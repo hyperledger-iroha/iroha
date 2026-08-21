@@ -245,7 +245,6 @@ impl Kura {
                     "pipeline sidecar",
                     fsync_mode,
                     None,
-                    SidecarIndexOrigin::HeightOne,
                 ),
                 Err(err) => {
                     iroha_logger::warn!(
@@ -400,7 +399,6 @@ impl Kura {
             "pipeline sidecar",
             self.sidecar_fsync_mode(),
             None,
-            SidecarIndexOrigin::HeightOne,
         );
         if wrote {
             if json_sidecar_path.exists()
@@ -434,141 +432,6 @@ impl Kura {
         } else {
             FastpqProofWriteResult::Retry
         }
-    }
-    /// Write safety-critical per-block roster metadata alongside the block store.
-    ///
-    /// The prune fence excludes canonical truncation while the payload, index,
-    /// and containing directory are fsynced. The return value is true only when
-    /// the strict write completed.
-    pub fn write_roster_metadata(&self, sidecar: &RosterSidecar) -> bool {
-        let _prune_guard = self.prune_lock.lock();
-        if self.prune_recovery_is_required() {
-            warn!(
-                height = sidecar.height,
-                "refusing roster sidecar write until prune recovery completes after restart"
-            );
-            return false;
-        }
-        if let Err(error) = self.durable_mutation_authorized() {
-            warn!(
-                ?error,
-                height = sidecar.height,
-                "refusing roster sidecar mutation while Kura output is unauthorized"
-            );
-            return false;
-        }
-        #[cfg(test)]
-        if self
-            .fail_next_roster_sidecar_writes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
-                remaining.checked_sub(1)
-            })
-            .is_ok()
-        {
-            iroha_logger::warn!(
-                height = sidecar.height,
-                "injected roster sidecar write failure"
-            );
-            return false;
-        }
-        let Some(mut dir) = self.store_dir() else {
-            return false;
-        };
-        let _guard = self.sidecar_lock.lock();
-        if self.prune_recovery_is_required() {
-            return false;
-        }
-        dir.push(PIPELINE_DIR_NAME);
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            iroha_logger::warn!(
-                ?e,
-                ?dir,
-                "failed to create pipeline dir for roster sidecars"
-            );
-            return false;
-        }
-        let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
-        let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
-        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
-            Ok(bytes) => Some(bytes),
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    ?dir,
-                    "failed to measure roster sidecar bytes before write"
-                );
-                None
-            }
-        };
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let wrote_norito = match sidecar.encode_framed() {
-            Ok(buf) => Self::append_indexed_sidecar_with_pinned_height(
-                &data_path,
-                &index_path,
-                sidecar.height,
-                &buf,
-                "roster sidecar",
-                FsyncMode::Always,
-                Some(self.roster_sidecar_retention),
-                Some(1),
-                SidecarIndexOrigin::HeightOne,
-                None,
-            ),
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    height = sidecar.height,
-                    "failed to encode roster metadata"
-                );
-                false
-            }
-        };
-        if !wrote_norito {
-            iroha_logger::warn!(
-                height = sidecar.height,
-                "failed to persist roster metadata sidecar"
-            );
-        }
-        let mut accounting_complete = before_bytes.is_some();
-        if let Some(before_bytes) = before_bytes {
-            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
-                Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
-                Err(err) => {
-                    accounting_complete = false;
-                    iroha_logger::warn!(
-                        ?err,
-                        ?dir,
-                        "failed to measure roster sidecar bytes after write"
-                    );
-                }
-            }
-        }
-        if accounting_complete {
-            accounting_mutation.finish();
-        }
-        wrote_norito
-    }
-    fn truncate_roster_metadata_above_at(blocks_dir: &Path, height: u64) -> Result<()> {
-        if blocks_dir.as_os_str().is_empty() {
-            return Err(Error::EmptyStoreRoot);
-        }
-        let dir = blocks_dir.join(PIPELINE_DIR_NAME);
-        let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
-        let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
-        if !Self::truncate_indexed_sidecars_to_height(
-            &data_path,
-            &index_path,
-            height,
-            "roster sidecar",
-        ) {
-            return Err(Error::IO(
-                std::io::Error::other(format!(
-                    "failed to truncate roster sidecars to canonical height {height}"
-                )),
-                index_path,
-            ));
-        }
-        Ok(())
     }
     /// Decode pipeline recovery metadata without assigning it canonical block authority.
     ///
@@ -654,6 +517,28 @@ impl Kura {
         }
         Some(sidecar)
     }
+    fn truncate_pipeline_metadata_above_at(blocks_dir: &Path, height: u64) -> Result<()> {
+        if blocks_dir.as_os_str().is_empty() {
+            return Err(Error::EmptyStoreRoot);
+        }
+        let dir = blocks_dir.join(PIPELINE_DIR_NAME);
+        let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
+        let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+        if !Self::truncate_indexed_sidecars_to_height(
+            &data_path,
+            &index_path,
+            height,
+            "pipeline recovery sidecar",
+        ) {
+            return Err(Error::IO(
+                std::io::Error::other(format!(
+                    "failed to truncate pipeline sidecars to canonical height {height}"
+                )),
+                index_path,
+            ));
+        }
+        Ok(())
+    }
     /// Read persisted FASTPQ proof snapshots for a committed block.
     #[must_use]
     pub fn fastpq_proofs_for_block(&self, height: u64) -> Vec<FastpqProofSnapshot> {
@@ -661,135 +546,11 @@ impl Kura {
             .map(|sidecar| sidecar.fastpq_proofs)
             .unwrap_or_default()
     }
-    /// Read roster metadata sidecar for `height` if present. Returns `None` on errors or missing
-    /// entries. Valid roster metadata is exposed only after reissuing the ordered data, index, and
-    /// parent-directory durability barriers. This prevents readable page-cache state left by a
-    /// failed strict write from being mistaken for durable recovery authority.
-    pub fn read_roster_metadata(&self, height: u64) -> Option<RosterSidecar> {
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        let sidecar = {
-            let _guard = self.sidecar_lock.lock();
-            if self.prune_recovery_is_required() {
-                return None;
-            }
-            let mut dir = self.store_dir()?;
-            dir.push(PIPELINE_DIR_NAME);
-            let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
-            let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
-            let sidecar = Self::read_indexed_sidecar_from_paths(
-                height,
-                &data_path,
-                &index_path,
-                norito::decode_canonical::<RosterSidecar>,
-                "roster sidecar",
-            )?;
-            if sidecar.height != height {
-                iroha_logger::warn!(
-                    height,
-                    sidecar_height = sidecar.height,
-                    "roster sidecar height mismatch"
-                );
-                return None;
-            }
-            let Some(canonical_height) = usize::try_from(height).ok().and_then(NonZeroUsize::new)
-            else {
-                iroha_logger::warn!(height, "roster sidecar has no canonical Kura height");
-                return None;
-            };
-            let Some(expected) = self
-                .get_block_hash(canonical_height)
-                .or_else(|| self.get_durable_block_hash(canonical_height))
-            else {
-                iroha_logger::warn!(
-                    height,
-                    actual = %sidecar.block_hash,
-                    "roster sidecar has no canonical Kura block hash"
-                );
-                return None;
-            };
-            if expected != sidecar.block_hash {
-                iroha_logger::warn!(
-                    height,
-                    expected = %expected,
-                    actual = %sidecar.block_hash,
-                    "roster sidecar block hash mismatch"
-                );
-                return None;
-            }
-            if let Some(cert) = sidecar.commit_qc.as_ref() {
-                let cert_block_hash = cert.subject_block_hash;
-                if cert.height != sidecar.height || cert_block_hash != sidecar.block_hash {
-                    iroha_logger::warn!(
-                        height,
-                        sidecar_height = sidecar.height,
-                        sidecar_hash = %sidecar.block_hash,
-                        cert_height = cert.height,
-                        cert_hash = %cert_block_hash,
-                        "roster sidecar commit certificate metadata mismatch"
-                    );
-                    return None;
-                }
-            }
-            if let Some(checkpoint) = sidecar.validator_checkpoint.as_ref() {
-                if checkpoint.height != sidecar.height
-                    || checkpoint.block_hash != sidecar.block_hash
-                {
-                    iroha_logger::warn!(
-                        height,
-                        sidecar_height = sidecar.height,
-                        sidecar_hash = %sidecar.block_hash,
-                        checkpoint_height = checkpoint.height,
-                        checkpoint_hash = %checkpoint.block_hash,
-                        "roster sidecar checkpoint metadata mismatch"
-                    );
-                    return None;
-                }
-            }
-            if !Self::sync_indexed_sidecar_barriers(&data_path, &index_path, "roster sidecar") {
-                return None;
-            }
-            sidecar
-        };
-        if self.prune_recovery_is_required() {
-            None
-        } else {
-            Some(sidecar)
-        }
-    }
     fn bound_progress_index_layout_classified(
         index: &mut std::fs::File,
         index_len: u64,
     ) -> std::result::Result<SidecarIndexLayout, BoundProgressRecoveryFailure> {
-        if index_len < PIPELINE_INDEX_ENTRY_SIZE_U64 {
-            return Ok(SidecarIndexLayout::legacy(index_len));
-        }
-        let mut first = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
-        index
-            .seek(SeekFrom::Start(0))
-            .and_then(|_| index.read_exact(&mut first))
-            .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
-        let marker = SidecarIndexEntry::from_bytes(first);
-        let marker_field_present = marker.offset == u64::MAX || marker.len == u64::MAX;
-        if !marker_field_present {
-            return Ok(SidecarIndexLayout::legacy(index_len));
-        }
-        if marker.offset != u64::MAX || marker.len != u64::MAX {
-            return Err(BoundProgressRecoveryFailure::InvalidData);
-        }
-        if index_len < INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 {
-            return Err(BoundProgressRecoveryFailure::InvalidData);
-        }
-        let mut metadata = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
-        index
-            .read_exact(&mut metadata)
-            .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
-        let metadata = SidecarIndexEntry::from_bytes(metadata);
-        if metadata.len != metadata.offset ^ INDEXED_SIDECAR_BASE_CHECK_MASK {
-            return Err(BoundProgressRecoveryFailure::InvalidData);
-        }
-        SidecarIndexLayout::based(metadata.offset, index_len)
+        SidecarIndexLayout::read_from(index, index_len)
             .map_err(|_| BoundProgressRecoveryFailure::InvalidData)
     }
     fn bound_sidecar_index_snapshot(
@@ -920,30 +681,6 @@ impl Kura {
             entries,
             indexed_end,
         })
-    }
-    fn bound_progress_index_is_incomplete_initial_header(
-        index: &mut std::fs::File,
-        index_len: u64,
-    ) -> bool {
-        Self::bound_progress_index_is_incomplete_initial_header_classified(index, index_len)
-            .unwrap_or(false)
-    }
-    fn bound_progress_index_is_incomplete_initial_header_classified(
-        index: &mut std::fs::File,
-        index_len: u64,
-    ) -> std::result::Result<bool, BoundProgressRecoveryFailure> {
-        if !(PIPELINE_INDEX_ENTRY_SIZE_U64..INDEXED_SIDECAR_BASE_HEADER_SIZE_U64)
-            .contains(&index_len)
-        {
-            return Ok(false);
-        }
-        let mut first = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
-        index
-            .seek(SeekFrom::Start(0))
-            .and_then(|_| index.read_exact(&mut first))
-            .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
-        let marker = SidecarIndexEntry::from_bytes(first);
-        Ok(marker.offset == u64::MAX && marker.len == u64::MAX)
     }
     fn decode_bound_progress_append_intent(
         intent_file: &mut std::fs::File,
@@ -1176,10 +913,10 @@ impl Kura {
                 return false;
             }
             let old_layout = if intent.old_index_len == 0 {
-                SidecarIndexLayout::legacy(0)
+                None
             } else {
                 match SidecarIndexLayout::read_from(index, intent.old_index_len) {
-                    Ok(layout) => layout,
+                    Ok(layout) => Some(layout),
                     Err(reason) => {
                         warn!(
                             reason,
@@ -1215,7 +952,7 @@ impl Kura {
             if intent.pair_was_present {
                 return false;
             }
-            if let Err(reason) = intent.validate_against_old_layout(SidecarIndexLayout::legacy(0)) {
+            if let Err(reason) = intent.validate_against_old_layout(None) {
                 warn!(
                     reason,
                     ?intent_path,
@@ -1332,6 +1069,31 @@ impl Kura {
                 return false;
             }
         } else {
+            if let Some(mut index_file) = index.take() {
+                if index_file
+                    .seek(SeekFrom::Start(0))
+                    .and_then(|_| {
+                        index_file.write_all(&SidecarIndexLayout::base_header(intent.height))
+                    })
+                    .and_then(|_| index_file.set_len(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64))
+                    .and_then(|_| index_file.sync_data())
+                    .is_err()
+                {
+                    return false;
+                }
+                drop(index_file);
+                if let Err(error) =
+                    Self::remove_bound_progress_temp_if_present(namespace, index_path)
+                {
+                    warn!(
+                        ?error,
+                        ?index_path,
+                        kind,
+                        "failed to remove rolled-back progress index"
+                    );
+                    return false;
+                }
+            }
             if let Some(data_file) = data.take() {
                 if data_file.set_len(0).is_err() || data_file.sync_data().is_err() {
                     return false;
@@ -1345,23 +1107,6 @@ impl Kura {
                         ?data_path,
                         kind,
                         "failed to remove rolled-back progress data"
-                    );
-                    return false;
-                }
-            }
-            if let Some(index_file) = index.take() {
-                if index_file.set_len(0).is_err() || index_file.sync_data().is_err() {
-                    return false;
-                }
-                drop(index_file);
-                if let Err(error) =
-                    Self::remove_bound_progress_temp_if_present(namespace, index_path)
-                {
-                    warn!(
-                        ?error,
-                        ?index_path,
-                        kind,
-                        "failed to remove rolled-back progress index"
                     );
                     return false;
                 }
@@ -1761,10 +1506,10 @@ impl Kura {
                     return Err(BoundProgressRecoveryFailure::InvalidData);
                 }
                 let old_layout = match index.as_mut() {
-                    Some(index) if intent.old_index_len != 0 => {
-                        Self::bound_progress_index_layout_classified(index, intent.old_index_len)?
-                    }
-                    _ => SidecarIndexLayout::legacy(0),
+                    Some(index) if intent.old_index_len != 0 => Some(
+                        Self::bound_progress_index_layout_classified(index, intent.old_index_len)?,
+                    ),
+                    _ => None,
                 };
                 intent
                     .validate_against_old_layout(old_layout)
@@ -1827,37 +1572,7 @@ impl Kura {
             let mut index = open(index_path)?;
             match (data, index.as_mut()) {
                 (None, None) => Ok(BoundProgressRecoveryFailure::RetryableIo),
-                (Some(data), None) => {
-                    let data_len = data
-                        .metadata()
-                        .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?
-                        .len();
-                    if data_len == 0 {
-                        Ok(BoundProgressRecoveryFailure::RetryableIo)
-                    } else {
-                        Err(BoundProgressRecoveryFailure::InvalidData)
-                    }
-                }
-                (None, Some(index)) => {
-                    let len = index
-                        .metadata()
-                        .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?
-                        .len();
-                    let removable = if len == 0
-                        || Self::bound_progress_index_is_incomplete_initial_header_classified(
-                            index, len,
-                        )? {
-                        true
-                    } else {
-                        let layout = Self::bound_progress_index_layout_classified(index, len)?;
-                        layout.aligned_len == len && layout.entry_count == 0
-                    };
-                    if removable {
-                        Ok(BoundProgressRecoveryFailure::RetryableIo)
-                    } else {
-                        Err(BoundProgressRecoveryFailure::InvalidData)
-                    }
-                }
+                (Some(_), None) | (None, Some(_)) => Err(BoundProgressRecoveryFailure::InvalidData),
                 (Some(data), Some(index)) => {
                     let data_len = data
                         .metadata()
@@ -1867,22 +1582,20 @@ impl Kura {
                         .metadata()
                         .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?
                         .len();
-                    if Self::bound_progress_index_is_incomplete_initial_header_classified(
-                        index, index_len,
-                    )? {
-                        return Ok(BoundProgressRecoveryFailure::RetryableIo);
-                    }
                     let layout = Self::bound_progress_index_layout_classified(index, index_len)?;
                     if layout.aligned_len != index_len {
-                        return Ok(BoundProgressRecoveryFailure::RetryableIo);
+                        return Err(BoundProgressRecoveryFailure::InvalidData);
                     }
-                    Self::bound_sidecar_index_snapshot_classified(
+                    let snapshot = Self::bound_sidecar_index_snapshot_classified(
                         index,
                         index_path,
                         data_len,
                         kind,
                         "recovery classification main",
                     )?;
+                    if snapshot.indexed_end != data_len {
+                        return Err(BoundProgressRecoveryFailure::InvalidData);
+                    }
                     Ok(BoundProgressRecoveryFailure::RetryableIo)
                 }
             }
@@ -1927,56 +1640,7 @@ impl Kura {
         let (data, mut index) = match (data, index) {
             (Some(data), Some(index)) => (data, index),
             (None, None) => return Self::progress_mutation_namespace_unchanged(namespace),
-            (None, Some(mut index)) => {
-                let removable = index.metadata().ok().is_some_and(|metadata| {
-                    let len = metadata.len();
-                    len == 0
-                        || Self::bound_progress_index_is_incomplete_initial_header(&mut index, len)
-                        || SidecarIndexLayout::read_from(&mut index, len).is_ok_and(|layout| {
-                            layout.aligned_len == len && layout.entry_count == 0
-                        })
-                });
-                if !removable {
-                    warn!(
-                        ?data_path,
-                        ?index_path,
-                        kind,
-                        "progress main index exists without a recoverable data preimage"
-                    );
-                    return false;
-                }
-                drop(index);
-                if let Err(error) =
-                    Self::remove_bound_progress_temp_if_present(namespace, index_path)
-                {
-                    warn!(
-                        ?error,
-                        ?index_path,
-                        kind,
-                        "failed to remove empty orphan progress index"
-                    );
-                    return false;
-                }
-                return Self::sync_bound_progress_intent_directories(namespace).is_ok()
-                    && Self::progress_mutation_namespace_unchanged(namespace);
-            }
-            (Some(data), None) if data.metadata().is_ok_and(|metadata| metadata.len() == 0) => {
-                drop(data);
-                if let Err(error) =
-                    Self::remove_bound_progress_temp_if_present(namespace, data_path)
-                {
-                    warn!(
-                        ?error,
-                        ?data_path,
-                        kind,
-                        "failed to remove empty orphan progress data"
-                    );
-                    return false;
-                }
-                return Self::sync_bound_progress_intent_directories(namespace).is_ok()
-                    && Self::progress_mutation_namespace_unchanged(namespace);
-            }
-            (Some(_), None) => {
+            (None, Some(_)) | (Some(_), None) => {
                 warn!(
                     ?data_path,
                     ?index_path,
@@ -2010,22 +1674,6 @@ impl Kura {
                 return false;
             }
         };
-        if Self::bound_progress_index_is_incomplete_initial_header(&mut index, index_len) {
-            if let Err(error) = index
-                .set_len(0)
-                .and_then(|_| data.set_len(0))
-                .and_then(|_| index.sync_data())
-            {
-                warn!(
-                    ?error,
-                    ?index_path,
-                    kind,
-                    "failed to roll back incomplete progress base-height header"
-                );
-                return false;
-            }
-            return Self::sync_indexed_sidecar_bound_mutation(&data, &index, namespace, kind);
-        }
         let layout = match SidecarIndexLayout::read_from(&mut index, index_len) {
             Ok(layout) => layout,
             Err(reason) => {
@@ -2038,20 +1686,12 @@ impl Kura {
                 return false;
             }
         };
-        let repaired_index_tail = layout.aligned_len != index_len;
-        if repaired_index_tail {
-            if let Err(error) = index
-                .set_len(layout.aligned_len)
-                .and_then(|_| index.sync_data())
-            {
-                warn!(
-                    ?error,
-                    ?index_path,
-                    kind,
-                    "failed to truncate partial progress index entry"
-                );
-                return false;
-            }
+        if layout.aligned_len != index_len {
+            warn!(
+                ?index_path,
+                kind, "progress main index has an unauthenticated partial entry"
+            );
+            return false;
         }
         let Some(snapshot) = Self::bound_sidecar_index_snapshot(
             &mut index,
@@ -2063,20 +1703,17 @@ impl Kura {
             return false;
         };
         if snapshot.indexed_end == data_len {
-            return !repaired_index_tail
-                || Self::sync_indexed_sidecar_bound_mutation(&data, &index, namespace, kind);
+            return Self::progress_mutation_namespace_unchanged(namespace);
         }
-        if let Err(error) = data.set_len(snapshot.indexed_end) {
-            warn!(
-                ?error,
-                ?data_path,
-                indexed_end = snapshot.indexed_end,
-                kind,
-                "failed to truncate unindexed progress main suffix"
-            );
-            return false;
-        }
-        Self::sync_indexed_sidecar_bound_mutation(&data, &index, namespace, kind)
+        warn!(
+            ?data_path,
+            ?index_path,
+            indexed_end = snapshot.indexed_end,
+            data_len,
+            kind,
+            "progress main pair has an unauthenticated unindexed data suffix"
+        );
+        false
     }
     fn discard_bound_progress_temps(
         namespace: &BoundProgressNamespace,
@@ -2474,10 +2111,6 @@ impl Kura {
                 return false;
             }
         };
-        if layout.entry_count == 0 {
-            warn!(?index_path, kind, label, "sidecar index has no entries");
-            return false;
-        }
         if index_len != layout.aligned_len {
             warn!(
                 len = index_len,
@@ -2486,6 +2119,19 @@ impl Kura {
                 kind,
                 label,
                 "sidecar index length misaligned"
+            );
+            return false;
+        }
+        if layout.entry_count == 0 {
+            if data_len == 0 {
+                return true;
+            }
+            warn!(
+                data_len,
+                ?index_path,
+                kind,
+                label,
+                "header-only sidecar index retains unindexed payload bytes"
             );
             return false;
         }
@@ -2726,7 +2372,6 @@ impl Kura {
         layout: SidecarIndexLayout,
         namespace: Option<&BoundProgressNamespace>,
     ) -> bool {
-        debug_assert!(layout.is_based());
         debug_assert!(height < layout.base_height);
         let prepend = layout.base_height - height;
         if prepend > MAX_INDEXED_SIDECAR_GAP_ENTRIES {
@@ -2752,11 +2397,7 @@ impl Kura {
             iroha_logger::warn!(?index_path, kind, "sidecar entry count overflows");
             return false;
         };
-        let new_entries_offset = if height == SidecarIndexLayout::LEGACY_BASE_HEIGHT {
-            0
-        } else {
-            INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
-        };
+        let new_entries_offset = INDEXED_SIDECAR_BASE_HEADER_SIZE_U64;
         let Some(projected_index_len) = new_entry_count
             .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
             .and_then(|entries_len| new_entries_offset.checked_add(entries_len))
@@ -2868,9 +2509,7 @@ impl Kura {
             len: payload_len,
         };
         let build_result = (|| -> std::io::Result<()> {
-            if height > SidecarIndexLayout::LEGACY_BASE_HEIGHT {
-                temp_index.write_all(&SidecarIndexLayout::base_header(height))?;
-            }
+            temp_index.write_all(&SidecarIndexLayout::base_header(height))?;
             temp_index.write_all(&entry.to_bytes())?;
             let filler_entries = prepend.saturating_sub(1);
             let filler_len = filler_entries
@@ -3037,10 +2676,9 @@ impl Kura {
         kind: &str,
         fsync_mode: FsyncMode,
         retention: Option<NonZeroUsize>,
-        origin: SidecarIndexOrigin,
     ) -> bool {
         Self::append_indexed_sidecar_with_pinned_height(
-            data_path, index_path, height, payload, kind, fsync_mode, retention, None, origin, None,
+            data_path, index_path, height, payload, kind, fsync_mode, retention, None, None,
         )
     }
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -3050,7 +2688,6 @@ impl Kura {
         height: u64,
         payload: &[u8],
         kind: &str,
-        origin: SidecarIndexOrigin,
         namespace: &BoundProgressNamespace,
     ) -> bool {
         let Ok(payload_len) = u64::try_from(payload.len()) else {
@@ -3158,7 +2795,7 @@ impl Kura {
         // immediately before binding this namespace. Re-read only the bounded
         // layout and target entry here instead of allocating and sorting the
         // entire historical index a second time on every consensus write.
-        let (mut layout, old_index_len) = match index.as_mut() {
+        let (layout, old_index_len) = match index.as_mut() {
             Some(index) => {
                 let old_index_len = match index.metadata() {
                     Ok(metadata) => metadata.len(),
@@ -3191,11 +2828,11 @@ impl Kura {
                         return false;
                     }
                 };
-                (layout, old_index_len)
+                (Some(layout), old_index_len)
             }
-            None => (SidecarIndexLayout::legacy(0), 0),
+            None => (None, 0),
         };
-        if let Some(entry_pos) = layout.entry_position(height) {
+        if let Some(entry_pos) = layout.and_then(|layout| layout.entry_position(height)) {
             let Some(index_file) = index.as_mut() else {
                 return false;
             };
@@ -3295,7 +2932,9 @@ impl Kura {
                 data_path, index_path, payload, kind, namespace, intent, data, index,
             );
         }
-        if layout.is_based() && height < layout.base_height {
+        if let Some(layout) = layout
+            && height < layout.base_height
+        {
             drop(index);
             drop(data);
             return Self::append_preceding_indexed_sidecar(
@@ -3311,29 +2950,27 @@ impl Kura {
             );
         }
         let mut new_index_bytes = Vec::new();
-        let index_write_offset;
-        if layout.aligned_len == 0
-            && height > SidecarIndexLayout::LEGACY_BASE_HEIGHT
-            && origin == SidecarIndexOrigin::FirstWrite
-        {
-            new_index_bytes.extend_from_slice(&SidecarIndexLayout::base_header(height));
-            layout = match SidecarIndexLayout::based(height, INDEXED_SIDECAR_BASE_HEADER_SIZE_U64) {
-                Ok(layout) => layout,
-                Err(reason) => {
-                    warn!(
-                        reason,
-                        height,
-                        ?index_path,
-                        kind,
-                        "invalid initial progress index base"
-                    );
-                    return false;
-                }
-            };
-            index_write_offset = 0;
-        } else {
-            index_write_offset = old_index_len;
-        }
+        let (layout, index_write_offset) = match layout {
+            Some(layout) => (layout, old_index_len),
+            None => {
+                new_index_bytes.extend_from_slice(&SidecarIndexLayout::base_header(height));
+                let layout =
+                    match SidecarIndexLayout::based(height, INDEXED_SIDECAR_BASE_HEADER_SIZE_U64) {
+                        Ok(layout) => layout,
+                        Err(reason) => {
+                            warn!(
+                                reason,
+                                height,
+                                ?index_path,
+                                kind,
+                                "invalid initial progress index base"
+                            );
+                            return false;
+                        }
+                    };
+                (layout, 0)
+            }
+        };
         let Some(expected_height) = layout.next_height() else {
             return false;
         };
@@ -3442,7 +3079,7 @@ impl Kura {
         let old_layout = match index.as_mut() {
             Some(index) if intent.old_index_len != 0 => {
                 match SidecarIndexLayout::read_from(index, intent.old_index_len) {
-                    Ok(layout) => layout,
+                    Ok(layout) => Some(layout),
                     Err(reason) => {
                         warn!(
                             reason,
@@ -3454,7 +3091,7 @@ impl Kura {
                     }
                 }
             }
-            _ => SidecarIndexLayout::legacy(0),
+            _ => None,
         };
         if let Err(reason) = intent.validate_against_old_layout(old_layout) {
             warn!(
@@ -3624,7 +3261,6 @@ impl Kura {
         payload: &[u8],
         kind: &str,
         retention: Option<NonZeroUsize>,
-        origin: SidecarIndexOrigin,
         namespace: &BoundProgressNamespace,
     ) -> bool {
         if retention.is_some() || !Self::progress_mutation_namespace_unchanged(namespace) {
@@ -3635,7 +3271,7 @@ impl Kura {
             return false;
         }
         let wrote = Self::append_indexed_bound_progress_sidecar(
-            data_path, index_path, height, payload, kind, origin, namespace,
+            data_path, index_path, height, payload, kind, namespace,
         );
         wrote && Self::progress_mutation_namespace_unchanged(namespace)
     }
@@ -3673,7 +3309,6 @@ impl Kura {
         fsync_mode: FsyncMode,
         retention: Option<NonZeroUsize>,
         pinned_height: Option<u64>,
-        origin: SidecarIndexOrigin,
         namespace: Option<&BoundProgressNamespace>,
     ) -> bool {
         // Sidecars are best-effort; only fsync when strict durability is requested.
@@ -3691,6 +3326,18 @@ impl Kura {
         {
             return false;
         }
+        let data_was_absent = !data_path.exists();
+        let index_was_absent = !index_path.exists();
+        if data_was_absent != index_was_absent {
+            iroha_logger::warn!(
+                ?data_path,
+                ?index_path,
+                kind,
+                "sidecar main data and index are only partially present"
+            );
+            return false;
+        }
+        let pair_was_absent = data_was_absent;
         let mut index =
             match Self::open_direct_sidecar_file_in_namespace(index_path, true, false, namespace) {
                 Ok(file) => file,
@@ -3699,24 +3346,44 @@ impl Kura {
                     return false;
                 }
             };
-        let index_len = match index.metadata() {
+        let mut index_len = match index.metadata() {
             Ok(meta) => meta.len(),
             Err(err) => {
                 iroha_logger::warn!(?err, ?index_path, kind, "failed to stat sidecar index");
                 return false;
             }
         };
-        let mut layout = match SidecarIndexLayout::read_from(&mut index, index_len) {
-            Ok(layout) => layout,
-            Err(reason) => {
+        let layout = if pair_was_absent {
+            if index_len != 0 {
+                return false;
+            }
+            let header = SidecarIndexLayout::base_header(height);
+            if let Err(err) = index.write_all(&header) {
                 iroha_logger::warn!(
-                    reason,
-                    len = index_len,
+                    ?err,
+                    height,
                     ?index_path,
                     kind,
-                    "refusing malformed sidecar index"
+                    "failed to initialize sidecar V1 index"
                 );
                 return false;
+            }
+            index_len = INDEXED_SIDECAR_BASE_HEADER_SIZE_U64;
+            SidecarIndexLayout::based(height, INDEXED_SIDECAR_BASE_HEADER_SIZE_U64)
+                .expect("validated sidecar height produces a canonical V1 layout")
+        } else {
+            match SidecarIndexLayout::read_from(&mut index, index_len) {
+                Ok(layout) => layout,
+                Err(reason) => {
+                    iroha_logger::warn!(
+                        reason,
+                        len = index_len,
+                        ?index_path,
+                        kind,
+                        "refusing malformed sidecar index"
+                    );
+                    return false;
+                }
             }
         };
         if index_len != layout.aligned_len {
@@ -3737,39 +3404,7 @@ impl Kura {
                 return false;
             }
         }
-        if layout.aligned_len == 0
-            && height > SidecarIndexLayout::LEGACY_BASE_HEIGHT
-            && origin == SidecarIndexOrigin::FirstWrite
-        {
-            let header = SidecarIndexLayout::base_header(height);
-            if let Err(err) = index
-                .seek(SeekFrom::Start(0))
-                .and_then(|_| index.write_all(&header))
-            {
-                iroha_logger::warn!(
-                    ?err,
-                    height,
-                    ?index_path,
-                    kind,
-                    "failed to initialize based sidecar index"
-                );
-                return false;
-            }
-            layout = match SidecarIndexLayout::based(height, INDEXED_SIDECAR_BASE_HEADER_SIZE_U64) {
-                Ok(layout) => layout,
-                Err(reason) => {
-                    iroha_logger::warn!(
-                        reason,
-                        height,
-                        ?index_path,
-                        kind,
-                        "invalid initial sidecar base height"
-                    );
-                    return false;
-                }
-            };
-        }
-        if layout.is_based() && height < layout.base_height {
+        if height < layout.base_height {
             drop(index);
             return Self::append_preceding_indexed_sidecar(
                 data_path,
@@ -4292,6 +3927,7 @@ impl Kura {
             entry_byte_limit,
         )
     }
+    #[cfg(test)]
     #[allow(clippy::too_many_lines)]
     fn read_indexed_sidecar_from_paths<T, F>(
         height: u64,

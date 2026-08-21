@@ -17,12 +17,11 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
         defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
         2
     );
-    assert_eq!(defaults::sumeragi::QUEUE_BODY_CAPACITY.get(), 163);
+    assert_eq!(defaults::sumeragi::QUEUE_BODY_CAPACITY.get(), 161);
     assert_eq!(
         defaults::sumeragi::QUEUE_BODY_CAPACITY.get(),
         5 * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
             + 3 * defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
-            + 2
     );
     assert_eq!(
         defaults::sumeragi::QUEUE_BODY_BYTES.get(),
@@ -58,7 +57,7 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
             .get(),
         2
     );
-    assert_eq!(cfg.sumeragi.queues.bodies.get(), 163);
+    assert_eq!(cfg.sumeragi.queues.bodies.get(), 161);
     assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 231 * 1024 * 1024);
     assert_eq!(
         cfg.sumeragi.queues.body_source_bytes.get(),

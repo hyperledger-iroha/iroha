@@ -8,9 +8,9 @@ fn invalid(message: impl Into<String>) -> PyErr {
     PyValueError::new_err(message.into())
 }
 #[pyfunction]
-#[pyo3(name = "inspect_sorafs_orderbook_submission_v1")]
+#[pyo3(name = "inspect_sorafs_orderbook_submission_for_discriminant_v1")]
 #[rustfmt::skip]
-pub(crate) fn inspect_sorafs_orderbook_submission_v1_py(
+pub(crate) fn inspect_sorafs_orderbook_submission_for_discriminant_v1_py(
     py: Python<'_>,
     route: &str,
     expected_network_id: &PyNetworkId,
@@ -23,7 +23,6 @@ pub(crate) fn inspect_sorafs_orderbook_submission_v1_py(
     let validated = inspect_submission(signed_transaction_versioned, route, expected_network_id.as_inner(), expected_chain_discriminant).map_err(|error| invalid(error.to_string()))?;
     let identity = validated.identity;
     let result = PyDict::new(py);
-    result.set_item("tx_hash", identity.tx_hash.to_string())?;
     result.set_item("entrypoint_hash", identity.entrypoint_hash.to_string())?;
     result.set_item("signed_transaction_hash", identity.signed_transaction_hash.to_string())?;
     Ok(result.unbind())
@@ -33,12 +32,11 @@ pub(crate) fn inspect_sorafs_orderbook_submission_v1_py(
 #[rustfmt::skip]
 pub(crate) fn verify_sorafs_orderbook_submission_receipt_v1_py(
     receipt_norito: &[u8],
-    tx_hash: &str,
     entrypoint_hash: &str,
     signed_transaction_hash: &str,
     expected_receipt_signer: &str,
 ) -> PyResult<String> {
-    let identity = parse_sorafs_orderbook_submission_identity_v1(tx_hash, entrypoint_hash, signed_transaction_hash).ok_or_else(|| invalid("receipt identities must be exact canonical text"))?;
+    let identity = parse_sorafs_orderbook_submission_identity_v1(entrypoint_hash, signed_transaction_hash).ok_or_else(|| invalid("receipt identities must be exact canonical text"))?;
     let signer = parse_sorafs_orderbook_receipt_signer_v1(expected_receipt_signer).ok_or_else(|| invalid("expected_receipt_signer must be exact canonical text"))?;
     let receipt = decode_and_verify_sorafs_orderbook_submission_receipt_v1(receipt_norito, &identity, &signer).map_err(|error| invalid(error.to_string()))?;
     norito::json::to_json(&receipt).map_err(|error| invalid(error.to_string()))

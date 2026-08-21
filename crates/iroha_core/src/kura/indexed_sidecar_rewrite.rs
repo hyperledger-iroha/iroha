@@ -451,9 +451,7 @@ impl Kura {
                 return false;
             }
         };
-        if output_base_height > SidecarIndexLayout::LEGACY_BASE_HEIGHT
-            && let Err(err) =
-                new_index.write_all(&SidecarIndexLayout::base_header(output_base_height))
+        if let Err(err) = new_index.write_all(&SidecarIndexLayout::base_header(output_base_height))
         {
             iroha_logger::warn!(
                 ?err,

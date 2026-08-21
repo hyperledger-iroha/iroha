@@ -11,8 +11,8 @@ The first-release target is therefore conditional:
 > the decision and activates its successor height.
 
 This remains the conditional revision-4 protocol target and paper argument.
-The checked-in `machine_checked_completion: true` flag belongs to the
-legacy/revision-3-rooted deductive ledger. That status declaration is not proof
+The checked-in `machine_checked_completion: true` flag belongs to the reviewed
+revision-4 deductive ledger. That status declaration is not proof
 evidence and does not replace the separate revision-4 exact-cardinality
 TLAPS/TLC/mutation corridor; the claim remains open until fresh same-source
 formal, cross-tool, trace, and release-receipt evidence validates one immutable
@@ -561,13 +561,11 @@ restore all five reservations after any service step. Each simultaneously
 materialized authenticated non-validator lane has three owners: one generic
 message slot, one certified-fence-escape slot, and one TransportCompletion slot for either a current-roster
 completion forwarded through that source or a proof-carrying historical lane
-response from an authenticated predecessor signer. The anonymous lane has the
-same two owners when the roster is non-empty, while its no-roster diagnostic
-geometry needs only the generic slot because no anonymous completion can be
-valid. If `H` is the
-configured maximum number of simultaneously materialized authenticated
-non-validator lanes, the exact non-empty-roster count minimum is therefore
-`5 * roster_len + 3 * H + 2`; the no-roster minimum is `3 * H + 1`.
+response from an authenticated predecessor signer. Identityless ingress has no
+production lane or capacity partition. If `H` is the configured maximum number
+of simultaneously materialized authenticated non-validator lanes, the exact
+count minimum is therefore `5 * roster_len + 3 * H`; setting `roster_len = 0`
+gives the diagnostic minimum `3 * H`.
 `H` is independent of exact-output reply-route capacity `R`, which is derived
 from the effective `network.max_total_connections`. Root validation resolves
 the selected lane profile before deriving `R`, so `lane_profile = "home"` with
@@ -600,9 +598,9 @@ the coalescing authority ends when the consumer removes the queued occurrence.
 
 Count bounds are paired with canonical-wire byte bounds. The
 `sumeragi.queues.body_source_bytes` quota isolates each frozen-roster validator,
-each of the `H` authenticated non-validator source lanes, and the anonymous
-lane, while `sumeragi.queues.body_bytes` bounds their aggregate ownership at no
-less than `(roster_len + H + 1) * body_source_bytes`. Roster installation fails
+and each of the `H` authenticated non-validator source lanes, while
+`sumeragi.queues.body_bytes` bounds their aggregate ownership at no less than
+`(roster_len + H) * body_source_bytes`. Roster installation fails
 closed if the aggregate cannot provide every source partition. Each
 authenticated source retains an isolated certified-fence-escape byte reserve;
 each validator additionally retains an isolated timeout-vote byte reserve, and
@@ -687,19 +685,18 @@ aggregate, consensus-topic, control-topic, block-sync-topic, or outbound-high
 requirement is undersized. Production defaults are 17 MiB for the global
 encrypted cap and the configured consensus and block-sync topic caps, 2 MiB
 for control, 128 MiB per peer for the high-priority encrypted-frame queue, and
-130 outer-ingress entries (`4 * 31 + 2 * 2 + 2`). The effective consensus and
+161 outer-ingress entries (`5 * 31 + 3 * 2`). The effective consensus and
 block-sync plaintext ceiling is the 17 MiB global cap minus the 28-byte AEAD
 expansion.
 
 Kagami-generated localnets inherit those 17/17/2/17 MiB frame caps, the
-130-entry count bound, and a 33 MiB per-source byte partition. They accept only
+161-entry count bound, and a 33 MiB per-source byte partition. They accept only
 exact `3f + 1` rosters from 4 through 31 validators and set aggregate
-body-ingress bytes from the validator, authenticated non-validator, and
-anonymous source partitions, retaining the reviewed four-validator floor.
-The Taira template carries the same per-source baseline; its bundle renderer
-enforces the same 4, 7, 10, …, 31 geometry and raises the aggregate to at least
-`(validator_count + authenticated_non_validator_sources + 1) *
-body_source_bytes`.
+body-ingress bytes from the validator and authenticated non-validator source
+partitions, giving a 198 MiB four-validator baseline when `H = 2`. The Taira
+template carries that baseline; its bundle renderer enforces the same 4, 7,
+10, …, 31 geometry and raises the aggregate to at least
+`(validator_count + authenticated_non_validator_sources) * body_source_bytes`.
 
 The peer sender extends that ownership boundary through encrypted stream I/O.
 It retains at most one bounded plaintext retry in each safety, ordinary-high,
@@ -816,13 +813,11 @@ remote-only eviction. This witness is bounded Kura-local serving authority,
 not an inclusion proof exported to consensus: every requester independently
 matches the reference and certified entry to its own canonical carrier and
 rejects a substituted or non-holder response.
-Canonical version-2 retained records remain restart-readable. They expose no
-merge witness because none was stored. If their exact body remains available,
-the same persistence operation that precedes eviction replaces the legacy
-record atomically with version 3 and verifies the replacement before eviction
-may continue. A bodyless legacy record therefore fails historical merge
-service closed instead of manufacturing authority. The version-3 byte ceiling
-is the sum of the complete version-2 envelope, the independently bounded
+Version 3 is the only accepted retained-record layout. Pre-release version-2
+bytes fail closed at direct read and startup, even when the exact body remains
+available; operators must discard and rebuild that pre-release storage rather
+than promote unauthenticated missing fields. The current byte ceiling covers
+the complete base retained-record envelope, the independently bounded merge
 reference, and explicit Norito option/struct framing headroom.
 An unknown current-generation Close is acknowledged statelessly and consumes
 none of those tables.
@@ -909,18 +904,29 @@ non-winning proposal is explicitly superseded by the finality authority rather
 than described as reconstructible winning output. The winning set is derived
 from the canonical finalized block's lane ownerships, never from the volatile
 output queue. An empty canonical ownership set is already complete, including
-for a result-bearing genesis block with external entries. Missing lane
-certificate or receipt evidence does not keep the finalized global height
-active. Rollover first canonicalizes every bounded unfinished winner against
-Kura, rejects conflicting quorum evidence, prunes proposal-only losers, and
-moves the exact remaining session cache, signing locks, autonomous payload and
-NewView cursors, historical recovery ownership, and retry cursors into the one
-immediate successor. Completed certificates keep their Kura-first source;
-unfinished certificates keep one move-only volatile owner. A block synchronized
-after adapter construction therefore retains its exact proposal as the request
-source for a peer's durable lane certificate while global successor progress
-continues. Duplicate, conflicting, unbounded, or non-canonical evidence fails
-closed. Native AMX
+for a result-bearing genesis block with external entries.
+
+Missing lane-certificate or application evidence keeps the finalized
+predecessor lifecycle active. On each bounded readiness turn the shared
+preflight rehydrates a late canonical lane body once, persists any newly
+complete anchored session, services one historical-recovery step, and checks
+that every winning current-height session is independently complete in Kura.
+If historical recovery remains pending or a winning certificate/application
+witness is absent, ordinary and PendingKura runners publish status, wait for a
+finite wake interval, and retry under the same predecessor owner. They do not
+construct a volatile successor owner.
+
+Only after this preflight succeeds does rollover build the complete durable
+lane authority, reject conflicting quorum evidence, prune proposal-only losers,
+drain exact output, and seal the predecessor handoff. A block synchronized
+after adapter construction therefore retains its exact proposal as the bounded
+certificate-recovery source while successor activation remains closed. During
+the later applied-height output handoff, an earlier-height ordinary lane output
+may use its independently reread Kura certificate plus application receipt,
+and an autonomous historical certificate may use its exact record-backed
+durable source; neither path weakens the current-height winning authority.
+Duplicate, conflicting, unbounded, or non-canonical evidence fails closed.
+Native AMX
 output binds the creation scope, embedded consensus round, and exact message
 hash. A merge share binds its creation scope and exact share hash. Certified
 sidecar requests and chunks bind creation scope, exact target and
@@ -1318,9 +1324,10 @@ test, 41-module checkpoint. The production-adapter activation guard and two
 deferred-canonical-carrier completion regressions produced the historical
 864-test, 41-module checkpoint. Retiring the duplicate inline network-simulation
 rows brings the historical 856-test, 40-module checkpoint. The exact retired-
-attempt accessor, mixed-carrier successor, two-link cold-restart hydration, and
-noncanonical autonomous-output retirement regressions bring the current
-source-bound inventory to 860 exact tests across 40 modules and 88 pre-network
+attempt accessor, mixed-carrier successor, two-link cold-restart hydration,
+noncanonical autonomous-output retirement, and the ordinary plus record-backed
+autonomous predecessor-durability regressions bring the current
+source-bound inventory to 864 exact tests across 43 modules and 91 pre-network
 legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
@@ -1329,11 +1336,11 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329`.
-Nine of those legs execute the separate 527-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 528 TSV lines and has SHA-256
-`5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d`.
-The 321-test core group includes grouped Native prevote-budget rejection before
+`c9972f55a17acbdcfacda42e3ca152d9705ec4e0f188a561f0c28990468ffe97`.
+Nine of those legs execute the separate 522-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 523 TSV lines and has SHA-256
+`e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`.
+The 316-test core group includes grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
 Native signing-boundary drift rejection, atomic grouped reservation commit,
@@ -1571,12 +1578,12 @@ fail-stop regressions are pinned alongside them in the current inventory.
 Daemon saturation now returns the exact occurrence to its durable remote
 source under an explicit source-release disposition; the former route-era
 "reconstruction" names are retired and no capability is synthesized.
-The current inventory retains the five-per-validator, three-per-materialized
-authenticated-non-validator, and two-anonymous owners (`5N+3H+2` total)
+The current inventory retains the five-per-validator and
+three-per-materialized-authenticated-non-validator owners (`5N+3H` total)
 capacity-negative boundary and the exact
 PrepareQC equal-vote quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-88 legs, including the governance-unlock audit module, the autonomous
+91 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate exact
 status and atomic lane-certificate decode
 contracts, nine G-UNIT execution-receipt legs, the source-attested Native AMX
@@ -1589,7 +1596,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 860-test inventory is a mechanically checked
+The current 864-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1788,9 +1795,9 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 860 exact production
-liveness tests and executes all 40 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 527-test
+Before those longer scenarios, the PR gate inventories 864 exact production
+liveness tests and executes all 43 owning Rust modules serially. The release
+profile additionally records nine G-UNIT legs executing a separate 522-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -1800,7 +1807,7 @@ adapter-owned successor activation, runner ingress
 handoff, watchdog predecessor/successor separation, and recovery-derived
 successor identity. The worker leg also pins rejection of an unissued future
 physical acquisition and exact latest-consumer rebind across unavailable-body
-recovery. The authoritative ingress leg pins `5N+3H+2` count potential, the
+recovery. The authoritative ingress leg pins `5N+3H` count potential, the
 certified-fence-escape, TimeoutVote, and TransportCompletion byte reserves, frozen-layout wire-size
 activation, cross-validator isolation, and fair service; the
 adapter/runtime legs pin the independent `2N+3` Busy-deferred partitions and
@@ -1957,9 +1964,14 @@ produced the historical 864-test, 41-module, 89-leg checkpoint. After retirement
 of the duplicate inline network-simulation rows, the historical inventory
 contained 856 tests across 40 modules and 89 legs. The four exact retired-
 attempt, mixed-carrier, cold-restart, and autonomous-output-retirement
-regressions bring the current inventory to 860 tests across those 40 modules.
-Removing the obsolete MKHE lifecycle G-UNIT leg leaves the current corridor at
-88 legs.
+regressions plus the ordinary and record-backed autonomous predecessor-
+durability rows and the three producer-publication-fence race rows bring the
+current inventory to 864 tests across 43 modules. The new rows require the
+post-preflight fence to serialize same-wire retransmission and unrelated append
+producers through the durable publication boundary, while a dropped unpublished
+dequeue must release the fence without consuming its target.
+Removing the obsolete MKHE lifecycle G-UNIT leg and retaining the current
+source-sealed command partition leaves the corridor at 91 legs.
 The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
@@ -1991,7 +2003,7 @@ unbounded broadcast admission. The integration filter remains a four-test
 module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic
 lane-certificate contracts brought that historical aggregate pre-network
 corridor to 61 legs. The current source-bound inventory is the separately
-audited 88-leg, 860-production-test corridor plus 527 G-UNIT tests; execution
+audited 91-leg, 864-production-test corridor plus 522 G-UNIT tests; execution
 against a signed clean candidate remains required before release promotion.
 
 The current reconnect changes supersede older mutable-tree diagnostics that
@@ -2215,7 +2227,7 @@ respectively; the canonical ordered IDs are recorded in the
 [multilane rehearsal runbook](runbooks/nexus_multilane_rehearsal.md#protected-release-approval-contract)
 and source-bound by `sumeragi_v2_release_approval_contract.py`. The canonical
 ordered operation-record SHA-256 values, in the same class order, are
-`4124c633d52744528f04a732149adce9d4e94b83437a6b121bf7087b03c95262`,
+`aba5987e1a69dba70c8ef47478ecbf748165f13c3131045594473d47a5a9e95f`,
 `eb9f0283898f09d23970f1d6511d250b17107a0ad80fc65e1adbe1ef0b1b19bb`,
 `e922b8afbfe4848e8b2b5f858654477a28d710c3afcf7698a77276a8294681cf`,
 and `76be51f1583e2d49c8b9ac85f9218a0a0b5a3334f1923dad39aa13ec8e7768fd`.
@@ -2325,8 +2337,8 @@ runner and preserves the active logs and evidence directory for diagnosis;
 without terminal validation it cannot publish external completion.
 
 On success, the private invocation publishes its exact aggregate receipt. That
-receipt binds the 88 pre-network corridor legs and
-their exact 860-test production inventory, the separate 527-test G-UNIT
+receipt binds the 91 pre-network corridor legs and
+their exact 864-test production inventory, the separate 522-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,

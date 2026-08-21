@@ -136,7 +136,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for StorageTicketId {
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(tag = "class", content = "value")]
+#[norito(tag = "class", content = "value", deny_unknown_fields)]
 pub enum BlobClass {
     /// Taikai broadcast segment.
     #[default]
@@ -196,7 +196,7 @@ impl GovernanceTag {
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default, Hash, PartialOrd, Ord,
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(tag = "scheme", content = "value")]
+#[norito(tag = "scheme", content = "value", deny_unknown_fields)]
 pub enum FecScheme {
     /// Mandatory RS 12/10 configuration.
     #[default]
@@ -229,14 +229,13 @@ impl From<norito::streaming::FecScheme> for FecScheme {
 /// Erasure coding parameters applied during chunking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct ErasureProfile {
     /// Number of data shards in each erasure set.
     pub data_shards: u16,
     /// Number of parity shards.
     pub parity_shards: u16,
-    /// Number of parity stripes across rows (column-parity stripes).
-    #[norito(default)]
-    #[norito(skip_serializing_if = "is_zero_u16")]
+    /// Number of parity stripes across rows (column-parity stripes), explicit even when zero.
     pub row_parity_stripes: u16,
     /// Chunk alignment (chunks per availability slice).
     pub chunk_alignment: u16,
@@ -254,14 +253,10 @@ impl Default for ErasureProfile {
         }
     }
 }
-// Norito's `skip_serializing_if` predicates take a reference to the field value.
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_zero_u16(value: &u16) -> bool {
-    *value == 0
-}
 /// Retention policy negotiated for a DA blob.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct RetentionPolicy {
     /// Hot-tier retention period in seconds.
     pub hot_retention_secs: u64,
@@ -288,6 +283,7 @@ impl Default for RetentionPolicy {
 /// Optional metadata entries supplied by submitters.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct ExtraMetadata {
     /// Metadata key-value pairs.
     pub items: Vec<MetadataEntry>,
@@ -301,14 +297,97 @@ impl ExtraMetadata {
 }
 /// Encryption algorithm applied to a metadata entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "cipher", content = "params"))]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "cipher", content = "params", deny_unknown_fields)
+)]
 pub enum MetadataEncryption {
     /// No encryption applied; `value` is stored as-is.
     #[default]
     None,
-    /// `ChaCha20Poly1305` envelope with optional metadata (e.g., key labels).
-    ChaCha20Poly1305(#[norito(default)] MetadataCipherEnvelope),
+    /// `ChaCha20Poly1305` envelope with explicit metadata (e.g., a nullable key label).
+    ChaCha20Poly1305(MetadataCipherEnvelope),
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for MetadataEncryption {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        parser.skip_ws();
+        parser.preflight_object_entries()?;
+        parser.expect(b'{')?;
+        parser.skip_ws();
+        let mut cipher = None;
+        let mut params = None;
+        if !parser.try_consume_char(b'}')? {
+            loop {
+                parser.skip_ws();
+                let key = parser.parse_key()?;
+                match key.as_str() {
+                    "cipher" => {
+                        if cipher.is_some() {
+                            return Err(norito::json::Error::duplicate_field("cipher"));
+                        }
+                        cipher = Some(parser.parse_string()?);
+                    }
+                    "params" => {
+                        if params.is_some() {
+                            return Err(norito::json::Error::duplicate_field("params"));
+                        }
+                        params = Some(parser.raw_value_slice()?);
+                    }
+                    _ => return Err(norito::json::Error::unknown_field(key.as_str())),
+                }
+                parser.skip_ws();
+                if parser.try_consume_char(b',')? {
+                    continue;
+                }
+                parser.expect(b'}')?;
+                break;
+            }
+        }
+        let cipher = cipher.ok_or_else(|| norito::json::Error::missing_field("cipher"))?;
+        let params = params.ok_or_else(|| norito::json::Error::missing_field("params"))?;
+        let mut params_parser = norito::json::Parser::new(params);
+        let encryption = match cipher.as_str() {
+            "None" => {
+                params_parser.parse_null()?;
+                Self::None
+            }
+            "ChaCha20Poly1305" => Self::ChaCha20Poly1305(
+                <MetadataCipherEnvelope as norito::json::JsonDeserialize>::json_deserialize(
+                    &mut params_parser,
+                )?,
+            ),
+            _ => {
+                return Err(norito::json::Error::Message(
+                    "unknown JSON enum variant".to_owned(),
+                ));
+            }
+        };
+        params_parser.skip_ws();
+        if !params_parser.eof() {
+            return Err(norito::json::Error::Message(format!(
+                "unexpected trailing data for variant `{cipher}`"
+            )));
+        }
+        Ok(encryption)
+    }
+}
+#[cfg(feature = "json")]
+impl<'a> norito::json::FastFromJson<'a> for MetadataEncryption {
+    fn parse(
+        walker: &mut norito::json::TapeWalker<'a>,
+        _arena: &mut norito::json::Arena,
+    ) -> Result<Self, norito::Error> {
+        walker.ensure_document_depth()?;
+        let mut parser = norito::json::Parser::new_at(walker.input(), walker.raw_pos());
+        let value = <Self as norito::json::JsonDeserialize>::json_deserialize(&mut parser)
+            .map_err(norito::Error::from)?;
+        walker.sync_to_raw(parser.position());
+        Ok(value)
+    }
 }
 impl MetadataEncryption {
     /// Build a ChaCha20-Poly1305 envelope with an optional key label.
@@ -320,10 +399,10 @@ impl MetadataEncryption {
 /// Additional envelope metadata associated with an encrypted entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct MetadataCipherEnvelope {
-    /// Optional label identifying the key used for encryption.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    /// Optional label identifying the key used for encryption; JSON uses an explicit nullable slot.
+    #[norito(required)]
     pub key_label: Option<String>,
 }
 impl MetadataCipherEnvelope {
@@ -341,6 +420,7 @@ impl MetadataCipherEnvelope {
 /// Single metadata entry stored alongside the blob.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct MetadataEntry {
     /// Metadata key (UTF-8, governance-approved).
     pub key: String,
@@ -355,8 +435,7 @@ pub struct MetadataEntry {
     pub value: Vec<u8>,
     /// Visibility scope for the entry.
     pub visibility: MetadataVisibility,
-    /// Encryption applied to the value (defaults to `None`).
-    #[norito(default)]
+    /// Encryption applied to the value; the first-release layout requires this field explicitly.
     pub encryption: MetadataEncryption,
 }
 impl MetadataEntry {
@@ -384,7 +463,7 @@ impl MetadataEntry {
 /// Visibility scope for a metadata entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(tag = "visibility", content = "value")]
+#[norito(tag = "visibility", content = "value", deny_unknown_fields)]
 pub enum MetadataVisibility {
     /// Entry is visible to all consumers.
     #[default]
@@ -532,6 +611,7 @@ fn apply_basis_points(amount: &XorQuantity, basis_points: u16) -> Result<XorQuan
 /// Rent and incentive breakdown derived from [`DaRentPolicyV1`].
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct DaRentQuote {
     /// Total rent charged for the blob (GiB × months × base rate).
     pub base_rent: XorQuantity,
@@ -641,36 +721,167 @@ impl RentRatioField {
         }
     }
 }
-#[cfg(test)]
-mod erasure_profile_tests {
+#[cfg(all(test, feature = "json"))]
+mod manifest_carrier_json_tests {
     use super::*;
     use norito::json;
+
     #[test]
-    fn skips_zero_row_parity_stripes_in_json() {
+    fn erasure_profile_json_requires_explicit_zero_row_parity() {
         let profile = ErasureProfile {
             row_parity_stripes: 0,
             ..Default::default()
         };
-        let serialized = json::to_value(&profile)
-            .and_then(|value| json::to_string(&value))
-            .expect("serialize erasure profile");
+        let value = json::to_value(&profile).expect("serialize erasure profile");
         assert!(
-            !serialized.contains("row_parity_stripes"),
-            "zero stripes should be omitted: {serialized}"
+            value
+                .as_object()
+                .and_then(|object| object.get("row_parity_stripes"))
+                .is_some_and(|value| value.as_u64() == Some(0)),
+            "zero row parity must remain explicit: {value:?}"
+        );
+        assert_eq!(
+            json::from_value::<ErasureProfile>(value.clone()).expect("decode current profile"),
+            profile
+        );
+
+        let mut missing = value.clone();
+        missing
+            .as_object_mut()
+            .expect("profile JSON object")
+            .remove("row_parity_stripes")
+            .expect("current profile contains row parity");
+        assert!(
+            json::from_value::<ErasureProfile>(missing).is_err(),
+            "pre-release profiles without row parity must be rejected"
+        );
+
+        let mut unknown = value;
+        unknown
+            .as_object_mut()
+            .expect("profile JSON object")
+            .insert("legacy_extension".to_owned(), json::Value::Null);
+        assert!(
+            json::from_value::<ErasureProfile>(unknown).is_err(),
+            "profile objects must reject unknown fields"
         );
     }
+
     #[test]
-    fn serializes_non_zero_row_parity_stripes_in_json() {
-        let profile = ErasureProfile {
-            row_parity_stripes: 2,
-            ..Default::default()
-        };
-        let serialized = json::to_value(&profile)
-            .and_then(|value| json::to_string(&value))
-            .expect("serialize erasure profile");
+    fn metadata_encryption_json_requires_explicit_envelope_slots() {
+        let none = MetadataEncryption::None;
+        let none_value = json::to_value(&none).expect("serialize unencrypted metadata marker");
         assert!(
-            serialized.contains("\"row_parity_stripes\":2"),
-            "non-zero stripes must be present: {serialized}"
+            none_value
+                .as_object()
+                .and_then(|object| object.get("params"))
+                .is_some_and(json::Value::is_null),
+            "the None variant must carry an explicit null params slot"
+        );
+        assert_eq!(
+            json::from_value::<MetadataEncryption>(none_value.clone())
+                .expect("decode explicit None params"),
+            none
+        );
+        let mut missing_none_params = none_value;
+        missing_none_params
+            .as_object_mut()
+            .expect("encryption JSON object")
+            .remove("params")
+            .expect("current encryption marker contains params");
+        assert!(
+            json::from_value::<MetadataEncryption>(missing_none_params).is_err(),
+            "an omitted encryption payload must be rejected"
+        );
+
+        let encrypted = MetadataEncryption::chacha20poly1305_with_label(None::<String>);
+        let encrypted_value =
+            json::to_value(&encrypted).expect("serialize encrypted metadata marker");
+        assert!(
+            encrypted_value
+                .as_object()
+                .and_then(|object| object.get("params"))
+                .and_then(json::Value::as_object)
+                .and_then(|params| params.get("key_label"))
+                .is_some_and(json::Value::is_null),
+            "an absent key label must use an explicit null slot"
+        );
+        assert_eq!(
+            json::from_value::<MetadataEncryption>(encrypted_value.clone())
+                .expect("decode encrypted metadata marker"),
+            encrypted
+        );
+
+        let mut missing_envelope = encrypted_value.clone();
+        missing_envelope
+            .as_object_mut()
+            .expect("encryption JSON object")
+            .remove("params")
+            .expect("current encryption marker contains params");
+        assert!(
+            json::from_value::<MetadataEncryption>(missing_envelope).is_err(),
+            "encrypted metadata without its cipher envelope must be rejected"
+        );
+
+        let mut missing_label = encrypted_value.clone();
+        missing_label
+            .as_object_mut()
+            .and_then(|object| object.get_mut("params"))
+            .and_then(json::Value::as_object_mut)
+            .expect("cipher params JSON object")
+            .remove("key_label")
+            .expect("current cipher envelope contains key label");
+        assert!(
+            json::from_value::<MetadataEncryption>(missing_label).is_err(),
+            "an omitted key-label slot must be rejected"
+        );
+
+        let mut unknown_envelope = encrypted_value;
+        unknown_envelope
+            .as_object_mut()
+            .and_then(|object| object.get_mut("params"))
+            .and_then(json::Value::as_object_mut)
+            .expect("cipher params JSON object")
+            .insert("legacy_extension".to_owned(), json::Value::Null);
+        assert!(
+            json::from_value::<MetadataEncryption>(unknown_envelope).is_err(),
+            "cipher envelopes must reject unknown fields"
+        );
+    }
+
+    #[test]
+    fn metadata_entry_json_requires_encryption_and_is_closed() {
+        let entry = MetadataEntry::new(
+            "content-type",
+            b"text/plain".to_vec(),
+            MetadataVisibility::Public,
+        );
+        let value = json::to_value(&entry).expect("serialize metadata entry");
+        assert_eq!(
+            json::from_value::<MetadataEntry>(value.clone())
+                .expect("decode current metadata entry"),
+            entry
+        );
+
+        let mut missing = value.clone();
+        missing
+            .as_object_mut()
+            .expect("metadata entry JSON object")
+            .remove("encryption")
+            .expect("current metadata entry contains encryption");
+        assert!(
+            json::from_value::<MetadataEntry>(missing).is_err(),
+            "pre-release metadata entries without encryption must be rejected"
+        );
+
+        let mut unknown = value;
+        unknown
+            .as_object_mut()
+            .expect("metadata entry JSON object")
+            .insert("legacy_extension".to_owned(), json::Value::Null);
+        assert!(
+            json::from_value::<MetadataEntry>(unknown).is_err(),
+            "metadata entries must reject unknown fields"
         );
     }
 }

@@ -53,6 +53,7 @@ def _payloads() -> dict[str, bytes]:
         "privacy_bootstrap_plan.json": b'{"plan":true}\n',
         "config.toml": b'chain = "taira"\n',
         "genesis.json": b'{"transactions":[]}\n',
+        "nevo-reset.review.json": b'{"review":true}\n',
         "bootle_lantern_broker_public.json": b'{"broker":true}\n',
     }
 
@@ -81,6 +82,11 @@ def _rollout_manifest(
             )
         elif contract["operator_copy"] is not None:
             row["operator_copy"] = contract["operator_copy"]
+        elif key == "nevo_review":
+            row.update(
+                binds_genesis_sha256=True,
+                binds_onboarding_token_hashes=True,
+            )
         else:
             row["bound_by_plan_sha256"] = True
         release[key] = row

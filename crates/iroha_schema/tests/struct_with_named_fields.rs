@@ -1,6 +1,5 @@
 //! `IntoSchema` derive tests for named fields.
-mod common;
-use common::{assert_schema, entry};
+use crate::common::{assert_schema, entry};
 use iroha_schema::prelude::*;
 use norito::{Decode, Encode};
 #[derive(IntoSchema, Encode, Decode)]

@@ -244,17 +244,18 @@ fn preflight_historical_autonomous_lane_recovery_inner(
     let mut expected_validators = if retained_record.is_some() {
         descriptor.validator_set.clone()
     } else {
-        let nexus = state.nexus_snapshot();
-        if !nexus.enabled || !super::lane_planner::proposal_lookahead_enabled(&nexus, height) {
-            input
-                .historical_context
-                .roster
-                .iter()
-                .map(|entry| entry.validator.clone())
-                .collect::<Vec<_>>()
-        } else {
-            state.authoritative_lane_peer_ids_at_height(descriptor.lane_id, height)
-        }
+        state
+            .resolve_lane_committee_at_height(
+                crate::state::LaneAuthorityRoute::new(descriptor.lane_id, descriptor.dataspace_id),
+                height,
+            )
+            .map(crate::state::LaneAuthorityCommittee::into_validators)
+            .map_err(|_| {
+                invalid_historical_autonomous_recovery(
+                    input,
+                    "exact lane-route authority is unavailable at the recovery height",
+                )
+            })?
     };
     expected_validators.sort();
     if expected_validators
@@ -327,7 +328,7 @@ fn preflight_historical_autonomous_lane_recovery_inner(
         )
         .map_err(|error| invalid_historical_autonomous_recovery(input, error.to_string()))?;
     let mut reservation_digests = BTreeSet::new();
-    let mut transaction_hashes = BTreeSet::new();
+    let mut entrypoint_hashes = BTreeSet::new();
     for (key, entrypoint_hash) in input
         .reservation_group
         .ordered_keys
@@ -340,9 +341,9 @@ fn preflight_historical_autonomous_lane_recovery_inner(
             || key.reservation_owner_hash != reservation_owner_hash
             || key.proposal_identity_hash != proposal_identity_hash
             || !reservation_digests.insert(key.digest())
-            || !transaction_hashes.insert(key.signed_transaction_hash)
+            || !entrypoint_hashes.insert(key.entrypoint_hash)
             || (require_canonical_carrier_body
-                && state.has_committed_transaction(key.signed_transaction_hash))
+                && state.has_committed_entrypoint(key.entrypoint_hash))
         {
             return Err(invalid_historical_autonomous_recovery(
                 input,

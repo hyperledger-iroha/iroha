@@ -88,7 +88,7 @@ pub struct DaIngestRequest {
     pub total_size: u64,
     pub payload_hash: BlobDigest,         // BLAKE3 of canonical decompressed bytes
     pub compression: Compression,        // Identity, gzip, deflate, or zstd
-    pub norito_manifest: Option<Vec<u8>>, // optional pre-built manifest
+    pub norito_manifest: Option<Vec<u8>>, // required slot: pre-built manifest or explicit null
     pub payload: Vec<u8>,                 // raw blob data (<= configured limit)
     pub metadata: ExtraMetadata,          // optional key/value metadata map
     pub signatures: Vec<DaIngestSignatureV1>, // canonical account-controller witnesses
@@ -122,6 +122,7 @@ pub enum BlobClass {
 pub struct ErasureProfile {
     pub data_shards: u16,
     pub parity_shards: u16,
+    pub row_parity_stripes: u16, // explicit even when zero
     pub chunk_alignment: u16, // chunks per availability slice
     pub fec_scheme: FecScheme,
 }
@@ -142,11 +143,70 @@ pub struct MetadataEntry {
     pub key: String,
     pub value: Vec<u8>,
     pub visibility: MetadataVisibility, // public vs governance-only
+    pub encryption: MetadataEncryption,
 }
 
 pub enum MetadataVisibility {
     Public,
     GovernanceOnly,
+}
+
+pub enum MetadataEncryption {
+    None,
+    ChaCha20Poly1305(MetadataCipherEnvelope),
+}
+
+pub struct MetadataCipherEnvelope {
+    pub key_label: Option<String>, // required slot: label or explicit null
+}
+
+pub struct DaRentQuote {
+    pub base_rent: XorQuantity,
+    pub protocol_reserve: XorQuantity,
+    pub provider_reward: XorQuantity,
+    pub pdp_bonus: XorQuantity,
+    pub potr_bonus: XorQuantity,
+    pub egress_credit_per_gib: XorQuantity,
+}
+
+pub enum ChunkRole {
+    Data,
+    LocalParity,
+    GlobalParity,
+    StripeParity,
+}
+
+pub struct ChunkCommitment {
+    pub index: u32,
+    pub offset: u64,
+    pub length: u32,
+    pub commitment: ChunkDigest,
+    pub parity: bool,
+    pub role: ChunkRole,
+    pub group_id: u32,
+}
+
+pub struct DaManifestV1 {
+    pub version: u16,
+    pub client_blob_id: BlobDigest,
+    pub lane_id: LaneId,
+    pub epoch: u64,
+    pub blob_class: BlobClass,
+    pub codec: BlobCodec,
+    pub blob_hash: BlobDigest,
+    pub chunk_root: BlobDigest,
+    pub storage_ticket: StorageTicketId,
+    pub total_size: u64,
+    pub chunk_size: u32,
+    pub total_stripes: u32,
+    pub shards_per_stripe: u32,
+    pub erasure_profile: ErasureProfile,
+    pub retention_policy: RetentionPolicy,
+    pub rent_quote: DaRentQuote,
+    pub chunks: Vec<ChunkCommitment>,
+    pub ipa_commitment: BlobDigest,
+    pub metadata: ExtraMetadata,
+    pub issued_at_unix: u64,
 }
 
 pub struct DaIngestReceipt {
@@ -157,15 +217,25 @@ pub struct DaIngestReceipt {
     pub chunk_root: BlobDigest,         // Merkle root after chunking
     pub manifest_hash: BlobDigest,      // Norito manifest hash
     pub storage_ticket: StorageTicketId,
-    pub pdp_commitment: Option<Vec<u8>>,     // Norito-encoded PDP bytes
-    #[norito(default)]
+    pub pdp_commitment: Option<Vec<u8>>, // required slot: Norito-encoded PDP bytes or explicit null
     pub stripe_layout: DaStripeLayout,   // total_stripes, shards_per_stripe, row_parity_stripes
     pub queued_at_unix: u64,
-    #[norito(default)]
     pub rent_quote: DaRentQuote,        // XOR rent + incentives derived from policy
     pub operator_signature: Signature,
 }
 ```
+
+The first-release request, receipt, authorization, signature, stripe-layout,
+manifest, and manifest-owned carrier objects are closed schemas. Every V1 field
+is present on the wire. Nullable manifest, PDP, and metadata key-label slots use
+explicit `null`; zero row-parity counts and zero IPA commitments are still
+serialized; tagged enum envelopes reject unknown fields; the metadata-
+encryption envelope requires both its `cipher` and `params` keys; and unknown
+fields are rejected at each closed boundary. Pre-release layouts that omitted
+compression, row parity, PDP, stripe, rent, IPA, metadata encryption, or
+cipher-envelope fields do not decode and are not upgraded by defaults.
+Removing the pre-release fallbacks does not reorder or retype the canonical
+binary fields, so already-valid current V1 bytes retain their encoding.
 
 > Implementation note: the canonical Rust representations for these payloads now live under
 > `iroha_data_model::da::types`, with request/receipt wrappers in `iroha_data_model::da::ingest`
@@ -221,7 +291,9 @@ commitment and exact byte length of the canonical decompressed payload, and the
 inner content commitment. Witnesses are non-empty and strictly ordered by
 `PublicKey`; duplicate, invalid, or non-canonical witness sets are rejected.
 There is no label-domain signature, unsigned pin intent, omitted authorization,
-or compatibility decoder.
+or alternate decoder. The current pin-intent JSON shape is closed: its alias
+slot is always present as a string or explicit `null`, and unknown fields are
+rejected on both an intent and its header-committed bundle.
 
 Torii checks the exact network and authenticated principal before
 decompression, erasure computation, or storage work. Consensus repeats the
@@ -297,6 +369,9 @@ one-shot nonce and existing pin indexes reject reuse.
 
 - Unit tests for schema validation, signature checks, duplicate detection.
 - Golden tests verifying Norito encoding of `DaIngestRequest`, manifest, and receipt.
+- Negative wire tests proving omission-based pre-release request, stripe, receipt, manifest,
+  erasure-profile, and metadata layouts do not decode, plus JSON tests for required nullable slots
+  and unknown-field rejection throughout the manifest-owned object graph.
 - Integration harness spinning up mock SoraFS + registry, asserting chunk + pin flows.
 - Property tests covering random erasure profiles and retention combinations.
 - Fuzzing of Norito payloads to guard against malformed metadata.
@@ -441,24 +516,35 @@ All previously blocked ingest TODOs have been implemented and verified:
   (defaulting to `lane_id` when absent), and Sumeragi now persists the highest
   `(epoch, sequence)` per `(shard_id, lane_id)` into
   `da-shard-cursors.norito` alongside the DA spool so restarts drop resharded/unknown lanes and keep
-  replay deterministic. The in-memory shard cursor index now fails fast on commitments for
-  unmapped lanes instead of defaulting to the lane id, making cursor advancement and replay errors
-  explicit, and block validation rejects shard-cursor regressions with a dedicated
-  `DaShardCursorViolation` reason + telemetry labels for operators. Startup/catch-up now halts DA
-  index hydration if Kura contains an unknown lane or regressing cursor and records the offending
-  block height so operators can remediate before serving DA state.【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/shard_cursor.rs】【crates/iroha_core/src/sumeragi/main_loop.rs】【crates/iroha_core/src/state.rs】【crates/iroha_core/src/block.rs】【specs/nexus_lanes.md:47】
+  replay deterministic. The in-memory index uses the same `(shard_id, lane_id)` key, so lanes
+  sharing a storage shard retain independent lane-scoped sequence cursors. It fails fast on
+  commitments for unmapped lanes instead of defaulting to the lane id, making cursor advancement
+  and replay errors explicit, and block validation rejects per-lane shard-cursor regressions with
+  a dedicated `DaShardCursorViolation` reason + telemetry labels for operators. The first-release
+  journal layout requires both each cursor's `last_block_height` and the complete
+  `canonical_reset_heights` map; truncated pre-release layouts are rejected rather than defaulted.
+  Startup and rewind are serialized by one hydration fence, capture one fixed committed WSV hash
+  prefix, and build commitments, confidential receipts, receipt cursors, shard cursors, and pin
+  intents in a private aggregate. A missing non-hash-only Kura body, WSV/body hash mismatch,
+  cursor regression, or receipt gap aborts the rebuild without changing any published index; all
+  five indexes publish only after the complete replay succeeds. Historical commitments for lanes
+  no longer in the catalog remain identity-only and do not become active query/cursor rows. Block
+  proof and block/transaction query consumers likewise accept a Kura body only when its hash and
+  declared height match the immutable WSV slot being queried.
+  【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/shard_cursor.rs】【crates/iroha_core/src/sumeragi/main_loop.rs】【crates/iroha_core/src/state.rs】【crates/iroha_core/src/block.rs】【specs/nexus_lanes.md:47】
 - **Shard cursor lag telemetry** — the `da_shard_cursor_lag_blocks{lane,shard}` gauge reports how
   far a shard trails the height being validated. Missing/stale/unknown lanes set the lag to the
   required height (or delta), and successful advances reset it to zero so steady-state stays flat.
   Operators should alarm on non-zero lags, inspect the DA spool/journal for the offending lane,
   and verify the lane catalog for accidental resharding before replaying the block to clear the
   gap.
-- **Confidential compute lanes** — lanes marked with
-  `metadata.confidential_compute=true` and a `confidential_key_version` are treated as
-  SMPC/encrypted DA paths: Sumeragi enforces non-zero payload/manifest digests and storage tickets,
-  rejects full-replica storage profiles, and indexes the SoraFS ticket + policy version without
-  exposing payload bytes. Receipts hydrate from Kura during replay so validators recover the same
-  confidentiality metadata after restarts.【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/confidential.rs】【crates/iroha_core/src/da/confidential_store.rs】【crates/iroha_core/src/state.rs】
+- **Confidential compute lanes** — lanes use the typed `confidential_compute` descriptor with an
+  exact `mechanism` (`encryption` or `secret_sharing`), a positive `key_version`, and canonically
+  ordered `allowed_audiences`, together with a non-full-replica storage profile. Catalog
+  construction rejects partial or malformed policies; the retired string metadata keys are never
+  interpreted. Sumeragi enforces non-zero payload/manifest digests and storage tickets and indexes
+  the SoraFS ticket + policy version without exposing payload bytes. Receipts hydrate from Kura
+  during replay so validators recover the same confidentiality metadata after restarts.【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/confidential.rs】【crates/iroha_core/src/da/confidential_store.rs】【crates/iroha_core/src/state.rs】
 
 ## Implementation Notes
 
@@ -540,8 +626,10 @@ unchanged.
   from the commitment.【crates/iroha_core/src/sumeragi/main_loop.rs:5335】【crates/iroha_core/src/sumeragi/main_loop.rs:14506】
 
 Roundtrip coverage for the request, manifest, and receipt payloads is tracked in
-`crates/iroha_data_model/tests/da_ingest_roundtrip.rs`, ensuring the Norito codec
-remains stable across updates.【crates/iroha_data_model/tests/da_ingest_roundtrip.rs:1】
+`crates/iroha_data_model/tests/da_ingest_roundtrip.rs`. Manifest coverage also
+asserts the exact current JSON object graph and rejects missing, unknown, and
+pre-release binary carrier layouts without compatibility decoding.
+【crates/iroha_data_model/tests/da_ingest_roundtrip.rs:1】
 
 **Retention defaults.** Governance ratified the initial retention policy during
 SF-6; the defaults enforced by `RetentionPolicy::default()` are:

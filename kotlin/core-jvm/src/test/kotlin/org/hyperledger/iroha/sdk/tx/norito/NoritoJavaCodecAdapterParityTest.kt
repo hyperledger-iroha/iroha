@@ -16,6 +16,7 @@ import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
@@ -99,13 +100,13 @@ class NoritoJavaCodecAdapterParityTest {
     }
 
     @Test
-    fun `signed Taira SBD transfer preserves exact authority and destination`() {
+    fun `signed Taira DS transfer preserves exact authority and destination`() {
         val authority = sampleAuthority(0x39)
         val destination = sampleAuthority(0x3A)
         assertEquals(SccpV1.TAIRA_I105_DISCRIMINANT_V1, AccountAddress.detectI105Discriminant(authority))
         assertEquals(SccpV1.TAIRA_I105_DISCRIMINANT_V1, AccountAddress.detectI105Discriminant(destination))
         val transfer = TransferWirePayloadEncoder.encodeAssetTransfer(
-            "$SBD_ASSET_DEFINITION_ID#$authority",
+            "$DS_ASSET_DEFINITION_ID#$authority",
             "10",
             destination,
         )
@@ -135,7 +136,7 @@ class NoritoJavaCodecAdapterParityTest {
                 wirePayload.payloadBytes,
                 SccpV1.TAIRA_I105_DISCRIMINANT_V1,
             )
-        assertEquals("$SBD_ASSET_DEFINITION_ID#$authority", decodedTransfer.assetId)
+        assertEquals("$DS_ASSET_DEFINITION_ID#$authority", decodedTransfer.assetId)
         assertEquals(destination, decodedTransfer.destinationAccountId)
     }
 
@@ -419,10 +420,15 @@ class NoritoJavaCodecAdapterParityTest {
         readField(ivmDecoder, "payload.time_to_live_ms")
         readField(ivmDecoder, "payload.nonce")
         readField(ivmDecoder, "payload.fee_payment")
+        val ivmAdmissionIntent = readField(ivmDecoder, "payload.admission_intent")
         readField(ivmDecoder, "payload.metadata")
         val ivmAttachments = readField(ivmDecoder, "payload.attachments")
         assertEquals(null, decodeOptionPayload(ivmAttachments, "payload.attachments"))
         assertEquals(0, ivmDecoder.remaining())
+        assertEquals(
+            TransactionAdmissionIntent.ORDINARY.ordinal.toLong(),
+            NoritoAdapters.uint(32).decode(canonicalDecoder(ivmAdmissionIntent)),
+        )
 
         val executableDecoder = canonicalDecoder(ivmExecutableField)
         assertEquals(2L, NoritoAdapters.uint(32).decode(executableDecoder))
@@ -461,6 +467,7 @@ class NoritoJavaCodecAdapterParityTest {
         readField(instructionDecoder, "payload.time_to_live_ms")
         readField(instructionDecoder, "payload.nonce")
         readField(instructionDecoder, "payload.fee_payment")
+        val instructionAdmissionIntent = readField(instructionDecoder, "payload.admission_intent")
         readField(instructionDecoder, "payload.metadata")
         val instructionAttachments = readField(instructionDecoder, "payload.attachments")
         assertEquals(
@@ -468,6 +475,10 @@ class NoritoJavaCodecAdapterParityTest {
             decodeOptionPayload(instructionAttachments, "payload.attachments"),
         )
         assertEquals(0, instructionDecoder.remaining())
+        assertEquals(
+            TransactionAdmissionIntent.ORDINARY.ordinal.toLong(),
+            NoritoAdapters.uint(32).decode(canonicalDecoder(instructionAdmissionIntent)),
+        )
 
         val listFieldDecoder = canonicalDecoder(instructionExecutableField)
         assertEquals(0L, NoritoAdapters.uint(32).decode(listFieldDecoder))
@@ -617,7 +628,7 @@ class NoritoJavaCodecAdapterParityTest {
         .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
 
     companion object {
-        private const val SBD_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
+        private const val DS_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
         private const val CONTRACT_ADDRESS =
             "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
         private val TEST_NETWORK_ID = NetworkId.parse(

@@ -28,9 +28,8 @@ use super::v2_core::{
 #[cfg(test)]
 use super::v2_recovery::RecoveredCompleteTipActivationAuthority;
 use super::{
-    FairV2Ingress, FairV2IngressBarrierBypass, FairV2IngressCapacityError,
-    FairV2IngressDequeueDisposition, FairV2IngressOwnershipEvidence, GenesisWithPubKey,
-    InboundBlockMessage, SumeragiWorker,
+    FairV2Ingress, FairV2IngressCapacityError, FairV2IngressDequeueDisposition,
+    FairV2IngressOwnershipEvidence, GenesisWithPubKey, InboundBlockMessage, SumeragiWorker,
     message::{BlockMessage, CanonicalExecutedBlockNeedV1},
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
     v2::{
@@ -54,10 +53,9 @@ use super::{
     },
     v2_chunks::{EncodedV2Payload, encode_payload},
     v2_effects::{
-        EffectExecutorStep, EffectQueueConfig, EffectTransportError, PendingKuraApplyRecoveryStage,
+        EffectExecutorStep, EffectQueueConfig, PendingKuraApplyRecoveryStage,
         PostFinalityCleanupTarget, V2EffectExecutor,
         certified_body_request_is_superseded_after_decision,
-        network_ingress_is_certified_fence_escape, v2_ingress_head_can_drain,
     },
     v2_first_release_recovery::{
         CompleteTipPredecessorStorageErrorV1, RetiredRecoveredCompleteTipActivationAuthorityV1,
@@ -85,14 +83,9 @@ use super::{
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
     v2_transport::AuthenticatedCertifiedBodyRequest,
     v2_worker::{
-        CertifiedServeAdmission, CertifiedServeNegativeOutcome, CertifiedServePrepareError,
         ExactFanoutOwnership, KuraReplicaAdvertRefreshOwner, ProductionV2Services,
         QueuePlanBatchSources, V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
     },
-};
-#[cfg(test)]
-use super::{
-    serviced_candidate_store::LeaderWireLifecycleStoreGate, v2_worker::CertifiedServeIngressGate,
 };
 use crate::{
     kura::{AutonomousLifecycleProcessGenerationClaim, Kura, KuraV2CommitReceipt},
@@ -129,7 +122,9 @@ mod lifecycle_runner_authority;
 pub(in crate::sumeragi) mod ordinary_ingress_consumer;
 #[path = "v2_runner/preactivation_ingress.rs"]
 mod preactivation_ingress;
-pub(in crate::sumeragi) use lifecycle_height_driver::drain_lifecycle_v2_ingress;
+pub(in crate::sumeragi) use lifecycle_height_driver::{
+    LifecycleProducerClaimDispositionV1, drain_lifecycle_v2_ingress,
+};
 #[cfg(test)]
 use lifecycle_pending_kura::{PendingTipRecoveryDeadline, pending_tip_recovery_deadline_error};
 use lifecycle_run_inner::PendingSuccessorActivation;
@@ -138,14 +133,146 @@ pub(in crate::sumeragi) use lifecycle_runner_authority::{
     ProductionLifecyclePendingKuraRunnerActivationV1, ProductionLifecycleRunnerActivationV1,
     RecoveredLifecycleOwnerFactoryDependencyPermitV1,
 };
-use ordinary_ingress_consumer::{
-    PreparedDequeuedV2IngressV1, ProductionPreparedOrdinaryIngressConsumptionV1,
-    consume_prepared_dequeued_v2_ingress,
-};
 pub(in crate::sumeragi) use preactivation_ingress::ProductionLifecycleCanonicalRecoveryIngressV1;
 
 const IDLE_POLL: Duration = Duration::from_millis(10);
 const CANDIDATE_WORK_RECHECK: Duration = Duration::from_millis(100);
+
+struct V2StatusClearGuard {
+    clear_on_drop: bool,
+}
+
+impl V2StatusClearGuard {
+    fn new() -> Self {
+        super::status::clear_v2_status();
+        Self {
+            clear_on_drop: false,
+        }
+    }
+
+    fn clear_on_drop(&mut self) {
+        self.clear_on_drop = true;
+    }
+}
+
+impl Drop for V2StatusClearGuard {
+    fn drop(&mut self) {
+        if self.clear_on_drop {
+            super::status::clear_v2_status();
+        }
+    }
+}
+
+fn close_ingress_for_rollover(ingress_ready: &AtomicBool, block_ingress: &FairV2Ingress) {
+    ingress_ready.store(false, Ordering::Release);
+    block_ingress.close();
+}
+
+#[cfg(test)]
+fn open_ingress_for_active_height(
+    output_guard: &ConsensusOutputGuard,
+    ingress_ready: &AtomicBool,
+    block_ingress: &FairV2Ingress,
+    activation: Option<(PendingSuccessorActivation, wire::SumeragiV2Status)>,
+) -> Result<(), V2RunnerError> {
+    let Some(ingress_activation) = output_guard.begin_fail_stop_operation() else {
+        return Err(V2RunnerError::RestartRequired);
+    };
+    if let Some((activation, successor)) = activation.as_ref() {
+        activation.preflight_ingress_open(successor)?;
+    }
+    block_ingress.open().map_err(ingress_capacity_error)?;
+    if let Some((activation, successor)) = activation
+        && let Err(error) = activation.publish(successor)
+    {
+        close_ingress_for_rollover(ingress_ready, block_ingress);
+        return Err(error);
+    }
+    // Keep readiness false across the fallible successor publication so no
+    // ingress can be accepted and then discarded on reauthentication failure.
+    ingress_ready.store(true, Ordering::Release);
+    ingress_activation.complete();
+    Ok(())
+}
+
+fn ingress_capacity_error(error: FairV2IngressCapacityError) -> V2RunnerError {
+    if error.is_bytes() {
+        V2RunnerError::IngressByteCapacity {
+            configured: error.configured(),
+            required: error.required(),
+        }
+    } else {
+        V2RunnerError::IngressCapacity {
+            configured: error.configured(),
+            required: error.required(),
+        }
+    }
+}
+
+fn validate_deadline_duration(duration: Duration) -> Result<(), V2RunnerError> {
+    Instant::now()
+        .checked_add(duration)
+        .ok_or(V2RunnerError::InvalidLimits)?;
+    Ok(())
+}
+
+fn deadline_after(now: Instant, duration: Duration) -> Instant {
+    now.checked_add(duration)
+        .expect("consensus deadline duration was prevalidated before height startup")
+}
+
+fn initial_block_sync_deadline(
+    height_started_at: Instant,
+    round_timeout: Duration,
+    eager_recovery: bool,
+) -> Instant {
+    if eager_recovery {
+        height_started_at
+    } else {
+        deadline_after(height_started_at, round_timeout)
+    }
+}
+
+const fn retain_eager_block_sync(
+    recovering_interrupted_tip: bool,
+    admitted_discovered_commit_qc: bool,
+) -> bool {
+    recovering_interrupted_tip || admitted_discovered_commit_qc
+}
+
+fn snapshot_successor_logical_time(
+    anchor: &wire::SnapshotBootstrapAnchor,
+    block_cadence: Duration,
+) -> Result<Duration, V2RunnerError> {
+    let cadence_ms =
+        u64::try_from(block_cadence.as_millis()).map_err(|_| V2RunnerError::V2BlockTimeOverflow)?;
+    if cadence_ms == 0 || Duration::from_millis(cadence_ms) != block_cadence {
+        return Err(V2RunnerError::InvalidSnapshotBootstrapCadence);
+    }
+    let successor_ms = anchor
+        .snapshot_block_creation_time_ms
+        .checked_add(cadence_ms)
+        .ok_or(V2RunnerError::V2BlockTimeOverflow)?;
+    Ok(Duration::from_millis(successor_ms))
+}
+
+fn canonical_executed_block_recovery_batches(
+    needs: &[CanonicalExecutedBlockNeedV1],
+    capacity: usize,
+) -> Result<std::slice::Chunks<'_, CanonicalExecutedBlockNeedV1>, V2RunnerError> {
+    if capacity == 0
+        || needs.is_empty()
+        || needs
+            .windows(2)
+            .any(|pair| pair[0].height >= pair[1].height)
+    {
+        return Err(V2RunnerError::Service(
+            "canonical executed-block recovery needs are empty, unordered, duplicated, or have zero batch capacity"
+                .to_owned(),
+        ));
+    }
+    Ok(needs.chunks(capacity))
+}
 
 /// Move-only post-activation ownership of runner readiness and exact ingress.
 ///
@@ -224,6 +351,38 @@ impl ProductionLifecycleActiveRunnerBorrowV1 {
     pub(in crate::sumeragi) fn for_test() -> Self {
         Self::mint_for_recovered_runner()
     }
+}
+
+/// Move-only proof that the serialized runner completed one bounded producer
+/// service pass while retaining the active lifecycle borrow.
+///
+/// Construction is private to this module, so lifecycle ownership can turn a
+/// claimed ProducerTurn into an attempted terminal authority only after the
+/// ordinary local-proposal call or PendingKura no-clock pass returns success.
+#[must_use = "the producer-attempt permit must terminalize its claimed ProducerTurn"]
+pub(in crate::sumeragi) struct ProducerTurnAttemptPermitV1 {
+    _seal: ProducerTurnAttemptPermitSealV1,
+}
+struct ProducerTurnAttemptPermitSealV1;
+impl Drop for ProducerTurnAttemptPermitSealV1 {
+    fn drop(&mut self) {}
+}
+
+fn producer_turn_attempt_permit(
+    _runner: &mut ProductionLifecycleActiveRunnerBorrowV1,
+) -> ProducerTurnAttemptPermitV1 {
+    ProducerTurnAttemptPermitV1 {
+        _seal: ProducerTurnAttemptPermitSealV1,
+    }
+}
+
+/// Mint a fixture-owned successful producer attempt beside the exact active
+/// runner borrow.
+#[cfg(test)]
+pub(in crate::sumeragi) fn producer_turn_attempt_permit_for_test(
+    runner: &mut ProductionLifecycleActiveRunnerBorrowV1,
+) -> ProducerTurnAttemptPermitV1 {
+    producer_turn_attempt_permit(runner)
 }
 
 /// Process-local borrow key for preparing a launched lifecycle before activation.
@@ -733,108 +892,6 @@ impl Drop for V2IngressClearGuard {
         self.block_ingress.close();
     }
 }
-#[cfg(test)]
-struct CertifiedServeIngressBinding {
-    ingress_ready: Arc<AtomicBool>,
-    block_ingress: Arc<FairV2Ingress>,
-    gate: Option<CertifiedServeIngressGate>,
-}
-#[cfg(test)]
-impl CertifiedServeIngressBinding {
-    fn bind(
-        ingress_ready: Arc<AtomicBool>,
-        block_ingress: Arc<FairV2Ingress>,
-        gate: CertifiedServeIngressGate,
-    ) -> Result<Self, V2RunnerError> {
-        block_ingress
-            .bind_certified_serve_gate(gate.clone())
-            .map_err(V2RunnerError::Service)?;
-        Ok(Self {
-            ingress_ready,
-            block_ingress,
-            gate: Some(gate),
-        })
-    }
-    fn retire(&mut self) -> Result<(), V2RunnerError> {
-        let Some(gate) = self.gate.as_ref() else {
-            return Ok(());
-        };
-        close_ingress_for_rollover(&self.ingress_ready, &self.block_ingress);
-        self.block_ingress
-            .unbind_certified_serve_gate(gate)
-            .map_err(V2RunnerError::Service)?;
-        self.gate = None;
-        Ok(())
-    }
-}
-#[cfg(test)]
-impl Drop for CertifiedServeIngressBinding {
-    fn drop(&mut self) {
-        if let Err(error) = self.retire() {
-            iroha_logger::error!(
-                %error,
-                "failed to retire the per-height certified Serve ingress gate"
-            );
-        }
-    }
-}
-/// Per-height binding of durable generic leader-wire ownership to fair ingress.
-#[cfg(test)]
-struct LeaderWireIngressBinding {
-    ingress_ready: Arc<AtomicBool>,
-    block_ingress: Arc<FairV2Ingress>,
-    gate: Option<Arc<LeaderWireLifecycleStoreGate>>,
-}
-#[cfg(test)]
-impl LeaderWireIngressBinding {
-    fn bind(
-        ingress_ready: Arc<AtomicBool>,
-        block_ingress: Arc<FairV2Ingress>,
-        gate: Arc<LeaderWireLifecycleStoreGate>,
-        restore: super::serviced_candidate_store::LeaderWireLifecycleRestore,
-        lifecycle_ordinals: super::v2_runtime::RuntimeLifecycleOrdinalSource,
-        context_id: wire::HeightContextId,
-        height: wire::Height,
-    ) -> Result<Self, V2RunnerError> {
-        block_ingress
-            .bind_leader_wire_lifecycle_gate(
-                Arc::clone(&gate),
-                restore,
-                lifecycle_ordinals,
-                context_id,
-                height,
-            )
-            .map_err(V2RunnerError::Service)?;
-        Ok(Self {
-            ingress_ready,
-            block_ingress,
-            gate: Some(gate),
-        })
-    }
-    fn retire(&mut self) -> Result<(), V2RunnerError> {
-        let Some(gate) = self.gate.as_ref() else {
-            return Ok(());
-        };
-        close_ingress_for_rollover(&self.ingress_ready, &self.block_ingress);
-        self.block_ingress
-            .unbind_leader_wire_lifecycle_gate(gate)
-            .map_err(V2RunnerError::Service)?;
-        self.gate = None;
-        Ok(())
-    }
-}
-#[cfg(test)]
-impl Drop for LeaderWireIngressBinding {
-    fn drop(&mut self) {
-        if let Err(error) = self.retire() {
-            iroha_logger::error!(
-                %error,
-                "failed to retire the per-height durable leader-wire lifecycle gate"
-            );
-        }
-    }
-}
-include!("v2_runner/height_ingress_bindings.rs");
 include!("v2_runner/lifecycle_terminal_recovery.rs");
 #[allow(clippy::too_many_lines)]
 fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
@@ -1060,36 +1117,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         ),
     }
 }
-#[derive(Default)]
-pub(super) struct CommittedLaneStatusPublisher {
-    published_revision: Option<(u64, u64, u64)>,
-}
-impl CommittedLaneStatusPublisher {
-    pub(super) fn publish_if_changed(&mut self, lane_work: &V2LaneWorkAdapter) -> bool {
-        self.publish_if_changed_with(
-            || lane_work.committed_lane_block_status_revision(),
-            || lane_work.committed_lane_block_status_snapshot(),
-        )
-    }
-    fn publish_if_changed_with(
-        &mut self,
-        mut observe_revision: impl FnMut() -> (u64, u64, u64),
-        project: impl FnOnce() -> Vec<super::status::CommittedLaneBlockSnapshot>,
-    ) -> bool {
-        let revision = observe_revision();
-        if self.published_revision == Some(revision) {
-            return false;
-        }
-        let snapshot = project();
-        if observe_revision() != revision {
-            return false;
-        }
-        super::status::set_committed_lane_blocks(snapshot);
-        self.published_revision = Some(revision);
-        true
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LockedBodyRecoveryPlan {
     request: Option<(EventTag, wire::ConsensusRound, wire::BlockSubject)>,
@@ -1353,6 +1380,8 @@ fn schedule_local_proposal(
         let (_, time_source) =
             iroha_primitives::time::TimeSource::new_mock(carrier_context_header.creation_time());
         let assembler = V2CandidateAssembler::new(candidate_limits, time_source.clone());
+        let queue_plan_admissions =
+            lane_work.reconcile_pending_queue_plan_admissions(directive.tag().view())?;
         let attachments = candidate_attachments(
             context,
             state,
@@ -1360,6 +1389,7 @@ fn schedule_local_proposal(
             directive.tag().view(),
             &carrier_context_header,
             npos_vrf,
+            queue_plan_admissions,
         )?;
         let assembly = assembler.assemble(CandidateRequest {
             context,
@@ -1802,69 +1832,6 @@ fn advance_executor(
     }
     Ok(())
 }
-/// Execute at most one serialized transition from an older lifecycle before
-/// an exact Serve target turn.
-///
-/// Lock reconciliation and every other local producer stay behind the target;
-/// the ordinary runner path performs them after the barrier drains. This is
-/// deliberately not a loop, even when the older causal episode remains live.
-fn advance_executor_once_before_exact_serve(
-    receiver: &FairV2Ingress,
-    executor: &mut V2EffectExecutor,
-    services: &mut ProductionV2Services,
-) -> Result<(), V2RunnerError> {
-    executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
-    let _ = executor.step(Instant::now(), services)?;
-    Ok(())
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CertifiedServeBarrierLivenessAction {
-    TimeoutVoteEpisode,
-    TimeoutRecoveryPrefix,
-    Pacemaker,
-}
-/// Service the complete timeout-recovery suffix of one selected Serve turn.
-///
-/// The still-selected Serve carrier admits one eligible direct-roster timeout
-/// vote, services an already-owned prefix completion, and runs one typed
-/// pacemaker transition in that exact order.
-fn service_certified_serve_barrier_liveness_turn<E>(
-    recovering_interrupted_tip: bool,
-    mut service: impl FnMut(CertifiedServeBarrierLivenessAction) -> Result<(), E>,
-) -> Result<(), E> {
-    if !recovering_interrupted_tip {
-        service(CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode)?;
-    }
-    service(CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix)?;
-    service_certified_serve_barrier_pacemaker_turn(recovering_interrupted_tip, || {
-        service(CertifiedServeBarrierLivenessAction::Pacemaker)
-    })
-}
-/// Keep the pacemaker live for the full lifetime of a certified Serve barrier.
-///
-/// The predecessor admission does not gate service: a backpressured target can
-/// remain in fair ingress after that transient aperture closes, while the
-/// absolute timeout and certified progress roots remain independently live.
-fn service_certified_serve_barrier_pacemaker_turn<E>(
-    recovering_interrupted_tip: bool,
-    service: impl FnOnce() -> Result<(), E>,
-) -> Result<(), E> {
-    if recovering_interrupted_tip {
-        return Ok(());
-    }
-    service()
-}
-/// Execute at most one typed timeout/Progress-root transition while an exact
-/// transport episode retains ordinary ownership.
-fn advance_pacemaker_once(
-    receiver: &FairV2Ingress,
-    executor: &mut V2EffectExecutor,
-    services: &mut ProductionV2Services,
-) -> Result<(), V2RunnerError> {
-    executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
-    let _ = executor.step_pacemaker_once(Instant::now(), services)?;
-    Ok(())
-}
 fn reconcile_executor_locked_body(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
@@ -2109,6 +2076,7 @@ fn candidate_attachments(
     view: wire::View,
     round_header: &BlockHeader,
     npos_vrf: &V2NposVrfLifecycle,
+    queue_plan_admissions: Vec<Vec<u8>>,
 ) -> Result<CandidateAttachments, V2RunnerError> {
     if round_header.height().get() != context.height
         || round_header.prev_block_hash() != Some(parent.hash())
@@ -2148,13 +2116,20 @@ fn candidate_attachments(
         .merge_ledger()
         .latest()
         .map_or(1, |latest| latest.epoch_id.saturating_add(1));
-    let selected_merge_entry = state
-        .select_pending_certified_merge_entry_for_round(
-            round_header,
-            expected_merge_epoch,
-            merge_selection,
-        )
-        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+    let selected_merge_entry = if queue_plan_admissions.is_empty() {
+        state
+            .select_pending_certified_merge_entry_for_round(
+                round_header,
+                expected_merge_epoch,
+                merge_selection,
+            )
+            .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
+    } else {
+        // QueuePlan registry writes are ordered by the global Sumeragi QC.
+        // Keep them out of an execution-bearing merge carrier so that the
+        // independent merge write-set remains exact and uncontaminated.
+        None
+    };
     let certified_merge_entry = selected_merge_entry
         .map(|(_, entry, _)| entry)
         .map(|entry| {
@@ -2178,6 +2153,7 @@ fn candidate_attachments(
             .and_then(|entry| entry.execution_batch.as_ref())
             .map(|batch| batch.application_block_header.clone()),
         certified_merge_entry,
+        queue_plan_admissions,
         ..CandidateAttachments::default()
     })
 }

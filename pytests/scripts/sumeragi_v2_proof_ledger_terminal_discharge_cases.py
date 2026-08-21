@@ -1,37 +1,12 @@
 # Executed lexically in sumeragi_v2_proof_ledger_test.py; do not collect directly.
 
 
-def test_serve_terminal_discharge_production_contract_is_complete(
-    tmp_path: Path,
-) -> None:
-    """The Rust restart/Decision discharge closure is source-bound."""
-
-    module = load_checker()
-    copy_serve_lifecycle_production_fixture(tmp_path, module)
-
-    errors = module._serve_lifecycle_production_source_fidelity_errors(tmp_path)
-
-    assert not any(
-        "v2_worker" in error
-        or "v2_effects.rs" in error
-        or "Decision/Serve" in error
-        or "terminal-discharge" in error
-        for error in errors
-    ), errors
-    assert (
-        "_serve_lifecycle_production_source_fidelity_errors"
-        in module.validate_ledger.__code__.co_names
-    )
-
-
 @pytest.mark.parametrize(
     "filename",
     (
         "v2_worker_reply_route_cases.rs",
         "v2_worker_backpressure_cases.rs",
         "v2_worker_recovered_lifecycle_output_cases.rs",
-        "v2_worker_serve_unsealed_cases.rs",
-        "v2_worker_serve_decision_restart_cases.rs",
     ),
 )
 def test_worker_regression_include_source_seal_rejects_drift(
@@ -66,8 +41,6 @@ def test_worker_regression_include_source_seal_rejects_drift(
         "v2_worker_reply_route_cases.rs",
         "v2_worker_backpressure_cases.rs",
         "v2_worker_recovered_lifecycle_output_cases.rs",
-        "v2_worker_serve_unsealed_cases.rs",
-        "v2_worker_serve_decision_restart_cases.rs",
     ),
 )
 def test_worker_regression_include_invocation_cannot_move_or_disappear(
@@ -78,15 +51,7 @@ def test_worker_regression_include_invocation_cannot_move_or_disappear(
 
     module = load_checker()
     copy_serve_lifecycle_production_fixture(tmp_path, module)
-    owner = (
-        "v2_worker_main_01.rs"
-        if filename in {
-            "v2_worker_reply_route_cases.rs",
-            "v2_worker_backpressure_cases.rs",
-            "v2_worker_recovered_lifecycle_output_cases.rs",
-        }
-        else "v2_worker_main_04.rs"
-    )
+    owner = "v2_worker_main_01.rs"
     worker = tmp_path / "crates/iroha_core/src/sumeragi/tests" / owner
     mutate_source_once(
         worker,
@@ -140,82 +105,6 @@ def test_worker_backpressure_kura_regressions_are_in_the_exact_inventory(
     ), errors
 
 
-@pytest.mark.parametrize(
-    ("item_name", "old", "new", "description"),
-    (
-        (
-            "try_push_at",
-            "advert.verify_keeper_signature().is_err()",
-            "false",
-            "atomic Serve ingress ordinal admission",
-        ),
-        (
-            "try_recv_if_at_checked",
-            "ownership.freeze_runtime_physical_cut(runtime_physical_cut)",
-            "ownership.freeze_runtime_physical_cut(0)",
-            "durable physical-carrier ingress arbitration",
-        ),
-    ),
-)
-def test_current_fair_ingress_hash_seals_reject_new_path_mutations(
-    tmp_path: Path,
-    item_name: str,
-    old: str,
-    new: str,
-    description: str,
-) -> None:
-    """Kura authentication and immutable runtime cuts remain exact."""
-
-    module = load_checker()
-    copy_serve_lifecycle_production_fixture(tmp_path, module)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/mod.rs"
-    mutate_rust_item_source_in_context(
-        module,
-        path,
-        item_name,
-        (("impl", "FairV2Ingress"),),
-        old,
-        new,
-    )
-
-    errors = module._serve_ingress_ordinal_production_source_fidelity_errors(
-        tmp_path
-    )
-
-    assert any(
-        description in error
-        and "must match the exact reviewed token digest" in error
-        for error in errors
-    ), errors
-
-
-def test_current_serve_ordinal_regression_hash_rejects_gate_aliasing(
-    tmp_path: Path,
-) -> None:
-    """The ordinal-only regression cannot become a certified-request gate test."""
-
-    module = load_checker()
-    copy_serve_lifecycle_production_fixture(tmp_path, module)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/mod.rs"
-    name = "fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes"
-    mutate_rust_item_source(
-        module,
-        path,
-        name,
-        "let message = v2_certified_body_response(7, 0, 64);",
-        "let message = v2_certified_body_request(&validator);",
-    )
-
-    errors = module._serve_ingress_ordinal_production_source_fidelity_errors(
-        tmp_path
-    )
-
-    assert any(
-        name in error and "must match the exact reviewed token digest" in error
-        for error in errors
-    ), errors
-
-
 def test_current_timeout_capacity_regression_hash_rejects_aliased_fillers(
     tmp_path: Path,
 ) -> None:
@@ -258,212 +147,6 @@ _SERVE_TERMINAL_EFFECT_CONTEXT = (
     ),
 )
 
-
-@pytest.mark.parametrize(
-    ("relative", "item_name", "context", "old", "new"),
-    (
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-            "fully_authenticate_persisted_certified_serve_request",
-            (),
-            "authenticate_certified_body_request_with_validator_pops(",
-            "authenticate_certified_body_request(",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-            "validate_persisted_certified_serve_terminal_outcomes",
-            (),
-            "local_validator != Some(tombstone.response_responder)",
-            "false",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-            "discharge_restored_certified_serve_lifecycles",
-            (),
-            "if outcome_count != 1 {",
-            "if outcome_count == 0 {",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-            "begin_decision_serve_reconciliation",
-            _SERVE_TERMINAL_WORKER_CONTEXT,
-            "state.decision_reconciliation_pending = true;",
-            "state.decision_reconciliation_pending = false;",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-            "finish_decision_serve_reconciliation",
-            _SERVE_TERMINAL_WORKER_CONTEXT,
-            "&& !carrier_owned.contains(lifecycle_id)",
-            "&& carrier_owned.contains(lifecycle_id)",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-            "convert_exact_terminal_retry_after_decision",
-            _SERVE_TERMINAL_WORKER_CONTEXT,
-            "if request.subject == decided_subject {",
-            "if request.subject != decided_subject {",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-            "serve_lifecycle_has_live_ingress_carrier",
-            _SERVE_TERMINAL_WORKER_CONTEXT,
-            "&& reservation.carrier_ordinal.is_some()",
-            "&& reservation.carrier_ordinal.is_none()",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-            "stage_selected_serve_rejection",
-            _SERVE_TERMINAL_WORKER_CONTEXT,
-            "state.durable_decided_subject != Some(decided_subject)",
-            "state.durable_decided_subject == Some(decided_subject)",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-            "publish_serve_ingress_physical_drain",
-            _SERVE_TERMINAL_WORKER_CONTEXT,
-            "CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided)",
-            "CertifiedServeNegativeOutcome::InvalidCertificate",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-            "serve_completion_delivery_ownership",
-            _SERVE_TERMINAL_WORKER_CONTEXT,
-            "return Ok(None);",
-            "return Err(\"response escaped\".to_owned());",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-            "complete_serve_response",
-            _SERVE_TERMINAL_WORKER_CONTEXT,
-            "return Ok(false);",
-            "return Ok(true);",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-            "acknowledge_serve_completion",
-            _SERVE_TERMINAL_WORKER_CONTEXT,
-            "tracked.state = V2IoServeState::Terminal;",
-            "tracked.state = V2IoServeState::CompletionPending;",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
-            "step",
-            _SERVE_TERMINAL_EFFECT_CONTEXT,
-            "if let Err(error) = services.begin_decision_serve_reconciliation() {",
-            "if false {",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
-            "step_pending_tip_recovery",
-            _SERVE_TERMINAL_EFFECT_CONTEXT,
-            "if let Err(error) = services.begin_decision_serve_reconciliation() {",
-            "if false {",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
-            "finish_decision_serve_reconciliation",
-            _SERVE_TERMINAL_EFFECT_CONTEXT,
-            "proposal_round != decision_round",
-            "proposal_round == decision_round",
-        ),
-    ),
-)
-def test_serve_terminal_discharge_production_mutations_fail_closed(
-    tmp_path: Path,
-    relative: Path,
-    item_name: str,
-    context: tuple[tuple[str, ...], ...],
-    old: str,
-    new: str,
-) -> None:
-    """Every authoritative restart/Decision transition is token sealed."""
-
-    module = load_checker()
-    copy_serve_lifecycle_production_fixture(tmp_path, module)
-    mutate_rust_item_source_in_context(
-        module,
-        tmp_path / relative,
-        item_name,
-        context,
-        old,
-        new,
-    )
-
-    errors = module._serve_lifecycle_production_source_fidelity_errors(tmp_path)
-
-    assert any(
-        item_name in error and "exact reviewed token digest" in error
-        for error in errors
-    ), errors
-
-
-@pytest.mark.parametrize(
-    "test_name",
-    (
-        "prepared_serve_carrier_is_atomically_superseded_by_decision",
-        "established_serve_owner_survives_decision_retry_carrier_retirement",
-        "decision_serve_fence_rejects_conflicting_durable_subject_without_ordinals",
-        "decision_serve_fence_rolls_back_failed_batch_and_converts_before_ordinals",
-        "active_serve_completion_after_decision_publishes_negative_without_response",
-        "completion_pending_serve_is_suppressed_after_decision_before_delivery",
-        "production_restart_retires_raw_terminal_replay_waiter_without_resigning",
-        "production_restart_atomically_supersedes_raw_terminal_replay_waiter",
-        "production_restart_rejects_negative_tombstone_with_physical_retry_waiter",
-        "same_height_foreign_context_is_rejected_before_every_serve_ordinal",
-    ),
-)
-def test_serve_terminal_discharge_regressions_cannot_be_deleted(
-    tmp_path: Path,
-    test_name: str,
-) -> None:
-    """Every repaired worker defect retains its exact regression item."""
-
-    module = load_checker()
-    copy_serve_lifecycle_production_fixture(tmp_path, module)
-    relative = Path(
-        "crates/iroha_core/src/sumeragi/tests/"
-        "v2_worker_serve_decision_restart_cases.rs"
-    )
-    mutate_rust_item_source_in_context(
-        module,
-        tmp_path / relative,
-        test_name,
-        (),
-        f"fn {test_name}(",
-        f"fn removed_{test_name}(",
-    )
-
-    errors = module._serve_lifecycle_production_source_fidelity_errors(tmp_path)
-
-    assert any(
-        f"named {test_name}; found 0" in error for error in errors
-    ), errors
-
-
-def test_serve_terminal_discharge_effect_regression_cannot_be_deleted(
-    tmp_path: Path,
-) -> None:
-    """The effect-side durable-Decision loss regression remains mandatory."""
-
-    module = load_checker()
-    copy_serve_lifecycle_production_fixture(tmp_path, module)
-    test_name = "decision_serve_fence_rejects_durable_decision_loss_without_reopening"
-    relative = Path("crates/iroha_core/src/sumeragi/v2_effects.rs")
-    mutate_rust_item_source_in_context(
-        module,
-        tmp_path / relative,
-        test_name,
-        (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
-        f"fn {test_name}(",
-        f"fn removed_{test_name}(",
-    )
-
-    errors = module._serve_lifecycle_production_source_fidelity_errors(tmp_path)
-
-    assert any(
-        f"named {test_name}; found 0" in error for error in errors
-    ), errors
 
 def test_liveness_ownership_mutation_source_seal_covers_exact_corpus(
     tmp_path: Path,

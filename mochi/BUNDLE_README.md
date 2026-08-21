@@ -43,15 +43,16 @@ manifest.json          # deterministic file manifest with SHA-256 hashes
    CLI runs accept the same presets or an inline profile table via
    `--profile '{ peer_count = 7, consensus_mode = "permissioned" }'`.
    For multi-lane/Nexus profiles, populate the `[nexus]` and `[sumeragi]`
-   sections in `config/local.toml` (or pass `--nexus-config`, `--enable-nexus`,
-   on the CLI). MOCHI validates `nexus.enabled` against lane counts. Sumeragi
+   sections in `config/local.toml` (or pass `--nexus-config` on the CLI).
+   Nexus routing is mandatory; generated configs omit the retired availability
+   switch and require NPoS consensus for custom multi-lane topology. Sumeragi
    mode and DA layout come from signed genesis/current height context; the
    bundle exposes no node-local enable/disable switch. Torii DA replay and manifest
    roots are immutable per-generation managed paths; configured overrides are
    rejected before publication.
 3. Start the supervisor via `./bin/mochi`. The egui application will create the
    per-profile data tree on demand and generate a Kagami-aligned genesis block.
-   The dashboard shows a compatibility summary (binary build-line/version and
+   The dashboard shows a compatibility summary (binary versions and
    `kagami verify` output for genesis profiles) before peers are launched.
    Readiness is gated on a small smoke transaction by default; disable it with
    `--disable-smoke`, `MOCHI_READINESS_SMOKE=false`, or
@@ -96,7 +97,6 @@ Define Nexus lane catalogs in `config/local.toml`:
 profile = { peer_count = 4, consensus_mode = "npos", genesis_profile = "iroha3-nexus" }
 
 [nexus]
-enabled = true
 lane_count = 3
 
 [[nexus.lane_catalog]]
@@ -127,7 +127,7 @@ id = 0
 ```
 
 Alternatively, store the `[nexus]` block above in a standalone TOML file and
-load it with `--nexus-config path/to/nexus.toml` plus `--enable-nexus`.
+load it with `--nexus-config path/to/nexus.toml`.
 
 Torii DA ingest replay and manifest roots are generated inside each peer's
 selected storage generation. They cannot be redirected by bundle settings.

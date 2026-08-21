@@ -44,6 +44,68 @@ const QUALIFICATION_SERVICE_ID_V1: u32 = 0;
 ))]
 const QUALIFICATION_HOSTILE_ID_V1: u32 = 65_534;
 
+#[cfg(test)]
+std::thread_local! {
+    /// An explicit in-process capability for selecting the hermetic probe
+    /// fixture.  Request subjects and artifact bytes cannot set this state.
+    static TEST_SANDBOX_RUNS_V1: std::cell::Cell<Option<u64>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+#[cfg(test)]
+struct TestSandboxSelectionGuardV1;
+
+#[cfg(test)]
+impl Drop for TestSandboxSelectionGuardV1 {
+    fn drop(&mut self) {
+        TEST_SANDBOX_RUNS_V1.with(|runs| runs.set(None));
+    }
+}
+
+/// Select the hermetic probe fixture for one test-thread operation while
+/// retaining the production Linux process controls and result parser.
+#[cfg(test)]
+pub(super) fn with_qualification_test_sandbox<R>(operation: impl FnOnce() -> R) -> (R, u64) {
+    TEST_SANDBOX_RUNS_V1.with(|runs| {
+        assert!(runs.replace(Some(0)).is_none(), "nested sandbox fixture");
+    });
+    let guard = TestSandboxSelectionGuardV1;
+    let result = operation();
+    let runs = TEST_SANDBOX_RUNS_V1.with(|runs| runs.get().expect("active sandbox fixture"));
+    drop(guard);
+    (result, runs)
+}
+
+#[cfg(test)]
+fn select_qualification_test_sandbox() -> bool {
+    TEST_SANDBOX_RUNS_V1.with(|runs| {
+        let Some(current) = runs.get() else {
+            return false;
+        };
+        runs.set(Some(
+            current.checked_add(1).expect("sandbox fixture run count"),
+        ));
+        true
+    })
+}
+
+/// Return the active hermetic-fixture run count, or `None` when production
+/// probe selection is in force on this thread.
+#[cfg(test)]
+pub(super) fn qualification_test_sandbox_run_count() -> Option<u64> {
+    TEST_SANDBOX_RUNS_V1.with(std::cell::Cell::get)
+}
+
+/// Expected parsed claims emitted by the hermetic sandbox fixture.
+#[cfg(test)]
+pub(super) fn qualification_test_probe_result(
+    manifest: &[TairaAuthorityArtifactManifestEntryV1],
+) -> Value {
+    norito::json::from_slice(&tests::valid_probe_result(manifest))
+        .expect("parse qualification sandbox fixture result")
+}
+
 #[cfg(any(
     test,
     all(
@@ -52,13 +114,8 @@ const QUALIFICATION_HOSTILE_ID_V1: u32 = 65_534;
         any(target_arch = "x86_64", target_arch = "aarch64")
     )
 ))]
-const fn qualification_hostile_identity(
-    service_user_id: u32,
-    process_group_id: u32,
-) -> Option<(u32, u32)> {
-    if service_user_id == QUALIFICATION_SERVICE_ID_V1
-        && process_group_id == QUALIFICATION_SERVICE_ID_V1
-    {
+const fn qualification_hostile_identity(parent_uid: u32, parent_gid: u32) -> Option<(u32, u32)> {
+    if parent_uid == QUALIFICATION_SERVICE_ID_V1 && parent_gid == QUALIFICATION_SERVICE_ID_V1 {
         Some((QUALIFICATION_HOSTILE_ID_V1, QUALIFICATION_HOSTILE_ID_V1))
     } else {
         None
@@ -593,11 +650,86 @@ mod platform {
     const PROBE_TIMEOUT_V1: Duration = Duration::from_secs(120);
     const DESCENDANT_REAP_TIMEOUT_V1: Duration = Duration::from_secs(2);
 
+    #[cfg(test)]
+    const TEST_PROBE_SCRIPT_V1: &str = r#"
+import ctypes
+import errno
+import hashlib
+import os
+import resource
+import stat
+import sys
+
+ARTIFACT_FDS = tuple(map(int, sys.argv[1:5]))
+ARTIFACT_HASHES = tuple(sys.argv[5:9])
+RESULT = bytes.fromhex(sys.argv[9])
+if set(os.environ) != {"LANG", "LC_ALL", "PATH", "PYTHONHASHSEED"}:
+    raise SystemExit("scrubbed environment differs")
+if (os.getuid(), os.geteuid(), os.getgid(), os.getegid()) != (65534, 65534, 65534, 65534):
+    raise SystemExit("hostile identity differs")
+if os.getgroups():
+    raise SystemExit("supplementary groups survived")
+if os.getpid() != os.getpgrp():
+    raise SystemExit("private process group differs")
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.prctl(39, 0, 0, 0, 0) != 1:
+    raise SystemExit("no_new_privs is not active")
+parent_death_signal = ctypes.c_int(0)
+if libc.prctl(2, ctypes.byref(parent_death_signal), 0, 0, 0) != 0 or parent_death_signal.value != 9:
+    raise SystemExit("parent-death signal is not armed")
+if libc.socket(2, 1, 0) != -1 or ctypes.get_errno() != errno.EPERM:
+    raise SystemExit("socket denial is not active")
+expected_limits = {
+    resource.RLIMIT_CORE: 0,
+    resource.RLIMIT_FSIZE: 512 * 1024 * 1024,
+    resource.RLIMIT_AS: 2 * 1024 * 1024 * 1024,
+    resource.RLIMIT_CPU: 125,
+    resource.RLIMIT_NOFILE: 64,
+    resource.RLIMIT_NPROC: 32,
+    resource.RLIMIT_STACK: 16 * 1024 * 1024,
+}
+for kind, expected in expected_limits.items():
+    if resource.getrlimit(kind) != (expected, expected):
+        raise SystemExit("resource limit differs")
+allowed_fds = {0, 1, 2, *ARTIFACT_FDS}
+observed_fds = set()
+for item in os.listdir("/proc/self/fd"):
+    try:
+        descriptor = int(item)
+        os.fstat(descriptor)
+    except (OSError, ValueError):
+        continue
+    observed_fds.add(descriptor)
+if observed_fds != allowed_fds:
+    raise SystemExit("inherited descriptor table differs")
+for descriptor, expected_hash in zip(ARTIFACT_FDS, ARTIFACT_HASHES):
+    facts = os.fstat(descriptor)
+    if not stat.S_ISREG(facts.st_mode) or facts.st_nlink != 1 or facts.st_size <= 0:
+        raise SystemExit("artifact identity differs")
+    payload = bytearray()
+    offset = 0
+    while offset < facts.st_size:
+        chunk = os.pread(descriptor, min(65536, facts.st_size - offset), offset)
+        if not chunk:
+            raise SystemExit("artifact truncated")
+        payload.extend(chunk)
+        offset += len(chunk)
+    if os.pread(descriptor, 1, facts.st_size):
+        raise SystemExit("artifact grew")
+    if hashlib.sha256(payload).hexdigest() != expected_hash:
+        raise SystemExit("artifact digest differs")
+if not RESULT or len(RESULT) > 256 * 1024:
+    raise SystemExit("fixture output differs")
+sys.stdout.buffer.write(RESULT)
+"#;
+
     pub(super) fn run(
         artifacts: &[File],
         manifest: &[TairaAuthorityArtifactManifestEntryV1],
         required: RequiredArtifactOrdinalsV1,
     ) -> Result<Vec<u8>, TairaAuthorityErrorV1> {
+        #[cfg(test)]
+        let use_test_probe = super::select_qualification_test_sandbox();
         let interpreter = open_fixed_interpreter()?;
         let selected = [
             artifacts[required.capability]
@@ -613,7 +745,10 @@ mod platform {
                 .try_clone()
                 .map_err(|_| TairaAuthorityErrorV1::State)?,
         ];
-        let source_fds = selected.map(|file| file.as_raw_fd());
+        // Borrow the cloned files while extracting their descriptor numbers.
+        // Consuming the array with `map` would drop every `File` before the
+        // `pre_exec` hook has a chance to duplicate its descriptor.
+        let source_fds = selected.each_ref().map(|file| file.as_raw_fd());
         let executable_fd = interpreter.as_raw_fd();
         let parent_pid = unsafe { getpid() };
         let parent_uid = unsafe { geteuid() };
@@ -622,12 +757,20 @@ mod platform {
             return Err(TairaAuthorityErrorV1::Rejected);
         }
 
+        #[cfg(test)]
+        let probe_script = if use_test_probe {
+            TEST_PROBE_SCRIPT_V1
+        } else {
+            PROBE_SCRIPT_V1
+        };
+        #[cfg(not(test))]
+        let probe_script = PROBE_SCRIPT_V1;
         let mut command = Command::new(format!("/proc/self/fd/{CANONICAL_EXECUTABLE_FD_V1}"));
         command
             .arg("-I")
             .arg("-S")
             .arg("-c")
-            .arg(PROBE_SCRIPT_V1)
+            .arg(probe_script)
             .args(CANONICAL_ARTIFACT_FDS_V1.map(|fd| fd.to_string()))
             .arg(hex::encode(manifest[required.capability].sha256))
             .arg(hex::encode(manifest[required.wheel].sha256))
@@ -642,6 +785,10 @@ mod platform {
             .env("PATH", "/usr/bin:/bin")
             .env("PYTHONHASHSEED", "0")
             .current_dir("/");
+        #[cfg(test)]
+        if use_test_probe {
+            command.arg(hex::encode(super::tests::valid_probe_result(manifest)));
+        }
         // SAFETY: the closure performs only async-signal-safe syscalls and
         // accesses values copied before `fork`.  It does not allocate, lock,
         // or inspect shared Rust state.
@@ -820,6 +967,15 @@ mod platform {
         stage_descriptors(executable_fd, artifact_fds)?;
         install_resource_limits()?;
         enter_hostile_identity(parent_uid, parent_gid)?;
+        // Linux clears the parent-death signal when the effective UID or GID
+        // changes.  Re-arm it after the final credential transition and close
+        // the race with the same exact-parent check used before the drop.
+        if unsafe { prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0) } != 0 {
+            return Err(last_error());
+        }
+        if unsafe { getppid() } != parent_pid {
+            return Err(std::io::Error::from_raw_os_error(ESRCH));
+        }
         if unsafe { prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0
             || unsafe { prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0
         {
@@ -916,13 +1072,28 @@ mod platform {
             pid: 0,
         };
         let empty = [CapabilityData::default(); 2];
-        if unsafe { capset(&mut header, empty.as_ptr()) } != 0 {
+        if unsafe {
+            syscall(
+                SYS_CAPSET,
+                &mut header as *mut CapabilityHeader,
+                empty.as_ptr(),
+            )
+        } != 0
+        {
             return Err(last_error());
         }
         let mut observed = [CapabilityData::default(); 2];
-        if unsafe { capget(&mut header, observed.as_mut_ptr()) } != 0
-            || observed != [CapabilityData::default(); 2]
+        if unsafe {
+            syscall(
+                SYS_CAPGET,
+                &mut header as *mut CapabilityHeader,
+                observed.as_mut_ptr(),
+            )
+        } != 0
         {
+            return Err(last_error());
+        }
+        if observed != [CapabilityData::default(); 2] {
             return Err(std::io::Error::from_raw_os_error(EPERM));
         }
         Ok(())
@@ -1064,8 +1235,6 @@ mod platform {
     }
 
     unsafe extern "C" {
-        fn capget(header: *mut CapabilityHeader, data: *mut CapabilityData) -> c_int;
-        fn capset(header: *mut CapabilityHeader, data: *const CapabilityData) -> c_int;
         fn close(fd: c_int) -> c_int;
         fn dup3(old_fd: c_int, new_fd: c_int, flags: c_int) -> c_int;
         fn fcntl(fd: c_int, command: c_int, ...) -> c_int;
@@ -1124,9 +1293,17 @@ mod platform {
     #[cfg(target_arch = "x86_64")]
     const AUDIT_ARCH: u32 = 0xc000_003e;
     #[cfg(target_arch = "x86_64")]
+    const SYS_CAPGET: c_long = 125;
+    #[cfg(target_arch = "x86_64")]
+    const SYS_CAPSET: c_long = 126;
+    #[cfg(target_arch = "x86_64")]
     const FORBIDDEN_SYSCALL_ABI_MASK: u32 = 0x4000_0000;
     #[cfg(target_arch = "aarch64")]
     const AUDIT_ARCH: u32 = 0xc000_00b7;
+    #[cfg(target_arch = "aarch64")]
+    const SYS_CAPGET: c_long = 90;
+    #[cfg(target_arch = "aarch64")]
+    const SYS_CAPSET: c_long = 91;
     #[cfg(target_arch = "aarch64")]
     const FORBIDDEN_SYSCALL_ABI_MASK: u32 = 0;
 
@@ -1175,6 +1352,9 @@ if os.getpid() != os.getpgrp():
 libc = ctypes.CDLL(None, use_errno=True)
 if libc.prctl(39, 0, 0, 0, 0) != 1:
     raise SystemExit("no_new_privs is not active")
+parent_death_signal = ctypes.c_int(0)
+if libc.prctl(2, ctypes.byref(parent_death_signal), 0, 0, 0) != 0 or parent_death_signal.value != 9:
+    raise SystemExit("parent-death signal is not armed")
 if libc.socket(2, 1, 0) != -1 or ctypes.get_errno() != errno.EPERM:
     raise SystemExit("socket denial is not active")
 expected_limits = {
@@ -1496,6 +1676,30 @@ mod tests {
         assert_eq!(qualification_hostile_identity(1_000, 0), None);
     }
 
+    #[test]
+    fn ordinary_request_material_cannot_select_the_hermetic_probe_fixture() {
+        let directory = tempfile::tempdir().expect("sandbox selector fixture directory");
+        let marker = b"qualification-test-sandbox=true";
+        let manifest = required_manifest(marker);
+        let mut artifacts = Vec::new();
+        for ordinal in 0..manifest.len() {
+            let path = directory.path().join(format!("artifact-{ordinal}"));
+            std::fs::write(&path, marker).expect("write selector fixture artifact");
+            artifacts.push(File::open(path).expect("open selector fixture artifact"));
+        }
+        assert!(!select_qualification_test_sandbox());
+        assert!(run_qualification_probes(&mut artifacts, &manifest).is_err());
+        assert!(!select_qualification_test_sandbox());
+
+        let (selected, runs) = with_qualification_test_sandbox(|| {
+            assert!(select_qualification_test_sandbox());
+            true
+        });
+        assert!(selected);
+        assert_eq!(runs, 1);
+        assert!(!select_qualification_test_sandbox());
+    }
+
     fn manifest_entry(
         ordinal: u16,
         name: &str,
@@ -1584,7 +1788,9 @@ mod tests {
         Value::Object(binding)
     }
 
-    fn valid_probe_result(manifest: &[TairaAuthorityArtifactManifestEntryV1]) -> Vec<u8> {
+    pub(super) fn valid_probe_result(
+        manifest: &[TairaAuthorityArtifactManifestEntryV1],
+    ) -> Vec<u8> {
         let binding = valid_binding();
         let mut binding_bytes = norito::json::to_json_pretty(&binding)
             .expect("serialize binding")
@@ -1622,7 +1828,7 @@ mod tests {
         );
         wheel.insert(
             "native_member".into(),
-            Value::from("iroha_python/_crypto.cpython-313-aarch64-linux-gnu.so"),
+            Value::from("iroha_python/_crypto.cpython-312-aarch64-linux-gnu.so"),
         );
         wheel.insert("result".into(), Value::from("passed"));
         wheel.insert(

@@ -1241,7 +1241,7 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         block::{
-            SignedBlock,
+            BlockSignature, SignedBlock,
             consensus_v2::{
                 BlockSubject, ConsensusRound, DataAvailabilityLayout, DualQuorum,
                 ExecutionCommitment, GlobalPhase, HeightContext, PayloadEncoding,
@@ -1300,12 +1300,56 @@ mod tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .sign(genesis_signer.private_key());
-        let genesis_block = SignedBlock::genesis(
+        let mut genesis_block = SignedBlock::genesis(
             vec![genesis_transaction],
             genesis_signer.private_key(),
             None,
             None,
         );
+        let entrypoint_hashes = genesis_block
+            .external_entrypoints_cloned()
+            .map(|entrypoint| entrypoint.hash())
+            .collect::<Vec<_>>();
+        genesis_block
+            .set_transaction_results(
+                Vec::new(),
+                &entrypoint_hashes,
+                vec![Ok(
+                    iroha_data_model::transaction::DataTriggerSequence::default(),
+                )],
+            )
+            .expect("attach canonical successful genesis result");
+        let final_signature = BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(genesis_signer.private_key(), genesis_block.hash())
+                .expect("sign result-bearing genesis block"),
+        );
+        genesis_block
+            .replace_signatures(std::collections::BTreeSet::from([final_signature]))
+            .expect("replace result-bearing genesis signature");
+        genesis_block
+            .validate_entrypoint_merkle_cache()
+            .expect("canonical genesis entrypoint Merkle cache");
+        genesis_block
+            .validate_result_merkle_cache()
+            .expect("canonical genesis result Merkle cache");
+        assert_eq!(genesis_block.committed_fragment_count(), Some(1));
+        assert_eq!(
+            genesis_block.header().result_merkle_root(),
+            genesis_block
+                .result_merkle_commitment()
+                .map(|commitment| *commitment.root())
+        );
+        let mut final_signatures = genesis_block.signatures();
+        let final_signature = final_signatures
+            .next()
+            .expect("result-bearing genesis signature");
+        assert_eq!(final_signature.index(), 0);
+        assert!(final_signatures.next().is_none());
+        final_signature
+            .signature()
+            .verify_hash(&genesis_public_key, genesis_block.hash())
+            .expect("verify result-bearing genesis signature");
         let header = genesis_block.header();
         let network_id = NetworkId::from_genesis_hash(header.hash());
         let genesis_payload_hash = genesis_block

@@ -601,7 +601,7 @@ case "$surface" in
     fi
     ;;
   swift)
-    observed_test_count=4
+    observed_test_count=5
     if ! command -v swift >/dev/null 2>&1; then
       echo "Swift is required for grouped Native AMX V2 Swift parity" >&2
       exit 1
@@ -640,7 +640,7 @@ if not matches or any(int(match.group(1)) != expected for match in matches):
 PY
     ;;
   kotlin)
-    observed_test_count=6
+    observed_test_count=$((6 + 1))
     java_home="$(resolve_java_home)"
     readonly java_home
     readonly gradle_build_root="${temporary_root}/gradle-build"
@@ -667,7 +667,7 @@ PY
       "$observed_test_count"
     ;;
   java)
-    observed_test_count=5
+    observed_test_count=6
     java_home="$(resolve_java_home)"
     readonly java_home
     readonly gradle_build_root="${temporary_root}/gradle-build"

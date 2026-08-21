@@ -18,6 +18,8 @@ use iroha::{
         query::peer::prelude::FindPeers,
     },
 };
+use iroha_config::parameters::{actual, defaults};
+use iroha_config_base::toml::TomlSource;
 use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
 use iroha_test_network::{
     Program, fslock_ports::AllocatedPortBlock, init_instruction_registry, repo_root,
@@ -68,8 +70,8 @@ const INTERIM_LAG_CHURN_BACKOFF_SECS: u64 = 30;
 const JOINER_STALL_LOG_EVERY: u64 = 5;
 const JOINER_PROGRESS_LOG_EVERY: u64 = 5;
 const JOINER_STALL_WARNING_THRESHOLD: u64 = 3;
-const LOCALNET_BLOCK_TIME_MS: u64 = 1_000;
-const LOCALNET_COMMIT_TIME_MS: u64 = 1_000;
+const LOCALNET_BLOCK_TIME_MS: u64 = 4_000;
+const LOCALNET_COMMIT_TIME_MS: u64 = 4_000;
 const LOCALNET_TRANSACTION_TTL_MS: i64 = 7_200_000;
 const MAX_TX_BURST_PER_TICK: u32 = 32;
 const TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
@@ -1619,6 +1621,11 @@ async fn setup_taira_harness<const STRICT_ALL_VALIDATORS: bool>(
         seed,
         packet_loss_percent,
     )?;
+    reserve_localnet_validator_body_ingress(
+        out_dir,
+        TAIRA_VALIDATORS,
+        usize::from(TAIRA_TOTAL_PORT_SLOTS),
+    )?;
     let irohad_bin = Program::Irohad
         .resolve()
         .wrap_err("resolve iroha3d binary")?;
@@ -1744,18 +1751,8 @@ fn build_joiner_peer(
             ExposedPrivateKey(soranet_transport_key.private_key().clone()).to_string(),
         ),
     );
-    if let Some(trusted_peers_pop) = root
-        .get_mut("trusted_peers_pop")
-        .and_then(TomlValue::as_array_mut)
-    {
-        let mut joiner_pop = Table::new();
-        joiner_pop.insert(
-            "public_key".into(),
-            TomlValue::String(peer_key.public_key().to_string()),
-        );
-        joiner_pop.insert("pop_hex".into(), TomlValue::String(hex::encode(&pop)));
-        trusted_peers_pop.push(TomlValue::Table(joiner_pop));
-    }
+    let p2p_addr = canonical_loopback_addr(p2p_port);
+    append_joiner_validator_and_scale_body_ingress(root, peer_key.public_key(), &pop, &p2p_addr)?;
     let stream_key = KeyPair::random();
     assert_ne!(
         soranet_transport_key.public_key(),
@@ -1771,7 +1768,6 @@ fn build_joiner_peer(
         "identity_private_key".into(),
         TomlValue::String(ExposedPrivateKey(stream_key.private_key().clone()).to_string()),
     );
-    let p2p_addr = canonical_loopback_addr(p2p_port);
     let network = get_subtable_mut(root, "network")?;
     network.insert("address".into(), TomlValue::String(p2p_addr.clone()));
     network.insert("public_address".into(), TomlValue::String(p2p_addr));
@@ -1783,22 +1779,7 @@ fn build_joiner_peer(
     let storage_root = out_dir.join("storage").join("joiner");
     fs::create_dir_all(&storage_root)
         .wrap_err_with(|| format!("create joiner storage root {}", storage_root.display()))?;
-    let kura = get_subtable_mut(root, "kura")?;
-    kura.insert(
-        "store_dir".into(),
-        TomlValue::String(storage_root.join("kura").to_string_lossy().into_owned()),
-    );
-    let tiered_state = get_subtable_mut(root, "tiered_state")?;
-    tiered_state.insert(
-        "cold_store_root".into(),
-        TomlValue::String(storage_root.join("tiered").to_string_lossy().into_owned()),
-    );
-    if tiered_state.contains_key("da_store_root") {
-        tiered_state.insert(
-            "da_store_root".into(),
-            TomlValue::String(storage_root.join("da").to_string_lossy().into_owned()),
-        );
-    }
+    rewrite_joiner_mutable_paths(root, &storage_root)?;
     let config_path = out_dir.join("joiner.toml");
     fs::write(
         &config_path,
@@ -1812,6 +1793,209 @@ fn build_joiner_peer(
         config_path,
         client,
     })
+}
+fn rewrite_joiner_mutable_paths(root: &mut Table, storage_root: &Path) -> Result<()> {
+    let path_value = |relative: &str| {
+        TomlValue::String(storage_root.join(relative).to_string_lossy().into_owned())
+    };
+    get_subtable_mut(root, "kura")?.insert("store_dir".into(), path_value("kura"));
+    get_subtable_mut(root, "soracloud_runtime")?
+        .insert("state_dir".into(), path_value("soracloud_runtime"));
+    let tiered_state = get_subtable_mut(root, "tiered_state")?;
+    tiered_state.insert("cold_store_root".into(), path_value("tiered_state"));
+    tiered_state.insert("da_store_root".into(), path_value("da_wsv_snapshots"));
+    let streaming = get_subtable_mut(root, "streaming")?;
+    streaming.insert("session_store_dir".into(), path_value("streaming"));
+    streaming
+        .get_mut("soranet")
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("template peer config must define `[streaming.soranet]`"))?
+        .insert(
+            "provision_spool_dir".into(),
+            path_value("streaming/soranet_routes"),
+        );
+    streaming
+        .get_mut("soravpn")
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("template peer config must define `[streaming.soravpn]`"))?
+        .insert(
+            "provision_spool_dir".into(),
+            path_value("streaming/soravpn_routes"),
+        );
+    let torii = get_subtable_mut(root, "torii")?;
+    torii.insert("data_dir".into(), path_value("torii"));
+    let da_ingest = torii
+        .get_mut("da_ingest")
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("template peer config must define `[torii.da_ingest]`"))?;
+    da_ingest.insert(
+        "replay_cache_store_dir".into(),
+        path_value("torii/da_replay"),
+    );
+    da_ingest.insert(
+        "manifest_store_dir".into(),
+        path_value("torii/da_manifests"),
+    );
+    get_subtable_mut(root, "network")?
+        .get_mut("soranet_handshake")
+        .and_then(TomlValue::as_table_mut)
+        .and_then(|handshake| handshake.get_mut("pow"))
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("template peer config must define `[network.soranet_handshake.pow]`"))?
+        .insert(
+            "revocation_store_path".into(),
+            path_value("soranet/ticket_revocations.norito"),
+        );
+    let sorafs = get_subtable_mut(root, "sorafs")?;
+    sorafs
+        .get_mut("storage")
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("template peer config must define `[sorafs.storage]`"))?
+        .insert("data_dir".into(), path_value("sorafs"));
+    sorafs
+        .get_mut("por")
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("template peer config must define `[sorafs.por]`"))?
+        .insert("state_dir".into(), path_value("sorafs/por"));
+    Ok(())
+}
+fn append_joiner_validator_and_scale_body_ingress(
+    root: &mut Table,
+    public_key: &PublicKey,
+    pop: &[u8],
+    p2p_addr: &str,
+) -> Result<()> {
+    let trusted_peers = root
+        .get_mut("trusted_peers")
+        .and_then(TomlValue::as_array_mut)
+        .ok_or_else(|| eyre!("template peer config must define `trusted_peers`"))?;
+    trusted_peers.push(TomlValue::String(format!("{public_key}@{p2p_addr}")));
+    let validator_roster_len = {
+        let trusted_peers_pop = root
+            .get_mut("trusted_peers_pop")
+            .and_then(TomlValue::as_array_mut)
+            .ok_or_else(|| eyre!("template peer config must define `trusted_peers_pop`"))?;
+        let mut joiner_pop = Table::new();
+        joiner_pop.insert(
+            "public_key".into(),
+            TomlValue::String(public_key.to_string()),
+        );
+        joiner_pop.insert("pop_hex".into(), TomlValue::String(hex::encode(pop)));
+        trusted_peers_pop.push(TomlValue::Table(joiner_pop));
+        trusted_peers_pop.len()
+    };
+    ensure_sumeragi_body_ingress(root, validator_roster_len)
+}
+fn ensure_sumeragi_body_ingress(root: &mut Table, validator_roster_len: usize) -> Result<()> {
+    let authenticated_non_validator_sources = effective_sumeragi_queue_capacity(
+        root,
+        "authenticated_non_validator_sources",
+        defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
+    )?;
+    let configured_bodies = effective_sumeragi_queue_capacity(
+        root,
+        "bodies",
+        defaults::sumeragi::QUEUE_BODY_CAPACITY.get(),
+    )?;
+    let body_source_bytes = effective_sumeragi_queue_capacity(
+        root,
+        "body_source_bytes",
+        defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
+    )?;
+    let configured_body_bytes = effective_sumeragi_queue_capacity(
+        root,
+        "body_bytes",
+        defaults::sumeragi::QUEUE_BODY_BYTES.get(),
+    )?;
+    let required_bodies = actual::sumeragi_v2_body_ingress_required_message_capacity(
+        validator_roster_len,
+        authenticated_non_validator_sources,
+    )
+    .ok_or_else(|| {
+        eyre!(
+            "Taira joiner Sumeragi body-message capacity overflowed for {validator_roster_len} validators and {authenticated_non_validator_sources} authenticated non-validator sources"
+        )
+    })?;
+    let required_body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+        validator_roster_len,
+        authenticated_non_validator_sources,
+        body_source_bytes,
+    )
+    .ok_or_else(|| {
+        eyre!(
+            "Taira joiner Sumeragi body-byte capacity overflowed for {validator_roster_len} validators, {authenticated_non_validator_sources} authenticated non-validator sources, and {body_source_bytes} bytes per source"
+        )
+    })?;
+    if required_bodies <= configured_bodies && required_body_bytes <= configured_body_bytes {
+        return Ok(());
+    }
+    let queues = root
+        .get_mut("sumeragi")
+        .and_then(TomlValue::as_table_mut)
+        .and_then(|sumeragi| sumeragi.get_mut("queues"))
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("template peer config must define `[sumeragi.queues]`"))?;
+    if required_bodies > configured_bodies {
+        queues.insert(
+            "bodies".into(),
+            TomlValue::Integer(i64::try_from(required_bodies).wrap_err(
+                "Taira joiner Sumeragi body-message capacity exceeds the TOML integer range",
+            )?),
+        );
+    }
+    if required_body_bytes > configured_body_bytes {
+        queues.insert(
+            "body_bytes".into(),
+            TomlValue::Integer(i64::try_from(required_body_bytes).wrap_err(
+                "Taira joiner Sumeragi body-byte capacity exceeds the TOML integer range",
+            )?),
+        );
+    }
+    Ok(())
+}
+fn effective_sumeragi_queue_capacity(root: &Table, key: &str, default: usize) -> Result<usize> {
+    let Some(value) = root
+        .get("sumeragi")
+        .and_then(TomlValue::as_table)
+        .and_then(|sumeragi| sumeragi.get("queues"))
+        .and_then(TomlValue::as_table)
+        .and_then(|queues| queues.get(key))
+    else {
+        return Ok(default);
+    };
+    let configured = value
+        .as_integer()
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| eyre!("`sumeragi.queues.{key}` must be a positive integer"))?;
+    Ok(configured)
+}
+fn reserve_localnet_validator_body_ingress(
+    out_dir: &Path,
+    peers: u16,
+    planned_validator_roster_len: usize,
+) -> Result<()> {
+    ensure!(
+        planned_validator_roster_len >= usize::from(peers),
+        "planned validator roster length {planned_validator_roster_len} must cover all {peers} bootstrap validators"
+    );
+    for idx in 0..peers {
+        let config_path = out_dir.join(format!("peer{idx}.toml"));
+        let config_text = fs::read_to_string(&config_path)
+            .wrap_err_with(|| format!("read peer config {}", config_path.display()))?;
+        let mut parsed: TomlValue = toml::from_str(&config_text)
+            .wrap_err_with(|| format!("parse peer config {}", config_path.display()))?;
+        let root = parsed
+            .as_table_mut()
+            .ok_or_else(|| eyre!("peer config root must be a TOML table"))?;
+        ensure_sumeragi_body_ingress(root, planned_validator_roster_len)?;
+        fs::write(
+            &config_path,
+            toml::to_string(&parsed).expect("serialize peer config TOML"),
+        )
+        .wrap_err_with(|| format!("write peer config {}", config_path.display()))?;
+    }
+    Ok(())
 }
 fn get_subtable_mut<'a>(root: &'a mut Table, key: &str) -> Result<&'a mut Table> {
     root.get_mut(key)
@@ -3014,8 +3198,6 @@ fn generate_localnet(
     let mut command = Command::new(&kagami_bin);
     command
         .arg("localnet")
-        .arg("--build-line")
-        .arg("iroha3")
         .arg("--sora-profile")
         .arg("nexus")
         .arg("--consensus-mode")
@@ -3064,609 +3246,5 @@ fn load_localnet_client(out_dir: &Path) -> Result<Client> {
     config.transaction_status_timeout = READY_TIMEOUT;
     Ok(Client::new(config))
 }
-#[test]
-fn simulation_config_defaults_are_valid() {
-    let cfg = SimulationConfig::quick(90, 30);
-    assert!(cfg.duration >= Duration::from_secs(1));
-    assert!(cfg.tps >= 1);
-    assert!(cfg.packet_loss_percent <= 100);
-    assert!(cfg.churn_interval >= Duration::from_secs(1));
-    assert!(cfg.max_height_skew_grace >= Duration::from_secs(1));
-    assert!(cfg.max_transient_height_skew >= cfg.max_height_skew);
-    assert!(cfg.stall_timeout >= Duration::from_secs(10));
-    assert!((0.0..=1.0).contains(&cfg.max_lagged_cycle_ratio));
-    assert!((0.0..=1.0).contains(&cfg.min_committed_tps_ratio));
-}
-#[test]
-fn env_u64_respects_minimum() {
-    assert_eq!(env_u64("IROHA_TAIRA_NO_SUCH_VAR", 10, 2), 10);
-}
-#[test]
-fn env_u8_respects_closed_range() {
-    assert_eq!(env_u8("IROHA_TAIRA_NO_SUCH_U8_VAR", 10, 0, 100), 10);
-}
-#[test]
-fn env_f64_respects_minimum() {
-    assert_eq!(env_f64("IROHA_TAIRA_NO_SUCH_VAR_FLOAT", 0.25, 0.0), 0.25);
-}
-#[test]
-fn skew_breach_window_tracks_first_exceedance_and_recovers() {
-    let base = Instant::now();
-    let start = update_skew_breach_started(None, 3, 2, base).expect("breach should start");
-    assert_eq!(start, base);
-    let sustained = update_skew_breach_started(Some(start), 4, 2, base + Duration::from_secs(2))
-        .expect("breach should stay active");
-    assert_eq!(sustained, start);
-    let recovered =
-        update_skew_breach_started(Some(sustained), 2, 2, base + Duration::from_secs(3));
-    assert!(recovered.is_none());
-}
-#[test]
-fn skew_breach_is_not_unrecovering_when_min_height_progresses_recently() {
-    assert!(!is_skew_breach_unrecovering(
-        Duration::from_secs(20),
-        Duration::from_secs(5),
-        Duration::from_secs(15),
-        Duration::from_secs(60),
-    ));
-}
-#[test]
-fn skew_breach_is_unrecovering_when_duration_and_min_age_exceed_thresholds() {
-    assert!(is_skew_breach_unrecovering(
-        Duration::from_secs(40),
-        Duration::from_secs(61),
-        Duration::from_secs(15),
-        Duration::from_secs(60),
-    ));
-}
-#[test]
-fn queue_timeout_error_classifier_matches_expected_message() {
-    let err = eyre!("transaction queued for too long");
-    assert!(is_queue_timeout_error(&err));
-}
-#[test]
-fn http_timeout_error_classifier_matches_expected_message() {
-    let err = eyre!("operation timed out");
-    assert!(is_http_timeout_error(&err));
-}
-#[test]
-fn process_churn_index_rotates_across_all_validators() {
-    assert_eq!(first_process_churn_index(7), 1);
-    assert_eq!(next_process_churn_index(1, 7), 2);
-    assert_eq!(next_process_churn_index(5, 7), 6);
-    assert_eq!(next_process_churn_index(6, 7), 0);
-    assert_eq!(next_process_churn_index(0, 7), 1);
-}
-#[test]
-fn process_churn_index_handles_single_validator() {
-    assert_eq!(first_process_churn_index(1), 0);
-    assert_eq!(next_process_churn_index(0, 1), 0);
-}
-#[test]
-fn select_process_churn_index_prioritizes_unresponsive_validator() {
-    let observed = [Some(100), Some(101), None, Some(100)];
-    assert_eq!(select_process_churn_index_from_heights(&observed, 0, 6), 2);
-}
-#[test]
-fn select_process_churn_index_prioritizes_lagger_when_skew_is_large() {
-    let observed = [Some(100), Some(84), Some(99), Some(100)];
-    assert_eq!(select_process_churn_index_from_heights(&observed, 0, 6), 1);
-}
-#[test]
-fn select_process_churn_index_uses_round_robin_fallback_when_balanced() {
-    let observed = [Some(100), Some(98), Some(99), Some(100)];
-    assert_eq!(select_process_churn_index_from_heights(&observed, 2, 6), 2);
-}
-#[test]
-fn select_process_churn_index_clamps_out_of_bounds_fallback() {
-    let observed = [Some(10), Some(10), Some(10)];
-    assert_eq!(select_process_churn_index_from_heights(&observed, 7, 6), 2);
-}
-#[test]
-fn next_process_churn_deadline_uses_interval_without_lag() {
-    let now = Instant::now();
-    let interval = Duration::from_secs(30);
-    let deadline = next_process_churn_deadline(now, interval, false);
-    assert_eq!(deadline.duration_since(now), interval);
-}
-#[test]
-fn next_process_churn_deadline_adds_backoff_without_schedule_drift() {
-    let now = Instant::now();
-    let interval = Duration::from_secs(30);
-    let deadline = next_process_churn_deadline(now, interval, true);
-    assert_eq!(
-        deadline.duration_since(now),
-        interval.saturating_add(Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS))
-    );
-}
-#[test]
-fn next_membership_churn_deadline_uses_interval_without_lag() {
-    let now = Instant::now();
-    let interval = Duration::from_secs(30);
-    let deadline = next_membership_churn_deadline(now, interval, false);
-    assert_eq!(deadline.duration_since(now), interval);
-}
-#[test]
-fn next_membership_churn_deadline_adds_backoff_when_lagged() {
-    let now = Instant::now();
-    let interval = Duration::from_secs(30);
-    let deadline = next_membership_churn_deadline(now, interval, true);
-    assert_eq!(
-        deadline.duration_since(now),
-        interval.saturating_add(Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS))
-    );
-}
-#[test]
-fn membership_backoff_triggers_only_on_hard_lag() {
-    let now = Instant::now();
-    let interval = Duration::from_secs(30);
-    let warning_only = MembershipCycleOutcome {
-        hard_lagged: false,
-        warning_lagged: true,
-    };
-    let warning_deadline = next_membership_churn_deadline(
-        now,
-        interval,
-        membership_backoff_requires_hard_lag(warning_only),
-    );
-    assert_eq!(warning_deadline.duration_since(now), interval);
-    let hard_lagged = MembershipCycleOutcome {
-        hard_lagged: true,
-        warning_lagged: false,
-    };
-    let hard_deadline = next_membership_churn_deadline(
-        now,
-        interval,
-        membership_backoff_requires_hard_lag(hard_lagged),
-    );
-    assert_eq!(
-        hard_deadline.duration_since(now),
-        interval.saturating_add(Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS))
-    );
-}
-#[test]
-fn stalled_joiner_catchup_marks_warning_without_hard_lag() {
-    let mut outcome = MembershipCycleOutcome::default();
-    record_joiner_stall_warning(&mut outcome, JOINER_STALL_WARNING_THRESHOLD);
-    assert!(outcome.warning_lagged);
-    assert!(!outcome.hard_lagged);
-}
-#[test]
-fn propagation_and_quorum_failures_mark_hard_lag() {
-    let mut propagation_timeout = MembershipCycleOutcome::default();
-    propagation_timeout.mark_hard_lag();
-    assert!(propagation_timeout.hard_lagged);
-    assert!(!propagation_timeout.warning_lagged);
-    let mut quorum_timeout = MembershipCycleOutcome::default();
-    quorum_timeout.mark_hard_lag();
-    assert!(quorum_timeout.hard_lagged);
-    assert!(!quorum_timeout.warning_lagged);
-}
-#[test]
-fn effective_final_settle_window_scales_with_duration() {
-    assert_eq!(
-        effective_final_settle_window(Duration::from_secs(3_600)),
-        FINAL_SETTLE_WINDOW
-    );
-    assert_eq!(
-        effective_final_settle_window(Duration::from_secs(90)),
-        Duration::from_secs(30)
-    );
-    assert_eq!(
-        effective_final_settle_window(Duration::from_secs(30)),
-        Duration::from_secs(10)
-    );
-}
-#[test]
-fn initial_churn_delay_stays_inside_churn_window() {
-    assert_eq!(
-        initial_churn_delay(Duration::from_secs(30), Duration::from_secs(20)),
-        Duration::from_secs(19)
-    );
-    assert_eq!(
-        initial_churn_delay(Duration::from_secs(30), Duration::from_secs(60)),
-        Duration::from_secs(30)
-    );
-}
-#[test]
-fn scheduled_churn_floor_requires_sustained_cycles() {
-    assert_eq!(
-        scheduled_churn_cycles(
-            Duration::from_secs(60),
-            Duration::from_secs(30),
-            Duration::from_secs(30)
-        ),
-        1
-    );
-    assert_eq!(
-        scheduled_churn_cycles(
-            Duration::from_secs(60),
-            Duration::from_secs(15),
-            Duration::from_secs(30)
-        ),
-        2
-    );
-    assert_eq!(minimum_required_churn_cycles(1), 1);
-    assert_eq!(minimum_required_churn_cycles(10), 9);
-    assert_eq!(minimum_required_churn_cycles(287), 259);
-    let duration = Duration::from_secs(DEFAULT_SIM_DURATION_SECS);
-    let churn_window = duration.saturating_sub(effective_final_settle_window(duration));
-    assert_eq!(
-        scheduled_churn_cycles(
-            churn_window,
-            initial_churn_delay(
-                Duration::from_secs(DEFAULT_CHURN_INTERVAL_SECS),
-                churn_window
-            ),
-            Duration::from_secs(DEFAULT_CHURN_INTERVAL_SECS),
-        ),
-        287
-    );
-    assert_eq!(
-        scheduled_churn_cycles(
-            churn_window,
-            initial_churn_delay(
-                Duration::from_secs(DEFAULT_CHURN_INTERVAL_SECS / 2),
-                churn_window,
-            ),
-            Duration::from_secs(DEFAULT_CHURN_INTERVAL_SECS),
-        ),
-        288
-    );
-    assert_eq!(minimum_required_churn_cycles(288), 260);
-}
-#[test]
-fn lagged_cycle_ratio_rejects_one_bad_cycle() {
-    assert_eq!(lagged_cycle_ratio(0, 0), 0.0);
-    assert_eq!(lagged_cycle_ratio(1, 1), 1.0);
-    assert!((lagged_cycle_ratio(1, 3) - (1.0 / 3.0)).abs() < f64::EPSILON);
-    assert!(lagged_cycle_ratio(1, 1) > DEFAULT_MAX_LAGGED_CYCLE_RATIO);
-}
-#[test]
-fn view_change_rate_uses_final_counter_and_full_soak_time() {
-    assert_eq!(view_change_rate(10, 22, Duration::from_secs(60)), 0.2);
-    assert_eq!(view_change_rate(22, 10, Duration::from_secs(60)), 0.0);
-    assert_eq!(view_change_rate(0, 1, Duration::ZERO), 1.0);
-}
-fn status_with_view_changes(view_changes: u32) -> iroha::client::Status {
-    iroha::client::Status {
-        view_changes,
-        ..iroha::client::Status::default()
-    }
-}
-#[test]
-fn view_change_tracker_accumulates_each_validator_across_restart_resets() {
-    let mut first = iroha::client::Status::default();
-    first.view_changes = 10;
-    let mut second = iroha::client::Status::default();
-    second.view_changes = 5;
-    let baseline = vec![(0, first.clone()), (1, second.clone())];
-    let mut tracker = ViewChangeTracker::new(3);
-    tracker.establish_baseline(&baseline);
-    assert_eq!(total_indexed_view_changes(&baseline), 15);
-    first.view_changes = 13;
-    second.view_changes = 7;
-    let mut newly_observed = iroha::client::Status::default();
-    newly_observed.view_changes = 4;
-    tracker.observe(&[(0, first.clone()), (1, second.clone()), (2, newly_observed)]);
-    assert_eq!(tracker.total_since_baseline(), 9);
-    first.view_changes = 2;
-    second.view_changes = 9;
-    tracker.observe(&[(0, first), (1, second)]);
-    assert_eq!(tracker.total_since_baseline(), 13);
-}
-#[test]
-fn view_change_tracker_conservatively_counts_a_late_first_observation() {
-    let mut tracker = ViewChangeTracker::new(2);
-    tracker.establish_baseline(&[(0, status_with_view_changes(5))]);
-    tracker.observe(&[
-        (0, status_with_view_changes(7)),
-        (1, status_with_view_changes(3)),
-    ]);
-    assert_eq!(tracker.total_since_baseline(), 5);
-}
-#[test]
-fn min_txs_approved_returns_lowest_counter() {
-    let mut first = iroha::client::Status::default();
-    first.txs_approved = 42;
-    let mut second = iroha::client::Status::default();
-    second.txs_approved = 17;
-    let mut third = iroha::client::Status::default();
-    third.txs_approved = 99;
-    assert_eq!(min_txs_approved(&[first, second, third]), 17);
-}
-#[test]
-fn apply_queue_transaction_ttl_updates_queue_section() {
-    let mut root = Table::new();
-    root.insert("queue".into(), TomlValue::Table(Table::new()));
-    apply_queue_transaction_ttl(&mut root, 7_200_000).expect("queue ttl should apply");
-    let applied = root
-        .get("queue")
-        .and_then(TomlValue::as_table)
-        .and_then(|queue| {
-            queue
-                .get("transaction_time_to_live_ms")
-                .and_then(TomlValue::as_integer)
-        });
-    assert_eq!(applied, Some(7_200_000));
-}
-#[test]
-fn apply_client_transaction_ttl_caps_status_timeout() {
-    let mut transaction = Table::new();
-    transaction.insert("time_to_live_ms".into(), TomlValue::Integer(600_000));
-    transaction.insert("status_timeout_ms".into(), TomlValue::Integer(900_000));
-    let mut root = Table::new();
-    root.insert("transaction".into(), TomlValue::Table(transaction));
-    apply_client_transaction_ttl(&mut root, 300_000).expect("client ttl should apply");
-    let tx = root
-        .get("transaction")
-        .and_then(TomlValue::as_table)
-        .expect("transaction section should exist");
-    assert_eq!(
-        tx.get("time_to_live_ms").and_then(TomlValue::as_integer),
-        Some(300_000)
-    );
-    assert_eq!(
-        tx.get("status_timeout_ms").and_then(TomlValue::as_integer),
-        Some(300_000)
-    );
-}
-#[test]
-fn apply_packet_impairment_sets_both_directions() {
-    let mut root = Table::new();
-    root.insert("network".into(), TomlValue::Table(Table::new()));
-    apply_packet_impairment(&mut root, 10).expect("packet impairment should apply");
-    let network = root
-        .get("network")
-        .and_then(TomlValue::as_table)
-        .expect("network section should exist");
-    assert_eq!(
-        network
-            .get("debug_packet_loss_inbound_percent")
-            .and_then(TomlValue::as_integer),
-        Some(10)
-    );
-    assert_eq!(
-        network
-            .get("debug_packet_loss_outbound_percent")
-            .and_then(TomlValue::as_integer),
-        Some(10)
-    );
-    assert!(apply_packet_impairment(&mut root, 101).is_err());
-}
-#[test]
-fn joiner_stall_warning_threshold_matches_policy() {
-    assert!(!should_count_joiner_stall_as_warning(0));
-    assert!(!should_count_joiner_stall_as_warning(1));
-    assert!(!should_count_joiner_stall_as_warning(2));
-    assert!(should_count_joiner_stall_as_warning(3));
-}
-#[test]
-fn release_execution_profile_accepts_only_the_exact_positive_profile() {
-    let profile = validate_release_execution_profile("release", "release", "true")
-        .expect("exact release/offline profile");
-    assert_eq!(profile.build_profile, "release");
-    assert!(profile.cargo_net_offline);
-}
-#[test]
-fn release_execution_profile_rejects_wrong_or_blank_build_profiles() {
-    for build_profile in ["", "debug", " release", "release "] {
-        assert!(
-            validate_release_execution_profile(build_profile, build_profile, "true").is_err(),
-            "unexpectedly accepted build profile {build_profile:?}"
-        );
-    }
-}
-#[test]
-fn release_execution_profile_rejects_cargo_profile_mismatch() {
-    for cargo_profile in ["", "debug", "release ", "Release"] {
-        assert!(
-            validate_release_execution_profile("release", cargo_profile, "true").is_err(),
-            "unexpectedly accepted Cargo profile {cargo_profile:?}"
-        );
-    }
-}
-#[test]
-fn release_execution_profile_rejects_non_exact_offline_values() {
-    for cargo_net_offline in ["", "1", "TRUE", " true", "true ", "false"] {
-        assert!(
-            validate_release_execution_profile("release", "release", cargo_net_offline).is_err(),
-            "unexpectedly accepted CARGO_NET_OFFLINE={cargo_net_offline:?}"
-        );
-    }
-}
-fn sample_simulation_summary() -> SimulationSummary {
-    SimulationSummary {
-        git_revision: "1".repeat(40),
-        workspace_source_manifest_sha256: "a".repeat(64),
-        build_profile: "release".to_owned(),
-        cargo_net_offline: true,
-        localnet_artifact_path: "/tmp/taira-localnet".to_owned(),
-        daemon_binary_path: "/tmp/iroha3d".to_owned(),
-        daemon_binary_blake2b_256: "b".repeat(64),
-        kagami_binary_path: "/tmp/kagami".to_owned(),
-        kagami_binary_blake2b_256: "c".repeat(64),
-        test_binary_path: "/tmp/taira-test".to_owned(),
-        test_binary_blake2b_256: "d".repeat(64),
-        generated_config_blake2b_256: "e".repeat(64),
-        seed: "taira-public-sim".to_owned(),
-        duration_secs: 60,
-        target_tps: 5,
-        packet_loss_percent: 10,
-        churn_interval_secs: 300,
-        max_height_skew: 2,
-        max_height_skew_grace_secs: 30,
-        max_transient_height_skew: 32,
-        stall_timeout_secs: 300,
-        max_view_change_rate: 0.2,
-        max_lagged_cycle_ratio: 0.35,
-        min_committed_tps_ratio: 0.6,
-        process_downtime_secs: 5,
-        tx_attempted: 300,
-        tx_sent: 295,
-        tx_submit_errors: 0,
-        process_churn_cycles: 4,
-        expected_process_churn_cycles: 4,
-        process_churn_lagged_cycles: 0,
-        membership_join_cycles: 3,
-        membership_leave_cycles: 3,
-        expected_membership_churn_cycles: 6,
-        membership_cleanup_leave: false,
-        membership_churn_lagged_cycles: 1,
-        membership_churn_warning_cycles: 2,
-        churn_paused_secs: 5.0,
-        churn_paused_ratio: 1.0 / 12.0,
-        soak_overrun_secs: 0.0,
-        max_height_skew_observed: 1,
-        view_changes_start: 0,
-        view_changes_end: 0,
-        view_change_rate_per_sec: 0.0,
-        scheduled_tps: 5.0,
-        submitted_tps: 4.9,
-        committed_tps: 4.8,
-        committed_txs_min_delta: 288,
-        saturated_samples: 0,
-        total_samples: 60,
-        initial_status_snapshots: vec![norito::json!({"height": 1_u64})],
-        final_status_snapshots: vec![norito::json!({"height": 61_u64})],
-        no_progress_intervals: vec![NoProgressInterval {
-            start_elapsed_ms: 1_000,
-            end_elapsed_ms: 2_000,
-            classifications: vec!["commit_quorum_missing".to_owned()],
-            classified: true,
-            status_snapshots: Vec::new(),
-        }],
-        unclassified_no_progress_intervals: 0,
-    }
-}
-#[test]
-fn simulation_summary_json_records_release_profile_and_status_evidence() {
-    let summary = sample_simulation_summary();
-    let value = summary.to_json_value();
-    let object = value
-        .as_object()
-        .expect("summary must render to JSON object");
-    assert_eq!(
-        object.get("seed").and_then(norito::json::Value::as_str),
-        Some("taira-public-sim")
-    );
-    assert_eq!(
-        object
-            .get("workspace_source_manifest_sha256")
-            .and_then(norito::json::Value::as_str),
-        Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-    );
-    assert_eq!(
-        object
-            .get("build_profile")
-            .and_then(norito::json::Value::as_str),
-        Some("release")
-    );
-    assert_eq!(
-        object
-            .get("cargo_net_offline")
-            .and_then(norito::json::Value::as_bool),
-        Some(true)
-    );
-    for name in [
-        "daemon_binary_blake2b_256",
-        "kagami_binary_blake2b_256",
-        "test_binary_blake2b_256",
-        "generated_config_blake2b_256",
-    ] {
-        assert_eq!(
-            object
-                .get(name)
-                .and_then(norito::json::Value::as_str)
-                .map(str::len),
-            Some(64),
-            "evidence digest {name}"
-        );
-    }
-    assert_eq!(
-        object
-            .get("membership_churn_warning_cycles")
-            .and_then(norito::json::Value::as_u64),
-        Some(2)
-    );
-    for (name, expected) in [
-        ("duration_secs", 60),
-        ("target_tps", 5),
-        ("packet_loss_percent", 10),
-        ("churn_interval_secs", 300),
-        ("max_height_skew", 2),
-        ("max_height_skew_grace_secs", 30),
-        ("max_transient_height_skew", 32),
-        ("stall_timeout_secs", 300),
-        ("process_downtime_secs", 5),
-        ("expected_process_churn_cycles", 4),
-        ("expected_membership_churn_cycles", 6),
-    ] {
-        assert_eq!(
-            object.get(name).and_then(norito::json::Value::as_u64),
-            Some(expected),
-            "profile field {name}"
-        );
-    }
-    for (name, expected) in [
-        ("max_view_change_rate", 0.2),
-        ("max_lagged_cycle_ratio", 0.35),
-        ("min_committed_tps_ratio", 0.6),
-    ] {
-        assert_eq!(
-            object.get(name).and_then(norito::json::Value::as_f64),
-            Some(expected),
-            "profile field {name}"
-        );
-    }
-    assert_eq!(
-        object
-            .get("unclassified_no_progress_intervals")
-            .and_then(norito::json::Value::as_u64),
-        Some(0)
-    );
-    assert_eq!(
-        object
-            .get("initial_status_snapshots")
-            .and_then(norito::json::Value::as_array)
-            .map(Vec::len),
-        Some(1)
-    );
-    assert_eq!(
-        object
-            .get("final_status_snapshots")
-            .and_then(norito::json::Value::as_array)
-            .map(Vec::len),
-        Some(1)
-    );
-    assert_eq!(
-        blocker_label(SumeragiV2LivenessBlocker::ApplicationPending),
-        "application_pending"
-    );
-    assert_eq!(
-        blocker_label(SumeragiV2LivenessBlocker::SuccessorActivationPending),
-        "successor_activation_pending"
-    );
-    assert_eq!(
-        blocker_label(SumeragiV2LivenessBlocker::LocalControlPending),
-        "local_control_pending"
-    );
-}
-#[test]
-fn write_summary_persists_local_and_durable_evidence() {
-    let temp = tempfile::tempdir().expect("temporary evidence directory");
-    let local = temp.path().join("local/summary.json");
-    let durable = temp.path().join("durable/taira-summary.json");
-    fs::create_dir_all(local.parent().expect("local parent")).expect("create local parent");
-    write_summary(&local, &durable, &sample_simulation_summary())
-        .expect("write both summary copies");
-    let local_bytes = fs::read(&local).expect("read local summary");
-    let durable_bytes = fs::read(&durable).expect("read durable summary");
-    assert_eq!(local_bytes, durable_bytes);
-    assert!(
-        String::from_utf8(local_bytes)
-            .expect("summary UTF-8")
-            .contains("workspace_source_manifest_sha256")
-    );
-}
-include!("taira_public_localnet_config_digest_test.rs");
+#[path = "taira_public_localnet/unit_tests.rs"]
+mod unit_tests;

@@ -44,16 +44,16 @@ def test_build_alias_preserves_full_normalized_domain() -> None:
     assert MODULE.build_alias(
         "Taira-Rollout_Canary",
         "ed0123456789ABCDEF",
-        " Wonderland.Universal ",
-    ) == "tairarolloutcanary0123456789abcdef@wonderland.universal"
+        " Sora.Universal ",
+    ) == "tairarolloutcanary0123456789abcdef@sora.universal"
 
 
 def test_build_alias_preserves_single_segment_dataspace_root() -> None:
     assert MODULE.build_alias(
         "canary",
         "ed0123456789ABCDEF",
-        "Wonderland",
-    ) == "canary0123456789abcdef@wonderland"
+        "Sora",
+    ) == "canary0123456789abcdef@sora"
 
 
 def test_pipeline_status_requires_current_nested_shape() -> None:

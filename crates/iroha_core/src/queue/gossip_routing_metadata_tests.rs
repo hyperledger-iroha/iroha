@@ -6,14 +6,14 @@ fn gossip_batch_returns_routing_metadata() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);
     let tx = accepted_tx_by_someone(&time_source);
-    let hash = tx.as_ref().hash();
+    let hash = tx.as_ref().hash_as_entrypoint();
     queue
         .push(tx, state.view())
         .expect("enqueue accepted transaction");
     let batch = queue.gossip_batch(1, &state.view());
     assert_eq!(batch.len(), 1);
     let entry = &batch[0];
-    assert_eq!(entry.tx.as_ref().hash(), hash);
+    assert_eq!(entry.tx.as_ref().hash_as_entrypoint(), hash);
     let expected_payload =
         ncore::to_bytes(entry.tx.entrypoint()).expect("encode transaction entrypoint");
     assert_eq!(entry.payload.as_slice(), expected_payload.as_slice());
@@ -43,17 +43,16 @@ fn gossip_batch_preserves_admitted_routing_across_policy_change() {
         ))],
         Metadata::default(),
     );
-    let hash = tx.as_ref().hash();
+    let hash = tx.as_ref().hash_as_entrypoint();
     queue.push(tx.clone(), state.view()).expect("push tx");
     assert_eq!(
         queue
-            .routing_decisions
+            .routing_plans
             .get(&hash)
-            .map(|entry| *entry.value()),
+            .map(|entry| entry.value().coordinator_route()),
         Some(RoutingDecision::default())
     );
     let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
     nexus.lane_catalog = (*fresh_lanes).clone();
     nexus.dataspace_catalog = (*fresh_dataspaces).clone();
     nexus.fees.base_fee = Quantity::zero();
@@ -73,15 +72,16 @@ fn gossip_batch_preserves_admitted_routing_across_policy_change() {
     assert_eq!(batch[0].routing, RoutingDecision::default());
     assert_eq!(
         queue
-            .routing_decisions
+            .routing_plans
             .get(&hash)
-            .map(|entry| *entry.value()),
+            .map(|entry| entry.value().coordinator_route()),
         Some(RoutingDecision::default())
     );
     assert_eq!(
-        crate::queue::routing_ledger::get(&hash),
+        queue
+            .routing_plan_hint(&hash)
+            .map(|plan| plan.coordinator_route()),
         Some(RoutingDecision::default())
     );
     assert!(!queue.accepted_work_validation_faulted());
-    let _ = crate::queue::routing_ledger::take(&hash);
 }

@@ -21,8 +21,8 @@ use iroha_config::{
     parameters::{
         actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
         defaults::kura::{
-            BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, FSYNC_INTERVAL,
-            MERGE_LEDGER_CACHE_CAPACITY, ROSTER_SIDECAR_RETENTION,
+            BLOCKS_IN_MEMORY, FSYNC_INTERVAL,
+            MERGE_LEDGER_CACHE_CAPACITY, LANE_HISTORY_RETENTION,
         },
     },
 };
@@ -44,7 +44,7 @@ use iroha_data_model::{
             QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
         },
     },
-    consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1},
+    consensus::VALIDATOR_SET_HASH_VERSION_V1,
     domain::{Domain, DomainId},
     isi::{InstructionBox, Log, Upgrade},
     merge::MergeQuorumCertificate,
@@ -72,7 +72,6 @@ use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in};
 use iroha_version::codec::EncodeVersioned;
 use nonzero_ext::nonzero;
-use sha2::Digest as _;
 use tempfile::TempDir;
 use super::*;
 use crate::{
@@ -85,7 +84,7 @@ use crate::{
     smartcontracts::Registrable,
     state::State,
     sumeragi::{
-        consensus::{PERMISSIONED_TAG, Phase, QcAggregate},
+        consensus::Phase,
         network_topology::Topology,
     },
 };
@@ -286,102 +285,104 @@ fn kura_new_rejects_empty_production_store_root_before_persistence_initializatio
         Err(err) => err,
     };
     assert!(matches!(err, Error::EmptyStoreRoot));
-    assert!(
-        CommitRosterJournal::journal_path(Path::new(""))
-            .as_os_str()
-            .is_empty(),
-        "the regression must cover the previously silent empty journal path"
-    );
 }
 #[test]
-fn state_and_kura_share_commit_roster_journal_owner_across_truncation() {
-    let kura = Kura::blank_kura_for_testing();
-    let state = State::new_for_testing(
-        World::default(),
-        Arc::clone(&kura),
-        LiveQueryStore::start_test(),
-    );
-    let kura_journal = kura.commit_roster_journal_handle();
-    assert!(
-        Arc::ptr_eq(&state.commit_roster_journal, &kura_journal),
-        "State must retain Kura's exact journal owner, not a cloned snapshot"
-    );
-    let first_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
-    let second_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA2; Hash::LENGTH]));
-    let (first_qc, first_checkpoint) = sample_commit_roster_tuple(1, first_hash, 0xA1);
-    let (second_qc, second_checkpoint) = sample_commit_roster_tuple(2, second_hash, 0xA2);
-    {
-        let mut journal = kura_journal.write();
-        assert!(journal.upsert(first_qc.clone(), first_checkpoint.clone(), None));
-        assert!(journal.upsert(second_qc.clone(), second_checkpoint, None));
-    }
-    assert_eq!(
-        state
-            .commit_roster_journal
-            .read()
-            .get(first_qc.height, first_qc.subject_block_hash)
-            .map(|snapshot| snapshot.validator_checkpoint),
-        Some(first_checkpoint),
-        "State must observe a mutation made through Kura's shared handle"
-    );
-    assert!(
-        state
-            .commit_roster_journal
-            .read()
-            .get(second_qc.height, second_qc.subject_block_hash)
-            .is_some()
-    );
-    kura_journal
-        .write()
-        .truncate_to_height(1)
-        .expect("truncate shared commit roster journal");
-    let state_journal = state.commit_roster_journal.read();
-    assert!(
-        state_journal
-            .get(first_qc.height, first_qc.subject_block_hash)
-            .is_some(),
-        "truncation must retain the in-range snapshot"
-    );
-    assert!(
-        state_journal
-            .get(second_qc.height, second_qc.subject_block_hash)
-            .is_none(),
-        "State must immediately observe Kura-side truncation"
-    );
-}
-#[test]
-fn kura_startup_rejects_existing_invalid_commit_roster_journals() {
-    let valid = CommitRosterJournal::empty_payload_bytes_for_version(2);
-    let truncated = valid[..valid.len().saturating_sub(1)].to_vec();
-    let unsupported = CommitRosterJournal::empty_payload_bytes_for_version(u32::MAX);
-    for (label, bytes, unsupported_version) in [
-        ("corrupt", b"not-a-norito-journal".to_vec(), false),
-        ("truncated", truncated, false),
-        ("unsupported", unsupported, true),
+fn kura_startup_rejects_every_retired_roster_artifact() {
+    for (name, in_pipeline, directory) in [
+        ("commit-rosters", false, true),
+        ("commit-rosters.norito", false, false),
+        ("commit-rosters.norito.tmp", false, false),
+        ("roster_sidecars.norito", true, false),
+        ("roster_sidecars.index", true, false),
+        ("roster_sidecars.norito.tmp", true, false),
+        ("roster_sidecars.index.tmp", true, false),
     ] {
-        let temp_dir = TempDir::new().expect("tempdir");
-        let path = CommitRosterJournal::journal_path(temp_dir.path());
-        let generations = path.join("generations");
-        fs::create_dir_all(&generations).expect("create commit-roster generations");
-        let digest = hex::encode(sha2::Sha256::digest(&bytes));
-        fs::write(generations.join(format!("{digest}.norito")), bytes)
-            .expect("write invalid commit-roster generation");
-        fs::write(path.join("current"), format!("{digest}\n"))
-            .expect("publish invalid commit-roster generation");
+        let temp_dir = TempDir::new().expect("retired-artifact tempdir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("initialize retired-artifact Kura");
+        let store_root = kura.store_root();
+        let blocks_root = kura.active_blocks_dir.lock().clone();
+        drop(kura);
+        let parent = if in_pipeline {
+            blocks_root.join(PIPELINE_DIR_NAME)
+        } else {
+            store_root
+        };
+        fs::create_dir_all(&parent).expect("create retired-artifact parent");
+        let path = parent.join(name);
+        if directory {
+            fs::create_dir(&path).expect("create retired directory artifact");
+        } else {
+            fs::write(&path, b"retired artifact must remain").expect("write retired artifact");
+        }
         let err = match Kura::new(&config, &RuntimeLaneConfig::default()) {
-            Ok(_) => panic!("{label} journal must abort Kura startup"),
+            Ok(_) => panic!("retired artifact {name} must abort Kura startup"),
             Err(err) => err,
         };
-        match err {
-            Error::CommitRosterJournal(CommitRosterJournalError::UnsupportedVersion { .. })
-                if unsupported_version => {}
-            Error::CommitRosterJournal(CommitRosterJournalError::Decode { .. })
-                if !unsupported_version => {}
-            other => panic!("unexpected startup error for {label} journal: {other:?}"),
+        assert!(
+            matches!(&err, Error::RetiredKuraArtifact { path: rejected } if rejected == &path),
+            "unexpected rejection for {name}: {err:?}",
+        );
+        assert!(
+            fs::symlink_metadata(&path).is_ok(),
+            "retired artifact must remain for operator-directed removal",
+        );
+        if !directory {
+            assert_eq!(
+                fs::read(&path).expect("retired bytes remain"),
+                b"retired artifact must remain"
+            );
         }
+    }
+}
+#[derive(Encode)]
+struct LegacyKuraRollbackIntentV1Fixture {
+    version: u32,
+    from_height: u64,
+    target_height: u64,
+    target_merge_entries: u64,
+    target_block_hash: Option<HashOf<BlockHeader>>,
+}
+#[test]
+fn pending_v1_rollback_intents_are_rejected_before_mutation() {
+    for temporary in [false, true] {
+        let temp_dir = TempDir::new().expect("V1 rollback tempdir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize rollback Kura");
+        let hashes = store_dummy_blocks(&kura, 2);
+        let blocks_root = kura.active_blocks_dir.lock().clone();
+        drop(kura);
+        let stable = Kura::rollback_intent_path(&blocks_root);
+        let path = if temporary {
+            stable.with_extension("norito.tmp")
+        } else {
+            stable
+        };
+        let legacy = LegacyKuraRollbackIntentV1Fixture {
+            version: 1,
+            from_height: 2,
+            target_height: 1,
+            target_merge_entries: 0,
+            target_block_hash: Some(hashes[0]),
+        };
+        fs::write(
+            &path,
+            norito::encode_canonical(&legacy).expect("encode V1 rollback intent"),
+        )
+        .expect("write V1 rollback intent");
+        sync_dir(&blocks_root).expect("sync V1 rollback intent");
+        let before = snapshot_regular_test_tree(&blocks_root);
+        assert!(matches!(
+            Kura::new(&config, &lane_config),
+            Err(Error::RollbackIntentInvalid { .. })
+        ));
+        assert_eq!(
+            snapshot_regular_test_tree(&blocks_root),
+            before,
+            "unsupported V1 rollback evidence must be rejected before any recovery mutation",
+        );
     }
 }
 #[test]
@@ -420,11 +421,12 @@ fn kura_startup_promotes_synced_temporary_rollback_intent_and_completes() {
     drop(kura);
     // Dummy blocks do not carry merge-ledger entries, so the sparse merge boundary is zero.
     let intent = KuraRollbackIntent::new_with_merge_entries(2, 1, 0, Some(hashes[0]));
+    assert_eq!(intent.version, 2);
     let intent_path = Kura::rollback_intent_path(&blocks_root);
     let temp_path = intent_path.with_extension("norito.tmp");
     fs::write(
         &temp_path,
-        norito::to_bytes(&intent).expect("encode rollback intent"),
+        norito::encode_canonical(&intent).expect("encode rollback intent"),
     )
     .expect("write temporary rollback intent");
     fs::File::open(&temp_path)
@@ -680,12 +682,11 @@ fn merge_entry_with_indexed_reservation(
     salt: u8,
 ) -> (
     MergeLedgerEntry,
-    HashOf<SignedTransaction>,
+    HashOf<TransactionEntrypoint>,
     LaneQueueReservationKeyV2,
 ) {
     let entrypoint = offline_top_up_entrypoint_for_index([salt; 32], [salt.saturating_add(1); 32]);
-    let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
-    let transaction_hash = accepted.hash();
+    let entrypoint_hash = entrypoint.hash();
     let mut entry = merge_entry_with_indexed_entrypoint(entrypoint.clone());
     entry.epoch_id = epoch;
     let execution = entry
@@ -700,7 +701,6 @@ fn merge_entry_with_indexed_reservation(
     ));
     let reservation = LaneQueueReservationKeyV2 {
         version: LaneQueueReservationKeyV2::VERSION,
-        signed_transaction_hash: transaction_hash,
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
             b"kura-queue-plan-admission-binding",
@@ -721,20 +721,20 @@ fn merge_entry_with_indexed_reservation(
         vec![norito::to_bytes(&reservation).expect("encode canonical indexed reservation fixture")];
     execution.routing_plans =
         vec![norito::to_bytes(&routing_plan).expect("encode canonical routing fixture")];
-    (entry, transaction_hash, reservation)
+    (entry, entrypoint_hash, reservation)
 }
 fn store_indexed_reservation_carrier(
     kura: &Kura,
     salt: u8,
 ) -> (
-    HashOf<SignedTransaction>,
+    HashOf<TransactionEntrypoint>,
     LaneQueueReservationKeyV2,
     MergeLedgerFrameIndex,
 ) {
     let mut blocks = DummyBlocks::new();
     let genesis = blocks.next();
     let raw_carrier = blocks.next();
-    let (mut entry, transaction_hash, reservation) = merge_entry_with_indexed_reservation(1, salt);
+    let (mut entry, entrypoint_hash, reservation) = merge_entry_with_indexed_reservation(1, salt);
     let batch = entry
         .execution_batch
         .as_mut()
@@ -781,7 +781,7 @@ fn store_indexed_reservation_carrier(
         .expect("store reservation merge carrier");
     let _ = persist_v2_finality_chain_through(kura, nonzero!(2_usize));
     let frame = kura.merge_log.lock().frames_by_epoch[&1];
-    (transaction_hash, reservation, frame)
+    (entrypoint_hash, reservation, frame)
 }
 fn v2_finality_fixture_keys() -> Vec<KeyPair> {
     let mut keypairs = (0_u8..4)
@@ -975,6 +975,26 @@ fn v2_finality_artifacts_for_chain(blocks: &[Arc<SignedBlock>]) -> Vec<V2Finalit
         artifacts.push(artifact);
     }
     artifacts
+}
+fn assert_v2_finality_telemetry(metrics: &Metrics, artifact: &V2FinalityArtifact) {
+    assert_eq!(metrics.sumeragi_commit_qc_height.get(), artifact.height);
+    assert_eq!(
+        metrics.sumeragi_commit_qc_view.get(),
+        artifact.commit_qc.round.view
+    );
+    assert_eq!(
+        metrics.sumeragi_commit_qc_epoch.get(),
+        artifact.height_context.epoch
+    );
+    assert_eq!(
+        metrics.sumeragi_commit_qc_signatures_total.get(),
+        u64::try_from(artifact.commit_qc.signers.len()).expect("fixture signer count fits u64")
+    );
+    assert_eq!(
+        metrics.sumeragi_commit_qc_validator_set_len.get(),
+        u64::try_from(artifact.height_context.roster.len())
+            .expect("fixture roster length fits u64")
+    );
 }
 pub(super) fn persist_v2_finality_chain_through(
     kura: &Kura,
@@ -1292,7 +1312,7 @@ fn blank_kura_applies_staged_pre_genesis_nexus_geometry() {
     );
     state
         .set_nexus(iroha_config::parameters::actual::Nexus {
-            enabled: true,
+
             lane_catalog: catalog.clone(),
             configured_lane_catalog: catalog,
             lane_config: lane_config.clone(),
@@ -1433,6 +1453,174 @@ fn v2_finality_artifact_roundtrips_with_unforgeable_receipt() {
             .exists(),
         "successful atomic write must not leave a temporary artifact"
     );
+}
+#[test]
+fn v2_finality_summary_maps_to_public_status_without_regression() {
+    let mut generator = DummyBlocks::new();
+    let blocks = vec![generator.next(), generator.next()];
+    let artifacts = v2_finality_artifacts_for_chain(&blocks);
+    let kura = Kura::blank_kura_for_testing();
+    for block in &blocks {
+        kura.store_block(Arc::clone(block))
+            .expect("store canonical telemetry fixture block");
+    }
+    let metrics = Arc::new(Metrics::default());
+    kura.attach_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
+    let _lower_receipt = kura
+        .store_v2_finality_artifact(&artifacts[0])
+        .expect("persist lower finality artifact");
+    let _higher_receipt = kura
+        .store_v2_finality_artifact(&artifacts[1])
+        .expect("persist higher finality artifact");
+    assert_v2_finality_telemetry(&metrics, &artifacts[1]);
+    let _historical_retry_receipt = kura
+        .store_v2_finality_artifact(&artifacts[0])
+        .expect("historical idempotent retry remains valid");
+    assert_v2_finality_telemetry(&metrics, &artifacts[1]);
+    let _latest_retry_receipt = kura
+        .store_v2_finality_artifact(&artifacts[1])
+        .expect("latest idempotent retry remains valid");
+    assert_v2_finality_telemetry(&metrics, &artifacts[1]);
+    let status = iroha_telemetry::metrics::Status::from(metrics.as_ref());
+    let sumeragi = status
+        .sumeragi
+        .expect("public status includes Sumeragi telemetry");
+    assert_eq!(sumeragi.commit_qc_height, artifacts[1].height);
+    assert_eq!(sumeragi.highest_qc_height, artifacts[1].height);
+    assert_eq!(sumeragi.locked_qc_height, artifacts[1].height);
+}
+#[test]
+fn disabled_telemetry_tracks_durable_v2_finality_before_enable() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block))
+        .expect("store canonical disabled-telemetry fixture block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let metrics = Arc::new(Metrics::default());
+    let telemetry = StateTelemetry::new(Arc::clone(&metrics), false);
+    kura.attach_telemetry(telemetry.clone());
+    let _disabled_receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("persist finality while telemetry observations are disabled");
+    assert_v2_finality_telemetry(&metrics, &artifact);
+    telemetry.enable();
+    assert_v2_finality_telemetry(&metrics, &artifact);
+}
+#[test]
+fn failed_v2_finality_store_does_not_publish_telemetry() {
+    let kura = Kura::blank_kura_for_testing();
+    let metrics = Arc::new(Metrics::default());
+    kura.attach_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block))
+        .expect("store canonical telemetry fixture block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    kura.fail_next_v2_finality_write_for_tests();
+    assert!(matches!(
+        kura.store_v2_finality_artifact(&artifact),
+        Err(Error::IO(error, _)) if error.to_string().contains("injected failure")
+    ));
+    assert_eq!(metrics.sumeragi_commit_qc_height.get(), 0);
+    assert_eq!(metrics.sumeragi_commit_qc_view.get(), 0);
+    assert_eq!(metrics.sumeragi_commit_qc_signatures_total.get(), 0);
+    let _recovered_receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("publish finality after injected failure");
+    assert_v2_finality_telemetry(&metrics, &artifact);
+    let _idempotent_receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("idempotent finality retry remains observable");
+    assert_v2_finality_telemetry(&metrics, &artifact);
+}
+#[test]
+fn telemetry_attach_hydrates_authenticated_durable_tip_after_restart() {
+    let temp_dir = TempDir::new().expect("create persistent telemetry Kura root");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let artifact = {
+        let (kura, _) = Kura::new(&config, &lane_config).expect("open persistent telemetry Kura");
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store persistent telemetry fixture block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        let _restart_receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("store persistent telemetry fixture finality");
+        artifact
+    };
+    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen persistent telemetry Kura");
+    let metrics = Arc::new(Metrics::default());
+    reopened.attach_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
+    assert_v2_finality_telemetry(&metrics, &artifact);
+    let status = iroha_telemetry::metrics::Status::from(metrics.as_ref());
+    let sumeragi = status
+        .sumeragi
+        .expect("public status includes hydrated Sumeragi telemetry");
+    assert_eq!(sumeragi.commit_qc_height, artifact.height);
+    assert_eq!(sumeragi.highest_qc_height, artifact.height);
+}
+#[test]
+fn telemetry_attach_hydrates_highest_finality_below_durable_tip_after_restart() {
+    let temp_dir = TempDir::new().expect("create persistent lagging-finality Kura root");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let artifact = {
+        let (kura, _) = Kura::new(&config, &lane_config).expect("open persistent telemetry Kura");
+        let mut generator = DummyBlocks::new();
+        let blocks = vec![generator.next(), generator.next()];
+        for block in &blocks {
+            kura.store_block(Arc::clone(block))
+                .expect("store persistent lagging-finality fixture block");
+        }
+        let artifact = v2_finality_artifacts_for_chain(&blocks)
+            .into_iter()
+            .next()
+            .expect("height-one finality fixture");
+        let _lagging_tip_receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("store finality below the durable block tip");
+        artifact
+    };
+    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen persistent telemetry Kura");
+    {
+        let inventory = reopened.v2_startup_finality_verification_inventory.lock();
+        let inventory = inventory
+            .as_ref()
+            .expect("startup finality inventory is installed");
+        assert!(
+            inventory.durable_tip_artifact.is_none(),
+            "replay authority must remain absent when the durable tip has no finality artifact"
+        );
+        assert_eq!(
+            inventory
+                .highest_verified_finality_artifact
+                .as_ref()
+                .map(|artifact| artifact.height),
+            Some(artifact.height)
+        );
+    }
+    let metrics = Arc::new(Metrics::default());
+    reopened.attach_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
+    assert_v2_finality_telemetry(&metrics, &artifact);
+}
+#[test]
+fn late_startup_inventory_install_hydrates_attached_telemetry() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block))
+        .expect("store late-inventory telemetry fixture block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let _late_inventory_receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("store late-inventory telemetry fixture finality");
+    let metrics = Arc::new(Metrics::default());
+    kura.attach_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
+    assert_eq!(metrics.sumeragi_commit_qc_height.get(), 0);
+    let inventory = kura
+        .validate_v2_finality_inventory_on_startup()
+        .expect("authenticate late startup finality inventory");
+    kura.install_v2_startup_finality_verification_inventory(inventory);
+    assert_v2_finality_telemetry(&metrics, &artifact);
 }
 #[test]
 fn kagemusha_topup_witness_stage_promotes_only_after_exact_finality_persistence() {

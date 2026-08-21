@@ -45,7 +45,7 @@ import org.junit.Test;
 
 public final class NoritoCodecAdapterTests {
 
-  private static final String SBD_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
+  private static final String DS_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
   private static final NetworkId TEST_NETWORK_ID =
       NetworkId.parse(
           "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
@@ -127,7 +127,7 @@ public final class NoritoCodecAdapterTests {
 
     final InstructionBox transfer =
         TransferWirePayloadEncoder.encodeAssetTransfer(
-            SBD_ASSET_DEFINITION_ID + "#" + authority, "10", destination);
+            DS_ASSET_DEFINITION_ID + "#" + authority, "10", destination);
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
@@ -157,7 +157,7 @@ public final class NoritoCodecAdapterTests {
         TransferWirePayloadEncoder.decodeAssetTransferPayload(
             ((InstructionBox.WirePayload) decodedInstruction.payload()).payloadBytes(),
             SccpV1.TAIRA_I105_DISCRIMINANT_V1);
-    assert (SBD_ASSET_DEFINITION_ID + "#" + authority).equals(decodedTransfer.assetId())
+    assert (DS_ASSET_DEFINITION_ID + "#" + authority).equals(decodedTransfer.assetId())
         : "signed transfer asset owner must preserve exact Taira I105";
     assert destination.equals(decodedTransfer.destinationAccountId())
         : "signed transfer destination must preserve exact Taira I105";
@@ -664,11 +664,11 @@ public final class NoritoCodecAdapterTests {
         new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final byte[] canonical = adapter.encodeTransaction(payload);
     final NoritoDecoder decoder = canonicalDecoder(canonical);
-    final byte[][] fields = new byte[9][];
+    final byte[][] fields = new byte[10][];
     for (int index = 0; index < fields.length; index++) {
       fields[index] = readField(decoder, "payload[" + index + "]");
     }
-    assert decoder.remaining() == 0 : "Canonical payload must contain exactly nine fields";
+    assert decoder.remaining() == 0 : "Canonical payload must contain exactly ten fields";
 
     final NoritoEncoder legacyChainId = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
     NoritoAdapters.stringAdapter().encode(legacyChainId, TEST_NETWORK_ID.literal());
@@ -901,10 +901,13 @@ public final class NoritoCodecAdapterTests {
     readField(decoder, "payload.time_to_live_ms");
     readField(decoder, "payload.nonce");
     readField(decoder, "payload.fee_payment");
+    final byte[] admissionIntentField = readField(decoder, "payload.admission_intent");
     readField(decoder, "payload.metadata");
     final byte[] attachmentsField = readField(decoder, "payload.attachments");
     assertOptionPayloadEmpty(attachmentsField, "payload.attachments");
     assert decoder.remaining() == 0 : "Payload has trailing bytes";
+    assert decodeFieldPayload(admissionIntentField, NoritoAdapters.uint(32), "payload.admission_intent") == 0L
+        : "Default admission intent must be Ordinary";
 
     final NoritoDecoder execDecoder = canonicalDecoder(executableField);
     final TypeAdapter<Long> uint32 = NoritoAdapters.uint(32);
@@ -945,10 +948,13 @@ public final class NoritoCodecAdapterTests {
     readField(decoder, "payload.time_to_live_ms");
     readField(decoder, "payload.nonce");
     readField(decoder, "payload.fee_payment");
+    final byte[] admissionIntentField = readField(decoder, "payload.admission_intent");
     readField(decoder, "payload.metadata");
     final byte[] attachmentsField = readField(decoder, "payload.attachments");
     assertOptionPayloadEmpty(attachmentsField, "payload.attachments");
     assert decoder.remaining() == 0 : "Payload has trailing bytes";
+    assert decodeFieldPayload(admissionIntentField, NoritoAdapters.uint(32), "payload.admission_intent") == 0L
+        : "Default admission intent must be Ordinary";
 
     final NoritoDecoder execDecoder = canonicalDecoder(executableField);
     final TypeAdapter<Long> uint32 = NoritoAdapters.uint(32);
@@ -1031,8 +1037,12 @@ public final class NoritoCodecAdapterTests {
     readField(payloadDecoder, "payload.time_to_live_ms");
     readField(payloadDecoder, "payload.nonce");
     readField(payloadDecoder, "payload.fee_payment");
+    final byte[] admissionIntentField =
+        readField(payloadDecoder, "payload.admission_intent");
     final byte[] metadataField = readField(payloadDecoder, "payload.metadata");
     final byte[] attachmentsField = readField(payloadDecoder, "payload.attachments");
+    assert decodeFieldPayload(admissionIntentField, NoritoAdapters.uint(32), "payload.admission_intent") == 0L
+        : "Default admission intent must be Ordinary";
     assertOptionPayloadEmpty(attachmentsField, "payload.attachments");
     assert payloadDecoder.remaining() == 0 : "Payload has trailing bytes";
 

@@ -61,6 +61,7 @@ public final class NativeAmxV2GroupedFixtureTests {
     assertEquals(
         "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F",
         firstLeg.participantProposal().proposalHash().value());
+    assertEquals(null, firstLeg.participantProposal().payloadBlockHint());
     assertEquals(
         "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72",
         firstLeg.participantSettlementHash().value());
@@ -124,6 +125,39 @@ public final class NativeAmxV2GroupedFixtureTests {
             IllegalArgumentException.class,
             () -> NativeAmxV2Models.parseReceipt(new byte[] {(byte) 0xff}));
     assertEquals("Native AMX V2 receipt must be valid UTF-8", invalidReceiptUtf8.getMessage());
+  }
+
+  @Test
+  public void participantProposalRequiresExplicitNullPayloadHint() throws Exception {
+    Map<String, Object> fixture = fixture();
+    Map<String, Object> group = object(object(fixture, "golden"), "receipt_group");
+    Map<String, Object> proposal = firstParticipantProposal(group);
+    assertTrue(proposal.containsKey("payload_block_hint"));
+    assertEquals(null, proposal.get("payload_block_hint"));
+
+    proposal.remove("payload_block_hint");
+    final Map<String, Object> missingGroup = group;
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> NativeAmxV2Models.parseReceiptGroup(missingGroup));
+
+    fixture = fixture();
+    group = object(object(fixture, "golden"), "receipt_group");
+    proposal = firstParticipantProposal(group);
+    proposal.put("payload_block_hint", new ArrayList<Object>());
+    final Map<String, Object> nonnullGroup = group;
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> NativeAmxV2Models.parseReceiptGroup(nonnullGroup));
+
+    fixture = fixture();
+    group = object(object(fixture, "golden"), "receipt_group");
+    proposal = firstParticipantProposal(group);
+    proposal.put("future_proposal_field", null);
+    final Map<String, Object> unknownGroup = group;
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> NativeAmxV2Models.parseReceiptGroup(unknownGroup));
   }
 
   @Test
@@ -533,6 +567,13 @@ public final class NativeAmxV2GroupedFixtureTests {
   private static BigInteger optionalUnsigned64(
       final Map<String, Object> object, final String name) {
     return object.get(name) == null ? null : unsigned64(object, name);
+  }
+
+  private static Map<String, Object> firstParticipantProposal(
+      final Map<String, Object> group) {
+    final Map<String, Object> receipt = object(array(group, "native_amx_receipts").get(0));
+    final Map<String, Object> leg = object(array(receipt, "legs").get(0));
+    return object(leg, "participant_proposal");
   }
 
   private static String string(final Map<String, Object> object, final String name) {

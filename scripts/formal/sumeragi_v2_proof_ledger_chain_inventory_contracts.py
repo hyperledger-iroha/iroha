@@ -83,7 +83,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
         expected_async_all_vars = (
             "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, "
             "AsyncProducerVars, asyncFixedCorridorDeadlines, "
-            "asyncServeProducerEpisodeDue>>"
+            "asyncServeProducerTurnReady>>"
         )
         if async_all_vars is None:
             errors.append(f"{async_path}: missing AsyncAllVars")
@@ -100,7 +100,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
         )
         expected_async_original_all_vars = (
             "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, "
-            "AsyncProducerVars, asyncServeProducerEpisodeDue>>"
+            "AsyncProducerVars, asyncServeProducerTurnReady>>"
         )
         if async_original_all_vars is None:
             errors.append(f"{async_path}: missing AsyncOriginalAllVars")
@@ -344,7 +344,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "IndexedFixedCorridorDeadlines": (
                 "indexedAsyncState[initialContext][6]"
             ),
-            "IndexedServeProducerEpisodeDue": (
+            "IndexedServeProducerTurnDue": (
                 "indexedAsyncState[initialContext][7]"
             ),
         }
@@ -417,8 +417,8 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "IndexedFixedCorridorDeadlines(initialContext)"
             )
             expected_serve_producer_episode_mapping = (
-                "asyncServeProducerEpisodeDue <- "
-                "IndexedServeProducerEpisodeDue(initialContext)"
+                "asyncServeProducerTurnReady <- "
+                "IndexedServeProducerTurnDue(initialContext)"
             )
             missing_recovery = [
                 mapping
@@ -485,8 +485,8 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "VerificationFixedCorridorDeadlines": (
                 "IndexedFixedCorridorDeadlines(VerificationContext)"
             ),
-            "VerificationServeProducerEpisodeDue": (
-                "IndexedServeProducerEpisodeDue(VerificationContext)"
+            "VerificationServeProducerTurnDue": (
+                "IndexedServeProducerTurnDue(VerificationContext)"
             ),
         }
         for symbol, expected_body in verification_helpers.items():
@@ -555,8 +555,8 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                         + (
                             "asyncFixedCorridorDeadlines <- "
                             "VerificationFixedCorridorDeadlines",
-                            "asyncServeProducerEpisodeDue <- "
-                            "VerificationServeProducerEpisodeDue",
+                            "asyncServeProducerTurnReady <- "
+                            "VerificationServeProducerTurnDue",
                         )
                     )
                 )
@@ -638,7 +638,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     "IndexedRecovery",
                     "IndexedProducer",
                     "IndexedFixedCorridorDeadlines",
-                    "IndexedServeProducerEpisodeDue",
+                    "IndexedServeProducerTurnDue",
                 )
                 if definition not in body
             ]
@@ -1108,16 +1108,16 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
         )
         require_chain_theorem_contract(
-            "IndexedServeProducerEpisodeDueProjectionIsExact",
+            "IndexedServeProducerTurnDueProjectionIsExact",
             exact=(
                 "IndexedAsyncStateShape => \\A initialContext \\in "
                 "AdmissibleContextRecords: "
-                "IndexedAsync(initialContext)!AsyncServeProducerEpisodeDebt = "
-                "IndexedServeProducerEpisodeDue(initialContext)"
+                "IndexedAsync(initialContext)!AsyncServeProducerTurnDebt = "
+                "IndexedServeProducerTurnDue(initialContext)"
             ),
             proof_required=(
-                "IndexedAsync!AsyncServeProducerEpisodeDebt",
-                "IndexedServeProducerEpisodeDue",
+                "IndexedAsync!AsyncServeProducerTurnDebt",
+                "IndexedServeProducerTurnDue",
             ),
         )
         require_chain_theorem_contract(
@@ -1172,14 +1172,14 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "VerificationAsyncProof!vars",
                 "VerificationProducer",
                 "VerificationFixedCorridorDeadlines",
-                "VerificationServeProducerEpisodeDue",
+                "VerificationServeProducerTurnDue",
                 "IndexedDuplicatedGst",
                 "IndexedCore",
                 "IndexedScheduler",
                 "IndexedRecovery",
                 "IndexedProducer",
                 "IndexedFixedCorridorDeadlines",
-                "IndexedServeProducerEpisodeDue",
+                "IndexedServeProducerTurnDue",
             ),
         )
         require_chain_theorem_contract(
@@ -3633,11 +3633,17 @@ def _production_liveness_release_inventory_guard_errors(
         "sumeragi::v2_effects::tests",
         "sumeragi::v2::tests",
         "sumeragi::v2_runtime::tests",
+        "sumeragi::v2_certified_serve_payload_store::tests",
+        "sumeragi::v2_lifecycle_coordinator",
+        "sumeragi::v2_runner::lifecycle_height_driver::tests",
         "merge_sidecar::tests",
         "state::tests",
         "sumeragi::v2_lane_work::tests",
         "sumeragi::v2_lifecycle_recovery::tests",
+        "sumeragi::v2_lifecycle_coordinator",
+        "sumeragi::v2_certified_serve_payload_store::tests",
         "sumeragi::v2_runner::tests",
+        "sumeragi::v2_runner::lifecycle_height_driver::tests",
         "sumeragi::v2_worker::tests",
         "network::tests",
         "network::inbound_source_memory_bound_tests",

@@ -300,9 +300,9 @@ pub struct ValidationFeeVerifiedPayoutV1 {
     pub code_hash: String,
     /// Exact autonomous entrypoint.
     pub entrypoint: String,
-    /// Canonical public SBD asset-definition address.
-    #[norito(rename = "sbdAssetDefinitionId")]
-    pub sbd_asset_definition_id: String,
+    /// Canonical public DS asset-definition address.
+    #[norito(rename = "dsAssetDefinitionId")]
+    pub ds_asset_definition_id: String,
     /// Canonical public XOR asset-definition address.
     #[norito(rename = "xorAssetDefinitionId")]
     pub xor_asset_definition_id: String,
@@ -312,12 +312,12 @@ pub struct ValidationFeeVerifiedPayoutV1 {
     /// Canonical pool vault account.
     #[norito(rename = "vaultAccountId")]
     pub vault_account_id: String,
-    /// Exact SBD payout batch in fee-asset minor units.
-    #[norito(rename = "batchSbdMinorUnits")]
-    pub batch_sbd_minor_units: String,
-    /// SBD asset scale.
-    #[norito(rename = "sbdScale")]
-    pub sbd_scale: u8,
+    /// Exact DS payout batch in fee-asset minor units.
+    #[norito(rename = "batchDsMinorUnits")]
+    pub batch_ds_minor_units: String,
+    /// DS asset scale.
+    #[norito(rename = "dsScale")]
+    pub ds_scale: u8,
     /// Inclusive minimum XOR output as a canonical decimal string.
     #[norito(rename = "xorOutputMin")]
     pub xor_output_min: String,
@@ -472,7 +472,7 @@ fn verified_current_policy(
         active_policy_hash: hex::encode(entry.policy_hash),
         fee_asset_definition_id: entry.policy.ds_asset_id.to_string(),
         fee_scale: entry.policy.ds_scale,
-        // The protected enabled policy invariant fixes exactly 0.10 SBD at scale two.
+        // The protected enabled policy invariant fixes exactly 0.10 DS at scale two.
         fee_minor_units: "10".to_owned(),
         charging_mode: "PER_QUALIFYING_TRANSFER_INSTRUCTION".to_owned(),
         effective_from_height: entry.policy.effective_from_height.to_string(),
@@ -497,13 +497,13 @@ fn verified_current_policy(
             contract_address: payout.contract_address.to_string(),
             code_hash: hex::encode(payout.code_hash),
             entrypoint: payout.entrypoint.to_string(),
-            sbd_asset_definition_id: payout.sbd_asset_id.to_string(),
+            ds_asset_definition_id: payout.ds_asset_id.to_string(),
             xor_asset_definition_id: payout.xor_asset_id.to_string(),
             treasury_account_id: payout.treasury_account_id.to_string(),
             vault_account_id: payout.pool_vault_account_id.to_string(),
-            // The protected lifecycle invariant fixes exactly 10 SBD at scale two.
-            batch_sbd_minor_units: "1000".to_owned(),
-            sbd_scale: entry.policy.ds_scale,
+            // The protected lifecycle invariant fixes exactly 10 DS at scale two.
+            batch_ds_minor_units: "1000".to_owned(),
+            ds_scale: entry.policy.ds_scale,
             xor_output_min: payout.min_xor_out.to_string(),
             xor_output_max: payout.max_xor_out.to_string(),
             recipients,
@@ -1535,12 +1535,12 @@ mod tests {
                 contract_address: "contract".to_owned(),
                 code_hash: "02".repeat(32),
                 entrypoint: "autonomous_validation_fee_tick".to_owned(),
-                sbd_asset_definition_id: "asset".to_owned(),
+                ds_asset_definition_id: "asset".to_owned(),
                 xor_asset_definition_id: "xor".to_owned(),
                 treasury_account_id: "treasury".to_owned(),
                 vault_account_id: "vault".to_owned(),
-                batch_sbd_minor_units: "1000".to_owned(),
-                sbd_scale: 2,
+                batch_ds_minor_units: "1000".to_owned(),
+                ds_scale: 2,
                 xor_output_min: "4".to_owned(),
                 xor_output_max: "100".to_owned(),
                 recipients: vec![ValidationFeeVerifiedPayoutRecipientV1 {
@@ -1570,11 +1570,19 @@ mod tests {
             "closes_at_height",
             "enacted_at_height",
             "contractAddress",
-            "batchSbdMinorUnits",
+            "dsAssetDefinitionId",
+            "batchDsMinorUnits",
+            "dsScale",
             "account_id",
             "share_basis_points",
         ] {
             assert!(json.contains(&format!(r#""{key}":"#)), "missing {key}");
+        }
+        for retired_key in ["sbdAssetDefinitionId", "batchSbdMinorUnits", "sbdScale"] {
+            assert!(
+                !json.contains(retired_key),
+                "retired first-release key leaked: {retired_key}"
+            );
         }
         assert!(!json.contains("validator_id"));
         assert!(!json.contains(r#""policy":"#));

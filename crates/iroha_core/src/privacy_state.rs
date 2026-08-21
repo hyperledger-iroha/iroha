@@ -9227,6 +9227,114 @@ mod tests {
     use mv::{json::JsonKeyCodec, storage::Storage};
     use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
     use std::str::FromStr as _;
+    macro_rules! assert_variant_field_corruptions {
+        (
+            $record:ident as $variant:path;
+            $(
+                $mode:ident $field:ident = $replacement:expr
+                    => $mismatch:literal;
+            )+
+        ) => {
+            $(
+                let mut malformed = assert_variant_field_corruptions!(@source $record, $mode);
+                let $variant { $field, .. } = &mut malformed else {
+                    unreachable!($mismatch)
+                };
+                *$field = $replacement;
+                assert!(malformed.validate().is_err());
+            )+
+        };
+        (@source $record:ident, clone) => { $record.clone() };
+        (@source $record:ident, take) => { $record };
+    }
+    macro_rules! assert_fixture_record_field_corruptions {
+        (
+            $factory:expr, $variant:path;
+            $(
+                $fixture:ident, prepare [$($prepare:stmt)*],
+                $key:ident = $key_expression:expr,
+                $record_label:literal, $field:ident mutate $mutation:block,
+                $mismatch:literal, $rejection:literal, $needle:literal;
+            )+
+        ) => {
+            $(
+                let mut $fixture = $factory;
+                $($prepare)*
+                let $key = $key_expression;
+                let mut record = $fixture.commitments.view().get(&$key)
+                    .expect($record_label).clone();
+                let $variant { $field, .. } = &mut record else {
+                    panic!($mismatch);
+                };
+                $mutation
+                $fixture.commitments.insert($key, record);
+                let error = $fixture.load().expect_err($rejection);
+                assert!(error.contains($needle));
+            )+
+        };
+    }
+    macro_rules! persisted_error_cases {
+        ($helper:ident; $($mutation:expr => $expected:expr;)+) => {
+            $($helper($mutation, $expected);)+
+        };
+    }
+    macro_rules! storage_loader_rejection_cases {
+        (
+            $loader:expr, $key:expr;
+            $(
+                $storage:ident { $($prepare:stmt)* } => $record:expr;
+                reject $rejection:literal, $needle:literal $(, $message:literal)?;
+            )+
+        ) => {
+            $(
+                $($prepare)*
+                let mut $storage = Storage::new();
+                $storage.insert($key, $record);
+                let error = ($loader)(&$storage.view()).expect_err($rejection);
+                assert!(error.contains($needle) $(, $message)?);
+            )+
+        };
+    }
+    macro_rules! fixture_load_rejection_cases {
+        (
+            $factory:expr;
+            $(
+                |$fixture:ident| $mutation:block
+                    => $rejection:literal, $needle:literal $(, $message:literal)?;
+            )+
+        ) => {
+            $(
+                let mut $fixture = $factory;
+                $mutation
+                let error = $fixture.load().expect_err($rejection);
+                assert!(error.contains($needle) $(, $message)?);
+            )+
+        };
+    }
+    macro_rules! retained_window_rejection_cases {
+        (
+            $factory:expr;
+            $(
+                |$fixture:ident| $mutation:block
+                    => $retention:expr, $mode:ident($($assertion:expr),+);
+            )+
+        ) => {
+            $(
+                let mut $fixture = $factory;
+                $mutation
+                retained_window_rejection_cases!(
+                    @reject $fixture, $retention, $mode($($assertion),+)
+                );
+            )+
+        };
+        (@reject $fixture:ident, $retention:expr, contains($rejection:expr, $needle:expr)) => {
+            let error = $fixture.load_with_retention($retention).expect_err($rejection);
+            assert!(error.contains($needle));
+        };
+        (@reject $fixture:ident, $retention:expr, any($message:expr)) => {
+            assert!($fixture.load_with_retention($retention).is_err(), $message);
+        };
+    }
     fn nonzero(byte: u8) -> [u8; 32] {
         [byte; 32]
     }
@@ -10805,23 +10913,12 @@ mod tests {
     }
     #[test]
     fn orchard_persisted_state_rejects_orphans_wrong_roles_and_cross_origin_state() {
-        expect_orchard_persisted_error(
-            |fixture| fixture.activations = Storage::new(),
-            "unregistered protocol",
-        );
-        expect_orchard_persisted_error(
-            |fixture| fixture.commitments = Storage::new(),
-            "no authoritative compact frontier",
-        );
-        expect_orchard_persisted_error(
-            |fixture| fixture.roots = Storage::new(),
-            "has no retained history",
-        );
-        expect_orchard_persisted_error(
-            |fixture| fixture.root_heads = Storage::new(),
-            "has no current head",
-        );
-        expect_orchard_persisted_error(
+        persisted_error_cases! {
+            expect_orchard_persisted_error;
+            |fixture| fixture.activations = Storage::new() => "unregistered protocol";
+            |fixture| fixture.commitments = Storage::new() => "no authoritative compact frontier";
+            |fixture| fixture.roots = Storage::new() => "has no retained history";
+            |fixture| fixture.root_heads = Storage::new() => "has no current head";
             |fixture| {
                 fixture.commitments.insert(
                     fixture.state_key,
@@ -10833,18 +10930,12 @@ mod tests {
                     )
                     .expect("locally valid wrong-role record"),
                 );
-            },
-            "wrong-role provenance",
-        );
-        expect_orchard_persisted_error(
+            } => "wrong-role provenance";
             |fixture| {
                 let mut state = fixture.state();
                 state.bootstrap_digest = PrivacyOrchardPoolBootstrapDigestV1::new(nonzero(0x33));
                 fixture.set_state(state);
-            },
-            "origin differs from its pool state",
-        );
-        expect_orchard_persisted_error(
+            } => "origin differs from its pool state";
             |fixture| {
                 let snapshot = fixture
                     .load_with_retention(
@@ -10855,10 +10946,7 @@ mod tests {
                     .derive_successor(&[[0; 32]])
                     .expect("valid but uncommitted successor");
                 fixture.set_state(successor);
-            },
-            "compact frontier does not equal its current root head",
-        );
-        expect_orchard_persisted_error(
+            } => "compact frontier does not equal its current root head";
             |fixture| {
                 let head = *fixture
                     .root_heads
@@ -10875,10 +10963,7 @@ mod tests {
                     )
                     .expect("locally valid mismatched head"),
                 );
-            },
-            "does not equal latest",
-        );
-        expect_orchard_persisted_error(
+            } => "does not equal latest";
             |fixture| {
                 let key = *fixture
                     .roots
@@ -10895,9 +10980,8 @@ mod tests {
                     )
                     .expect("locally valid wrong origin"),
                 );
-            },
-            "invalid provenance",
-        );
+            } => "invalid provenance";
+        }
     }
     #[test]
     fn orchard_nullifiers_are_canonical_pool_scoped_origin_bound_and_restart_safe() {
@@ -11006,147 +11090,62 @@ mod tests {
         restart
             .load_with_retention(3)
             .expect("retained window survives exact restart");
-        let mut fixture = rolled();
-        let keys = fixture
-            .roots
-            .view()
-            .iter()
-            .map(|(key, _)| *key)
-            .collect::<Vec<_>>();
-        fixture.roots = fixture
-            .roots
-            .view()
-            .iter()
-            .filter(|(key, _)| **key != keys[1])
-            .map(|(key, provenance)| (*key, *provenance))
-            .collect();
-        assert!(
-            fixture
-                .load_with_retention(3)
-                .expect_err("middle gap")
-                .contains("gap or forged parent")
-        );
-        let mut fixture = rolled();
-        let (first_key, first_provenance) = fixture
-            .roots
-            .view()
-            .iter()
-            .next()
-            .map(|(key, provenance)| (*key, *provenance))
-            .expect("first retained root");
-        let duplicate_key = PrivacyRootKeyV1::new(
-            fixture.namespace,
-            PrivacyRootRoleV1::NoteCommitmentAnchor,
-            first_key.epoch(),
-            PrivacyRootV1::new(nonzero(0x51)),
-        )
-        .expect("same-epoch alternate root");
-        fixture.roots.insert(duplicate_key, first_provenance);
-        assert!(
-            fixture
-                .load_with_retention(4)
-                .expect_err("duplicate epoch")
-                .contains("duplicate epoch")
-        );
-        let mut fixture = rolled();
-        let retained = fixture
-            .roots
-            .view()
-            .iter()
-            .map(|(key, provenance)| (*key, *provenance))
-            .collect::<Vec<_>>();
-        fixture.roots.insert(retained[0].0, retained[1].1);
-        fixture.roots.insert(retained[1].0, retained[0].1);
-        assert!(
-            fixture.load_with_retention(3).is_err(),
-            "reordered successor provenance must reject"
-        );
-        let mut fixture = rolled();
-        let (first_key, first_provenance) = fixture
-            .roots
-            .view()
-            .iter()
-            .next()
-            .map(|(key, provenance)| (*key, *provenance))
-            .expect("first retained root");
-        let PrivacyRootProvenanceV1::OrchardPoolSuccessor {
-            statement_digest,
-            admitted_at_height,
-            action_index,
-            parent_epoch,
-            ..
-        } = first_provenance
-        else {
-            panic!("rolled Orchard prefix starts with a successor");
-        };
-        fixture.roots.insert(
-            first_key,
-            PrivacyRootProvenanceV1::orchard_pool_successor(
-                fixture.bootstrap_digest,
-                statement_digest,
-                admitted_at_height,
-                action_index,
-                parent_epoch,
-                PrivacyRootV1::new(nonzero(0x52)),
-            )
-            .expect("locally valid forged parent"),
-        );
-        assert!(
-            fixture
-                .load_with_retention(3)
-                .expect_err("forged pruned-prefix parent")
-                .contains("exact pruned-prefix anchor")
-        );
-        let mut fixture = rolled();
-        let (last_key, last_provenance) = fixture
-            .roots
-            .view()
-            .iter()
-            .last()
-            .map(|(key, provenance)| (*key, *provenance))
-            .expect("latest retained root");
-        let PrivacyRootProvenanceV1::OrchardPoolSuccessor {
-            statement_digest,
-            admitted_at_height,
-            action_index,
-            parent_epoch,
-            parent_root,
-            ..
-        } = last_provenance
-        else {
-            panic!("latest Orchard root is a successor");
-        };
-        let forged = PrivacyRootProvenanceV1::orchard_pool_successor(
-            PrivacyOrchardPoolBootstrapDigestV1::new(nonzero(0x53)),
-            statement_digest,
-            admitted_at_height,
-            action_index,
-            parent_epoch,
-            parent_root,
-        )
-        .expect("locally valid cross-origin successor");
-        fixture.roots.insert(last_key, forged);
-        fixture.root_heads.insert(
-            fixture.head_key,
-            PrivacyRootHeadRecordV1::new(
-                last_key.epoch(),
-                last_key.root(),
-                forged,
-                fixture
-                    .root_heads
-                    .view()
-                    .get(&fixture.head_key)
-                    .expect("rolled head")
-                    .retention_anchor(),
-            )
-            .expect("cross-origin head"),
-        );
-        assert!(
-            fixture
-                .load_with_retention(3)
-                .expect_err("cross-origin successor")
-                .contains("different pool bootstrap")
-        );
+        retained_window_rejection_cases! {
+            rolled();
+            |fixture| {
+                let keys = fixture.roots.view().iter().map(|(key, _)| *key).collect::<Vec<_>>();
+                fixture.roots = fixture.roots.view().iter()
+                    .filter(|(key, _)| **key != keys[1])
+                    .map(|(key, provenance)| (*key, *provenance)).collect();
+            } => 3, contains("middle gap", "gap or forged parent");
+            |fixture| {
+                let (first_key, first_provenance) = fixture.roots.view().iter().next()
+                    .map(|(key, provenance)| (*key, *provenance)).expect("first retained root");
+                let duplicate_key = PrivacyRootKeyV1::new(
+                    fixture.namespace, PrivacyRootRoleV1::NoteCommitmentAnchor,
+                    first_key.epoch(), PrivacyRootV1::new(nonzero(0x51)),
+                ).expect("same-epoch alternate root");
+                fixture.roots.insert(duplicate_key, first_provenance);
+            } => 4, contains("duplicate epoch", "duplicate epoch");
+            |fixture| {
+                let retained = fixture.roots.view().iter()
+                    .map(|(key, provenance)| (*key, *provenance)).collect::<Vec<_>>();
+                fixture.roots.insert(retained[0].0, retained[1].1);
+                fixture.roots.insert(retained[1].0, retained[0].1);
+            } => 3, any("reordered successor provenance must reject");
+            |fixture| {
+                let (first_key, first_provenance) = fixture.roots.view().iter().next()
+                    .map(|(key, provenance)| (*key, *provenance)).expect("first retained root");
+                let PrivacyRootProvenanceV1::OrchardPoolSuccessor {
+                    statement_digest, admitted_at_height, action_index, parent_epoch, ..
+                } = first_provenance else {
+                    panic!("rolled Orchard prefix starts with a successor");
+                };
+                fixture.roots.insert(first_key,
+                    PrivacyRootProvenanceV1::orchard_pool_successor(
+                        fixture.bootstrap_digest, statement_digest, admitted_at_height,
+                        action_index, parent_epoch, PrivacyRootV1::new(nonzero(0x52)),
+                    ).expect("locally valid forged parent"));
+            } => 3, contains("forged pruned-prefix parent", "exact pruned-prefix anchor");
+            |fixture| {
+                let (last_key, last_provenance) = fixture.roots.view().iter().last()
+                    .map(|(key, provenance)| (*key, *provenance)).expect("latest retained root");
+                let PrivacyRootProvenanceV1::OrchardPoolSuccessor {
+                    statement_digest, admitted_at_height, action_index,
+                    parent_epoch, parent_root, ..
+                } = last_provenance else { panic!("latest Orchard root is a successor"); };
+                let forged = PrivacyRootProvenanceV1::orchard_pool_successor(
+                    PrivacyOrchardPoolBootstrapDigestV1::new(nonzero(0x53)), statement_digest,
+                    admitted_at_height, action_index, parent_epoch, parent_root,
+                ).expect("locally valid cross-origin successor");
+                fixture.roots.insert(last_key, forged);
+                fixture.root_heads.insert(fixture.head_key, PrivacyRootHeadRecordV1::new(
+                    last_key.epoch(), last_key.root(), forged,
+                    fixture.root_heads.view().get(&fixture.head_key).expect("rolled head")
+                        .retention_anchor(),
+                ).expect("cross-origin head"));
+            } => 3, contains("cross-origin successor", "different pool bootstrap");
+        }
         for anchor in [
             None,
             Some(
@@ -11178,28 +11177,16 @@ mod tests {
                 "missing, wrong-root, stale, and advanced anchors must reject"
             );
         }
-        let mut fixture = orchard_persisted_fixture();
-        let bootstrap_key = *fixture
-            .roots
-            .view()
-            .iter()
-            .next()
-            .map(|(key, _)| key)
-            .expect("bootstrap key");
-        fixture.roots.insert(
-            bootstrap_key,
-            PrivacyRootProvenanceV1::governance(
-                PrivacyRootPublicationDigestV1::new(nonzero(0x57)),
-                9,
-            )
-            .expect("wrong-role origin"),
-        );
-        assert!(
-            fixture
-                .load_with_retention(3)
-                .expect_err("governance-forged Orchard origin")
-                .contains("invalid provenance")
-        );
+        retained_window_rejection_cases! {
+            orchard_persisted_fixture();
+            |fixture| {
+                let bootstrap_key = *fixture.roots.view().iter().next()
+                    .map(|(key, _)| key).expect("bootstrap key");
+                fixture.roots.insert(bootstrap_key, PrivacyRootProvenanceV1::governance(
+                    PrivacyRootPublicationDigestV1::new(nonzero(0x57)), 9,
+                ).expect("wrong-role origin"));
+            } => 3, contains("governance-forged Orchard origin", "invalid provenance");
+        }
     }
     #[test]
     fn due_activation_plan_preserves_schedule_across_height_jump_and_restart() {
@@ -11587,30 +11574,19 @@ mod tests {
     }
     #[test]
     fn persisted_pgc_state_rejects_every_orphan_class() {
-        expect_pgc_persisted_error(
-            |fixture| fixture.activations = Storage::new(),
-            "unregistered protocol",
-        );
-        expect_pgc_persisted_error(
-            |fixture| fixture.pgc_pool_invariants = Storage::new(),
-            "no pool invariant",
-        );
-        expect_pgc_persisted_error(
-            |fixture| fixture.pgc_accounts = Storage::new(),
-            "has no encrypted account table",
-        );
-        expect_pgc_persisted_error(
-            |fixture| fixture.roots = Storage::new(),
-            "has no retained history",
-        );
-        expect_pgc_persisted_error(
-            |fixture| fixture.root_heads = Storage::new(),
-            "has no current head",
-        );
+        persisted_error_cases! {
+            expect_pgc_persisted_error;
+            |fixture| fixture.activations = Storage::new() => "unregistered protocol";
+            |fixture| fixture.pgc_pool_invariants = Storage::new() => "no pool invariant";
+            |fixture| fixture.pgc_accounts = Storage::new() => "has no encrypted account table";
+            |fixture| fixture.roots = Storage::new() => "has no retained history";
+            |fixture| fixture.root_heads = Storage::new() => "has no current head";
+        }
     }
     #[test]
     fn persisted_pgc_state_rejects_supply_digest_root_epoch_and_provenance_corruption() {
-        expect_pgc_persisted_error(
+        persisted_error_cases! {
+            expect_pgc_persisted_error;
             |fixture| {
                 fixture.pgc_pool_invariants.insert(
                     fixture.invariant_key,
@@ -11622,10 +11598,7 @@ mod tests {
                     )
                     .expect("altered supply remains locally valid"),
                 );
-            },
-            "does not match its root head",
-        );
-        expect_pgc_persisted_error(
+            } => "does not match its root head";
             |fixture| {
                 fixture.pgc_pool_invariants.insert(
                     fixture.invariant_key,
@@ -11637,10 +11610,7 @@ mod tests {
                     )
                     .expect("altered bootstrap root remains locally valid"),
                 );
-            },
-            "bootstrap root provenance differs from its immutable invariant",
-        );
-        expect_pgc_persisted_error(
+            } => "bootstrap root provenance differs from its immutable invariant";
             |fixture| {
                 fixture.pgc_pool_invariants.insert(
                     fixture.invariant_key,
@@ -11652,10 +11622,7 @@ mod tests {
                     )
                     .expect("altered public digest remains locally valid"),
                 );
-            },
-            "bootstrap root provenance differs from its immutable invariant",
-        );
-        expect_pgc_persisted_error(
+            } => "bootstrap root provenance differs from its immutable invariant";
             |fixture| {
                 fixture.pgc_pool_invariants.insert(
                     fixture.invariant_key,
@@ -11667,10 +11634,7 @@ mod tests {
                     )
                     .expect("altered proof digest remains locally valid"),
                 );
-            },
-            "bootstrap root provenance differs from its immutable invariant",
-        );
-        expect_pgc_persisted_error(
+            } => "bootstrap root provenance differs from its immutable invariant";
             |fixture| {
                 let state = *fixture
                     .pgc_accounts
@@ -11686,10 +11650,7 @@ mod tests {
                     )
                     .expect("altered epoch remains locally valid"),
                 );
-            },
-            "contains mixed epochs",
-        );
-        expect_pgc_persisted_error(
+            } => "contains mixed epochs";
             |fixture| {
                 let state = *fixture
                     .pgc_accounts
@@ -11710,20 +11671,14 @@ mod tests {
                     )
                     .expect("altered provenance remains locally valid"),
                 );
-            },
-            "contains mixed provenance",
-        );
-        expect_pgc_persisted_error(
+            } => "contains mixed provenance";
             |fixture| {
                 fixture.replace_root_and_head(
                     PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
                     PrivacyRootV1::new(nonzero(0xC4)),
                     fixture.provenance,
                 );
-            },
-            "bootstrap root provenance differs from its immutable invariant",
-        );
-        expect_pgc_persisted_error(
+            } => "bootstrap root provenance differs from its immutable invariant";
             |fixture| {
                 let wrong = PrivacyRootProvenanceV1::verified_bootstrap(
                     fixture.bootstrap_digest,
@@ -11741,10 +11696,7 @@ mod tests {
                     )
                     .expect("locally valid mismatched head"),
                 );
-            },
-            "does not equal latest history entry",
-        );
-        expect_pgc_persisted_error(
+            } => "does not equal latest history entry";
             |fixture| {
                 let governance = PrivacyRootProvenanceV1::governance(
                     PrivacyRootPublicationDigestV1::new(nonzero(0xC5)),
@@ -11756,9 +11708,8 @@ mod tests {
                     fixture.root,
                     governance,
                 );
-            },
-            "begins with invalid provenance",
-        );
+            } => "begins with invalid provenance";
+        }
     }
     #[test]
     fn persisted_pgc_state_allows_only_proof_successors_after_verified_bootstrap() {
@@ -11994,96 +11945,43 @@ mod tests {
                 .expect("valid adversarial fixture");
             fixture
         };
-        let mut fixture = rolled();
-        let keys = fixture
-            .roots
-            .view()
-            .iter()
-            .map(|(key, _)| *key)
-            .collect::<Vec<_>>();
-        fixture.roots = fixture
-            .roots
-            .view()
-            .iter()
-            .filter(|(key, _)| **key != keys[1])
-            .map(|(key, provenance)| (*key, *provenance))
-            .collect();
-        assert!(
-            fixture
-                .load_with_retention(3)
-                .expect_err("orphan in retained middle")
-                .contains("gap or forged parent")
-        );
-        let mut fixture = rolled();
-        let (first_key, first_provenance) = fixture
-            .roots
-            .view()
-            .iter()
-            .next()
-            .map(|(key, provenance)| (*key, *provenance))
-            .expect("first retained root");
-        let duplicate_key = PrivacyRootKeyV1::new(
-            fixture.namespace,
-            PrivacyRootRoleV1::PgcAccountState,
-            first_key.epoch(),
-            PrivacyRootV1::new(nonzero(0xE1)),
-        )
-        .expect("same-epoch alternate root");
-        fixture.roots.insert(duplicate_key, first_provenance);
-        assert!(
-            fixture
-                .load_with_retention(3)
-                .expect_err("duplicate retained epoch")
-                .contains("duplicate epoch")
-        );
-        let mut fixture = rolled();
-        let retained = fixture
-            .roots
-            .view()
-            .iter()
-            .map(|(key, provenance)| (*key, *provenance))
-            .collect::<Vec<_>>();
-        fixture.roots.insert(retained[0].0, retained[1].1);
-        fixture.roots.insert(retained[1].0, retained[0].1);
-        assert!(
-            fixture.load_with_retention(3).is_err(),
-            "reordered provenance"
-        );
-        let mut fixture = rolled();
-        let (first_key, first_provenance) = fixture
-            .roots
-            .view()
-            .iter()
-            .next()
-            .map(|(key, provenance)| (*key, *provenance))
-            .expect("first retained root");
-        let PrivacyRootProvenanceV1::VerifiedPgcSuccessor {
-            statement_digest,
-            admitted_at_height,
-            action_index,
-            parent_epoch,
-            pool_invariant_digest,
-            ..
-        } = first_provenance
-        else {
-            panic!("rolled prefix starts with a PGC successor");
-        };
-        let forged_parent = PrivacyRootProvenanceV1::verified_pgc_successor(
-            statement_digest,
-            admitted_at_height,
-            action_index,
-            parent_epoch,
-            PrivacyRootV1::new(nonzero(0xE2)),
-            pool_invariant_digest,
-        )
-        .expect("locally valid forged parent");
-        fixture.roots.insert(first_key, forged_parent);
-        assert!(
-            fixture
-                .load_with_retention(3)
-                .expect_err("forged pruned-prefix parent")
-                .contains("exact pruned-prefix anchor")
-        );
+        retained_window_rejection_cases! {
+            rolled();
+            |fixture| {
+                let keys = fixture.roots.view().iter().map(|(key, _)| *key).collect::<Vec<_>>();
+                fixture.roots = fixture.roots.view().iter()
+                    .filter(|(key, _)| **key != keys[1])
+                    .map(|(key, provenance)| (*key, *provenance)).collect();
+            } => 3, contains("orphan in retained middle", "gap or forged parent");
+            |fixture| {
+                let (first_key, first_provenance) = fixture.roots.view().iter().next()
+                    .map(|(key, provenance)| (*key, *provenance)).expect("first retained root");
+                let duplicate_key = PrivacyRootKeyV1::new(
+                    fixture.namespace, PrivacyRootRoleV1::PgcAccountState,
+                    first_key.epoch(), PrivacyRootV1::new(nonzero(0xE1)),
+                ).expect("same-epoch alternate root");
+                fixture.roots.insert(duplicate_key, first_provenance);
+            } => 3, contains("duplicate retained epoch", "duplicate epoch");
+            |fixture| {
+                let retained = fixture.roots.view().iter()
+                    .map(|(key, provenance)| (*key, *provenance)).collect::<Vec<_>>();
+                fixture.roots.insert(retained[0].0, retained[1].1);
+                fixture.roots.insert(retained[1].0, retained[0].1);
+            } => 3, any("reordered provenance");
+            |fixture| {
+                let (first_key, first_provenance) = fixture.roots.view().iter().next()
+                    .map(|(key, provenance)| (*key, *provenance)).expect("first retained root");
+                let PrivacyRootProvenanceV1::VerifiedPgcSuccessor {
+                    statement_digest, admitted_at_height, action_index,
+                    parent_epoch, pool_invariant_digest, ..
+                } = first_provenance else { panic!("rolled prefix starts with a PGC successor"); };
+                let forged_parent = PrivacyRootProvenanceV1::verified_pgc_successor(
+                    statement_digest, admitted_at_height, action_index, parent_epoch,
+                    PrivacyRootV1::new(nonzero(0xE2)), pool_invariant_digest,
+                ).expect("locally valid forged parent");
+                fixture.roots.insert(first_key, forged_parent);
+            } => 3, contains("forged pruned-prefix parent", "exact pruned-prefix anchor");
+        }
         for (anchor_epoch, anchor_root) in [
             (1, PrivacyRootV1::new(nonzero(0xE3))),
             (3, PrivacyRootV1::new(nonzero(0xE4))),
@@ -12113,45 +12011,29 @@ mod tests {
                 "stale, advanced, and wrong-root anchors must reject"
             );
         }
-        let mut fixture = pgc_persisted_fixture();
-        let head = *fixture
-            .root_heads
-            .view()
-            .get(&fixture.head_key)
-            .expect("bootstrap head");
-        fixture.root_heads.insert(
-            fixture.head_key,
-            PrivacyRootHeadRecordV1 {
-                epoch: head.epoch(),
-                root: head.root(),
-                provenance: head.provenance(),
-                retention_anchor: Some(
-                    PrivacyRootRetentionAnchorV1::new(1, fixture.root)
-                        .expect("nonzero corrupt anchor"),
-                ),
-            },
-        );
-        assert!(
-            fixture.load_with_retention(3).is_err(),
-            "anchor with bootstrap"
-        );
-        let mut fixture = rolled();
-        let altered = PrivacyPgcPoolInvariantV1::new(
-            fixture.invariant().total_supply(),
-            PrivacyRootV1::new(nonzero(0xE6)),
-            fixture.bootstrap_digest,
-            fixture.bootstrap_proof_digest,
-        )
-        .expect("altered immutable bootstrap root");
-        fixture
-            .pgc_pool_invariants
-            .insert(fixture.invariant_key, altered);
-        assert!(
-            fixture
-                .load_with_retention(3)
-                .expect_err("mutated immutable metadata after rollover")
-                .contains("different immutable pool invariant")
-        );
+        retained_window_rejection_cases! {
+            pgc_persisted_fixture();
+            |fixture| {
+                let head = *fixture.root_heads.view().get(&fixture.head_key)
+                    .expect("bootstrap head");
+                fixture.root_heads.insert(fixture.head_key, PrivacyRootHeadRecordV1 {
+                    epoch: head.epoch(), root: head.root(), provenance: head.provenance(),
+                    retention_anchor: Some(PrivacyRootRetentionAnchorV1::new(1, fixture.root)
+                        .expect("nonzero corrupt anchor")),
+                });
+            } => 3, any("anchor with bootstrap");
+        }
+        retained_window_rejection_cases! {
+            rolled();
+            |fixture| {
+                let altered = PrivacyPgcPoolInvariantV1::new(
+                    fixture.invariant().total_supply(), PrivacyRootV1::new(nonzero(0xE6)),
+                    fixture.bootstrap_digest, fixture.bootstrap_proof_digest,
+                ).expect("altered immutable bootstrap root");
+                fixture.pgc_pool_invariants.insert(fixture.invariant_key, altered);
+            } => 3, contains("mutated immutable metadata after rollover",
+                "different immutable pool invariant");
+        }
     }
     #[test]
     fn future_unanchored_retention_is_prevalidated_while_typed_histories_are_prunable() {
@@ -12392,88 +12274,60 @@ mod tests {
                 .expect_err("Bootle/Lantern state requires executable protocol activation")
                 .contains("unregistered protocol")
         );
-        let mut wrong_role = Storage::new();
-        wrong_role.insert(
-            key,
-            PrivacyStateItemRecordV1::zk_ace_policy_governance(
+        storage_loader_rejection_cases! {
+            |view| load_privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id, view), key;
+            wrong_role {} => PrivacyStateItemRecordV1::zk_ace_policy_governance(
                 zk_ace_policy_record(zk_ace_policy_id(1)),
                 7,
-            )
-            .expect("valid cross-role record"),
-        );
-        assert!(
-            load_privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id, &wrong_role.view())
-                .expect_err("cross-role record must reject")
-                .contains("wrong-role")
-        );
-        let mismatched_policy = bootle_lantern_issuer_policy(
-            0xB4,
-            0xB2,
-            1,
-            BootleLanternIssuerPolicyLifecycleV1::Active,
-        );
-        let mut mismatched = Storage::new();
-        mismatched.insert(
-            key,
-            PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(mismatched_policy, 7)
-                .expect("intrinsically valid mismatched policy"),
-        );
-        assert!(
-            load_privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id, &mismatched.view())
-                .expect_err("key/record identity mismatch must reject")
-                .contains("does not match")
-        );
-        let mut corrupted_policy = policy.clone();
-        corrupted_policy.record_digest =
-            PrivacyBootleLanternIssuerPolicyDigestV1::new(nonzero(0xB5));
-        let mut corrupted = Storage::new();
-        corrupted.insert(
-            key,
-            PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance {
+            ).expect("valid cross-role record");
+            reject "cross-role record must reject", "wrong-role";
+
+            mismatched {
+                let mismatched_policy = bootle_lantern_issuer_policy(
+                    0xB4,
+                    0xB2,
+                    1,
+                    BootleLanternIssuerPolicyLifecycleV1::Active,
+                );
+            } => PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(
+                mismatched_policy,
+                7,
+            ).expect("intrinsically valid mismatched policy");
+            reject "key/record identity mismatch must reject", "does not match";
+
+            corrupted {
+                let mut corrupted_policy = policy.clone();
+                corrupted_policy.record_digest =
+                    PrivacyBootleLanternIssuerPolicyDigestV1::new(nonzero(0xB5));
+            } => PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance {
                 policy: corrupted_policy,
                 admitted_at_height: 7,
-            },
-        );
-        let error =
-            load_privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id, &corrupted.view())
-                .expect_err("record digest corruption must reject");
-        assert!(error.contains("is invalid"), "unexpected error: {error}");
-        let mut wrong_parameter_digest = policy.clone();
-        wrong_parameter_digest.issuer_parameter_digest =
-            PrivacyParameterDigestV1::new(nonzero(0xB6));
-        wrong_parameter_digest.record_digest =
-            PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
-        wrong_parameter_digest.record_digest = wrong_parameter_digest
-            .computed_record_digest()
-            .expect("recompute outer record digest");
-        let mut corrupted_parameter = Storage::new();
-        corrupted_parameter.insert(
-            key,
-            PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance {
+            };
+            reject "record digest corruption must reject", "is invalid",
+                "unexpected record digest validation error";
+
+            corrupted_parameter {
+                let mut wrong_parameter_digest = policy.clone();
+                wrong_parameter_digest.issuer_parameter_digest =
+                    PrivacyParameterDigestV1::new(nonzero(0xB6));
+                wrong_parameter_digest.record_digest =
+                    PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+                wrong_parameter_digest.record_digest = wrong_parameter_digest
+                    .computed_record_digest()
+                    .expect("recompute outer record digest");
+            } => PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance {
                 policy: wrong_parameter_digest,
                 admitted_at_height: 7,
-            },
-        );
-        let error = load_privacy_bootle_lantern_issuer_policy_v1(
-            issuer_id,
-            policy_id,
-            &corrupted_parameter.view(),
-        )
-        .expect_err("issuer-parameter digest substitution must reject");
-        assert!(error.contains("is invalid"), "unexpected error: {error}");
-        let mut zero_height = Storage::new();
-        zero_height.insert(
-            key,
-            PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance {
+            };
+            reject "issuer-parameter digest substitution must reject", "is invalid",
+                "unexpected issuer-parameter digest validation error";
+
+            zero_height {} => PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance {
                 policy,
                 admitted_at_height: 0,
-            },
-        );
-        assert!(
-            load_privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id, &zero_height.view())
-                .expect_err("zero admission height must reject")
-                .contains("admission height must be non-zero")
-        );
+            };
+            reject "zero admission height must reject", "admission height must be non-zero";
+        }
     }
     #[test]
     fn bootle_lantern_terminal_lifecycle_is_durable_but_unknown_json_state_rejects() {
@@ -12668,81 +12522,57 @@ mod tests {
             reuse_error.contains("reactivates a retired P-256 key"),
             "unexpected key-reactivation rejection: {reuse_error}"
         );
-        let mut wrong_role = Storage::new();
-        wrong_role.insert(
-            key,
-            PrivacyStateItemRecordV1::zk_ace_policy_governance(
+        storage_loader_rejection_cases! {
+            |view| load_privacy_vega_issuer_v1(issuer_id, view), key;
+            wrong_role {} => PrivacyStateItemRecordV1::zk_ace_policy_governance(
                 zk_ace_policy_record(zk_ace_policy_id(1)),
                 7,
-            )
-            .expect("valid wrong-role provenance"),
-        );
-        assert!(
-            load_privacy_vega_issuer_v1(issuer_id, &wrong_role.view())
-                .expect_err("cross-role record must reject")
-                .contains("wrong-role")
-        );
-        let mismatched = vega_issuer_record(
-            PrivacyIssuerIdV1::new(nonzero(0xC2)),
-            1,
-            1,
-            None,
-            PrivacyVegaIssuerRecordLifecycleV1::Active,
-        );
-        let mut mismatched_state = Storage::new();
-        mismatched_state.insert(
-            key,
-            PrivacyStateItemRecordV1::vega_issuer_governance(mismatched, 7)
-                .expect("intrinsically valid mismatched issuer"),
-        );
-        assert!(
-            load_privacy_vega_issuer_v1(issuer_id, &mismatched_state.view())
-                .expect_err("key/record mismatch must reject")
-                .contains("differs from its record")
-        );
-        let mut corrupt_digest = record;
-        corrupt_digest.record_digest.0[0] ^= 1;
-        let mut corrupted = Storage::new();
-        corrupted.insert(
-            key,
-            PrivacyStateItemRecordV1::VegaIssuerGovernance {
+            ).expect("valid wrong-role provenance");
+            reject "cross-role record must reject", "wrong-role";
+
+            mismatched_state {
+                let mismatched = vega_issuer_record(
+                    PrivacyIssuerIdV1::new(nonzero(0xC2)),
+                    1,
+                    1,
+                    None,
+                    PrivacyVegaIssuerRecordLifecycleV1::Active,
+                );
+            } => PrivacyStateItemRecordV1::vega_issuer_governance(mismatched, 7)
+                .expect("intrinsically valid mismatched issuer");
+            reject "key/record mismatch must reject", "differs from its record";
+
+            corrupted {
+                let mut corrupt_digest = record;
+                corrupt_digest.record_digest.0[0] ^= 1;
+            } => PrivacyStateItemRecordV1::VegaIssuerGovernance {
                 record: corrupt_digest,
                 admitted_at_height: 7,
-            },
-        );
-        assert!(
-            load_privacy_vega_issuer_v1(issuer_id, &corrupted.view())
-                .expect_err("self-digest corruption must reject")
-                .contains("is invalid")
-        );
-        let mut invalid_key_bytes = [u8::MAX; 33];
-        invalid_key_bytes[0] = 0x02;
-        let off_curve = PrivacyVegaIssuerRecordV1::new(
-            issuer_id,
-            1,
-            PrivacyP256PointV1::new(invalid_key_bytes),
-            record.document_type,
-            record.namespace,
-            record.digest_algorithm,
-            record.issuer_authentication_algorithm,
-            record.device_authentication_algorithm,
-            None,
-            PrivacyVegaIssuerRecordLifecycleV1::Active,
-        )
-        .expect("wire-level compressed shape is valid");
-        let mut corrupted_key = Storage::new();
-        corrupted_key.insert(
-            key,
-            PrivacyStateItemRecordV1::VegaIssuerGovernance {
+            };
+            reject "self-digest corruption must reject", "is invalid";
+
+            corrupted_key {
+                let mut invalid_key_bytes = [u8::MAX; 33];
+                invalid_key_bytes[0] = 0x02;
+                let off_curve = PrivacyVegaIssuerRecordV1::new(
+                    issuer_id,
+                    1,
+                    PrivacyP256PointV1::new(invalid_key_bytes),
+                    record.document_type,
+                    record.namespace,
+                    record.digest_algorithm,
+                    record.issuer_authentication_algorithm,
+                    record.device_authentication_algorithm,
+                    None,
+                    PrivacyVegaIssuerRecordLifecycleV1::Active,
+                )
+                .expect("wire-level compressed shape is valid");
+            } => PrivacyStateItemRecordV1::VegaIssuerGovernance {
                 record: off_curve,
                 admitted_at_height: 7,
-            },
-        );
-        assert!(
-            load_privacy_vega_issuer_v1(issuer_id, &corrupted_key.view())
-                .expect_err("off-curve snapshot key must reject")
-                .contains("invalid P-256 key")
-        );
+            };
+            reject "off-curve snapshot key must reject", "invalid P-256 key";
+        }
     }
     #[test]
     fn vega_issuer_lineage_rejects_gaps_terminal_advancement_and_wrong_predecessor() {
@@ -13093,83 +12923,23 @@ mod tests {
             norito::json::from_json::<PrivacyStateItemRecordV1>(&unknown_field).is_err(),
             "first-release durable provenance rejects unknown fields"
         );
-        let mut malformed = record.clone();
-        let PrivacyStateItemRecordV1::ZkX509VerifiedCertificateNullifier {
-            trust_anchor_record_digest,
-            ..
-        } = &mut malformed
-        else {
-            unreachable!("fixture has the X.509 replay role")
-        };
-        *trust_anchor_record_digest = PrivacyZkX509TrustAnchorRecordDigestV1::new([0; 32]);
-        assert!(malformed.validate().is_err());
-        let mut malformed = record.clone();
-        let PrivacyStateItemRecordV1::ZkX509VerifiedCertificateNullifier {
-            trust_anchor_record_epoch,
-            ..
-        } = &mut malformed
-        else {
-            unreachable!("fixture has the X.509 replay role")
-        };
-        *trust_anchor_record_epoch = 0;
-        assert!(malformed.validate().is_err());
-        let mut malformed = record.clone();
-        let PrivacyStateItemRecordV1::ZkX509VerifiedCertificateNullifier {
-            certificate_policy_record_digest,
-            ..
-        } = &mut malformed
-        else {
-            unreachable!("fixture has the X.509 replay role")
-        };
-        *certificate_policy_record_digest =
-            PrivacyZkX509CertificatePolicyRecordDigestV1::new([0; 32]);
-        assert!(malformed.validate().is_err());
-        let mut malformed = record.clone();
-        let PrivacyStateItemRecordV1::ZkX509VerifiedCertificateNullifier {
-            certificate_policy_record_epoch,
-            ..
-        } = &mut malformed
-        else {
-            unreachable!("fixture has the X.509 replay role")
-        };
-        *certificate_policy_record_epoch = 0;
-        assert!(malformed.validate().is_err());
-        let mut malformed = record.clone();
-        let PrivacyStateItemRecordV1::ZkX509VerifiedCertificateNullifier {
-            crl_record_digest, ..
-        } = &mut malformed
-        else {
-            unreachable!("fixture has the X.509 replay role")
-        };
-        *crl_record_digest = PrivacyZkX509CrlRecordDigestV1::new([0; 32]);
-        assert!(malformed.validate().is_err());
-        let mut malformed = record.clone();
-        let PrivacyStateItemRecordV1::ZkX509VerifiedCertificateNullifier {
-            crl_record_epoch, ..
-        } = &mut malformed
-        else {
-            unreachable!("fixture has the X.509 replay role")
-        };
-        *crl_record_epoch = 0;
-        assert!(malformed.validate().is_err());
-        let mut malformed = record.clone();
-        let PrivacyStateItemRecordV1::ZkX509VerifiedCertificateNullifier {
-            statement_digest, ..
-        } = &mut malformed
-        else {
-            unreachable!("fixture has the X.509 replay role")
-        };
-        *statement_digest = PrivacyStatementDigestV1::new([0; 32]);
-        assert!(malformed.validate().is_err());
-        let mut malformed = record;
-        let PrivacyStateItemRecordV1::ZkX509VerifiedCertificateNullifier {
-            admitted_at_height, ..
-        } = &mut malformed
-        else {
-            unreachable!("fixture has the X.509 replay role")
-        };
-        *admitted_at_height = 0;
-        assert!(malformed.validate().is_err());
+        assert_variant_field_corruptions! {
+            record as PrivacyStateItemRecordV1::ZkX509VerifiedCertificateNullifier;
+            clone trust_anchor_record_digest =
+                PrivacyZkX509TrustAnchorRecordDigestV1::new([0; 32])
+                => "fixture has the X.509 replay role";
+            clone trust_anchor_record_epoch = 0 => "fixture has the X.509 replay role";
+            clone certificate_policy_record_digest =
+                PrivacyZkX509CertificatePolicyRecordDigestV1::new([0; 32])
+                => "fixture has the X.509 replay role";
+            clone certificate_policy_record_epoch = 0 => "fixture has the X.509 replay role";
+            clone crl_record_digest = PrivacyZkX509CrlRecordDigestV1::new([0; 32])
+                => "fixture has the X.509 replay role";
+            clone crl_record_epoch = 0 => "fixture has the X.509 replay role";
+            clone statement_digest = PrivacyStatementDigestV1::new([0; 32])
+                => "fixture has the X.509 replay role";
+            take admitted_at_height = 0 => "fixture has the X.509 replay role";
+        }
     }
     #[test]
     fn proof_managed_pool_keys_are_closed_scoped_and_nonzero() {
@@ -13436,32 +13206,22 @@ mod tests {
         fixture
             .load()
             .expect("snapshot round-trip preserves the authenticated frontier");
-        let mut extra = proof_managed_persisted_fixture();
-        let extra_commitment = PrivacyCommitmentV1::new(nonzero(0xB6));
-        extra.commitments.insert(
-            PrivacyCommitmentKeyV1::proof_managed_pool_commitment(
-                extra.namespace,
-                extra_commitment,
-            )
-            .expect("extra commitment key"),
-            PrivacyStateItemRecordV1::proof_managed_pool_verified_commitment(
-                extra.bootstrap_digest,
-                PrivacyStatementDigestV1::new(nonzero(0xB7)),
-                2,
-                0,
-                2,
-                1,
-                1,
-                8,
-                0,
-            )
-            .expect("extra item"),
-        );
-        let error = extra.load().expect_err("uncommitted output must reject");
-        assert!(
-            error.contains("output epochs"),
-            "uncommitted output must fail the persisted epoch/head binding, got `{error}`"
-        );
+        fixture_load_rejection_cases! {
+            proof_managed_persisted_fixture();
+            |extra| {
+                let extra_commitment = PrivacyCommitmentV1::new(nonzero(0xB6));
+                extra.commitments.insert(
+                    PrivacyCommitmentKeyV1::proof_managed_pool_commitment(
+                        extra.namespace, extra_commitment,
+                    ).expect("extra commitment key"),
+                    PrivacyStateItemRecordV1::proof_managed_pool_verified_commitment(
+                        extra.bootstrap_digest, PrivacyStatementDigestV1::new(nonzero(0xB7)),
+                        2, 0, 2, 1, 1, 8, 0,
+                    ).expect("extra item"),
+                );
+            } => "uncommitted output must reject", "output epochs",
+                "uncommitted output must fail the persisted epoch/head binding";
+        }
         let outputs = [
             PrivacyCommitmentV1::new(nonzero(0xB8)),
             PrivacyCommitmentV1::new(nonzero(0xB9)),
@@ -13520,28 +13280,19 @@ mod tests {
             error.contains("declares 2 outputs but restored 1"),
             "omitted output must fail at the exact declared batch arity: {error}"
         );
-        let mut corrupted = proof_managed_persisted_fixture();
-        let mut config = corrupted
-            .commitments
-            .view()
-            .get(&corrupted.config_key)
-            .expect("config")
-            .clone();
-        let PrivacyStateItemRecordV1::ProofManagedPoolBootstrap {
-            accumulator_state: PrivacyProofManagedPoolAccumulatorStateV1::PrivateNote(state),
-            ..
-        } = &mut config
-        else {
-            panic!("IVM config must carry a compact frontier");
-        };
-        state.leaf.as_mut().expect("non-empty frontier")[0] ^= 1;
-        corrupted.commitments.insert(corrupted.config_key, config);
-        assert!(
-            corrupted
-                .load()
-                .expect_err("mutated compact frontier must reject")
-                .contains("compact frontier")
-        );
+        fixture_load_rejection_cases! {
+            proof_managed_persisted_fixture();
+            |corrupted| {
+                let mut config = corrupted.commitments.view().get(&corrupted.config_key)
+                    .expect("config").clone();
+                let PrivacyStateItemRecordV1::ProofManagedPoolBootstrap {
+                    accumulator_state: PrivacyProofManagedPoolAccumulatorStateV1::PrivateNote(state),
+                    ..
+                } = &mut config else { panic!("IVM config must carry a compact frontier"); };
+                state.leaf.as_mut().expect("non-empty frontier")[0] ^= 1;
+                corrupted.commitments.insert(corrupted.config_key, config);
+            } => "mutated compact frontier must reject", "compact frontier";
+        }
     }
     #[test]
     fn proof_managed_batch_identity_cannot_replay_with_different_arities() {
@@ -13567,147 +13318,70 @@ mod tests {
             PrivacyCommitmentKeyV1::proof_managed_pool_commitment(fixture.namespace, outputs[index])
                 .expect("output key")
         };
-        let mut duplicate_position = proof_managed_persisted_fixture();
-        duplicate_position.advance(&outputs);
-        let key = output_key(&duplicate_position, 1);
-        let mut record = duplicate_position
-            .commitments
-            .view()
-            .get(&key)
-            .expect("second output")
-            .clone();
-        let PrivacyStateItemRecordV1::ProofManagedPoolVerifiedCommitment {
-            append_position, ..
-        } = &mut record
-        else {
-            panic!("output must carry commitment provenance");
-        };
-        *append_position = 2;
-        duplicate_position.commitments.insert(key, record);
-        assert!(
-            duplicate_position
-                .load()
-                .expect_err("duplicate append position must reject")
-                .contains("duplicate position")
-        );
-        let mut duplicate_output_index = proof_managed_persisted_fixture();
-        duplicate_output_index.advance(&outputs);
-        let key = output_key(&duplicate_output_index, 1);
-        let mut record = duplicate_output_index
-            .commitments
-            .view()
-            .get(&key)
-            .expect("second output")
-            .clone();
-        let PrivacyStateItemRecordV1::ProofManagedPoolVerifiedCommitment { output_index, .. } =
-            &mut record
-        else {
-            panic!("output must carry commitment provenance");
-        };
-        *output_index = 0;
-        duplicate_output_index.commitments.insert(key, record);
-        assert!(
-            duplicate_output_index
-                .load()
-                .expect_err("duplicate output index must reject")
-                .contains("statement order")
-        );
-        let mut future_epoch = proof_managed_persisted_fixture();
-        future_epoch.advance(&outputs);
-        let key = output_key(&future_epoch, 0);
-        let mut record = future_epoch
-            .commitments
-            .view()
-            .get(&key)
-            .expect("first output")
-            .clone();
-        let PrivacyStateItemRecordV1::ProofManagedPoolVerifiedCommitment {
-            successor_epoch, ..
-        } = &mut record
-        else {
-            panic!("output must carry commitment provenance");
-        };
-        *successor_epoch = 3;
-        future_epoch.commitments.insert(key, record);
-        assert!(
-            future_epoch
-                .load()
-                .expect_err("future output epoch must reject")
-                .contains("epoch")
-        );
-        let mut wrong_role = proof_managed_persisted_fixture();
-        wrong_role.advance(&outputs);
-        let key = output_key(&wrong_role, 0);
-        wrong_role.commitments.insert(
-            key,
-            PrivacyStateItemRecordV1::proof_managed_pool_verified_nullifier(
-                wrong_role.bootstrap_digest,
-                PrivacyStatementDigestV1::new(nonzero(0xBA)),
-                1,
-                1,
-                12,
-                0,
-            )
-            .expect("nullifier provenance"),
-        );
-        assert!(
-            wrong_role
-                .load()
-                .expect_err("nullifier provenance under commitment key must reject")
-                .contains("wrong-role")
-        );
-        let mut substituted_commitment = proof_managed_persisted_fixture();
-        substituted_commitment.advance(&outputs);
-        let original_key = output_key(&substituted_commitment, 0);
-        let record = substituted_commitment
-            .commitments
-            .view()
-            .get(&original_key)
-            .expect("first output")
-            .clone();
-        substituted_commitment.remove_commitment(original_key);
-        let replacement_key = PrivacyCommitmentKeyV1::proof_managed_pool_commitment(
-            substituted_commitment.namespace,
-            PrivacyCommitmentV1::new(nonzero(0xBA)),
-        )
-        .expect("replacement key");
-        substituted_commitment
-            .commitments
-            .insert(replacement_key, record);
-        assert!(
-            substituted_commitment
-                .load()
-                .expect_err("position-preserving commitment substitution must reject")
-                .contains("differs from its compact frontier")
-        );
-        let mut reordered_genesis = proof_managed_persisted_fixture();
-        let genesis_key = PrivacyCommitmentKeyV1::proof_managed_pool_commitment(
-            reordered_genesis.namespace,
-            reordered_genesis
-                .bootstrap
-                .initial_note_commitments()
-                .expect("private-note bootstrap commitments")[0],
-        )
-        .expect("genesis key");
-        let mut record = reordered_genesis
-            .commitments
-            .view()
-            .get(&genesis_key)
-            .expect("first genesis commitment")
-            .clone();
-        let PrivacyStateItemRecordV1::ProofManagedPoolBootstrapCommitment { position, .. } =
-            &mut record
-        else {
-            panic!("genesis commitment must carry bootstrap position");
-        };
-        *position = 1;
-        reordered_genesis.commitments.insert(genesis_key, record);
-        assert!(
-            reordered_genesis
-                .load()
-                .expect_err("reordered genesis prefix must reject")
-                .contains("duplicate position")
-        );
+        assert_fixture_record_field_corruptions! {
+            proof_managed_persisted_fixture(),
+            PrivacyStateItemRecordV1::ProofManagedPoolVerifiedCommitment;
+            duplicate_position, prepare [duplicate_position.advance(&outputs);],
+                key = output_key(&duplicate_position, 1),
+                "second output", append_position mutate { *append_position = 2; },
+                "output must carry commitment provenance",
+                "duplicate append position must reject", "duplicate position";
+            duplicate_output_index, prepare [duplicate_output_index.advance(&outputs);],
+                key = output_key(&duplicate_output_index, 1),
+                "second output", output_index mutate { *output_index = 0; },
+                "output must carry commitment provenance",
+                "duplicate output index must reject", "statement order";
+            future_epoch, prepare [future_epoch.advance(&outputs);],
+                key = output_key(&future_epoch, 0),
+                "first output", successor_epoch mutate { *successor_epoch = 3; },
+                "output must carry commitment provenance",
+                "future output epoch must reject", "epoch";
+        }
+        fixture_load_rejection_cases! {
+            proof_managed_persisted_fixture();
+            |wrong_role| {
+                wrong_role.advance(&outputs);
+                let key = output_key(&wrong_role, 0);
+                wrong_role.commitments.insert(
+                    key,
+                    PrivacyStateItemRecordV1::proof_managed_pool_verified_nullifier(
+                        wrong_role.bootstrap_digest,
+                        PrivacyStatementDigestV1::new(nonzero(0xBA)),
+                        1,
+                        1,
+                        12,
+                        0,
+                    ).expect("nullifier provenance"),
+                );
+            } => "nullifier provenance under commitment key must reject", "wrong-role";
+
+            |substituted_commitment| {
+                substituted_commitment.advance(&outputs);
+                let original_key = output_key(&substituted_commitment, 0);
+                let record = substituted_commitment.commitments.view().get(&original_key)
+                    .expect("first output").clone();
+                substituted_commitment.remove_commitment(original_key);
+                let replacement_key = PrivacyCommitmentKeyV1::proof_managed_pool_commitment(
+                    substituted_commitment.namespace,
+                    PrivacyCommitmentV1::new(nonzero(0xBA)),
+                ).expect("replacement key");
+                substituted_commitment.commitments.insert(replacement_key, record);
+            } => "position-preserving commitment substitution must reject",
+                "differs from its compact frontier";
+        }
+        assert_fixture_record_field_corruptions! {
+            proof_managed_persisted_fixture(),
+            PrivacyStateItemRecordV1::ProofManagedPoolBootstrapCommitment;
+            reordered_genesis, prepare [],
+                genesis_key = PrivacyCommitmentKeyV1::proof_managed_pool_commitment(
+                    reordered_genesis.namespace,
+                    reordered_genesis.bootstrap.initial_note_commitments()
+                        .expect("private-note bootstrap commitments")[0],
+                ).expect("genesis key"),
+                "first genesis commitment", position mutate { *position = 1; },
+                "genesis commitment must carry bootstrap position",
+                "reordered genesis prefix must reject", "duplicate position";
+        }
     }
     #[test]
     fn proof_managed_note_snapshot_rejects_mixed_root_and_declared_batch_arities() {
@@ -14020,132 +13694,76 @@ mod tests {
     }
     #[test]
     fn fcmp_snapshot_rejects_tuple_key_order_role_and_frontier_substitution() {
-        let mut substituted_tuple = fcmp_persisted_fixture();
-        let original = substituted_tuple
-            .bootstrap
-            .initial_fcmp_outputs()
-            .expect("genesis outputs")[0];
-        let key =
-            PrivacyCommitmentKeyV1::fcmp_output(substituted_tuple.namespace, original.output_id())
-                .expect("genesis key");
-        let mut record = substituted_tuple
-            .commitments
-            .view()
-            .get(&key)
-            .expect("genesis output")
-            .clone();
-        let PrivacyStateItemRecordV1::FcmpBootstrapOutput { output, .. } = &mut record else {
-            panic!("typed FCMP++ genesis provenance");
-        };
-        output.amount_commitment = fcmp_output_tuple(91).amount_commitment;
-        assert_ne!(output.output_id(), original.output_id());
-        substituted_tuple.commitments.insert(key, record);
-        assert!(
-            substituted_tuple
-                .load()
-                .expect_err("tuple substitution under an old id must reject")
-                .contains("complete tuple")
-        );
-        let mut reordered = fcmp_persisted_fixture();
-        let second = reordered
-            .bootstrap
-            .initial_fcmp_outputs()
-            .expect("genesis outputs")[1];
-        let key = PrivacyCommitmentKeyV1::fcmp_output(reordered.namespace, second.output_id())
-            .expect("second genesis key");
-        let mut record = reordered
-            .commitments
-            .view()
-            .get(&key)
-            .expect("second genesis output")
-            .clone();
-        let PrivacyStateItemRecordV1::FcmpBootstrapOutput { position, .. } = &mut record else {
-            panic!("typed FCMP++ genesis provenance");
-        };
-        *position = 2;
-        reordered.commitments.insert(key, record);
-        assert!(
-            reordered
-                .load()
-                .expect_err("duplicate FCMP++ append position must reject")
-                .contains("duplicate position")
-        );
-        let mut foreign_note = fcmp_persisted_fixture();
-        foreign_note.commitments.insert(
-            PrivacyCommitmentKeyV1::ProofManagedPoolCommitment {
-                namespace: foreign_note.namespace,
-                commitment: PrivacyCommitmentV1::new(nonzero(0xD2)),
-            },
-            PrivacyStateItemRecordV1::proof_managed_pool_bootstrap_commitment(
-                foreign_note.bootstrap_digest,
-                2,
-                7,
-            )
-            .expect("syntactically valid foreign note provenance"),
-        );
-        assert!(
-            foreign_note
-                .load()
-                .expect_err("FCMP++ must reject a generic note key")
-                .contains("foreign note-commitment")
-        );
-        let mut wrong_role = fcmp_persisted_fixture();
-        let output = wrong_role
-            .bootstrap
-            .initial_fcmp_outputs()
-            .expect("genesis outputs")[0];
-        wrong_role.commitments.insert(
-            PrivacyCommitmentKeyV1::fcmp_output(wrong_role.namespace, output.output_id())
-                .expect("genesis key"),
-            PrivacyStateItemRecordV1::proof_managed_pool_bootstrap_commitment(
-                wrong_role.bootstrap_digest,
-                0,
-                7,
-            )
-            .expect("generic provenance"),
-        );
-        assert!(
-            wrong_role
-                .load()
-                .expect_err("FCMP++ output key cannot carry note provenance")
-                .contains("wrong-role")
-        );
-        let mut missing = fcmp_persisted_fixture();
-        let output = missing
-            .bootstrap
-            .initial_fcmp_outputs()
-            .expect("genesis outputs")[1];
-        missing.remove_output(output);
-        assert!(
-            missing
-                .load()
-                .expect_err("omitted FCMP++ genesis tuple must reject")
-                .contains("omits a canonical genesis output")
-        );
-        let mut corrupted_frontier = fcmp_persisted_fixture();
-        let mut config = corrupted_frontier
-            .commitments
-            .view()
-            .get(&corrupted_frontier.config_key)
-            .expect("FCMP++ config")
-            .clone();
-        let PrivacyStateItemRecordV1::ProofManagedPoolBootstrap {
-            accumulator_state: PrivacyProofManagedPoolAccumulatorStateV1::Fcmp(state),
-            ..
-        } = &mut config
-        else {
-            panic!("FCMP++ config carries its curve frontier");
-        };
-        state.active_outputs[0] = fcmp_output_tuple(101);
-        corrupted_frontier
-            .commitments
-            .insert(corrupted_frontier.config_key, config);
-        assert!(
-            corrupted_frontier
-                .load()
-                .expect_err("valid-point frontier substitution must reject")
-                .contains("frontier")
-        );
+        assert_fixture_record_field_corruptions! {
+            fcmp_persisted_fixture(), PrivacyStateItemRecordV1::FcmpBootstrapOutput;
+            substituted_tuple, prepare [
+                let original = substituted_tuple.bootstrap.initial_fcmp_outputs()
+                    .expect("genesis outputs")[0];
+            ],
+                key = PrivacyCommitmentKeyV1::fcmp_output(
+                    substituted_tuple.namespace,
+                    original.output_id(),
+                ).expect("genesis key"),
+                "genesis output", output mutate {
+                    output.amount_commitment = fcmp_output_tuple(91).amount_commitment;
+                    assert_ne!(output.output_id(), original.output_id());
+                },
+                "typed FCMP++ genesis provenance",
+                "tuple substitution under an old id must reject", "complete tuple";
+            reordered, prepare [
+                let second = reordered.bootstrap.initial_fcmp_outputs()
+                    .expect("genesis outputs")[1];
+            ],
+                key = PrivacyCommitmentKeyV1::fcmp_output(
+                    reordered.namespace,
+                    second.output_id(),
+                ).expect("second genesis key"),
+                "second genesis output", position mutate { *position = 2; },
+                "typed FCMP++ genesis provenance",
+                "duplicate FCMP++ append position must reject", "duplicate position";
+        }
+        fixture_load_rejection_cases! {
+            fcmp_persisted_fixture();
+            |foreign_note| {
+                foreign_note.commitments.insert(
+                    PrivacyCommitmentKeyV1::ProofManagedPoolCommitment {
+                        namespace: foreign_note.namespace,
+                        commitment: PrivacyCommitmentV1::new(nonzero(0xD2)),
+                    },
+                    PrivacyStateItemRecordV1::proof_managed_pool_bootstrap_commitment(
+                        foreign_note.bootstrap_digest, 2, 7,
+                    ).expect("syntactically valid foreign note provenance"),
+                );
+            } => "FCMP++ must reject a generic note key", "foreign note-commitment";
+            |wrong_role| {
+                let output = wrong_role.bootstrap.initial_fcmp_outputs()
+                    .expect("genesis outputs")[0];
+                wrong_role.commitments.insert(
+                    PrivacyCommitmentKeyV1::fcmp_output(
+                        wrong_role.namespace, output.output_id(),
+                    ).expect("genesis key"),
+                    PrivacyStateItemRecordV1::proof_managed_pool_bootstrap_commitment(
+                        wrong_role.bootstrap_digest, 0, 7,
+                    ).expect("generic provenance"),
+                );
+            } => "FCMP++ output key cannot carry note provenance", "wrong-role";
+            |missing| {
+                let output = missing.bootstrap.initial_fcmp_outputs()
+                    .expect("genesis outputs")[1];
+                missing.remove_output(output);
+            } => "omitted FCMP++ genesis tuple must reject", "omits a canonical genesis output";
+            |corrupted_frontier| {
+                let mut config = corrupted_frontier.commitments.view()
+                    .get(&corrupted_frontier.config_key).expect("FCMP++ config").clone();
+                let PrivacyStateItemRecordV1::ProofManagedPoolBootstrap {
+                    accumulator_state: PrivacyProofManagedPoolAccumulatorStateV1::Fcmp(state), ..
+                } = &mut config else {
+                    panic!("FCMP++ config carries its curve frontier");
+                };
+                state.active_outputs[0] = fcmp_output_tuple(101);
+                corrupted_frontier.commitments.insert(corrupted_frontier.config_key, config);
+            } => "valid-point frontier substitution must reject", "frontier";
+        }
         let note_fixture = proof_managed_persisted_fixture();
         let note_commitments = note_fixture.commitments.view();
         let note_config = note_commitments
@@ -14158,193 +13776,99 @@ mod tests {
         else {
             panic!("private-note fixture carries its SHA-256 frontier");
         };
-        let mut cross_protocol = fcmp_persisted_fixture();
-        let mut config = cross_protocol
-            .commitments
-            .view()
-            .get(&cross_protocol.config_key)
-            .expect("FCMP++ config")
-            .clone();
-        let PrivacyStateItemRecordV1::ProofManagedPoolBootstrap {
-            accumulator_state, ..
-        } = &mut config
-        else {
-            panic!("typed FCMP++ config");
-        };
-        *accumulator_state =
-            PrivacyProofManagedPoolAccumulatorStateV1::PrivateNote(note_state.clone());
-        cross_protocol
-            .commitments
-            .insert(cross_protocol.config_key, config);
-        assert!(
-            cross_protocol
-                .load()
-                .expect_err("FCMP++ cannot decode as a private-note frontier")
-                .contains("foreign SHA-256")
-        );
+        fixture_load_rejection_cases! {
+            fcmp_persisted_fixture();
+            |cross_protocol| {
+                let mut config = cross_protocol.commitments.view()
+                    .get(&cross_protocol.config_key).expect("FCMP++ config").clone();
+                let PrivacyStateItemRecordV1::ProofManagedPoolBootstrap {
+                    accumulator_state, ..
+                } = &mut config else { panic!("typed FCMP++ config"); };
+                *accumulator_state =
+                    PrivacyProofManagedPoolAccumulatorStateV1::PrivateNote(note_state.clone());
+                cross_protocol.commitments.insert(cross_protocol.config_key, config);
+            } => "FCMP++ cannot decode as a private-note frontier", "foreign SHA-256";
+        }
     }
     #[test]
     fn fcmp_snapshot_rejects_verified_output_provenance_corruption() {
         let outputs = sorted_fcmp_output_tuples(&[31, 41]);
-        let mut duplicate_position = fcmp_persisted_fixture();
-        duplicate_position.advance(&outputs);
-        let second_key = PrivacyCommitmentKeyV1::fcmp_output(
-            duplicate_position.namespace,
-            outputs[1].output_id(),
-        )
-        .expect("second output key");
-        let mut record = duplicate_position
-            .commitments
-            .view()
-            .get(&second_key)
-            .expect("second verified output")
-            .clone();
-        let PrivacyStateItemRecordV1::FcmpVerifiedOutput {
-            append_position, ..
-        } = &mut record
-        else {
-            panic!("verified FCMP++ provenance");
-        };
-        *append_position = 2;
-        duplicate_position.commitments.insert(second_key, record);
-        assert!(
-            duplicate_position
-                .load()
-                .expect_err("duplicate verified append position must reject")
-                .contains("duplicate position")
-        );
-        let mut duplicate_output_index = fcmp_persisted_fixture();
-        duplicate_output_index.advance(&outputs);
-        let second_key = PrivacyCommitmentKeyV1::fcmp_output(
-            duplicate_output_index.namespace,
-            outputs[1].output_id(),
-        )
-        .expect("second output key");
-        let mut record = duplicate_output_index
-            .commitments
-            .view()
-            .get(&second_key)
-            .expect("second verified output")
-            .clone();
-        let PrivacyStateItemRecordV1::FcmpVerifiedOutput { output_index, .. } = &mut record else {
-            panic!("verified FCMP++ provenance");
-        };
-        *output_index = 0;
-        duplicate_output_index
-            .commitments
-            .insert(second_key, record);
-        assert!(
-            duplicate_output_index
-                .load()
-                .expect_err("duplicate statement output index must reject")
-                .contains("statement order")
-        );
-        let mut substituted_output = fcmp_persisted_fixture();
-        substituted_output.advance(&outputs);
-        let first_key = PrivacyCommitmentKeyV1::fcmp_output(
-            substituted_output.namespace,
-            outputs[0].output_id(),
-        )
-        .expect("first output key");
-        let mut record = substituted_output
-            .commitments
-            .view()
-            .get(&first_key)
-            .expect("first verified output")
-            .clone();
-        let PrivacyStateItemRecordV1::FcmpVerifiedOutput { output, .. } = &mut record else {
-            panic!("verified FCMP++ provenance");
-        };
-        *output = fcmp_output_tuple(111);
-        substituted_output.commitments.insert(first_key, record);
-        assert!(
-            substituted_output
-                .load()
-                .expect_err("position-preserving complete tuple substitution must reject")
-                .contains("complete tuple")
-        );
-        let mut missing_output = fcmp_persisted_fixture();
-        missing_output.advance(&outputs);
-        missing_output.remove_output(outputs[1]);
-        let error = missing_output
-            .load()
-            .expect_err("omitted verified FCMP++ output must reject");
-        assert!(
-            error.contains("declares 2 outputs but restored 1"),
-            "omitted FCMP++ output must fail at the exact declared batch arity: {error}"
-        );
-        let mut wrong_arity = fcmp_persisted_fixture();
-        wrong_arity.advance(&outputs);
-        for output in &outputs {
-            let key =
-                PrivacyCommitmentKeyV1::fcmp_output(wrong_arity.namespace, output.output_id())
-                    .expect("verified FCMP++ output key");
-            let mut record = wrong_arity
-                .commitments
-                .view()
-                .get(&key)
-                .expect("verified FCMP++ output")
-                .clone();
-            let PrivacyStateItemRecordV1::FcmpVerifiedOutput { output_count, .. } = &mut record
-            else {
-                panic!("verified FCMP++ output provenance");
-            };
-            *output_count = 1;
-            wrong_arity.commitments.insert(key, record);
+        assert_fixture_record_field_corruptions! {
+            fcmp_persisted_fixture(),
+            PrivacyStateItemRecordV1::FcmpVerifiedOutput;
+            duplicate_position, prepare [duplicate_position.advance(&outputs);],
+                second_key = PrivacyCommitmentKeyV1::fcmp_output(
+                duplicate_position.namespace,
+                outputs[1].output_id(),
+            ).expect("second output key"),
+                "second verified output", append_position mutate { *append_position = 2; },
+                "verified FCMP++ provenance",
+                "duplicate verified append position must reject", "duplicate position";
+            duplicate_output_index, prepare [duplicate_output_index.advance(&outputs);],
+                second_key = PrivacyCommitmentKeyV1::fcmp_output(
+                duplicate_output_index.namespace,
+                outputs[1].output_id(),
+            ).expect("second output key"),
+                "second verified output", output_index mutate { *output_index = 0; },
+                "verified FCMP++ provenance",
+                "duplicate statement output index must reject", "statement order";
+            substituted_output, prepare [substituted_output.advance(&outputs);],
+                first_key = PrivacyCommitmentKeyV1::fcmp_output(
+                substituted_output.namespace,
+                outputs[0].output_id(),
+            ).expect("first output key"),
+                "first verified output", output mutate { *output = fcmp_output_tuple(111); },
+                "verified FCMP++ provenance",
+                "position-preserving complete tuple substitution must reject", "complete tuple";
         }
-        assert!(
-            wrong_arity
-                .load()
-                .expect_err("coherently truncated FCMP++ output arity must reject")
-                .contains("declares 1 outputs but restored 2")
-        );
-        let mut mixed_root = fcmp_persisted_fixture();
-        mixed_root.advance(&outputs);
-        let (root_key, provenance) = mixed_root
-            .roots
-            .view()
-            .iter()
-            .last()
-            .map(|(key, provenance)| (*key, *provenance))
-            .expect("FCMP++ successor root");
-        let PrivacyRootProvenanceV1::ProofManagedPoolSuccessor {
-            bootstrap_digest,
-            protocol_id,
-            nullifier_count,
-            output_count,
-            admitted_at_height,
-            action_index,
-            parent_epoch,
-            parent_root,
-            ..
-        } = provenance
-        else {
-            panic!("FCMP++ successor provenance");
-        };
-        let forged = PrivacyRootProvenanceV1::proof_managed_pool_successor(
-            bootstrap_digest,
-            protocol_id,
-            PrivacyStatementDigestV1::new(nonzero(0xBF)),
-            nullifier_count,
-            output_count,
-            admitted_at_height,
-            action_index,
-            parent_epoch,
-            parent_root,
-        )
-        .expect("locally valid mixed FCMP++ root provenance");
-        mixed_root.roots.insert(root_key, forged);
-        mixed_root.root_heads.insert(
-            mixed_root.head_key,
-            PrivacyRootHeadRecordV1::new(root_key.epoch(), root_key.root(), forged, None)
-                .expect("forged but internally consistent FCMP++ head"),
-        );
-        assert!(
-            mixed_root
-                .load()
-                .expect_err("FCMP++ root/output batch substitution must reject")
-                .contains("canonical output-batch provenance")
-        );
+        fixture_load_rejection_cases! {
+            fcmp_persisted_fixture();
+            |missing_output| {
+                missing_output.advance(&outputs);
+                missing_output.remove_output(outputs[1]);
+            } => "omitted verified FCMP++ output must reject",
+                "declares 2 outputs but restored 1",
+                "omitted FCMP++ output must fail at the exact declared batch arity";
+            |wrong_arity| {
+                wrong_arity.advance(&outputs);
+                for output in &outputs {
+                    let key = PrivacyCommitmentKeyV1::fcmp_output(
+                        wrong_arity.namespace, output.output_id(),
+                    ).expect("verified FCMP++ output key");
+                    let mut record = wrong_arity.commitments.view().get(&key)
+                        .expect("verified FCMP++ output").clone();
+                    let PrivacyStateItemRecordV1::FcmpVerifiedOutput {
+                        output_count, ..
+                    } = &mut record else {
+                        panic!("verified FCMP++ output provenance");
+                    };
+                    *output_count = 1;
+                    wrong_arity.commitments.insert(key, record);
+                }
+            } => "coherently truncated FCMP++ output arity must reject",
+                "declares 1 outputs but restored 2";
+            |mixed_root| {
+                mixed_root.advance(&outputs);
+                let (root_key, provenance) = mixed_root.roots.view().iter().last()
+                    .map(|(key, provenance)| (*key, *provenance))
+                    .expect("FCMP++ successor root");
+                let PrivacyRootProvenanceV1::ProofManagedPoolSuccessor {
+                    bootstrap_digest, protocol_id, nullifier_count, output_count,
+                    admitted_at_height, action_index, parent_epoch, parent_root, ..
+                } = provenance else { panic!("FCMP++ successor provenance"); };
+                let forged = PrivacyRootProvenanceV1::proof_managed_pool_successor(
+                    bootstrap_digest, protocol_id,
+                    PrivacyStatementDigestV1::new(nonzero(0xBF)), nullifier_count, output_count,
+                    admitted_at_height, action_index, parent_epoch, parent_root,
+                ).expect("locally valid mixed FCMP++ root provenance");
+                mixed_root.roots.insert(root_key, forged);
+                mixed_root.root_heads.insert(mixed_root.head_key,
+                    PrivacyRootHeadRecordV1::new(
+                        root_key.epoch(), root_key.root(), forged, None,
+                    ).expect("forged but internally consistent FCMP++ head"));
+            } => "FCMP++ root/output batch substitution must reject",
+                "canonical output-batch provenance";
+        }
     }
     #[test]
     fn proof_managed_root_chain_rejects_cross_origin_gaps_and_forged_anchors() {
@@ -14558,63 +14082,38 @@ mod tests {
                 .expect("unrelated protocols are not counted"),
             1
         );
-        let mut wrong_role = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
-        wrong_role.insert(
-            key,
-            PrivacyStateItemRecordV1::zk_ams_governance(
+        storage_loader_rejection_cases! {
+            |view| load_privacy_zk_ace_policy_v1(policy_id, view), key;
+            wrong_role {} => PrivacyStateItemRecordV1::zk_ams_governance(
                 PrivacyZkAmsRegistryBootstrapDigestV1::new(nonzero(24)),
                 7,
-            )
-            .expect("valid but wrong-role provenance"),
-        );
-        assert!(
-            load_privacy_zk_ace_policy_v1(policy_id, &wrong_role.view())
-                .expect_err("wrong-role value must reject")
-                .contains("wrong-role")
-        );
-        let mismatched_policy_id = zk_ace_policy_id(2);
-        let mut mismatched = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
-        mismatched.insert(
-            key,
-            PrivacyStateItemRecordV1::zk_ace_policy_governance(
+            ).expect("valid but wrong-role provenance");
+            reject "wrong-role value must reject", "wrong-role";
+
+            mismatched {
+                let mismatched_policy_id = zk_ace_policy_id(2);
+            } => PrivacyStateItemRecordV1::zk_ace_policy_governance(
                 zk_ace_policy_record(mismatched_policy_id),
                 7,
-            )
-            .expect("valid mismatched policy record"),
-        );
-        assert!(
-            load_privacy_zk_ace_policy_v1(policy_id, &mismatched.view())
-                .expect_err("key/payload mismatch must reject")
-                .contains("does not match")
-        );
-        let mut corrupted_policy = zk_ace_policy_record(policy_id);
-        corrupted_policy.record_digest = PrivacyZkAcePolicyRecordDigestV1::new(nonzero(25));
-        let mut corrupted = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
-        corrupted.insert(
-            key,
-            PrivacyStateItemRecordV1::ZkAcePolicyGovernance {
+            ).expect("valid mismatched policy record");
+            reject "key/payload mismatch must reject", "does not match";
+
+            corrupted {
+                let mut corrupted_policy = zk_ace_policy_record(policy_id);
+                corrupted_policy.record_digest =
+                    PrivacyZkAcePolicyRecordDigestV1::new(nonzero(25));
+            } => PrivacyStateItemRecordV1::ZkAcePolicyGovernance {
                 policy: corrupted_policy,
                 admitted_at_height: 7,
-            },
-        );
-        assert!(
-            load_privacy_zk_ace_policy_v1(policy_id, &corrupted.view())
-                .expect_err("self-digest corruption must reject")
-                .contains("self-digest mismatch")
-        );
-        let mut zero_height = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
-        zero_height.insert(
-            key,
-            PrivacyStateItemRecordV1::ZkAcePolicyGovernance {
+            };
+            reject "self-digest corruption must reject", "self-digest mismatch";
+
+            zero_height {} => PrivacyStateItemRecordV1::ZkAcePolicyGovernance {
                 policy,
                 admitted_at_height: 0,
-            },
-        );
-        assert!(
-            load_privacy_zk_ace_policy_v1(policy_id, &zero_height.view())
-                .expect_err("zero policy admission height must reject")
-                .contains("zero admission height")
-        );
+            };
+            reject "zero policy admission height must reject", "zero admission height";
+        }
     }
     #[test]
     fn zk_ace_policy_count_rejects_state_above_the_closed_global_bound() {

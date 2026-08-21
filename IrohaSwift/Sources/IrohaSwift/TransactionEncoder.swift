@@ -417,6 +417,17 @@ private struct NativeClaimIdentifierReceiptEnvelope: Encodable, Sendable {
 
 private let signedTransactionWireVersion: UInt8 = 1
 
+enum TransactionAdmissionIntentV1: UInt32 {
+    case ordinary = 0
+    case queuePlanSynced = 1
+
+    var norito: Data {
+        var writer = CompactNoritoWriter()
+        writer.writeUInt32LE(rawValue)
+        return writer.data
+    }
+}
+
 private func encodeVersionedSignedTransaction(_ signedTransaction: Data) -> Data {
     var bytes = Data([signedTransactionWireVersion])
     bytes.append(signedTransaction)
@@ -518,6 +529,7 @@ enum SingleInstructionSwiftNoritoEncoder {
             try CompactNorito.encodeOption(nonce, encode: CompactNorito.encodeUInt32)
         )
         transactionPayload.writeField(try feePayment.compactNorito())
+        transactionPayload.writeField(TransactionAdmissionIntentV1.queuePlanSynced.norito)
         transactionPayload.writeField(encodeEmptyMetadata())
         transactionPayload.writeField(encodeNoneOption())
 
@@ -731,6 +743,7 @@ enum SingleInstructionSwiftNoritoEncoder {
         )
         transactionPayload.writeField(encodeNoneOption())
         transactionPayload.writeField(try feePayment.compactNorito())
+        transactionPayload.writeField(TransactionAdmissionIntentV1.queuePlanSynced.norito)
         transactionPayload.writeField(encodeEmptyMetadata())
         transactionPayload.writeField(encodeNoneOption())
         return transactionPayload.data
@@ -806,8 +819,8 @@ enum SingleInstructionSwiftNoritoEncoder {
     }
 
     private static func encodeEmptyMetadata() -> Data {
-        var metadata = CanonicalNoritoWriter()
-        metadata.writeLength(0)
+        var metadata = CompactNoritoWriter()
+        metadata.writeUInt64LE(0)
         return metadata.data
     }
 

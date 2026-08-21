@@ -1,6 +1,6 @@
 #[cfg(feature = "bls")]
 #[test]
-fn durable_store_prepare_seal_and_drop_preserve_the_closed_row() {
+fn durable_store_prepare_and_drop_preserve_the_closed_row() {
     let DurableStoreFixture {
         mut registry,
         verified,
@@ -18,11 +18,6 @@ fn durable_store_prepare_seal_and_drop_preserve_the_closed_row() {
     else {
         unreachable!("durable Store fixture retains its Store effect")
     };
-    let validate_effect = AdapterEffect::ValidateBody {
-        tag,
-        round,
-        subject,
-    };
     let before = format!("{registry:?}");
 
     let prepared = registry
@@ -36,31 +31,7 @@ fn durable_store_prepare_seal_and_drop_preserve_the_closed_row() {
         expected_manifest_hash
     );
     assert_eq!(prepared.expected_manifest_hash(), expected_manifest_hash);
-    let sealed = prepared
-        .seal_validate_successor(&validate_effect)
-        .expect("seal exact ordinal-free Validate successor");
-    assert_eq!(sealed._store_address, address);
-    assert_eq!(sealed._validate_effect, validate_effect);
-    assert!(
-        sealed
-            ._validate_pending
-            .exactly_binds_adapter_effect(&sealed._validate_effect)
-    );
-    assert_eq!(
-        sealed._validate_digest,
-        digest_from_hash(sealed._validate_pending.exact_effect_identity())
-    );
-    assert_eq!(
-        super::super::CausalRoot::new(digest_from_hash(
-            sealed._validate_pending.causal_lifecycle_key()
-        )),
-        lease.owner().causal_root()
-    );
-    assert_eq!(
-        sealed._durable_body.manifest_hash(),
-        sealed._expected_manifest_hash
-    );
-    drop(sealed);
+    drop(prepared);
 
     assert_eq!(format!("{registry:?}"), before);
     assert!(registry.exactly_contains(address, &effect));
@@ -195,43 +166,15 @@ fn durable_store_prepare_rejects_wrong_lease_projection_and_context_without_muta
 
 #[cfg(feature = "bls")]
 #[test]
-fn durable_store_seal_rejects_wrong_kind_or_tag_and_wrong_row_kind() {
+fn durable_store_prepare_rejects_wrong_row_kind() {
     let DurableStoreFixture {
         mut registry,
         verified,
         address,
         lease,
         slot,
-        effect,
         ..
     } = durable_store_fixture(0x61);
-    let before = format!("{registry:?}");
-
-    let prepared = registry
-        .prepare_durable_store_execution(&lease, slot, &verified)
-        .expect("prepare Store before wrong-kind successor");
-    assert!(matches!(
-        prepared.seal_validate_successor(&effect),
-        Err(DurableStoreExecutionError::InvalidValidateSuccessor)
-    ));
-    assert_eq!(format!("{registry:?}"), before);
-
-    let AdapterEffect::StoreBody { round, subject, .. } = effect.clone() else {
-        unreachable!("durable Store fixture retains its Store effect")
-    };
-    let wrong_tag_validate = AdapterEffect::ValidateBody {
-        tag: EventTag::new(round.height, round.view, Generation::new(999)),
-        round,
-        subject,
-    };
-    let prepared = registry
-        .prepare_durable_store_execution(&lease, slot, &verified)
-        .expect("prepare Store before wrong-tag successor");
-    assert!(matches!(
-        prepared.seal_validate_successor(&wrong_tag_validate),
-        Err(DurableStoreExecutionError::InvalidValidateSuccessor)
-    ));
-    assert_eq!(format!("{registry:?}"), before);
 
     let closed = registry
         .entries
@@ -752,14 +695,21 @@ fn live_wal_apply_join_rejects_foreign_receipt_and_root_before_exact_retry() {
             .expect("retained Validate projects exact Apply pending");
         let foreign_owner = bind_adapter_effect_batch_ownership(
             core::slice::from_ref(&validate.effect),
-            vec![RuntimeEffectOwnership::fresh_for_test(*tag, 9_700)],
+            vec![
+                RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                    *tag,
+                    9_700,
+                    b"foreign live-WAL Validate owner",
+                ),
+            ],
         )
         .expect("bind same effect under foreign causal root")
         .pop()
         .expect("one foreign Validate owner");
         let foreign_predecessor = foreign_owner
-            .pending_adapter_effect_binding(&validate.effect)
-            .expect("mint foreign Validate pending");
+            .current_effect_producer(&validate.effect)
+            .expect("seal foreign Validate producer")
+            .mint_pending_binding();
         assert_ne!(
             foreign_predecessor.causal_lifecycle_key(),
             validate.pending.causal_lifecycle_key()
@@ -1141,27 +1091,34 @@ fn durable_validate_detached_rejection_and_sidecar_deferral_remain_bound() {
     drop(rejected);
     assert_eq!(format!("{:?}", fixture.registry), before);
 
-    let reference = detached_validation_merge_reference(&durable);
-    let deferred = fixture
+    let (mut deferred_fixture, _deferred_directory, mut deferred_store, deferred_durable) =
+        durable_validate_store_fixture(0xA6);
+    let deferred_before = format!("{:?}", deferred_fixture.registry);
+    let reference = detached_validation_merge_reference(&deferred_durable);
+    let deferred = deferred_fixture
         .registry
-        .prepare_durable_validate_execution(&fixture.lease, fixture.slot, &fixture.verified)
+        .prepare_durable_validate_execution(
+            &deferred_fixture.lease,
+            deferred_fixture.slot,
+            &deferred_fixture.verified,
+        )
         .expect("prepare deferred detached Validate")
         .detach()
-        .execute(&mut store, |_| {
+        .execute(&mut deferred_store, |_| {
             Err::<wire::ExecutionCommitment, _>(DetachedValidationError::MissingMergeSidecar(
                 reference.clone(),
             ))
         })
         .expect("execute typed sidecar deferral");
-    assert_eq!(deferred.outcome().durable_body(), &durable);
+    assert_eq!(deferred.outcome().durable_body(), &deferred_durable);
     assert_eq!(deferred.outcome().missing_merge_sidecar(), Some(&reference));
-    let deferred = fixture
+    let deferred = deferred_fixture
         .registry
         .reattach_durable_validate_execution(deferred)
         .expect("reattach exact sidecar deferral");
     assert_eq!(deferred.outcome().missing_merge_sidecar(), Some(&reference));
     drop(deferred);
-    assert_eq!(format!("{:?}", fixture.registry), before);
+    assert_eq!(format!("{:?}", deferred_fixture.registry), deferred_before);
 }
 
 #[cfg(feature = "bls")]
@@ -1225,8 +1182,9 @@ fn durable_validate_reattach_rejects_an_inflight_authority_upgrade() {
         .adopt_incumbent_body_stage_for_retry_or_authority(&incoming_store_owner, &store_effect)
         .expect("retain physical Store owner while upgrading authority");
     let upgraded_store = adopted_store_owner
-        .pending_adapter_effect_binding(&store_effect)
-        .expect("mint upgraded Store binding");
+        .current_effect_producer(&store_effect)
+        .expect("seal upgraded Store producer")
+        .mint_pending_binding();
     let upgraded_validate = upgraded_store
         .project_store_validate_successor(&store_effect, &fixture.effect)
         .expect("carry upgraded authority into Validate");

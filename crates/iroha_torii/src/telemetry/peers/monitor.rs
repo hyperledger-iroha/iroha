@@ -459,59 +459,10 @@ fn construct_geo_query(
         .append_pair("fields", GEO_QUERY_FIELDS);
     Ok(url)
 }
-fn value_to_u32(value: &Value) -> Option<u32> {
-    value.as_u64().and_then(|raw| u32::try_from(raw).ok())
-}
-fn decode_legacy_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSnapshot> {
-    let value: Value = json::from_slice(bytes)?;
-    let payload = value
-        .as_object()
-        .ok_or_else(|| eyre!("expected object payload"))?;
-    let queue = payload
-        .get("queue")
-        .and_then(Value::as_object)
-        .ok_or_else(|| eyre!("missing queue object"))?;
-    let network = payload
-        .get("network")
-        .and_then(Value::as_object)
-        .ok_or_else(|| eyre!("missing network object"))?;
-    let public_key = payload
-        .get("public_key")
-        .and_then(Value::as_str)
-        .and_then(|raw| PublicKey::from_str(raw).ok());
-    let queue_capacity = queue.get("capacity").and_then(value_to_u32);
-    let network_block_gossip_size = network.get("block_gossip_size").and_then(value_to_u32);
-    let network_block_gossip_period_ms = network
-        .get("block_gossip_period_ms")
-        .and_then(Value::as_u64);
-    let network_tx_gossip_size = network
-        .get("transaction_gossip_size")
-        .and_then(value_to_u32);
-    let network_tx_gossip_period_ms = network
-        .get("transaction_gossip_period_ms")
-        .and_then(Value::as_u64);
-    Ok(PeerConfigSnapshot {
-        public_key,
-        queue_capacity,
-        network_block_gossip_size,
-        network_block_gossip_period_ms,
-        network_tx_gossip_size,
-        network_tx_gossip_period_ms,
-    })
-}
 fn decode_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSnapshot> {
-    match json::from_slice::<ConfigGetDTO>(bytes) {
-        Ok(config) => Ok(PeerConfigSnapshot::from(&config)),
-        Err(err) => {
-            let legacy = decode_legacy_peer_config_payload(bytes).map_err(|fallback_err| {
-                eyre!(
-                    "failed to decode /v1/configuration payload: {err}; legacy fallback failed: {fallback_err}"
-                )
-            })?;
-            iroha_logger::debug!("decoded /v1/configuration payload using legacy fallback");
-            Ok(legacy)
-        }
-    }
+    let config = json::from_slice::<ConfigGetDTO>(bytes)
+        .map_err(|error| eyre!("failed to decode canonical /v1/configuration payload: {error}"))?;
+    Ok(PeerConfigSnapshot::from(&config))
 }
 fn decode_operator_access_error(bytes: &[u8]) -> Option<String> {
     let value: Value = json::from_slice(bytes).ok()?;
@@ -1118,7 +1069,7 @@ mod tests {
         server.abort();
     }
     #[test]
-    fn decode_peer_config_payload_accepts_legacy_without_public_key() {
+    fn decode_peer_config_payload_rejects_retired_partial_shape() {
         let payload = br#"{
             "queue": { "capacity": 512 },
             "network": {
@@ -1128,21 +1079,22 @@ mod tests {
                 "transaction_gossip_period_ms": 2500
             }
         }"#;
-        let decoded = decode_peer_config_payload(payload).expect("legacy payload should decode");
-        assert!(decoded.public_key.is_none());
-        assert_eq!(decoded.queue_capacity, Some(512));
-        assert_eq!(decoded.network_block_gossip_size, Some(64));
-        assert_eq!(decoded.network_block_gossip_period_ms, Some(1500));
-        assert_eq!(decoded.network_tx_gossip_size, Some(32));
-        assert_eq!(decoded.network_tx_gossip_period_ms, Some(2500));
+        let error = decode_peer_config_payload(payload)
+            .expect_err("partial pre-release configuration shape must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("failed to decode canonical /v1/configuration payload"),
+            "unexpected error: {error}"
+        );
     }
     #[test]
-    fn decode_peer_config_payload_rejects_invalid_legacy_shape() {
+    fn decode_peer_config_payload_rejects_unrelated_error_shape() {
         let payload = br#"{ "error": "unauthorized" }"#;
         let err = decode_peer_config_payload(payload).expect_err("invalid shape should fail");
         let message = err.to_string();
         assert!(
-            message.contains("missing queue object"),
+            message.contains("failed to decode canonical /v1/configuration payload"),
             "unexpected error: {message}"
         );
     }

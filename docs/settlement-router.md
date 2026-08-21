@@ -14,7 +14,7 @@
 |-----------|----------|----------------|
 | Router primitives | `crates/settlement_router/` | Shadow-price calculator, haircut tiers, buffer policy helpers, settlement receipt type.【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】【crates/settlement_router/src/policy.rs:1】 |
 | Runtime façade | `crates/iroha_core/src/settlement/mod.rs:1` | Wraps router config into `SettlementEngine`, exposes `quote` + accumulator used during block execution. |
-| Block integration | `crates/iroha_core/src/block.rs:120` | Drains `PendingSettlement` records, aggregates `LaneSettlementCommitment` per lane/dataspace, parses lane buffer metadata, and emits telemetry. |
+| Block integration | `crates/iroha_core/src/block.rs:120` | Drains `PendingSettlement` records, aggregates `LaneSettlementCommitment` per lane/dataspace, consumes typed lane buffer policy, and emits telemetry. |
 | Telemetry & dashboards | `crates/iroha_telemetry/src/metrics.rs:4847`, `dashboards/grafana/settlement_router_overview.json:1` | Prometheus/OTLP metrics for buffers, variance, haircuts, conversion counts; Grafana board for SRE. |
 | Reference schema | `specs/nexus_fee_model.md:1` | Documents settlement receipt fields persisted in `LaneBlockCommitment`. |
 
@@ -32,19 +32,21 @@ buffer_halt_pct = 2           # Remaining-buffer % where settlement halts
 buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 ```
 
-Lane metadata wires in the per-dataspace buffer account:
-- `settlement.buffer_account` — account that holds the reserve (e.g., `buffer::cbdc_treasury`).
-- `settlement.buffer_asset` — asset definition debited for headroom (typically `xor#sora`).
-- `settlement.buffer_capacity` — canonical exact XOR capacity (decimal string, at most nine fractional digits).
+Each lane may carry one typed `settlement_buffer` descriptor:
 
-All three buffer fields must be present together. Absent metadata disables
-buffer snapshotting; partial metadata, zero capacity, a noncanonical value, or
-precision beyond nine fractional digits rejects block finalization.
+- `account_id` — exact canonical domainless I105 account holding the reserve.
+- `asset_definition_id` — canonical asset-definition address debited for headroom.
+- `capacity` — positive canonical exact XOR capacity (decimal string, at most nine fractional digits).
+
+The descriptor is all-or-none. Omitting it disables buffer snapshotting; partial
+descriptors, aliases, zero capacity, noncanonical values, or precision beyond
+nine fractional digits are configuration errors. Retired `settlement.buffer_*`
+metadata is rejected and never resolved through mutable alias state.
 
 ## Conversion Pipeline
 1. **Quote:** `SettlementEngine::quote` accepts canonical `Quantity` and `Numeric` values, applies the configured epsilon + volatility margin and haircut tier, and returns exact `xor_due` and `xor_after_haircut` values. Both stages use explicit ceiling at XOR's nine-digit boundary; non-positive TWAPs and haircuts above 100% are rejected.【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】
 2. **Accumulate:** During block execution the executor records `PendingSettlement` entries (local amount, TWAP, epsilon, volatility bucket, liquidity profile, oracle timestamp). `LaneSettlementBuilder` aggregates totals and swap metadata per `(lane, dataspace)` before sealing the block.【crates/iroha_core/src/settlement/mod.rs:34】【crates/iroha_core/src/block.rs:3460】
-3. **Buffer snapshot:** If lane metadata declares a buffer, the builder captures a `SettlementBufferSnapshot` (remaining headroom, capacity, status) using the `BufferPolicy` thresholds from config.【crates/iroha_core/src/block.rs:203】
+3. **Buffer snapshot:** If the typed lane policy declares a buffer, the builder captures a `SettlementBufferSnapshot` (remaining headroom, capacity, status) using the `BufferPolicy` thresholds from config.【crates/iroha_core/src/block.rs:203】
 4. **Commit + telemetry:** Receipts and swap evidence land inside `LaneBlockCommitment` and are mirrored into status snapshots. Telemetry records buffer gauges, variance (`iroha_settlement_pnl_xor`), applied margin (`iroha_settlement_haircut_bp`), optional swapline utilisation, and per-asset conversion/haircut counters so dashboards and alerts stay in sync with the block contents.【crates/iroha_core/src/block.rs:298】【crates/iroha_core/src/telemetry.rs:844】
 5. **Evidence surfaces:** `status::set_lane_settlement_commitments` publishes commitments for relays/DA consumers, Grafana dashboards read the Prometheus metrics, and operators use `ops/runbooks/settlement-buffers.md` alongside `dashboards/grafana/settlement_router_overview.json` to track refill/throttle events.
 
@@ -59,13 +61,13 @@ precision beyond nine fractional digits rejects block finalization.
 
 ## Developer & SRE Checklist
 - Set `[settlement.router]` values in `config/config.json5` (or TOML) and validate via `iroha3d --version` logs; ensure thresholds satisfy `100 >= alert >= throttle >= xor_only >= halt`.
-- Populate lane metadata with the buffer account/asset/capacity so buffer gauges reflect live reserves; omit the fields for lanes that should not track buffers.
+- Populate the typed lane `settlement_buffer` descriptor so buffer gauges reflect live reserves; omit the descriptor for lanes that should not track buffers.
 - Monitor `settlement_router_*` and `iroha_settlement_*` metrics via `dashboards/grafana/settlement_router_overview.json`; alert on throttle/XOR-only/halt states.
 - Run `cargo test -p settlement_router` for pricing/policy coverage and the existing block-level aggregation tests in `crates/iroha_core/src/block.rs`.
 - Record governance approvals for config changes in `specs/nexus_fee_model.md` and keep `status.md` updated when thresholds or telemetry surfaces change.
 
 ## Rollout Plan Snapshot
-- Router + telemetry ship in every build; no feature gates. Lane metadata controls whether buffer snapshots publish.
+- Router + telemetry ship in every build; no feature gates. Typed lane policy controls whether buffer snapshots publish.
 - Default config matches the roadmap values (60 s TWAP, 25 bp base epsilon, 72 h buffer horizon); tune via config and restart `iroha3d` to apply.
 - Evidence bundle = lane settlement commitments + Prometheus scrape for the `settlement_router_*`/`iroha_settlement_*` series + Grafana screenshot/JSON export for the affected window.
 

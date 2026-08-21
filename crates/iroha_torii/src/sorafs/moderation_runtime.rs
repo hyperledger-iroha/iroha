@@ -765,20 +765,21 @@ impl ToriiModerationStrictTransactionIngressV1 {
         Ok(observed_finalized_height)
     }
     fn has_positive_pending_hint(&self, transaction_hash: &HashOf<SignedTransaction>) -> bool {
-        self.queue
-            .contains_pending_hash(transaction_hash.clone(), self.state.as_ref())
-            || self
-                .pipeline_status_cache
-                .lookup(transaction_hash)
-                .is_some_and(|entry| {
-                    matches!(
-                        entry.kind,
-                        crate::PipelineStatusKind::Queued
-                            | crate::PipelineStatusKind::Approved
-                            | crate::PipelineStatusKind::Committed
-                            | crate::PipelineStatusKind::Applied
-                    )
-                })
+        self.queue.contains_pending_hash(
+            iroha_core::tx::external_entrypoint_hash_from_signed_hash(transaction_hash.clone()),
+            self.state.as_ref(),
+        ) || self
+            .pipeline_status_cache
+            .lookup(transaction_hash)
+            .is_some_and(|entry| {
+                matches!(
+                    entry.kind,
+                    crate::PipelineStatusKind::Queued
+                        | crate::PipelineStatusKind::Approved
+                        | crate::PipelineStatusKind::Committed
+                        | crate::PipelineStatusKind::Applied
+                )
+            })
     }
 }
 impl ModerationRuntimeProviderV1 for ToriiModerationStrictTransactionIngressV1 {
@@ -892,6 +893,8 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
             return ModerationSubmissionLookupV1::Unknown;
         }
         let transaction_hash = HashOf::from_untyped_unchecked(Hash::prehashed(transaction_id));
+        let entrypoint_hash =
+            iroha_core::tx::external_entrypoint_hash_from_signed_hash(transaction_hash.clone());
         let view = self.state.view();
         let Some(observed_finalized_height) = u64::try_from(view.block_hashes().len())
             .ok()
@@ -899,7 +902,7 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
         else {
             return ModerationSubmissionLookupV1::Unknown;
         };
-        let Some(block_height) = view.transactions().get(&transaction_hash) else {
+        let Some(block_height) = view.transactions().get(&entrypoint_hash) else {
             drop(view);
             return if self.has_positive_pending_hint(&transaction_hash) {
                 ModerationSubmissionLookupV1::Pending { transaction_id }

@@ -116,7 +116,9 @@ fn direct_certified_body_preview_is_inert_and_commits_one_store_successor() {
         DirectCertifiedBodyAvailableInactive::Superseded(reducer::IgnoreReason::StaleGeneration)
     );
 }
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(recovered_broadcast_and_sign_projection_remains_affine_and_phase_body_bound);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    recovered_broadcast_and_sign_projection_remains_affine_and_phase_body_bound
+);
 #[test]
 fn direct_body_stored_preview_is_inert_and_commits_one_validate_successor() {
     let directory = TempDir::new().expect("temporary direct-body-stored directory");
@@ -1320,7 +1322,9 @@ fn direct_validation_rejects_foreign_receipts_and_commitments_without_mutation()
     assert_eq!(adapter.reducer, reducer_before);
     assert_registry_eq(&adapter.registry, &registry_with_commitment);
 }
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(direct_validation_preview_surface_is_closed_move_only_and_unwired);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    direct_validation_preview_surface_is_closed_move_only_and_unwired
+);
 #[test]
 fn direct_validation_failed_no_effect_preview_is_drop_inert() {
     let directory = TempDir::new().expect("temporary direct-rejection directory");
@@ -1515,8 +1519,9 @@ fn direct_validation_failed_report_carries_exact_registered_prepare_qc() {
     .expect("bind one ordinary Store owner")
     .pop()
     .expect("one ordinary Store owner")
-    .pending_adapter_effect_binding(&store_effect)
-    .expect("ordinary Store retains one pending binding");
+    .current_effect_producer(&store_effect)
+    .expect("ordinary Store retains one producer")
+    .mint_pending_binding();
     let ordinary_validate_pending = ordinary_store_pending
         .project_store_validate_successor(&store_effect, &validate_effect)
         .expect("ordinary Store projects its exact Validate owner");
@@ -1563,8 +1568,9 @@ fn direct_validation_failed_report_carries_exact_registered_prepare_qc() {
     .expect("bind one Prepare-certified Fetch owner")
     .pop()
     .expect("one Prepare-certified Fetch owner")
-    .pending_adapter_effect_binding(&certified_fetch_effect)
-    .expect("certified Fetch retains one pending binding");
+    .current_effect_producer(&certified_fetch_effect)
+    .expect("certified Fetch retains one producer")
+    .mint_pending_binding();
     let certified_store_pending = certified_fetch_pending
         .project_certified_fetch_store_successor(&certified_fetch_effect, &store_effect)
         .expect("certified Fetch projects its exact Store owner");
@@ -1788,7 +1794,9 @@ fn direct_validation_failed_rejects_foreign_receipts_without_mutation() {
         wal_before
     );
 }
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(direct_validation_failed_surface_is_closed_move_only_and_unwired);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    direct_validation_failed_surface_is_closed_move_only_and_unwired
+);
 #[test]
 #[allow(clippy::too_many_lines)]
 fn ready_validate_adapter_bridge_is_sealed_and_live_sign_has_one_real_append() {

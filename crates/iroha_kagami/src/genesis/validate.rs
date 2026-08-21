@@ -1,8 +1,4 @@
-use crate::{
-    Outcome, RunArgs,
-    genesis::{ConsensusPolicy, build_line_from_env, validate_consensus_mode_for_line},
-    tui,
-};
+use crate::{Outcome, RunArgs, tui};
 use clap::Parser;
 use color_eyre::eyre::{WrapErr as _, eyre};
 use iroha_data_model::{account::address::ChainDiscriminantGuard, name::Name};
@@ -32,7 +28,7 @@ impl<T: Write> RunArgs<T> for Args {
             .wrap_err("read genesis manifest under fixed resource bounds")?;
         let manifest = RawGenesisTransaction::from_json_slice(&bytes)
             .wrap_err("genesis manifest failed structural validation")?;
-        validate_consensus_manifest(&manifest, build_line_from_env())?;
+        validate_consensus_manifest(&manifest)?;
         let chain_discriminant = manifest.chain_discriminant();
         drop(manifest);
         let json: norito::json::Value = norito::json::from_slice(&bytes)?;
@@ -59,13 +55,9 @@ impl<T: Write> RunArgs<T> for Args {
         Ok(())
     }
 }
-fn validate_consensus_manifest(
-    manifest: &RawGenesisTransaction,
-    build_line: iroha_version::BuildLine,
-) -> color_eyre::Result<()> {
+fn validate_consensus_manifest(manifest: &RawGenesisTransaction) -> color_eyre::Result<()> {
     super::require_v2_wire_protocol_only(manifest)?;
     let consensus_mode = manifest.consensus_mode();
-    validate_consensus_mode_for_line(build_line, consensus_mode, ConsensusPolicy::Any)?;
     let has_npos = super::has_npos_parameters(manifest)?;
     match (consensus_mode, has_npos) {
         (iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned, false)
@@ -287,7 +279,7 @@ mod tests {
         );
     }
     #[test]
-    fn run_accepts_permissioned_on_iroha3() {
+    fn run_accepts_permissioned_consensus() {
         let manifest = GenesisBuilder::new_without_executor(ChainId::from("0"), PathBuf::from("."))
             .build_raw()
             .with_consensus_mode(SumeragiConsensusMode::Permissioned)
@@ -300,10 +292,10 @@ mod tests {
         };
         let mut sink = BufWriter::new(Vec::<u8>::new());
         args.run(&mut sink)
-            .expect("permissioned consensus should be allowed on Iroha3");
+            .expect("permissioned consensus should be allowed");
     }
     #[test]
-    fn run_accepts_canonical_npos_on_iroha3() {
+    fn run_accepts_canonical_npos() {
         let manifest = GenesisBuilder::new_without_executor(
             ChainId::from("npos-validate"),
             PathBuf::from("."),
@@ -322,6 +314,6 @@ mod tests {
         };
         let mut sink = BufWriter::new(Vec::<u8>::new());
         args.run(&mut sink)
-            .expect("canonical NPoS consensus should be accepted on Iroha3");
+            .expect("canonical NPoS consensus should be accepted");
     }
 }

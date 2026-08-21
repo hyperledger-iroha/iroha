@@ -20,6 +20,7 @@ use iroha::client::{
 use iroha_config::kura::FsyncMode;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
+    block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT,
     isi::{
         RegisterBox,
         register::RegisterPeerWithPop,
@@ -60,8 +61,16 @@ use tokio::{
 };
 use toml::{Table, Value as TomlValue};
 use tracing::{debug, info, warn};
-const IZANAMI_SUMERAGI_QUEUE_COMMANDS: i64 = 4_096;
-const IZANAMI_SUMERAGI_QUEUE_BODIES: i64 = 512;
+const IZANAMI_SUMERAGI_QUEUE_COMMANDS: usize = 4_096;
+const IZANAMI_SUMERAGI_QUEUE_BODIES: usize =
+    iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY.get();
+const IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES: usize =
+    iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
+        .get();
+const IZANAMI_SUMERAGI_BODY_SOURCE_BYTES: usize =
+    iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+const IZANAMI_MAX_TOTAL_CONNECTIONS: usize =
+    MAX_VALIDATORS_PER_HEIGHT - 1 + IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES;
 const IZANAMI_SUMERAGI_QUEUE_CHUNKS: i64 = 4_096;
 const IZANAMI_SUMERAGI_QUEUE_READY_BODIES: i64 = 256;
 const IZANAMI_P2P_QUEUE_CAP_HIGH: i64 = 65_536;
@@ -77,10 +86,10 @@ const IZANAMI_HIGH_TPS_ACCOUNT_THRESHOLD: f64 = 1_000.0;
 const IZANAMI_HIGH_TPS_ACCOUNT_COUNT: usize = 4_096;
 const IZANAMI_HIGH_TPS_STABLE_ACCOUNT_COUNT: usize = 8_192;
 const IZANAMI_TRANSACTION_GOSSIP_PERIOD_MS: i64 = 250;
-const IZANAMI_TRANSACTION_GOSSIP_SIZE: i64 = 1024;
+const IZANAMI_TRANSACTION_GOSSIP_SIZE: u32 =
+    iroha_config::parameters::defaults::network::TRANSACTION_GOSSIP_SIZE.get();
 const IZANAMI_TRANSACTION_GOSSIP_RESEND_TICKS: i64 = 1;
 const IZANAMI_TRANSACTION_GOSSIP_PUBLIC_TARGET_CAP: i64 = 64;
-const IZANAMI_MAX_TOTAL_CONNECTIONS: i64 = 31;
 const IZANAMI_NEXUS_FUSION_FLOOR_TEU: i64 = 16_000_000;
 const IZANAMI_NEXUS_FUSION_EXIT_TEU: i64 = 24_000_000;
 const IZANAMI_IVM_GAS_LIMIT_PER_BLOCK: u64 = 2_000_000_000;
@@ -1897,7 +1906,7 @@ fn izanami_npos_parameters(peer_count: usize) -> SumeragiNposParameters {
 }
 fn npos_min_self_bond_from_genesis(genesis: &GenesisBlock) -> Quantity {
     let mut params = Parameters::default();
-    for tx in genesis.0.transactions_vec() {
+    for tx in genesis.0.external_transactions() {
         let Executable::Instructions(instructions) = tx.instructions() else {
             continue;
         };
@@ -2048,7 +2057,7 @@ fn audit_npos_genesis_preflight(
 ) -> Result<NposGenesisPreflightSummary> {
     let min_self_bond = npos_min_self_bond_from_genesis(genesis);
     let mut instructions = Vec::<InstructionBox>::new();
-    for tx in genesis.0.transactions_vec() {
+    for tx in genesis.0.external_transactions() {
         let Executable::Instructions(tx_instructions) = tx.instructions() else {
             continue;
         };
@@ -2247,6 +2256,41 @@ fn workload_account_count(config: &ChaosConfig) -> usize {
         baseline
     }
 }
+fn izanami_sumeragi_body_bytes(validator_count: usize) -> Result<usize> {
+    let effect_work_capacity = (IZANAMI_SUMERAGI_QUEUE_COMMANDS
+        / iroha_config::parameters::defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
+        .max(1);
+    iroha_config::parameters::actual::sumeragi_v2_lifecycle_capacity_geometry(
+        validator_count,
+        effect_work_capacity,
+        IZANAMI_SUMERAGI_QUEUE_BODIES,
+        IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
+    )
+    .wrap_err_with(|| {
+        format!(
+            "Izanami Sumeragi lifecycle geometry is inadmissible for {validator_count} validators"
+        )
+    })?;
+    let shared_ownership_capacity =
+        iroha_config::parameters::actual::sumeragi_v2_exact_output_shared_ownership_capacity(
+            effect_work_capacity,
+            IZANAMI_SUMERAGI_QUEUE_BODIES,
+        )
+        .wrap_err("Izanami Sumeragi exact-output shared capacity overflowed")?;
+    iroha_config::parameters::actual::validate_sumeragi_v2_exact_output_geometry(
+        shared_ownership_capacity,
+        IZANAMI_MAX_TOTAL_CONNECTIONS,
+    )
+    .wrap_err("Izanami Sumeragi exact-output geometry is inadmissible")?;
+    iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
+        validator_count,
+        IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
+        IZANAMI_SUMERAGI_BODY_SOURCE_BYTES,
+    )
+    .ok_or_else(|| {
+        eyre!("Izanami Sumeragi body-byte geometry overflowed for {validator_count} validators")
+    })
+}
 #[cfg(test)]
 fn make_network_builder(
     config: &ChaosConfig,
@@ -2259,6 +2303,20 @@ fn make_network_builder_with_sorafs(
     genesis: Vec<Vec<InstructionBox>>,
     sorafs_provider_owners: BTreeMap<String, String>,
 ) -> Result<NetworkBuilder> {
+    let sumeragi_body_bytes = izanami_sumeragi_body_bytes(config.peer_count)?;
+    let sumeragi_queue_commands = i64::try_from(IZANAMI_SUMERAGI_QUEUE_COMMANDS)
+        .wrap_err("Izanami Sumeragi command queue exceeds TOML limits")?;
+    let sumeragi_queue_bodies = i64::try_from(IZANAMI_SUMERAGI_QUEUE_BODIES)
+        .wrap_err("Izanami Sumeragi body queue exceeds TOML limits")?;
+    let sumeragi_authenticated_non_validator_sources =
+        i64::try_from(IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
+            .wrap_err("Izanami Sumeragi authenticated source count exceeds TOML limits")?;
+    let sumeragi_body_source_bytes = i64::try_from(IZANAMI_SUMERAGI_BODY_SOURCE_BYTES)
+        .wrap_err("Izanami Sumeragi source byte cap exceeds TOML limits")?;
+    let sumeragi_body_bytes = i64::try_from(sumeragi_body_bytes)
+        .wrap_err("Izanami Sumeragi aggregate body bytes exceed TOML limits")?;
+    let max_total_connections = i64::try_from(IZANAMI_MAX_TOTAL_CONNECTIONS)
+        .wrap_err("Izanami network connection capacity exceeds TOML limits")?;
     let mut genesis = genesis;
     let nexus_bootstrap_post_topology = if let Some(profile) = config.nexus.as_ref() {
         let post_topology =
@@ -2487,16 +2545,12 @@ fn make_network_builder_with_sorafs(
             )
             .write(["torii", "api_high_load_tx_threshold"], queue_capacity)
             .write(
-                ["network", "max_total_connections"],
-                IZANAMI_MAX_TOTAL_CONNECTIONS,
-            )
-            .write(
                 ["network", "transaction_gossip_period_ms"],
                 IZANAMI_TRANSACTION_GOSSIP_PERIOD_MS,
             )
             .write(
                 ["network", "transaction_gossip_size"],
-                IZANAMI_TRANSACTION_GOSSIP_SIZE,
+                i64::from(IZANAMI_TRANSACTION_GOSSIP_SIZE),
             )
             .write(
                 ["network", "transaction_gossip_resend_ticks"],
@@ -2506,6 +2560,7 @@ fn make_network_builder_with_sorafs(
                 ["network", "transaction_gossip_public_target_cap"],
                 IZANAMI_TRANSACTION_GOSSIP_PUBLIC_TARGET_CAP,
             )
+            .write(["network", "max_total_connections"], max_total_connections)
             .write(
                 ["sumeragi", "block", "max_transactions"],
                 i64::try_from(config.sumeragi_block_max_transactions)
@@ -2524,14 +2579,17 @@ fn make_network_builder_with_sorafs(
                 )
                 .expect("Sumeragi payload limit fits config layer"),
             )
+            .write(["sumeragi", "queues", "commands"], sumeragi_queue_commands)
+            .write(["sumeragi", "queues", "bodies"], sumeragi_queue_bodies)
             .write(
-                ["sumeragi", "queues", "commands"],
-                IZANAMI_SUMERAGI_QUEUE_COMMANDS,
+                ["sumeragi", "queues", "authenticated_non_validator_sources"],
+                sumeragi_authenticated_non_validator_sources,
             )
             .write(
-                ["sumeragi", "queues", "bodies"],
-                IZANAMI_SUMERAGI_QUEUE_BODIES,
+                ["sumeragi", "queues", "body_source_bytes"],
+                sumeragi_body_source_bytes,
             )
+            .write(["sumeragi", "queues", "body_bytes"], sumeragi_body_bytes)
             .write(
                 ["sumeragi", "queues", "chunks"],
                 IZANAMI_SUMERAGI_QUEUE_CHUNKS,
@@ -7519,6 +7577,108 @@ mod tests {
         KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
             .expect("generate checked Izanami Ed25519 key fixture")
     }
+    fn test_chaos_config() -> ChaosConfig {
+        ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
+            latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
+            seed: Some(7),
+            tps: 1.0,
+            max_inflight: 4,
+            submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
+            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+            sumeragi_proposal_queue_scan_multiplier:
+                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([false, false, false, false]),
+            nexus: None,
+            diagnostic_dir: None,
+        }
+    }
+    fn test_endpoint_pool(
+        endpoints: &[&str],
+        max_attempts: usize,
+        unhealthy_failure_threshold: u32,
+        unhealthy_cooldown: Duration,
+        reprobe_interval: Duration,
+    ) -> (EndpointHealthPool, Arc<IngressStats>) {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            endpoints
+                .iter()
+                .map(|endpoint| (*endpoint).to_owned())
+                .collect(),
+            IngressEndpointPoolConfig {
+                max_attempts,
+                unhealthy_failure_threshold,
+                unhealthy_cooldown,
+                reprobe_interval,
+            },
+            Arc::clone(&ingress_stats),
+        );
+        (pool, ingress_stats)
+    }
+    fn test_prepared_network_builder(config: &ChaosConfig) -> Result<NetworkBuilder> {
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos { genesis, .. } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            config.nexus.as_ref(),
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
+        make_network_builder(config, genesis)
+    }
+    async fn start_test_prepared_network(config: &ChaosConfig) -> Result<Option<Network>> {
+        let builder = test_prepared_network_builder(config)?;
+        match builder.start().await {
+            Ok(network) => Ok(Some(network)),
+            Err(err) => {
+                let looks_like_permission_denied = err
+                    .downcast_ref::<io::Error>()
+                    .is_some_and(|io_err| io_err.kind() == io::ErrorKind::PermissionDenied)
+                    || err.to_string().contains("Operation not permitted");
+                if looks_like_permission_denied {
+                    // CI sandboxes (or restricted environments) may block binding loopback ports.
+                    // Treat this as a skipped test rather than a hard failure so other coverage runs.
+                    return Ok(None);
+                }
+                Err(err)
+            }
+        }
+    }
+    fn build_test_prepared_network(config: &ChaosConfig) -> Result<Option<Network>> {
+        let builder = test_prepared_network_builder(config)?;
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| builder.build())) {
+            Ok(network) => Ok(Some(network)),
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
+                    .unwrap_or_default();
+                if msg.contains("Operation not permitted") || msg.contains("permission denied") {
+                    return Ok(None);
+                }
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
     #[test]
     fn izanami_fixture_uses_checked_ed25519_key_generation() {
         let key_pair = checked_izanami_ed25519_key_fixture();
@@ -7757,64 +7917,15 @@ mod tests {
         init_instruction_registry();
         let nexus = NexusProfile::sora_defaults()?;
         let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
             duration: Duration::from_secs(2),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(42),
-            tps: 1.0,
-            max_inflight: 4,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(nexus),
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos {
-            state: _,
-            genesis,
-            recipes: _,
-            ..
-        } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            config.nexus.as_ref(),
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let builder = make_network_builder(&config, genesis)?;
-        let network = match builder.start().await {
-            Ok(network) => network,
-            Err(err) => {
-                let looks_like_permission_denied = err
-                    .downcast_ref::<io::Error>()
-                    .is_some_and(|io_err| io_err.kind() == io::ErrorKind::PermissionDenied)
-                    || err.to_string().contains("Operation not permitted");
-                if looks_like_permission_denied {
-                    // CI sandboxes (or restricted environments) may block binding loopback ports.
-                    // Treat this as a skipped test rather than a hard failure so other coverage runs.
-                    return Ok(());
-                }
-                return Err(err);
-            }
+        let Some(network) = start_test_prepared_network(&config).await? else {
+            return Ok(());
         };
         network
             .ensure_blocks_with(|height| height.total >= 4)
@@ -7828,45 +7939,12 @@ mod tests {
         init_instruction_registry();
         let profile = crate::config::NexusProfile::sora_defaults()?;
         let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(23),
             tps: 2.0,
-            max_inflight: 4,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(profile),
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos { genesis, .. } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            config.nexus.as_ref(),
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let network = make_network_builder(&config, genesis)?.build();
+        let network = test_prepared_network_builder(&config)?.build();
         let summary = audit_npos_genesis_preflight(
             &network.genesis(),
             config.peer_count,
@@ -7902,49 +7980,16 @@ mod tests {
         init_instruction_registry();
         let profile = crate::config::NexusProfile::sora_defaults()?;
         let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(31),
             tps: 2.0,
-            max_inflight: 4,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(profile.clone()),
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos { genesis, .. } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            config.nexus.as_ref(),
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let network = make_network_builder(&config, genesis)?.build();
+        let network = test_prepared_network_builder(&config)?.build();
         let mut bootstrap_tx_index = None;
         let mut validator_tx_index = None;
         let mut tx_index = 0usize;
-        for tx in network.genesis().0.transactions_vec() {
+        for tx in network.genesis().0.external_transactions() {
             let Executable::Instructions(instructions) = tx.instructions() else {
                 tx_index = tx_index.saturating_add(1);
                 continue;
@@ -7988,54 +8033,15 @@ mod tests {
         init_instruction_registry();
         let profile = crate::config::NexusProfile::sora_defaults()?;
         let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(41),
             tps: 2.0,
-            max_inflight: 4,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(profile.clone()),
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos { genesis, .. } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            config.nexus.as_ref(),
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let network = make_network_builder(&config, genesis)?.build();
+        let network = test_prepared_network_builder(&config)?.build();
         let mut registrations = BTreeMap::<AssetDefinitionId, Vec<usize>>::new();
         let mut tx_asset_registrations = BTreeMap::<usize, Vec<AssetDefinitionId>>::new();
-        for (tx_index, tx) in network
-            .genesis()
-            .0
-            .transactions_vec()
-            .into_iter()
-            .enumerate()
-        {
+        for (tx_index, tx) in network.genesis().0.external_transactions().enumerate() {
             let Executable::Instructions(instructions) = tx.instructions() else {
                 continue;
             };
@@ -8165,35 +8171,14 @@ mod tests {
     #[test]
     fn shared_host_stable_soak_profile_caps_load_and_timeout() {
         let mut config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
             duration: Duration::from_secs(3_600),
-            pipeline_time: None,
             target_blocks: Some(3_600),
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(7),
             tps: 5.0,
             max_inflight: 8,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
         assert!(is_shared_host_stable_soak(&config));
         apply_shared_host_stable_soak_profile(&mut config);
@@ -8228,35 +8213,14 @@ mod tests {
     #[test]
     fn shared_host_stable_soak_profile_applies_to_permissioned_long_run() {
         let mut config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
             duration: Duration::from_secs(3_600),
-            pipeline_time: None,
             target_blocks: Some(2_000),
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(21),
             tps: 7.0,
             max_inflight: 13,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: None,
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
         assert!(is_shared_host_stable_soak(&config));
         apply_shared_host_stable_soak_profile(&mut config);
@@ -8284,35 +8248,15 @@ mod tests {
     #[test]
     fn shared_host_stable_soak_profile_pins_canonical_load_shape() {
         let mut config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
             duration: Duration::from_secs(3_600),
-            pipeline_time: None,
             target_blocks: Some(3_600),
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(17),
             tps: 3.0,
             max_inflight: 6,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
         assert!(is_shared_host_stable_soak(&config));
         apply_shared_host_stable_soak_profile(&mut config);
@@ -8328,35 +8272,15 @@ mod tests {
     #[test]
     fn shared_host_stable_soak_profile_does_not_touch_non_soak_runs() {
         let mut config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
             duration: Duration::from_secs(600),
-            pipeline_time: None,
             target_blocks: Some(600),
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(9),
             tps: 5.0,
             max_inflight: 8,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
         assert!(!is_shared_host_stable_soak(&config));
         apply_shared_host_stable_soak_profile(&mut config);
@@ -8368,35 +8292,16 @@ mod tests {
     #[test]
     fn shared_host_stable_soak_profile_applies_with_single_frozen_peer() {
         let mut config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
             faulty_peers: 1,
             duration: Duration::from_secs(3_600),
-            pipeline_time: None,
             target_blocks: Some(2_000),
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(29),
             tps: 4.0,
             max_inflight: 6,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
         assert!(
             is_shared_host_stable_soak(&config),
@@ -8420,35 +8325,14 @@ mod tests {
     #[test]
     fn submission_confirmation_mode_uses_ingress_acceptance_for_stable_no_faults() {
         let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
             duration: Duration::from_secs(600),
-            pipeline_time: None,
             target_blocks: Some(200),
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(5),
             tps: 5.0,
             max_inflight: 8,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: None,
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
         assert_eq!(
             submission_confirmation_mode(&config),
@@ -8458,35 +8342,15 @@ mod tests {
     #[test]
     fn submission_confirmation_mode_uses_ingress_acceptance_for_stable_fault_runs() {
         let mut config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
             faulty_peers: 1,
             duration: Duration::from_secs(600),
-            pipeline_time: None,
             target_blocks: Some(200),
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(5),
             tps: 5.0,
             max_inflight: 8,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: None,
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
         assert_eq!(
             submission_confirmation_mode(&config),
@@ -8502,35 +8366,14 @@ mod tests {
     #[test]
     fn stable_ingress_effective_max_inflight_is_capped() {
         let mut config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
             duration: Duration::from_secs(600),
-            pipeline_time: None,
             target_blocks: Some(200),
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(5),
             tps: 5.0,
             max_inflight: IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP * 8,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: None,
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
         assert_eq!(
             effective_submission_max_inflight(&config),
@@ -8547,37 +8390,17 @@ mod tests {
     #[test]
     fn severe_stopping_stable_ingress_pacing_is_capped() {
         let mut config = ChaosConfig {
-            allow_net: true,
             peer_count: 20,
             faulty_peers: 18,
             duration: Duration::from_secs(800),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(7),
             tps: 200.0,
             max_inflight: 512,
             submitters: 20,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
             faults: FaultToggles::from_explicit_array([
                 true, false, false, false, false, false, false,
             ]),
-            nexus: None,
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
         assert!(is_severe_stopping_recovery_run(&config));
         assert_eq!(
@@ -8596,37 +8419,17 @@ mod tests {
     #[test]
     fn non_stopping_stable_ingress_pacing_keeps_configured_rate() {
         let mut config = ChaosConfig {
-            allow_net: true,
             peer_count: 20,
             faulty_peers: 5,
             duration: Duration::from_secs(800),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(7),
             tps: 200.0,
             max_inflight: 512,
             submitters: 20,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
             faults: FaultToggles::from_explicit_array([
                 false, false, false, true, true, false, false,
             ]),
-            nexus: None,
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
         assert!(!is_severe_stopping_recovery_run(&config));
         assert_eq!(
@@ -8644,35 +8447,15 @@ mod tests {
     #[test]
     fn prebuilt_stress_queue_capacity_scales_to_buffer() {
         let mut config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
             duration: Duration::from_secs(120),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(7),
             tps: 20_000.0,
             max_inflight: 2_400_000,
             submitters: 4096,
             prebuild_tx_buffer: 2_400_000,
             prebuild_tx_workers: 20,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
             faults: FaultToggles::default(),
-            nexus: None,
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
         assert_eq!(effective_network_queue_capacity(&config), 2_400_000);
         assert_eq!(
@@ -8735,35 +8518,15 @@ mod tests {
     #[test]
     fn blocking_ingress_effective_max_inflight_preserves_configured_limit() {
         let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
             duration: Duration::from_secs(600),
-            pipeline_time: None,
             target_blocks: Some(200),
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(5),
             tps: 5.0,
             max_inflight: IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP * 8,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
             workload_profile: WorkloadProfile::Chaos,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: None,
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
         assert_eq!(
             effective_submission_max_inflight(&config),
@@ -8879,35 +8642,17 @@ mod tests {
     #[test]
     fn prebuild_worker_count_uses_auto_parallelism_when_enabled() {
         let mut config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: None,
-            target_blocks: None,
             progress_interval: Duration::from_secs(1),
             progress_timeout: Duration::from_secs(2),
             shutdown_drain_timeout: Duration::from_secs(1),
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: None,
-            tps: 1.0,
             max_inflight: 1,
             submitters: 7,
             prebuild_tx_buffer: 128,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
             packet_loss_percent: 0,
             log_filter: "info".to_string(),
             faults: FaultToggles::default(),
-            nexus: None,
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
         let workers = effective_prebuild_tx_workers(&config);
         assert!(workers >= 1);
@@ -8941,19 +8686,12 @@ mod tests {
     }
     #[test]
     fn endpoint_pool_can_pin_and_reuse_same_endpoint() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:101".to_string(),
-                "http://127.0.0.1:102".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 2,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(5),
-                reprobe_interval: Duration::from_millis(500),
-            },
-            ingress_stats,
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:101", "http://127.0.0.1:102"],
+            2,
+            1,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
         );
         let now = Instant::now();
         let endpoint_idx = pool
@@ -8987,20 +8725,13 @@ mod tests {
     }
     #[test]
     fn endpoint_pool_failover_excluding_skips_pinned_endpoint() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:201".to_string(),
-                "http://127.0.0.1:202".to_string(),
-                "http://127.0.0.1:203".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 3,
-                unhealthy_failure_threshold: 2,
-                unhealthy_cooldown: Duration::from_secs(5),
-                reprobe_interval: Duration::from_millis(500),
-            },
-            ingress_stats,
+        #[rustfmt::skip]
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:201", "http://127.0.0.1:202", "http://127.0.0.1:203"],
+            3,
+            2,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
         );
         let now = Instant::now();
         let mut attempts = Vec::new();
@@ -9036,35 +8767,17 @@ mod tests {
     #[test]
     fn shared_host_stable_soak_profile_keeps_higher_pipeline_time() {
         let mut config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
             duration: Duration::from_secs(3_600),
             pipeline_time: Some(Duration::from_millis(1_200)),
             target_blocks: Some(3_600),
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: Some(Duration::from_secs(2)),
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(11),
             tps: 5.0,
             max_inflight: 8,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
         assert!(is_shared_host_stable_soak(&config));
         apply_shared_host_stable_soak_profile(&mut config);
@@ -9080,59 +8793,14 @@ mod tests {
         init_instruction_registry();
         let nexus = NexusProfile::sora_defaults().expect("nexus profile");
         let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
             duration: Duration::from_secs(2),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(7),
-            tps: 1.0,
-            max_inflight: 4,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(nexus.clone()),
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos {
-            state: _, genesis, ..
-        } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            config.nexus.as_ref(),
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let builder = make_network_builder(&config, genesis)?;
-        let network = match builder.start().await {
-            Ok(network) => network,
-            Err(err) => {
-                let looks_like_permission_denied = err
-                    .downcast_ref::<io::Error>()
-                    .is_some_and(|io_err| io_err.kind() == io::ErrorKind::PermissionDenied)
-                    || err.to_string().contains("Operation not permitted");
-                if looks_like_permission_denied {
-                    return Ok(());
-                }
-                return Err(err);
-            }
+        let Some(network) = start_test_prepared_network(&config).await? else {
+            return Ok(());
         };
         let status = match network.peer().status().await {
             Ok(status) => status,
@@ -9459,19 +9127,12 @@ mod tests {
     }
     #[test]
     fn endpoint_pool_rotates_on_retryable_failure() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:1".to_string(),
-                "http://127.0.0.1:2".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 3,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(5),
-                reprobe_interval: Duration::from_millis(500),
-            },
-            Arc::clone(&ingress_stats),
+        let (pool, ingress_stats) = test_endpoint_pool(
+            &["http://127.0.0.1:1", "http://127.0.0.1:2"],
+            3,
+            1,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
         );
         let now = Instant::now();
         let mut attempts = Vec::new();
@@ -9495,19 +9156,12 @@ mod tests {
     }
     #[test]
     fn endpoint_pool_query_confirmation_fails_over() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:11".to_string(),
-                "http://127.0.0.1:12".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 3,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(5),
-                reprobe_interval: Duration::from_millis(500),
-            },
-            ingress_stats,
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:11", "http://127.0.0.1:12"],
+            3,
+            1,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
         );
         let now = Instant::now();
         let mut attempts = Vec::new();
@@ -9528,20 +9182,13 @@ mod tests {
     }
     #[test]
     fn endpoint_pool_status_read_prefers_hint_then_fails_over() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:21".to_string(),
-                "http://127.0.0.1:22".to_string(),
-                "http://127.0.0.1:23".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 3,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(5),
-                reprobe_interval: Duration::from_millis(500),
-            },
-            ingress_stats,
+        #[rustfmt::skip]
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:21", "http://127.0.0.1:22", "http://127.0.0.1:23"],
+            3,
+            1,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
         );
         let now = Instant::now();
         let mut attempts = Vec::new();
@@ -9563,20 +9210,13 @@ mod tests {
     }
     #[test]
     fn endpoint_pool_status_fanout_continues_after_empty_response() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:24".to_string(),
-                "http://127.0.0.1:25".to_string(),
-                "http://127.0.0.1:26".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 3,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(5),
-                reprobe_interval: Duration::from_millis(500),
-            },
-            ingress_stats,
+        #[rustfmt::skip]
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:24", "http://127.0.0.1:25", "http://127.0.0.1:26"],
+            3,
+            1,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
         );
         let now = Instant::now();
         let mut attempts = Vec::new();
@@ -9603,21 +9243,17 @@ mod tests {
     }
     #[test]
     fn endpoint_pool_status_fanout_can_override_submit_attempt_cap() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:34".to_string(),
-                "http://127.0.0.1:35".to_string(),
-                "http://127.0.0.1:36".to_string(),
-                "http://127.0.0.1:37".to_string(),
+        let (pool, _) = test_endpoint_pool(
+            &[
+                "http://127.0.0.1:34",
+                "http://127.0.0.1:35",
+                "http://127.0.0.1:36",
+                "http://127.0.0.1:37",
             ],
-            IngressEndpointPoolConfig {
-                max_attempts: 1,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(5),
-                reprobe_interval: Duration::from_millis(500),
-            },
-            ingress_stats,
+            1,
+            1,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
         );
         let now = Instant::now();
         let mut attempts = Vec::new();
@@ -9644,19 +9280,12 @@ mod tests {
     }
     #[test]
     fn endpoint_pool_status_query_429_does_not_mark_endpoint_unhealthy() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:31".to_string(),
-                "http://127.0.0.1:32".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 3,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(5),
-                reprobe_interval: Duration::from_millis(500),
-            },
-            Arc::clone(&ingress_stats),
+        let (pool, ingress_stats) = test_endpoint_pool(
+            &["http://127.0.0.1:31", "http://127.0.0.1:32"],
+            3,
+            1,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
         );
         let now = Instant::now();
         let mut attempts = Vec::new();
@@ -9683,19 +9312,12 @@ mod tests {
     }
     #[test]
     fn endpoint_pool_submit_queue_pressure_marks_endpoint_unhealthy() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:41".to_string(),
-                "http://127.0.0.1:42".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 3,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(5),
-                reprobe_interval: Duration::from_millis(500),
-            },
-            Arc::clone(&ingress_stats),
+        let (pool, ingress_stats) = test_endpoint_pool(
+            &["http://127.0.0.1:41", "http://127.0.0.1:42"],
+            3,
+            1,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
         );
         let now = Instant::now();
         let mut attempts = Vec::new();
@@ -9720,19 +9342,12 @@ mod tests {
     }
     #[test]
     fn endpoint_pool_respects_cooldown_then_reprobes() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:21".to_string(),
-                "http://127.0.0.1:22".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 3,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(10),
-                reprobe_interval: Duration::from_secs(2),
-            },
-            ingress_stats,
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:21", "http://127.0.0.1:22"],
+            3,
+            1,
+            Duration::from_secs(10),
+            Duration::from_secs(2),
         );
         let start = Instant::now();
         let first: Result<&'static str> = pool.run_with_failover_at("submit", start, |idx, _| {
@@ -9784,20 +9399,13 @@ mod tests {
     }
     #[test]
     fn ingress_pool_excludes_lagging_endpoint_when_healthy_alternatives_exist() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:61".to_string(),
-                "http://127.0.0.1:62".to_string(),
-                "http://127.0.0.1:63".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 3,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(10),
-                reprobe_interval: Duration::from_secs(5),
-            },
-            ingress_stats,
+        #[rustfmt::skip]
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:61", "http://127.0.0.1:62", "http://127.0.0.1:63"],
+            3,
+            1,
+            Duration::from_secs(10),
+            Duration::from_secs(5),
         );
         let now = Instant::now();
         pool.update_lag_snapshot(IngressLagSnapshot {
@@ -9822,20 +9430,13 @@ mod tests {
     }
     #[test]
     fn ingress_pool_forced_probe_when_all_endpoints_excluded_or_unhealthy() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:71".to_string(),
-                "http://127.0.0.1:72".to_string(),
-                "http://127.0.0.1:73".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 3,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(30),
-                reprobe_interval: Duration::from_secs(30),
-            },
-            ingress_stats,
+        #[rustfmt::skip]
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:71", "http://127.0.0.1:72", "http://127.0.0.1:73"],
+            3,
+            1,
+            Duration::from_secs(30),
+            Duration::from_secs(30),
         );
         let start = Instant::now();
         assert!(pool.mark_failure_at(1, start, IngressFailureClass::Retryable));
@@ -9875,19 +9476,12 @@ mod tests {
     }
     #[test]
     fn queue_pressure_sticky_cooldown_blocks_early_reprobe_after_threshold() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:81".to_string(),
-                "http://127.0.0.1:82".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 2,
-                unhealthy_failure_threshold: 3,
-                unhealthy_cooldown: Duration::from_secs(5),
-                reprobe_interval: Duration::from_millis(500),
-            },
-            ingress_stats,
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:81", "http://127.0.0.1:82"],
+            2,
+            3,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
         );
         let start = Instant::now();
         let first: Result<&'static str> = pool.run_with_failover_at("submit", start, |idx, _| {
@@ -9948,19 +9542,12 @@ mod tests {
     }
     #[test]
     fn ingress_submission_backpressure_defers_when_all_endpoints_recently_probed_and_unhealthy() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:91".to_string(),
-                "http://127.0.0.1:92".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 2,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(10),
-                reprobe_interval: Duration::from_secs(2),
-            },
-            ingress_stats,
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:91", "http://127.0.0.1:92"],
+            2,
+            1,
+            Duration::from_secs(10),
+            Duration::from_secs(2),
         );
         let start = Instant::now();
         assert!(pool.mark_failure_at(0, start, IngressFailureClass::QueuePressure));
@@ -9994,20 +9581,13 @@ mod tests {
     }
     #[test]
     fn all_unhealthy_pool_promotes_successful_probe_to_healthy_endpoint() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:111".to_string(),
-                "http://127.0.0.1:112".to_string(),
-                "http://127.0.0.1:113".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 3,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(30),
-                reprobe_interval: Duration::from_secs(2),
-            },
-            ingress_stats,
+        #[rustfmt::skip]
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:111", "http://127.0.0.1:112", "http://127.0.0.1:113"],
+            3,
+            1,
+            Duration::from_secs(30),
+            Duration::from_secs(2),
         );
         let start = Instant::now();
         assert!(pool.mark_failure_at(0, start, IngressFailureClass::QueuePressure));
@@ -10058,19 +9638,12 @@ mod tests {
     }
     #[test]
     fn ingress_submission_backpressure_is_disabled_when_endpoint_is_ready() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:93".to_string(),
-                "http://127.0.0.1:94".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 2,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(10),
-                reprobe_interval: Duration::from_secs(2),
-            },
-            ingress_stats,
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:93", "http://127.0.0.1:94"],
+            2,
+            1,
+            Duration::from_secs(10),
+            Duration::from_secs(2),
         );
         let now = Instant::now();
         assert!(pool.mark_failure_at(0, now, IngressFailureClass::QueuePressure));
@@ -10082,16 +9655,12 @@ mod tests {
     }
     #[test]
     fn endpoint_pool_queue_timeout_respects_unhealthy_failure_threshold() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec!["http://127.0.0.1:31".to_string()],
-            IngressEndpointPoolConfig {
-                max_attempts: 1,
-                unhealthy_failure_threshold: 3,
-                unhealthy_cooldown: Duration::from_secs(5),
-                reprobe_interval: Duration::from_millis(500),
-            },
-            ingress_stats,
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:31"],
+            1,
+            3,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
         );
         let now = Instant::now();
         let result: Result<()> = pool.run_with_failover_at("submit", now, |_idx, _| {
@@ -10137,16 +9706,12 @@ mod tests {
     #[test]
     fn endpoint_pool_queue_timeout_sticky_cooldown_clears_on_success_when_all_endpoints_unhealthy()
     {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec!["http://127.0.0.1:41".to_string()],
-            IngressEndpointPoolConfig {
-                max_attempts: 1,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(5),
-                reprobe_interval: Duration::from_millis(500),
-            },
-            ingress_stats,
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:41"],
+            1,
+            1,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
         );
         let start = Instant::now();
         let first: Result<()> = pool.run_with_failover_at("submit", start, |_idx, _| {
@@ -10187,16 +9752,12 @@ mod tests {
     }
     #[test]
     fn endpoint_pool_queue_timeout_cooldown_uses_configured_unhealthy_cooldown() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec!["http://127.0.0.1:51".to_string()],
-            IngressEndpointPoolConfig {
-                max_attempts: 1,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(1),
-                reprobe_interval: Duration::from_millis(500),
-            },
-            ingress_stats,
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:51"],
+            1,
+            1,
+            Duration::from_secs(1),
+            Duration::from_millis(500),
         );
         let start = Instant::now();
         let result: Result<()> = pool.run_with_failover_at("submit", start, |_idx, _| {
@@ -10525,62 +10086,14 @@ mod tests {
         crate::config::init_tracing_with_filter("warn");
         init_instruction_registry();
         let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
             duration: Duration::from_secs(4),
             pipeline_time: Some(Duration::from_millis(250)),
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(9),
-            tps: 1.0,
-            max_inflight: 4,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([false, false, false, false]),
-            nexus: None,
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos {
-            state: _,
-            genesis,
-            recipes: _,
-            ..
-        } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            None,
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let builder = make_network_builder(&config, genesis)?;
-        let network = match builder.start().await {
-            Ok(network) => network,
-            Err(err) => {
-                let looks_like_permission_denied = err
-                    .downcast_ref::<io::Error>()
-                    .is_some_and(|io_err| io_err.kind() == io::ErrorKind::PermissionDenied)
-                    || err.to_string().contains("Operation not permitted");
-                if looks_like_permission_denied {
-                    return Ok(());
-                }
-                return Err(err);
-            }
+        let Some(network) = start_test_prepared_network(&config).await? else {
+            return Ok(());
         };
         let run_control = RunControl::new(Instant::now() + Duration::from_secs(20));
         let progress = wait_for_target_blocks(
@@ -10611,62 +10124,14 @@ mod tests {
         crate::config::init_tracing_with_filter("warn");
         init_instruction_registry();
         let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
             duration: Duration::from_secs(4),
             pipeline_time: Some(Duration::from_millis(250)),
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(10),
-            tps: 1.0,
-            max_inflight: 4,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([false, false, false, false]),
-            nexus: None,
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos {
-            state: _,
-            genesis,
-            recipes: _,
-            ..
-        } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            None,
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let builder = make_network_builder(&config, genesis)?;
-        let network = match builder.start().await {
-            Ok(network) => network,
-            Err(err) => {
-                let looks_like_permission_denied = err
-                    .downcast_ref::<io::Error>()
-                    .is_some_and(|io_err| io_err.kind() == io::ErrorKind::PermissionDenied)
-                    || err.to_string().contains("Operation not permitted");
-                if looks_like_permission_denied {
-                    return Ok(());
-                }
-                return Err(err);
-            }
+        let Some(network) = start_test_prepared_network(&config).await? else {
+            return Ok(());
         };
         let run_control = RunControl::new(Instant::now() + Duration::from_secs(3));
         let target_blocks = 10_000;
@@ -10704,62 +10169,14 @@ mod tests {
         crate::config::init_tracing_with_filter("warn");
         init_instruction_registry();
         let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
             duration: Duration::from_secs(4),
             pipeline_time: Some(Duration::from_millis(250)),
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(11),
-            tps: 1.0,
-            max_inflight: 4,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([false, false, false, false]),
-            nexus: None,
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos {
-            state: _,
-            genesis,
-            recipes: _,
-            ..
-        } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            None,
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let builder = make_network_builder(&config, genesis)?;
-        let network = match builder.start().await {
-            Ok(network) => network,
-            Err(err) => {
-                let looks_like_permission_denied = err
-                    .downcast_ref::<io::Error>()
-                    .is_some_and(|io_err| io_err.kind() == io::ErrorKind::PermissionDenied)
-                    || err.to_string().contains("Operation not permitted");
-                if looks_like_permission_denied {
-                    return Ok(());
-                }
-                return Err(err);
-            }
+        let Some(network) = start_test_prepared_network(&config).await? else {
+            return Ok(());
         };
         let run_control = RunControl::new(Instant::now() + Duration::from_secs(3));
         let target_blocks = 10_000;
@@ -10819,34 +10236,10 @@ mod tests {
     async fn allow_net_false_rejects_runner() {
         let config = ChaosConfig {
             allow_net: false,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(5),
             tps: 0.1,
             max_inflight: 1,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([false, false, false, false]),
-            nexus: None,
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
         let err = IzanamiRunner::new(config)
             .await
@@ -11576,20 +10969,13 @@ mod tests {
     }
     #[test]
     fn endpoint_pool_preferred_endpoint_round_robins_submitters() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:401".to_string(),
-                "http://127.0.0.1:402".to_string(),
-                "http://127.0.0.1:403".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 3,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(5),
-                reprobe_interval: Duration::from_millis(500),
-            },
-            ingress_stats,
+        #[rustfmt::skip]
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:401", "http://127.0.0.1:402", "http://127.0.0.1:403"],
+            3,
+            1,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
         );
         assert_eq!(
             pool.select_endpoint_preferred("submit", 0)
@@ -11614,20 +11000,13 @@ mod tests {
     }
     #[test]
     fn endpoint_pool_skips_reserved_fault_target_when_alternate_is_healthy() {
-        let ingress_stats = Arc::new(IngressStats::default());
-        let pool = EndpointHealthPool::new(
-            vec![
-                "http://127.0.0.1:411".to_string(),
-                "http://127.0.0.1:412".to_string(),
-                "http://127.0.0.1:413".to_string(),
-            ],
-            IngressEndpointPoolConfig {
-                max_attempts: 3,
-                unhealthy_failure_threshold: 1,
-                unhealthy_cooldown: Duration::from_secs(5),
-                reprobe_interval: Duration::from_millis(500),
-            },
-            ingress_stats,
+        #[rustfmt::skip]
+        let (pool, _) = test_endpoint_pool(
+            &["http://127.0.0.1:411", "http://127.0.0.1:412", "http://127.0.0.1:413"],
+            3,
+            1,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
         );
         let now = Instant::now();
         pool.mark_endpoint_sticky_unhealthy_until(0, now + Duration::from_secs(60));
@@ -11639,6 +11018,21 @@ mod tests {
             pool.attempt_order_preview_at_with_preference(now + Duration::from_secs(61), Some(0)),
             vec![0, 1, 2]
         );
+    }
+    #[test]
+    fn izanami_sumeragi_capacity_geometry_covers_legal_committee_scales() -> Result<()> {
+        for validator_count in [4, 7, MAX_VALIDATORS_PER_HEIGHT] {
+            assert_eq!(
+                izanami_sumeragi_body_bytes(validator_count)?,
+                (validator_count + IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
+                    * IZANAMI_SUMERAGI_BODY_SOURCE_BYTES
+            );
+        }
+        assert_eq!(
+            IZANAMI_MAX_TOTAL_CONNECTIONS,
+            MAX_VALIDATORS_PER_HEIGHT - 1 + IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES
+        );
+        Ok(())
     }
     #[test]
     fn submission_metadata_increments_counter() {
@@ -11658,268 +11052,17 @@ mod tests {
             .expect("second metadata entry should decode");
         assert_ne!(value_a, value_b, "each submission should be unique");
     }
-    #[test]
-    fn make_network_builder_emits_only_strict_sumeragi_v2_config() -> Result<()> {
-        init_instruction_registry();
-        let pipeline_time = Duration::from_millis(300);
-        let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: Some(pipeline_time),
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(17),
-            tps: 1.0,
-            max_inflight: 4,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([false, false, false, false]),
-            nexus: None,
-            diagnostic_dir: None,
-        };
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos { genesis, .. } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            None,
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let network = make_network_builder(&config, genesis)?.build();
-        assert_eq!(network.block_cadence(), pipeline_time);
-        let layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
-        let lookup = |path: &[&str]| {
-            layers.iter().rev().find_map(|layer| {
-                let mut current = layer;
-                for (idx, key) in path.iter().enumerate() {
-                    let value = current.get(*key)?;
-                    if idx + 1 == path.len() {
-                        return Some(value);
-                    }
-                    current = value.as_table()?;
-                }
-                None
-            })
-        };
-        assert!(lookup(&["sumeragi", "round_timeout_ms"]).is_none());
-        let cadence_ms = u64::try_from(pipeline_time.as_millis()).expect("cadence fits u64");
-        assert_eq!(
-            iroha_config::parameters::actual::sumeragi_v2_timing_ms(cadence_ms),
-            Ok((3_000, 600)),
-            "runtime timing must derive solely from the signed 300ms cadence"
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "role"]).and_then(TomlValue::as_str),
-            Some("validator")
-        );
-        assert_eq!(
-            lookup(&["network", "max_total_connections"]).and_then(TomlValue::as_integer),
-            Some(IZANAMI_MAX_TOTAL_CONNECTIONS)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "block", "max_transactions"]).and_then(TomlValue::as_integer),
-            Some(
-                i64::try_from(config.sumeragi_block_max_transactions)
-                    .expect("transaction limit fits i64")
-            )
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "block", "proposal_queue_scan_multiplier"])
-                .and_then(TomlValue::as_integer),
-            Some(
-                i64::try_from(config.sumeragi_proposal_queue_scan_multiplier)
-                    .expect("scan multiplier fits i64")
-            )
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "queues", "commands"]).and_then(TomlValue::as_integer),
-            Some(IZANAMI_SUMERAGI_QUEUE_COMMANDS)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "queues", "bodies"]).and_then(TomlValue::as_integer),
-            Some(IZANAMI_SUMERAGI_QUEUE_BODIES)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "queues", "chunks"]).and_then(TomlValue::as_integer),
-            Some(IZANAMI_SUMERAGI_QUEUE_CHUNKS)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "queues", "ready_bodies"]).and_then(TomlValue::as_integer),
-            Some(IZANAMI_SUMERAGI_QUEUE_READY_BODIES)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "keys", "allowed_algorithms"])
-                .and_then(TomlValue::as_array)
-                .and_then(|algorithms| algorithms.first())
-                .and_then(TomlValue::as_str),
-            Some("bls_normal")
-        );
-        for layer in &layers {
-            let Some(sumeragi) = layer.get("sumeragi").and_then(TomlValue::as_table) else {
-                continue;
-            };
-            for retired in [
-                "consensus_mode",
-                "protocol_version",
-                "da",
-                "advanced",
-                "recovery",
-                "gating",
-                "collectors",
-                "persistence",
-            ] {
-                assert!(
-                    !sumeragi.contains_key(retired),
-                    "retired sumeragi.{retired} must not be generated"
-                );
-            }
-        }
-        Ok(())
-    }
-    #[test]
-    fn make_network_builder_forwards_rust_log_and_sets_peer_base_level() -> Result<()> {
-        init_instruction_registry();
-        let _env_guard = EnvGuard::set("RUST_LOG", "iroha_p2p=debug,iroha_core=debug");
-        let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(19),
-            tps: 1.0,
-            max_inflight: 4,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([false, false, false, false]),
-            nexus: None,
-            diagnostic_dir: None,
-        };
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos { genesis, .. } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            None,
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let builder = make_network_builder(&config, genesis)?;
-        let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            builder.build()
-        })) {
-            Ok(network) => network,
-            Err(payload) => {
-                let msg = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
-                    .unwrap_or_default();
-                if msg.contains("Operation not permitted") || msg.contains("permission denied") {
-                    return Ok(());
-                }
-                std::panic::resume_unwind(payload);
-            }
-        };
-        let layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
-        let read_str = |layer: &Table, path: &[&str]| -> Option<String> {
-            let mut current = layer;
-            for (idx, key) in path.iter().enumerate() {
-                let value = current.get(*key)?;
-                if idx + 1 == path.len() {
-                    return value.as_str().map(ToString::to_string);
-                }
-                current = value.as_table()?;
-            }
-            None
-        };
-        let filter = layers
-            .iter()
-            .rev()
-            .find_map(|layer| read_str(layer, &["logger", "filter"]));
-        assert_eq!(filter.as_deref(), Some("iroha_p2p=debug,iroha_core=debug"));
-        let level = layers
-            .iter()
-            .rev()
-            .find_map(|layer| read_str(layer, &["logger", "level"]));
-        assert_eq!(level.as_deref(), Some(IZANAMI_PEER_LOG_BASE_LEVEL));
-        Ok(())
-    }
+    mod network_builder_config;
     #[test]
     fn make_network_builder_derives_nexus_keys() -> Result<()> {
         init_instruction_registry();
         let profile = crate::config::NexusProfile::sora_defaults()?;
         let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(23),
-            tps: 1.0,
-            max_inflight: 4,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(profile),
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos { genesis, .. } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            config.nexus.as_ref(),
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let _builder = make_network_builder(&config, genesis)?;
+        let _builder = test_prepared_network_builder(&config)?;
         Ok(())
     }
     #[test]
@@ -11927,60 +11070,12 @@ mod tests {
         init_instruction_registry();
         let profile = crate::config::NexusProfile::sora_defaults()?;
         let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(19),
-            tps: 1.0,
-            max_inflight: 4,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(profile),
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos { genesis, .. } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            config.nexus.as_ref(),
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let builder = make_network_builder(&config, genesis)?;
-        let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            builder.build()
-        })) {
-            Ok(network) => network,
-            Err(payload) => {
-                let msg = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
-                    .unwrap_or_default();
-                if msg.contains("Operation not permitted") || msg.contains("permission denied") {
-                    return Ok(());
-                }
-                std::panic::resume_unwind(payload);
-            }
+        let Some(network) = build_test_prepared_network(&config)? else {
+            return Ok(());
         };
         let mut params = Parameters::default();
         for tx in network.genesis_isi() {
@@ -12040,62 +11135,14 @@ mod tests {
         init_instruction_registry();
         let profile = crate::config::NexusProfile::sora_defaults()?;
         let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(23),
-            tps: 1.0,
-            max_inflight: 4,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(profile),
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos { genesis, .. } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            config.nexus.as_ref(),
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let builder = make_network_builder(&config, genesis)?;
-        let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            builder.build()
-        })) {
-            Ok(network) => network,
-            Err(payload) => {
-                let msg = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
-                    .unwrap_or_default();
-                if msg.contains("Operation not permitted") || msg.contains("permission denied") {
-                    return Ok(());
-                }
-                std::panic::resume_unwind(payload);
-            }
+        let Some(network) = build_test_prepared_network(&config)? else {
+            return Ok(());
         };
-        let tx_count = network.genesis().0.transactions_vec().len();
+        let tx_count = network.genesis().0.external_transactions().len();
         assert!(
             (1..=16).contains(&tx_count),
             "NPoS genesis must fit Iroha's startup validation cap; got {tx_count} transactions"
@@ -12106,60 +11153,11 @@ mod tests {
     fn make_network_builder_uses_fast_pipeline_default_without_nexus() -> Result<()> {
         init_instruction_registry();
         let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(71),
-            tps: 1.0,
-            max_inflight: 4,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([false, false, false, false]),
-            nexus: None,
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos { genesis, .. } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            config.nexus.as_ref(),
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let builder = make_network_builder(&config, genesis)?;
-        let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            builder.build()
-        })) {
-            Ok(network) => network,
-            Err(payload) => {
-                let msg = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
-                    .unwrap_or_default();
-                if msg.contains("Operation not permitted") || msg.contains("permission denied") {
-                    return Ok(());
-                }
-                std::panic::resume_unwind(payload);
-            }
+        let Some(network) = build_test_prepared_network(&config)? else {
+            return Ok(());
         };
         assert_eq!(network.block_cadence(), default_izanami_pipeline_time());
         Ok(())
@@ -12172,35 +11170,11 @@ mod tests {
         crate::config::init_tracing_with_filter("warn");
         init_instruction_registry();
         let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(13),
             tps: 0.5,
             max_inflight: 2,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([false, false, false, false]),
-            nexus: None,
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
         let runner = match IzanamiRunner::new(config).await {
             Ok(runner) => runner,
@@ -12225,65 +11199,51 @@ mod tests {
         init_instruction_registry();
         let nexus = NexusProfile::sora_defaults()?;
         let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
             seed: Some(23),
-            tps: 1.0,
-            max_inflight: 4,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(nexus.clone()),
-            diagnostic_dir: None,
+            ..test_chaos_config()
         };
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos { genesis, .. } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            config.nexus.as_ref(),
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let builder = make_network_builder(&config, genesis)?;
-        let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            builder.build()
-        })) {
-            Ok(network) => network,
-            Err(payload) => {
-                let msg = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
-                    .unwrap_or_default();
-                if msg.contains("Operation not permitted") || msg.contains("permission denied") {
-                    return Ok(());
-                }
-                std::panic::resume_unwind(payload);
-            }
+        let Some(network) = build_test_prepared_network(&config)? else {
+            return Ok(());
         };
         let layers: Vec<_> = network.config_layers().collect();
+        let lookup = |path: &[&str]| {
+            layers.iter().rev().find_map(|layer| {
+                let mut current = layer.as_ref();
+                for (idx, key) in path.iter().enumerate() {
+                    let value = current.get(*key)?;
+                    if idx + 1 == path.len() {
+                        return Some(value);
+                    }
+                    current = value.as_table()?;
+                }
+                None
+            })
+        };
         assert!(
             layers.len() >= 2,
             "expected base layer plus nexus config layer"
+        );
+        assert_eq!(
+            lookup(&["network", "max_total_connections"]).and_then(TomlValue::as_integer),
+            Some(
+                i64::try_from(IZANAMI_MAX_TOTAL_CONNECTIONS)
+                    .expect("connection capacity fits TOML")
+            ),
+            "Izanami's admissible reply-source bound must override the Nexus profile"
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "queues", "bodies"]).and_then(TomlValue::as_integer),
+            Some(i64::try_from(IZANAMI_SUMERAGI_QUEUE_BODIES).expect("bodies fit TOML")),
+            "Izanami's admissible body queue must override the Nexus profile"
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "queues", "body_bytes"]).and_then(TomlValue::as_integer),
+            Some(
+                i64::try_from(izanami_sumeragi_body_bytes(config.peer_count)?)
+                    .expect("aggregate body bytes fit TOML")
+            ),
+            "Izanami must retain one byte partition per validator and ingress source"
         );
         let has_nexus_layer = layers.iter().any(|layer| {
             layer

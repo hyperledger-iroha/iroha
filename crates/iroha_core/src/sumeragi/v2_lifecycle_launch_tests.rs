@@ -3,6 +3,7 @@ use iroha_crypto::{Hash, HashOf};
 use tempfile::TempDir;
 
 use super::*;
+use crate::BlockMessage;
 use crate::sumeragi::v2_lifecycle_coordinator::reviewed_lifecycle_ledger_source_for_test;
 
 fn source_region<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
@@ -215,12 +216,9 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
     ingress
         .configure_roster([validator.clone()])
         .expect("one-validator launch binding geometry");
-    ingress.require_certified_serve_gate();
     ingress.require_leader_wire_lifecycle_gate();
     ingress.state.lock().leader_wire_max_chunk_count = 2;
 
-    let (first_serve_gate, first_ordinals) =
-        crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
     let (first_gate, first_restore) = empty_leader_wire_gate_for_binding_test(
         &directory,
         "explicit.wal",
@@ -232,13 +230,11 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
         Arc::clone(&ingress),
         Arc::clone(&first_gate),
         first_restore,
-        first_ordinals,
+        RuntimeLifecycleOrdinalSource::after_high_watermark(0),
         context_id,
         HEIGHT,
     )
-    .expect("bind the exact launch gate")
-    .bind_certified_serve(first_serve_gate.clone())
-    .expect("join the exact certified Serve gate");
+    .expect("bind the exact launch gate");
     assert!(
         ingress
             .state
@@ -247,27 +243,17 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
             .as_ref()
             .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &first_gate))
     );
-    assert!(
-        ingress
-            .state
-            .lock()
-            .certified_serve_gate
-            .as_ref()
-            .is_some_and(|bound| bound.ptr_eq(&first_serve_gate))
-    );
     binding
         .retire()
-        .expect("explicit retirement detaches both exact launch gates");
+        .expect("explicit retirement detaches the exact launch gate");
     binding
         .retire()
         .expect("explicit retirement remains idempotent");
     {
         let state = ingress.state.lock();
-        assert!(state.leader_wire_lifecycle_gate.is_none() && state.certified_serve_gate.is_none());
+        assert!(state.leader_wire_lifecycle_gate.is_none());
     }
 
-    let (drop_serve_gate, drop_ordinals) =
-        crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
     let (drop_gate, drop_restore) = empty_leader_wire_gate_for_binding_test(
         &directory, "drop.wal", context_id, HEIGHT, &validator,
     );
@@ -275,51 +261,17 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
         Arc::clone(&ingress),
         Arc::clone(&drop_gate),
         drop_restore,
-        drop_ordinals,
-        context_id,
-        HEIGHT,
-    )
-    .expect("rebind the exact launch gate")
-    .bind_certified_serve(drop_serve_gate)
-    .expect("rejoin the certified Serve gate");
-    drop(binding);
-    {
-        let state = ingress.state.lock();
-        assert!(
-            state.leader_wire_lifecycle_gate.is_none() && state.certified_serve_gate.is_none(),
-            "Drop must detach both exact launch gates"
-        );
-    }
-
-    let (mismatched_serve_gate, _) =
-        crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
-    let (mismatch_gate, mismatch_restore) = empty_leader_wire_gate_for_binding_test(
-        &directory,
-        "mismatch.wal",
-        context_id,
-        HEIGHT,
-        &validator,
-    );
-    let mismatch = match ProductionLeaderWireIngressBindingV1::bind(
-        Arc::clone(&ingress),
-        mismatch_gate,
-        mismatch_restore,
         RuntimeLifecycleOrdinalSource::after_high_watermark(0),
         context_id,
         HEIGHT,
     )
-    .expect("bind the leader gate before the mismatched Serve join")
-    .bind_certified_serve(mismatched_serve_gate)
-    {
-        Ok(_) => panic!("a foreign lifecycle ordinal source passed the joint join"),
-        Err(error) => error,
-    };
-    assert!(mismatch.contains("actor-global lifecycle ordinal source"));
+    .expect("rebind the exact launch gate");
+    drop(binding);
     {
         let state = ingress.state.lock();
         assert!(
-            state.leader_wire_lifecycle_gate.is_none() && state.certified_serve_gate.is_none(),
-            "a failed joint join must drop the retained leader binding"
+            state.leader_wire_lifecycle_gate.is_none(),
+            "Drop must detach the exact launch gate"
         );
     }
 
@@ -330,20 +282,15 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
         HEIGHT,
         &validator,
     );
-    let (incumbent_serve_gate, incumbent_ordinals) =
-        crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
     ingress
         .bind_leader_wire_lifecycle_gate(
             Arc::clone(&incumbent_gate),
             incumbent_restore,
-            incumbent_ordinals,
+            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
             context_id,
             HEIGHT,
         )
         .expect("bind the incumbent gate");
-    ingress
-        .bind_certified_serve_gate(incumbent_serve_gate.clone())
-        .expect("bind the incumbent certified Serve gate");
     ingress.open().expect("open the incumbent ingress");
     let (foreign_gate, foreign_restore) = empty_leader_wire_gate_for_binding_test(
         &directory,
@@ -369,8 +316,149 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
         "failed binding must close ingress"
     );
     ingress
-        .unbind_height_ingress_gates(&incumbent_serve_gate, &incumbent_gate)
-        .expect("clean up both incumbent bindings");
+        .retire_leader_wire_lifecycle_gate(&incumbent_gate)
+        .expect("clean up the incumbent binding");
+}
+
+#[test]
+fn production_leader_wire_binding_parks_queued_carriers_atomically_before_unbind() {
+    const HEIGHT: wire::Height = 9;
+    let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+        b"production-leader-wire-queued-retirement",
+    )));
+    let validator = PeerId::new(KeyPair::random().public_key().clone());
+    let directory = TempDir::new().expect("temporary queued-retirement directory");
+    let wal_path = directory.path().join("queued-retirement.wal");
+    let ingress = Arc::new(FairV2Ingress::new(16, 4 << 20, 1 << 20, 1 << 18, 1 << 18));
+    ingress
+        .configure_roster([validator.clone()])
+        .expect("one-validator queued-retirement geometry");
+    ingress.require_leader_wire_lifecycle_gate();
+    ingress.state.lock().leader_wire_max_chunk_count = 2;
+
+    let owner = [0xB7; 32];
+    let capacity = LeaderWireLifecycleStoreGate::derived_capacity(1, 2)
+        .expect("finite queued-retirement leader-wire capacity");
+    let recovery_authority =
+        crate::sumeragi::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            context_id,
+            HEIGHT,
+            owner,
+            0,
+            false,
+        );
+    let (gate, restore) = LeaderWireLifecycleStoreGate::open(
+        &wal_path,
+        context_id,
+        HEIGHT,
+        owner,
+        [validator.clone()].into_iter().collect(),
+        capacity,
+        2,
+        recovery_authority,
+        &[],
+        &[],
+    )
+    .expect("open queued-retirement leader-wire gate");
+    let mut binding = ProductionLeaderWireIngressBindingV1::bind(
+        Arc::clone(&ingress),
+        Arc::clone(&gate),
+        restore,
+        RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+        context_id,
+        HEIGHT,
+    )
+    .expect("bind queued-retirement leader-wire gate");
+    ingress.open().expect("open queued-retirement ingress");
+
+    let timeout_vote = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutVote(
+        wire::TimeoutVote {
+            round: wire::ConsensusRound {
+                context_id,
+                height: HEIGHT,
+                view: 0,
+            },
+            highest_prepare_qc: None,
+            signer: 0,
+            signature: vec![0x5A],
+        },
+    ));
+    ingress
+        .try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(timeout_vote),
+            validator.clone(),
+        ))
+        .expect("queue one durable productive carrier");
+    let unbound_chunk = wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+            manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"queued-retirement-unbound-manifest",
+            )),
+            index: 0,
+            bytes: vec![0xA5],
+            sender: 0,
+            signature: vec![0xC3],
+        }),
+    );
+    ingress
+        .try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(unbound_chunk),
+            validator.clone(),
+        ))
+        .expect("queue one proofless producer carrier");
+    assert_eq!(ingress.snapshot_at(Instant::now()).depth, 2);
+
+    binding
+        .retire()
+        .expect("retire every queued carrier before unbinding");
+    assert_eq!(ingress.snapshot_at(Instant::now()).depth, 0);
+    assert!(ingress.state.lock().leader_wire_lifecycle_gate.is_none());
+    let retained = gate
+        .restore()
+        .expect("read queued-retirement durable projection");
+    assert_eq!(retained.records().len(), 1);
+    assert_eq!(
+        retained.records()[0].status(),
+        crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStatus::Dormant
+    );
+    assert!(retained.records()[0].runtime_owner().is_none());
+
+    drop(binding);
+    drop(gate);
+    let recovery_authority =
+        crate::sumeragi::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            context_id,
+            HEIGHT,
+            owner,
+            0,
+            false,
+        );
+    let (reopened, restore) = LeaderWireLifecycleStoreGate::open(
+        &wal_path,
+        context_id,
+        HEIGHT,
+        owner,
+        [validator].into_iter().collect(),
+        capacity,
+        2,
+        recovery_authority,
+        &[],
+        &[],
+    )
+    .expect("reopen queued-retirement leader-wire gate");
+    assert_eq!(restore.records().len(), 1);
+    assert_eq!(
+        restore.records()[0].status(),
+        crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStatus::Dormant,
+        "atomic ingress retirement must reopen under the exact durable retry owner"
+    );
+    assert!(restore.records()[0].runtime_owner().is_none());
+    assert_eq!(
+        reopened
+            .earliest_ingress_scheduler_ordinal()
+            .expect("read replay-dormant queued-retirement selector"),
+        None
+    );
 }
 
 #[test]
@@ -399,6 +487,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test();
     let runner_source = include_str!("v2_runner.rs");
     let lifecycle_run_inner_source = include_str!("v2_runner/lifecycle_run_inner.rs");
+    let pending_kura_lifecycle_source = include_str!("v2_runner/lifecycle_pending_kura.rs");
     let runner_authority_source = concat!(
         include_str!("v2_runner/lifecycle_runner_authority.rs"),
         include_str!("v2_runner.rs")
@@ -518,16 +607,14 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "exactly_covers_recovered_ready_work(&self.coordinator)",
         ],
     );
-    assert!(launch.contains(
-            "inputs.network.reply_route_source_capacity().max(1),\n            inputs.auxiliary_io_capacity,"
-        ));
+    assert!(!launch.contains("reply_route_source_capacity()"));
     assert_source_tokens_in_order(
         launch,
         &[
             "service.matches_lifecycle_launch(",
             "binding.storage_paths_for_launch(inputs.kura.as_ref())",
             ".prepare_leader_wire_launch(launch_storage.wal_path())",
-            "ProductionV2Services::restore_lifecycle_ordinal_source(",
+            "RuntimeLifecycleOrdinalSource::after_high_watermark(0)",
             "leader_wire_launch.restored_producer_ordinal_high_watermark()",
             ".open_gate(",
             "self.body_store\n                        .as_ref()",
@@ -549,7 +636,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     assert_eq!(
         launch.matches("inputs.auxiliary_io_capacity,").count(),
         2,
-        "Serve restore and service startup must share the exact certified-request capacity"
+        "lifecycle restore and service startup must share the exact auxiliary capacity"
     );
     let identity = launch
         .rfind("self.body_store_identity = Some(body_store_identity)")
@@ -711,14 +798,10 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref()",
             "executor\n                .install_authenticated_genesis_body(authenticated_genesis.signed_block())",
             "ProductionV2Services::start_with_apply_service(",
-            "services\n            .certified_serve_ingress_gate()",
-            ".bind_certified_serve(certified_serve_gate)",
         ],
     );
-    let joint_ingress_bind =
-        source_token_position(launch, ".bind_certified_serve(certified_serve_gate)");
     let worker = source_token_position(launch, "ProductionV2Services::start_with_apply_service(");
-    assert!(joint_ingress_bind < identity && worker < identity && identity < complete);
+    assert!(worker < identity && identity < complete);
     assert_source_tokens_in_order(
         launch,
         &[
@@ -734,7 +817,6 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         ));
     assert!(launch.contains("leader_wire_ingress_binding,"));
     assert!(source.contains("impl Drop for ProductionLeaderWireIngressBindingV1"));
-    assert!(source.contains("certified_serve_gate: Option<CertifiedServeIngressGate>"));
     let launched_fields = source_region(
         &source,
         "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {",
@@ -758,17 +840,18 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     assert_source_tokens_in_order(
         leader_wire_drop,
         &[
-            "self.ingress.close()",
-            "self.ingress.unbind_leader_wire_lifecycle_gate(gate)?",
+            "let Some(gate) = self.gate.as_ref().cloned()",
+            "self.ingress.retire_leader_wire_lifecycle_gate(&gate)?",
+            "self.gate = None",
         ],
     );
-    assert_source_tokens_in_order(
-        leader_wire_drop,
-        &[
-            "self.ingress.close()",
-            ".unbind_height_ingress_gates(certified_serve_gate, leader_wire_gate)",
-        ],
+    assert!(!leader_wire_drop.contains("self.gate.take()"));
+    let leader_wire_drop_impl = source_region(
+        &source,
+        "impl Drop for ProductionLeaderWireIngressBindingV1",
+        "/// Opaque running stack produced by the sole consuming lifecycle launch.",
     );
+    assert!(leader_wire_drop_impl.contains("self.retire()"));
     assert!(source.contains("impl Drop for ProductionV2CompletionObserverActivationPermitSealV1"));
     let worker_start = source_region(
         worker_source,
@@ -1279,6 +1362,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             ".stage_finalized_height_all_row_retirement(reconciliation)",
             ".persist_exact_finalization_successor(staged)",
             "publication.consume_owners(registry)",
+            "kura_binding.bind_finalized_lifecycle_floor(published_floor)",
             "operation.complete()",
         ],
     );
@@ -1290,15 +1374,43 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     assert_source_tokens_in_order(
         cleanup,
         &[
+            "let output_guard = self.services.lifecycle_output_guard()",
             "self.services.allow_clean_shutdown()",
             ".finish_height(self.receipt, cleanup_timeout, supervisor)",
+            "retained_floor: Some(self.retained_floor)",
+            "output_guard,\n        }",
         ],
     );
+    let floor_binding = source_region(
+        &source,
+        "fn bind_successor_storage(",
+        "/// Move-only runner state joined to one exact launched reducer directive",
+    );
+    assert_source_tokens_in_order(
+        floor_binding,
+        &[
+            "begin_fail_stop_operation()",
+            "self.retained_floor.take()",
+            ".bind_finalized_predecessor_floor(floor)",
+            "operation.complete()",
+        ],
+    );
+    for production_successor in [lifecycle_run_inner_source, pending_kura_lifecycle_source] {
+        assert_source_tokens_in_order(
+            production_successor,
+            &[
+                "cleanup.bind_successor_storage(lifecycle_storage_authority)?",
+                "cleanup.wal_retirement_warning()",
+                "cleanup.cleanup().warnings()",
+            ],
+        );
+    }
 
     for state in [
         "FinalizedProductionLifecycleRolloverV1",
         "ProductionLifecyclePostOutputHandoffV1",
         "ProductionLifecycleCleanupReadyV1",
+        "ProductionLifecycleFinalizationOutcomeV1",
         "StagedFinalizationRetirementV1",
         "PublishedFinalizationRetirementV1",
         "ProductionLifecycleOutputRolloverPermitV1",
@@ -1391,8 +1503,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "BlockSignaturePolicy::GenesisAuthority(",
             "WalRecordV2::Decision(decision.clone())",
             "let mut launched = owner",
-            "ProductionLifecycleCompletionSelectionV1::RecoveredIoDispatch(result)",
-            "ProductionRecoveredCompletionDispatchV1::ApplyQueued",
+            "ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(result)",
+            "ProductionCompletionDispatchV1::ApplyQueued",
             "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
             "let mut activated = launched",
             "lifecycle_run_inner::finalize_lifecycle_height(",
@@ -1679,13 +1791,14 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
     let registry_source = include_str!("v2_lifecycle_work_registry.rs");
     let coordinator_source = include_str!("v2_lifecycle_coordinator.rs");
     let worker_source = include_str!("v2_worker.rs");
+    let worker_tests_source = include_str!("tests/v2_worker_recovered_lifecycle_output_cases.rs");
     let launch_source = include_str!("v2_lifecycle_launch.rs");
-    let effects_source = include_str!("v2_effects.rs");
+    let effects_tests_source = include_str!("tests/v2_effects_main_04.rs");
 
     let dispatch = source_region(
         scheduler_source,
         "fn dispatch_recovered_lifecycle_sign_with_runner_debt(",
-        "/// Refanout one durable recovered signed Broadcast at the live Completion cursor.",
+        "pub(super) fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
     );
     assert_source_tokens_in_order(
         dispatch,
@@ -1824,9 +1937,9 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
     let capacity = source_region(
         worker_source,
         "fn capture_recovered_lifecycle_sign_capacity<'a>(",
-        "fn begin_decision_serve_reconciliation(",
+        "/// Project worker capacity for one recovered candidate without changing the queue cut.",
     );
-    assert_source_token_count(capacity, "operation.complete()", 5);
+    assert_source_token_count(capacity, "operation.complete()", 4);
     assert_forbidden_source_tokens(capacity, &["drop(operation)"]);
 
     let rollback = source_region(
@@ -1850,16 +1963,18 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
         "fn unpublished_turn_rollback_restores_ready_and_clears_the_active_lease()",
     ] {
         assert!(
-            worker_source.contains(regression) || coordinator_source.contains(regression),
+            worker_source.contains(regression)
+                || worker_tests_source.contains(regression)
+                || coordinator_source.contains(regression),
             "recovered Sign prerequisite omitted behavior regression {regression}"
         );
     }
-    assert!(effects_source.contains("owner.dispatch_recovered_lifecycle_sign("));
-    assert!(effects_source.contains(
+    assert!(launch_source.contains(".dispatch_recovered_lifecycle_sign("));
+    assert!(scheduler_source.contains(
         "Err(ProductionRecoveredLifecycleSignDispatchErrorV1::ForeignRunnerObservation)"
     ));
     assert!(
-        effects_source.contains(
+        effects_tests_source.contains(
             "a non-Completion runner cursor cannot claim or mutate a recovered Sign owner"
         )
     );
@@ -2033,7 +2148,7 @@ fn assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart
     let settlement = source_region(
         source,
         "pub(in crate::sumeragi) fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
-        "/// Refanout one durable recovered signed Broadcast",
+        "/// Drive and retry one exact missing-sidecar recovered Apply owner.",
     );
     assert_source_tokens_in_order(
         settlement,
@@ -2069,7 +2184,7 @@ fn assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart
 fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_and_commit() {
     let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
     let dispatch = scheduler
-        .split_once("fn dispatch_recovered_completion_with_runner_debt(")
+        .split_once("fn dispatch_completion_with_runner_debt(")
         .expect("recovered Completion has one composite dispatch transaction")
         .1
         .split_once(
@@ -2089,12 +2204,18 @@ fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_an
     let executor = dispatch
         .find("prepare_recovered_decision_fetch_request_registration(owner)")
         .expect("executor vacancy is reserved");
+    let staged_wait = dispatch
+        .find("let mut next = self.coordinator.stage_durable_transaction();")
+        .expect("the exact external wait is staged before owner mutation");
     let registry = dispatch
         .find("prepare_recovered_decision_fetch_dispatch(")
         .expect("the claimed row projects its exact task");
     let commit = dispatch
-        .find("registration.commit(prepared)")
+        .find("registration.commit(prepared, wait_source)")
         .expect("request owner has one commit tail");
+    let waiting = dispatch
+        .find("self.coordinator = next;")
+        .expect("the claimed Fetch is parked before external publication");
     let publication = dispatch
         .find("output.commit();")
         .expect("exact output publishes after request installation");
@@ -2102,9 +2223,11 @@ fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_an
         census < claim
             && claim < output
             && output < executor
-            && executor < registry
+            && executor < staged_wait
+            && staged_wait < registry
             && registry < commit
-            && commit < publication
+            && commit < waiting
+            && waiting < publication
     );
 }
 
@@ -2121,17 +2244,54 @@ fn recovered_decision_fetch_queue_parks_generic_drain_and_uses_unified_completio
     assert!(generic.contains("V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)"));
     assert!(generic.contains("self.held_io_completion = Some(completion);"));
     let classifier = worker
-        .split_once("fn take_next_recovered_lifecycle_completion(")
+        .split_once("fn take_next_lifecycle_completion(")
         .expect("unified recovered lifecycle classifier exists")
         .1
-        .split_once("/// Drain only the oldest lifecycle-owned recovered Sign completion.")
+        .split_once("pub(in crate::sumeragi) fn drain_recovered_lifecycle_sign_completion(")
         .expect("unified classifier stays bounded")
         .0;
     assert!(classifier.contains("V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded)"));
-    assert!(classifier.contains("RecoveredLifecycleCompletionTakeV1::DecisionFetch("));
+    assert!(classifier.contains("LifecycleCompletionTakeV1::DecisionFetch("));
     assert!(worker.contains("tracked.state = V2IoWorkState::Active;"));
     assert!(worker.contains("tracked.state = V2IoWorkState::CompletionPending;"));
     assert!(!worker.contains("drain_recovered_decision_fetch_body_completion"));
+}
+
+#[test]
+fn ordinary_certified_body_pipeline_has_no_retained_compatibility_carrier() {
+    let effects = include_str!("v2_effects.rs");
+    let runtime = include_str!("v2_runtime.rs");
+    let run_inner = include_str!("v2_runner/lifecycle_run_inner.rs");
+    let ordinary_consumer = include_str!("v2_runner/ordinary_ingress_consumer.rs");
+    let turn_driver = include_str!("v2_lifecycle_turn_driver.rs");
+
+    for (source, forbidden) in [
+        (effects, "RetainedCertifiedBodyResponse"),
+        (effects, "retained_certified_body_response"),
+        (
+            effects,
+            concat!("accept_certified_body_", "response_with_ingress_ownership"),
+        ),
+        (runtime, "retained_response_predecessor_target_ordinal"),
+        (runtime, "retained_response_predecessor_retry_attempted"),
+        (run_inner, "service_retained_certified_response"),
+        (run_inner, "retry_retained_certified_body_response"),
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "retired ordinary response compatibility surface returned: {forbidden}",
+        );
+    }
+    assert!(
+        ordinary_consumer.contains("retired certified body response outside lifecycle selection")
+    );
+    assert!(
+        ordinary_consumer
+            .contains("a selected fetch response must instead complete through lifecycle")
+    );
+    assert!(!ordinary_consumer.contains(concat!("accept_certified_body_", "response(")));
+    assert!(turn_driver.contains("drive_certified_fetch_ingress_selector(selector, runner)"));
+    assert!(turn_driver.contains("complete_certified_fetch_body_persistence("));
 }
 
 #[test]
@@ -2154,6 +2314,72 @@ fn recovered_decision_fetch_phase_a_is_reachable_only_after_runner_validation() 
     assert!(cursor < handoff);
     assert!(driver.contains("persist_recovered_decision_fetch_response_after_runner("));
     assert!(!scheduler.contains("fn persist_recovered_decision_fetch_response("));
+}
+
+#[test]
+fn authenticated_current_serve_context_drift_fails_closed_instead_of_retrying() {
+    let driver = include_str!("v2_lifecycle_turn_driver.rs");
+    let narrowing = source_region(
+        driver,
+        "let expected_context = lifecycle_context_for_ingress(executor.context());",
+        "let selector = match executor.capture_lifecycle_ingress_selector(lifecycle_cut)",
+    );
+    assert_source_tokens_in_order(
+        narrowing,
+        &[
+            "Ok(FairIngressTurnContextCut::Ordinary(cut))",
+            "authenticated current Certified-Serve lost its active lifecycle context",
+            "close_admission_for_restart()",
+            "drop(cut);",
+            "drop(runner);",
+            "ProductionLifecycleIngressSelectionV1::RestartRequired",
+        ],
+    );
+    assert!(!driver.contains("OrdinaryRetained"));
+}
+
+#[test]
+fn recovered_decision_fetch_phase_a_wakes_waiting_owner_before_queue_publication() {
+    let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
+    let registry = include_str!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs");
+    let phase_a = source_region(
+        scheduler,
+        "pub(super) fn persist_recovered_decision_fetch_response_after_runner(",
+        "/// Plan, submit, and reblock one exact selected certified-Fetch response.",
+    );
+    assert_source_tokens_in_order(
+        phase_a,
+        &[
+            "self.coordinator.active_lease.is_some()",
+            "attest_scheduler_recovered_fetch_carrier(",
+            "capture_lifecycle_capacity_rank(selector)",
+            "authenticated_waiting_fetch_ready_row(",
+            "prepare_recovered_decision_fetch_response_claim(&task)",
+            "let mut next = self.coordinator.stage_durable_transaction();",
+            "let lease = match next.plan_turn(inputs)",
+            "matches_claimed_dispatched_recovered_decision_fetch(",
+            "self.coordinator = next;",
+            "claim.commit_with_queue(reservation, task);",
+        ],
+    );
+    let swap = source_token_position(phase_a, "self.coordinator = next;");
+    let tail = &phase_a[swap..];
+    assert!(!tail.contains("return Err"));
+    assert!(!tail.contains("settle_turn("));
+    assert!(tail.contains("assert_eq!(self.coordinator.active_lease.as_ref(), Some(&lease))"));
+    let waiting_carrier = source_region(
+        registry,
+        "pub(super) fn matches_waiting_dispatched_recovered_decision_fetch(",
+        "/// Join one exact claimed recovered Decision Fetch back to its closed carrier.",
+    );
+    assert_required_source_tokens(
+        waiting_carrier,
+        &[
+            "coordinator.records.iter().any",
+            "*candidate != ordinal",
+            "wait.source() == wait_source",
+        ],
+    );
 }
 
 #[test]
@@ -2284,9 +2510,17 @@ fn recovered_decision_fetch_store_settlement_is_restart_closed_and_tail_infallib
         .expect("restart guard is disarmed after index removal");
     assert!(index < disarm);
 
-    let ledger = include_str!("v2_lifecycle_ledger.rs");
+    let ledger = [
+        include_str!("v2_lifecycle_ledger.rs"),
+        include_str!("v2_lifecycle_ledger_operations.rs"),
+    ]
+    .concat();
     let open = include_str!("v2_lifecycle_open.rs");
-    let registry_source = include_str!("v2_lifecycle_work_registry_validate_recovery.rs");
+    let registry_source = [
+        include_str!("v2_lifecycle_work_registry_validate_recovery.rs"),
+        include_str!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs"),
+    ]
+    .concat();
     for required in [
         "authenticate_recovered_decision_fetch_store",
         "open_recovered_decision_store_startup",

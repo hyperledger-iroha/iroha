@@ -50,7 +50,6 @@ finally:
     sys.dont_write_bytecode = _PREVIOUS_DONT_WRITE_BYTECODE
 LocalnetManifestError = _LOCALNET_MANIFEST_MODULE.LocalnetManifestError
 canonical_localnet_manifest = _LOCALNET_MANIFEST_MODULE.canonical_localnet_manifest
-
 _RELEASE_RECEIPT_COMPONENT_FILES = (
     "write_sumeragi_v2_release_receipt_formal_artifacts.py",
     "write_sumeragi_v2_release_receipt_corridor_log.py",
@@ -71,7 +70,6 @@ _RELEASE_RECEIPT_COMPONENT_SHA256 = {
         "4f351ac1711c88465e76f804c714a8d43ee0fc8d0133739b717f6e31dcf79ae6"
     ),
 }
-
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _OBJECT_ID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _SSH_FINGERPRINT_RE = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
@@ -508,14 +506,14 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 860
-_G_UNIT_TEST_COUNT = 527
+_PRODUCTION_TEST_COUNT = 864
+_G_UNIT_TEST_COUNT = 522
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        321,
+        316,
         "lib",
     ),
     (
@@ -590,7 +588,7 @@ _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        43,
+        42,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-state-governance-unlock-audit", "state::tests", 1),
@@ -616,13 +614,18 @@ _PRODUCTION_MODULES = (
         "sumeragi::serviced_candidate_store::tests",
         1,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 47),
+    ("production-v2-adapter", "sumeragi::v2::tests", 48),
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
+    (
+        "production-v2-certified-serve-payload-store",
+        "sumeragi::v2_certified_serve_payload_store::tests",
+        11,
+    ),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 72),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 70),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 65),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
     (
@@ -630,8 +633,18 @@ _PRODUCTION_MODULES = (
         "sumeragi::v2_lifecycle_recovery::tests",
         5,
     ),
+    (
+        "production-v2-lifecycle-coordinator",
+        "sumeragi::v2_lifecycle_coordinator",
+        42,
+    ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 135),
+    (
+        "production-v2-lifecycle-height-driver",
+        "sumeragi::v2_runner::lifecycle_height_driver::tests",
+        1,
+    ),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 90),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -761,9 +774,9 @@ _NATIVE_AMX_GROUPED_PARITY_SUITES = (
     ("openapi", 7),
     ("python", 63),
     ("javascript", 61),
-    ("swift", 4),
-    ("kotlin", 6),
-    ("java", 5),
+    ("swift", 5),
+    ("kotlin", 7),
+    ("java", 6),
 )
 _SUMERAGI_SDK_DIAGNOSTICS_HARNESS = "ci/run_sumeragi_v2_sdk_diagnostics.sh"
 _SUMERAGI_SDK_DIAGNOSTICS_SUITES = (
@@ -783,8 +796,6 @@ _SDK_SOURCE_CLOSURE_SUITES = frozenset(
         _SUMERAGI_SDK_DIAGNOSTICS_SOURCE_CLOSURE_SUITE,
     }
 )
-
-
 
 
 class ReceiptError(RuntimeError):
@@ -4853,8 +4864,6 @@ def _validate_bootstrap_evidence(
         "release_approvals": release_approvals,
     }
     return authentication, bootstrap_evidence, framework_runtime_contracts
-
-
 
 
 def _execute_release_receipt_component(filename: str) -> None:

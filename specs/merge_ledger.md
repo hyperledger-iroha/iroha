@@ -1,7 +1,7 @@
 # Merge ledger: certified lane execution and global ordering
 
 This document defines the live merge-ledger validation, replay, and recovery
-contract used when `nexus.enabled = true`. A lane certificate proves that a
+contract used by every first-release node. A lane certificate proves that a
 lane payload is available and accepted by its lane committee; it does **not**
 authorize a shared-world-state mutation by itself. Only a canonical global
 block carrying a merge-committee certificate establishes the order in which
@@ -14,9 +14,10 @@ drain votes. One exact durable reservation identity follows each transaction
 from FIFO queue acquisition through the lane payload, merge certificate,
 canonical global application, and final queue retirement.
 
-Legacy single-lane operation continues to use ordinary global blocks. The
-direct lane-application helpers retained in tests model historical and failure
-cases; production builds recover certified lane inputs but never apply them in
+Ordinary globally planned carrier execution remains the current single-lane
+path; it is not a legacy consensus mode. Direct State/lane application helpers
+exist only in the unit or explicitly nonshipping test-feature surface.
+Production builds recover certified lane inputs but never apply them in
 QC-arrival order.
 
 ## Safety and liveness invariants
@@ -128,6 +129,14 @@ lane QC, availability certificate, NewView certificate, and Native AMX
 participant check for the incarnation uses the same pin. Later global roster,
 manifest, or key-cache rotation cannot rewrite historical authority and there
 is no live-authority fallback. A pin change is a retire/recreate boundary.
+
+For a static lane, an already-certified source is not re-authorized from the
+current mutable manifest or stake projection. Merge selection loads the
+proposal-height block through the WSV/Kura hash binding, requires its verified
+Sumeragi V2 finality and height context, and recovers the exact committee from
+the unique execution-context ownership matching the complete lane descriptor.
+Missing or ambiguous historical ownership defers the merge; current state is
+never treated as a reconstruction of past authority.
 
 Lane validators durably lock their full commit-vote bodies and highest signed
 drain frontier per incarnation before either artifact can leave the process. A
@@ -305,7 +314,8 @@ For a carrier block, commit proceeds in this order:
 1. Resolve and validate the exact full entry. Stage relay-settlement effects or
    deterministically re-execute the autonomous execution batch on a pristine
    block overlay against the exact committed base WSV.
-2. Commit the global block certificate in memory.
+2. Verify the exact V2 finality artifact against the result-bearing block and
+   retain that authentication as a private transient commit capability.
 3. `Kura::store_block_with_merge_entry` durably writes the full entry, exact
    sparse `(entry hash -> carrier height/hash)` record, and canonical block as
    one rollback-safe operation.
@@ -313,8 +323,11 @@ For a carrier block, commit proceeds in this order:
    Native AMX application manifest. For each participant height, publish its
    immutable manifest file, immutable receipt file, and descriptor-bound exact
    latest pointer before its WSV frontier becomes visible.
-5. Persist the staged WSV checkpoint, apply ordinary block effects after the
-   already-staged merge effects, and atomically commit the WSV overlay.
+5. Persist the staged WSV checkpoint, then use only the transient verified-V2
+   capability to apply ordinary block effects after the already-staged merge
+   effects. State derives the commit topology from the artifact's frozen
+   roster; no caller-supplied topology or commit-roster projection can amend
+   it. Atomically commit the WSV overlay.
 6. Persist the commit manifest and exact merge-application receipt, repair any
    interrupted Native manifest/receipt/latest-pointer or pair-prune
    publication, then publish the entry into the bounded in-memory merge cache

@@ -172,7 +172,7 @@ fn bls_batch_block_validates_with_pop() {
     let block = builder.build_with_signature(0, peer_kp.private_key());
     let mut state_block = state.block(block.header());
     let topology = Topology::new(vec![peer]);
-    ValidBlock::validate(
+    ValidBlock::validate_replay_fixture(
         block,
         &topology,
         &account,
@@ -197,7 +197,7 @@ fn bls_batch_block_validates_without_pop_fallback() {
     let mut state_block = state.block(block.header());
     let topology = Topology::new(vec![peer]);
     // Should still validate via per-signature path when PoP is absent.
-    ValidBlock::validate(
+    ValidBlock::validate_replay_fixture(
         block,
         &topology,
         &account,
@@ -219,7 +219,7 @@ fn bls_batch_block_rejects_missing_proof_policy_hash() {
     let block = builder.build_with_signature(0, peer_kp.private_key());
     let mut state_block = state.block(block.header());
     let topology = Topology::new(vec![peer]);
-    let err = ValidBlock::validate(
+    let err = ValidBlock::validate_replay_fixture(
         block,
         &topology,
         &account,

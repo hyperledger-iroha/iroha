@@ -33,8 +33,8 @@ const LANE_DRAIN_EMPTY_UNRESOLVED_EVIDENCE_ROOT_DOMAIN: &[u8] =
     b"iroha:nexus:lane-drain:unresolved-evidence:empty:v1\0";
 /// Current-only first-release merge-ledger entry layout.
 ///
-/// Version two adds globally ordered queue-plan admission controls. Version one
-/// has no compatibility path and is intentionally rejected by live consensus.
+/// Earlier development layouts have no compatibility path and are
+/// intentionally rejected by live consensus.
 pub const MERGE_LEDGER_ENTRY_VERSION_V2: u8 = 2;
 /// Maximum canonical framed size of one full merge-ledger entry.
 ///
@@ -60,12 +60,6 @@ pub const MAX_MERGE_EXECUTION_ENTRYPOINTS: usize = 4_096;
 /// four-MiB source ceiling therefore preserves enough of the 12-MiB execution
 /// envelope for every individually certified lane source to remain mergeable.
 pub const MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES: usize = 4 * 1024 * 1024;
-/// Maximum number of globally ordered queue-plan admission controls in one entry.
-pub const MAX_MERGE_QUEUE_PLAN_ADMISSIONS: usize = 4_096;
-/// Maximum canonical size of one opaque queue-plan admission certificate.
-pub const MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES: usize = 1024 * 1024;
-/// Maximum aggregate queue-plan admission bytes carried by one merge entry.
-pub const MAX_MERGE_QUEUE_PLAN_ADMISSIONS_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum canonical size reserved for the certified-proposal half of one source bundle.
 ///
 /// The certified envelope repeats the bounded entrypoint commitments in the proposal and
@@ -95,22 +89,6 @@ pub const fn merge_ledger_entry_size_within_limit(encoded_len: usize) -> bool {
 #[must_use]
 pub const fn merge_execution_batch_size_within_limit(encoded_len: usize) -> bool {
     encoded_len <= MAX_MERGE_EXECUTION_BATCH_BYTES
-}
-/// Return whether opaque queue-plan admission bytes fit their protocol envelope.
-#[must_use]
-pub fn merge_queue_plan_admissions_within_limits(admissions: &[Vec<u8>]) -> bool {
-    if admissions.len() > MAX_MERGE_QUEUE_PLAN_ADMISSIONS {
-        return false;
-    }
-    admissions
-        .iter()
-        .try_fold(0_usize, |total, admission| {
-            if admission.is_empty() || admission.len() > MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES {
-                return None;
-            }
-            total.checked_add(admission.len())
-        })
-        .is_some_and(|total| total <= MAX_MERGE_QUEUE_PLAN_ADMISSIONS_BYTES)
 }
 /// Proof of possession for one signer selected by a merge QC bitmap.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -666,13 +644,6 @@ pub struct MergeLedgerEntry {
     /// without inventing an executable lane payload. Runtime admission limits
     /// an entry to the single highest autoscale retirement candidate.
     pub lane_drain_certificates: Vec<LaneDrainCertificateV1>,
-    /// Canonical framed queue-plan admission certificates in strict source order.
-    ///
-    /// The concrete certificate type belongs to `iroha_core`, so the data
-    /// model retains exact canonical bytes without introducing a dependency
-    /// cycle. Runtime admission decodes, authenticates, and stages the
-    /// certificate bindings through an immutable WSV compare-and-set.
-    pub queue_plan_admissions: Vec<Vec<u8>>,
 }
 impl MergeLedgerEntry {
     /// Current supported entry layout.
@@ -1001,27 +972,6 @@ mod tests {
             MAX_MERGE_LEDGER_ENTRY_BYTES - MAX_MERGE_EXECUTION_BATCH_BYTES,
             4 * 1024 * 1024
         );
-        assert!(merge_queue_plan_admissions_within_limits(&[vec![
-            0xA5;
-            MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES
-        ]]));
-        assert!(!merge_queue_plan_admissions_within_limits(&[Vec::new()]));
-        assert!(!merge_queue_plan_admissions_within_limits(&[vec![
-            0xA5;
-            MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES
-                + 1
-        ]]));
-        assert!(!merge_queue_plan_admissions_within_limits(&vec![
-            vec![0xA5];
-            MAX_MERGE_QUEUE_PLAN_ADMISSIONS
-                + 1
-        ]));
-        assert!(!merge_queue_plan_admissions_within_limits(&vec![
-                vec![0xA5; MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES];
-                MAX_MERGE_QUEUE_PLAN_ADMISSIONS_BYTES
-                    / MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES
-                    + 1
-            ]));
     }
     #[test]
     fn reserved_entry_headroom_fits_maximum_execution_committee_and_lane_bindings() {
@@ -1076,7 +1026,6 @@ mod tests {
             ),
             execution_batch: None,
             lane_drain_certificates: Vec::new(),
-            queue_plan_admissions: Vec::new(),
         };
         let envelope_overhead = entry.canonical_bytes().len();
         assert!(
@@ -1178,10 +1127,6 @@ mod tests {
             ],
             execution_batch: None,
             lane_drain_certificates: vec![sample_lane_drain_certificate()],
-            queue_plan_admissions: vec![
-                norito::to_bytes(&sample_hash(b"queue-plan-admission"))
-                    .expect("opaque queue-plan admission fixture encodes"),
-            ],
             global_state_root: sample_hash(b"global"),
             merge_qc: qc.clone(),
         };

@@ -6,7 +6,8 @@ use super::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 pub(super) const MAX_PHYSICAL_SLOTS_PER_RECORD: usize = 64;
-pub(super) const MAX_LIFECYCLE_RECORDS_PER_HEIGHT: usize = u16::MAX as usize + 1;
+pub(super) const MAX_LIFECYCLE_RECORDS_PER_HEIGHT: usize =
+    iroha_config::parameters::defaults::sumeragi::V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT;
 pub(super) fn has_lifecycle_record_capacity(current: usize, additional: usize) -> bool {
     current
         .checked_add(additional)
@@ -1501,6 +1502,90 @@ pub(super) struct AttestedReadyValidateDemand {
     capacity_class: Option<CapacityClass>,
     requires_io_dispatch: bool,
 }
+/// Immutable process-local key for one lifecycle-owned Validate dispatch.
+///
+/// The key is derived only from a registry-attested Ready row. It deliberately
+/// binds both logical identity and the exact installed physical carrier so the
+/// worker cannot accept a generic effect work id or a caller-selected owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct LifecycleValidateDispatchKeyV1 {
+    context: LifecycleDigest,
+    height: u64,
+    owner: OwnerId,
+    ordinal: u128,
+    slot: PhysicalSlotId,
+    digest: LifecycleDigest,
+}
+impl LifecycleValidateDispatchKeyV1 {
+    /// Reconstruct the immutable key stored by an authenticated Validate
+    /// sidecar registration. Registry and coordinator joins must still attest
+    /// every returned field before the key can regain execution authority.
+    pub(super) fn from_recovered_validate_registration(
+        context: LifecycleDigest,
+        height: u64,
+        owner: OwnerId,
+        ordinal: u128,
+        slot: PhysicalSlotId,
+        digest: LifecycleDigest,
+    ) -> Option<Self> {
+        let key = Self {
+            context,
+            height,
+            owner,
+            ordinal,
+            slot,
+            digest,
+        };
+        (ordinal != 0
+            && owner.first_admission_ordinal() != 0
+            && owner.first_admission_ordinal() <= ordinal
+            && slot.capacity_class() == Some(LifecycleWorkClass::Validate.capacity_class()))
+        .then_some(key)
+    }
+
+    /// Return whether this key is bound to the same immutable consensus round
+    /// context and height. The view remains part of the sealed request.
+    pub(super) fn matches_consensus_round(
+        self,
+        round: &iroha_data_model::block::consensus_v2::ConsensusRound,
+    ) -> bool {
+        self.height == round.height
+            && self.context.as_bytes() == round.context_id.0.as_ref()
+            && self.ordinal != 0
+            && self.owner.first_admission_ordinal() != 0
+            && self.owner.first_admission_ordinal() <= self.ordinal
+            && self.slot.capacity_class() == Some(LifecycleWorkClass::Validate.capacity_class())
+    }
+
+    /// Return whether this key belongs to the launched immutable height cut.
+    pub(in crate::sumeragi) fn matches_height_context(
+        self,
+        context: &iroha_data_model::block::consensus_v2::HeightContext,
+    ) -> bool {
+        self.height == context.height
+            && self.context.as_bytes() == context.id().0.as_ref()
+            && self.ordinal != 0
+            && self.owner.first_admission_ordinal() != 0
+            && self.owner.first_admission_ordinal() <= self.ordinal
+            && self.slot.capacity_class() == Some(LifecycleWorkClass::Validate.capacity_class())
+    }
+    /// Return the exact logical ordinal retained by command and completion ownership.
+    pub(in crate::sumeragi) const fn lifecycle_ordinal(self) -> u128 {
+        self.ordinal
+    }
+    /// Return the immutable owner bound by the attested Ready row.
+    pub(crate) const fn owner(self) -> OwnerId {
+        self.owner
+    }
+    /// Return the exact physical slot retained across execution.
+    pub(crate) const fn slot(self) -> PhysicalSlotId {
+        self.slot
+    }
+    /// Return the exact installed carrier digest retained across execution.
+    pub(crate) const fn digest(self) -> LifecycleDigest {
+        self.digest
+    }
+}
 impl AttestedReadyValidateDemand {
     /// Bind one opaque registry carrier seal to its exact Validate row.
     pub(super) fn from_registry_seal(
@@ -1574,6 +1659,17 @@ impl AttestedReadyValidateDemand {
     pub(super) const fn requires_io_dispatch(self) -> bool {
         self.requires_io_dispatch
     }
+    /// Derive the sole dedicated worker key for this registry-attested row.
+    pub(super) const fn dispatch_key(self) -> LifecycleValidateDispatchKeyV1 {
+        LifecycleValidateDispatchKeyV1 {
+            context: self.key.context(),
+            height: self.key.round().height(),
+            owner: self.owner,
+            ordinal: self.ordinal,
+            slot: self.slot,
+            digest: self.digest,
+        }
+    }
 }
 /// One identity-bound row of live runtime rank debts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1581,6 +1677,7 @@ pub(crate) struct SchedulerReadyInputs {
     owner: OwnerId,
     key: LifecycleKey,
     validate_attestation: Option<AttestedReadyValidateDemand>,
+    producer_handoff_blocked: bool,
     output_capacity_class: Option<CapacityClass>,
     physical_capacity_available: bool,
     mode: u64,
@@ -1594,9 +1691,9 @@ impl SchedulerReadyInputs {
     /// Join one reserved ordinary certified-Fetch ingress transaction to its
     /// exact Waiting coordinator row.
     ///
-    /// This path is distinct from recovered-WAL Fetch scheduling: the selector
-    /// seal authenticates the prospective generation transition while the
-    /// caller retains the bounded I/O reservation.
+    /// The selector seal authenticates the prospective generation transition
+    /// for either an ordinary or recovered-WAL Fetch while the caller retains
+    /// the bounded I/O reservation.
     pub(super) fn from_authenticated_waiting_fetch(
         _factory: &AuthenticatedSchedulerInputsFactory,
         record: &LifecycleRecord,
@@ -1608,6 +1705,7 @@ impl SchedulerReadyInputs {
             owner: record.owner,
             key: record.key,
             validate_attestation: None,
+            producer_handoff_blocked: false,
             output_capacity_class: None,
             physical_capacity_available: true,
             mode,
@@ -1619,6 +1717,34 @@ impl SchedulerReadyInputs {
         };
         (fetch.matches_waiting_record(record) && row.identity_matches(record.ordinal, record))
             .then_some(row)
+    }
+
+    /// Join one ordinary certified Fetch or durable Store carrier to its
+    /// exact Ready or prospectively-woken coordinator row.
+    pub(super) fn from_authenticated_certified_body_pipeline(
+        _factory: &AuthenticatedSchedulerInputsFactory,
+        record: &LifecycleRecord,
+        attestation: super::work_registry::ReadyCertifiedBodyPipelineAttestationV1,
+        live_debts: [u64; 6],
+    ) -> Option<Self> {
+        let [mode, capacity, selector, lane, source, runner] = live_debts;
+        let row = Self {
+            owner: record.owner,
+            key: record.key,
+            validate_attestation: None,
+            producer_handoff_blocked: false,
+            output_capacity_class: None,
+            physical_capacity_available: true,
+            mode,
+            capacity,
+            selector,
+            lane,
+            source,
+            runner,
+        };
+        (attestation.matches_schedulable_record(record)
+            && row.identity_matches(record.ordinal, record))
+        .then_some(row)
     }
 
     /// Join one exact coordinator row, optional sealed Validate carrier, and
@@ -1656,6 +1782,7 @@ impl SchedulerReadyInputs {
             owner: record.owner,
             key: record.key,
             validate_attestation,
+            producer_handoff_blocked: false,
             output_capacity_class,
             physical_capacity_available: true,
             mode,
@@ -1706,6 +1833,29 @@ impl SchedulerReadyInputs {
         };
         (carrier_matches && row.identity_matches(record.ordinal, record)).then_some(row)
     }
+    /// Join one later Ready row to the registry seal proving that an older
+    /// selectable ProducerHandoffBarrier makes it ineligible in this complete
+    /// planning episode.
+    pub(super) fn from_authenticated_producer_handoff_blocked(
+        _factory: &AuthenticatedSchedulerInputsFactory,
+        record: &LifecycleRecord,
+        seal: super::work_registry::ProducerHandoffBlockedReadySealV1,
+    ) -> Option<Self> {
+        seal.matches_record(record).then_some(Self {
+            owner: record.owner,
+            key: record.key,
+            validate_attestation: None,
+            producer_handoff_blocked: true,
+            output_capacity_class: None,
+            physical_capacity_available: true,
+            mode: 0,
+            capacity: 0,
+            selector: 0,
+            lane: 0,
+            source: 0,
+            runner: 0,
+        })
+    }
     /// Join the same authenticated row to one service-frozen physical corridor result.
     ///
     /// The sealed factory is the only production mint. A physically unavailable
@@ -1753,6 +1903,7 @@ impl SchedulerReadyInputs {
             key: record.key,
             validate_attestation: rejected_validate
                 .and_then(|rejected| AttestedReadyValidateDemand::for_test(record, rejected)),
+            producer_handoff_blocked: false,
             output_capacity_class: rejected_validate
                 .filter(|rejected| *rejected)
                 .map(|_| CapacityClass::Consensus),
@@ -1785,13 +1936,17 @@ impl SchedulerReadyInputs {
         ordinal == record.ordinal
             && self.owner == record.owner
             && self.key == record.key
-            && match (record.work_class, self.validate_attestation) {
-                (LifecycleWorkClass::Validate, Some(attestation)) => {
-                    attestation.matches_record(record)
+            && if self.producer_handoff_blocked {
+                self.validate_attestation.is_none() && self.output_capacity_class.is_none()
+            } else {
+                match (record.work_class, self.validate_attestation) {
+                    (LifecycleWorkClass::Validate, Some(attestation)) => {
+                        attestation.matches_record(record)
+                    }
+                    (LifecycleWorkClass::Validate, None) => false,
+                    (_, None) => true,
+                    (_, Some(_)) => false,
                 }
-                (LifecycleWorkClass::Validate, None) => false,
-                (_, None) => true,
-                (_, Some(_)) => false,
             }
     }
     /// Return the sealed extra capacity class needed before this row is claimed.

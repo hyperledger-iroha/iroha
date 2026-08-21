@@ -40,15 +40,9 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
             )
 
     def require_token_count(
-        path: Path,
-        label: str,
-        body: str,
-        token: str,
-        expected: int,
+        path: Path, label: str, body: str, token: str, expected: int,
     ) -> None:
-        observed = _token_sequence_count(
-            rust_code_tokens(body), rust_code_tokens(token)
-        )
+        observed = _token_sequence_count(rust_code_tokens(body), rust_code_tokens(token))
         if observed != expected:
             errors.append(
                 f"{path}: {label} must contain {token!r} exactly {expected} "
@@ -114,25 +108,13 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 f"{path}: {label} must use the opaque checked-transition gate; "
                 f"found obsolete direct-kernel forms {observed}"
             )
-    runner_path, runner_source = load(
-        "crates/iroha_core/src/sumeragi/v2_runner.rs"
-    )
-    lifecycle_run_inner_path, lifecycle_run_inner_source = load(
-        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"
-    )
-    lifecycle_pending_kura_path, lifecycle_pending_kura_source = load(
-        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs"
-    )
-    runner_authority_path, runner_authority_source = load(
-        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_runner_authority.rs"
-    )
-    sumeragi_path, sumeragi_source = load(
-        "crates/iroha_core/src/sumeragi/mod.rs"
-    )
+    runner_path, runner_source = load("crates/iroha_core/src/sumeragi/v2_runner.rs")
+    lifecycle_run_inner_path, lifecycle_run_inner_source = load("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs")
+    lifecycle_pending_kura_path, lifecycle_pending_kura_source = load("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs")
+    runner_authority_path, runner_authority_source = load("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_runner_authority.rs")
+    sumeragi_path, sumeragi_source = load("crates/iroha_core/src/sumeragi/mod.rs")
 
-    recovery_path, recovery_source = load(
-        "crates/iroha_core/src/sumeragi/v2_recovery.rs"
-    )
+    recovery_path, recovery_source = load("crates/iroha_core/src/sumeragi/v2_recovery.rs")
     if recovery_source:
         production_recovery_source = recovery_source.split(
             "\n#[cfg(test)]\nmod tests {", 1
@@ -333,12 +315,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "self.authenticated_genesis",
             ),
         )
-        ledger_path, ledger_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs"
-        )
-        ledger_operations_path, ledger_operations_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_operations.rs"
-        )
+        ledger_path, ledger_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs")
+        ledger_operations_path, ledger_operations_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_operations.rs")
         if ledger_source:
             predecessor_store_join = region(
                 ledger_path,
@@ -375,7 +353,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "authorizes_successor_body_store(body_store, &owner.verified)",
                     "owner.payload_store.matches_lifecycle_storage_root(",
                     "owner.payload_store.validate_authenticated_cut(&owner.serve_payloads)",
-                    "authenticated_serve_payloads_match_ledger( &self.successor_ledger, &owner.serve_payloads, )",
+                    "authenticated_serve_payloads_match_ledger( successor_ledger, &owner.serve_payloads, )",
                     "adapter_startup.authorizes_verified_context(&owner.verified)",
                     "self.complete_tip.authorizes_successor_kura(owner.kura_binding.as_ref())",
                     "serve_payloads: recovery.into_serve_payloads()",
@@ -386,22 +364,28 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 ledger_source,
                 "CompleteTip restart publication authority",
                 "fn successor_descends_from_retirement(",
-                "\n    fn exactly_matches_successor_owner(",
+                "\n    fn matches_successor_owner_ledger(",
             )
             require_order(
                 ledger_path,
                 "CompleteTip restart publication authority",
                 restart_publication,
                 (
-                    "self.successor_ledger.context() == self.successor_store.context",
                     "self.successor_ledger.frame_identity() == self.successor_frame_identity",
-                    "self.successor_ledger.records.is_empty()",
-                    "self.successor_ledger.high_water == self.retained_high_water",
-                    "record.ordinal() > self.retained_high_water",
-                    "fn authorizes_retained_successor(&self) -> bool",
+                    "self.frame_descends_from_retained_floor(&self.successor_ledger)",
+                    "fn predecessor_remains_exact(&self) -> bool",
                     "self.predecessor_ledger.frame_identity() == self.predecessor_frame_identity",
                     ".is_authorized_complete_tip_predecessor_target(&self.complete_tip)",
                     "self.predecessor_store.load().ok().as_ref() == Some(&self.predecessor_ledger)",
+                    "fn authorizes_owner_open_successor(&self, successor: &LifecycleLedgerV1) -> bool",
+                    "successor == &self.successor_ledger",
+                    "self.successor_descends_from_retirement()",
+                    "self.successor_ledger.records.is_empty()",
+                    "self.successor_ledger.producer_debts.is_empty()",
+                    "self.successor_ledger.high_water == self.retained_high_water",
+                    "record.ordinal() > self.retained_high_water",
+                    "fn authorizes_retained_successor(&self) -> bool",
+                    "self.predecessor_remains_exact()",
                     "self.successor_descends_from_retirement()",
                     "self.complete_tip.authorizes_successor_lifecycle_target(",
                     "self.successor_store.load().ok().as_ref() == Some(&self.successor_ledger)",
@@ -428,7 +412,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 ledger_path,
                 ledger_source,
                 "CompleteTip exact H+1 owner bind",
-                "fn exactly_matches_successor_owner(",
+                "fn matches_successor_owner_ledger(",
                 "\n/// Private Kura-derived target for the empty CompleteTip successor ledger.",
             )
             require_order(
@@ -436,11 +420,33 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "CompleteTip exact H+1 owner bind",
                 successor_owner_bind,
                 (
-                    "fn exactly_matches_successor_owner(",
+                    "fn matches_successor_owner_ledger(",
+                    "self.predecessor_remains_exact()",
+                    "authorizes_successor_kura(owner.kura_binding.as_ref())",
+                    "authorizes_verified_successor(&owner.verified)",
+                    "authorizes_successor_lifecycle_target(successor_root, successor_ledger.context())",
+                    "authorizes_successor_body_store(body_store, &owner.verified)",
+                    "adapter_startup.authorizes_verified_context(&owner.verified)",
+                    "matches_lifecycle_storage_root(successor_root, owner.verified.context())",
                     "validate_authenticated_cut(&owner.serve_payloads)",
-                    "authenticated_serve_payloads_match_ledger(",
-                    "fn bind_successor_owner( self, mut owner: ProductionLifecycleOwnerV1, )",
-                    "if !self.exactly_matches_successor_owner(&mut owner)",
+                    "authenticated_serve_payloads_match_ledger( successor_ledger, &owner.serve_payloads, )",
+                    "owner_store.same_publication_target(&self.successor_store)",
+                    "self.successor_store.load().ok().as_ref() != Some(successor_ledger)",
+                    "owner_store.load().ok().as_ref() != Some(successor_ledger)",
+                    "LifecycleLedgerV1::from_coordinator(&owner.coordinator)",
+                    "exactly_covers_recovered_ready_work(&owner.coordinator)",
+                    "fn exactly_matches_successor_owner(",
+                    "self.successor_descends_from_retirement()",
+                    "self.matches_successor_owner_ledger(owner, &self.successor_ledger)",
+                    "fn bind_successor_owner( mut self, mut owner: ProductionLifecycleOwnerV1, )",
+                    "self.successor_store.load()",
+                    "self.authorizes_owner_open_successor(&successor_ledger)",
+                    "successor.authorizes_complete_tip_owner_join(",
+                    "self.matches_successor_owner_ledger(&mut owner, &successor_ledger)",
+                    "owner.timeout_supersession_successor.take()",
+                    "self.successor_frame_identity = successor_ledger.frame_identity()",
+                    "self.successor_ledger = successor_ledger",
+                    "self.exactly_matches_successor_owner(&mut owner)",
                     "BoundRecoveredCompleteTipSuccessorOwnerV1 { owner, retirement: self, }",
                     "struct BoundRecoveredCompleteTipSuccessorOwnerV1 { owner: ProductionLifecycleOwnerV1, retirement: RetiredRecoveredCompleteTipActivationAuthorityV1, }",
                     "impl BoundRecoveredCompleteTipSuccessorOwnerV1",
@@ -496,18 +502,10 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 4,
             )
 
-        adapter_path, adapter_source = load(
-            "crates/iroha_core/src/sumeragi/v2.rs"
-        )
-        body_store_path, body_store_source = load(
-            "crates/iroha_core/src/sumeragi/v2_body_store.rs"
-        )
-        safety_wal_path, safety_wal_source = load(
-            "crates/iroha_core/src/sumeragi/safety_wal.rs"
-        )
-        adjacent_store_path, adjacent_store_source = load(
-            "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"
-        )
+        adapter_path, adapter_source = load("crates/iroha_core/src/sumeragi/v2.rs")
+        body_store_path, body_store_source = load("crates/iroha_core/src/sumeragi/v2_body_store.rs")
+        safety_wal_path, safety_wal_source = load("crates/iroha_core/src/sumeragi/safety_wal.rs")
+        adjacent_store_path, adjacent_store_source = load("crates/iroha_core/src/sumeragi/serviced_candidate_store.rs")
         if adapter_source:
             authenticated_startup = region(
                 adapter_path,
@@ -564,8 +562,10 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "storage.genesis_account.clone()",
                     "apply_service.matches_lifecycle_launch( &state, &kura, &context, &validator_set_pops )",
                     "body_store.into_revalidated_lifecycle_startup( &apply_service, &context, validation_authority )",
-                    "let RecoveredLifecycleStorageAuthorityV1 { kura_identity, wal_path, chunk_root, lifecycle_root, .. } = storage",
+                    "let RecoveredLifecycleStorageAuthorityV1 { kura_identity, wal_path, chunk_root, lifecycle_root, successor_floor, .. } = storage",
                     "self.open_production_lifecycle_owner_v1_at_authenticated_roots(",
+                    "let owner = match successor_floor",
+                    "owner.authenticate_recovered_successor_floor(floor)",
                     "let kura_binding = RecoveredLifecycleOwnerKuraBindingV1 { kura_identity, wal_path, chunk_root, local_signer: Some(local_signer.public_key().clone()), }",
                     "owner.with_recovered_kura_binding_and_apply_service(kura_binding, apply_service)",
                 ),
@@ -709,17 +709,21 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "let mut launched = owner.launch(launch_inputs)",
                         "let mut setup_runner = ProductionLifecyclePreActivationRunnerBorrowV1::for_test()",
                         ".with_runner_setup(&mut setup_runner",
+                        "services.set_exact_output_admission_hook(|_post, _ticket| Ok(()))",
                         "launched.drive_completion_turn(runner, &mut lane_work)",
-                        "ProductionRecoveredCompletionDispatchV1::ApplyQueued",
+                        "ProductionCompletionDispatchV1::ApplyQueued",
                         "launched.drive_completion_turn(runner, &mut lane_work)",
                         "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
                         ".initialize_recovered_local_proposal(setup_runner)",
                         "let mut activated = launched .activate(Instant::now(), activation, local_proposal_state)",
-                        "let producer_episode = activated .take_certified_serve_producer_episode_for_test()",
-                        "assert!(producer_episode.is_some())",
+                        "drop(auxiliary_hold)", "ProductionLifecycleIngressSelectionV1::CertifiedServeQueued",
+                        "assert_eq!(leader_wire_ingress.len(), 0)", "ProductionLifecycleCompletionSelectionV1::CertifiedServeClaimedCompleted",
+                        "!selected.restart_required()",
+                        "let claimed_producer = activated .claim_producer_turn_for_local_proposal(&mut serve_runner)",
+                        "let attempted_producer = claimed_producer .into_attempted(producer_turn_attempt_permit_for_test(&mut serve_runner))",
+                        "activated .settle_producer_turn_after_local_proposal(&mut serve_runner, attempted_producer)",
                         "let mut runner = super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test()",
                         "super::super::v2_runner::lifecycle_run_inner::finalize_lifecycle_height(",
-                        "producer_episode",
                         "assert_eq!(receipt.context_id(), recovered_context.id())",
                         "assert_eq!(artifact.subject, subject)",
                         ".retain_merge_sidecars_for_global_view(",
@@ -728,6 +732,17 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "drop(retained_sidecars)",
                         "assert!(outcome.cleanup().warnings().is_empty())",
                         "assert!(outcome.wal_retirement_warning().is_none())",
+                    ),
+                )
+                admitted_serve_dispatch = region(
+                    adapter_path, finalization_behavior.source,
+                    "direct lifecycle Certified-Serve dispatch",
+                    "drop(auxiliary_hold);", "let claimed_producer = activated",
+                )
+                reject_tokens(
+                    adapter_path, "direct lifecycle Certified-Serve dispatch",
+                    admitted_serve_dispatch, (
+                        "consume_prepared_ordinary_ingress_turn(", "has_prepared_serve_for_test()",
                     ),
                 )
             for literal in (
@@ -837,8 +852,10 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 terminal_store_join,
                 (
                     "ledger_store.is_authorized_complete_tip_predecessor_target(&complete_tip)",
+                    "ledger_store.context != self.context()",
                     "ledger_store.load()? != self",
-                    "self.authenticate_complete_tip_terminal_apply(&complete_tip)?",
+                    "predecessor_evidence.exactly_matches(&ledger_store, &self, &complete_tip)",
+                    "predecessor_evidence",
                     "cut.is_exact()?",
                     "Ok(cut)",
                 ),
@@ -854,77 +871,33 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "fn complete_tip_retirement_binds_only_the_exact_unlaunched_successor_owner()",
                 ),
             )
-        launch_path, launch_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"
-        )
-        turn_driver_path, turn_driver_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs"
-        )
+        launch_path, launch_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs")
+        turn_driver_path, turn_driver_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs")
         kura_path, kura_source = load("crates/iroha_core/src/kura.rs")
-        owner_path, owner_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"
-        )
-        worker_path, worker_source = load(
-            "crates/iroha_core/src/sumeragi/v2_worker.rs"
-        )
-        scheduler_path, scheduler_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs"
-        )
-        registry_path, registry_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"
-        )
-        registry_validate_path, registry_validate_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs"
-        )
-        concrete_admission_path, concrete_admission_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_concrete_admission.rs"
-        )
-        lifecycle_projection_path, lifecycle_projection_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs"
-        )
-        wal_recovery_path, wal_recovery_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs"
-        )
-        selector_path, selector_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs"
-        )
-        ingress_position_path, ingress_position_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs"
-        )
-        body_pipeline_path, body_pipeline_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs"
-        )
-        replay_authority_path, replay_authority_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs"
-        )
-        runtime_path, runtime_source = load(
-            "crates/iroha_core/src/sumeragi/v2_runtime.rs"
-        )
-        effects_path, effects_source = load(
-            "crates/iroha_core/src/sumeragi/v2_effects.rs"
-        )
-        transport_path, transport_source = load(
-            "crates/iroha_core/src/sumeragi/v2_transport.rs"
-        )
-        lifecycle_open_path, lifecycle_open_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs"
-        )
+        owner_path, owner_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs")
+        worker_path, worker_source = load("crates/iroha_core/src/sumeragi/v2_worker.rs")
+        scheduler_path, scheduler_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs")
+        registry_path, registry_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs")
+        registry_validate_path, registry_validate_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs")
+        concrete_admission_path, concrete_admission_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_concrete_admission.rs")
+        lifecycle_projection_path, lifecycle_projection_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs")
+        wal_recovery_path, wal_recovery_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs")
+        selector_path, selector_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs")
+        ingress_position_path, ingress_position_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs")
+        body_pipeline_path, body_pipeline_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs")
+        replay_authority_path, replay_authority_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs")
+        runtime_path, runtime_source = load("crates/iroha_core/src/sumeragi/v2_runtime.rs")
+        effects_path, effects_source = load("crates/iroha_core/src/sumeragi/v2_effects.rs")
+        transport_path, transport_source = load("crates/iroha_core/src/sumeragi/v2_transport.rs")
+        lifecycle_open_path, lifecycle_open_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs")
         runner_dependency_path = runner_authority_path
         runner_dependency_source = f"{runner_authority_source}\n{runner_source}"
-        finalized_output_path, finalized_output_source = load(
-            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs"
-        )
-        lifecycle_startup_test_path, lifecycle_startup_test_source = load(
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs"
-        )
+        finalized_output_path, finalized_output_source = load("crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs")
+        lifecycle_startup_test_path, lifecycle_startup_test_source = load("crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs")
         state_path, state_source = load("crates/iroha_core/src/state.rs")
         snapshot_path, snapshot_source = load("crates/iroha_core/src/snapshot.rs")
-        schema_path, schema_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs"
-        )
-        apply_path, apply_source = load(
-            "crates/iroha_core/src/sumeragi/v2_apply.rs"
-        )
+        schema_path, schema_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs")
+        apply_path, apply_source = load("crates/iroha_core/src/sumeragi/v2_apply.rs")
         if (
             launch_source
             and turn_driver_source
@@ -997,24 +970,42 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     ),
                 )
             restart_reconciliation = _require_rust_item(
-                owner_path,
-                owner_source,
-                "reconcile_restart",
+                lifecycle_open_path,
+                lifecycle_open_source,
+                "reconcile_restart_inner",
                 errors,
             )
             if restart_reconciliation is not None:
                 require_order(
-                    owner_path,
+                    lifecycle_open_path,
                     "payload-free recovered Decision Fetch continuation",
                     restart_reconciliation.source,
                     (
                         "metadata.continuation.successor_parts()",
                         "recovered_decision_body_continuation_is_exact(",
+                        ".or_else(|| { signed_broadcast_continuation_is_exact(",
                         ".unwrap_or_else(||",
                         "durable_continuation_payload_is_exact(",
                         "!payload_and_replay_are_exact",
                     ),
                 )
+            require_tokens(
+                ledger_path,
+                "payload-free signed-Broadcast restart regression",
+                ledger_source,
+                (
+                    "fn all_sign_broadcast_continuations_roundtrip_with_canonical_wire_shapes()",
+                    "exact_timeout_sign_broadcast_fixture(",
+                    "durable_continuation_successor_is_exact(",
+                    "signed_broadcast_continuation_is_exact(",
+                    "Some(false)",
+                    "parent.replay_authority_is_exact(context())",
+                    "child.replay_authority_is_exact(context())",
+                    "coordinator.reconcile_restart(RecoverySnapshot::new(",
+                    "Some(super::super::CoordinatorFault::RecoveryRejected)",
+                    "coordinator.records.is_empty()",
+                ),
+            )
             require_tokens(
                 replay_authority_path,
                 "recovered Decision body continuation regression",
@@ -1148,7 +1139,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
             all_live_census = _require_rust_item(
                 registry_validate_path,
                 registry_validate_source,
-                "exactly_covers_all_live_work",
+                "exactly_covers_all_live_work_with_optional_active_producer",
                 errors,
             )
             if all_live_census is not None:
@@ -1177,8 +1168,13 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "sign.repair.validates_in_ledger(&exact_ledger)",
                         "sign.carrier.validates_in_ledger(verified, &exact_ledger)",
                         "broadcast.validates_in_ledger(&exact_ledger)",
-                        "fetch.dispatch_key.is_none()",
                         "fetch.carrier.validates_in_ledger(verified, &exact_ledger)",
+                        "match (fetch.dispatch_key, fetch.wait_source)",
+                        "(None, None)",
+                        "(Some(key), Some(source))",
+                        "key.matches(coordinator.active_context, address, digest)",
+                        "fetch.matches_waiting_record( address, digest, coordinator, source, )",
+                        "(None, Some(_)) | (Some(_), None) => false",
                         "store.fetch.validates(verified)",
                         "store.fetch.validates_recovered_store_in_ledger(&store.store, &exact_ledger)",
                         "apply.dispatch_key.is_none()",
@@ -1216,13 +1212,6 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     all_live_census.source,
                     "sign.dispatch_key.is_none()",
                     3,
-                )
-                require_token_count(
-                    registry_validate_path,
-                    "fresh Serve exhaustive all-live registry census",
-                    all_live_census.source,
-                    "fetch.dispatch_key.is_none()",
-                    1,
                 )
                 require_token_count(
                     registry_validate_path,
@@ -1370,7 +1359,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "service.matches_lifecycle_launch( &inputs.state, &inputs.kura, &context, &validator_set_pops, )",
                     "binding.storage_paths_for_launch(inputs.kura.as_ref())",
                     "prepare_leader_wire_launch(launch_storage.wal_path())",
-                    "ProductionV2Services::restore_lifecycle_ordinal_source(",
+                    "RuntimeLifecycleOrdinalSource::after_high_watermark(0)",
                     "leader_wire_launch.restored_producer_ordinal_high_watermark()",
                     "leader_wire_launch.open_gate(",
                     "leader_wire_restore.scheduler_ordinal_high_watermark()",
@@ -1384,8 +1373,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "ProductionV2Services::start_with_apply_service(",
                     "ProductionLifecycleApplyServiceLaunchPermitV1",
                     "apply_service,",
-                    "services.certified_serve_ingress_gate()",
-                    "leader_wire_ingress_binding.bind_certified_serve(certified_serve_gate)",
+                    "leader_wire_ingress_binding,",
                 ),
             )
             runner_dependency_permit = region(
@@ -1753,22 +1741,22 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 ),
             )
             require_tokens(
-                launch_path,
-                "single restored lifecycle ordinal source",
-                lifecycle_launch,
+                launch_path, "single restored lifecycle ordinal source", lifecycle_launch,
                 (
-                    "inputs.network.reply_route_source_capacity().max(1)",
                     "inputs.auxiliary_io_capacity",
-                    "lifecycle_ordinals.clone()",
-                    "lifecycle_ordinals,",
+                    "lifecycle_ordinals.clone()", "lifecycle_ordinals .advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())",
                 ),
+            )
+            require_token_count(
+                launch_path, "single restored lifecycle ordinal source",
+                lifecycle_launch, "lifecycle_ordinals.clone()", 2,
             )
             require_token_count(
                 launch_path,
                 "certified Serve restore/start capacity parity",
                 lifecycle_launch,
                 "inputs.auxiliary_io_capacity",
-                2,
+                1,
             )
             require_tokens(
                 launch_path,
@@ -1879,12 +1867,13 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 launch_source,
                 (
                     "struct ProductionLeaderWireIngressBindingV1",
-                    "certified_serve_gate: Option<CertifiedServeIngressGate>",
-                    "fn bind_certified_serve(",
-                    "self.ingress.bind_certified_serve_gate(gate.clone())",
-                    "self.ingress.close()",
-                    "self.ingress.unbind_leader_wire_lifecycle_gate(gate)?",
-                    "self.ingress.unbind_height_ingress_gates( certified_serve_gate, leader_wire_gate )",
+                    "gate: Option<Arc<LeaderWireLifecycleStoreGate>>",
+                    "fn bind(",
+                    "ingress.bind_leader_wire_lifecycle_gate(",
+                    "fn retire(&mut self)",
+                    "self.gate.as_ref().cloned()",
+                    "self.ingress.retire_leader_wire_lifecycle_gate(&gate)",
+                    "self.gate = None",
                     "impl Drop for ProductionLeaderWireIngressBindingV1",
                     "leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1",
                 ),
@@ -2312,7 +2301,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 effects_source,
                 "single-preview recovered next-Vote body executor join",
                 "pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion_with_body(",
-                "/// Publish executor-retained owners",
+                "/// Reserve exclusive mutation of the exact recovered response-family claim.",
             )
             require_order(
                 effects_path,
@@ -3239,7 +3228,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "restart-closed recovered Sign-to-Broadcast settlement",
                 recovered_sign_settlement,
                 (
-                    "recovered_lifecycle_sign_completion.take()",
+                    "PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)",
                     "prepare_recovered_lifecycle_sign_completion(authority)",
                     "prepare_recovered_lifecycle_sign_broadcast_successor(",
                     "prepare_recovered_lifecycle_sign_broadcast_transition(",
@@ -3290,7 +3279,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "restart-closed recovered Vote Broadcast-and-next-Sign settlement",
                 recovered_vote_two_child_settlement,
                 (
-                    "recovered_lifecycle_sign_completion.take()",
+                    "PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)",
                     "prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)",
                     "preview.is_vote_broadcast_and_sign_shape()",
                     "prepare_recovered_lifecycle_sign_broadcast_and_sign_successor(",
@@ -3335,7 +3324,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "restart-closed initial Proposal PrepareIntent settlement",
                 recovered_proposal_prepare_wal_settlement,
                 (
-                    "recovered_lifecycle_sign_completion.take()",
+                    "PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)",
                     "prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)",
                     "RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal",
                     "preview.project_proposal_exact_output_authority()",
@@ -3357,7 +3346,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 recovered_proposal_prepare_wal_settlement,
                 (
                     "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(authority)",
-                    "*recovered_lifecycle_sign_completion = Some(completion)",
+                    "*pending_lifecycle_completion = Some(PendingLifecycleCompletionV1::RecoveredSign(completion))",
                     "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::CapacityUnavailable",
                 ),
             )
@@ -3390,7 +3379,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "restart-closed recovered Proposal Broadcast-and-next-Sign settlement",
                 recovered_proposal_two_child_settlement,
                 (
-                    "recovered_lifecycle_sign_completion.take()",
+                    "PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)",
                     "prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)",
                     "preview.project_proposal_exact_output_authority()",
                     "capture_recovered_lifecycle_proposal_exact_output(output_authority)",
@@ -3417,7 +3406,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 (
                     "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(authority)",
                     "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::CapacityUnavailable",
-                    "*recovered_lifecycle_sign_completion = Some(completion)",
+                    "*pending_lifecycle_completion = Some(PendingLifecycleCompletionV1::RecoveredSign(completion))",
                     "drop(output)",
                     "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired",
                 ),
@@ -3560,13 +3549,11 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 lifecycle_open_source,
                 (
                     "PhaseBroadcast(",
-                    "PhaseBroadcastAndSign(",
                     "PhaseBroadcastAndNextSign(",
                     "ControlBroadcast(",
-                    "assemble_storage_only_with_recovered_phase_broadcast_and_durable_fetch_startup",
-                    "assemble_storage_only_with_recovered_phase_broadcast_and_sign_and_durable_fetch_startup",
-                    "assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_durable_fetch_startup",
-                    "assemble_storage_only_with_recovered_control_broadcast_and_durable_fetch_startup",
+                    "assemble_storage_only_with_recovered_phase_broadcast_and_body_pipeline_startup",
+                    "assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_body_pipeline_startup",
+                    "assemble_storage_only_with_recovered_control_broadcast_and_body_pipeline_startup",
                 ),
             )
             require_tokens(
@@ -3640,6 +3627,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "(*authenticated).persist_repair()",
                     "Ok(persisted)",
                     "#[inline(never)] fn prepare_recovered_phase_vote_cold_adapter_stage<'registry>(",
+                    "local_proposal_attempt: Option<RecoveredLifecycleLocalProposalAttemptV1>",
+                    "ProductionLifecycleAdapterStartupV1::recovered_with_local_proposal_attempt( adapter, effects, local_proposal_attempt, )",
                     "prepare_cold_adapter_startup(&verified, adapter_startup, body_store)",
                     "ColdPreparedStorageAuthenticatedRecoveredWalLifecycleStartup { adapter_startup, verified, persisted, }",
                     "#[inline(never)] fn install_recovered_phase_vote_sign_stage<'registry>(",
@@ -3666,7 +3655,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "Self::open_recovered_non_apply_stores(",
                         "Self::authenticate_recovered_phase_vote_stage(",
                         "Self::persist_recovered_phase_vote_stage(authenticated)",
-                        "Self::prepare_recovered_phase_vote_cold_adapter_stage(persisted, &body_store)",
+                        "Self::prepare_recovered_phase_vote_cold_adapter_stage( persisted, &body_store, local_proposal_attempt, )",
                         "Self::install_recovered_phase_vote_sign_stage(prepared)",
                         "Self::open_recovered_phase_vote_seals_stage(",
                         "Self::finish_recovered_phase_vote_owner_stage(",
@@ -3676,7 +3665,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 lifecycle_open_path,
                 lifecycle_open_source,
                 "cold recovered phase-Broadcast storage assembly",
-                "fn assemble_storage_only_with_recovered_phase_broadcast_and_durable_fetch_startup(",
+                "fn assemble_storage_only_with_recovered_phase_broadcast_and_body_pipeline_startup(",
                 "/// Assemble the exact standalone control Sign with every durable Fetch.",
             )
             require_tokens(
@@ -3692,7 +3681,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 lifecycle_open_path,
                 lifecycle_open_source,
                 "cold recovered control-Broadcast storage assembly",
-                "fn assemble_storage_only_with_recovered_control_broadcast_and_durable_fetch_startup(",
+                "fn assemble_storage_only_with_recovered_control_broadcast_and_body_pipeline_startup(",
                 "/// Assemble the standalone Decision Fetch with every durable body-backed Fetch.",
             )
             require_tokens(
@@ -3723,14 +3712,14 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 worker_source,
                 "recovered Sign capacity capture release",
                 "fn capture_recovered_lifecycle_sign_capacity<'a>(",
-                "fn begin_decision_serve_reconciliation(",
+                "fn recovered_completion_worker_capacity(",
             )
             require_token_count(
                 worker_path,
                 "recovered Sign capacity capture release",
                 recovered_sign_capacity,
                 "operation.complete()",
-                5,
+                4,
             )
             reject_tokens(
                 worker_path,
@@ -3772,17 +3761,17 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
             launched_owner_fields = region(
                 launch_path,
                 launch_source,
-                "launched recovered Sign Drop order",
+                "launched unified lifecycle completion Drop order",
                 "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {",
                 "/// Result of draining one dedicated recovered Apply worker completion.",
             )
             require_order(
                 launch_path,
-                "launched recovered Sign Drop order",
+                "launched unified lifecycle completion Drop order",
                 launched_owner_fields,
                 (
                     "services: ProductionV2Services",
-                    "recovered_lifecycle_sign_completion: Option<PreparedRecoveredLifecycleSignCompletionV1>",
+                    "pending_lifecycle_completion: Option<PendingLifecycleCompletionV1>",
                     "leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1",
                 ),
             )
@@ -3790,7 +3779,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 scheduler_path,
                 scheduler_source,
                 "lifecycle-owned recovered Decision Fetch dispatch",
-                "fn dispatch_recovered_completion_with_runner_debt(",
+                "fn dispatch_completion_with_runner_debt(",
                 "/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.",
             )
             require_order(
@@ -3806,7 +3795,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "census.select_fetch(ordinal)",
                     "prepare_recovered_decision_fetch_request_registration(owner)",
                     "prepare_recovered_decision_fetch_dispatch",
-                    "registration.commit(prepared)",
+                    "registration.commit(prepared, wait_source)",
                     "output.commit()",
                 ),
             )
@@ -3851,9 +3840,12 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "capture_lifecycle_capacity_rank(selector)",
                     "reservation.preflight_recovered_decision_fetch_target_absent()",
                     "executor.prepare_recovered_decision_fetch_body_persistence(prepared)",
-                    "matches_claimed_dispatched_recovered_decision_fetch(",
                     "reservation.preflight_recovered_decision_fetch_body_persistence(&task)",
                     "executor.prepare_recovered_decision_fetch_response_claim(&task)",
+                    "let mut next = self.coordinator.stage_durable_transaction()",
+                    "next.plan_turn(inputs)",
+                    "matches_claimed_dispatched_recovered_decision_fetch(",
+                    "self.coordinator = next",
                     "claim.commit_with_queue(reservation, task)",
                     "assert_eq!(self.coordinator.active_lease.as_ref(), Some(&lease))",
                 ),
@@ -4170,10 +4162,10 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 ),
             )
             require_tokens(
-                runner_path,
+                turn_driver_path,
                 "ordinary runner shared ingress drain predicate",
-                runner_source,
-                ("v2_ingress_head_can_drain(inbound, executor, terminal_subject)",),
+                turn_driver_source,
+                ("v2_ingress_head_can_drain(occurrence.inbound(), executor, terminal_subject,)",),
             )
             require_tokens(
                 effects_path,
@@ -4236,8 +4228,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 worker_path,
                 worker_source,
                 "unified recovered Decision Fetch completion classifier",
-                "pub(in crate::sumeragi) fn take_next_recovered_lifecycle_completion(",
-                "pub(in crate::sumeragi) fn drain_recovered_lifecycle_sign_completion(",
+                "pub(in crate::sumeragi) fn take_next_lifecycle_completion(",
+                "/// Drain only the oldest recovered-Sign guard;",
             )
             require_order(
                 worker_path,
@@ -4246,7 +4238,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 (
                     "V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded)",
                     "prepare_recovered_decision_fetch_body_completion(guarded, 0)",
-                    "RecoveredLifecycleCompletionTakeV1::DecisionFetch(",
+                    "LifecycleCompletionTakeV1::DecisionFetch(",
                 ),
             )
             require_tokens(
@@ -4258,7 +4250,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "recovered_decision_fetch_bodies: BTreeMap<RecoveredDecisionFetchDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>",
                     "V2IoCompletion::RecoveredDecisionFetchBodyPersisted",
                     "V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained",
-                    "fn take_next_recovered_lifecycle_completion(",
+                    "fn take_next_lifecycle_completion(",
                     "fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extraction()",
                 ),
             )
@@ -4314,7 +4306,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "restart-closed recovered Decision Fetch-to-Store settlement",
                 recovered_fetch_settlement,
                 (
-                    "*recovered_decision_fetch_body_completion = Some(completion)",
+                    "*pending_lifecycle_completion = Some(PendingLifecycleCompletionV1::RecoveredDecisionFetch(completion),)",
                     "owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure)",
                     "ProductionRecoveredDecisionFetchStoreSettlementV1::RestartRequired",
                     "ProductionRecoveredDecisionFetchStoreSettlementV1::Applied",
@@ -4404,7 +4396,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 lifecycle_open_source,
                 (
                     "RecoveredWalStartupProjectionV1::DecisionStore",
-                    "assemble_storage_only_with_recovered_decision_store_and_durable_fetch_startup",
+                    "assemble_storage_only_with_recovered_decision_store_and_body_pipeline_startup",
                     "recovered_decision_store_chain_records(",
                 ),
             )
@@ -4420,12 +4412,12 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
             )
             require_order(
                 launch_path,
-                "launched recovered Decision Fetch Drop order",
+                "launched unified lifecycle completion/capacity Drop order",
                 launched_owner_fields,
                 (
                     "services: ProductionV2Services",
-                    "recovered_decision_fetch_body_completion: Option<PreparedRecoveredDecisionFetchBodyCompletionV1>",
-                    "recovered_lifecycle_sign_completion: Option<PreparedRecoveredLifecycleSignCompletionV1>",
+                    "pending_lifecycle_completion: Option<PendingLifecycleCompletionV1>",
+                    "pending_ingress_capacity: Option<PendingIngressCapacityV1>",
                     "leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1",
                 ),
             )
@@ -4463,12 +4455,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "Self::open_safety_wal_store_root_directory(&store_root, &store_root_lock_file)?",
                 ),
             )
-        payload_store_path, payload_store_source = load(
-            "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs"
-        )
-        coordinator_path, coordinator_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"
-        )
+        payload_store_path, payload_store_source = load("crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs")
+        coordinator_path, coordinator_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs")
         if payload_store_source and lifecycle_open_source and coordinator_source:
             payload_census = region(
                 payload_store_path,
@@ -4673,8 +4661,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "activated lifecycle finalization quiescence",
                 activated_finalization,
                 (
-                    "recovered_decision_fetch_body_completion.is_some()",
-                    "recovered_lifecycle_sign_completion.is_some()",
+                    "pending_lifecycle_completion.is_some()",
+                    "pending_ingress_capacity.is_some()",
                     "completion_observer_activation.is_some()",
                     "ProductionLifecycleFinalizationErrorV1::NotReady",
                     "finalized_adapter: finalized",
@@ -4774,10 +4762,12 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 ledger_source,
                 (
                     "struct StagedFinalizationRetirementV1 { current: LifecycleLedgerV1, retired: LifecycleLedgerV1, }",
-                    "struct PublishedFinalizationRetirementV1 { coordinator: LifecycleCoordinator, current: LifecycleLedgerV1, retired: LifecycleLedgerV1, }",
+                    "struct PublishedFinalizationRetirementV1 { coordinator: LifecycleCoordinator, current: LifecycleLedgerV1, retired: LifecycleLedgerV1, retained_floor: PublishedFinalizedLifecycleRetainedFloorV1, }",
                     "fn consume_owners( self, mut registry: LifecycleWorkRegistryHolder, )",
                     "registry.registry_mut().exactly_covers_finalization_work(&self.coordinator)",
+                    "let retained_floor = self.retained_floor",
                     "drop(self.coordinator)",
+                    "retained_floor",
                 ),
             )
             reject_tokens(
@@ -4807,7 +4797,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "placeholder_cadence.checked_add(Duration::from_millis(1))",
                     "assert_eq!(cadence_inputs.block_cadence, authenticated_cadence)",
                     "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
-                    ".take_certified_serve_producer_episode_for_test()",
+                    ".claim_producer_turn_for_local_proposal(&mut serve_runner)",
+                    ".settle_producer_turn_after_local_proposal(&mut serve_runner, attempted_producer)",
                     "super::super::v2_runner::lifecycle_run_inner::finalize_lifecycle_height(",
                     "assert_eq!(receipt.context_id(), recovered_context.id())",
                     "assert_eq!(artifact.subject, subject)",

@@ -16,7 +16,7 @@ fn queue_plan_test_certificate_at_height(
     let proposal_height = authority_height.checked_add(1).expect("proposal height");
     let routing_plan =
         RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
-    qp_lane_case! { let route_incarnations = routing_plan.legs().into_iter().map(|leg| { let validator_set = crate::queue::queue_plan_authoritative_peers_in_view_at_height(&adapter.state.view(), leg.route, proposal_height); crate::queue::QueuePlanRouteIncarnationV2 { leg, lane_incarnation: adapter.state.lane_incarnation_at_height(leg.route.lane_id, proposal_height).expect("active route"), validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1, validator_set_hash: HashOf::new(&validator_set), validator_count: u16::try_from(validator_set.len()).expect("validator count"), durability_threshold: u16::try_from(validator_set.len().div_ceil(3)).expect("threshold"), validator_set } }).collect(); let context = crate::queue::QueuePlanAdmissionContextV2 { version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2, authority_height, proposal_height, predecessor_block_hash, routing_plan_digest: routing_plan.digest(), route_incarnations }; }
+    qp_lane_case! { let route_incarnations = routing_plan.legs().into_iter().map(|leg| { let validator_set = crate::queue::queue_plan_authoritative_peers_in_view_at_height(&adapter.state.view(), leg.route, proposal_height).expect("route authority"); crate::queue::QueuePlanRouteIncarnationV2 { leg, lane_incarnation: adapter.state.lane_incarnation_at_height(leg.route.lane_id, proposal_height).expect("active route"), validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1, validator_set_hash: HashOf::new(&validator_set), validator_count: u16::try_from(validator_set.len()).expect("validator count"), durability_threshold: u16::try_from(validator_set.len().div_ceil(3)).expect("threshold"), validator_set } }).collect(); let context = crate::queue::QueuePlanAdmissionContextV2 { version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2, authority_height, proposal_height, predecessor_block_hash, routing_plan_digest: routing_plan.digest(), route_incarnations }; }
     qp_lane_case! { let tx_key = KeyPair::try_from_seed(vec![tag.wrapping_add(0x31); 32], Algorithm::Ed25519).expect("transaction key"); let mut tx = TransactionBuilder::new(adapter.context.network_id, AccountId::new(tx_key.public_key().clone()), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)); tx.set_creation_time(Duration::from_millis(u64::from(tag) + 1)); let entrypoint = TransactionEntrypoint::External(tx.with_instructions([Log::new(Level::INFO, format!("queue-plan-{tag}"))]).sign(tx_key.private_key())); let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(&adapter.context.network_id, &entrypoint, &routing_plan, context, u64::from(tag) + 100).expect("binding"); }
     let binding_hash = binding.canonical_hash();
     let coordinator = &binding.admission_context.route_incarnations[0];
@@ -161,6 +161,39 @@ fn queue_plan_leader_stages_exact_handoff_idempotently() {
         reads + 1
     );
     assert_queue_plan_kura_source(&adapter, &bytes);
+}
+
+#[test]
+fn queue_plan_exact_marker_retains_certificate_until_transaction_application() {
+    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    prepare_queue_plan_test(&mut adapter, &keys);
+    let (binding, bytes) = queue_plan_test_certificate(&adapter, &keys, 0x46);
+    adapter
+        .kura
+        .persist_pending_queue_plan_admission_certificate(&bytes)
+        .expect("persist exact-marker handoff");
+    adapter
+        .state
+        .install_queue_plan_pending_binding_for_test(&binding)
+        .expect("install exact marker and pending transaction obligation");
+
+    assert!(
+        adapter
+            .reconcile_pending_queue_plan_admissions(0)
+            .expect("reconcile exact pending marker")
+            .is_empty()
+    );
+    assert_queue_plan_kura_source(&adapter, &bytes);
+    let indexed = adapter
+        .state
+        .pending_queue_plan_admission_gossip_certificates()
+        .expect("index exact pending handoff");
+    assert_eq!(
+        indexed
+            .get(&binding.canonical_hash())
+            .map(|certificate| certificate.as_slice()),
+        Some(bytes.as_slice())
+    );
 }
 
 #[test]

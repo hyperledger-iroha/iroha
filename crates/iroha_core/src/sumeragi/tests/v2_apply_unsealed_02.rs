@@ -40,11 +40,12 @@ type ApplyNativeReceiptBuilder =
         &[crate::queue::RoutingPlan],
     ) -> Vec<Option<iroha_data_model::block::consensus::NativeAmxReceipt>>;
 fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightContext) {
-    use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneConfig, LaneLifecyclePlan};
+    use iroha_data_model::nexus::{
+        DataSpaceCatalog, DataSpaceMetadata, LaneConfig, LaneLifecyclePlan,
+    };
     let participant_lane = LaneId::new(1);
     let participant_dataspace = DataSpaceId::new(7);
     let mut nexus = state.nexus_snapshot();
-    assert!(nexus.enabled, "Native fixture requires enabled Nexus");
     nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),
         DataSpaceMetadata {
@@ -172,7 +173,7 @@ fn native_amx_receipts_for_apply_fixture(
         .iter()
         .map(|key| {
             let mut source_id = [0_u8; Hash::LENGTH];
-            source_id.copy_from_slice(key.signed_transaction_hash.as_ref());
+            source_id.copy_from_slice(key.entrypoint_hash.as_ref());
             source_id
         })
         .collect::<Vec<_>>();

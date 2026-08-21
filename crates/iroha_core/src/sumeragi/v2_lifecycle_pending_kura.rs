@@ -3,7 +3,13 @@
 use thiserror::Error;
 
 use super::*;
-use crate::sumeragi::Queue;
+use crate::sumeragi::{
+    Queue,
+    v2_lifecycle_coordinator::{
+        AttemptedProducerTurnV1, ClaimedProducerTurnV1, ProducerTurnSchedulerClaimErrorV1,
+        ProducerTurnTerminalSettlementErrorV1,
+    },
+};
 
 /// Result of one bounded closed-ingress interrupted-tip recovery turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -343,7 +349,6 @@ impl PreparedPendingKuraLaneRecoveryV1 {
             && launched.recovered_local_proposal_attempt.is_none()
             && launched.executor.lifecycle_live_clocks_are_unarmed()
             && launched.executor.ready_to_finish()
-            && !launched.executor.has_retained_certified_body_response()
             && launched
                 .services
                 .matches_installed_pending_kura_tip(installed.expected())
@@ -436,6 +441,48 @@ impl PendingKuraActivatedProductionLifecycleV1 {
         )
     }
 
+    /// Settle at most one lifecycle-owned Certified-Serve completion without
+    /// exposing or consuming any non-Serve completion head.
+    pub(in crate::sumeragi) fn settle_certified_serve_completion_for_no_clock_recovery(
+        &mut self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+    ) -> Result<bool, String> {
+        let completion = self
+            .launched
+            .services
+            .drain_lifecycle_certified_serve_completion()?
+            .into_completion();
+        let Some(completion) = completion else {
+            return Ok(false);
+        };
+        let _settlement = completion
+            .settle_deliver_and_acknowledge(&mut self.launched.owner, &self.launched.services)
+            .map_err(|_| "pending Kura Certified-Serve settlement requires restart".to_owned())?;
+        Ok(true)
+    }
+
+    /// Claim the oldest lifecycle-owned ProducerTurn at this no-clock
+    /// recovery loop's single bounded service point.
+    pub(in crate::sumeragi) fn claim_producer_turn_for_no_clock_recovery(
+        &mut self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+    ) -> Result<Option<ClaimedProducerTurnV1>, ProducerTurnSchedulerClaimErrorV1> {
+        let mode = self.launched.executor.lifecycle_mode_rank_snapshot();
+        self.launched
+            .owner
+            .claim_producer_turn_at_bounded_producer_point(&mode)
+    }
+
+    /// Durably terminalize one no-clock ProducerTurn after the bounded
+    /// recovery service pass completed successfully.
+    pub(in crate::sumeragi) fn settle_producer_turn_after_no_clock_recovery(
+        &mut self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+        attempted: AttemptedProducerTurnV1,
+    ) -> Result<(), ProducerTurnTerminalSettlementErrorV1> {
+        self.launched.owner.settle_producer_turn_advanced(attempted)
+    }
+
     /// Consume a live interrupted-tip height during orderly operator shutdown.
     #[allow(dead_code, clippy::result_large_err)]
     pub(in crate::sumeragi) fn into_clean_shutdown(
@@ -477,17 +524,8 @@ impl PendingKuraActivatedProductionLifecycleV1 {
                     evidence.stage()
                         != crate::sumeragi::v2_effects::PendingKuraApplyRecoveryStage::Completed
                 })
-            || self
-                .launched
-                .executor
-                .has_retained_certified_body_response()
-            || self
-                .launched
-                .recovered_decision_fetch_body_completion
-                .is_some()
-            || self.launched.recovered_decision_apply_deferred.is_some()
-            || self.launched.recovered_lifecycle_sign_completion.is_some()
-            || self.launched.recovered_ingress_capacity_wait.is_some()
+            || self.launched.pending_lifecycle_completion.is_some()
+            || self.launched.pending_ingress_capacity.is_some()
             || self.launched.completion_observer_activation.is_some()
             || !self
                 .launched
@@ -531,26 +569,20 @@ impl PendingKuraActivatedProductionLifecycleV1 {
             services,
             pending_kura_apply_replay,
             recovered_local_proposal_attempt,
-            recovered_decision_apply_deferred,
-            recovered_decision_fetch_body_completion,
-            recovered_lifecycle_sign_completion,
-            recovered_ingress_capacity_wait,
+            pending_lifecycle_completion,
+            pending_ingress_capacity,
             completion_observer_activation,
             leader_wire_ingress_binding,
         } = launched;
         debug_assert!(pending_kura_apply_replay.is_none());
         debug_assert!(recovered_local_proposal_attempt.is_none());
-        debug_assert!(recovered_decision_apply_deferred.is_none());
-        debug_assert!(recovered_decision_fetch_body_completion.is_none());
-        debug_assert!(recovered_lifecycle_sign_completion.is_none());
-        debug_assert!(recovered_ingress_capacity_wait.is_none());
+        debug_assert!(pending_lifecycle_completion.is_none());
+        debug_assert!(pending_ingress_capacity.is_none());
         debug_assert!(completion_observer_activation.is_none());
         drop(pending_kura_apply_replay);
         drop(recovered_local_proposal_attempt);
-        drop(recovered_decision_apply_deferred);
-        drop(recovered_decision_fetch_body_completion);
-        drop(recovered_lifecycle_sign_completion);
-        drop(recovered_ingress_capacity_wait);
+        drop(pending_lifecycle_completion);
+        drop(pending_ingress_capacity);
         drop(completion_observer_activation);
         drop(leader_wire_ingress_binding);
 

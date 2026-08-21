@@ -65,11 +65,6 @@ fn tool_registry_skips_ws_and_sse_routes() {
             .iter()
             .any(|tool| tool.name == "iroha.sumeragi.pacemaker")
     );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.phases")
-    );
     for retired in [
         "iroha.sumeragi.commit_certificates",
         "iroha.sumeragi.validator_sets.list",
@@ -83,6 +78,7 @@ fn tool_registry_skips_ws_and_sse_routes() {
         "iroha.sumeragi.bls_keys",
         "iroha.sumeragi.key_lifecycle",
         "iroha.sumeragi.telemetry",
+        "iroha.sumeragi.phases",
         "iroha.sumeragi.commit_qc.get",
         "iroha.sumeragi.evidence.count",
         "iroha.sumeragi.evidence.list",
@@ -2403,7 +2399,6 @@ fn extract_transaction_hash_from_submit_result_accepts_encoded_submission_receip
     let tx_hash =
         iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xAB; 32]));
     let payload = iroha_data_model::transaction::TransactionSubmissionReceiptPayload {
-        tx_hash: tx_hash.clone(),
         entrypoint_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(
             tx_hash.clone(),
         )),
@@ -2443,7 +2438,7 @@ fn extract_transaction_hash_from_submit_result_accepts_json_receipt_payload() {
         "status": 202,
         "body": {
             "payload": {
-                "tx_hash": (canonical_hash.clone())
+                "entrypoint_hash": (canonical_hash.clone())
             },
             "signature": "ignored"
         }
@@ -2459,7 +2454,7 @@ fn extract_transaction_hash_from_submit_result_normalizes_json_receipt_literal_h
         "status": 202,
         "body": {
             "payload": {
-                "tx_hash": hash_literal
+                "entrypoint_hash": hash_literal
             },
             "signature": "ignored"
         }

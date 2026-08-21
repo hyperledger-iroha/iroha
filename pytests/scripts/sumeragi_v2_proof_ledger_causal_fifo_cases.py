@@ -962,18 +962,6 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "same-semantic retry must preserve its first immutable runtime lifecycle root",
         ),
         (
-            "ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it",
-            "fn ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it()",
-            "fn removed_ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it()",
-            "named ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it; found 0",
-        ),
-        (
-            "ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it",
-            "assert_eq!(consumed.lifecycle_ordinal, fair_ordinal);",
-            "assert_eq!(consumed.lifecycle_ordinal, serve_ordinal);",
-            "ordinary Fair ownership must precede Serve exactly until runtime consumes it",
-        ),
-        (
             "older_frozen_aggregate_carrier_rebases_queued_runtime_minimum",
             "fn older_frozen_aggregate_carrier_rebases_queued_runtime_minimum()",
             "fn removed_older_frozen_aggregate_carrier_rebases_queued_runtime_minimum()",

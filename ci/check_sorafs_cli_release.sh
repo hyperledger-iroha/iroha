@@ -64,7 +64,7 @@ cargo fmt --all -- --check
 
 echo "[sorafs-release] shell syntax checks"
 bash -n scripts/release_sorafs_cli.sh scripts/package_sorafs_validate_release.sh \
-  scripts/build_line.sh scripts/build_release_bundle.sh scripts/build_release_image.sh \
+  scripts/build_canonical_binaries.sh scripts/build_release_bundle.sh scripts/build_release_image.sh \
   configs/sorafs/external_software_signer/launchd/sorafs-external-software-signer-launchd-v1 \
   python/iroha_python/scripts/release_smoke.sh \
   scripts/tests/release_manifest_signing_test.sh \

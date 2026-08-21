@@ -193,12 +193,23 @@ def test_rollout_budget_fails_runner_queue_stalls_with_action_only_write_scope()
 
 
 def test_release_readiness_fails_before_any_native_builder() -> None:
+    source = WORKFLOW.read_text(encoding="utf-8")
     jobs = _workflow()
     readiness_job = jobs["release-readiness"]
     assert readiness_job["runs-on"] == "ubuntu-latest"
     assert readiness_job["timeout-minutes"] == 2
     assert readiness_job["permissions"] == {"contents": "read"}
-    assert "check_taira_release_prerequisites.py" in _job_text(readiness_job)
+    readiness_text = _job_text(readiness_job)
+    assert "check_taira_release_prerequisites.py" in readiness_text
+    assert (
+        "Verify all authenticated release-authority source paths" in readiness_text
+    )
+    assert "source-disabled" not in readiness_text
+    assert (
+        "# Audit the complete fixed native client and all eight authenticated authority"
+        in source
+    )
+    assert "source barriers on a hosted runner" not in source
     assert jobs["public-privacy-input"]["needs"] == "release-readiness"
     assert jobs["macos-native-build"]["needs"] == "release-readiness"
 
@@ -274,9 +285,32 @@ def _assert_fixed_controller_contract(source: str) -> None:
         "Remove the exact sealed",
     ):
         assert forbidden not in source
+    authenticated_tool_sudo = (
+        'sudo -n /bin/test ! -d "$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH"',
+        'sudo -n /bin/test ! -L "$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH"',
+        'sudo -n /bin/test ! -e "$controller_candidate"',
+        'sudo -n /bin/test ! -L "$controller_candidate"',
+        "sudo -n /usr/bin/install -o root -g wheel -m 0555 "
+        '"$built_controller" "$controller_candidate"',
+        'sudo -n /usr/bin/shasum -a 256 "$controller_candidate"',
+        'sudo -n /usr/bin/cmp "$built_controller" "$controller_candidate"',
+        'sudo -n /bin/mv -f -- "$controller_candidate" '
+        '"$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH"',
+        "sudo -n /usr/bin/shasum -a 256 "
+        '"$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH"',
+        'sudo -n /usr/bin/cmp "$built_controller" '
+        '"$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH"',
+        "sudo -n /usr/bin/env -i LANG=C LC_ALL=C PATH=/usr/bin:/bin "
+        'TMPDIR=/private/var/tmp "$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH" '
+        "qualify-host-v1",
+    )
+    for command in authenticated_tool_sudo:
+        assert source.count(command) == 2, command
     for line in source.splitlines():
         if "sudo -n " in line:
-            assert 'sudo -n "$TAIRA_CONTROLLER_COMMAND"' in line
+            assert 'sudo -n "$TAIRA_CONTROLLER_COMMAND"' in line or any(
+                command in line for command in authenticated_tool_sudo
+            )
         if any(
             token in line
             for token in (
@@ -307,7 +341,7 @@ def _assert_fixed_controller_contract(source: str) -> None:
     assert "--expected-artifact-handoff-sha256" in source
 
 
-def test_workflow_uses_only_preprovisioned_digest_and_identity_attested_controller() -> None:
+def test_workflow_uses_preprovisioned_release_controller_and_exact_native_tool_controller() -> None:
     _assert_fixed_controller_contract(WORKFLOW.read_text(encoding="utf-8"))
 
 
@@ -477,9 +511,13 @@ def test_deploy_workflow_rejects_weak_or_incomplete_apply_reports() -> None:
         'range(1,5)',
         '"protocol_version":4',
         '"peer_count":4',
-        'int(genesis[-2:],16)&1==0',
+        'manifest.get("genesis_expected_hash")',
+        'canonical_network_id(genesis)',
     ):
         assert token in deploy
+    assert "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94" not in deploy
+    assert 'int(after["end_block_hash"][-2:],16)&1' not in deploy
+    assert "int(genesis[-2:],16)&1" not in deploy
 
 
 def test_deploy_apply_report_gate_accepts_only_exact_bound_identity(
@@ -488,7 +526,7 @@ def test_deploy_apply_report_gate_accepts_only_exact_bound_identity(
     deploy = "\n".join(
         str(step.get("run", "")) for step in _steps(_workflow()["macos-deploy"])
     )
-    marker = 'before,after=(json.load(open(path,encoding="ascii"))'
+    marker = 'before,after,manifest=(json.load(open(path,encoding="ascii"))'
     marker_index = deploy.index(marker)
     start = deploy.rfind("import json,sys\n", 0, marker_index)
     script = deploy[start : deploy.index("\nPY\n", marker_index)]
@@ -501,6 +539,13 @@ def test_deploy_apply_report_gate_accepts_only_exact_bound_identity(
         "public_key": {"algorithm": "secp256k1", "payload_hex": "02" + "4" * 64},
         "runtime_binding_sha256": "5" * 64,
     }
+    genesis_hash = "9" * 62 + "11"
+    crc = 0xFFFF
+    for byte in b"hash:" + genesis_hash.upper().encode("ascii"):
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    network_id = f"hash:{genesis_hash.upper()}#{crc:04X}"
     after = {
         "admission_receipt_id": "receipt",
         "applied": True,
@@ -510,8 +555,8 @@ def test_deploy_apply_report_gate_accepts_only_exact_bound_identity(
         "deployment_completed_at_unix_ms": 1,
         "end_block_hash": "8" * 62 + "11",
         "end_height": 2,
-        "genesis_block_hash": "9" * 62 + "11",
-        "network_id": "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94",
+        "genesis_block_hash": genesis_hash,
+        "network_id": network_id,
         "network_name": "taira",
         "peer_count": 4,
         "protocol_version": 4,
@@ -534,12 +579,32 @@ def test_deploy_apply_report_gate_accepts_only_exact_bound_identity(
     }
     before_path = tmp_path / "before.json"
     after_path = tmp_path / "after.json"
+    manifest_path = tmp_path / "reset-manifest.json"
     before_path.write_text(json.dumps(before), encoding="ascii")
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema": "taira-exact2f-reset-bundle",
+                "chain_id": after["chain_id"],
+                "genesis_expected_hash": genesis_hash,
+                "signed_genesis_sha256": after["signed_genesis_sha256"],
+            }
+        ),
+        encoding="ascii",
+    )
 
     def run(value: dict[str, object]) -> subprocess.CompletedProcess[str]:
         after_path.write_text(json.dumps(value), encoding="ascii")
         return subprocess.run(
-            [sys.executable, "-I", "-S", "-", str(before_path), str(after_path)],
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-",
+                str(before_path),
+                str(after_path),
+                str(manifest_path),
+            ],
             input=script,
             check=False,
             capture_output=True,
@@ -549,9 +614,9 @@ def test_deploy_apply_report_gate_accepts_only_exact_bound_identity(
     assert run(after).returncode == 0
     for field, invalid in (
         ("deployment_completed_at_unix_ms", 0),
-        ("end_block_hash", "8" * 64),
         ("end_height", 1),
         ("genesis_block_hash", "8" * 64),
+        ("network_id", "hash:" + "8" * 64 + "#0000"),
         ("protocol_version", True),
         ("topology_sha256", "C" * 64),
     ):

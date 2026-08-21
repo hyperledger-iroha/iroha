@@ -13,6 +13,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
@@ -858,6 +859,7 @@ public final class HttpClientTransportStatusTests {
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
             .setTimeToLiveMs(5_000L)
             .setNonce((seed & 0xFF) + 1)
+            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
             .setMetadata(Map.of("note", "tx-" + seed))
             .build();
     final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
@@ -923,7 +925,7 @@ public final class HttpClientTransportStatusTests {
         final Map<String, List<String>> headers =
             submitHeaderHash == null
                 ? Map.of()
-                : Map.of("x-iroha-transaction-hash", List.of(submitHeaderHash));
+                : Map.of("x-iroha-entrypoint-hash", List.of(submitHeaderHash));
         return CompletableFuture.completedFuture(new TransportResponse(202, new byte[0], "", headers));
       }
       if ("GET".equals(request.method())) {

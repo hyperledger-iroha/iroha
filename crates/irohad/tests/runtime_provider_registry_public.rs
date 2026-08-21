@@ -1,12 +1,12 @@
 //! Public-surface checks for deployment-owned daemon providers and publication factories.
 use irohad::{
-    BuildLine, IrohaRuntimeDeps, IrohaRuntimeProviderBindingsV1,
-    IrohaRuntimeProviderCatalogErrorV1, IrohaRuntimeProviderRegistryErrorV1,
-    IrohaRuntimeProviderRegistryV1, MainError, RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1, ReportResult,
-    RuntimeProviderBrokerBackendRegistryV1, RuntimeProviderBrokerBackendsV1,
-    RuntimeProviderBrokerDeploymentV1, RuntimeProviderBrokerExecutableArgsV1,
-    RuntimeProviderBrokerExecutableErrorV1, RuntimeProviderBrokerExecutableV1,
-    RuntimeProviderBrokerReadinessErrorV1, load_runtime_provider_broker_catalog_file_v1,
+    IrohaRuntimeDeps, IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderCatalogErrorV1,
+    IrohaRuntimeProviderRegistryErrorV1, IrohaRuntimeProviderRegistryV1, MainError,
+    RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1, ReportResult, RuntimeProviderBrokerBackendRegistryV1,
+    RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerDeploymentV1,
+    RuntimeProviderBrokerExecutableArgsV1, RuntimeProviderBrokerExecutableErrorV1,
+    RuntimeProviderBrokerExecutableV1, RuntimeProviderBrokerReadinessErrorV1,
+    load_runtime_provider_broker_catalog_file_v1,
     musubi_publication_service::{
         MusubiPublicationPrivateDeploymentV1, MusubiPublicationPrivateIngressFutureV1,
         MusubiPublicationPrivateServiceContextV1, MusubiPublicationPrivateServiceFactoryErrorV1,
@@ -19,7 +19,6 @@ struct DeploymentRegistry;
 struct ExternalMusubiPublicationFactory;
 struct ExternalMusubiPublicationRunner;
 type CombinedPublicationLauncher = fn(
-    BuildLine,
     &dyn IrohaRuntimeProviderRegistryV1,
     Box<dyn MusubiPublicationPrivateServiceFactoryV1>,
 ) -> ReportResult<(), MainError>;
@@ -133,17 +132,14 @@ impl iroha_torii::SoraFsProofOutcomeTransactionSigner for ExternalProofOutcomeSi
 #[test]
 fn external_crate_can_implement_registry_and_name_standard_launcher() {
     let registry: Arc<dyn IrohaRuntimeProviderRegistryV1> = Arc::new(DeploymentRegistry);
-    let launcher: fn(
-        BuildLine,
-        &dyn IrohaRuntimeProviderRegistryV1,
-    ) -> ReportResult<(), MainError> = irohad::run_with_runtime_provider_registry;
+    let launcher: fn(&dyn IrohaRuntimeProviderRegistryV1) -> ReportResult<(), MainError> =
+        irohad::run_with_runtime_provider_registry;
     assert_eq!(Arc::strong_count(&registry), 1);
     let _ = launcher;
 }
 #[test]
 fn external_crate_can_implement_factory_and_name_publication_launchers() {
     let standalone_launcher: fn(
-        BuildLine,
         Box<dyn MusubiPublicationPrivateServiceFactoryV1>,
     ) -> ReportResult<(), MainError> = irohad::run_with_musubi_publication;
     let combined_launcher: CombinedPublicationLauncher =

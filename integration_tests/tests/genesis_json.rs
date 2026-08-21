@@ -8,7 +8,7 @@ use iroha_genesis::{GenesisBuilder, RawGenesisTransaction, init_instruction_regi
 use iroha_primitives::{json::Json, numeric::NumericSpec};
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-use std::{borrow::Cow, io::Write, path::PathBuf, sync::Arc};
+use std::{borrow::Cow, io::Write, path::PathBuf};
 use tempfile::NamedTempFile;
 use tokio::time::timeout;
 use toml::Table;
@@ -82,46 +82,36 @@ fn fallback_raw_genesis_from_json() -> RawGenesisTransaction {
 #[test]
 fn genesis_asset_minted_across_peers() -> Result<()> {
     init_instruction_registry();
-    // Build network first to obtain peer topology
+    let raw_genesis = load_raw_genesis_transaction();
+    let builder = NetworkBuilder::new().with_min_peers(4).with_genesis_block(
+        move |_topology, topology_entries| {
+            raw_genesis
+                .clone()
+                .into_builder()
+                .next_transaction()
+                .set_topology(topology_entries)
+                .build_raw()
+                .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+                .expect("build canonical resultless custom genesis proposal")
+        },
+    );
     let Some((network, rt)) = sandbox::build_network_blocking_or_skip(
-        NetworkBuilder::new().with_min_peers(4),
+        builder,
         stringify!(genesis_asset_minted_across_peers),
     ) else {
         return Ok(());
     };
-    let builder = load_raw_genesis_transaction()
-        .into_builder()
-        .next_transaction()
-        .set_topology(network.topology_entries().to_vec());
-    let da_proof_policies = network.genesis().0.da_proof_policies().cloned();
-    let zk_policy_hash = network
-        .genesis()
-        .0
-        .header()
-        .confidential_features()
-        .and_then(|digest| digest.zk_policy_hash);
-    let genesis_block = builder
-        .build_raw()
-        .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
-            &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
-            da_proof_policies,
-            zk_policy_hash,
-        )?;
     let sync_timeout = network.sync_timeout();
     let block_result: Result<()> = rt.block_on(async {
-        let genesis = Arc::new(genesis_block);
-        for peer in network.peers() {
-            if let Err(err) = peer
-                .start_checked(network.config_layers(), Some(&genesis))
-                .await
-            {
-                if let Some(reason) = sandbox::sandbox_reason(&err) {
-                    return Err(eyre!(
-                        "sandboxed network restriction detected while starting peers: {reason}"
-                    ));
-                }
-                return Err(err);
+        if let Err(err) = network.start_all().await {
+            if let Some(reason) = sandbox::sandbox_reason(&err) {
+                return Err(eyre!(
+                    "sandboxed network restriction detected while starting peers: {reason}"
+                ));
             }
+            return Err(err);
+        }
+        for peer in network.peers() {
             timeout(sync_timeout, peer.once_block(1))
                 .await
                 .map_err(|_| eyre!("timed out waiting for genesis block 1"))?;

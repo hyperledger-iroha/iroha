@@ -23,8 +23,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "queue_plan_synced",
+        "value": null
       },
       "metadata": {}
     }
@@ -53,8 +58,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "queue_plan_synced",
+        "value": null
       },
       "metadata": {}
     }
@@ -83,8 +93,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "queue_plan_synced",
+        "value": null
       },
       "metadata": {}
     }

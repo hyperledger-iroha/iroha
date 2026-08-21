@@ -155,10 +155,17 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         XCTAssertEqual(signedReader.remaining(), 0)
         var payloadReader = CanonicalNoritoReader(data: payload)
         var payloadFields: [Data] = []
-        for _ in 0..<9 {
+        for _ in 0..<10 {
             payloadFields.append(try payloadReader.readCompactField())
         }
         XCTAssertEqual(payloadReader.remaining(), 0)
+
+        var admissionIntentReader = CanonicalNoritoReader(data: payloadFields[7])
+        XCTAssertEqual(
+            try admissionIntentReader.readUInt32LE(),
+            TransactionAdmissionIntentV1.queuePlanSynced.rawValue
+        )
+        XCTAssertEqual(admissionIntentReader.remaining(), 0)
 
         var domainReader = CanonicalNoritoReader(data: payloadFields[0])
         XCTAssertEqual(try domainReader.readUInt32LE(), 0)

@@ -35,6 +35,9 @@ def binding() -> lease_state.LeaseBinding:
         candidate_handoff_sha256=digest("candidate"),
         publication_handoff_sha256=digest("publication"),
         deploy_handoff_sha256=digest("deploy"),
+        network_id=lease_state.taira_constants.network_id_from_genesis_hash(
+            digest("genesis-block")
+        ),
         genesis_block_hash=digest("genesis-block"),
         deploy_end_height=97,
         deploy_end_block_hash=digest("deploy-end-block"),

@@ -20,6 +20,7 @@ public sealed class UnsignedTransactionPayload
         ulong timeToLiveMilliseconds,
         uint? nonce,
         FeePaymentIntent feePayment,
+        TransactionAdmissionIntent admissionIntent,
         IReadOnlyDictionary<string, JsonNode?> metadata)
     {
         Domain = new TransactionNetworkDomain(
@@ -30,6 +31,7 @@ public sealed class UnsignedTransactionPayload
         TimeToLiveMilliseconds = timeToLiveMilliseconds;
         Nonce = nonce;
         FeePayment = feePayment;
+        AdmissionIntent = admissionIntent;
 
         var metadataSnapshot = new Dictionary<string, JsonNode?>(StringComparer.Ordinal);
         foreach (var (key, value) in metadata)
@@ -67,6 +69,10 @@ public sealed class UnsignedTransactionPayload
     /// <summary>Requested or quoted signature-bound fee payment.</summary>
     [JsonPropertyName("fee_payment")]
     public FeePaymentIntent FeePayment { get; }
+
+    /// <summary>Required signature-bound admission protocol.</summary>
+    [JsonPropertyName("admission_intent")]
+    public TransactionAdmissionIntent AdmissionIntent { get; }
 
     /// <summary>Exact transaction metadata.</summary>
     [JsonPropertyName("metadata")]

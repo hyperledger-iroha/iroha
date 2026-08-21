@@ -1217,31 +1217,8 @@ fn sample_trm_bytes() -> Vec<u8> {
     to_bytes(&sample_trm_manifest()).expect("encode trm")
 }
 fn taikai_envelope_fixture() -> taikai_ingest::EnvelopeArtifacts {
-    let mut request = sample_request();
-    request.metadata = taikai_metadata();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
-    let rent_policy = DaRentPolicyV1::default();
-    let manifest = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1,
-        &rent_policy,
-    )
-    .expect("manifest");
-    taikai_ingest::build_envelope(
-        &request,
-        &manifest,
-        &chunk_store,
-        canonical.as_slice(),
-        None,
-    )
-    .expect("envelope")
+    let (_, envelope) = taikai_ssm_validation_fixture();
+    envelope
 }
 fn sample_request() -> DaIngestRequest {
     // Golden fixture tests must not depend on OS randomness.
@@ -1400,7 +1377,6 @@ fn nexus_with_catalog(lane_catalog: LaneCatalog) -> ConfigNexus {
     )
     .expect("dataspace catalog");
     ConfigNexus {
-        enabled: true,
         lane_config: ConfigLaneConfig::from_catalog(&lane_catalog),
         lane_catalog,
         dataspace_catalog,
@@ -2093,6 +2069,29 @@ async fn write_minimal_taikai_anchor_artifacts(spool_dir: &Path, base_id: &str) 
     .await
     .expect("write ssm");
 }
+const ANCHOR_BASE_ID: &str = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+struct AnchorFixture {
+    _dir: tempfile::TempDir,
+    spool_dir: PathBuf,
+    base_id: &'static str,
+}
+async fn minimal_anchor_fixture(base_id: &'static str) -> AnchorFixture {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    AnchorFixture {
+        _dir: dir,
+        spool_dir,
+        base_id,
+    }
+}
+fn taikai_anchor_config(api_token: Option<&str>) -> DaTaikaiAnchor {
+    DaTaikaiAnchor {
+        endpoint: Url::parse("http://localhost/anchor").unwrap(),
+        api_token: api_token.map(str::to_owned),
+        poll_interval: Duration::from_secs(5),
+    }
+}
 #[cfg(unix)]
 async fn replace_path_with_symlink(path: &Path, target_contents: &[u8]) -> PathBuf {
     use std::os::unix::fs::symlink;
@@ -2196,11 +2195,7 @@ async fn taikai_anchor_processing_generates_payload_and_sentinel() {
     )
     .await
     .expect("write lineage hint");
-    let anchor_cfg = DaTaikaiAnchor {
-        endpoint: Url::parse("http://localhost/anchor").unwrap(),
-        api_token: Some("secret-token".to_string()),
-        poll_interval: Duration::from_secs(5),
-    };
+    let anchor_cfg = taikai_anchor_config(Some("secret-token"));
     let pending = collect_pending_uploads(&spool_dir)
         .await
         .expect("collect pending");
@@ -2264,18 +2259,15 @@ async fn taikai_anchor_processing_generates_payload_and_sentinel() {
 }
 #[tokio::test]
 async fn taikai_anchor_processing_reports_anchor_delivery_failure() {
-    let dir = tempdir().expect("tempdir");
-    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
-    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
     let sentinel = spool_dir.join(format!(
         "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
     ));
-    let anchor_cfg = DaTaikaiAnchor {
-        endpoint: Url::parse("http://localhost/anchor").unwrap(),
-        api_token: None,
-        poll_interval: Duration::from_secs(5),
-    };
+    let anchor_cfg = taikai_anchor_config(None);
     let sender = FailingAnchorSender::default();
     let err = process_batch(&spool_dir, &anchor_cfg, &sender)
         .await
@@ -2329,11 +2321,7 @@ async fn taikai_anchor_processing_continues_after_anchor_delivery_failure() {
         pending_before[1].body(),
         "test fixture bodies must identify which upload failed"
     );
-    let anchor_cfg = DaTaikaiAnchor {
-        endpoint: Url::parse("http://localhost/anchor").unwrap(),
-        api_token: None,
-        poll_interval: Duration::from_secs(5),
-    };
+    let anchor_cfg = taikai_anchor_config(None);
     let sender = FirstFailingAnchorSender::default();
     let err = process_batch(&spool_dir, &anchor_cfg, &sender)
         .await
@@ -2401,11 +2389,7 @@ async fn taikai_anchor_processing_reports_all_anchor_delivery_failures() {
     for base_id in base_ids {
         write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
     }
-    let anchor_cfg = DaTaikaiAnchor {
-        endpoint: Url::parse("http://localhost/anchor").unwrap(),
-        api_token: None,
-        poll_interval: Duration::from_secs(5),
-    };
+    let anchor_cfg = taikai_anchor_config(None);
     let sender = FailingAnchorSender::default();
     let err = process_batch(&spool_dir, &anchor_cfg, &sender)
         .await
@@ -2481,11 +2465,7 @@ async fn taikai_anchor_processing_continues_after_sentinel_persistence_failure()
             )
         })
         .collect();
-    let anchor_cfg = DaTaikaiAnchor {
-        endpoint: Url::parse("http://localhost/anchor").unwrap(),
-        api_token: None,
-        poll_interval: Duration::from_secs(5),
-    };
+    let anchor_cfg = taikai_anchor_config(None);
     let sender = FirstBlockingSentinelAnchorSender {
         calls: AsyncMutex::new(Vec::new()),
         sentinel_paths_by_body,
@@ -2555,18 +2535,15 @@ async fn taikai_anchor_processing_continues_after_sentinel_persistence_failure()
 }
 #[tokio::test]
 async fn taikai_anchor_processing_rejects_unpersistable_sentinel_after_upload() {
-    let dir = tempdir().expect("tempdir");
-    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
-    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
     let sentinel = spool_dir.join(format!(
         "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
     ));
-    let anchor_cfg = DaTaikaiAnchor {
-        endpoint: Url::parse("http://localhost/anchor").unwrap(),
-        api_token: None,
-        poll_interval: Duration::from_secs(5),
-    };
+    let anchor_cfg = taikai_anchor_config(None);
     let sender = BlockingSentinelAnchorSender {
         calls: AsyncMutex::new(Vec::new()),
         sentinel_path: sentinel.clone(),
@@ -2609,30 +2586,12 @@ async fn taikai_anchor_processing_rejects_unpersistable_sentinel_after_upload() 
 }
 #[tokio::test]
 async fn taikai_anchor_collection_rejects_malformed_base_id() {
-    let dir = tempdir().expect("tempdir");
-    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
-    async_fs::create_dir_all(&spool_dir)
-        .await
-        .expect("create spool");
     let base_id = "not-a-production-base-id";
-    async_fs::write(
-        spool_dir.join(format!("taikai-envelope-{base_id}.norito")),
-        b"envelope-bytes",
-    )
-    .await
-    .expect("write envelope");
-    async_fs::write(
-        spool_dir.join(format!("taikai-indexes-{base_id}.json")),
-        b"{}",
-    )
-    .await
-    .expect("write indexes");
-    async_fs::write(
-        spool_dir.join(format!("taikai-ssm-{base_id}.norito")),
-        b"ssm-bytes",
-    )
-    .await
-    .expect("write ssm");
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(base_id).await;
     let err = match collect_pending_uploads(&spool_dir).await {
         Ok(_) => panic!("malformed base id must reject anchor collection"),
         Err(err) => err,
@@ -2648,10 +2607,11 @@ async fn taikai_anchor_collection_rejects_malformed_base_id() {
 }
 #[tokio::test]
 async fn taikai_anchor_collection_rejects_non_file_sentinel() {
-    let dir = tempdir().expect("tempdir");
-    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
-    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
     let sentinel = spool_dir.join(format!(
         "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
     ));
@@ -2674,10 +2634,11 @@ async fn taikai_anchor_collection_rejects_non_file_sentinel() {
 #[cfg(unix)]
 #[tokio::test]
 async fn taikai_anchor_collection_rejects_symlinked_sentinel() {
-    let dir = tempdir().expect("tempdir");
-    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
-    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
     let sentinel = spool_dir.join(format!(
         "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
     ));
@@ -2720,10 +2681,11 @@ async fn taikai_anchor_collection_rejects_symlinked_spool_root() {
 #[cfg(unix)]
 #[tokio::test]
 async fn taikai_anchor_collection_rejects_symlinked_envelope() {
-    let dir = tempdir().expect("tempdir");
-    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
-    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
     let envelope = spool_dir.join(format!("taikai-envelope-{base_id}.norito"));
     let target = replace_path_with_symlink(&envelope, b"envelope-bytes").await;
     let err = match collect_pending_uploads(&spool_dir).await {
@@ -2743,10 +2705,11 @@ async fn taikai_anchor_collection_rejects_symlinked_envelope() {
 #[cfg(unix)]
 #[tokio::test]
 async fn taikai_anchor_collection_rejects_symlinked_required_companion() {
-    let dir = tempdir().expect("tempdir");
-    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
-    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
     let indexes = spool_dir.join(format!("taikai-indexes-{base_id}.json"));
     let target = replace_path_with_symlink(&indexes, b"{}").await;
     let err = match collect_pending_uploads(&spool_dir).await {
@@ -2792,10 +2755,11 @@ async fn taikai_anchor_collection_rejects_missing_required_artifacts() {
 }
 #[tokio::test]
 async fn taikai_anchor_collection_rejects_corrupt_indexes_json() {
-    let dir = tempdir().expect("tempdir");
-    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
-    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
     async_fs::write(
         spool_dir.join(format!("taikai-indexes-{base_id}.json")),
         b"{not-json",
@@ -2817,10 +2781,11 @@ async fn taikai_anchor_collection_rejects_corrupt_indexes_json() {
 }
 #[tokio::test]
 async fn taikai_anchor_collection_rejects_corrupt_lineage_hint() {
-    let dir = tempdir().expect("tempdir");
-    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
-    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
     async_fs::write(
         spool_dir.join(format!("taikai-lineage-{base_id}.json")),
         b"{not-json",
@@ -2843,10 +2808,11 @@ async fn taikai_anchor_collection_rejects_corrupt_lineage_hint() {
 #[cfg(unix)]
 #[tokio::test]
 async fn taikai_anchor_collection_rejects_symlinked_optional_trm() {
-    let dir = tempdir().expect("tempdir");
-    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
-    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
     let trm = spool_dir.join(format!("taikai-trm-{base_id}.norito"));
     let target = replace_path_with_symlink(&trm, b"trm-bytes").await;
     let err = match collect_pending_uploads(&spool_dir).await {
@@ -2866,10 +2832,11 @@ async fn taikai_anchor_collection_rejects_symlinked_optional_trm() {
 #[cfg(unix)]
 #[tokio::test]
 async fn taikai_anchor_collection_rejects_symlinked_optional_lineage_hint() {
-    let dir = tempdir().expect("tempdir");
-    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
-    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
     let lineage = spool_dir.join(format!("taikai-lineage-{base_id}.json"));
     let target = replace_path_with_symlink(&lineage, b"{}").await;
     let err = match collect_pending_uploads(&spool_dir).await {
@@ -2888,10 +2855,11 @@ async fn taikai_anchor_collection_rejects_symlinked_optional_lineage_hint() {
 }
 #[tokio::test]
 async fn taikai_anchor_collection_rejects_blocked_request_capture() {
-    let dir = tempdir().expect("tempdir");
-    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
-    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
     let request_capture = spool_dir.join(format!(
         "{TAIKAI_ANCHOR_REQUEST_PREFIX}{base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
     ));
@@ -2913,10 +2881,11 @@ async fn taikai_anchor_collection_rejects_blocked_request_capture() {
 }
 #[tokio::test]
 async fn taikai_anchor_collection_rejects_mismatched_request_capture() {
-    let dir = tempdir().expect("tempdir");
-    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
-    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
     let request_capture = spool_dir.join(format!(
         "{TAIKAI_ANCHOR_REQUEST_PREFIX}{base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
     ));
@@ -3428,31 +3397,7 @@ fn taikai_alias_cache_policy() -> crate::sorafs::AliasCachePolicy {
 }
 #[test]
 fn validate_taikai_ssm_accepts_matching_payload() {
-    let mut request = sample_request();
-    request.metadata = taikai_metadata();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
-    let rent_policy = DaRentPolicyV1::default();
-    let manifest = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1,
-        &rent_policy,
-    )
-    .expect("manifest");
-    let taikai = taikai_ingest::build_envelope(
-        &request,
-        &manifest,
-        &chunk_store,
-        canonical.as_slice(),
-        None,
-    )
-    .expect("envelope");
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
     let now_secs = crate::sorafs::unix_now_secs();
     let ssm_bytes = build_ssm_bytes(
         manifest.manifest_hash,
@@ -3462,16 +3407,7 @@ fn validate_taikai_ssm_accepts_matching_payload() {
         now_secs,
         now_secs + 600,
     );
-    let alias_policy = crate::sorafs::AliasCachePolicy::new(
-        Duration::from_secs(600),
-        Duration::from_secs(60),
-        Duration::from_secs(1_200),
-        Duration::from_secs(60),
-        Duration::from_secs(120),
-        Duration::from_secs(10_000),
-        Duration::from_secs(60),
-        Duration::from_secs(60),
-    );
+    let alias_policy = taikai_alias_cache_policy();
     let (_, telemetry) = telemetry_handle_for_tests();
     let outcome = taikai::validate_taikai_ssm(
         &ssm_bytes,
@@ -3616,31 +3552,7 @@ fn validate_taikai_ssm_fails_closed_without_alias_council_policy() {
 }
 #[test]
 fn validate_taikai_ssm_rejects_manifest_mismatch() {
-    let mut request = sample_request();
-    request.metadata = taikai_metadata();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
-    let rent_policy = DaRentPolicyV1::default();
-    let manifest = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1,
-        &rent_policy,
-    )
-    .expect("manifest");
-    let taikai = taikai_ingest::build_envelope(
-        &request,
-        &manifest,
-        &chunk_store,
-        canonical.as_slice(),
-        None,
-    )
-    .expect("envelope");
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
     let now_secs = crate::sorafs::unix_now_secs();
     let bad_ssm = build_ssm_bytes(
         BlobDigest::from_hash(blake3_hash(b"other-manifest")),
@@ -3650,16 +3562,7 @@ fn validate_taikai_ssm_rejects_manifest_mismatch() {
         now_secs,
         now_secs + 600,
     );
-    let alias_policy = crate::sorafs::AliasCachePolicy::new(
-        Duration::from_secs(600),
-        Duration::from_secs(60),
-        Duration::from_secs(1_200),
-        Duration::from_secs(60),
-        Duration::from_secs(120),
-        Duration::from_secs(10_000),
-        Duration::from_secs(60),
-        Duration::from_secs(60),
-    );
+    let alias_policy = taikai_alias_cache_policy();
     let (_, telemetry) = telemetry_handle_for_tests();
     let err = taikai::validate_taikai_ssm(
         &bad_ssm,
@@ -3676,31 +3579,7 @@ fn validate_taikai_ssm_rejects_manifest_mismatch() {
 }
 #[test]
 fn validate_taikai_ssm_rejects_tampered_signature() {
-    let mut request = sample_request();
-    request.metadata = taikai_metadata();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
-    let rent_policy = DaRentPolicyV1::default();
-    let manifest = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1,
-        &rent_policy,
-    )
-    .expect("manifest");
-    let taikai = taikai_ingest::build_envelope(
-        &request,
-        &manifest,
-        &chunk_store,
-        canonical.as_slice(),
-        None,
-    )
-    .expect("envelope");
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
     let now_secs = crate::sorafs::unix_now_secs();
     let mut ssm_bytes = build_ssm_bytes(
         manifest.manifest_hash,
@@ -3714,16 +3593,7 @@ fn validate_taikai_ssm_rejects_tampered_signature() {
     if let Some(last) = ssm_bytes.last_mut() {
         *last ^= 0xFF;
     }
-    let alias_policy = crate::sorafs::AliasCachePolicy::new(
-        Duration::from_secs(600),
-        Duration::from_secs(60),
-        Duration::from_secs(1_200),
-        Duration::from_secs(60),
-        Duration::from_secs(120),
-        Duration::from_secs(10_000),
-        Duration::from_secs(60),
-        Duration::from_secs(60),
-    );
+    let alias_policy = taikai_alias_cache_policy();
     let (_, telemetry) = telemetry_handle_for_tests();
     let err = taikai::validate_taikai_ssm(
         &ssm_bytes,
@@ -3745,31 +3615,7 @@ fn validate_taikai_ssm_rejects_malformed_ed25519_signature_r() {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-    let mut request = sample_request();
-    request.metadata = taikai_metadata();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
-    let rent_policy = DaRentPolicyV1::default();
-    let manifest = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1,
-        &rent_policy,
-    )
-    .expect("manifest");
-    let taikai = taikai_ingest::build_envelope(
-        &request,
-        &manifest,
-        &chunk_store,
-        canonical.as_slice(),
-        None,
-    )
-    .expect("envelope");
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
     let now_secs = crate::sorafs::unix_now_secs();
     let ssm_bytes = build_ssm_bytes(
         manifest.manifest_hash,
@@ -3781,16 +3627,7 @@ fn validate_taikai_ssm_rejects_malformed_ed25519_signature_r() {
     );
     let signing_manifest: TaikaiSegmentSigningManifestV1 =
         norito::decode_from_bytes(&ssm_bytes).expect("decode signing manifest");
-    let alias_policy = crate::sorafs::AliasCachePolicy::new(
-        Duration::from_secs(600),
-        Duration::from_secs(60),
-        Duration::from_secs(1_200),
-        Duration::from_secs(60),
-        Duration::from_secs(120),
-        Duration::from_secs(10_000),
-        Duration::from_secs(60),
-        Duration::from_secs(60),
-    );
+    let alias_policy = taikai_alias_cache_policy();
     let (_, telemetry) = telemetry_handle_for_tests();
     taikai::validate_taikai_ssm(
         &ssm_bytes,
@@ -3836,31 +3673,7 @@ fn validate_taikai_ssm_rejects_malformed_ed25519_signature_r() {
 }
 #[test]
 fn validate_taikai_ssm_rejects_malformed_mldsa_signature_lengths() {
-    let mut request = sample_request();
-    request.metadata = taikai_metadata();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
-    let rent_policy = DaRentPolicyV1::default();
-    let manifest = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1,
-        &rent_policy,
-    )
-    .expect("manifest");
-    let taikai = taikai_ingest::build_envelope(
-        &request,
-        &manifest,
-        &chunk_store,
-        canonical.as_slice(),
-        None,
-    )
-    .expect("envelope");
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
     let now_secs = crate::sorafs::unix_now_secs();
     let ssm_bytes = build_ssm_bytes_with_publisher_algorithm(
         manifest.manifest_hash,
@@ -3873,16 +3686,7 @@ fn validate_taikai_ssm_rejects_malformed_mldsa_signature_lengths() {
     );
     let signing_manifest: TaikaiSegmentSigningManifestV1 =
         norito::decode_from_bytes(&ssm_bytes).expect("decode ML-DSA signing manifest");
-    let alias_policy = crate::sorafs::AliasCachePolicy::new(
-        Duration::from_secs(600),
-        Duration::from_secs(60),
-        Duration::from_secs(1_200),
-        Duration::from_secs(60),
-        Duration::from_secs(120),
-        Duration::from_secs(10_000),
-        Duration::from_secs(60),
-        Duration::from_secs(60),
-    );
+    let alias_policy = taikai_alias_cache_policy();
     let (_, telemetry) = telemetry_handle_for_tests();
     taikai::validate_taikai_ssm(
         &ssm_bytes,
@@ -3930,31 +3734,7 @@ fn validate_taikai_ssm_rejects_malformed_mldsa_signature_lengths() {
 }
 #[test]
 fn validate_taikai_trm_accepts_matching_manifest() {
-    let mut request = sample_request();
-    request.metadata = taikai_metadata();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
-    let rent_policy = DaRentPolicyV1::default();
-    let manifest = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1,
-        &rent_policy,
-    )
-    .expect("manifest");
-    let taikai = taikai_ingest::build_envelope(
-        &request,
-        &manifest,
-        &chunk_store,
-        canonical.as_slice(),
-        None,
-    )
-    .expect("envelope");
+    let (_, taikai) = taikai_ssm_validation_fixture();
     let routing_manifest =
         taikai::validate_taikai_trm(&sample_trm_bytes(), &taikai).expect("trm valid");
     assert_eq!(
@@ -3969,31 +3749,7 @@ fn validate_taikai_trm_accepts_matching_manifest() {
 }
 #[test]
 fn validate_taikai_trm_rejects_mismatched_event() {
-    let mut request = sample_request();
-    request.metadata = taikai_metadata();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
-    let rent_policy = DaRentPolicyV1::default();
-    let manifest = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1,
-        &rent_policy,
-    )
-    .expect("manifest");
-    let taikai = taikai_ingest::build_envelope(
-        &request,
-        &manifest,
-        &chunk_store,
-        canonical.as_slice(),
-        None,
-    )
-    .expect("envelope");
+    let (_, taikai) = taikai_ssm_validation_fixture();
     let mut trm = sample_trm_manifest();
     trm.event_id = TaikaiEventId::new(Name::from_str("other-event").unwrap());
     let trm_bytes = to_bytes(&trm).expect("encode trm");
@@ -4459,26 +4215,95 @@ fn build_chunk_commitments_rejects_row_parity_chunk_offset_overflow() {
         err.1
     );
 }
+struct ManifestResolutionFixture {
+    request: DaIngestRequest,
+    canonical: Vec<u8>,
+    chunk_store: ChunkStore,
+    metadata: ExtraMetadata,
+    rent_policy: DaRentPolicyV1,
+}
+impl ManifestResolutionFixture {
+    fn new(request: DaIngestRequest) -> Self {
+        let canonical = normalize_payload(&request)
+            .expect("normalize payload")
+            .into_vec();
+        let chunk_store = build_chunk_store(&request, canonical.as_slice());
+        let metadata = encrypt_governance_metadata(&request.metadata, None, None)
+            .expect("metadata encryption");
+        Self {
+            request,
+            canonical,
+            chunk_store,
+            metadata,
+            rent_policy: DaRentPolicyV1::default(),
+        }
+    }
+    fn resolve(&self, queued_at_unix: u64) -> Result<ManifestArtifacts, (StatusCode, String)> {
+        self.resolve_with_retention(&self.request.retention_policy, queued_at_unix)
+    }
+    fn resolve_with_retention(
+        &self,
+        retention_policy: &RetentionPolicy,
+        queued_at_unix: u64,
+    ) -> Result<ManifestArtifacts, (StatusCode, String)> {
+        resolve_manifest(
+            &self.request,
+            &self.chunk_store,
+            self.canonical.as_slice(),
+            &self.metadata,
+            retention_policy,
+            queued_at_unix,
+            &self.rent_policy,
+        )
+    }
+}
+fn resolved_manifest_fixture(
+    request: DaIngestRequest,
+    queued_at_unix: u64,
+    expectation: &str,
+) -> (ManifestResolutionFixture, ManifestArtifacts) {
+    let fixture = ManifestResolutionFixture::new(request);
+    let artifacts = fixture.resolve(queued_at_unix).expect(expectation);
+    (fixture, artifacts)
+}
+fn commitment_record_fixture(
+    fixture: &ManifestResolutionFixture,
+    manifest: &ManifestArtifacts,
+    queued_at_unix: u64,
+) -> (Vec<u8>, DaCommitmentRecord) {
+    let mut pdp_commitment = sample_pdp_commitment_for_tests();
+    pdp_commitment.manifest_digest = *manifest.manifest_hash.as_bytes();
+    let pdp_bytes = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
+    let receipt = build_receipt(
+        &checked_random_keypair(),
+        &fixture.request,
+        queued_at_unix,
+        manifest.blob_hash,
+        manifest.chunk_root,
+        manifest.manifest_hash,
+        manifest.storage_ticket,
+        pdp_bytes.clone(),
+        manifest.manifest.rent_quote.clone(),
+        stripe_layout_from_manifest(&manifest.manifest),
+    )
+    .expect("build receipt");
+    let record = build_da_commitment_record(
+        &fixture.request,
+        manifest,
+        &fixture.request.retention_policy,
+        &receipt.operator_signature,
+        &pdp_bytes,
+        DaProofScheme::MerkleSha256,
+    );
+    (pdp_bytes, record)
+}
 #[test]
 fn persist_manifest_for_sorafs_writes_and_is_idempotent() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
-    let request = sample_request();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let rent_policy = DaRentPolicyV1::default();
-    let manifest = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1_701_000_555,
-        &rent_policy,
-    )
-    .expect("manifest");
+    let (fixture, manifest) =
+        resolved_manifest_fixture(sample_request(), 1_701_000_555, "manifest");
+    let request = &fixture.request;
     let first_path = persistence::persist_manifest_for_sorafs(
         manifest_dir,
         &manifest.encoded,
@@ -4541,27 +4366,14 @@ fn persist_manifest_for_sorafs_writes_and_is_idempotent() {
 fn persist_pdp_commitment_writes_and_is_idempotent() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
-    let request = sample_request();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let rent_policy = DaRentPolicyV1::default();
-    let manifest = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1_701_000_777,
-        &rent_policy,
-    )
-    .expect("manifest");
+    let (fixture, manifest) =
+        resolved_manifest_fixture(sample_request(), 1_701_000_777, "manifest");
+    let request = &fixture.request;
     let commitment = compute_pdp_commitment(
         &manifest.manifest_hash,
         &manifest.manifest,
-        &chunk_store,
-        canonical.as_slice(),
+        &fixture.chunk_store,
+        fixture.canonical.as_slice(),
         1_701_000_777,
     )
     .expect("commitment");
@@ -4605,47 +4417,10 @@ fn persist_pdp_commitment_writes_and_is_idempotent() {
 }
 #[test]
 fn build_da_commitment_record_reflects_artifacts() {
-    let request = sample_request();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let rent_policy = DaRentPolicyV1::default();
-    let manifest = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1_701_500_000,
-        &rent_policy,
-    )
-    .expect("manifest");
-    let mut pdp_commitment = sample_pdp_commitment_for_tests();
-    pdp_commitment.manifest_digest = *manifest.manifest_hash.as_bytes();
-    let pdp_bytes = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
-    let stripe_layout = stripe_layout_from_manifest(&manifest.manifest);
-    let receipt = build_receipt(
-        &checked_random_keypair(),
-        &request,
-        1_701_500_000,
-        manifest.blob_hash,
-        manifest.chunk_root,
-        manifest.manifest_hash,
-        manifest.storage_ticket,
-        pdp_bytes.clone(),
-        manifest.manifest.rent_quote.clone(),
-        stripe_layout,
-    )
-    .expect("build receipt");
-    let record = build_da_commitment_record(
-        &request,
-        &manifest,
-        &request.retention_policy,
-        &receipt.operator_signature,
-        &pdp_bytes,
-        DaProofScheme::MerkleSha256,
-    );
+    let (fixture, manifest) =
+        resolved_manifest_fixture(sample_request(), 1_701_500_000, "manifest");
+    let request = &fixture.request;
+    let (_, record) = commitment_record_fixture(&fixture, &manifest, 1_701_500_000);
     assert_eq!(record.lane_id, request.lane_id);
     assert_eq!(record.epoch, request.epoch);
     assert_eq!(record.sequence, request.sequence);
@@ -4663,47 +4438,10 @@ fn build_da_commitment_record_reflects_artifacts() {
 fn persist_da_commitment_record_writes_and_is_idempotent() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
-    let request = sample_request();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let rent_policy = DaRentPolicyV1::default();
-    let manifest = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1_701_600_000,
-        &rent_policy,
-    )
-    .expect("manifest");
-    let mut pdp_commitment = sample_pdp_commitment_for_tests();
-    pdp_commitment.manifest_digest = *manifest.manifest_hash.as_bytes();
-    let pdp_bytes = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
-    let stripe_layout = stripe_layout_from_manifest(&manifest.manifest);
-    let receipt = build_receipt(
-        &checked_random_keypair(),
-        &request,
-        1_701_600_000,
-        manifest.blob_hash,
-        manifest.chunk_root,
-        manifest.manifest_hash,
-        manifest.storage_ticket,
-        pdp_bytes.clone(),
-        manifest.manifest.rent_quote.clone(),
-        stripe_layout,
-    )
-    .expect("build receipt");
-    let record = build_da_commitment_record(
-        &request,
-        &manifest,
-        &request.retention_policy,
-        &receipt.operator_signature,
-        &pdp_bytes,
-        DaProofScheme::MerkleSha256,
-    );
+    let (fixture, manifest) =
+        resolved_manifest_fixture(sample_request(), 1_701_600_000, "manifest");
+    let request = &fixture.request;
+    let (_, record) = commitment_record_fixture(&fixture, &manifest, 1_701_600_000);
     let first_path = persistence::persist_da_commitment_record(
         manifest_dir,
         &record,
@@ -4736,47 +4474,10 @@ fn persist_da_commitment_record_writes_and_is_idempotent() {
 fn persist_da_commitment_schedule_entry_writes_bundle() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
-    let request = sample_request();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let rent_policy = DaRentPolicyV1::default();
-    let manifest = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1_701_600_000,
-        &rent_policy,
-    )
-    .expect("manifest");
-    let mut pdp_commitment = sample_pdp_commitment_for_tests();
-    pdp_commitment.manifest_digest = *manifest.manifest_hash.as_bytes();
-    let pdp_bytes = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
-    let stripe_layout = stripe_layout_from_manifest(&manifest.manifest);
-    let receipt = build_receipt(
-        &checked_random_keypair(),
-        &request,
-        1_701_600_000,
-        manifest.blob_hash,
-        manifest.chunk_root,
-        manifest.manifest_hash,
-        manifest.storage_ticket,
-        pdp_bytes.clone(),
-        manifest.manifest.rent_quote.clone(),
-        stripe_layout,
-    )
-    .expect("build receipt");
-    let record = build_da_commitment_record(
-        &request,
-        &manifest,
-        &request.retention_policy,
-        &receipt.operator_signature,
-        &pdp_bytes,
-        DaProofScheme::MerkleSha256,
-    );
+    let (fixture, manifest) =
+        resolved_manifest_fixture(sample_request(), 1_701_600_000, "manifest");
+    let request = &fixture.request;
+    let (pdp_bytes, record) = commitment_record_fixture(&fixture, &manifest, 1_701_600_000);
     let schedule_path = persistence::persist_da_commitment_schedule_entry(
         manifest_dir,
         &record,
@@ -4807,21 +4508,8 @@ fn persist_da_pin_intent_writes_file() {
         b"sora/docs".to_vec(),
         MetadataVisibility::Public,
     ));
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let rent_policy = DaRentPolicyV1::default();
-    let manifest = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1_701_700_123,
-        &rent_policy,
-    )
-    .expect("manifest");
+    let (fixture, manifest) = resolved_manifest_fixture(request, 1_701_700_123, "manifest");
+    let request = &fixture.request;
     let alias =
         registry_alias_from_metadata(&request.metadata).expect("alias metadata should parse");
     let mut intent = DaPinIntent::new(
@@ -5164,11 +4852,7 @@ fn persist_spool_artifacts_reject_existing_mismatched_targets() {
         ),
         "pin",
     );
-    let receipt_path = manifest_dir.join(receipt_spool_file_name(
-        &receipt,
-        request.sequence,
-        fingerprint,
-    ));
+    let receipt_path = receipt_spool_path(manifest_dir, &receipt, request.sequence, fingerprint);
     fs::write(&receipt_path, b"poison-receipt").expect("poison receipt");
     assert_invalid_data(
         persistence::persist_da_receipt(
@@ -5272,6 +4956,36 @@ fn receipt_spool_file_name(
         epoch = receipt.epoch,
         ticket_hex = hex::encode(receipt.storage_ticket.as_bytes()),
         fingerprint_hex = hex::encode(fingerprint)
+    )
+}
+fn encoded_stored_receipt(receipt: &DaIngestReceipt, sequence: u64, version: u16) -> Vec<u8> {
+    to_bytes(&persistence::StoredDaReceipt {
+        version,
+        sequence,
+        receipt: receipt.clone(),
+    })
+    .expect("encode receipt")
+}
+fn receipt_spool_path(
+    dir: &Path,
+    receipt: &DaIngestReceipt,
+    sequence: u64,
+    fingerprint: [u8; 32],
+) -> PathBuf {
+    dir.join(receipt_spool_file_name(receipt, sequence, fingerprint))
+}
+fn canonical_receipt_spool_path(dir: &Path, receipt: &DaIngestReceipt, sequence: u64) -> PathBuf {
+    receipt_spool_path(dir, receipt, sequence, receipt_fingerprint_bytes(receipt))
+}
+fn open_receipt_log(
+    dir: &Path,
+    cursor_store: &Arc<ReplayCursorStore>,
+    signer: &KeyPair,
+) -> eyre::Result<DaReceiptLog> {
+    DaReceiptLog::open(
+        dir.to_path_buf(),
+        Arc::clone(cursor_store),
+        signer.public_key().clone(),
     )
 }
 fn receipt_file_count(dir: &Path) -> usize {
@@ -5416,17 +5130,8 @@ fn load_da_receipts_rejects_unsupported_versions() {
     let signer = checked_random_keypair();
     let lane_id = LaneId::new(3);
     let receipt = test_receipt(&signer, lane_id, 5, 7, 0xAB);
-    let stored = persistence::StoredDaReceipt {
-        version: persistence::STORED_RECEIPT_VERSION + 1,
-        sequence: 7,
-        receipt: receipt.clone(),
-    };
-    let bytes = to_bytes(&stored).expect("encode receipt");
-    let path = manifest_dir.join(receipt_spool_file_name(
-        &receipt,
-        7,
-        receipt_fingerprint_bytes(&receipt),
-    ));
+    let bytes = encoded_stored_receipt(&receipt, 7, persistence::STORED_RECEIPT_VERSION + 1);
+    let path = canonical_receipt_spool_path(manifest_dir, &receipt, 7);
     fs::write(&path, bytes).expect("write receipt");
     let err = persistence::load_da_receipts(manifest_dir)
         .expect_err("unsupported receipt versions must reject the receipt load");
@@ -5439,17 +5144,8 @@ fn load_da_receipts_rejects_filename_body_mismatch() {
     let signer = checked_random_keypair();
     let lane_id = LaneId::new(3);
     let receipt = test_receipt(&signer, lane_id, 5, 7, 0xAC);
-    let stored = persistence::StoredDaReceipt {
-        version: persistence::STORED_RECEIPT_VERSION,
-        sequence: 7,
-        receipt: receipt.clone(),
-    };
-    let bytes = to_bytes(&stored).expect("encode receipt");
-    let path = manifest_dir.join(receipt_spool_file_name(
-        &receipt,
-        8,
-        receipt_fingerprint_bytes(&receipt),
-    ));
+    let bytes = encoded_stored_receipt(&receipt, 7, persistence::STORED_RECEIPT_VERSION);
+    let path = canonical_receipt_spool_path(manifest_dir, &receipt, 8);
     fs::write(&path, bytes).expect("write receipt");
     let err = persistence::load_da_receipts(manifest_dir)
         .expect_err("filename/body mismatches must reject the receipt load");
@@ -5462,19 +5158,10 @@ fn load_da_receipts_rejects_filename_ticket_mismatch() {
     let signer = checked_random_keypair();
     let lane_id = LaneId::new(3);
     let receipt = test_receipt(&signer, lane_id, 5, 7, 0xAD);
-    let stored = persistence::StoredDaReceipt {
-        version: persistence::STORED_RECEIPT_VERSION,
-        sequence: 7,
-        receipt: receipt.clone(),
-    };
-    let bytes = to_bytes(&stored).expect("encode receipt");
+    let bytes = encoded_stored_receipt(&receipt, 7, persistence::STORED_RECEIPT_VERSION);
     let mut filename_receipt = receipt;
     filename_receipt.storage_ticket = StorageTicketId::new([0x99; 32]);
-    let path = manifest_dir.join(receipt_spool_file_name(
-        &filename_receipt,
-        7,
-        receipt_fingerprint_bytes(&filename_receipt),
-    ));
+    let path = canonical_receipt_spool_path(manifest_dir, &filename_receipt, 7);
     fs::write(&path, bytes).expect("write receipt");
     let err = persistence::load_da_receipts(manifest_dir)
         .expect_err("filename/body ticket mismatches must reject the receipt load");
@@ -5486,16 +5173,8 @@ fn load_da_receipts_rejects_receipt_shaped_directory() {
     let manifest_dir = temp_dir.path();
     let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, LaneId::new(3), 5, 7, 0xAE);
-    let first_path = manifest_dir.join(receipt_spool_file_name(
-        &receipt,
-        7,
-        receipt_fingerprint_bytes(&receipt),
-    ));
-    let later_path = manifest_dir.join(receipt_spool_file_name(
-        &receipt,
-        8,
-        receipt_fingerprint_bytes(&receipt),
-    ));
+    let first_path = canonical_receipt_spool_path(manifest_dir, &receipt, 7);
+    let later_path = canonical_receipt_spool_path(manifest_dir, &receipt, 8);
     fs::create_dir(&later_path).expect("create later receipt-shaped directory");
     fs::create_dir(&first_path).expect("create first receipt-shaped directory");
     let err = persistence::load_da_receipts(manifest_dir)
@@ -5564,17 +5243,8 @@ fn load_da_receipts_rejects_same_manifest_duplicate_with_different_receipt() {
     let unsigned = persistence::unsigned_receipt_bytes(&conflicting, 7).expect("unsigned bytes");
     conflicting.operator_signature = checked_signature(signer.private_key(), &unsigned);
     for receipt in [&receipt, &conflicting] {
-        let stored = persistence::StoredDaReceipt {
-            version: persistence::STORED_RECEIPT_VERSION,
-            sequence: 7,
-            receipt: receipt.clone(),
-        };
-        let bytes = to_bytes(&stored).expect("encode receipt");
-        let path = manifest_dir.join(receipt_spool_file_name(
-            receipt,
-            7,
-            receipt_fingerprint_bytes(receipt),
-        ));
+        let bytes = encoded_stored_receipt(receipt, 7, persistence::STORED_RECEIPT_VERSION);
+        let path = canonical_receipt_spool_path(manifest_dir, receipt, 7);
         fs::write(path, bytes).expect("write duplicate receipt");
     }
     let err = persistence::load_da_receipts(manifest_dir)
@@ -5591,14 +5261,9 @@ fn load_da_receipts_rejects_filename_fingerprint_mismatch() {
     let manifest_dir = temp_dir.path();
     let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, LaneId::new(3), 5, 7, 0xB1);
-    let stored = persistence::StoredDaReceipt {
-        version: persistence::STORED_RECEIPT_VERSION,
-        sequence: 7,
-        receipt: receipt.clone(),
-    };
-    let bytes = to_bytes(&stored).expect("encode receipt");
+    let bytes = encoded_stored_receipt(&receipt, 7, persistence::STORED_RECEIPT_VERSION);
     for fingerprint in [[0xC2; 32], [0xC3; 32]] {
-        let path = manifest_dir.join(receipt_spool_file_name(&receipt, 7, fingerprint));
+        let path = receipt_spool_path(manifest_dir, &receipt, 7, fingerprint);
         fs::write(path, &bytes).expect("write duplicate receipt");
     }
     let err = persistence::load_da_receipts(manifest_dir)
@@ -5620,11 +5285,7 @@ fn da_receipt_log_open_rejects_spool_dir_symlink() {
     symlink(&target, &spool).expect("create receipt log symlink");
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_fixture_ed25519_keypair(0x62);
-    let err = match DaReceiptLog::open(
-        spool.clone(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    ) {
+    let err = match open_receipt_log(&spool, &cursor_store, &signer) {
         Ok(_) => panic!("symlinked DA receipt log root must reject"),
         Err(err) => err,
     };
@@ -5651,12 +5312,7 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
     let lane_epoch = LaneEpoch::new(LaneId::new(4), 9);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_random_keypair();
-    let log = DaReceiptLog::open(
-        temp_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    )
-    .unwrap();
+    let log = open_receipt_log(temp_dir.path(), &cursor_store, &signer).unwrap();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 1);
     assert!(matches!(
         log.append(lane_epoch, 1, receipt.clone(), test_fingerprint(1))
@@ -5760,25 +5416,12 @@ fn da_receipt_log_recovery_rejects_filename_fingerprint_mismatch_in_canonical_pa
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_fixture_ed25519_keypair(0x63);
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xE1);
-    let stored = persistence::StoredDaReceipt {
-        version: persistence::STORED_RECEIPT_VERSION,
-        sequence: 1,
-        receipt: receipt.clone(),
-    };
-    let bytes = to_bytes(&stored).expect("encode receipt");
-    let higher_path = temp_dir
-        .path()
-        .join(receipt_spool_file_name(&receipt, 2, [0xE3; 32]));
-    let lower_path = temp_dir
-        .path()
-        .join(receipt_spool_file_name(&receipt, 1, [0xE2; 32]));
+    let bytes = encoded_stored_receipt(&receipt, 1, persistence::STORED_RECEIPT_VERSION);
+    let higher_path = receipt_spool_path(temp_dir.path(), &receipt, 2, [0xE3; 32]);
+    let lower_path = receipt_spool_path(temp_dir.path(), &receipt, 1, [0xE2; 32]);
     fs::write(&higher_path, &bytes).expect("write higher-fingerprint receipt");
     fs::write(&lower_path, &bytes).expect("write lower-fingerprint receipt");
-    let err = match DaReceiptLog::open(
-        temp_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    ) {
+    let err = match open_receipt_log(temp_dir.path(), &cursor_store, &signer) {
         Ok(_) => panic!("filename fingerprint mismatch must reject durable recovery"),
         Err(err) => err,
     };
@@ -5805,12 +5448,7 @@ fn da_receipt_log_rejected_append_does_not_advance_replay_cursor() {
     let lane_epoch = LaneEpoch::new(LaneId::new(4), 19);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_fixture_ed25519_keypair(0x64);
-    let log = DaReceiptLog::open(
-        temp_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    )
-    .unwrap();
+    let log = open_receipt_log(temp_dir.path(), &cursor_store, &signer).unwrap();
     let first = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xE1);
     assert!(matches!(
         log.append(lane_epoch, 1, first, test_fingerprint(0xE1))
@@ -5844,12 +5482,7 @@ fn da_receipt_log_recovers_after_cursor_failure_post_file_write() {
     let cursor_store =
         Arc::new(ReplayCursorStore::empty(cursor_dir.path().to_path_buf()).expect("cursor store"));
     let signer = checked_fixture_ed25519_keypair(0x65);
-    let log = DaReceiptLog::open(
-        receipt_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    )
-    .unwrap();
+    let log = open_receipt_log(receipt_dir.path(), &cursor_store, &signer).unwrap();
     let main_path = replay_cursor_main_path(cursor_dir.path());
     let tmp_path = persistence::replay_cursor_temp_path(&main_path);
     fs::create_dir(&tmp_path).expect("block cursor temp path");
@@ -5893,19 +5526,10 @@ fn da_receipt_log_rejects_conflicting_preexisting_receipt_without_cursor_advance
     let lane_epoch = LaneEpoch::new(LaneId::new(4), 21);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_fixture_ed25519_keypair(0x66);
-    let log = DaReceiptLog::open(
-        receipt_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    )
-    .unwrap();
+    let log = open_receipt_log(receipt_dir.path(), &cursor_store, &signer).unwrap();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xF2);
     let fingerprint = test_fingerprint(0xF2);
-    let poisoned_path = receipt_dir.path().join(receipt_spool_file_name(
-        &receipt,
-        1,
-        receipt_fingerprint_bytes(&receipt),
-    ));
+    let poisoned_path = canonical_receipt_spool_path(receipt_dir.path(), &receipt, 1);
     fs::write(&poisoned_path, b"poison-receipt").expect("seed poisoned receipt");
     let err = log
         .append(lane_epoch, 1, receipt.clone(), fingerprint)
@@ -5974,12 +5598,8 @@ fn da_receipt_log_duplicate_reload_rejects_receipt_symlink_replacement() {
     let lane_epoch = LaneEpoch::new(LaneId::new(4), 10);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_fixture_ed25519_keypair(0x67);
-    let log = DaReceiptLog::open(
-        receipt_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    )
-    .expect("open receipt log");
+    let log =
+        open_receipt_log(receipt_dir.path(), &cursor_store, &signer).expect("open receipt log");
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xA2);
     let fingerprint = test_fingerprint(0xA2);
     assert!(matches!(
@@ -5987,11 +5607,7 @@ fn da_receipt_log_duplicate_reload_rejects_receipt_symlink_replacement() {
             .expect("append receipt"),
         ReceiptInsertOutcome::Stored { .. }
     ));
-    let receipt_path = receipt_dir.path().join(receipt_spool_file_name(
-        &receipt,
-        1,
-        receipt_fingerprint_bytes(&receipt),
-    ));
+    let receipt_path = canonical_receipt_spool_path(receipt_dir.path(), &receipt, 1);
     let target_path = receipt_dir.path().join("receipt-symlink-target.norito");
     fs::write(
         &target_path,
@@ -6094,12 +5710,7 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
     )
     .expect("build receipt");
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let log = DaReceiptLog::open(
-        spool_dir.to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    )
-    .expect("open receipt log");
+    let log = open_receipt_log(spool_dir, &cursor_store, &signer).expect("open receipt log");
     assert!(matches!(
         log.append(
             lane_epoch,
@@ -6178,11 +5789,6 @@ fn da_receipt_log_rejects_receipt_hash_mismatch_against_ticket_manifest_on_open(
         stripe_layout_from_manifest(&manifest.manifest),
     )
     .expect("build receipt");
-    let stored = persistence::StoredDaReceipt {
-        version: persistence::STORED_RECEIPT_VERSION,
-        sequence: request.sequence,
-        receipt: receipt.clone(),
-    };
     let correct_fingerprint = *manifest.fingerprint.as_bytes();
     let manifest_path = spool_artifact_path_for_key(
         spool_dir,
@@ -6200,18 +5806,19 @@ fn da_receipt_log_rejects_receipt_hash_mismatch_against_ticket_manifest_on_open(
         to_bytes(&mismatched_manifest).expect("encode mismatched manifest sidecar"),
     )
     .expect("write mismatched manifest sidecar");
-    let receipt_path = spool_dir.join(receipt_spool_file_name(
-        &receipt,
-        request.sequence,
-        correct_fingerprint,
-    ));
-    fs::write(&receipt_path, to_bytes(&stored).expect("encode receipt")).expect("write receipt");
+    let receipt_path =
+        receipt_spool_path(spool_dir, &receipt, request.sequence, correct_fingerprint);
+    fs::write(
+        &receipt_path,
+        encoded_stored_receipt(
+            &receipt,
+            request.sequence,
+            persistence::STORED_RECEIPT_VERSION,
+        ),
+    )
+    .expect("write receipt");
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let err = match DaReceiptLog::open(
-        spool_dir.to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    ) {
+    let err = match open_receipt_log(spool_dir, &cursor_store, &signer) {
         Ok(_) => panic!("receipt/manifest hash mismatch must reject receipt-log recovery"),
         Err(err) => err,
     };
@@ -6231,12 +5838,7 @@ fn da_receipt_log_rejects_invalid_signature() {
     let lane_epoch = LaneEpoch::new(LaneId::new(5), 7);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_random_keypair();
-    let log = DaReceiptLog::open(
-        temp_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    )
-    .expect("open log");
+    let log = open_receipt_log(temp_dir.path(), &cursor_store, &signer).expect("open log");
     let mut receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 4);
     let unsigned = persistence::unsigned_receipt_bytes(&receipt, 1).expect("unsigned bytes");
     let wrong_signer = checked_random_keypair();
@@ -6253,12 +5855,7 @@ fn da_receipt_log_rejects_sequence_rebound_signature() {
     let lane_epoch = LaneEpoch::new(LaneId::new(5), 8);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_random_keypair();
-    let log = DaReceiptLog::open(
-        temp_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    )
-    .expect("open log");
+    let log = open_receipt_log(temp_dir.path(), &cursor_store, &signer).expect("open log");
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 5);
     let outcome = log.append(lane_epoch, 2, receipt, test_fingerprint(5));
     assert!(
@@ -6278,12 +5875,7 @@ fn da_receipt_log_reloads_from_disk() {
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_random_keypair();
     {
-        let log = DaReceiptLog::open(
-            temp_dir.path().to_path_buf(),
-            Arc::clone(&cursor_store),
-            signer.public_key().clone(),
-        )
-        .unwrap();
+        let log = open_receipt_log(temp_dir.path(), &cursor_store, &signer).unwrap();
         let first = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 9);
         let second = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 2, 10);
         log.append(lane_epoch, 1, first.clone(), test_fingerprint(9))
@@ -6292,12 +5884,7 @@ fn da_receipt_log_reloads_from_disk() {
             .unwrap();
     }
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let reopened = DaReceiptLog::open(
-        temp_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    )
-    .unwrap();
+    let reopened = open_receipt_log(temp_dir.path(), &cursor_store, &signer).unwrap();
     let entries = reopened.receipts_for(lane_epoch);
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].sequence, 1);
@@ -6327,25 +5914,12 @@ fn da_receipt_log_rejects_sequence_gap_on_open() {
             sequence,
             seed,
         );
-        let stored = persistence::StoredDaReceipt {
-            version: persistence::STORED_RECEIPT_VERSION,
-            sequence,
-            receipt: receipt.clone(),
-        };
-        let bytes = to_bytes(&stored).expect("encode receipt");
-        let path = temp_dir.path().join(receipt_spool_file_name(
-            &receipt,
-            sequence,
-            receipt_fingerprint_bytes(&receipt),
-        ));
+        let bytes = encoded_stored_receipt(&receipt, sequence, persistence::STORED_RECEIPT_VERSION);
+        let path = canonical_receipt_spool_path(temp_dir.path(), &receipt, sequence);
         fs::write(path, bytes).expect("write receipt");
     }
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let err = match DaReceiptLog::open(
-        temp_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    ) {
+    let err = match open_receipt_log(temp_dir.path(), &cursor_store, &signer) {
         Ok(_) => panic!("receipt-log recovery must reject missing receipt sequences"),
         Err(err) => err,
     };
@@ -6369,25 +5943,12 @@ fn da_receipt_log_rejects_same_manifest_duplicate_with_different_receipt_on_open
     let unsigned = persistence::unsigned_receipt_bytes(&conflicting, 1).expect("unsigned bytes");
     conflicting.operator_signature = checked_signature(signer.private_key(), &unsigned);
     for receipt in [&receipt, &conflicting] {
-        let stored = persistence::StoredDaReceipt {
-            version: persistence::STORED_RECEIPT_VERSION,
-            sequence: 1,
-            receipt: receipt.clone(),
-        };
-        let bytes = to_bytes(&stored).expect("encode receipt");
-        let path = temp_dir.path().join(receipt_spool_file_name(
-            receipt,
-            1,
-            receipt_fingerprint_bytes(receipt),
-        ));
+        let bytes = encoded_stored_receipt(receipt, 1, persistence::STORED_RECEIPT_VERSION);
+        let path = canonical_receipt_spool_path(temp_dir.path(), receipt, 1);
         fs::write(path, bytes).expect("write duplicate receipt");
     }
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let err = match DaReceiptLog::open(
-        temp_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    ) {
+    let err = match open_receipt_log(temp_dir.path(), &cursor_store, &signer) {
         Ok(_) => panic!("conflicting duplicate receipt must reject receipt-log recovery"),
         Err(err) => err,
     };
@@ -6406,24 +5967,13 @@ fn da_receipt_log_rejects_same_receipt_under_wrong_fingerprint_on_open() {
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 17);
     let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x93);
-    let stored = persistence::StoredDaReceipt {
-        version: persistence::STORED_RECEIPT_VERSION,
-        sequence: 1,
-        receipt: receipt.clone(),
-    };
-    let bytes = to_bytes(&stored).expect("encode receipt");
+    let bytes = encoded_stored_receipt(&receipt, 1, persistence::STORED_RECEIPT_VERSION);
     for fingerprint in [receipt_fingerprint_bytes(&receipt), [0xA4; 32]] {
-        let path = temp_dir
-            .path()
-            .join(receipt_spool_file_name(&receipt, 1, fingerprint));
+        let path = receipt_spool_path(temp_dir.path(), &receipt, 1, fingerprint);
         fs::write(path, &bytes).expect("write duplicate receipt");
     }
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let err = match DaReceiptLog::open(
-        temp_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    ) {
+    let err = match open_receipt_log(temp_dir.path(), &cursor_store, &signer) {
         Ok(_) => {
             panic!("same receipt under different fingerprints must reject receipt-log recovery")
         }
@@ -6445,23 +5995,10 @@ fn da_receipt_log_rejects_sequence_rebound_signature_on_open() {
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 9);
-    let stored = persistence::StoredDaReceipt {
-        version: persistence::STORED_RECEIPT_VERSION,
-        sequence: 2,
-        receipt: receipt.clone(),
-    };
-    let bytes = to_bytes(&stored).expect("encode receipt");
-    let path = temp_dir.path().join(receipt_spool_file_name(
-        &receipt,
-        2,
-        receipt_fingerprint_bytes(&receipt),
-    ));
+    let bytes = encoded_stored_receipt(&receipt, 2, persistence::STORED_RECEIPT_VERSION);
+    let path = canonical_receipt_spool_path(temp_dir.path(), &receipt, 2);
     fs::write(&path, bytes).expect("write rebound receipt");
-    let err = match DaReceiptLog::open(
-        temp_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    ) {
+    let err = match open_receipt_log(temp_dir.path(), &cursor_store, &signer) {
         Ok(_) => panic!("sequence-rebound receipt must reject receipt-log recovery"),
         Err(err) => err,
     };
@@ -6479,18 +6016,10 @@ fn da_receipt_log_rejects_invalid_entries_on_open() {
     let temp_dir = tempdir().expect("temp dir");
     let signer = checked_random_keypair();
     let corrupt_receipt = test_receipt(&signer, LaneId::new(1), 1, 1, 0xAA);
-    let bad_path = temp_dir.path().join(receipt_spool_file_name(
-        &corrupt_receipt,
-        1,
-        receipt_fingerprint_bytes(&corrupt_receipt),
-    ));
+    let bad_path = canonical_receipt_spool_path(temp_dir.path(), &corrupt_receipt, 1);
     fs::write(&bad_path, b"corrupt").expect("write corrupt receipt");
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let err = match DaReceiptLog::open(
-        temp_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    ) {
+    let err = match open_receipt_log(temp_dir.path(), &cursor_store, &signer) {
         Ok(_) => panic!("corrupt receipt must reject receipt-log recovery"),
         Err(err) => err,
     };
@@ -6504,18 +6033,10 @@ fn da_receipt_log_rejects_receipt_shaped_directory_on_open() {
     let temp_dir = tempdir().expect("temp dir");
     let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, LaneId::new(1), 1, 1, 0xAB);
-    let path = temp_dir.path().join(receipt_spool_file_name(
-        &receipt,
-        1,
-        receipt_fingerprint_bytes(&receipt),
-    ));
+    let path = canonical_receipt_spool_path(temp_dir.path(), &receipt, 1);
     fs::create_dir(&path).expect("create receipt-shaped directory");
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let err = match DaReceiptLog::open(
-        temp_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    ) {
+    let err = match open_receipt_log(temp_dir.path(), &cursor_store, &signer) {
         Ok(_) => panic!("receipt-shaped directory must reject receipt-log recovery"),
         Err(err) => err,
     };
@@ -6535,23 +6056,10 @@ fn da_receipt_log_rejects_filename_body_mismatch_on_open() {
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 8);
-    let stored = persistence::StoredDaReceipt {
-        version: persistence::STORED_RECEIPT_VERSION,
-        sequence: 1,
-        receipt: receipt.clone(),
-    };
-    let bytes = to_bytes(&stored).expect("encode receipt");
-    let mismatched_path = temp_dir.path().join(receipt_spool_file_name(
-        &receipt,
-        2,
-        receipt_fingerprint_bytes(&receipt),
-    ));
+    let bytes = encoded_stored_receipt(&receipt, 1, persistence::STORED_RECEIPT_VERSION);
+    let mismatched_path = canonical_receipt_spool_path(temp_dir.path(), &receipt, 2);
     fs::write(&mismatched_path, bytes).expect("write mismatched receipt");
-    let err = match DaReceiptLog::open(
-        temp_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    ) {
+    let err = match open_receipt_log(temp_dir.path(), &cursor_store, &signer) {
         Ok(_) => panic!("filename/body mismatch must reject receipt-log recovery"),
         Err(err) => err,
     };
@@ -6568,25 +6076,12 @@ fn da_receipt_log_rejects_filename_ticket_mismatch_on_open() {
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x8A);
-    let stored = persistence::StoredDaReceipt {
-        version: persistence::STORED_RECEIPT_VERSION,
-        sequence: 1,
-        receipt: receipt.clone(),
-    };
-    let bytes = to_bytes(&stored).expect("encode receipt");
+    let bytes = encoded_stored_receipt(&receipt, 1, persistence::STORED_RECEIPT_VERSION);
     let mut filename_receipt = receipt;
     filename_receipt.storage_ticket = StorageTicketId::new([0x99; 32]);
-    let mismatched_path = temp_dir.path().join(receipt_spool_file_name(
-        &filename_receipt,
-        1,
-        receipt_fingerprint_bytes(&filename_receipt),
-    ));
+    let mismatched_path = canonical_receipt_spool_path(temp_dir.path(), &filename_receipt, 1);
     fs::write(&mismatched_path, bytes).expect("write mismatched receipt");
-    let err = match DaReceiptLog::open(
-        temp_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    ) {
+    let err = match open_receipt_log(temp_dir.path(), &cursor_store, &signer) {
         Ok(_) => panic!("filename/body ticket mismatch must reject receipt-log recovery"),
         Err(err) => err,
     };
@@ -6612,11 +6107,7 @@ fn da_receipt_log_rejects_replay_cursor_seed_failures_on_open() {
     cursor_store
         .record(retained, 9)
         .expect("seed the sole bounded replay cursor");
-    let err = match DaReceiptLog::open(
-        receipt_dir.path().to_path_buf(),
-        Arc::clone(&cursor_store),
-        signer.public_key().clone(),
-    ) {
+    let err = match open_receipt_log(receipt_dir.path(), &cursor_store, &signer) {
         Ok(_) => panic!("cursor seed failures must reject receipt-log recovery"),
         Err(err) => err,
     };
@@ -6629,30 +6120,49 @@ fn da_receipt_log_rejects_replay_cursor_seed_failures_on_open() {
         "failed cursor seeding must not mutate bounded cursor memory"
     );
 }
+struct ReplayCursorFixture {
+    _dir: tempfile::TempDir,
+    root: PathBuf,
+    main_path: PathBuf,
+    temp_path: PathBuf,
+    journal_path: PathBuf,
+    lane_epoch: LaneEpoch,
+}
+fn replay_cursor_fixture() -> ReplayCursorFixture {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path().to_path_buf();
+    let main_path = replay_cursor_main_path(&root);
+    let temp_path = persistence::replay_cursor_temp_path(&main_path);
+    let journal_path = replay_cursor_journal_path(&root);
+    ReplayCursorFixture {
+        _dir: dir,
+        root,
+        main_path,
+        temp_path,
+        journal_path,
+        lane_epoch: LaneEpoch::new(LaneId::new(2), 9),
+    }
+}
 #[test]
 fn replay_cursor_store_persists_sequences() {
-    let temp = tempdir().expect("tempdir");
-    let path = temp.path().to_path_buf();
-    let store = ReplayCursorStore::open(path.clone()).expect("open store");
-    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
-    store.record(lane_epoch, 42).expect("record");
+    let fixture = replay_cursor_fixture();
+    let store = ReplayCursorStore::open(fixture.root.clone()).expect("open store");
+    store.record(fixture.lane_epoch, 42).expect("record");
     drop(store);
-    let reopened = ReplayCursorStore::open(path).expect("reopen store");
+    let reopened = ReplayCursorStore::open(fixture.root).expect("reopen store");
     let mut entries = reopened.highest_sequences();
     assert_eq!(entries.len(), 1);
     entries.sort_by_key(|(lane_epoch, _)| lane_epoch.lane_id.as_u32());
-    assert_eq!(entries[0], (lane_epoch, 42));
+    assert_eq!(entries[0], (fixture.lane_epoch, 42));
 }
 #[test]
 fn replay_cursor_store_persists_first_zero_sequence() {
-    let temp = tempdir().expect("tempdir");
-    let path = temp.path().to_path_buf();
-    let store = ReplayCursorStore::open(path.clone()).expect("open store");
-    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
-    store.record(lane_epoch, 0).expect("record zero");
+    let fixture = replay_cursor_fixture();
+    let store = ReplayCursorStore::open(fixture.root.clone()).expect("open store");
+    store.record(fixture.lane_epoch, 0).expect("record zero");
     drop(store);
-    let reopened = ReplayCursorStore::open(path).expect("reopen store");
-    assert_replay_cursor_sequences(&reopened, &[(lane_epoch, 0)]);
+    let reopened = ReplayCursorStore::open(fixture.root).expect("reopen store");
+    assert_replay_cursor_sequences(&reopened, &[(fixture.lane_epoch, 0)]);
 }
 #[test]
 fn replay_cursor_store_rejects_new_lane_epochs_at_global_capacity() {
@@ -6677,41 +6187,47 @@ fn replay_cursor_store_rejects_new_lane_epochs_at_global_capacity() {
 }
 #[test]
 fn replay_cursor_store_uses_journal_without_per_record_snapshot_rewrite() {
-    let temp = tempdir().expect("tempdir");
-    let path = temp.path().to_path_buf();
-    let main_path = replay_cursor_main_path(temp.path());
-    let journal_path = replay_cursor_journal_path(temp.path());
-    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
-    let store = ReplayCursorStore::open(path.clone()).expect("open store");
-    store.record(lane_epoch, 42).expect("append cursor journal");
+    let fixture = replay_cursor_fixture();
+    let store = ReplayCursorStore::open(fixture.root.clone()).expect("open store");
+    store
+        .record(fixture.lane_epoch, 42)
+        .expect("append cursor journal");
     assert!(
-        !main_path.exists(),
+        !fixture.main_path.exists(),
         "a single cursor update must not rewrite the full snapshot"
     );
     assert!(
-        fs::metadata(&journal_path).expect("journal metadata").len() > 0,
+        fs::metadata(&fixture.journal_path)
+            .expect("journal metadata")
+            .len()
+            > 0,
         "the constant-size journal entry must be durable"
     );
     drop(store);
-    let reopened = ReplayCursorStore::open(path).expect("recover journal");
-    assert_replay_cursor_sequences(&reopened, &[(lane_epoch, 42)]);
+    let reopened = ReplayCursorStore::open(fixture.root).expect("recover journal");
+    assert_replay_cursor_sequences(&reopened, &[(fixture.lane_epoch, 42)]);
 }
 #[test]
 fn replay_cursor_store_checkpoints_at_bounded_journal_interval() {
-    let temp = tempdir().expect("tempdir");
-    let path = temp.path().to_path_buf();
-    let main_path = replay_cursor_main_path(temp.path());
-    let journal_path = replay_cursor_journal_path(temp.path());
-    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
-    let store =
-        ReplayCursorStore::open_with_max_lane_epochs(path.clone(), NonZeroUsize::new(2).unwrap())
-            .expect("open bounded store");
-    store.record(lane_epoch, 1).expect("first journal entry");
-    assert!(!main_path.exists());
-    store.record(lane_epoch, 2).expect("second journal entry");
-    assert!(main_path.exists(), "capacity-sized journal must checkpoint");
+    let fixture = replay_cursor_fixture();
+    let store = ReplayCursorStore::open_with_max_lane_epochs(
+        fixture.root.clone(),
+        NonZeroUsize::new(2).unwrap(),
+    )
+    .expect("open bounded store");
+    store
+        .record(fixture.lane_epoch, 1)
+        .expect("first journal entry");
+    assert!(!fixture.main_path.exists());
+    store
+        .record(fixture.lane_epoch, 2)
+        .expect("second journal entry");
+    assert!(
+        fixture.main_path.exists(),
+        "capacity-sized journal must checkpoint"
+    );
     assert_eq!(
-        fs::metadata(&journal_path)
+        fs::metadata(&fixture.journal_path)
             .expect("journal metadata after checkpoint")
             .len(),
         0,
@@ -6719,30 +6235,31 @@ fn replay_cursor_store_checkpoints_at_bounded_journal_interval() {
     );
     drop(store);
     let reopened =
-        ReplayCursorStore::open_with_max_lane_epochs(path, NonZeroUsize::new(2).unwrap())
+        ReplayCursorStore::open_with_max_lane_epochs(fixture.root, NonZeroUsize::new(2).unwrap())
             .expect("reopen checkpointed store");
-    assert_replay_cursor_sequences(&reopened, &[(lane_epoch, 2)]);
+    assert_replay_cursor_sequences(&reopened, &[(fixture.lane_epoch, 2)]);
 }
 #[test]
 fn replay_cursor_store_recovers_torn_final_journal_frame() {
-    let temp = tempdir().expect("tempdir");
-    let path = temp.path().to_path_buf();
-    let journal_path = replay_cursor_journal_path(temp.path());
-    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
-    let store = ReplayCursorStore::open(path.clone()).expect("open store");
-    store.record(lane_epoch, 42).expect("append cursor journal");
+    let fixture = replay_cursor_fixture();
+    let store = ReplayCursorStore::open(fixture.root.clone()).expect("open store");
+    store
+        .record(fixture.lane_epoch, 42)
+        .expect("append cursor journal");
     drop(store);
-    let valid_len = fs::metadata(&journal_path).expect("journal metadata").len();
+    let valid_len = fs::metadata(&fixture.journal_path)
+        .expect("journal metadata")
+        .len();
     fs::OpenOptions::new()
         .append(true)
-        .open(&journal_path)
+        .open(&fixture.journal_path)
         .expect("open journal for torn-tail fixture")
         .write_all(&[0, 0])
         .expect("append torn length prefix");
-    let reopened = ReplayCursorStore::open(path).expect("recover torn final frame");
-    assert_replay_cursor_sequences(&reopened, &[(lane_epoch, 42)]);
+    let reopened = ReplayCursorStore::open(fixture.root).expect("recover torn final frame");
+    assert_replay_cursor_sequences(&reopened, &[(fixture.lane_epoch, 42)]);
     assert_eq!(
-        fs::metadata(&journal_path)
+        fs::metadata(&fixture.journal_path)
             .expect("recovered journal metadata")
             .len(),
         valid_len,
@@ -6751,19 +6268,17 @@ fn replay_cursor_store_recovers_torn_final_journal_frame() {
 }
 #[test]
 fn replay_cursor_store_rejects_corrupt_complete_journal_frame() {
-    let temp = tempdir().expect("tempdir");
-    let path = temp.path().to_path_buf();
-    let journal_path = replay_cursor_journal_path(temp.path());
-    let store = ReplayCursorStore::open(path.clone()).expect("open store");
+    let fixture = replay_cursor_fixture();
+    let store = ReplayCursorStore::open(fixture.root.clone()).expect("open store");
     store
-        .record(LaneEpoch::new(LaneId::new(2), 9), 42)
+        .record(fixture.lane_epoch, 42)
         .expect("append cursor journal");
     drop(store);
-    let mut bytes = fs::read(&journal_path).expect("read journal");
+    let mut bytes = fs::read(&fixture.journal_path).expect("read journal");
     let checksum_byte = bytes.last_mut().expect("journal frame is non-empty");
     *checksum_byte ^= 0x80;
-    fs::write(&journal_path, bytes).expect("write corrupt journal fixture");
-    let err = match ReplayCursorStore::open(path) {
+    fs::write(&fixture.journal_path, bytes).expect("write corrupt journal fixture");
+    let err = match ReplayCursorStore::open(fixture.root) {
         Ok(_) => panic!("corrupt complete journal frame must fail closed"),
         Err(err) => err,
     };
@@ -6774,14 +6289,12 @@ fn replay_cursor_store_rejects_corrupt_complete_journal_frame() {
 }
 #[test]
 fn replay_cursor_store_retries_checkpoint_after_persist_failure() {
-    let temp = tempdir().expect("tempdir");
-    let path = temp.path().to_path_buf();
-    let main_path = replay_cursor_main_path(temp.path());
-    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
-    let store = ReplayCursorStore::open(path.clone()).expect("open store");
-    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
-    store.record(lane_epoch, 42).expect("append journal entry");
-    fs::create_dir(&tmp_path).expect("block temp snapshot path");
+    let fixture = replay_cursor_fixture();
+    let store = ReplayCursorStore::open(fixture.root.clone()).expect("open store");
+    store
+        .record(fixture.lane_epoch, 42)
+        .expect("append journal entry");
+    fs::create_dir(&fixture.temp_path).expect("block temp snapshot path");
     let err = store
         .checkpoint()
         .expect_err("blocked temp path should fail snapshot persistence");
@@ -6789,23 +6302,21 @@ fn replay_cursor_store_retries_checkpoint_after_persist_failure() {
         format!("{err:?}").contains("failed to create DA replay snapshot temp file"),
         "unexpected error: {err:?}"
     );
-    assert_replay_cursor_sequences(&store, &[(lane_epoch, 42)]);
-    fs::remove_dir(&tmp_path).expect("unblock temp snapshot path");
+    assert_replay_cursor_sequences(&store, &[(fixture.lane_epoch, 42)]);
+    fs::remove_dir(&fixture.temp_path).expect("unblock temp snapshot path");
     store.checkpoint().expect("retry checkpoint");
     drop(store);
-    let reopened = ReplayCursorStore::open(path).expect("reopen store");
-    assert_replay_cursor_sequences(&reopened, &[(lane_epoch, 42)]);
+    let reopened = ReplayCursorStore::open(fixture.root).expect("reopen store");
+    assert_replay_cursor_sequences(&reopened, &[(fixture.lane_epoch, 42)]);
 }
 #[test]
 fn replay_cursor_store_rejects_existing_temp_without_truncating() {
-    let temp = tempdir().expect("tempdir");
-    let path = temp.path().to_path_buf();
-    let main_path = replay_cursor_main_path(temp.path());
-    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
-    let store = ReplayCursorStore::open(path.clone()).expect("open store");
-    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
-    store.record(lane_epoch, 42).expect("append journal entry");
-    fs::write(&tmp_path, b"existing-temp-snapshot").expect("seed temp snapshot");
+    let fixture = replay_cursor_fixture();
+    let store = ReplayCursorStore::open(fixture.root.clone()).expect("open store");
+    store
+        .record(fixture.lane_epoch, 42)
+        .expect("append journal entry");
+    fs::write(&fixture.temp_path, b"existing-temp-snapshot").expect("seed temp snapshot");
     let err = store
         .checkpoint()
         .expect_err("existing temp snapshot should reject cursor persistence");
@@ -6813,9 +6324,9 @@ fn replay_cursor_store_rejects_existing_temp_without_truncating() {
         format!("{err:?}").contains("failed to create DA replay snapshot temp file"),
         "unexpected error: {err:?}"
     );
-    assert_replay_cursor_sequences(&store, &[(lane_epoch, 42)]);
+    assert_replay_cursor_sequences(&store, &[(fixture.lane_epoch, 42)]);
     assert_eq!(
-        fs::read(&tmp_path).expect("read temp snapshot after failed record"),
+        fs::read(&fixture.temp_path).expect("read temp snapshot after failed record"),
         b"existing-temp-snapshot"
     );
 }
@@ -6925,17 +6436,15 @@ fn replay_cursor_store_record_rejects_dir_symlink_replacement() {
 #[test]
 fn replay_cursor_store_open_rejects_main_snapshot_symlink() {
     use std::os::unix::fs::symlink;
-    let temp = tempdir().expect("tempdir");
-    let main_path = replay_cursor_main_path(temp.path());
-    let target_path = temp.path().join("cursor-symlink-target.json");
-    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    let fixture = replay_cursor_fixture();
+    let target_path = fixture.root.join("cursor-symlink-target.json");
     fs::write(
         &target_path,
-        replay_cursor_snapshot_bytes(&[(lane_epoch, 42)]),
+        replay_cursor_snapshot_bytes(&[(fixture.lane_epoch, 42)]),
     )
     .expect("write cursor symlink target");
-    symlink(&target_path, &main_path).expect("create cursor snapshot symlink");
-    let err = match ReplayCursorStore::open(temp.path().to_path_buf()) {
+    symlink(&target_path, &fixture.main_path).expect("create cursor snapshot symlink");
+    let err = match ReplayCursorStore::open(fixture.root.clone()) {
         Ok(_) => panic!("symlinked main replay cursor snapshot must reject open"),
         Err(err) => err,
     };
@@ -6944,7 +6453,7 @@ fn replay_cursor_store_open_rejects_main_snapshot_symlink() {
         "unexpected cursor symlink error: {err:?}"
     );
     assert!(
-        fs::symlink_metadata(&main_path)
+        fs::symlink_metadata(&fixture.main_path)
             .expect("inspect cursor symlink")
             .file_type()
             .is_symlink(),
@@ -6984,18 +6493,15 @@ fn replay_cursor_store_open_rejects_journal_symlink() {
 #[test]
 fn replay_cursor_store_open_rejects_temp_snapshot_symlink() {
     use std::os::unix::fs::symlink;
-    let temp = tempdir().expect("tempdir");
-    let main_path = replay_cursor_main_path(temp.path());
-    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
-    let target_path = temp.path().join("cursor-temp-symlink-target.json");
-    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    let fixture = replay_cursor_fixture();
+    let target_path = fixture.root.join("cursor-temp-symlink-target.json");
     fs::write(
         &target_path,
-        replay_cursor_snapshot_bytes(&[(lane_epoch, 42)]),
+        replay_cursor_snapshot_bytes(&[(fixture.lane_epoch, 42)]),
     )
     .expect("write cursor temp symlink target");
-    symlink(&target_path, &tmp_path).expect("create cursor temp snapshot symlink");
-    let err = match ReplayCursorStore::open(temp.path().to_path_buf()) {
+    symlink(&target_path, &fixture.temp_path).expect("create cursor temp snapshot symlink");
+    let err = match ReplayCursorStore::open(fixture.root.clone()) {
         Ok(_) => panic!("symlinked temp replay cursor snapshot must reject open"),
         Err(err) => err,
     };
@@ -7004,7 +6510,7 @@ fn replay_cursor_store_open_rejects_temp_snapshot_symlink() {
         "unexpected cursor temp symlink error: {err:?}"
     );
     assert!(
-        fs::symlink_metadata(&tmp_path)
+        fs::symlink_metadata(&fixture.temp_path)
             .expect("inspect cursor temp symlink")
             .file_type()
             .is_symlink(),
@@ -7119,70 +6625,67 @@ fn replay_cursor_store_persists_canonical_snapshot_order() {
 }
 #[test]
 fn replay_cursor_store_open_promotes_temp_snapshot() {
-    let temp = tempdir().expect("tempdir");
-    let main_path = replay_cursor_main_path(temp.path());
-    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
-    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
-    fs::write(&tmp_path, replay_cursor_snapshot_bytes(&[(lane_epoch, 42)]))
-        .expect("write temp snapshot");
-    let store = ReplayCursorStore::open(temp.path().to_path_buf()).expect("open store");
-    assert!(main_path.exists(), "temp snapshot should be promoted");
+    let fixture = replay_cursor_fixture();
+    fs::write(
+        &fixture.temp_path,
+        replay_cursor_snapshot_bytes(&[(fixture.lane_epoch, 42)]),
+    )
+    .expect("write temp snapshot");
+    let store = ReplayCursorStore::open(fixture.root.clone()).expect("open store");
     assert!(
-        !tmp_path.exists(),
+        fixture.main_path.exists(),
+        "temp snapshot should be promoted"
+    );
+    assert!(
+        !fixture.temp_path.exists(),
         "promoted temp snapshot should be removed"
     );
-    assert_replay_cursor_sequences(&store, &[(lane_epoch, 42)]);
+    assert_replay_cursor_sequences(&store, &[(fixture.lane_epoch, 42)]);
 }
 #[test]
 fn replay_cursor_store_open_promotes_newer_temp_snapshot() {
-    let temp = tempdir().expect("tempdir");
-    let main_path = replay_cursor_main_path(temp.path());
-    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
-    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    let fixture = replay_cursor_fixture();
     fs::write(
-        &main_path,
-        replay_cursor_snapshot_bytes(&[(lane_epoch, 41)]),
+        &fixture.main_path,
+        replay_cursor_snapshot_bytes(&[(fixture.lane_epoch, 41)]),
     )
     .expect("write main snapshot");
-    fs::write(&tmp_path, replay_cursor_snapshot_bytes(&[(lane_epoch, 42)]))
-        .expect("write temp snapshot");
-    let store = ReplayCursorStore::open(temp.path().to_path_buf()).expect("open store");
-    assert!(main_path.exists(), "newer temp should be promoted");
-    assert!(!tmp_path.exists(), "newer temp should be consumed");
-    assert_replay_cursor_sequences(&store, &[(lane_epoch, 42)]);
+    fs::write(
+        &fixture.temp_path,
+        replay_cursor_snapshot_bytes(&[(fixture.lane_epoch, 42)]),
+    )
+    .expect("write temp snapshot");
+    let store = ReplayCursorStore::open(fixture.root.clone()).expect("open store");
+    assert!(fixture.main_path.exists(), "newer temp should be promoted");
+    assert!(!fixture.temp_path.exists(), "newer temp should be consumed");
+    assert_replay_cursor_sequences(&store, &[(fixture.lane_epoch, 42)]);
 }
 #[test]
 fn replay_cursor_store_open_removes_corrupt_temp_snapshot() {
-    let temp = tempdir().expect("tempdir");
-    let main_path = replay_cursor_main_path(temp.path());
-    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
-    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    let fixture = replay_cursor_fixture();
     fs::write(
-        &main_path,
-        replay_cursor_snapshot_bytes(&[(lane_epoch, 42)]),
+        &fixture.main_path,
+        replay_cursor_snapshot_bytes(&[(fixture.lane_epoch, 42)]),
     )
     .expect("write main snapshot");
-    fs::write(&tmp_path, b"corrupt").expect("write corrupt temp snapshot");
-    let store = ReplayCursorStore::open(temp.path().to_path_buf()).expect("open store");
+    fs::write(&fixture.temp_path, b"corrupt").expect("write corrupt temp snapshot");
+    let store = ReplayCursorStore::open(fixture.root.clone()).expect("open store");
     assert!(
-        !tmp_path.exists(),
+        !fixture.temp_path.exists(),
         "corrupt temp snapshot should be removed"
     );
-    assert_replay_cursor_sequences(&store, &[(lane_epoch, 42)]);
+    assert_replay_cursor_sequences(&store, &[(fixture.lane_epoch, 42)]);
 }
 #[test]
 fn replay_cursor_store_open_rejects_unremovable_corrupt_temp_snapshot() {
-    let temp = tempdir().expect("tempdir");
-    let main_path = replay_cursor_main_path(temp.path());
-    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
-    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    let fixture = replay_cursor_fixture();
     fs::write(
-        &main_path,
-        replay_cursor_snapshot_bytes(&[(lane_epoch, 42)]),
+        &fixture.main_path,
+        replay_cursor_snapshot_bytes(&[(fixture.lane_epoch, 42)]),
     )
     .expect("write main snapshot");
-    fs::create_dir(&tmp_path).expect("block corrupt temp snapshot cleanup");
-    let err = match ReplayCursorStore::open(temp.path().to_path_buf()) {
+    fs::create_dir(&fixture.temp_path).expect("block corrupt temp snapshot cleanup");
+    let err = match ReplayCursorStore::open(fixture.root.clone()) {
         Ok(_) => panic!("unremovable corrupt temp snapshot should reject recovery"),
         Err(err) => err,
     };
@@ -7191,17 +6694,15 @@ fn replay_cursor_store_open_rejects_unremovable_corrupt_temp_snapshot() {
         "unexpected error: {err:?}"
     );
     assert!(
-        tmp_path.exists(),
+        fixture.temp_path.exists(),
         "failed cleanup should leave temp path visible for operator repair"
     );
 }
 #[test]
 fn replay_cursor_store_open_rejects_orphan_corrupt_temp_snapshot() {
-    let temp = tempdir().expect("tempdir");
-    let main_path = replay_cursor_main_path(temp.path());
-    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
-    fs::write(&tmp_path, b"corrupt").expect("write corrupt temp snapshot");
-    let err = match ReplayCursorStore::open(temp.path().to_path_buf()) {
+    let fixture = replay_cursor_fixture();
+    fs::write(&fixture.temp_path, b"corrupt").expect("write corrupt temp snapshot");
+    let err = match ReplayCursorStore::open(fixture.root.clone()) {
         Ok(_) => panic!("orphan corrupt temp snapshot should be rejected"),
         Err(err) => err,
     };
@@ -7210,25 +6711,23 @@ fn replay_cursor_store_open_rejects_orphan_corrupt_temp_snapshot() {
         "unexpected error: {err:?}"
     );
     assert!(
-        tmp_path.exists(),
+        fixture.temp_path.exists(),
         "orphan corrupt temp snapshot should remain for operator inspection"
     );
     assert!(
-        !main_path.exists(),
+        !fixture.main_path.exists(),
         "corrupt temp snapshot must not be promoted into the main cursor path"
     );
 }
 #[test]
 fn replay_cursor_store_open_rejects_duplicate_main_snapshot() {
-    let temp = tempdir().expect("tempdir");
-    let main_path = replay_cursor_main_path(temp.path());
-    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    let fixture = replay_cursor_fixture();
     fs::write(
-        &main_path,
-        replay_cursor_snapshot_bytes_with_duplicate_entry(&[(lane_epoch, 42)]),
+        &fixture.main_path,
+        replay_cursor_snapshot_bytes_with_duplicate_entry(&[(fixture.lane_epoch, 42)]),
     )
     .expect("write duplicate main snapshot");
-    let err = match ReplayCursorStore::open(temp.path().to_path_buf()) {
+    let err = match ReplayCursorStore::open(fixture.root.clone()) {
         Ok(_) => panic!("duplicate main snapshot should be rejected"),
         Err(err) => err,
     };
@@ -7239,17 +6738,16 @@ fn replay_cursor_store_open_rejects_duplicate_main_snapshot() {
 }
 #[test]
 fn replay_cursor_store_open_rejects_snapshot_over_global_capacity() {
-    let temp = tempdir().expect("tempdir");
-    let main_path = replay_cursor_main_path(temp.path());
+    let fixture = replay_cursor_fixture();
     let first = LaneEpoch::new(LaneId::new(2), 9);
     let second = LaneEpoch::new(LaneId::new(2), 10);
     fs::write(
-        &main_path,
+        &fixture.main_path,
         replay_cursor_snapshot_bytes(&[(first, 41), (second, 42)]),
     )
     .expect("write over-capacity snapshot");
     let err = match ReplayCursorStore::open_with_max_lane_epochs(
-        temp.path().to_path_buf(),
+        fixture.root.clone(),
         NonZeroUsize::new(1).unwrap(),
     ) {
         Ok(_) => panic!("over-capacity replay cursor snapshot must fail closed"),
@@ -7262,32 +6760,35 @@ fn replay_cursor_store_open_rejects_snapshot_over_global_capacity() {
 }
 #[test]
 fn replay_cursor_store_open_recovers_temp_when_main_version_unsupported() {
-    let temp = tempdir().expect("tempdir");
-    let main_path = replay_cursor_main_path(temp.path());
-    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
-    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    let fixture = replay_cursor_fixture();
     fs::write(
-        &main_path,
-        replay_cursor_snapshot_bytes_with_version(&[(lane_epoch, 41)], 2),
+        &fixture.main_path,
+        replay_cursor_snapshot_bytes_with_version(&[(fixture.lane_epoch, 41)], 2),
     )
     .expect("write unsupported main snapshot");
-    fs::write(&tmp_path, replay_cursor_snapshot_bytes(&[(lane_epoch, 42)]))
-        .expect("write recoverable temp snapshot");
-    let store = ReplayCursorStore::open(temp.path().to_path_buf()).expect("recover from temp");
-    assert!(main_path.exists(), "valid temp should be promoted");
-    assert!(!tmp_path.exists(), "promoted temp should be consumed");
-    assert_replay_cursor_sequences(&store, &[(lane_epoch, 42)]);
+    fs::write(
+        &fixture.temp_path,
+        replay_cursor_snapshot_bytes(&[(fixture.lane_epoch, 42)]),
+    )
+    .expect("write recoverable temp snapshot");
+    let store = ReplayCursorStore::open(fixture.root.clone()).expect("recover from temp");
+    assert!(fixture.main_path.exists(), "valid temp should be promoted");
+    assert!(
+        !fixture.temp_path.exists(),
+        "promoted temp should be consumed"
+    );
+    assert_replay_cursor_sequences(&store, &[(fixture.lane_epoch, 42)]);
 }
 #[test]
 fn replay_cursor_store_open_rejects_unpromotable_temp_snapshot() {
-    let temp = tempdir().expect("tempdir");
-    let main_path = replay_cursor_main_path(temp.path());
-    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
-    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
-    fs::create_dir(&main_path).expect("block main snapshot path");
-    fs::write(&tmp_path, replay_cursor_snapshot_bytes(&[(lane_epoch, 42)]))
-        .expect("write temp snapshot");
-    let err = match ReplayCursorStore::open(temp.path().to_path_buf()) {
+    let fixture = replay_cursor_fixture();
+    fs::create_dir(&fixture.main_path).expect("block main snapshot path");
+    fs::write(
+        &fixture.temp_path,
+        replay_cursor_snapshot_bytes(&[(fixture.lane_epoch, 42)]),
+    )
+    .expect("write temp snapshot");
+    let err = match ReplayCursorStore::open(fixture.root.clone()) {
         Ok(_) => panic!("unpromotable temp snapshot should be rejected"),
         Err(err) => err,
     };
@@ -7298,48 +6799,37 @@ fn replay_cursor_store_open_rejects_unpromotable_temp_snapshot() {
 }
 #[test]
 fn replay_cursor_store_open_discards_conflicting_temp_snapshot() {
-    let temp = tempdir().expect("tempdir");
-    let main_path = replay_cursor_main_path(temp.path());
-    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
+    let fixture = replay_cursor_fixture();
     let lane_a = LaneEpoch::new(LaneId::new(2), 9);
     let lane_b = LaneEpoch::new(LaneId::new(3), 9);
     fs::write(
-        &main_path,
+        &fixture.main_path,
         replay_cursor_snapshot_bytes(&[(lane_a, 41), (lane_b, 50)]),
     )
     .expect("write main snapshot");
     fs::write(
-        &tmp_path,
+        &fixture.temp_path,
         replay_cursor_snapshot_bytes(&[(lane_a, 42), (lane_b, 49)]),
     )
     .expect("write conflicting temp snapshot");
-    let store = ReplayCursorStore::open(temp.path().to_path_buf()).expect("open store");
+    let store = ReplayCursorStore::open(fixture.root.clone()).expect("open store");
     assert!(
-        !tmp_path.exists(),
+        !fixture.temp_path.exists(),
         "conflicting temp snapshot should be removed"
     );
     assert_replay_cursor_sequences(&store, &[(lane_a, 41), (lane_b, 50)]);
 }
 #[test]
 fn resolve_manifest_emits_parity_chunks() {
-    let request = sample_request();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let rent_policy = DaRentPolicyV1::default();
-    let artifacts = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
+    let (fixture, artifacts) = resolved_manifest_fixture(
+        sample_request(),
         1_701_000_111,
-        &rent_policy,
-    )
-    .expect("resolve manifest with parity");
-    let expected = build_chunk_commitments(&request, &chunk_store, canonical.as_slice())
-        .expect("expected chunk commitments");
+        "resolve manifest with parity",
+    );
+    let request = &fixture.request;
+    let expected =
+        build_chunk_commitments(request, &fixture.chunk_store, fixture.canonical.as_slice())
+            .expect("expected chunk commitments");
     assert_eq!(artifacts.manifest.chunks, expected);
     let parity_chunks: Vec<_> = artifacts
         .manifest
@@ -7368,37 +6858,15 @@ fn resolve_manifest_emits_parity_chunks() {
 }
 #[test]
 fn resolve_manifest_rejects_malformed_request_manifest_without_panicking() {
-    let mut request = sample_request();
-    let canonical = normalize_payload(&request)
-        .expect("normalize payload")
-        .into_vec();
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let rent_policy = DaRentPolicyV1::default();
-    let valid = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1_701_000_112,
-        &rent_policy,
-    )
-    .expect("resolve valid manifest");
+    let mut fixture = ManifestResolutionFixture::new(sample_request());
+    let valid = fixture
+        .resolve(1_701_000_112)
+        .expect("resolve valid manifest");
     let mut malformed = to_bytes(&valid.manifest).expect("encode valid manifest");
     malformed.truncate(malformed.len().saturating_sub(1));
-    request.norito_manifest = Some(malformed);
+    fixture.request.norito_manifest = Some(malformed);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        resolve_manifest(
-            &request,
-            &chunk_store,
-            canonical.as_slice(),
-            &metadata,
-            &request.retention_policy,
-            1_701_000_113,
-            &rent_policy,
-        )
+        fixture.resolve(1_701_000_113)
     }));
     let err = result
         .expect("malformed request manifest must not panic")
@@ -7412,31 +6880,22 @@ fn resolve_manifest_rejects_malformed_request_manifest_without_panicking() {
 }
 #[test]
 fn resolve_manifest_uses_provided_rent_policy() {
-    let request = sample_request();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let rent_policy = DaRentPolicyV1::from_components(
+    let mut fixture = ManifestResolutionFixture::new(sample_request());
+    fixture.rent_policy = DaRentPolicyV1::from_components(
         "0.75".parse().expect("canonical XOR rate"),
         1_500,
         250,
         125,
         "0.002".parse().expect("canonical XOR egress credit"),
     );
-    let artifacts = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1_701_001_000,
-        &rent_policy,
-    )
-    .expect("resolve manifest with custom rent policy");
+    let artifacts = fixture
+        .resolve(1_701_001_000)
+        .expect("resolve manifest with custom rent policy");
+    let request = &fixture.request;
     let (gib, months) = rent_usage_from_request(request.total_size, &request.retention_policy)
         .expect("rent usage should fit test inputs");
-    let expected_quote = rent_policy
+    let expected_quote = fixture
+        .rent_policy
         .quote(gib, months)
         .expect("rent quote should compute for test inputs");
     assert_eq!(artifacts.manifest.rent_quote, expected_quote);
@@ -7460,26 +6919,15 @@ fn rent_usage_from_request_rejects_retention_month_overflow() {
 }
 #[test]
 fn resolve_manifest_rejects_retention_month_overflow() {
-    let request = sample_request();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let mut retention = request.retention_policy.clone();
+    let fixture = ManifestResolutionFixture::new(sample_request());
+    let mut retention = fixture.request.retention_policy.clone();
     retention.hot_retention_secs = u64::from(u32::MAX)
         .checked_mul(SECS_PER_MONTH)
         .and_then(|secs| secs.checked_add(1))
         .expect("overflow threshold fits into u64");
-    let err = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &retention,
-        1_701_001_001,
-        &DaRentPolicyV1::default(),
-    )
-    .expect_err("oversized rent duration must reject manifest resolution");
+    let err = fixture
+        .resolve_with_retention(&retention, 1_701_001_001)
+        .expect_err("oversized rent duration must reject manifest resolution");
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
     assert!(
         err.1.contains("rent quote month range"),
@@ -7489,13 +6937,7 @@ fn resolve_manifest_rejects_retention_month_overflow() {
 }
 #[test]
 fn resolve_manifest_applies_enforced_retention_policy() {
-    let request = sample_request();
-    let canonical_bytes = normalize_payload(&request)
-        .expect("normalize payload")
-        .into_vec();
-    let chunk_store = build_chunk_store(&request, canonical_bytes.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
+    let fixture = ManifestResolutionFixture::new(sample_request());
     let enforced = RetentionPolicy {
         hot_retention_secs: 99,
         cold_retention_secs: 199,
@@ -7503,79 +6945,32 @@ fn resolve_manifest_applies_enforced_retention_policy() {
         storage_class: StorageClass::Cold,
         governance_tag: GovernanceTag::new("da.test"),
     };
-    let rent_policy = DaRentPolicyV1::default();
-    let artifacts = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical_bytes.as_slice(),
-        &metadata,
-        &enforced,
-        1_701_000_555,
-        &rent_policy,
-    )
-    .expect("resolve manifest with enforced retention");
+    let artifacts = fixture
+        .resolve_with_retention(&enforced, 1_701_000_555)
+        .expect("resolve manifest with enforced retention");
     assert_eq!(artifacts.manifest.retention_policy, enforced);
 }
 #[test]
 fn provided_manifest_must_match_enforced_retention_policy() {
-    let mut request = sample_request();
-    let canonical_bytes = normalize_payload(&request)
-        .expect("normalize payload")
-        .into_vec();
-    let chunk_store = build_chunk_store(&request, canonical_bytes.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let rent_policy = DaRentPolicyV1::default();
-    let artifacts = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical_bytes.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1_701_000_600,
-        &rent_policy,
-    )
-    .expect("resolve manifest");
-    request.norito_manifest = Some(to_bytes(&artifacts.manifest).expect("encode manifest"));
+    let mut fixture = ManifestResolutionFixture::new(sample_request());
+    let artifacts = fixture.resolve(1_701_000_600).expect("resolve manifest");
+    fixture.request.norito_manifest = Some(to_bytes(&artifacts.manifest).expect("encode manifest"));
     let strict_policy = RetentionPolicy {
-        hot_retention_secs: request.retention_policy.hot_retention_secs + 1,
-        cold_retention_secs: request.retention_policy.cold_retention_secs,
-        required_replicas: request.retention_policy.required_replicas,
-        storage_class: request.retention_policy.storage_class,
+        hot_retention_secs: fixture.request.retention_policy.hot_retention_secs + 1,
+        cold_retention_secs: fixture.request.retention_policy.cold_retention_secs,
+        required_replicas: fixture.request.retention_policy.required_replicas,
+        storage_class: fixture.request.retention_policy.storage_class,
         governance_tag: GovernanceTag::new("da.strict"),
     };
-    let err = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical_bytes.as_slice(),
-        &metadata,
-        &strict_policy,
-        1_701_000_601,
-        &rent_policy,
-    )
-    .expect_err("mismatched retention policy must be rejected");
+    let err = fixture
+        .resolve_with_retention(&strict_policy, 1_701_000_601)
+        .expect_err("mismatched retention policy must be rejected");
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
 }
 #[test]
 fn provided_manifest_with_wrong_parity_is_rejected() {
-    let mut request = sample_request();
-    let canonical_bytes = normalize_payload(&request)
-        .expect("normalize payload")
-        .into_vec();
-    let chunk_store = build_chunk_store(&request, canonical_bytes.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let rent_policy = DaRentPolicyV1::default();
-    let artifacts = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical_bytes.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1_701_000_222,
-        &rent_policy,
-    )
-    .expect("resolve manifest");
+    let mut fixture = ManifestResolutionFixture::new(sample_request());
+    let artifacts = fixture.resolve(1_701_000_222).expect("resolve manifest");
     let mut tampered = artifacts.manifest.clone();
     let first_parity = tampered
         .chunks
@@ -7583,16 +6978,8 @@ fn provided_manifest_with_wrong_parity_is_rejected() {
         .find(|chunk| chunk.parity)
         .expect("expected parity chunk to mutate");
     first_parity.parity = false;
-    request.norito_manifest = Some(to_bytes(&tampered).expect("encode tampered manifest"));
-    let err = match resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical_bytes.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1_701_000_333,
-        &rent_policy,
-    ) {
+    fixture.request.norito_manifest = Some(to_bytes(&tampered).expect("encode tampered manifest"));
+    let err = match fixture.resolve(1_701_000_333) {
         Ok(_) => panic!("manifest with mismatched parity flag must be rejected"),
         Err(err) => err,
     };
@@ -7600,37 +6987,14 @@ fn provided_manifest_with_wrong_parity_is_rejected() {
 }
 #[test]
 fn provided_manifest_with_wrong_ipa_commitment_is_rejected() {
-    let mut request = sample_request();
-    let canonical_bytes = normalize_payload(&request)
-        .expect("normalize payload")
-        .into_vec();
-    let chunk_store = build_chunk_store(&request, canonical_bytes.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let rent_policy = DaRentPolicyV1::default();
-    let artifacts = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical_bytes.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1_701_000_920,
-        &rent_policy,
-    )
-    .expect("resolve manifest");
+    let mut fixture = ManifestResolutionFixture::new(sample_request());
+    let artifacts = fixture.resolve(1_701_000_920).expect("resolve manifest");
     let mut tampered = artifacts.manifest.clone();
     tampered.ipa_commitment = BlobDigest::new([0xAB; 32]);
-    request.norito_manifest = Some(to_bytes(&tampered).expect("encode tampered manifest"));
-    let err = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical_bytes.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1_701_000_921,
-        &rent_policy,
-    )
-    .expect_err("manifest with mismatched ipa commitment must be rejected");
+    fixture.request.norito_manifest = Some(to_bytes(&tampered).expect("encode tampered manifest"));
+    let err = fixture
+        .resolve(1_701_000_921)
+        .expect_err("manifest with mismatched ipa commitment must be rejected");
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
 }
 #[test]
@@ -8144,7 +7508,7 @@ async fn da_rent_metrics_exposed_via_metrics_handler_snapshot() {
             .expect("legacy micro-XOR value is representable"),
     };
     record_da_rent_quote_metrics(&telemetry, "cluster-a", StorageClass::Warm, 4, 3, &quote);
-    let prometheus = crate::handle_metrics(&telemetry, true)
+    let prometheus = crate::handle_metrics(&telemetry)
         .await
         .expect("prometheus snapshot");
     let snapshot = da_rent_metric_lines(&prometheus);

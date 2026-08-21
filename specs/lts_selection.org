@@ -122,7 +122,7 @@ for selecting a particular version as an LTS candidate
    for the candidate. Failure to do so is an automatic disqualification.
 
 In addition to the current release procedure outlined in
-[[release_dual_track_runbook.md][the dual-track release procedure]], the LTS
+[[release_runbook.md][the Iroha 3 release procedure]], the LTS
 must adhere to the following additional steps.
 
 In /addition/ to performing a regular release, a separate PR with the

@@ -5,10 +5,10 @@ crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     durable_validate_async_handoff_surface_is_move_only_scheduler_free_and_inert
 );
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
-    durable_validate_wait_dispatch_is_move_only_single_entry_and_unwired
+    durable_validate_wait_dispatch_is_move_only_single_entry_and_worker_bound
 );
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
-    durable_validate_volatile_completion_is_atomic_move_only_and_unwired
+    durable_validate_volatile_completion_is_atomic_move_only_and_owner_published
 );
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     certified_fetch_dequeue_commit_requires_the_durable_token

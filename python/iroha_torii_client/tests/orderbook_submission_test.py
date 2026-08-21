@@ -20,7 +20,6 @@ from iroha_torii_client import (
 
 
 IDENTITY = {
-    "tx_hash": "aa" * 32,
     "entrypoint_hash": "aa" * 32,
     "signed_transaction_hash": "aa" * 32,
 }
@@ -39,7 +38,6 @@ def canonical_hash(seed: int) -> str:
 
 def receipt_json(**payload_overrides: Any) -> str:
     payload = {
-        "tx_hash": canonical_hash(0xAA),
         "entrypoint_hash": canonical_hash(0xAA),
         "signed_transaction_hash": canonical_hash(0xAA),
         "submitted_at_ms": 1,
@@ -64,7 +62,7 @@ class Verifier:
         self.inspected: bytes | None = None
         self.during_inspect = None
 
-    def inspect_sorafs_orderbook_submission_v1(
+    def inspect_sorafs_orderbook_submission_for_discriminant_v1(
         self, route: str, network: object, discriminant: int, signer: str, body: bytes
     ) -> dict[str, str]:
         assert route in {"order", "cancel", "receipt"}
@@ -80,8 +78,8 @@ class Verifier:
         return dict(IDENTITY)
 
     def verify_sorafs_orderbook_submission_receipt_v1(self, *args: Any) -> str:
-        assert args[1:4] == tuple(IDENTITY.values())
-        assert args[4] == SIGNER
+        assert args[1:3] == tuple(IDENTITY.values())
+        assert args[3] == SIGNER
         return self.verified_json
 
 
@@ -113,7 +111,6 @@ class Response:
             {
                 "Content-Type": "application/x-norito",
                 "Content-Length": str(len(body)),
-                "x-iroha-transaction-hash": IDENTITY["tx_hash"],
                 "x-iroha-entrypoint-hash": IDENTITY["entrypoint_hash"],
                 "x-iroha-signed-transaction-hash": IDENTITY["signed_transaction_hash"],
                 **(headers or {}),
@@ -174,7 +171,8 @@ def test_public_submit_receipt_types_are_precise_and_exported() -> None:
     assert get_type_hints(ToriiClient.submit_sorafs_orderbook_order)["return"] is SorafsOrderbookSubmissionReceipt
     assert SorafsOrderbookSubmissionIdentity.__required_keys__ == frozenset(IDENTITY)
     assert SorafsOrderbookSubmissionReceiptPayload.__required_keys__ == frozenset({
-        *IDENTITY, "submitted_at_ms", "submitted_at_height", "signer",
+        "entrypoint_hash", "signed_transaction_hash", "submitted_at_ms",
+        "submitted_at_height", "signer",
     })
 
 
@@ -282,7 +280,7 @@ def test_default_client_and_missing_trust_inputs_fail_before_http() -> None:
         Response(status=500),
         Response(headers={"Content-Type": "application/json"}),
         Response(headers={"x-iroha-entrypoint-hash": "bb" * 32}),
-        Response(duplicates={"x-iroha-transaction-hash"}),
+        Response(duplicates={"x-iroha-entrypoint-hash"}),
         Response(headers={"Content-Length": "1048577"}),
         Response(headers={"Content-Length": "2"}),
         Response(body=b""),
@@ -311,7 +309,8 @@ def test_post_dispatch_failures_are_ambiguous_and_never_retried(response: Any) -
         receipt_json(submitted_at_ms=1.5),
         receipt_json(submitted_at_ms=True),
         receipt_json(submitted_at_ms=1 << 64),
-        receipt_json(tx_hash="hash:" + "AA" * 32 + "#0000"),
+        receipt_json(entrypoint_hash="hash:" + "AA" * 32 + "#0000"),
+        receipt_json(tx_hash=canonical_hash(0xAA)),
         json.dumps({"payload": json.loads(receipt_json())["payload"], "signature": "ab"}),
     ],
 )

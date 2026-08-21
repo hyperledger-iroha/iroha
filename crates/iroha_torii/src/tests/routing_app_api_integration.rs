@@ -2240,7 +2240,6 @@ mod app_api_integration_tests {
         Arc::get_mut(&mut state)
             .expect("unique state")
             .set_nexus(iroha_config::parameters::actual::Nexus {
-                enabled: true,
                 lane_catalog,
                 dataspace_catalog,
                 ..iroha_config::parameters::actual::Nexus::default()

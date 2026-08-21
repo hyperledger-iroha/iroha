@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 try:
+    from . import compose_taira_nevo_reset_genesis as nevo_composer
+except ImportError:
+    import compose_taira_nevo_reset_genesis as nevo_composer
+
+try:
     import tomllib
 except ModuleNotFoundError:  # Python 3.9/3.10 development and operator hosts.
     try:
@@ -25,6 +30,7 @@ EXPECTED = {
     "bootle_lantern_broker_public.json": 4 * 1024 * 1024,
     "config.toml": 8 * 1024 * 1024,
     "genesis.json": 16 * 1024 * 1024,
+    "nevo-reset.review.json": 4 * 1024 * 1024,
     "privacy_bootstrap_plan.json": 8 * 1024 * 1024,
 }
 HANDOFF_MANIFEST = "handoff-inventory-v1.json"
@@ -40,8 +46,8 @@ CHAIN_DISCRIMINANT = 369
 GENESIS_AUTHORITY = (
     "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A"
 )
-MATRIX_FILE_SHA256 = "7336d0221fddc51486ee53d4203f5a92d560d0ec9104a49de25896a8b10673d0"
-ROLLOUT_PLAN_SHA256 = "63f3d331b25e5b240b3e8ac291b1fa64c6901b52f88b2ea2bb7bdb8af0889aa2"
+MATRIX_FILE_SHA256 = "f75eeba824067aaf903fd8060c967190e37073dc07e487c81c265018a1c00f38"
+ROLLOUT_PLAN_SHA256 = "6db9c54ebfa147a57199b02f476929389b0751d59c8387da2e0104d16200ce65"
 REGISTRY_SHA256 = "734eafb58f0c54f5319b9cc26557920e564453f689071931393dcdba91123e51"
 ISSUER_ID = hashlib.sha256(
     b"iroha.taira.privacy.bootle-lantern.issuer.v1"
@@ -50,11 +56,20 @@ POLICY_ID = hashlib.sha256(
     b"iroha.taira.privacy.bootle-lantern.policy.v1"
 ).hexdigest()
 PROVIDER_HANDLE = "runtime://privacy/bootle-lantern/taira-primary"
+PUBLIC_ONBOARDING_CREDENTIALS = [
+    {
+        "id": "REPLACE_WITH_TAIRA_BOI_ONBOARDING_CREDENTIAL_ID",
+        "scope": {"dataspace": "is2"},
+        "token_hash": "REPLACE_WITH_TAIRA_BOI_ONBOARDING_TOKEN_HASH",
+    },
+    {
+        "id": "REPLACE_WITH_TAIRA_DPN_ONBOARDING_CREDENTIAL_ID",
+        "scope": {"dataspace": "dpn"},
+        "token_hash": "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH",
+    },
+]
 CONFIG_PUBLIC_BASE_SHA256 = (
-    "67e2059e3d5b13832ac8b3f19ecb54a46fe24b0653ecb74b89c902a2ddb60077"
-)
-GENESIS_PUBLIC_BASE_SHA256 = (
-    "355226bf9aeb76176d5c5fcdf15aaba1acae26f32e0712135ea01127c068bc49"
+    "23b92e7f24e6fe1d4e9358fa54b0a8dcec38b0836e4b3154a7d9ac35bb5d86ac"
 )
 PROTOCOLS = (
     (0, "zk-ace-pq-authorization-v0", "ZkAcePqAuthorizationV0"),
@@ -696,11 +711,7 @@ def _validate_public_config(payload: bytes, plan: dict[str, Any]) -> None:
         or not isinstance(onboarding, dict)
         or onboarding.get("private_key_file")
         != "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY_FILE"
-        or not isinstance(credentials, list)
-        or len(credentials) != 1
-        or not isinstance(credentials[0], dict)
-        or credentials[0].get("token_hash")
-        != "REPLACE_WITH_TAIRA_ONBOARDING_TOKEN_HASH"
+        or credentials != PUBLIC_ONBOARDING_CREDENTIALS
         or not isinstance(faucet, dict)
         or faucet.get("private_key_file")
         != "REPLACE_WITH_TAIRA_FAUCET_PRIVATE_KEY_FILE"
@@ -755,19 +766,8 @@ def _validate_public_genesis(
     payload: bytes, _plan: dict[str, Any], _broker: dict[str, Any]
 ) -> None:
     genesis = _strict_json_object(payload, "public Taira genesis")
-    canonical = (
-        json.dumps(
-            genesis,
-            ensure_ascii=False,
-            sort_keys=True,
-            indent=2,
-            allow_nan=False,
-        )
-        + "\n"
-    ).encode("utf-8")
     if (
-        payload != canonical
-        or b"\r" in payload
+        b"\r" in payload
         or not payload.startswith(b"{\n")
         or not payload.endswith(b"\n")
     ):
@@ -796,12 +796,6 @@ def _validate_public_genesis(
             "public release genesis must not schedule encoded privacy activation or "
             "issuer-policy instructions"
         )
-    if hashlib.sha256(_semantic_bytes(genesis, "public genesis base")).hexdigest() != (
-        GENESIS_PUBLIC_BASE_SHA256
-    ):
-        _fail("public Taira genesis differs from the canonical secret-free base")
-
-
 def _validate_secret_free_projection(payloads: dict[str, bytes]) -> None:
     if set(payloads) != set(EXPECTED):
         _fail("public privacy projection inventory differs")
@@ -811,6 +805,28 @@ def _validate_secret_free_projection(payloads: dict[str, bytes]) -> None:
     )
     _validate_public_config(payloads["config.toml"], plan)
     _validate_public_genesis(payloads["genesis.json"], plan, broker)
+    base_genesis = nevo_composer._read_bounded_regular(
+        nevo_composer.CHECKED_IN_TAIRA_GENESIS,
+        nevo_composer.MAX_BASE_GENESIS_BYTES,
+        "sealed canonical Taira genesis",
+    )
+    base_config_path = (
+        nevo_composer.REPO_ROOT / "configs/soranexus/taira/config.toml"
+    )
+    base_config = nevo_composer._read_bounded_regular(
+        base_config_path,
+        nevo_composer.MAX_BASE_CONFIG_BYTES,
+        "sealed canonical Taira config",
+    )
+    try:
+        nevo_composer.verify_reviewed_payloads(
+            unsigned_genesis_bytes=payloads["genesis.json"],
+            review_bytes=payloads["nevo-reset.review.json"],
+            base_genesis_bytes=base_genesis,
+            base_config_bytes=base_config,
+        )
+    except nevo_composer.CompositionError as exc:
+        raise SnapshotError(f"reviewed NEVO genesis is invalid: {exc}") from exc
 
 
 def snapshot(source: Path, output: Path, forbidden_root: Path) -> dict[str, object]:

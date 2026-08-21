@@ -1222,6 +1222,7 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
         let ttlField = try field(&payloadReader, "ttl")
         let nonceField = try field(&payloadReader, "nonce")
         let feePaymentField = try field(&payloadReader, "fee payment")
+        let admissionIntentField = try field(&payloadReader, "admission intent")
         let metadataField = try field(&payloadReader, "metadata")
         let attachmentsField = try field(&payloadReader, "attachments")
         try finish(payloadReader, "transaction payload")
@@ -1234,6 +1235,9 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
         try validateOption(ttlField, valueLength: 8, field: "ttl")
         try validateOption(nonceField, valueLength: 4, field: "nonce")
         try validateFeePayment(feePaymentField)
+        guard admissionIntentField == TransactionAdmissionIntentV1.queuePlanSynced.norito else {
+            throw invalid("admission intent")
+        }
         try validateMetadata(metadataField)
         guard attachmentsField == Data([0]) else {
             throw invalid("proof attachments")
@@ -1705,6 +1709,7 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
         payload.writeField(try CanonicalNorito.encodeOption(ttlMs, encode: CanonicalNorito.encodeUInt64))
         payload.writeField(try CanonicalNorito.encodeOption(nonce, encode: CanonicalNorito.encodeUInt32))
         payload.writeField(try feePayment.canonicalNorito())
+        payload.writeField(TransactionAdmissionIntentV1.queuePlanSynced.norito)
         payload.writeField(try CanonicalNorito.encodeMetadata(metadata))
         payload.writeField(Data([0]))
         return payload.data

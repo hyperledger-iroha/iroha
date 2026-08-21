@@ -37,14 +37,14 @@ fn v1_fixture_batch(rows: usize) -> TransitionBatch {
                 transfer_idx = transfer_idx.wrapping_add(1);
             }
             1 => {
-                let key = format!("asset/xor#fixture/mint/{row_idx:08}").into_bytes();
+                let key = format!("asset/xor#fixture/mint-{row_idx:08}").into_bytes();
                 let pre = (row_idx as u64).to_le_bytes().to_vec();
                 let post = (row_idx as u64 + 1).to_le_bytes().to_vec();
                 batch.push(StateTransition::new(key, pre, post, OperationKind::Mint));
                 row_idx += 1;
             }
             _ => {
-                let key = format!("asset/xor#fixture/burn/{row_idx:08}").into_bytes();
+                let key = format!("asset/xor#fixture/burn-{row_idx:08}").into_bytes();
                 let pre = (row_idx as u64 + 2).to_le_bytes().to_vec();
                 let post = (row_idx as u64 + 1).to_le_bytes().to_vec();
                 batch.push(StateTransition::new(key, pre, post, OperationKind::Burn));
@@ -139,7 +139,9 @@ fn golden_v1_proof_matches_fixture() {
             Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
                 .unwrap();
         let batch = v1_fixture_batch(1_000);
-        let proof = prover.prove(&batch).expect("generate proof for fixture");
+        let proof = prover
+            .prove_raw_statement(&batch)
+            .expect("generate raw proof fixture");
         let reencoded = to_bytes(&proof).expect("encode regenerated proof");
         fs::write(&path, &reencoded).expect("write regenerated fixture");
         return;
@@ -148,7 +150,9 @@ fn golden_v1_proof_matches_fixture() {
     let prover =
         Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu).unwrap();
     let batch = v1_fixture_batch(1_000);
-    let proof = prover.prove(&batch).expect("produce proof for comparison");
+    let proof = prover
+        .prove_raw_statement(&batch)
+        .expect("produce raw proof fixture for comparison");
     let reencoded = to_bytes(&proof).expect("encode proof for comparison");
     assert_eq!(
         reencoded, bytes,

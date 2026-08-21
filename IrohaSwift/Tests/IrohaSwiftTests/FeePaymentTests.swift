@@ -13,7 +13,7 @@ final class FeePaymentTests: XCTestCase {
 
         XCTAssertEqual(
             String(decoding: try intent.canonicalJSONData(), as: UTF8.self),
-            #"{"payer":"authority","value":{"charge_limits":[]}}"#
+            #"{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}}"#
         )
         XCTAssertEqual(
             try intent.canonicalNorito().hexEncodedString(),
@@ -202,9 +202,14 @@ final class FeePaymentTests: XCTestCase {
 
     func testIntentRejectsUnknownFieldsAndNonCanonicalLimits() throws {
         let unknown = Data(
-            #"{"payer":"authority","value":{"charge_limits":[]},"fee_sponsor":"legacy"}"#.utf8
+            #"{"payer":"authority","value":{"charge_limits":[],"gas_limit":null},"fee_sponsor":"legacy"}"#.utf8
         )
         XCTAssertThrowsError(try JSONDecoder().decode(FeePaymentIntent.self, from: unknown))
+
+        let missingGasLimit = Data(
+            #"{"payer":"authority","value":{"charge_limits":[]}}"#.utf8
+        )
+        XCTAssertThrowsError(try JSONDecoder().decode(FeePaymentIntent.self, from: missingGasLimit))
 
         let nexus = try FeeChargeLimit(
             kind: .nexus,
@@ -243,7 +248,7 @@ final class FeePaymentTests: XCTestCase {
             Data(
                 """
                 {
-                  "intent":{"payer":"authority","value":{"charge_limits":[]}},
+                  "intent":{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}},
                   "observation":{"ledger_time_ms":1,"next_block_height":1,"route_dataspace_id":0},
                   "components":[],
                   "capacities":[],

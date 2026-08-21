@@ -8,7 +8,7 @@ async fn committing_popped_transaction_does_not_create_fifo_tombstone() {
     register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
     let state = Arc::new(state);
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
-    let hash = transaction.as_ref().hash();
+    let hash = transaction.as_ref().hash_as_entrypoint();
     queue
         .push(transaction, state.view())
         .expect("push transaction");
@@ -190,7 +190,7 @@ async fn queue_throttling() {
     // Put transaction hashes into state as if they were in the blockchain
     let transaction_hashes = transactions
         .into_iter()
-        .map(|tx| tx.as_ref().hash())
+        .map(|tx| tx.as_ref().hash_as_entrypoint())
         .collect();
     state_block
         .transactions

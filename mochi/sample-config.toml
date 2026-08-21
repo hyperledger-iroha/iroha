@@ -58,9 +58,8 @@ iroha_cli = ""
 kagami = ""
 
 [nexus]
-# Enable Nexus/multi-lane configuration in generated peer configs.
-# enabled = true
-# Optional explicit lane count (defaults to 1 when omitted).
+# Nexus is mandatory. Optionally set an explicit lane count (defaults to 1 when
+# omitted).
 # lane_count = 3
 #
 # Optional lane catalog entries:

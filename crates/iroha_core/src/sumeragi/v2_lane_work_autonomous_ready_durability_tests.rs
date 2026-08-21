@@ -11,7 +11,6 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         &keys,
         &proposal,
         entrypoint,
-        AutonomousAuthorRule::Autonomous,
         b"autonomous-ready-queue-plan-admission-binding",
         b"autonomous-ready-reservation-owner",
         "deterministic autonomous producer",
@@ -563,216 +562,219 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         "terminal autonomous ingress must not stop consensus output"
     );
 }
-    #[test]
-    fn autonomous_local_author_reserves_fifo_before_durable_hint_free_publication() {
-        let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
-        let lane_id = LaneId::new(1);
-        let dataspace_id = DataSpaceId::new(7);
-        prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
-        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
-        let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
-        let journal_path = journal_dir.path().join("lane-reservations.norito");
-        let queue =
-            install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
-        let expected_entrypoints =
-            enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 4);
-        let original_fifo = queue.fifo_snapshot_for_test();
-        assert_eq!(original_fifo.len(), expected_entrypoints.len());
-        let exact_slot = plan_autonomous_lane_reservation_slot(
-            adapter.state.as_ref(),
-            adapter.kura.as_ref(),
-            &adapter.context,
-            lane_id,
-            dataspace_id,
-        )
-        .expect("plan the exact producer Kura activation slot");
-        let journal_len_before = std::fs::metadata(&journal_path)
-            .expect("stat empty reservation journal")
-            .len();
-        let limits = autonomous_test_candidate_limits(6, 6);
-        let expected_count = autonomous_route_quota_for_test(&adapter, lane_id, dataspace_id, 6);
-        assert_eq!(expected_count, 3, "fixture gives the independent lane half");
-        adapter
-            .schedule_autonomous_lane_production(0, limits)
-            .expect("run autonomous producer tick");
-        let payload = adapter
-            .pending_autonomous_anchor_payloads
-            .values()
-            .find(|payload| {
-                payload.origin_proposal.descriptor.lane_id == lane_id
-                    && payload.origin_proposal.descriptor.dataspace_id == dataspace_id
-            })
-            .expect("local producer publishes one pending autonomous payload")
-            .clone();
-        assert_eq!(payload.origin_proposal.payload_block_hint, None);
-        assert!(lane_executable_payload_carries_lane(
+#[test]
+fn single_custom_lane_still_produces_autonomous_payload() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    let validators = enable_single_custom_lane_nexus(&mut adapter, &keys, lane_id, dataspace_id);
+    assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
+    let journal_dir = tempfile::tempdir().expect("single-lane reservation journal directory");
+    let journal_path = journal_dir.path().join("lane-reservations.norito");
+    let queue = install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
+    enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(1, 1))
+        .expect("run single custom-lane producer tick");
+
+    let payload = adapter
+        .pending_autonomous_anchor_payloads
+        .values()
+        .find(|payload| {
+            payload.origin_proposal.descriptor.lane_id == lane_id
+                && payload.origin_proposal.descriptor.dataspace_id == dataspace_id
+        })
+        .expect("enabled single custom-lane author publishes its durable payload");
+    assert_eq!(payload.origin_proposal.payload_block_hint, None);
+    assert_eq!(
+        payload.origin_proposal.descriptor.validator_set, validators,
+        "the payload must bind the custom lane authority, not the global roster mode"
+    );
+    assert_eq!(payload.producer, adapter.local_peer);
+    assert_eq!(queue.live_lane_reservations(), payload.reservation_keys);
+}
+#[test]
+fn autonomous_local_author_reserves_fifo_before_durable_hint_free_publication() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+    assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
+    let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
+    let journal_path = journal_dir.path().join("lane-reservations.norito");
+    let queue = install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
+    let expected_entrypoints =
+        enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 4);
+    let original_fifo = queue.fifo_snapshot_for_test();
+    assert_eq!(original_fifo.len(), expected_entrypoints.len());
+    let exact_slot = plan_autonomous_lane_reservation_slot(
+        adapter.state.as_ref(),
+        adapter.kura.as_ref(),
+        &adapter.context,
+        lane_id,
+        dataspace_id,
+    )
+    .expect("plan the exact producer Kura activation slot");
+    let journal_len_before = std::fs::metadata(&journal_path)
+        .expect("stat empty reservation journal")
+        .len();
+    let limits = autonomous_test_candidate_limits(6, 6);
+    let expected_count = autonomous_route_quota_for_test(&adapter, lane_id, dataspace_id, 6);
+    assert_eq!(expected_count, 3, "fixture gives the independent lane half");
+    adapter
+        .schedule_autonomous_lane_production(0, limits)
+        .expect("run autonomous producer tick");
+    let payload = adapter
+        .pending_autonomous_anchor_payloads
+        .values()
+        .find(|payload| {
+            payload.origin_proposal.descriptor.lane_id == lane_id
+                && payload.origin_proposal.descriptor.dataspace_id == dataspace_id
+        })
+        .expect("local producer publishes one pending autonomous payload")
+        .clone();
+    assert_eq!(payload.origin_proposal.payload_block_hint, None);
+    assert!(lane_executable_payload_carries_lane(
+        &payload,
+        lane_id,
+        dataspace_id,
+        payload.origin_proposal.descriptor.lane_incarnation,
+    ));
+    assert!(
+        !lane_executable_payload_carries_lane(
             &payload,
             lane_id,
             dataspace_id,
-            payload.origin_proposal.descriptor.lane_incarnation,
+            Hash::new(b"recreated autonomous lane incarnation"),
+        ),
+        "incarnation-A payload ownership must not ABA-block incarnation B"
+    );
+    let mut misaligned_payload = payload.clone();
+    misaligned_payload.native_amx_receipts.clear();
+    assert!(
+        lane_executable_payload_carries_lane(
+            &misaligned_payload,
+            lane_id,
+            dataspace_id,
+            Hash::new(b"recreated autonomous lane incarnation"),
+        ),
+        "malformed routing/receipt alignment must fail closed"
+    );
+    assert_eq!(
+        payload.entrypoints,
+        expected_entrypoints[..expected_count],
+        "the deterministic author must retain exact FIFO order"
+    );
+    assert_eq!(payload.reservation_keys.len(), expected_count);
+    assert_eq!(queue.live_lane_reservations().len(), expected_count);
+    assert_eq!(
+        queue.queued_len(),
+        expected_entrypoints.len() - expected_count
+    );
+    assert!(
+        std::fs::metadata(&journal_path)
+            .expect("stat durable reservation journal")
+            .len()
+            > journal_len_before,
+        "queue ownership must be appended durably before publication"
+    );
+    let reservation_group =
+        lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+            .expect("derive the exact published lifecycle reservation group");
+    let lifecycle_binding = AutonomousLifecycleAttemptBindingV1::from_payload(
+        exact_slot.height_context_id,
+        exact_slot.lane_block_height,
+        &payload,
+        reservation_group,
+        &adapter.local_peer,
+    )
+    .expect("rederive the exact signed producer lifecycle binding");
+    let process_generation = adapter
+        .autonomous_lifecycle_process_generation
+        .clone()
+        .expect("validator fixture owns one process-lifetime lifecycle claim");
+    let lifecycle_cursor_hash = {
+        let lifecycle_read = adapter
+            .kura
+            .read_autonomous_lifecycle_cursor(&payload, &lifecycle_binding, &process_generation)
+            .expect("read the durably completed producer lifecycle cursor");
+        let lifecycle_cursor = lifecycle_read
+            .cursor()
+            .expect("producer bootstrap publishes its exact Live cursor");
+        assert!(matches!(
+            lifecycle_cursor.phase(),
+            AutonomousLifecycleCursorPhaseV2::Live { .. }
         ));
-        assert!(
-            !lane_executable_payload_carries_lane(
-                &payload,
+        assert_eq!(
+            lifecycle_cursor.owner_generation(),
+            process_generation.generation()
+        );
+        lifecycle_cursor.cursor_hash()
+    };
+    assert!(
+        adapter
+            .kura
+            .autonomous_lifecycle_bootstrap_recovery_inventory(
+                &process_generation,
                 lane_id,
                 dataspace_id,
-                Hash::new(b"recreated autonomous lane incarnation"),
-            ),
-            "incarnation-A payload ownership must not ABA-block incarnation B"
-        );
-        let mut misaligned_payload = payload.clone();
-        misaligned_payload.native_amx_receipts.clear();
-        assert!(
-            lane_executable_payload_carries_lane(
-                &misaligned_payload,
-                lane_id,
-                dataspace_id,
-                Hash::new(b"recreated autonomous lane incarnation"),
-            ),
-            "malformed routing/receipt alignment must fail closed"
-        );
-        assert_eq!(
-            payload.entrypoints,
-            expected_entrypoints[..expected_count],
-            "the deterministic author must retain exact FIFO order"
-        );
-        assert_eq!(payload.reservation_keys.len(), expected_count);
-        assert_eq!(queue.live_lane_reservations().len(), expected_count);
-        assert_eq!(
-            queue.queued_len(),
-            expected_entrypoints.len() - expected_count
-        );
-        assert!(
-            std::fs::metadata(&journal_path)
-                .expect("stat durable reservation journal")
-                .len()
-                > journal_len_before,
-            "queue ownership must be appended durably before publication"
-        );
-        let reservation_group =
-            lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
-                .expect("derive the exact published lifecycle reservation group");
-        let lifecycle_binding = AutonomousLifecycleAttemptBindingV1::from_payload(
+                payload.origin_proposal.descriptor.lane_incarnation,
+            )
+            .expect("inventory completed producer bootstraps")
+            .is_empty(),
+        "exact Live readback must precede synced bootstrap deletion"
+    );
+    let mut substituted_proposal = payload.origin_proposal.clone();
+    substituted_proposal
+        .descriptor
+        .qc_mode_tag
+        .push_str(":substituted");
+    substituted_proposal.descriptor.descriptor_hash =
+        substituted_proposal.descriptor.computed_descriptor_hash();
+    substituted_proposal.proposal_hash = substituted_proposal.computed_proposal_hash();
+    let substituted_payload = LaneExecutablePayloadV1::new_signed_with_reservations(
+        adapter.native_network_id(),
+        adapter.context.epoch,
+        substituted_proposal,
+        payload.entrypoints.clone(),
+        payload.reservation_keys.clone(),
+        payload.routing_plans.clone(),
+        payload.native_amx_receipts.clone(),
+        adapter.local_peer.clone(),
+        adapter.key_pair.private_key(),
+    )
+    .expect("construct an internally valid payload with a substituted slot identity");
+    assert!(
+        AutonomousLifecycleAttemptBindingV1::from_payload(
             exact_slot.height_context_id,
             exact_slot.lane_block_height,
-            &payload,
+            &substituted_payload,
             reservation_group,
             &adapter.local_peer,
         )
-        .expect("rederive the exact signed producer lifecycle binding");
-        let process_generation = adapter
-            .autonomous_lifecycle_process_generation
-            .clone()
-            .expect("validator fixture owns one process-lifetime lifecycle claim");
-        let lifecycle_cursor_hash = {
-            let lifecycle_read = adapter
-                .kura
-                .read_autonomous_lifecycle_cursor(&payload, &lifecycle_binding, &process_generation)
-                .expect("read the durably completed producer lifecycle cursor");
-            let lifecycle_cursor = lifecycle_read
-                .cursor()
-                .expect("producer bootstrap publishes its exact Live cursor");
-            assert!(matches!(
-                lifecycle_cursor.phase(),
-                AutonomousLifecycleCursorPhaseV2::Live { .. }
-            ));
-            assert_eq!(
-                lifecycle_cursor.owner_generation(),
-                process_generation.generation()
-            );
-            lifecycle_cursor.cursor_hash()
-        };
-        assert!(
-            adapter
-                .kura
-                .autonomous_lifecycle_bootstrap_recovery_inventory(
-                    &process_generation,
-                    lane_id,
-                    dataspace_id,
-                    payload.origin_proposal.descriptor.lane_incarnation,
-                )
-                .expect("inventory completed producer bootstraps")
-                .is_empty(),
-            "exact Live readback must precede synced bootstrap deletion"
-        );
-        let mut substituted_proposal = payload.origin_proposal.clone();
-        substituted_proposal
-            .descriptor
-            .qc_mode_tag
-            .push_str(":substituted");
-        substituted_proposal.descriptor.descriptor_hash =
-            substituted_proposal.descriptor.computed_descriptor_hash();
-        substituted_proposal.proposal_hash = substituted_proposal.computed_proposal_hash();
-        let substituted_payload = LaneExecutablePayloadV1::new_signed_with_reservations(
-            adapter.native_network_id(),
-            adapter.context.epoch,
-            substituted_proposal,
-            payload.entrypoints.clone(),
-            payload.reservation_keys.clone(),
-            payload.routing_plans.clone(),
-            payload.native_amx_receipts.clone(),
-            adapter.local_peer.clone(),
-            adapter.key_pair.private_key(),
-        )
-        .expect("construct an internally valid payload with a substituted slot identity");
-        assert!(
-            AutonomousLifecycleAttemptBindingV1::from_payload(
-                exact_slot.height_context_id,
-                exact_slot.lane_block_height,
-                &substituted_payload,
-                reservation_group,
-                &adapter.local_peer,
+        .is_err(),
+        "the signed lifecycle binding must reject a substituted proposal identity"
+    );
+    assert_eq!(queue.live_lane_reservations().len(), expected_count);
+    assert_eq!(
+        adapter
+            .kura
+            .read_autonomous_lane_block_artifact(
+                lane_id,
+                payload.origin_proposal.descriptor.lane_block_height,
+                adapter.native_network_id(),
+                adapter.context.epoch,
             )
-            .is_err(),
-            "the signed lifecycle binding must reject a substituted proposal identity"
-        );
-        assert_eq!(queue.live_lane_reservations().len(), expected_count);
-        assert_eq!(
-            adapter
-                .kura
-                .read_autonomous_lane_block_artifact(
-                    lane_id,
-                    payload.origin_proposal.descriptor.lane_block_height,
-                    adapter.native_network_id(),
-                    adapter.context.epoch,
-                )
-                .expect("read durable autonomous payload")
-                .executable_payload,
-            payload,
-            "the published payload must already be recoverable from Kura"
-        );
-        let duplicate_effect = adapter
-            .effects
-            .iter()
-            .find(|effect| {
-                matches!(
-                    effect,
-                    V2LaneWorkEffect::PostLaneBlock {
-                        message: BlockMessage::LaneExecutablePayload(published),
-                        ..
-                    } if published == &payload
-                )
-            })
-            .expect("fresh producer fanout retains one exact remote effect")
-            .clone();
-        let effect_count = adapter.effect_count();
-        assert_eq!(
-            adapter
-                .push_effect_with_fresh_authorization(
-                    duplicate_effect,
-                    |_| -> Result<FirstReleaseServeLateBodyAuthorization, V2LaneWorkError> {
-                        panic!("an exact queued duplicate must not mint another transition")
-                    },
-                )
-                .expect("duplicate preflight is infallible"),
-            LaneWorkEffectInsertionOutcome::Duplicate
-        );
-        assert_eq!(
-            adapter.effect_count(),
-            effect_count,
-            "an exact queued fanout duplicate is a transport stutter"
-        );
-        assert!(adapter.drain_effects(usize::MAX).iter().any(|effect| {
+            .expect("read durable autonomous payload")
+            .executable_payload,
+        payload,
+        "the published payload must already be recoverable from Kura"
+    );
+    let duplicate_effect = adapter
+        .effects
+        .iter()
+        .find(|effect| {
             matches!(
                 effect,
                 V2LaneWorkEffect::PostLaneBlock {
@@ -780,583 +782,595 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
                     ..
                 } if published == &payload
             )
-        }));
-        let exact_reservations = queue.live_lane_reservations();
-        let queued_after_reservation = queue.queued_len();
-        let context = adapter.context.clone();
-        for _ in 0..3 {
-            let recovery_work = (&mut adapter)
-                .prepare(&context, 0, &[])
-                .expect("non-empty retry carries durable autonomous ownership");
-            assert_eq!(recovery_work.autonomous_lane_payloads.len(), 1);
-            adapter.next_autonomous_producer_tick = Instant::now();
-            adapter
-                .schedule_autonomous_lane_production(0, limits)
-                .expect("non-empty retry drives the idempotent lane producer");
-            assert_eq!(
-                queue.live_lane_reservations(),
-                exact_reservations,
-                "non-empty/global retry must neither release nor duplicate exact reservations"
-            );
-            assert_eq!(queue.queued_len(), queued_after_reservation);
-        }
-        let repeated_lifecycle_read = adapter
-            .kura
-            .read_autonomous_lifecycle_cursor(&payload, &lifecycle_binding, &process_generation)
-            .expect("re-read lifecycle cursor after idempotent producer heartbeats");
-        assert_eq!(
-            repeated_lifecycle_read
-                .cursor()
-                .expect("idempotent heartbeat retains the Live lifecycle cursor")
-                .cursor_hash(),
-            lifecycle_cursor_hash,
-            "duplicate producer heartbeats must not re-bootstrap or replace the Live cursor"
-        );
-        let mut wrong_context = context.clone();
-        wrong_context.height = wrong_context.height.saturating_add(1);
-        let wrong_context_error = adapter
-            .prepare_certified_execution_carrier(&wrong_context, 0, &[])
-            .expect_err("a certified execution carrier must reject another height context");
-        assert!(wrong_context_error.indices().is_empty());
-        assert_eq!(
-            wrong_context_error.reason(),
-            "certified execution carrier requires its exact height and an empty ordinary batch"
-        );
-        assert!(
-            !adapter.output_guard.restart_required() && adapter.output_guard.acquire().is_some(),
-            "context rejection must happen before a fail-stop operation can latch the output guard"
-        );
-        let ordinary_entrypoint = payload
-            .entrypoints
-            .first()
-            .expect("autonomous payload contains a reserved entrypoint")
-            .clone();
-        let ordinary_transaction = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
-            std::borrow::Cow::Owned(ordinary_entrypoint),
-        );
-        let ordinary_routing_plan = payload
-            .routing_plans
-            .first()
-            .expect("autonomous payload contains a reserved routing plan")
-            .clone();
-        let ordinary_candidate =
-            CandidateDescriptor::new(&ordinary_transaction, &ordinary_routing_plan);
-        let nonempty_error = adapter
-            .prepare_certified_execution_carrier(&context, 0, &[ordinary_candidate])
-            .expect_err("a certified execution carrier must reject ordinary candidates");
-        assert_eq!(nonempty_error.indices(), &BTreeSet::from([0]));
-        assert_eq!(
-            nonempty_error.reason(),
-            "certified execution carrier requires its exact height and an empty ordinary batch"
-        );
-        assert!(
-            !adapter.output_guard.restart_required() && adapter.output_guard.acquire().is_some(),
-            "ordinary-candidate rejection must happen before a fail-stop operation can latch the output guard"
-        );
-        let execution_carrier_work = adapter
-            .prepare_certified_execution_carrier(&context, 0, &[])
-            .expect("certified execution carrier reserves an exact-empty lane-work surface");
-        assert!(execution_carrier_work.native_amx_receipts.is_empty());
-        assert!(execution_carrier_work.lane_payload_ownerships.is_empty());
-        assert!(execution_carrier_work.autonomous_lane_payloads.is_empty());
-        assert_eq!(
-            adapter.pending_autonomous_anchor_payloads.len(),
-            1,
-            "dedicated carrier preparation must not release a durable losing slot before lock"
-        );
-        assert_eq!(
-            queue.live_lane_reservations(),
-            exact_reservations,
-            "dedicated carrier preparation preserves Queue ownership until a winner is locked"
-        );
-        let leader_index =
-            usize::try_from(adapter.context.leader(0)).expect("execution-carrier leader index");
-        let carrier_header = adapter
-            .merge_carrier_context_header(0)
-            .expect("exact execution-carrier round header");
-        let carrier = BlockBuilder::new(carrier_header)
-            .build_with_signature(
-                u64::try_from(leader_index).expect("leader index fits u64"),
-                keys[leader_index].private_key(),
+        })
+        .expect("fresh producer fanout retains one exact remote effect")
+        .clone();
+    let effect_count = adapter.effect_count();
+    assert_eq!(
+        adapter
+            .push_effect_with_fresh_authorization(
+                duplicate_effect,
+                |_| -> Result<FirstReleaseServeLateBodyAuthorization, V2LaneWorkError> {
+                    panic!("an exact queued duplicate must not mint another transition")
+                },
             )
-            .canonical_resultless_proposal();
-        let (_round, _subject) = mark_global_body_locked_for_block(&mut adapter, &carrier);
-        assert_eq!(
-            queue.live_lane_reservations(),
-            exact_reservations,
-            "lock publication alone cannot release pending durable ownership"
-        );
-        assert_ne!(
-            adapter.bind_locked_global_body(&carrier),
-            V2LaneIngressOutcome::Rejected,
-            "the exact empty carrier body must authenticate losing-slot release"
-        );
-        assert!(queue.live_lane_reservations().is_empty());
-        assert_eq!(
-            queue.fifo_snapshot_for_test(),
-            original_fifo,
-            "losing multi-transaction reservations must return in their original global FIFO order"
-        );
-    }
-    #[test]
-    fn autonomous_non_author_does_not_take_queue_ownership() {
-        let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, false);
-        let lane_id = LaneId::new(1);
-        let dataspace_id = DataSpaceId::new(7);
-        prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
-        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, false);
-        let slot = plan_autonomous_lane_reservation_slot(
-            adapter.state.as_ref(),
-            adapter.kura.as_ref(),
-            &adapter.context,
-            lane_id,
-            dataspace_id,
+            .expect("duplicate preflight is infallible"),
+        LaneWorkEffectInsertionOutcome::Duplicate
+    );
+    assert_eq!(
+        adapter.effect_count(),
+        effect_count,
+        "an exact queued fanout duplicate is a transport stutter"
+    );
+    assert!(adapter.drain_effects(usize::MAX).iter().any(|effect| {
+        matches!(
+            effect,
+            V2LaneWorkEffect::PostLaneBlock {
+                message: BlockMessage::LaneExecutablePayload(published),
+                ..
+            } if published == &payload
         )
-        .expect("plan non-author autonomous slot");
-        let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
-        let journal_path = journal_dir.path().join("lane-reservations.norito");
-        let queue =
-            install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
-        enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
-        adapter
-            .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
-            .expect("run non-author autonomous producer tick");
-        assert!(queue.live_lane_reservations().is_empty());
-        assert_eq!(queue.queued_len(), 1);
-        assert!(adapter.pending_autonomous_anchor_payloads.is_empty());
-        assert!(
-            adapter
-                .kura
-                .read_autonomous_lane_block_artifact(
-                    lane_id,
-                    slot.lane_block_height,
-                    adapter.native_network_id(),
-                    adapter.context.epoch,
-                )
-                .is_none()
-        );
-    }
-    #[test]
-    fn generic_fanout_cannot_publish_an_autonomous_producer_payload() {
-        let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
-        let lane_id = LaneId::new(1);
-        let dataspace_id = DataSpaceId::new(7);
-        prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
-        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
-        let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
-        let journal_path = journal_dir.path().join("lane-reservations.norito");
-        let queue =
-            install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
-        enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
-        adapter
-            .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
-            .expect("produce one Queue-fenced autonomous payload");
-        let payload = adapter
-            .pending_autonomous_anchor_payloads
-            .values()
-            .next()
-            .expect("local author publishes one autonomous payload")
-            .clone();
-        let validators = adapter.frozen_validator_set();
-        let _ = adapter.drain_effects(usize::MAX);
-        adapter.fanout_lane_message(BlockMessage::LaneExecutablePayload(payload), &validators);
-        assert!(adapter.effects.is_empty());
-        assert!(
-            adapter.output_guard.restart_required(),
-            "generic transport must fail closed before a producer payload effect is inserted"
-        );
-    }
-    #[test]
-    fn autonomous_restart_hydrates_durable_hint_free_payload_and_queue_owner() {
-        let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
-        let lane_id = LaneId::new(1);
-        let dataspace_id = DataSpaceId::new(7);
-        prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
-        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
-        let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
-        let journal_path = journal_dir.path().join("lane-reservations.norito");
-        let queue =
-            install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
-        enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
-        adapter
-            .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
-            .expect("produce durable autonomous payload");
-        let payload = adapter
-            .pending_autonomous_anchor_payloads
-            .values()
-            .next()
-            .expect("pending autonomous payload")
-            .clone();
-        assert_eq!(payload.origin_proposal.payload_block_hint, None);
-        let context = adapter.context.clone();
-        let restart = LaneAdapterRestartParts::capture(&adapter);
-        drop(adapter);
-        drop(queue);
-        let mut recovered = restart
-            .reopen(context, true)
-            .expect("reopen autonomous lane adapter");
-        assert_eq!(
-            recovered.pending_autonomous_anchor_payloads.values().next(),
-            Some(&payload),
-            "startup hydration must recover the exact hint-free Kura payload"
-        );
-        recovered
-            .hydrate_canonical_lane_artifacts()
-            .expect("repeated hydration must accept the exact durable payload idempotently");
-        assert_eq!(
-            recovered.pending_autonomous_anchor_payloads.values().next(),
-            Some(&payload),
-            "repeated hydration must retain the exact same pending payload"
-        );
-        let recovered_queue =
-            install_autonomous_test_queue(&mut recovered, lane_id, dataspace_id, &journal_path);
-        assert_eq!(
-            recovered_queue.live_lane_reservations(),
-            payload.reservation_keys,
-            "queue journal replay must retain the payload's exact durable owner"
-        );
-    }
-    #[test]
-    fn autonomous_restart_rejects_conflicting_in_memory_payload_for_durable_slot() {
-        let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
-        let lane_id = LaneId::new(1);
-        let dataspace_id = DataSpaceId::new(7);
-        prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
-        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
-        let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
-        let journal_path = journal_dir.path().join("lane-reservations.norito");
-        let queue =
-            install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
-        enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
-        adapter
-            .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
-            .expect("produce durable autonomous payload");
-        let payload = adapter
-            .pending_autonomous_anchor_payloads
-            .values()
-            .next()
-            .expect("pending autonomous payload")
-            .clone();
-        let payload_key = AutonomousLanePayloadKey::from(&payload.origin_proposal);
-        let context = adapter.context.clone();
-        let restart = LaneAdapterRestartParts::capture(&adapter);
-        drop(adapter);
-        drop(queue);
-        let mut recovered = restart
-            .reopen(context, true)
-            .expect("reopen autonomous lane adapter");
-        recovered
-            .pending_autonomous_anchor_payloads
-            .get_mut(&payload_key)
-            .expect("startup hydration installed the exact durable payload")
-            .producer_signature
-            .push(0xA5);
-        let error = recovered
-            .hydrate_canonical_lane_artifacts()
-            .expect_err("same-slot payload substitution must fail closed");
-        assert!(
-            matches!(
-                &error,
-                V2LaneWorkError::InvalidContext(reason)
-                    if reason.contains("conflicting bytes for the current slot")
-            ),
-            "unexpected conflicting-payload error: {error}"
-        );
-        assert!(
-            recovered.output_guard.restart_required(),
-            "conflicting same-slot hydration must close authoritative admission"
-        );
-    }
-    #[test]
-    fn autonomous_small_payload_and_scan_limits_cannot_over_reserve() {
-        let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
-        let lane_id = LaneId::new(1);
-        let dataspace_id = DataSpaceId::new(7);
-        prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
-        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
-        let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
-        let journal_path = journal_dir.path().join("lane-reservations.norito");
-        let queue =
-            install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
-        let expected_entrypoints =
-            enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 3);
-        assert_eq!(
-            autonomous_route_quota_for_test(&adapter, lane_id, dataspace_id, 2),
-            1
-        );
-        adapter
-            .schedule_autonomous_lane_production(
-                0,
-                autonomous_test_candidate_limits_with_payload(
-                    2,
-                    adapter
-                        .limits
-                        .autonomous_carrier_headroom_bytes
-                        .get()
-                        .saturating_add(2),
-                    2,
-                ),
-            )
-            .expect("run byte-bounded autonomous producer tick");
-        assert!(
-            adapter.pending_autonomous_anchor_payloads.is_empty(),
-            "an entrypoint larger than the route's one-byte budget cannot be published"
-        );
-        assert!(queue.live_lane_reservations().is_empty());
-        assert_eq!(queue.queued_len(), expected_entrypoints.len());
+    }));
+    let exact_reservations = queue.live_lane_reservations();
+    let queued_after_reservation = queue.queued_len();
+    let context = adapter.context.clone();
+    for _ in 0..3 {
+        let recovery_work = (&mut adapter)
+            .prepare(&context, 0, &[])
+            .expect("non-empty retry carries durable autonomous ownership");
+        assert_eq!(recovery_work.autonomous_lane_payloads.len(), 1);
         adapter.next_autonomous_producer_tick = Instant::now();
         adapter
-            .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
-            .expect("run tightly bounded autonomous producer tick");
-        let payload = adapter
-            .pending_autonomous_anchor_payloads
-            .values()
-            .next()
-            .expect("bounded producer publishes one payload");
-        assert_eq!(payload.entrypoints, expected_entrypoints[..1]);
-        assert_eq!(payload.reservation_keys.len(), 1);
-        assert_eq!(queue.live_lane_reservations().len(), 1);
-        assert_eq!(queue.queued_len(), 2);
-    }
-    fn autonomous_carrier_block(
-        adapter: &V2LaneWorkAdapter,
-        keys: &[KeyPair],
-        payload: &LaneExecutablePayloadV1,
-    ) -> SignedBlock {
-        let envelope = autonomous_lane_payload_envelope(
-            payload,
-            adapter.native_network_id(),
-            adapter.context.epoch,
-        )
-        .expect("encode autonomous carrier envelope");
-        let header = BlockHeader::new(
-            NonZeroU64::new(adapter.context.height).expect("non-zero carrier height"),
-            adapter
-                .context
-                .parent_commit_qc
-                .as_ref()
-                .map(|qc| qc.subject.block_hash),
-            None,
-            None,
-            adapter.context.height,
-            0,
-        );
-        let mut builder = BlockBuilder::new(header);
-        builder.set_execution_context(Some(
-            BlockExecutionContextBundle::new(Vec::new())
-                .with_autonomous_lane_payloads(vec![envelope]),
-        ));
-        let leader = usize::try_from(adapter.context.leader(0)).expect("global leader index");
-        builder.build_with_signature(
-            u64::try_from(leader).expect("global leader index fits u64"),
-            keys[leader].private_key(),
-        )
-    }
-    fn exercise_canonical_autonomous_carrier_after_direct_decision(local_signer_quorum: bool) {
-        let (mut adapter, keys) =
-            fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
-        let quorum_keys = if local_signer_quorum {
-            &keys[..3]
-        } else {
-            &keys[1..]
-        };
-        let (source_block, mut proposal) =
-            planned_lane_candidate_block_at_view(&adapter, &keys, 0);
-        proposal.payload_block_hint = None;
-        let entrypoint = source_block
-            .external_entrypoints_cloned()
-            .next()
-            .expect("autonomous entrypoint");
-        let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
-            std::borrow::Cow::Owned(entrypoint.clone()),
-        );
-        let routing_plan = RoutingPlan::single(RoutingDecision::new(
-            proposal.descriptor.lane_id,
-            proposal.descriptor.dataspace_id,
-        ));
-        let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
-            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
-            signed_transaction_hash: accepted.hash(),
-            entrypoint_hash: entrypoint.hash(),
-            queue_plan_admission_binding_hash: Hash::new(
-                b"direct-decision-queue-plan-admission-binding",
-            ),
-            routing_plan_digest: routing_plan.digest(),
-            coordinator_leg: routing_plan.coordinator_leg(),
-            lane_id: proposal.descriptor.lane_id,
-            dataspace_id: proposal.descriptor.dataspace_id,
-            lane_incarnation: proposal.descriptor.lane_incarnation,
-            proposal_height: proposal.descriptor.proposal_height,
-            lane_block_height: proposal.descriptor.lane_block_height,
-            lane_block_view: proposal.descriptor.lane_block_view,
-            reservation_owner_hash: Hash::new(b"direct-decision-reservation-owner"),
-            proposal_identity_hash: proposal.proposal_hash,
-        };
-        let producer = adapter
-            .expected_lane_author(&proposal)
-            .expect("deterministic autonomous producer")
-            .clone();
-        let producer_key = keys
-            .iter()
-            .find(|candidate| candidate.public_key() == producer.public_key())
-            .expect("autonomous producer key");
-        bind_canonical_autonomous_reservation_identity(
-            &adapter,
-            &proposal,
-            &producer,
-            &mut reservation,
-        );
-        let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
-            adapter.native_network_id(),
-            adapter.context.epoch,
-            proposal.clone(),
-            vec![entrypoint],
-            vec![reservation],
-            vec![routing_plan],
-            vec![None],
-            producer.clone(),
-            producer_key.private_key(),
-        )
-        .expect("signed hint-free autonomous payload");
+            .schedule_autonomous_lane_production(0, limits)
+            .expect("non-empty retry drives the idempotent lane producer");
         assert_eq!(
-            accept_lane_message_from(
-                &mut adapter,
-                BlockMessage::LaneExecutablePayload(payload.clone()),
-                producer,
-                0,
-            ),
-            V2LaneIngressOutcome::Inserted
+            queue.live_lane_reservations(),
+            exact_reservations,
+            "non-empty/global retry must neither release nor duplicate exact reservations"
         );
-        let carrier = autonomous_carrier_block(&adapter, &keys, &payload);
+        assert_eq!(queue.queued_len(), queued_after_reservation);
+    }
+    let repeated_lifecycle_read = adapter
+        .kura
+        .read_autonomous_lifecycle_cursor(&payload, &lifecycle_binding, &process_generation)
+        .expect("re-read lifecycle cursor after idempotent producer heartbeats");
+    assert_eq!(
+        repeated_lifecycle_read
+            .cursor()
+            .expect("idempotent heartbeat retains the Live lifecycle cursor")
+            .cursor_hash(),
+        lifecycle_cursor_hash,
+        "duplicate producer heartbeats must not re-bootstrap or replace the Live cursor"
+    );
+    let mut wrong_context = context.clone();
+    wrong_context.height = wrong_context.height.saturating_add(1);
+    let wrong_context_error = adapter
+        .prepare_certified_execution_carrier(&wrong_context, 0, &[])
+        .expect_err("a certified execution carrier must reject another height context");
+    assert!(wrong_context_error.indices().is_empty());
+    assert_eq!(
+        wrong_context_error.reason(),
+        "certified execution carrier requires its exact height and an empty ordinary batch"
+    );
+    assert!(
+        !adapter.output_guard.restart_required() && adapter.output_guard.acquire().is_some(),
+        "context rejection must happen before a fail-stop operation can latch the output guard"
+    );
+    let ordinary_entrypoint = payload
+        .entrypoints
+        .first()
+        .expect("autonomous payload contains a reserved entrypoint")
+        .clone();
+    let ordinary_transaction = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
+        std::borrow::Cow::Owned(ordinary_entrypoint),
+    );
+    let ordinary_routing_plan = payload
+        .routing_plans
+        .first()
+        .expect("autonomous payload contains a reserved routing plan")
+        .clone();
+    let ordinary_candidate =
+        CandidateDescriptor::new(&ordinary_transaction, &ordinary_routing_plan);
+    let nonempty_error = adapter
+        .prepare_certified_execution_carrier(&context, 0, &[ordinary_candidate])
+        .expect_err("a certified execution carrier must reject ordinary candidates");
+    assert_eq!(nonempty_error.indices(), &BTreeSet::from([0]));
+    assert_eq!(
+        nonempty_error.reason(),
+        "certified execution carrier requires its exact height and an empty ordinary batch"
+    );
+    assert!(
+        !adapter.output_guard.restart_required() && adapter.output_guard.acquire().is_some(),
+        "ordinary-candidate rejection must happen before a fail-stop operation can latch the output guard"
+    );
+    let execution_carrier_work = adapter
+        .prepare_certified_execution_carrier(&context, 0, &[])
+        .expect("certified execution carrier reserves an exact-empty lane-work surface");
+    assert!(execution_carrier_work.native_amx_receipts.is_empty());
+    assert!(execution_carrier_work.lane_payload_ownerships.is_empty());
+    assert!(execution_carrier_work.autonomous_lane_payloads.is_empty());
+    assert_eq!(
+        adapter.pending_autonomous_anchor_payloads.len(),
+        1,
+        "dedicated carrier preparation must not release a durable losing slot before lock"
+    );
+    assert_eq!(
+        queue.live_lane_reservations(),
+        exact_reservations,
+        "dedicated carrier preparation preserves Queue ownership until a winner is locked"
+    );
+    let leader_index =
+        usize::try_from(adapter.context.leader(0)).expect("execution-carrier leader index");
+    let carrier_header = adapter
+        .merge_carrier_context_header(0)
+        .expect("exact execution-carrier round header");
+    let carrier = BlockBuilder::new(carrier_header)
+        .build_with_signature(
+            u64::try_from(leader_index).expect("leader index fits u64"),
+            keys[leader_index].private_key(),
+        )
+        .canonical_resultless_proposal();
+    let (_round, _subject) = mark_global_body_locked_for_block(&mut adapter, &carrier);
+    assert_eq!(
+        queue.live_lane_reservations(),
+        exact_reservations,
+        "lock publication alone cannot release pending durable ownership"
+    );
+    assert_ne!(
+        adapter.bind_locked_global_body(&carrier),
+        V2LaneIngressOutcome::Rejected,
+        "the exact empty carrier body must authenticate losing-slot release"
+    );
+    assert!(queue.live_lane_reservations().is_empty());
+    assert_eq!(
+        queue.fifo_snapshot_for_test(),
+        original_fifo,
+        "losing multi-transaction reservations must return in their original global FIFO order"
+    );
+}
+#[test]
+fn autonomous_non_author_does_not_take_queue_ownership() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, false);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+    assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, false);
+    let slot = plan_autonomous_lane_reservation_slot(
+        adapter.state.as_ref(),
+        adapter.kura.as_ref(),
+        &adapter.context,
+        lane_id,
+        dataspace_id,
+    )
+    .expect("plan non-author autonomous slot");
+    let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
+    let journal_path = journal_dir.path().join("lane-reservations.norito");
+    let queue = install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
+    enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+        .expect("run non-author autonomous producer tick");
+    assert!(queue.live_lane_reservations().is_empty());
+    assert_eq!(queue.queued_len(), 1);
+    assert!(adapter.pending_autonomous_anchor_payloads.is_empty());
+    assert!(
         adapter
             .kura
-            .store_block(carrier.clone())
-            .expect("persist canonical autonomous carrier");
-        let (locked_round, decided) = global_lock_for_block(&adapter, &carrier);
-        let finality = verified_finality_artifact_for_block(&adapter, &keys, &carrier);
-        let receipt = adapter
-            .kura
-            .store_v2_finality_artifact(&finality)
-            .expect("persist exact canonical finality before receipt-bound recovery");
-        let stale_label: &[u8] = if local_signer_quorum {
-            b"stale-single-validator-local-lock"
-        } else {
-            b"stale-four-validator-local-lock"
-        };
-        let stale_payload_label: &[u8] = if local_signer_quorum {
-            b"stale-single-validator-local-lock-payload"
-        } else {
-            b"stale-four-validator-local-lock-payload"
-        };
-        let stale_lock = wire::BlockSubject {
-            parent_block_hash: decided.parent_block_hash,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(stale_label)),
-            payload_hash: Hash::new(stale_payload_label),
-        };
-        assert_eq!(
-            adapter.mark_global_body_locked(locked_round, stale_lock),
-            Ok(GlobalBodyLockOutcome::Inserted)
-        );
-        adapter
-            .retain_merge_sidecars_for_global_view(
-                locked_round.view,
-                Some(stale_lock),
-                Some(decided),
+            .read_autonomous_lane_block_artifact(
+                lane_id,
+                slot.lane_block_height,
+                adapter.native_network_id(),
+                adapter.context.epoch,
             )
-            .expect("install direct same-view Decision");
-        assert_eq!(
-            adapter.globally_locked_body.map(|lock| lock.subject),
-            Some(stale_lock)
-        );
-        let committed = ValidBlock::committed_from_replay_signed_block(carrier);
-        commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
-        assert!(
-            adapter
-                .kura
-                .read_lane_block_execution_input(
-                    proposal.descriptor.lane_id,
-                    proposal.descriptor.lane_block_height,
-                )
-                .is_none(),
-            "Decision arrived before the live locked-body binding path"
-        );
-        assert_ne!(
-            adapter
-                .recover_decided_canonical_lane_body(&receipt, &finality)
-                .expect("recover exact receipt-authorized canonical carrier"),
-            V2LaneIngressOutcome::Rejected
-        );
-        assert!(
-            adapter
-                .kura
-                .read_lane_block_execution_input(
-                    proposal.descriptor.lane_id,
-                    proposal.descriptor.lane_block_height,
-                )
-                .is_some(),
-            "receipt-bound recovery must persist execution input before READY"
-        );
-        let prepare_votes = quorum_keys
-            .iter()
-            .map(|key| signed_autonomous_prepare_vote(&proposal, &payload, key, &keys))
-            .collect::<Vec<_>>();
-        let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
-            proposal.vote_body(CertPhase::Prepare),
-            proposal.descriptor.validator_set.clone(),
-            &prepare_votes,
-        )
-        .expect("exact three-of-four READY votes form PrepareQC");
-        assert_eq!(
-            adapter.insert_lane_qc(prepare_qc, locked_round.view),
-            V2LaneIngressOutcome::Inserted
-        );
-        assert_eq!(
-            adapter.insert_lane_qc(
-                lane_qc_for_phase(&proposal, quorum_keys, CertPhase::Commit),
-                locked_round.view,
+            .is_none()
+    );
+}
+#[test]
+fn generic_fanout_cannot_publish_an_autonomous_producer_payload() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+    assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
+    let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
+    let journal_path = journal_dir.path().join("lane-reservations.norito");
+    let queue = install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
+    enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+        .expect("produce one Queue-fenced autonomous payload");
+    let payload = adapter
+        .pending_autonomous_anchor_payloads
+        .values()
+        .next()
+        .expect("local author publishes one autonomous payload")
+        .clone();
+    let validators = adapter.frozen_validator_set();
+    let _ = adapter.drain_effects(usize::MAX);
+    adapter.fanout_lane_message(BlockMessage::LaneExecutablePayload(payload), &validators);
+    assert!(adapter.effects.is_empty());
+    assert!(
+        adapter.output_guard.restart_required(),
+        "generic transport must fail closed before a producer payload effect is inserted"
+    );
+}
+#[test]
+fn autonomous_restart_hydrates_durable_hint_free_payload_and_queue_owner() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+    assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
+    let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
+    let journal_path = journal_dir.path().join("lane-reservations.norito");
+    let queue = install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
+    enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+        .expect("produce durable autonomous payload");
+    let payload = adapter
+        .pending_autonomous_anchor_payloads
+        .values()
+        .next()
+        .expect("pending autonomous payload")
+        .clone();
+    assert_eq!(payload.origin_proposal.payload_block_hint, None);
+    let context = adapter.context.clone();
+    let restart = LaneAdapterRestartParts::capture(&adapter);
+    drop(adapter);
+    drop(queue);
+    let mut recovered = restart
+        .reopen(context, true)
+        .expect("reopen autonomous lane adapter");
+    assert_eq!(
+        recovered.pending_autonomous_anchor_payloads.values().next(),
+        Some(&payload),
+        "startup hydration must recover the exact hint-free Kura payload"
+    );
+    recovered
+        .hydrate_canonical_lane_artifacts()
+        .expect("repeated hydration must accept the exact durable payload idempotently");
+    assert_eq!(
+        recovered.pending_autonomous_anchor_payloads.values().next(),
+        Some(&payload),
+        "repeated hydration must retain the exact same pending payload"
+    );
+    let recovered_queue =
+        install_autonomous_test_queue(&mut recovered, lane_id, dataspace_id, &journal_path);
+    assert_eq!(
+        recovered_queue.live_lane_reservations(),
+        payload.reservation_keys,
+        "queue journal replay must retain the payload's exact durable owner"
+    );
+}
+#[test]
+fn autonomous_restart_rejects_conflicting_in_memory_payload_for_durable_slot() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+    assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
+    let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
+    let journal_path = journal_dir.path().join("lane-reservations.norito");
+    let queue = install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
+    enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+        .expect("produce durable autonomous payload");
+    let payload = adapter
+        .pending_autonomous_anchor_payloads
+        .values()
+        .next()
+        .expect("pending autonomous payload")
+        .clone();
+    let payload_key = AutonomousLanePayloadKey::from(&payload.origin_proposal);
+    let context = adapter.context.clone();
+    let restart = LaneAdapterRestartParts::capture(&adapter);
+    drop(adapter);
+    drop(queue);
+    let mut recovered = restart
+        .reopen(context, true)
+        .expect("reopen autonomous lane adapter");
+    recovered
+        .pending_autonomous_anchor_payloads
+        .get_mut(&payload_key)
+        .expect("startup hydration installed the exact durable payload")
+        .producer_signature
+        .push(0xA5);
+    let error = recovered
+        .hydrate_canonical_lane_artifacts()
+        .expect_err("same-slot payload substitution must fail closed");
+    assert!(
+        matches!(
+            &error,
+            V2LaneWorkError::InvalidContext(reason)
+                if reason.contains("conflicting bytes for the current slot")
+        ),
+        "unexpected conflicting-payload error: {error}"
+    );
+    assert!(
+        recovered.output_guard.restart_required(),
+        "conflicting same-slot hydration must close authoritative admission"
+    );
+}
+#[test]
+fn autonomous_small_payload_and_scan_limits_cannot_over_reserve() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+    assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
+    let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
+    let journal_path = journal_dir.path().join("lane-reservations.norito");
+    let queue = install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
+    let expected_entrypoints =
+        enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 3);
+    assert_eq!(
+        autonomous_route_quota_for_test(&adapter, lane_id, dataspace_id, 2),
+        1
+    );
+    adapter
+        .schedule_autonomous_lane_production(
+            0,
+            autonomous_test_candidate_limits_with_payload(
+                2,
+                adapter
+                    .limits
+                    .autonomous_carrier_headroom_bytes
+                    .get()
+                    .saturating_add(2),
+                2,
             ),
-            V2LaneIngressOutcome::Inserted
-        );
-        assert_eq!(
-            adapter
-                .persist_anchored_sessions()
-                .expect("bind canonical carrier and finish lane consensus"),
-            1
-        );
-        assert!(
-            adapter
-                .kura
-                .read_lane_block_execution_input(
-                    proposal.descriptor.lane_id,
-                    proposal.descriptor.lane_block_height,
-                )
-                .is_some(),
-            "canonical fallback must persist execution input before READY"
-        );
-        let durable = adapter
+        )
+        .expect("run byte-bounded autonomous producer tick");
+    assert!(
+        adapter.pending_autonomous_anchor_payloads.is_empty(),
+        "an entrypoint larger than the route's one-byte budget cannot be published"
+    );
+    assert!(queue.live_lane_reservations().is_empty());
+    assert_eq!(queue.queued_len(), expected_entrypoints.len());
+    adapter.next_autonomous_producer_tick = Instant::now();
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+        .expect("run tightly bounded autonomous producer tick");
+    let payload = adapter
+        .pending_autonomous_anchor_payloads
+        .values()
+        .next()
+        .expect("bounded producer publishes one payload");
+    assert_eq!(payload.entrypoints, expected_entrypoints[..1]);
+    assert_eq!(payload.reservation_keys.len(), 1);
+    assert_eq!(queue.live_lane_reservations().len(), 1);
+    assert_eq!(queue.queued_len(), 2);
+}
+fn autonomous_carrier_block(
+    adapter: &V2LaneWorkAdapter,
+    keys: &[KeyPair],
+    payload: &LaneExecutablePayloadV1,
+) -> SignedBlock {
+    let envelope = autonomous_lane_payload_envelope(
+        payload,
+        adapter.native_network_id(),
+        adapter.context.epoch,
+    )
+    .expect("encode autonomous carrier envelope");
+    let header = BlockHeader::new(
+        NonZeroU64::new(adapter.context.height).expect("non-zero carrier height"),
+        adapter
+            .context
+            .parent_commit_qc
+            .as_ref()
+            .map(|qc| qc.subject.block_hash),
+        None,
+        None,
+        adapter.context.height,
+        0,
+    );
+    let mut builder = BlockBuilder::new(header);
+    builder.set_execution_context(Some(
+        BlockExecutionContextBundle::new(Vec::new()).with_autonomous_lane_payloads(vec![envelope]),
+    ));
+    let leader = usize::try_from(adapter.context.leader(0)).expect("global leader index");
+    builder.build_with_signature(
+        u64::try_from(leader).expect("global leader index fits u64"),
+        keys[leader].private_key(),
+    )
+}
+fn exercise_canonical_autonomous_carrier_after_direct_decision(local_signer_quorum: bool) {
+    let (mut adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
+    let quorum_keys = if local_signer_quorum {
+        &keys[..3]
+    } else {
+        &keys[1..]
+    };
+    let (source_block, mut proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+    proposal.payload_block_hint = None;
+    let entrypoint = source_block
+        .external_entrypoints_cloned()
+        .next()
+        .expect("autonomous entrypoint");
+    let routing_plan = RoutingPlan::single(RoutingDecision::new(
+        proposal.descriptor.lane_id,
+        proposal.descriptor.dataspace_id,
+    ));
+    let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
+        version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+        entrypoint_hash: entrypoint.hash(),
+        queue_plan_admission_binding_hash: Hash::new(
+            b"direct-decision-queue-plan-admission-binding",
+        ),
+        routing_plan_digest: routing_plan.digest(),
+        coordinator_leg: routing_plan.coordinator_leg(),
+        lane_id: proposal.descriptor.lane_id,
+        dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
+        proposal_height: proposal.descriptor.proposal_height,
+        lane_block_height: proposal.descriptor.lane_block_height,
+        lane_block_view: proposal.descriptor.lane_block_view,
+        reservation_owner_hash: Hash::new(b"direct-decision-reservation-owner"),
+        proposal_identity_hash: proposal.proposal_hash,
+    };
+    let producer = adapter
+        .expected_lane_author(&proposal)
+        .expect("deterministic autonomous producer")
+        .clone();
+    let producer_key = keys
+        .iter()
+        .find(|candidate| candidate.public_key() == producer.public_key())
+        .expect("autonomous producer key");
+    bind_canonical_autonomous_reservation_identity(
+        &adapter,
+        &proposal,
+        &producer,
+        &mut reservation,
+    );
+    let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
+        adapter.native_network_id(),
+        adapter.context.epoch,
+        proposal.clone(),
+        vec![entrypoint],
+        vec![reservation],
+        vec![routing_plan],
+        vec![None],
+        producer.clone(),
+        producer_key.private_key(),
+    )
+    .expect("signed hint-free autonomous payload");
+    assert_eq!(
+        accept_lane_message_from(
+            &mut adapter,
+            BlockMessage::LaneExecutablePayload(payload.clone()),
+            producer,
+            0,
+        ),
+        V2LaneIngressOutcome::Inserted
+    );
+    let carrier = autonomous_carrier_block(&adapter, &keys, &payload);
+    adapter
+        .kura
+        .store_block(carrier.clone())
+        .expect("persist canonical autonomous carrier");
+    let (locked_round, decided) = global_lock_for_block(&adapter, &carrier);
+    let finality = verified_finality_artifact_for_block(&adapter, &keys, &carrier);
+    let receipt = adapter
+        .kura
+        .store_v2_finality_artifact(&finality)
+        .expect("persist exact canonical finality before receipt-bound recovery");
+    let stale_label: &[u8] = if local_signer_quorum {
+        b"stale-single-validator-local-lock"
+    } else {
+        b"stale-four-validator-local-lock"
+    };
+    let stale_payload_label: &[u8] = if local_signer_quorum {
+        b"stale-single-validator-local-lock-payload"
+    } else {
+        b"stale-four-validator-local-lock-payload"
+    };
+    let stale_lock = wire::BlockSubject {
+        parent_block_hash: decided.parent_block_hash,
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(stale_label)),
+        payload_hash: Hash::new(stale_payload_label),
+    };
+    assert_eq!(
+        adapter.mark_global_body_locked(locked_round, stale_lock),
+        Ok(GlobalBodyLockOutcome::Inserted)
+    );
+    adapter
+        .retain_merge_sidecars_for_global_view(locked_round.view, Some(stale_lock), Some(decided))
+        .expect("install direct same-view Decision");
+    assert_eq!(
+        adapter.globally_locked_body.map(|lock| lock.subject),
+        Some(stale_lock)
+    );
+    let committed = ValidBlock::committed_from_replay_signed_block(carrier);
+    commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
+    assert!(
+        adapter
             .kura
-            .read_certified_lane_block_artifact(
+            .read_lane_block_execution_input(
                 proposal.descriptor.lane_id,
                 proposal.descriptor.lane_block_height,
             )
-            .expect("READY and Commit votes produce a durable certificate");
-        assert!(durable.prepare_qc.payload_availability_qc.is_some());
-        assert!(
-            adapter
-                .durable_lane_rollover_authority(&finality)
-                .expect("validate lane rollover")
-                .is_some(),
-            "durable availability and Commit certificates release rollover"
-        );
-    }
-    #[test]
-    fn canonical_autonomous_carrier_binds_after_direct_single_validator_decision() {
-        exercise_canonical_autonomous_carrier_after_direct_decision(true);
-    }
-    #[test]
-    fn canonical_autonomous_carrier_binds_after_direct_four_validator_decision() {
-        exercise_canonical_autonomous_carrier_after_direct_decision(false);
-    }
+            .is_none(),
+        "Decision arrived before the live locked-body binding path"
+    );
+    assert_ne!(
+        adapter
+            .recover_decided_canonical_lane_body(&receipt, &finality)
+            .expect("recover exact receipt-authorized canonical carrier"),
+        V2LaneIngressOutcome::Rejected
+    );
+    assert!(
+        adapter
+            .kura
+            .read_lane_block_execution_input(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .is_some(),
+        "receipt-bound recovery must persist execution input before READY"
+    );
+    let prepare_votes = quorum_keys
+        .iter()
+        .map(|key| signed_autonomous_prepare_vote(&proposal, &payload, key, &keys))
+        .collect::<Vec<_>>();
+    let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+        proposal.vote_body(CertPhase::Prepare),
+        proposal.descriptor.validator_set.clone(),
+        &prepare_votes,
+    )
+    .expect("exact three-of-four READY votes form PrepareQC");
+    assert_eq!(
+        adapter.insert_lane_qc(prepare_qc, locked_round.view),
+        V2LaneIngressOutcome::Inserted
+    );
+    assert_eq!(
+        adapter.insert_lane_qc(
+            lane_qc_for_phase(&proposal, quorum_keys, CertPhase::Commit),
+            locked_round.view,
+        ),
+        V2LaneIngressOutcome::Inserted
+    );
+    assert_eq!(
+        adapter
+            .persist_anchored_sessions()
+            .expect("bind canonical carrier and finish lane consensus"),
+        1
+    );
+    assert!(
+        adapter
+            .kura
+            .read_lane_block_execution_input(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .is_some(),
+        "canonical fallback must persist execution input before READY"
+    );
+    let durable = adapter
+        .kura
+        .read_certified_lane_block_artifact(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
+        )
+        .expect("READY and Commit votes produce a durable certificate");
+    assert!(durable.prepare_qc.payload_availability_qc.is_some());
+    assert!(
+        adapter
+            .durable_lane_rollover_authority(&finality)
+            .expect("validate lane rollover")
+            .is_some(),
+        "durable availability and Commit certificates release rollover"
+    );
+}
+#[test]
+fn canonical_autonomous_carrier_binds_after_direct_single_validator_decision() {
+    exercise_canonical_autonomous_carrier_after_direct_decision(true);
+}
+#[test]
+fn canonical_autonomous_carrier_binds_after_direct_four_validator_decision() {
+    exercise_canonical_autonomous_carrier_after_direct_decision(false);
+}
 #[test]
 fn recovered_autonomous_certificate_repairs_ready_before_certified_publication() {
     let (mut adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
@@ -1371,7 +1385,6 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
         &keys,
         &proposal,
         entrypoint,
-        AutonomousAuthorRule::Autonomous,
         b"autonomous-recovery-queue-plan-admission-binding",
         b"autonomous-recovery-reservation-owner",
         "deterministic autonomous recovery producer",
@@ -1544,14 +1557,14 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
         Ok(()),
         "standalone CommitQC must recover PoPs from durable READY after cache and State pruning"
     );
-    assert!(
+    assert_eq!(
         durable_historical_lane_output_source_hash(
             adapter.kura.as_ref(),
             &BlockMessage::LaneBlockQc(alternative_commit),
         )
-        .expect("validate alternate autonomous quorum against durable READY authority")
-        .is_some(),
-        "a different valid 3-of-4 QC must survive rollover without mutable State PoPs"
+        .expect("classify autonomous output against ordinary historical durability"),
+        None,
+        "autonomous recovery must use its immutable record rather than ordinary certificate-and-application authority"
     );
     let alternative_prepare_votes = keys[1..]
         .iter()

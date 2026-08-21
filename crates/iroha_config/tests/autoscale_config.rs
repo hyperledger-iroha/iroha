@@ -30,9 +30,6 @@ fn assert_ratio_eq(actual: f64, expected: f64) {
 fn autoscale_overrides_parse_from_toml() {
     let config = parse_actual_config(
         r"
-[nexus]
-enabled = true
-
 [nexus.autoscale]
 enabled = true
 min_lanes = 3
@@ -63,22 +60,6 @@ per_lane_target_tps = 75
     assert_eq!(autoscale.cooldown_blocks.get(), 9);
     assert_eq!(autoscale.per_lane_target_tps.get(), 75);
     assert_eq!(autoscale.last_transition_height, 0);
-}
-#[test]
-fn autoscale_rejects_enabled_autoscale_when_nexus_disabled() {
-    let message = autoscale_config_error(
-        r"
-[nexus]
-enabled = false
-
-[nexus.autoscale]
-enabled = true
-",
-    );
-    assert!(
-        message.contains("nexus.autoscale.enabled requires nexus.enabled = true"),
-        "error should require Nexus before enabling autoscale: {message}"
-    );
 }
 #[test]
 fn autoscale_rejects_zero_sizing_fields() {
@@ -156,7 +137,6 @@ fn autoscale_rejects_reserved_lane_metadata_claim() {
     let message = autoscale_config_error(
         r#"
 [nexus]
-enabled = true
 lane_count = 1
 
 [[nexus.lane_catalog]]
@@ -175,7 +155,6 @@ fn autoscale_rejects_manual_lane_inside_elastic_id_range() {
     let message = autoscale_config_error(
         r#"
 [nexus]
-enabled = true
 lane_count = 2
 
 [nexus.autoscale]
@@ -205,7 +184,6 @@ fn autoscale_accepts_sparse_manual_catalog_around_elastic_id_range() {
     let config = parse_actual_config(
         r#"
 [nexus]
-enabled = true
 lane_count = 8
 
 [nexus.autoscale]
@@ -252,7 +230,6 @@ fn autoscale_accepts_elastic_id_range_above_initial_catalog_namespace() {
     let config = parse_actual_config(
         r#"
 [nexus]
-enabled = true
 lane_count = 4
 
 [nexus.autoscale]
@@ -304,7 +281,6 @@ fn autoscale_rejects_manual_lane_in_sparse_elastic_id_gap() {
     let message = autoscale_config_error(
         r#"
 [nexus]
-enabled = true
 lane_count = 8
 
 [nexus.autoscale]
@@ -343,7 +319,6 @@ fn autoscale_rejects_default_lane_inside_elastic_id_range() {
     let message = autoscale_config_error(
         r#"
 [nexus]
-enabled = true
 lane_count = 2
 
 [[nexus.lane_catalog]]
@@ -378,7 +353,6 @@ fn autoscale_rejects_default_lane_above_elastic_id_range() {
     let message = autoscale_config_error(
         r#"
 [nexus]
-enabled = true
 lane_count = 3
 
 [[nexus.lane_catalog]]
@@ -531,7 +505,6 @@ fn dataspace_fault_tolerance_accepts_largest_bounded_committee() {
     let config = parse_actual_config(
         r#"
 [nexus]
-enabled = true
 
 [[nexus.dataspace_catalog]]
 alias = "universal"
@@ -550,7 +523,6 @@ fn dataspace_fault_tolerance_rejects_oversized_committee() {
     let message = autoscale_config_error(
         r#"
 [nexus]
-enabled = true
 
 [[nexus.dataspace_catalog]]
 alias = "universal"

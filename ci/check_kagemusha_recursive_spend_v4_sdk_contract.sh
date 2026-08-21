@@ -85,6 +85,10 @@ paths = {
     ),
     "kagami": Path("crates/iroha_kagami/src/kagemusha.rs"),
     "bundle": Path("crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle.rs"),
+    "bundle_source_seal_inputs": Path(
+        "crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle/"
+        "source_seal_build_inputs.rs"
+    ),
     "core_artifact": Path("crates/iroha_core/src/zk/kagemusha_artifact_v4.rs"),
     "kotlin": Path(
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/"
@@ -169,8 +173,39 @@ texts["rust"] = "\n".join(
         *(texts[f"rust_platform_jni_part_{part}"] for part in range(1, 4)),
     )
 )
+bundle_source_seal_include = (
+    'include!("kagemusha_recursive_spend_v4_bundle/source_seal_build_inputs.rs");'
+)
+if texts["bundle"].count(bundle_source_seal_include) != 1:
+    raise SystemExit(
+        f"{paths['bundle']}: expected exactly one reviewed source-seal input include"
+    )
+texts["bundle"] = texts["bundle"].replace(
+    bundle_source_seal_include, texts["bundle_source_seal_inputs"], 1
+)
+
+jni_forwarder_methods = re.findall(
+    r"^\s*(native[A-Za-z0-9]+)\s*\{",
+    texts["rust_platform_jni_part_3"],
+    re.MULTILINE,
+)
+duplicate_jni_forwarders = sorted(
+    method for method in set(jni_forwarder_methods) if jni_forwarder_methods.count(method) != 1
+)
+lifecycle_macro_exports = set(
+    re.findall(
+        r"=>\s*(connect_norito_kagemusha_recursive_spend_[a-z0-9_]+_v4)\s*,",
+        texts["rust"],
+    )
+)
 
 errors: list[str] = []
+
+if duplicate_jni_forwarders:
+    errors.append(
+        f"{paths['rust_platform_jni_part_3']}: duplicate generated JNI methods "
+        f"{duplicate_jni_forwarders!r}"
+    )
 
 
 def require(label: str, needle: str) -> None:
@@ -194,6 +229,26 @@ def canonical_hex_vector(label: str) -> bytes:
         errors.append(f"{paths[label]}: fixture is not canonical lowercase 32-byte-line hex")
         return b""
     return bytes.fromhex("".join(lines))
+
+
+require_regex(
+    "rust",
+    r"macro_rules!\s+kagemusha_sdk_android_forwarders\s*\{[\s\S]*?"
+    r"Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_[\s\S]*?"
+    r"stringify!\(\$method\)[\s\S]*?pub unsafe extern \"system\" fn sdk[\s\S]*?"
+    r"Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_[\s\S]*?"
+    r"stringify!\(\$method\)[\s\S]*?pub unsafe extern \"system\" fn android",
+    "reviewed dual-namespace JNI forwarder generator",
+)
+require_regex(
+    "rust",
+    r"macro_rules!\s+kagemusha_recursive_spend_lifecycle_exports\s*\{[\s\S]*?"
+    r"pub unsafe extern \"C\" fn \$init_name[\s\S]*?"
+    r"pub unsafe extern \"C\" fn \$append_name[\s\S]*?"
+    r"pub unsafe extern \"C\" fn \$verify_name[\s\S]*?"
+    r"pub unsafe extern \"C\" fn \$redeem_name",
+    "reviewed four-stage C lifecycle export generator",
+)
 
 
 recipient_request_vector = canonical_hex_vector("recipient_request_vector")
@@ -965,11 +1020,12 @@ for method in native_methods:
         "org_hyperledger_iroha_sdk_offline",
         "org_hyperledger_iroha_android_offline",
     ):
-        require_regex(
-            "rust",
-            rf"fn\s+Java_{package}_KagemushaRecursiveSpendProver_{re.escape(method)}\s*\(",
-            f"Rust JNI export {package}.{method}",
-        )
+        if method not in jni_forwarder_methods:
+            require_regex(
+                "rust",
+                rf"fn\s+Java_{package}_KagemushaRecursiveSpendProver_{re.escape(method)}\s*\(",
+                f"Rust JNI export {package}.{method}",
+            )
 
 privacy_compiled_profile_symbols = (
     "iroha_privacy_compiled_profile_catalog_v1",
@@ -1173,7 +1229,8 @@ if "KagemushaPastaCycleProverArtifactsV4::new" in texts["rust"]:
     errors.append(f"{paths['rust']}: in-memory all-role V4 prover construction is forbidden")
 
 for symbol in c_symbols:
-    require_regex("rust", rf"fn\s+{re.escape(symbol)}\s*\(", f"Rust C export {symbol}")
+    if symbol not in lifecycle_macro_exports:
+        require_regex("rust", rf"fn\s+{re.escape(symbol)}\s*\(", f"Rust C export {symbol}")
     require_regex("header", rf"\b{re.escape(symbol)}\s*\(", f"C header declaration {symbol}")
     for label in ("xcframework_build", "mobile_check", "mobile_check_test"):
         require(label, symbol)

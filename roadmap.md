@@ -1,12 +1,45 @@
 # Roadmap
 
-Last updated: 2026-08-17
+Last updated: 2026-08-21
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## First-release hard-cut closeout
+
+The current candidate has one canonical release profile and no `BuildLine` or
+top-level Nexus enablement selector. Nexus routing is mandatory for both the
+canonical single-lane catalog and custom multilane catalogs; optional elastic
+capacity is controlled only by the subordinate `nexus.autoscale.enabled`
+policy. The six-field lifecycle status and byte-identical OpenAPI mirrors are
+recorded in `status.md`. For this hard-cut tranche, remaining work is limited
+to:
+
+- Run the focused and workspace Rust Cargo tests and strict all-target Clippy
+  from the settled candidate.
+- Reconcile the remaining source-file budget ratchets without raising the
+  reviewed ceilings merely to absorb merge growth.
+- Regenerate the exact context/genesis goldens from that candidate and attach
+  the required authorized signatures, including clean OpenAPI provenance.
+- Recompute and verify the source, formal, and release seals from one immutable
+  tree; mutable-tree checks are not release evidence.
+- Complete the single production Ready-Validate worker atom and its exact
+  recovery/formal coverage; do not introduce a parallel scheduler path.
+
 ## Workspace review closure
 
+- Validate the refreshed FastPQ proof/trace binary fixtures and pinned trace
+  commitments under the eight-limb raw Blake2b-256 metadata schema with the
+  focused AXT/FastPQ/Core suites and the release-wide test matrix. Retired
+  single-field metadata proofs and snapshots are intentionally incompatible
+  with the first-release format and must not be accepted or migrated by
+  relabelling.
+
+- TODO: add an authenticated cancellation/rebind protocol for an exact pending
+  QueuePlan whose fresh dataspace/role topology changes (for example after an
+  SNS lease transition). Candidate assembly now defers such work without
+  poisoning proposals, but the immutable obligation otherwise remains pending
+  until canonical application.
 - Validate the bounded high-view pacemaker and corrected selected-Serve
   late-Fetch regression in the four-validator loss/hold/heal corridor. The
   promotion canary must submit real work, observe it commit within the finite
@@ -94,7 +127,7 @@ Completed history lives in [`status.md`](./status.md).
   source-budget gate finding-free.
 - Keep every reviewed production module and newly introduced companion source
   in the eventual signed commit, then rerun the strict SDK source-closure guard
-  from that immutable candidate. Keep the staged merge-resolution and
+  from that immutable candidate. Keep the resolved merge candidate and
   optimization changes reviewable until the signed commit is prepared.
 - Use the unchanged protected workspace lockfile now that the incompatible
   prototype manifest edge is withdrawn. From that immutable candidate, run the
@@ -158,11 +191,19 @@ not add release gates. Guarded formatting, explicit production `iroha_core`
 library compilation, profile-tool compilation, Swarm/Kagami prepared-bundle
 regressions, deterministic Swarm/Kagami profile-bundle regeneration, exact
 profile-config admission, and public consensus wire roundtrips are complete.
-The five checked-in OpenAPI artifacts remain stale and require deterministic
-regeneration from a clean exact candidate; the dirty development checkout
-without the required release-authorized SSH signature is not release
+The checked-in Torii OpenAPI mirrors now carry the current always-on six-field
+lifecycle contract and are byte-identical, but their final clean-source
+provenance and required release-authorized signature must still be regenerated
+from the immutable candidate. A dirty development checkout is not release
 provenance. The outstanding revision-4 work includes:
 
+- Preserve the single finalized-lane predecessor owner through release
+  qualification. Ordinary and PendingKura lifecycles now share a bounded
+  preflight that rehydrates late canonical ownership, services historical
+  dependencies, and requires every winning certificate plus its application
+  witness to be durable before rollover authority or successor activation.
+  There is no incomplete-session successor branch. Run the focused Rust and
+  four-validator loss/hold/heal corridors against this exact source seal.
 - Run a fresh strict source-bound TLAPS wave over the exact-cardinality change
   closure. The TLA model now preserves `DualQuorum` as mathematical
   `>= 2f + 1` count-and-power sufficiency, separately validates exact wire
@@ -262,9 +303,10 @@ provenance. The outstanding revision-4 work includes:
   ingress capacity waits internally; takes at most one physical Completion
   head; classifies the complete Ready census; and returns the unchanged cursor
   only when no fair ingress winner exists. Its queue-owned ordinary ingress
-  prerequisite now freezes that exact fair winner, prepares current-height
-  Certified-Serve state under the legacy lock/transaction discipline, and
-  physically removes the same occurrence into an opaque fail-stop token.
+  prerequisite now freezes that exact fair winner. Current-height
+  Certified-Serve enters the coordinator-owned selector/admission transaction,
+  and the typed capacity/dequeue cut physically removes the same occurrence
+  only when its registry-attested scheduler claim is ready.
   Backpressure retains the carrier plus off-queue debt, while recovered
   Decision-Fetch retains its queue witness through Phase A. Mixed
   Apply/Sign/Fetch Ready rows now freeze one composite worker/output-capacity
@@ -314,10 +356,11 @@ provenance. The outstanding revision-4 work includes:
   The same seal now retains the Kura-derived safety-WAL and
   chunk paths; the factory binds the adapter's held WAL before store side effects, and launch
   internally restores one ordinal source, folds producer and leader-wire
-  high-watermarks, opens the gate from the owner-held body store, then joins it
-  with the exact service-owned Certified-Serve gate on the same still-closed
-  ingress. The non-PendingKura production runner consumes this path, and one
-  RAII owner retires both gates atomically. Raw paths,
+  high-watermarks and opens the leader-wire binding from the owner-held body
+  store on the same still-closed ingress. Certified-Serve no longer has a
+  parallel service gate; it joins only through the lifecycle coordinator after
+  selection. The non-PendingKura production runner consumes this path, and one
+  RAII owner retires the leader-wire binding atomically. Raw paths,
   ordinals, receipts, Queue/archives/cadence/events, and genesis authority are
   no longer launch inputs. Launch consumes the retained Apply service through
   a parent-sealed move-only worker permit. The authenticated adapter
@@ -439,7 +482,7 @@ provenance. The outstanding revision-4 work includes:
   exact ingress open, and H+1 status publication. The parallel ordinary
   activation returns an opaque owner borrowable only through a private runner
   key. The consuming finalization chain is now present: readiness and exact
-  ingress close first, both gates retire jointly, executor/Kura finality and
+  ingress close first, leader-wire ownership retires, executor/Kura finality and
   adapter WAL retirement complete under fail-stop ownership, and the existing
   lane/service output transaction seals its durable handoff while services and
   the lifecycle owner remain joined. A fresh post-handoff Certified-Serve
@@ -448,7 +491,7 @@ provenance. The outstanding revision-4 work includes:
   publication token consumes the concrete registry. Only the cleanup-ready
   state permits normal finalized-height teardown. Explicit consuming shutdown
   transitions now close runner readiness and the exact queue, release prepared
-  local-Proposal state, jointly detach both ingress gates, and permit normal
+  local-Proposal state, detach leader-wire ingress ownership, and permit normal
   worker stop for unpublished or active heights without claiming finality;
   CompleteTip keeps its retired predecessor joined through the same boundary.
   The consumed activation authority also lends one borrow-scoped preactivation
@@ -1052,31 +1095,154 @@ narrow-field Poseidon, dense vector/Pedersen, and direct verification—is a har
 `NO` under the combined k17, 5 GiB processed-key, 384 KiB proof-pair, and
 128 MiB device ceilings. Exact public transport remains an unreviewed schema
 redesign whose fit depends on the guarded inventory; it is not production-ready.
-Any replacement binding requires independent cryptographic review. The guarded
-pre-graph `S/E/T/P` inventory completed at a 1,636,745,216-byte evidence peak
-with zero populated Step circuits. Both parities have 2,025 sources, eight
-equations, 2,680 terms, 636 protocol points, and 5,364 non-native Poseidon
-permutations; raw/compressed combined bindings require 69/51 k17 lanes, so
-neither fits the reviewed five-lane bridge. Do not run a populated graph, bind
-release hashes, or describe `[220]` / `[25, 0, 0]` as a candidate until a
-reviewed replacement satisfies every cap.
+The simplest exact field transport already needs
+`2 * (2,025 + 2,680) * 32 = 301,120` bytes before indices or framing. Adding
+the two old projected 93,120-byte proofs yields 487,360 bytes, 94,144 above the
+393,216-byte proof-pair cap. This rejects that exact transport, not every
+possible redesign; any replacement still requires independent cryptographic
+review. The guarded pre-graph `S/E/T/P` inventory completed at a
+1,636,745,216-byte evidence peak with zero populated Step circuits. Both
+parities have 2,025 sources, eight equations, 2,680 terms, 636 protocol points,
+and 5,364 non-native Poseidon permutations; raw/compressed combined bindings
+require 69/51 k17 lanes, so neither fits the reviewed five-lane bridge. Do not
+run a populated graph, bind release hashes, or describe `[220]` / `[25, 0, 0]`
+as a candidate until a reviewed replacement satisfies every cap.
 
-The production-readiness audit closed the local false-green and
-resource-amplification gaps: candidate success is now explicitly static and
-rejects unresolved index state, the complete lightweight release-tool and SDK
-boundary suites are workflow-owned, and Core/Kagami share bounded governed
-device-policy validation. Those controls do not discharge release evidence.
-The authenticated source-seal projection still needs a pinned producer (or an
-equivalently reviewed external-controller protocol) with end-to-end
-generate/seal/reconstruct tests. Production hardware qualification must also
-use a production-policy identifier and hash distinct from the
-`taira-testnet-physical-ios-xcode-paired-v1` candidate lab schema; promotion
-now rejects the latter's `app_attest_used:false` receipt. Replace that explicit
-blocker only after an independently reviewed production App Attest/Secure
-Enclave evidence schema and validator are available.
+The first explicitly non-shipping V7 IPA audit-bridge experiment is unsound:
+its prover-chosen commitment is not circuit-constrained to either canonical
+vector, so its equality at one commitment-derived point and every shape number
+it emitted are diagnostic only. Its source module and operator command are
+retired; retain only this rejection record and keep the replacement release
+gate hard-failed.
+
+Finish the single serialized-advice V7 construction; do not revive the rejected
+IPA, fixed-generator, generic-Poseidon, or segmented-Poseidon candidates. Keep
+the exact dense group-identity enforcement. Add one equality-enabled phase-zero
+advice column to each physical proof and copy-bind the frozen native vector,
+then every reciprocal scalar's constrained canonical two-`u128` encoding, then
+literal zero through the authenticated usable-row boundary. Reproduce that
+column's real Halo2 commitment from a fresh role-local CSPRNG seed before
+deriving the challenge, prove once with the same seed, structurally parse the
+verified PLONK witness list at the manifest-pinned phase/rank/global index, and
+require byte-exact commitment equality. Reject batched multi-circuit proving.
+
+The typed 70-cell layout must expose the same ten current cells
+`Ceq/Cep/z/vEq/vEp`, two transitive ordered-parent digest cells, and the
+live/bootstrap bit in both halves. Derive masked 254-bit `z` only after both
+commitments, binding exact ParamsIPA encodings, compiled protocols/VKs, k/n,
+blinding schedule, full advice phase vectors, column index/rank, serialization
+schema/count/order/padding, frozen pre-audit statement, and both Eq/Ep counts.
+Constrain `z != 0,1`, native and reciprocal Horner recurrences, and a distinct
+commitment-derived dense batching challenge. For each present parent, bind the
+actual structurally parsed commitment to its claimed cell; hash the verified
+parent's profile, step and parent counts, own live/bootstrap bit, frozen core,
+current ten cells, and prior ancestry. An absent slot is a literal all-zero null
+70-cell parsed instance, while a bootstrap proof may be a present slot with its
+own live bit zero. Atomic pair verification must cross-match all shared cells
+and identities, recompute both Params/protocol identities and `z`, and
+terminally decide both IPA opening accumulators; single-half acceptance stays
+forbidden.
+
+Compile the integrated builder, then add failures for serialized source and
+tail-padding mutation, final-commitment drift, identity/noncanonical points,
+relabeled parameters/protocols, swapped or mismatched Eq/Ep pairs, `z`/`v`
+mutation, parent commitment/claimed-slot mismatch, null-slot malleation,
+parent-count/live/order/ancestry mutation, and dense-transcript drift. Exercise
+parent counts one and two, carried and branch selectors, Prover-stage real
+recursive proofs, bootstrap-as-present, all four bootstrap/live roles, and
+exact k17 MockProver/advice/lookup measurements. The acceptance targets remain
+220 advice, 25 lookup advice, degree 9, `P=298`, `S<=638`, each ParamsIPA below
+the profile cap, each processed key at most 5 GiB, proof pair at most 384 KiB,
+device aggregate at most 128 MiB, and guarded peak at most 56 GiB. Only after
+those measurements and independent review may authenticated artifacts be
+generated. The V7 gate remains hard false until then.
+
+The production-readiness audit closed the local false-green and bounded-tooling
+gaps: candidate success is explicitly static and rejects unresolved index
+state, the lightweight release-tool and SDK boundary suites are workflow-owned,
+and Core/Kagami share governed device-policy validation. Production signer and
+Kagami execution now require a distinct digest-pinned
+`iroha.authenticated-tool-os-isolation.v1` controller instead of directly
+running the authenticated tool. The existing `iroha_kagami` crate implements
+  the dependency-free native controller. The protected Taira qualification and
+  deploy jobs source-authenticate, root-install, byte-verify, and hostile-qualify
+  the independently pinned image on each actual kernel before use. The dedicated
+  protected Kagemusha workflow performs the same bootstrap before running the
+  fully pinned promotion gate under `env -i`. The qualification and deploy reset
+  stages now consume separate mandatory environment-owned Kagemusha release-root
+  and activation-authority pairs through the sealed controller; repository
+  defaults cannot substitute either trust value. The source-readiness audit is
+  green for the fixed native client and all eight exact authority roles, but
+  protected-host socket/broker/replay-journal provisioning remains external and
+  runtime preflights continue to fail closed when it is absent. Its deny-default Seatbelt profile grants
+only exact authenticated input reads plus immutable Apple runtime files, exact
+pre-created output writes, and the authenticated image; it denies ambient
+secrets, network/process/filesystem escapes, bounds output/time/storage, and
+uses a sibling watchdog for forced-parent-death cleanup. Linux deliberately
+  fails closed pending a qualified Landlock/seccomp/delegated-cgroup backend.
+  Operator-provisioned root paths/trust records/sudo grants and qualified
+  proprietary external-signer compatibility remain absent. Those controls do not
+discharge release evidence. The
+authenticated source-seal projection now has a signed request/produce/verify
+protocol that binds the exact Cargo/rustc executables, execution policy, and raw
+plus normalized unit graphs. The canonical projection carries those tool
+identities and the raw graph binding into the build: both the Python consumer
+and Core build script reject a different actual toolchain. Protected promotion
+now repeats deterministic reconstruction from separately pinned signed inputs
+and cross-binds each manifest's tool digests. The repository still has no
+controller-captured real graph or receipt, and cannot prove that an external normalizer faithfully
+transformed Cargo's unstable output; the checked-in synthetic graph is test
+material only. Production iOS validation now authenticates bounded X.509 v3
+chains, P-256/P-384 signatures, certificate time/static revocation, the exact
+Apple nonce extension, App ID/key/authenticator fields, assertion signature and
+counter, and a separately pinned signed freshness/consumption receipt. Missing,
+stale, substituted, or untrusted receipts fail closed. Apple's full published
+2026 attestation-object vector now passes the real chain/authData/nonce/CMS/raw
+receipt parser, but a capture from the exact Kagemusha app on the attached
+physical phone remains absent.
+The repository stateful authority now durably issues exact challenge pairs and
+consumption IDs, verifies Apple's production refreshed CMS receipt to the
+digest-pinned Root CA G3, enforces signed app/key/time/type/risk and monotonic
+per-key counters, commits before signing, and recovers deterministically after
+a crash. Live authority signing keys and the runtime-only DeviceCheck JWT
+issuer remain unprovisioned and the physical production path remains
+unqualified.
 
 Remaining work stays ordered and fail-closed:
 
+- Provision the independently reviewed controller digest, root target/trust
+  records, fixed promotion paths, and exact sudo grants consumed by the protected
+  workflows. Qualify the proprietary external signer against the controller's
+  pre-created four-output protocol, including the canonical paired
+  `genesis.identity.toml`, then run and retain complete signer and Kagemusha
+  promotion evidence through the wired protected jobs. If Linux promotion
+  is required, implement and independently qualify the still-missing
+  Landlock/seccomp/delegated-cgroup backend first; Linux currently fails closed
+  rather than substituting local process-group or per-file bounds.
+- Capture and validate a real production App Attest leaf/intermediate chain,
+  authenticator data, assertion, and Apple receipt on the physical target using
+  the exact independently prepared signed app whose canonical
+  Team/bundle/build/executable/CDHash measurement is bound into both challenges
+  and the signed platform evidence. Then provision and independently audit the
+  online authority that issues the one-time challenge, persists
+  key/counter/consumption state, obtains and cryptographically validates Apple's
+  current App Attest receipt refresh/risk assessment alongside the static
+  certificate-digest revocation policy, and signs the bounded freshness receipt. The
+  synthetic mutation fixtures and Apple's published compatibility vector are
+  not operational qualification. The attached production-fused iPhone is
+  paired and has Developer Mode enabled; it reached Xcode's real signing path
+  while connected but is currently offline. Resume only after it is reconnected
+  and unlocked, an Apple Developer
+  account is added to Xcode and an App Attest production profile is issued for
+  `org.hyperledger.iroha.kagemusha.appattestlab`; the current host has zero
+  Xcode accounts and zero App Attest profiles, so no device installation or
+  Apple service call is claimed.
+- Reconcile the concurrent `TransactionEntrypoint` and `iroha_config`
+  integer-width migrations, then rerun the workflow-owned receiver-snapshot,
+  compact-registration, active-receiver-routing, Kagami activation, and Taira
+  backing suites from a clean locked source tree. Only the five-test data-model
+  receiver-snapshot suite has a current local Rust pass; no Core/Kagami or
+  full-workspace green result is release evidence yet.
 - Bind the completed guarded pre-graph `S/E/T/P`, V6/V2 element and
   permutation counts, and legacy SHA lower bounds into the independent review
   input. Use those measurements to select and independently review a
@@ -1124,7 +1290,10 @@ Remaining work stays ordered and fail-closed:
   query-visible `/status.blocks` equality, ordinary node readiness, universal
   `cash_handoff_v1`/ABI-21 capability discovery without an asset enrollment
   gate, a real top-up/redemption canary, a restart below 45 seconds, and
-  continued advancement after restart.
+  continued advancement after restart. The 2026-08-17 read-only recheck
+  returned HTTP 502 for public status, health, readiness, and MCP endpoints;
+  do not treat ingress availability as rollout evidence until the four-peer
+  cohort is independently reachable and advancing.
 
 ## ZK-ACE JavaScript signed-transaction parity
 
@@ -1154,23 +1323,23 @@ evidence.
 The canonical 54-obligation ledger records 44 `tlaps_proved`, 3
 `cross_tool_proved`, 6 `trusted_contract`, and 1 `out_of_scope`, with no
 `specified_unproved` rows and `machine_checked_completion: true`. This freezes
-the checker-mandated legacy/revision-3-rooted status inventory before evidence
-generation; it is not proof evidence by itself and is not a deductive proof of
-revision 4. The next formal step is to freeze a clean signed tree, run strict
+the checker-mandated revision-4 status inventory before evidence generation; it
+is not proof evidence by itself and is not a deductive proof of revision 4. The
+next formal step is to freeze a clean signed tree, run strict
 TLAPS and pinned Verus, derive the cross-tool and production-trace evidence,
 execute the separate mandatory revision-4 TLC/mutation corridor, and validate
 the signed receipts and completion marker against that same commit and ledger
 digest.
 
 On the current mutable tree, the independent static release inventory contract
-passes with 88 legs, 860/860 production tests across 40 modules, 527/527 G-UNIT
+contains 91 legs, 864/864 production tests across 43 modules, 522/522 G-UNIT
 rows, and four mandatory four-peer gates. The grouped fixture SHA-256 is
-`87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`.
-The grouped SDK closure is 1,399 paths at
-`3c360ab5e3abca9a5b94430f69ac4ef295f8bf67b896c9021745e511345ee9f1`,
-and diagnostics is 1,401 paths at
-`88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`.
-These are mutable-tree source inventories, not a sealed receipt.
+`e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
+The grouped SDK closure is 1,400 paths and diagnostics is 1,402 paths.
+Mutable documentation does not embed SDK suite-source digests: the executable resolver derives them during immutable-candidate freeze/replay, and the release receipt binds the result.
+The newly declared Java typed-intent path remains untracked, so the exact
+tracked-source gate still awaits authorized staging. These are mutable-tree
+source inventories, not a sealed receipt.
 
 Both reproduced clean-`d24` consensus root causes are closed in source and
 their three focused regressions pass. The bounded Kura-backed tag-21 QueuePlan
@@ -1227,22 +1396,30 @@ green at that checkpoint. No Cargo result against the current split source is
 claimed, and this historical focused evidence does not replace the complete
 release gates.
 
-The static release inventory contract now enumerates `860/860` production tests
-across 40 modules and `527/527` focused `G-UNIT` entries. Its canonical 528-line
+The static release inventory contract now enumerates `864/864` production tests
+across 43 modules and `522/522` focused `G-UNIT` entries. Its canonical 523-line
 TSV has
 SHA-256
-`5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d`.
+`e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`.
 The separate canonical production module/test TSV has SHA-256
-`4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329`;
+`c9972f55a17acbdcfacda42e3ca152d9705ec4e0f188a561f0c28990468ffe97`;
 the newest rows bind the proposal-height namespace for exact retired attempts,
 canonical successor acceptance while local sidecars lag, two-link raw
 lane-chain hydration on receipt-free cold restart, and exact noncanonical
-autonomous-output retirement at applied-height handoff. They also bind
+autonomous-output retirement at applied-height handoff, plus ordinary and
+record-backed autonomous historical predecessor durability. They also bind
 crash-safe autonomous lifecycle terminal completion,
 startup reconciliation before lane-work activation, and the exact pre-mutation
 terminal-sweep partition. The duplicate inline V2 core network simulations
 are retired; the standalone `iroha_sumeragi_core` harness remains.
-The 321-entry core group additionally source-seals grouped Native prevote
+The finalized predecessor remains active while the shared ordinary/PendingKura
+preflight rehydrates late canonical lane ownership, services bounded
+historical recovery, and persists each winning certificate plus its
+application witness. No incomplete lane session is transferred into the
+successor. The two new handoff rows instead bind independent Kura
+revalidation of already durable ordinary and record-backed autonomous
+historical output.
+The 316-entry core group additionally source-seals grouped Native prevote
 budget rejection before Kura/WSV mutation, historical source-bundle
 authentication, crash-safe latest-index and prune-V2 recovery, cross-route
 manifest-barrier isolation, durable Native signing-boundary drift rejection,
@@ -1253,46 +1430,48 @@ source inventory consistency, not execution evidence.
 Schema 5 machine-maps 34 conceptual multilane rows to 106 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending structural
-source check. The reviewed Rust include topology contains 50 parents and 317
+source check. The reviewed Rust include topology contains 57 parents and 340
 direct entries; its canonical payload SHA-256 is
-`7eee4e44535cee07db90ff756c4b54786fcef23ea3dc7f0ada6c663a454c72d7`.
-The release-inventory contract is statically reconciled at 88/860/527, and the
+`efe1f1598aff2fe7d27c9f9149de36561ee0b686dba8b21118ff1031fe6a9f5d`.
+The release-inventory contract is statically reconciled at 91/864/522, and the
 structural model/source contract suite passes. The aggregate proof-ledger
 checker and static Apalache-runner contract remain under current-source
-validation. No current TLC or Apalache engine run is claimed. The newly bound non-retireable lane transport
+validation. The fixed QueuePlan admission-registry TLC run currently exhausts
+15,525 generated / 1,520 distinct states at depth 16, and each of its ten
+dedicated mutants reaches the exact named counterexample. No current Apalache
+or broader TLC-suite engine run is claimed. The newly bound non-retireable lane transport
 is intentionally fail-closed at applied-height handoff; formal operational
 correspondence plus drain/restart/liveness evidence remain mandatory.
 
 The Rust-owned protocol-4 grouped fixture contains 56 negative controls and
 hashes to
-`87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`;
-its staged grouped and diagnostics suite-source manifests contain 1,399 and
-1,401 records respectively and hash to
-`3c360ab5e3abca9a5b94430f69ac4ef295f8bf67b896c9021745e511345ee9f1`
-and
-`88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`;
+`e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`;
+its staged grouped and diagnostics suite-source manifests contain 1,400 and
+1,402 records respectively; the executable resolver derives their hashes from
+the exact frozen candidate;
 the synchronized 48-line wire TSV hashes to
 `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
 The current grouped harness inventories OpenAPI `7`, Python `63`, JavaScript
-`61`, Swift `4`, Kotlin `6`, and Java `5` tests. Previously recorded direct
+`61`, Swift `5`, Kotlin `7`, and Java `6` tests. Previously recorded direct
 OpenAPI `7/7`, Python `58/58`, and JavaScript `56/56` results predate this
 fixture and do not attest it; one archived aggregate source/distribution replay
 remains open under `G-SDK`. The release receipt must reproduce the exact staged
-record totals and suite-source SHA-256 values above from its immutable
-candidate; the staged values are not execution evidence. The
+record totals and resolver-derived suite-source SHA-256 values from its
+immutable candidate; mutable-tree values are not execution evidence. The
 diagnostics runner inventories Rust `14`, Python `129`, JavaScript
 source/distribution `88`, Swift `34`, Kotlin `43`, and Java `42` tests. Its
 Swift/Kotlin/Java wire consumers are runner- and receipt-bound; the Rust wire
 consumer is bound directly by the release runner and receipt. The
-receipt-required legacy-version-before-signing regression preserves the exact
-860-production-test and 527-G-UNIT-test counts. Rust's separated client test
+receipt-required unsupported-version-before-signing regression preserves the exact
+864-production-test and 522-G-UNIT-test counts. Rust's separated client test
 module covers both complete endpoint-payload swaps while retaining its
 14-test count, so the API-separation source gap is closed. This is
 mutable-source inventory consistency, not deterministic regeneration, SDK
-execution, or immutable-candidate evidence. The five checked-in OpenAPI
-artifacts remain dirty and unsigned. Exact-five replay is source- and
-receipt-bound to the protected schema-v3 OpenAPI Node closure, but immutable
-candidate execution remains unclaimed.
+execution, or immutable-candidate evidence. The current Torii OpenAPI mirrors
+are byte-identical and carry the closed lifecycle schema; their clean-source
+provenance and release signature remain outstanding. Exact-five replay is
+source- and receipt-bound to the protected schema-v3 OpenAPI Node closure, but
+immutable-candidate execution remains unclaimed.
 
 The in-flight carrier formal corpus is now bound to the versions that
 production actually accepts: schema V2 in the `LaneExecutablePayloadV1`
@@ -1302,13 +1481,13 @@ multilane binding ledger keeps this as the
 `composed_state_action_relation_with_source_bound_trace_extraction` claim, and source-binds
 the exact payload, reservation, queue-order, Kura persistence/recovery, runner,
 and release-receipt consumers. The schema-5 structural/source-binding checker
-passes on the mutable tree. The exact 860-test production inventory, 527-test
+passes on the mutable tree. The exact 864-test production inventory, 522-test
 G-UNIT source inventory, 12 fail-closed layout tests, two receipt parser tests,
 and 12 Apalache-runner contract controls still require a final source-bound
 rerun. The ledger retains the
 distinct fifth layout-only Apalache result after the four refinement rows. The
-G-UNIT inventory has 528 TSV lines and SHA-256
-`5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d`.
+G-UNIT inventory has 523 TSV lines and SHA-256
+`e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`.
 The TLC trace normalizer also imports on the supported Xcode Python 3.9 runtime
 again and passes all 15 focused tests. No TLC or Apalache engine execution is
 claimed by those static checks, and formal correspondence between concrete
@@ -1351,30 +1530,27 @@ The remaining work is evidence-driven and must stay in order:
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
   mutations before release evidence is accepted, then finish the remaining
-  860-test,
-  40-module production inventory legs and archived G-UNIT execution.
+  864-test,
+  43-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product assigns all 54 structural TLAPS
   projection rows; that is source inventory only. Its V2 inductive-safety,
   successor-isolation, and temporal-product obligations remain in the formal
   dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 527 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 522 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
   source/distribution, Swift, Kotlin, and Java for
   `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 56 negative controls,
   fixture SHA-256
-  `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`,
-  staged grouped/diagnostics suite-source manifests at exactly 1,399 and 1,401
-  records with SHA-256 values
-  `3c360ab5e3abca9a5b94430f69ac4ef295f8bf67b896c9021745e511345ee9f1`
-  and
-  `88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`,
-  to be regenerated and receipt-bound from the exact immutable candidate, and
+  `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`,
+  staged grouped/diagnostics suite-source manifests at exactly 1,400 and 1,402
+  records whose hashes must be regenerated and receipt-bound from the exact
+  immutable candidate, and
   wire-TSV SHA-256
   `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
   The current harness inventories OpenAPI `7`, Python `63`, JavaScript `61`,
-  Swift `4`, Kotlin `6`, and Java `5` tests. Earlier direct subset results are
+  Swift `5`, Kotlin `7`, and Java `6` tests. Earlier direct subset results are
   not an archived all-surface replay and do not attest this
   corpus; the aggregate source/distribution harness remains required. The
   separate diagnostics harness inventories Rust `14`, Python `129`, JavaScript
@@ -14715,7 +14891,7 @@ excluded from the first release.
   wire, certified-fetch, and compact RBC regressions consume them;
   feature-gated core Sumeragi main-loop deterministic, retransmit, seeded BLS
   peer, P2P refresh, NPoS canonicalization, and canonical payload
-  previous-roster fixtures now use checked seed expansion before main-loop
+  canonical payload fixtures now use checked seed expansion before main-loop
   regressions consume them;
   core state default streaming key material, ZK-ACE identity account helpers,
   and governance-stage decision fixtures now use checked Ed25519 seed expansion
@@ -15197,9 +15373,8 @@ excluded from the first release.
   through `SeedableRng::try_from_os_rng` and the CLI `Result` path, and CEK
   rotation receipt HKDF salts now use direct checked OS RNG fills when an
   explicit `--hkdf-salt` is not supplied; Kagami keypair, PoP, client-config,
-  genesis-signing including NPoS bootstrap escrow, wizard, localnet
-  peer/genesis/gas/extra-account key generation, and the Taira Kaigi localnet
-  overlay example's seed-derived genesis signer now route
+  genesis-signing including NPoS bootstrap escrow, wizard, and localnet
+  peer/genesis/gas/extra-account key generation now route
   random, seeded, and private-key-derived material through `KeyPair`'s fallible
   APIs and BLS PoP `Result`s instead of compatibility panic
   wrappers; irohad's ephemeral Torii receipt-signer fallback now uses checked
@@ -15241,7 +15416,7 @@ excluded from the first release.
 				  algorithm-specific random-key helpers, and bridge finality proof,
 				  bundle, authority-set, and verifier fixtures now use checked
 				  BLS/default/Ed25519 random-key helpers; block signing, genesis,
-				  previous-roster evidence, FastPQ/result-proof, and canonical-wire
+				  FastPQ/result-proof and canonical-wire
 				  fixtures now use checked BLS/default random-key helpers; consensus
 				  roundtrip QC, reconfiguration, RBC, Sumeragi status, and message
 				  fixtures now use checked BLS/default random-key and peer-id helpers;
@@ -20102,6 +20277,15 @@ operator-provided rollout bundles.
 
 **Status:** active pre-release hardening.
 
+**Current-truth supersession (2026-08-18):** Nexus is always on. The retired
+top-level `nexus.enabled` switch is neither a supported disabled profile nor a
+constant-true compatibility field. Historical enabled/disabled claims below do
+not describe the current candidate. Autoscale remains independently optional:
+only `nexus.autoscale.enabled` and its validated bounds decide whether managed
+elastic lanes participate in default routing or lifecycle transitions. Manual
+lane lifecycle, routing, telemetry, DA, Sumeragi, and public APIs remain active
+regardless of that subordinate autoscale setting.
+
 - Use the public Taira testnet to harden consensus, routing, lane-aware
   execution, data availability, operator workflows, and SDK integration.
 - Validate and roll out the completed independent-lane consensus, DA/RBC,
@@ -20386,8 +20570,8 @@ operator-provided rollout bundles.
   validator records cannot revive a removed or rebound lane committee. The
   global NPoS epoch stake snapshot now uses the same active lane/dataspace
   guard before public validator records can influence topology scope, council
-  member mapping, or stake-ranked candidates. When Nexus is enabled, live NPoS
-  active-topology derivation, roster-unavailability recovery candidate
+  member mapping, or stake-ranked candidates. The mandatory Nexus runtime's
+  live NPoS active-topology derivation, roster-unavailability recovery candidate
   selection, block-sync sender-lane roster caching, and block-apply peer
   reconciliation now also intersect validator-derived lane scopes with the
   active lane/dataspace catalogs. State-backed commit stake snapshot
@@ -20440,16 +20624,16 @@ operator-provided rollout bundles.
 - Manual lane additions, full config swaps, and static TOML parsing now reserve
   the enabled autoscale elastic id range for the consensus autoscaler, so
   operator-managed lanes cannot occupy future scale-out ids and silently cap
-  default-route horizontal growth. Static TOML parsing also rejects
-  `nexus.autoscale.enabled=true` when `nexus.enabled=false`, preventing shadow
-  autoscale settings; the `State::set_nexus` runtime boundary now enforces the
-  same disabled-profile guard for direct actual-config swaps. Runtime lifecycle
+  default-route horizontal growth. Static TOML parsing and the `State::set_nexus`
+  runtime boundary both treat `nexus.autoscale.enabled` as the sole enablement
+  policy: autoscale-owned lanes are invalid while that subordinate policy is
+  disabled, and no top-level Nexus switch participates. Runtime lifecycle
   validation also rejects post-plan catalogs that would preserve a pre-existing
-  manual lane in that range, while still allowing an explicit retire plan to
-  repair the bad manual lane. The same post-plan scan now rejects unrelated
-  lifecycle updates that would preserve an autoscale-owned lane with malformed
-  metadata, disabled autoscale, an out-of-range id, or a non-default dataspace
-  binding.
+  manual lane in the active reserved range, while still allowing an explicit
+  retire plan to repair the bad manual lane. The same post-plan scan rejects
+  unrelated lifecycle updates that would preserve an autoscale-owned lane with
+  malformed metadata, disabled autoscale, an out-of-range id, or a non-default
+  dataspace binding.
   Explicit lifecycle retire plans may remove those invalid autoscale-owned
   lanes for repair, while valid autoscale-managed lanes remain protected from
   manual retirement. The internal autoscale lifecycle path now rejects
@@ -20491,24 +20675,19 @@ operator-provided rollout bundles.
   is occupied by a manual lane, malformed autoscale-managed lane, or managed
   lane outside the default dataspace, with the same behavior pinned through the
   `nexus_and_streaming` multilane router integration harness. Live autoscale
-  routing now additionally requires `nexus.enabled = true`, so a corrupted
-  actual state with Nexus disabled but autoscale still marked enabled cannot
-  admit elastic lanes into default traffic; transaction validation coverage now
-  proves the same gate keeps disabled-Nexus traffic on base-lane policy instead
-  of bypassing it through an elastic route, and proposal-refresh coverage proves
-  stale elastic vectors are recomputed back to the default lane before consensus
-  proposal execution. Multilane router integration coverage now also pins the
-  public `ConfigLaneRouter::route_with_view` boundary so stale autoscale-managed
-  catalog lanes are ignored when either autoscale or Nexus is disabled, while
-  enabled autoscale still shards default traffic over valid elastic lanes. Block
-  validation coverage now also proves stale elastic execution contexts are
-  rejected after Nexus is disabled or after active elastic-range corruption
-  forces base-lane routing, so forged or delayed blocks cannot keep using an
-  elastic route once live state falls back to the base lane. Block autoscale
-  application coverage now also proves corrupted
-  disabled-Nexus state cannot create or retire elastic lanes even when autoscale
-  remains marked enabled, and enabled-Nexus state cannot create or retire
-  elastic lanes after autoscale is disabled. Future `last_transition_height`
+  routing depends only on `nexus.autoscale.enabled` and the validated elastic
+  range. Transaction validation and proposal-refresh coverage prove that
+  disabling that subordinate policy or corrupting its bounds returns no-target
+  traffic and stale elastic vectors to the base lane before consensus proposal
+  execution. Multilane router integration coverage pins the fallible
+  `LaneRouter::try_route_with_view` boundary so stale autoscale-managed catalog
+  lanes are ignored while autoscale is disabled, while enabled autoscale still
+  shards default traffic over valid elastic lanes. Block validation rejects
+  stale elastic execution contexts after autoscale disablement or active-range
+  corruption, so forged or delayed blocks cannot retain an elastic route after
+  live state falls back to the base lane. Block autoscale application likewise
+  cannot create or retire elastic lanes while autoscale is disabled. Future
+  `last_transition_height`
   corruption now also has block-application coverage proving it suppresses
   scale-out and scale-in without overwriting the cooldown marker.
   Conflicting-window coverage now pins scale-out precedence when a longer hot
@@ -20604,11 +20783,10 @@ operator-provided rollout bundles.
   the reserved elastic range are also pinned as no-side-effect endpoint
   rejections even when the rejected lane metadata includes scheduler capacity
   overrides.
-  Generic malformed lifecycle plans and disabled-Nexus lifecycle attempts,
-  including duplicate additions or retires, unknown retire targets, unknown
-  dataspace additions, and default-route retire/replacement attempts, are
-  likewise pinned as no-side-effect public API failures for both committed
-  catalogs and queue-local scheduler limits.
+  Generic malformed lifecycle plans, including duplicate additions or retires,
+  unknown retire targets, unknown dataspace additions, and default-route
+  retire/replacement attempts, are likewise pinned as no-side-effect public API
+  failures for both committed catalogs and queue-local scheduler limits.
   The core queue lifecycle helper now directly proves rejected autoscale-reserved
   scheduler metadata cannot refresh queue-local lane catalogs or TEU limits
   before the state catalog accepts the plan, and accepted repair-retire plans
@@ -26916,12 +27094,12 @@ included in each edge-triggered record.
 
 Reliable transport ownership now covers the bounded local seams in both
 directions. For outer ingress, the exact non-empty-roster count geometry is
-`5N+3H+2`: each validator transport hop owns generic, ordinary Progress,
+`5N+3H`: each validator transport hop owns generic, ordinary Progress,
 certified-fence-escape, TimeoutVote, and TransportCompletion positions; each of
 the at most `H` simultaneously materialized authenticated non-validator lanes
-owns generic, certified-fence-escape, and TransportCompletion positions; and
-the persistent anonymous lane owns the final pair. The no-roster diagnostic
-minimum is `3H+1`. Semantic origin remains
+owns generic, certified-fence-escape, and TransportCompletion positions.
+Identityless ingress owns no capacity partition; the no-roster diagnostic
+minimum is `3H`. Semantic origin remains
 available to the protocol, but authenticated `via` owns count, bytes, fairness,
 and reservations, so relay identity churn cannot multiply capacity or borrow a
 validator reserve. Semantic duplicate/alternate-route attachment precedes the
@@ -26982,10 +27160,10 @@ feature-independent 8,258-byte raw public-key ceiling covers non-roster
 observers and rotated responders. Configure and open both fail closed when any
 count, byte partition, topic frame, global encrypted frame, or queue owner is
 undersized. Shipping defaults are 17 MiB for global/consensus/block-sync,
-2 MiB for control, `H=2`, 518 ingress entries, a 33 MiB source partition, and
+2 MiB for control, `H=2`, 161 ingress entries, a 33 MiB source partition, and
 231 MiB aggregate body ownership. Kagami and the Taira renderer scale aggregate
-body bytes by `N + H + 1` and reject validator rosters above the protocol
-maximum of 128. The independent P2P wire-prefix boundary is also closed: the
+body bytes by `N + H` and reject validator rosters above the protocol maximum
+of 31. The independent P2P wire-prefix boundary is also closed: the
 wire body has the inclusive `u32::MAX` ceiling, while runtime configuration is
 limited to a deterministic 2,147,483,643-byte body so prefix plus body remains
 representable in one buffer on 32-bit and 64-bit hosts. Daemon and network
@@ -27333,8 +27511,8 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
-original HEAD/tree/`Cargo.lock`, all 88 pre-network legs and their exact
-860-test inventory plus the separate exact 527-test G-UNIT inventory, the
+original HEAD/tree/`Cargo.lock`, all 91 pre-network legs and their exact
+864-test inventory plus the separate exact 522-test G-UNIT inventory, the
 formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the

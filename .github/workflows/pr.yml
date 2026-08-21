@@ -194,6 +194,7 @@ jobs:
           python3 -m pytest -q \
             pytests/scripts/check_cargo_feature_hygiene_test.py \
             pytests/scripts/check_workspace_target_inventory_test.py \
+            scripts/tests/cargo_fast_test.py \
             scripts/tests/profile_build_test.py \
             scripts/tests/profile_cargo_build_test.py \
             scripts/tests/check_musubi_fixture_owner_test.py \
@@ -213,6 +214,22 @@ jobs:
           python3 -I -S scripts/check_jni_sdk_android_pairs.py
           python3 scripts/check_dependency_budget.py
           python3 scripts/check_source_file_budget.py --require-objective
+          python3 -I -S scripts/check_telemetry_metric_catalog_v2.py
+          python3 -I -S scripts/check_telemetry_metric_catalog_v2.py --self-test
+          python3 -m unittest \
+            scripts.tests.connect_gating_fixture_compaction_source_test \
+            scripts.tests.developer_executable_retirement_source_test \
+            scripts.tests.halo2_backend_02_compaction_source_test \
+            scripts.tests.halo2_backend_shared_circuit_source_test \
+            scripts.tests.integration_target_consolidation_source_test \
+            scripts.tests.isi_instruction_box_macro_source_test \
+            scripts.tests.ivm_vector_metal_compaction_source_test \
+            scripts.tests.kotodama_ir_compaction_source_test \
+            scripts.tests.kotodama_typed_case_registry_source_test \
+            scripts.tests.norito_columnar_derive_compaction_source_test \
+            scripts.tests.norito_scratch_retirement_source_test \
+            scripts.tests.obsolete_developer_test_retirement_source_test \
+            scripts.tests.shared_proc_macro_emitter_source_test
           python3 scripts/check_generated_artifacts.py
           python3 scripts/check_nexus_provisioning_templates.py
       - name: Classify the PR reverse-dependency closure

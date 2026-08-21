@@ -921,14 +921,14 @@ mod tests {
         );
     }
     #[test]
-    fn transaction_payload_schema_requires_closed_network_domain_and_positive_ttl() {
+    fn transaction_payload_schema_requires_closed_domain_admission_and_positive_ttl() {
         let document = canonical_document();
         let schemas = component_schemas(&document);
         assert_strict_object_schema(
             schemas,
             "TransactionPayload",
             &openapi_contract_strings("openapi.transaction_payload.required").collect::<Vec<_>>(),
-            &["nonce", "attachments"],
+            &["nonce"],
         );
         let properties = schemas["TransactionPayload"]["properties"]
             .as_object()
@@ -942,6 +942,12 @@ mod tests {
         assert_eq!(
             properties["domain"].get("$ref").and_then(Value::as_str),
             Some("#/components/schemas/TransactionDomain")
+        );
+        assert_eq!(
+            properties["admission_intent"]
+                .get("$ref")
+                .and_then(Value::as_str),
+            Some("#/components/schemas/TransactionAdmissionIntent")
         );
         assert_eq!(
             properties["time_to_live_ms"]
@@ -984,6 +990,146 @@ mod tests {
             Some("genesis")
         );
         assert!(variants[1]["properties"].get("value").is_none());
+
+        let admission_schema = schemas["TransactionAdmissionIntent"]
+            .as_object()
+            .expect("TransactionAdmissionIntent schema");
+        assert_eq!(
+            admission_schema
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["oneOf"]),
+            "TransactionAdmissionIntent must expose only its closed union"
+        );
+        let admission_variants = admission_schema["oneOf"]
+            .as_array()
+            .expect("TransactionAdmissionIntent variants");
+        let admission_labels =
+            openapi_contract_strings("openapi.transaction_admission_intent.labels")
+                .collect::<Vec<_>>();
+        assert_eq!(admission_variants.len(), admission_labels.len());
+        for (variant, expected_label) in admission_variants.iter().zip(admission_labels) {
+            let variant = variant
+                .as_object()
+                .expect("TransactionAdmissionIntent object variant");
+            assert_eq!(
+                variant.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+                BTreeSet::from(["additionalProperties", "properties", "required", "type"]),
+                "TransactionAdmissionIntent variant shape"
+            );
+            assert_eq!(variant.get("type").and_then(Value::as_str), Some("object"));
+            assert_eq!(
+                variant.get("additionalProperties").and_then(Value::as_bool),
+                Some(false)
+            );
+            let required = variant["required"]
+                .as_array()
+                .expect("TransactionAdmissionIntent required fields")
+                .iter()
+                .map(|field| field.as_str().expect("required field name"))
+                .collect::<BTreeSet<_>>();
+            assert_eq!(required, BTreeSet::from(["intent", "value"]));
+            let intent_properties = variant["properties"]
+                .as_object()
+                .expect("TransactionAdmissionIntent properties");
+            assert_eq!(
+                intent_properties
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from(["intent", "value"])
+            );
+            assert_eq!(
+                intent_properties["intent"]
+                    .get("const")
+                    .and_then(Value::as_str),
+                Some(expected_label)
+            );
+            assert_eq!(
+                intent_properties["intent"]
+                    .as_object()
+                    .expect("TransactionAdmissionIntent intent property")
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from(["const"])
+            );
+            assert_eq!(
+                intent_properties["value"]
+                    .get("type")
+                    .and_then(Value::as_str),
+                Some("null")
+            );
+            assert_eq!(
+                intent_properties["value"]
+                    .as_object()
+                    .expect("TransactionAdmissionIntent value property")
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from(["type"])
+            );
+        }
+    }
+    #[test]
+    fn authenticated_transaction_nullable_fields_are_required_and_nullable() {
+        let document = canonical_document();
+        let schemas = component_schemas(&document);
+
+        let payload = &schemas["TransactionPayload"];
+        assert!(
+            payload["required"]
+                .as_array()
+                .expect("TransactionPayload required fields")
+                .iter()
+                .any(|field| field.as_str() == Some("attachments"))
+        );
+        assert_eq!(
+            payload["properties"]["attachments"]["type"],
+            norito::json!(["string", "null"])
+        );
+
+        for variant in schemas["FeePaymentIntent"]["oneOf"]
+            .as_array()
+            .expect("fee-payment variants")
+        {
+            let value = &variant["properties"]["value"];
+            assert_eq!(
+                value.get("additionalProperties").and_then(Value::as_bool),
+                Some(false)
+            );
+            assert!(
+                value["required"]
+                    .as_array()
+                    .expect("fee-payment required fields")
+                    .iter()
+                    .any(|field| field.as_str() == Some("gas_limit"))
+            );
+            assert_eq!(
+                value["properties"]["gas_limit"]["type"],
+                norito::json!(["integer", "null"])
+            );
+        }
+
+        let receipt_payload = &schemas["TransactionSubmissionReceipt"]["properties"]["payload"];
+        assert_eq!(
+            receipt_payload
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            receipt_payload["required"]
+                .as_array()
+                .expect("receipt-payload required fields")
+                .iter()
+                .any(|field| field.as_str() == Some("signed_transaction_hash"))
+        );
+        assert_eq!(
+            receipt_payload["properties"]["signed_transaction_hash"]["type"],
+            norito::json!(["string", "null"])
+        );
     }
     #[test]
     fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
@@ -1099,6 +1245,11 @@ mod tests {
         assert!(axt_properties.contains_key("next_handle_counter"));
         assert!(!axt_properties.contains_key("next_min_handle_era"));
         assert!(!axt_properties.contains_key("next_min_sub_nonce"));
+        let error_details_properties = schemas["ErrorDetails"]["properties"]
+            .as_object()
+            .expect("error details properties");
+        assert!(error_details_properties.contains_key("entrypoint_hash"));
+        assert!(error_details_properties.contains_key("tx_hash"));
     }
     #[test]
     fn static_account_operations_publish_exact_auth_and_private_responses() {
@@ -3720,7 +3871,7 @@ mod tests {
                 .and_then(Value::as_str),
             Some("operator")
         );
-        for path in ["/v1/sumeragi/pacemaker", "/v1/sumeragi/phases"] {
+        for path in ["/v1/sumeragi/pacemaker"] {
             let operation = paths
                 .get(path)
                 .and_then(Value::as_object)

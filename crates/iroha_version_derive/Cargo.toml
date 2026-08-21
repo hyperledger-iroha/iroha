@@ -1,5 +1,6 @@
 [package]
 name = "iroha_version_derive"
+autotests = false
 
 edition.workspace = true
 version.workspace = true
@@ -30,5 +31,10 @@ iroha_version = { workspace = true, features = ["derive", "json"] }
 iroha_macro = { workspace = true }
 
 [[test]]
+name = "codec"
+path = "tests/codec.rs"
+
+[[test]]
 name = "ui"
+path = "tests/ui.rs"
 required-features = ["trybuild-tests"]

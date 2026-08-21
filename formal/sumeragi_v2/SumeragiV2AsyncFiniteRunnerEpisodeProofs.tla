@@ -1838,7 +1838,7 @@ PROOF
 (***************************************************************************
 Claimed-response finite Serve episode.
 
-The receiver's retained certified response owns a target lifecycle ordinal,
+The receiver's certified-response claim owns a target lifecycle ordinal,
 a distinct fresh episode scheduler ceiling, a physical admission cut, and
 immutable Candidate, Serve, continuation, and leader-wire predecessor source
 sets.  The target ordinal identifies the response carrier only; the rank

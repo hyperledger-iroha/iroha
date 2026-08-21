@@ -26,7 +26,7 @@ private final class StubPipelineClient: ToriiTransactionSubmitting {
 
 private func makeSubmitReceipt() -> ToriiSubmitTransactionResponse {
     ToriiSubmitTransactionResponse(
-        payload: .init(txHash: "abc", submittedAtMs: 1, submittedAtHeight: 2, signer: "signer"),
+        payload: .init(entrypointHash: "abc", submittedAtMs: 1, submittedAtHeight: 2, signer: "signer"),
         signature: "deadbeef"
     )
 }
@@ -156,7 +156,7 @@ private final class PipelineURLProtocol: URLProtocol {
     private static var defaultSubmitBody: Data {
         let body: [String: Any] = [
             "payload": [
-                "tx_hash": "abc",
+                "entrypoint_hash": "abc",
                 "submitted_at_ms": 1,
                 "submitted_at_height": 2,
                 "signer": "signer"
@@ -510,6 +510,25 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(second.remaining(), 0)
         XCTAssertEqual(third.remaining(), 0)
         XCTAssertEqual(sequenceReader.remaining(), 0)
+
+        _ = try payloadReader.readCompactField()
+        _ = try payloadReader.readCompactField()
+        _ = try payloadReader.readCompactField()
+        var admissionIntentReader = CanonicalNoritoReader(
+            data: try payloadReader.readCompactField()
+        )
+        XCTAssertEqual(
+            try admissionIntentReader.readUInt32LE(),
+            TransactionAdmissionIntentV1.queuePlanSynced.rawValue
+        )
+        XCTAssertEqual(admissionIntentReader.remaining(), 0)
+        var metadataReader = CanonicalNoritoReader(
+            data: try payloadReader.readCompactField()
+        )
+        XCTAssertEqual(try metadataReader.readUInt64LE(), 0)
+        XCTAssertEqual(metadataReader.remaining(), 0)
+        XCTAssertEqual(try payloadReader.readCompactField(), Data([0]))
+        XCTAssertEqual(payloadReader.remaining(), 0)
     }
 
     func testExecutableBatchRejectsEmptyAndMissingContractGasLimit() throws {

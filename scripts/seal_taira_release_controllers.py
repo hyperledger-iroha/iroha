@@ -130,9 +130,13 @@ PYTHON_ENV_SCRUBBER = (
 )
 
 COMMON_FILES = (
+    "configs/soranexus/taira/config.toml",
+    "configs/soranexus/taira/genesis.json",
+    "scripts/compose_taira_nevo_reset_genesis.py",
     "scripts/compute_workspace_source_manifest.py",
     "scripts/seal_taira_release_controllers.py",
     "scripts/taira_authority_client.py",
+    "scripts/taira_constants.py",
 )
 LINUX_FILES = COMMON_FILES + (
     "scripts/build_privacy_v1_boi_handoff.py",
@@ -167,7 +171,6 @@ MACOS_FILES = COMMON_FILES + (
     "scripts/release_artifact_contract.py",
     "scripts/release_manifest_signing.py",
     "scripts/render_taira_validator_bundle.py",
-    "scripts/taira_constants.py",
     "scripts/taira_peer_supervisor.py",
     "scripts/taira_privacy_action_driver_ipc.py",
     "scripts/taira_privacy_governance_authority.py",
@@ -282,7 +285,13 @@ OPERATION_FLAGS: dict[str, set[str]] = {
     },
     "prepare-reset": {
         "--source-bundle", "--source-bundle-sha256", "--privacy-release-dir",
+        "--local-testnet-reviewed-input-dir",
+        "--local-testnet-reviewed-inputs-sha256",
         "--genesis-external-signer", "--trusted-genesis-external-signer-sha256",
+        "--authenticated-tool-controller",
+        "--trusted-authenticated-tool-controller-sha256",
+        "--genesis-native-verifier", "--trusted-genesis-native-verifier-sha256",
+        "--operator-status-client", "--trusted-operator-status-client-sha256",
         "--onboarding-token-hash-tool", "--irohad-sha256", "--source-commit",
         "--dpn-validator-release-commit",
         "--cargo-lock-sha256", "--workspace-source-manifest-sha256",
@@ -400,6 +409,10 @@ INPUT_PATH_FLAGS = {
     "--trusted-boi-qualification-public-key",
     "--release-manifest-verifier", "--authority-dir", "--source-bundle",
     "--privacy-release-dir", "--genesis-external-signer",
+    "--authenticated-tool-controller",
+    "--local-testnet-reviewed-input-dir",
+    "--genesis-native-verifier",
+    "--operator-status-client",
     "--kagemusha-release-root",
     "--onboarding-token-hash-tool", "--reset-bundle", "--validator-binary",
     "--supervisor", "--linux-archive", "--linux-authority-dir",
@@ -421,6 +434,15 @@ INPUT_PATH_FLAGS = {
 KAGEMUSHA_PREPARE_RESET_FLAGS = frozenset(
     {"--kagemusha-release-root", "--kagemusha-activation-authority"}
 )
+LOCAL_TESTNET_PREPARE_RESET_FLAGS = frozenset(
+    {
+        "--local-testnet-reviewed-input-dir",
+        "--local-testnet-reviewed-inputs-sha256",
+    }
+)
+PREPARE_RESET_PRIVACY_MODE_FLAGS = LOCAL_TESTNET_PREPARE_RESET_FLAGS | {
+    "--privacy-release-dir"
+}
 POSITIONAL_COMMANDS = {
     "assemble-candidate": {"assemble"},
     "admit": {"verify", "init-replay-ledger"},
@@ -432,7 +454,9 @@ REQUIRED_FLAGS: dict[tuple[str, str | None], set[str]] = {
     # Ordinary qualification resets remain supported.  A Kagemusha reset is
     # selected only by supplying its complete release-root/authority pair.
     ("prepare-reset", None): (
-        OPERATION_FLAGS["prepare-reset"] - KAGEMUSHA_PREPARE_RESET_FLAGS
+        OPERATION_FLAGS["prepare-reset"]
+        - KAGEMUSHA_PREPARE_RESET_FLAGS
+        - PREPARE_RESET_PRIVACY_MODE_FLAGS
     ),
     ("capture-four-peer", None): OPERATION_FLAGS["capture-four-peer"],
     ("assemble-candidate", "assemble"): OPERATION_FLAGS["assemble-candidate"],
@@ -466,6 +490,9 @@ TRUSTED_EXECUTABLE_FLAGS = frozenset(
         "--external-signer",
         "--qualification-external-signer",
         "--genesis-external-signer",
+        "--authenticated-tool-controller",
+        "--genesis-native-verifier",
+        "--operator-status-client",
         "--onboarding-token-hash-tool",
         "--oras",
         "--release-manifest-verifier",
@@ -473,7 +500,12 @@ TRUSTED_EXECUTABLE_FLAGS = frozenset(
     }
 )
 EXECUTABLE_DIGEST_FLAGS = {
+    "--authenticated-tool-controller": (
+        "--trusted-authenticated-tool-controller-sha256"
+    ),
     "--genesis-external-signer": "--trusted-genesis-external-signer-sha256",
+    "--genesis-native-verifier": "--trusted-genesis-native-verifier-sha256",
+    "--operator-status-client": "--trusted-operator-status-client-sha256",
     "--qualification-external-signer": (
         "--trusted-qualification-external-signer-sha256"
     ),
@@ -559,6 +591,7 @@ SENSITIVE_TRUSTED_INPUT_FLAGS = frozenset(
         "--trusted-boi-qualification-public-key",
         "--source",
         "--source-bundle",
+        "--local-testnet-reviewed-input-dir",
         "--write-config",
     }
 )
@@ -2339,6 +2372,15 @@ def _validate_operation_args(
         ):
             _fail(
                 "Kagemusha release root and activation authority must be supplied together"
+            )
+        production_privacy = "--privacy-release-dir" in seen
+        local_testnet_privacy = seen & LOCAL_TESTNET_PREPARE_RESET_FLAGS
+        if production_privacy:
+            if local_testnet_privacy:
+                _fail("production and local-testnet reset inputs are mutually exclusive")
+        elif local_testnet_privacy != LOCAL_TESTNET_PREPARE_RESET_FLAGS:
+            _fail(
+                "prepare-reset requires either one production privacy release or the complete local-testnet reviewed-input pair"
             )
     required = REQUIRED_FLAGS[(operation, subcommand)]
     missing = sorted(required - seen)

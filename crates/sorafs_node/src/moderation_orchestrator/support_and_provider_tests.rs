@@ -58,6 +58,118 @@ const PANEL_NOTIFICATION_ARCHIVE_ROTATED_QUALIFICATION: ModerationRuntimeProvide
     ModerationRuntimeProviderQualificationV1::new(2, [0xB5; 32]);
 const CHECKPOINT_STORE_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
     ModerationRuntimeProviderQualificationV1::new(7, [0xA7; 32]);
+macro_rules! orchestrator_fixture {
+    ($orchestrator:ident; $( $binding:ident = $value:expr; )+ => $config:expr; $dependencies:expr; $open_error:literal) => {
+        $(let $binding = $value;)+
+        let $orchestrator = ModerationOrchestratorV1::open($config, $dependencies)
+            .expect($open_error);
+    };
+}
+macro_rules! open_test_orchestrator {
+    ($orchestrator:ident = $config:expr; $dependencies:expr; $open_error:literal) => {
+        let $orchestrator = open_test_orchestrator!($config; $dependencies; $open_error);
+    };
+    ($config:expr; $dependencies:expr; $open_error:literal) => {
+        ModerationOrchestratorV1::open($config, $dependencies).expect($open_error)
+    };
+}
+macro_rules! isolated_orchestrator {
+    ($config:expr; $snapshot:expr; $submitter_value:expr; $open_error:literal) => {{
+        let reader = Arc::new(MockSnapshotReader::new($snapshot));
+        let submitter = Arc::new($submitter_value);
+        ModerationOrchestratorV1::open($config, deps(reader, submitter)).expect($open_error)
+    }};
+}
+macro_rules! test_runtime_deps {
+    (
+        $checkpoint_store:expr; $submitter:expr; $snapshot_reader:expr;
+        $settlement_sink:expr; $publication_sink:expr;
+        $panel_notification_sink:expr; $panel_notification_archive:expr
+    ) => {
+        ModerationOrchestratorDepsV1 {
+            checkpoint_store: $checkpoint_store,
+            submitter: $submitter,
+            snapshot_reader: $snapshot_reader,
+            settlement_sink: $settlement_sink,
+            publication_sink: $publication_sink,
+            panel_notification_sink: $panel_notification_sink,
+            panel_notification_archive: $panel_notification_archive,
+        }
+    };
+}
+macro_rules! compact_panel_receipts {
+    ($orchestrator:expr, $limit:expr; $compact_error:literal; $head_error:literal) => {
+        $orchestrator
+            .compact_panel_notification_receipts($limit)
+            .expect($compact_error)
+            .expect($head_error)
+    };
+}
+macro_rules! publish_panel_archive {
+    ($orchestrator:expr; $error:literal) => {
+        $orchestrator
+            .reconcile_panel_notification_archive_publication()
+            .expect($error)
+    };
+}
+macro_rules! audit_panel_archive {
+    ($orchestrator:expr, $limit:expr; $error:literal) => {
+        $orchestrator
+            .audit_panel_notification_archive($limit)
+            .expect($error)
+    };
+}
+macro_rules! panel_archive_health {
+    ($orchestrator:expr; $error:literal) => {
+        $orchestrator.durable_health().expect($error)
+    };
+}
+macro_rules! seed_default_operation {
+    ($orchestrator:expr; $nonce:expr) => {
+        seed_ready_operation_without_delivery(
+            &$orchestrator,
+            account(1),
+            policy_action(policy(1)),
+            $nonce,
+        )
+    };
+}
+macro_rules! find_outbox_entry {
+    ($state:ident, $entry:ident = $orchestrator:expr, $operation_id:expr; $state_error:literal; $entry_error:literal) => {
+        let $state = $orchestrator.state.lock().expect($state_error);
+        let $entry = $state
+            .outbox
+            .iter()
+            .find(|entry| entry.operation_id == $operation_id)
+            .expect($entry_error);
+    };
+}
+macro_rules! single_outbox_entry {
+    ($state:ident, $entry:ident = $orchestrator:expr; $state_error:literal; $entry_error:literal) => {
+        let $state = $orchestrator.state.lock().expect($state_error);
+        let [$entry] = $state.outbox.as_slice() else {
+            panic!($entry_error);
+        };
+    };
+}
+macro_rules! unpack_saturated_fixture {
+    ($fixture:expr; $($fields:tt)*) => {
+        let SaturatedPanelNotificationFixture {
+            $($fields)*
+            ..
+        } = $fixture;
+    };
+}
+macro_rules! assert_default_open_error {
+    ($config:expr; $error:pat_param if $guard:expr) => {{
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
+        assert!(matches!(
+            ModerationOrchestratorV1::open($config, deps(reader, submitter)),
+            $error if $guard
+        ));
+    }};
+}
 fn test_network_id() -> iroha_data_model::NetworkId {
     iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
         iroha_data_model::block::BlockHeader,
@@ -1547,13 +1659,7 @@ fn external_providers_are_qualified_before_checkpoint_access() {
     ));
     assert!(!missing_parent.exists());
     config.transaction_signer_handle = "moderation-hsm-secondary".to_owned();
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
-    assert!(matches!(
-        ModerationOrchestratorV1::open(config.clone(), deps(reader, submitter)),
-        Err(ModerationOrchestratorError::InvalidConfiguration(message))
-            if message.contains("runtime provider binding")
-    ));
+    assert_default_open_error!(config.clone(); Err(ModerationOrchestratorError::InvalidConfiguration(message)) if message.contains("runtime provider binding"));
     assert!(!missing_parent.exists());
     config.transaction_signer_handle = TRANSACTION_SIGNER_HANDLE.to_owned();
     for settlement in [true, false] {
@@ -1565,26 +1671,11 @@ fn external_providers_are_qualified_before_checkpoint_access() {
             boundary_config.publication_handoff_handle =
                 "moderation-publication-secondary".to_owned();
         }
-        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
-        assert!(matches!(
-            ModerationOrchestratorV1::open(
-                boundary_config,
-                deps(reader, submitter),
-            ),
-            Err(ModerationOrchestratorError::InvalidConfiguration(message))
-                if message.contains("runtime provider binding")
-        ));
+        assert_default_open_error!(boundary_config; Err(ModerationOrchestratorError::InvalidConfiguration(message)) if message.contains("runtime provider binding"));
         assert!(!missing_parent.exists());
     }
     config.panel_notification_handle = "moderation-notification-secondary".to_owned();
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
-    assert!(matches!(
-        ModerationOrchestratorV1::open(config, deps(reader, submitter)),
-        Err(ModerationOrchestratorError::InvalidConfiguration(message))
-            if message.contains("runtime provider binding")
-    ));
+    assert_default_open_error!(config; Err(ModerationOrchestratorError::InvalidConfiguration(message)) if message.contains("runtime provider binding"));
     assert!(!missing_parent.exists());
 }
 #[test]
@@ -1605,78 +1696,33 @@ fn snapshot_bounds_cannot_exceed_native_query_ceilings() {
             .expect("checkpoint parent")
             .to_path_buf();
         configure(&mut config);
-        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
-        assert!(matches!(
-            ModerationOrchestratorV1::open(config, deps(reader, submitter)),
-            Err(ModerationOrchestratorError::InvalidConfiguration(message))
-                if message.contains("native query ceiling")
-        ));
+        assert_default_open_error!(config; Err(ModerationOrchestratorError::InvalidConfiguration(message)) if message.contains("native query ceiling"));
         assert!(!checkpoint_parent.exists());
     }
 }
-#[test]
-fn signer_policy_drift_discards_the_returned_envelope() {
-    let temp = TempDir::new().expect("tempdir");
-    let config = config(&temp, "signer-drift.bin");
-    let inner = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
-    let submitter: Arc<dyn ModerationTransactionSubmitterV1> = Arc::new(DriftingSubmitter {
-        inner: Arc::clone(&inner),
-        signer_after_sign: Some(ModerationRuntimeProviderQualificationV1::new(2, [0xB1; 32])),
-        ingress_after_submit: None,
-        ingress_after_lookup: None,
-    });
-    let qualified = QualifiedModerationTransactionSubmitterV1::try_new(&config, submitter)
-        .expect("initially qualified submitter");
-    assert_eq!(
-        qualified.sign(&provider_test_request()),
-        Err(ModerationSubmissionFailureV1::RuntimeUnavailable)
-    );
-    assert_eq!(inner.sign_calls(), 1);
+macro_rules! runtime_provider_drift_tests {
+    ($( $name:ident($qualified:ident, $inner:ident): $checkpoint:literal, $signer_after_sign:expr, $ingress_after_submit:expr, $ingress_after_lookup:expr => $body:block )+) => {$(
+        #[test]
+        fn $name() {
+            let temp = TempDir::new().expect("tempdir");
+            let config = config(&temp, $checkpoint);
+            let $inner = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
+            let submitter: Arc<dyn ModerationTransactionSubmitterV1> = Arc::new(DriftingSubmitter {
+                inner: Arc::clone(&$inner),
+                signer_after_sign: $signer_after_sign,
+                ingress_after_submit: $ingress_after_submit,
+                ingress_after_lookup: $ingress_after_lookup,
+            });
+            let $qualified = QualifiedModerationTransactionSubmitterV1::try_new(&config, submitter)
+                .expect("initially qualified submitter");
+            $body
+        }
+    )+};
 }
-#[test]
-fn ingress_policy_drift_after_admission_is_ambiguous() {
-    let temp = TempDir::new().expect("tempdir");
-    let config = config(&temp, "ingress-drift.bin");
-    let inner = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
-    let submitter: Arc<dyn ModerationTransactionSubmitterV1> = Arc::new(DriftingSubmitter {
-        inner: Arc::clone(&inner),
-        signer_after_sign: None,
-        ingress_after_submit: Some(ModerationRuntimeProviderQualificationV1::new(2, [0xB2; 32])),
-        ingress_after_lookup: None,
-    });
-    let qualified = QualifiedModerationTransactionSubmitterV1::try_new(&config, submitter)
-        .expect("initially qualified submitter");
-    let request = provider_test_request();
-    let signed = qualified.sign(&request).expect("qualified signer result");
-    assert_eq!(
-        qualified.submit_signed(&request, &signed),
-        Err(ModerationSubmissionFailureV1::Ambiguous)
-    );
-    assert_eq!(inner.calls(), 1);
-}
-#[test]
-fn ingress_policy_drift_discards_a_positive_lookup() {
-    let temp = TempDir::new().expect("tempdir");
-    let config = config(&temp, "lookup-drift.bin");
-    let inner = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
-    let submitter: Arc<dyn ModerationTransactionSubmitterV1> = Arc::new(DriftingSubmitter {
-        inner: Arc::clone(&inner),
-        signer_after_sign: None,
-        ingress_after_submit: None,
-        ingress_after_lookup: Some(ModerationRuntimeProviderQualificationV1::new(2, [0xC2; 32])),
-    });
-    let qualified = QualifiedModerationTransactionSubmitterV1::try_new(&config, submitter)
-        .expect("initially qualified submitter");
-    let request = provider_test_request();
-    let signed = qualified.sign(&request).expect("qualified signer result");
-    qualified
-        .submit_signed(&request, &signed)
-        .expect("qualified admission");
-    assert_eq!(
-        qualified.lookup(request.operation_id, Some(signed.transaction_id)),
-        ModerationSubmissionLookupV1::Unknown
-    );
+runtime_provider_drift_tests! {
+    signer_policy_drift_discards_the_returned_envelope(qualified, inner): "signer-drift.bin", Some(ModerationRuntimeProviderQualificationV1::new(2, [0xB1; 32])), None, None => { assert_eq!(qualified.sign(&provider_test_request()), Err(ModerationSubmissionFailureV1::RuntimeUnavailable)); assert_eq!(inner.sign_calls(), 1); }
+    ingress_policy_drift_after_admission_is_ambiguous(qualified, inner): "ingress-drift.bin", None, Some(ModerationRuntimeProviderQualificationV1::new(2, [0xB2; 32])), None => { let request = provider_test_request(); let signed = qualified.sign(&request).expect("qualified signer result"); assert_eq!(qualified.submit_signed(&request, &signed), Err(ModerationSubmissionFailureV1::Ambiguous)); assert_eq!(inner.calls(), 1); }
+    ingress_policy_drift_discards_a_positive_lookup(qualified, inner): "lookup-drift.bin", None, None, Some(ModerationRuntimeProviderQualificationV1::new(2, [0xC2; 32])) => { let request = provider_test_request(); let signed = qualified.sign(&request).expect("qualified signer result"); qualified.submit_signed(&request, &signed).expect("qualified admission"); assert_eq!(qualified.lookup(request.operation_id, Some(signed.transaction_id)), ModerationSubmissionLookupV1::Unknown); }
 }
 #[test]
 fn canonical_committed_event_sequence_must_be_contiguous() {
@@ -1880,15 +1926,7 @@ fn assert_finalized_authority_rejection_has_no_native_mutation(
 ) {
     let temp = tempfile::tempdir().expect("tempdir");
     let finalized_height = snapshot.finalized_height;
-    let reader = Arc::new(MockSnapshotReader::new(snapshot));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
-        observed_finalized_height: finalized_height,
-    }));
-    let orchestrator = ModerationOrchestratorV1::open(
-        config(&temp, "authority-negative.norito"),
-        deps(reader, Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
+    orchestrator_fixture!(orchestrator; reader = Arc::new(MockSnapshotReader::new(snapshot)); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: finalized_height })); => config(&temp, "authority-negative.norito"); deps(reader, Arc::clone(&submitter)); "orchestrator");
     let action_label = action.label();
     let error = orchestrator
         .submit(authenticated.clone(), action, [0xE1; 32])

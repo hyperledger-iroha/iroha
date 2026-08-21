@@ -5,6 +5,8 @@
 //! independently reauthenticate it. Completed records retain only response
 //! metadata: canonical body bytes remain owned by the v2 body store and must be
 //! resolved there before a response is reconstructed.
+#[cfg(any(not(test), feature = "bls"))]
+use super::v2_body_store::{DurableCertifiedServeBodyReadbackV1, V2BodyStoreInstanceIdentity};
 use super::{
     v2::VerifiedHeightContext,
     v2_body_store::{DurableBodyReceipt, V2BodyStore},
@@ -1770,6 +1772,47 @@ impl CertifiedServePayloadStoreV1 {
             .map_err(CertifiedServeTerminalPersistenceError::InputRejected)?;
         self.persist_completed_response(authenticated_request.request(), response)
     }
+    /// Persist completion from one exact worker-owned body-store readback.
+    ///
+    /// Launch moves the body store into the I/O worker and leaves only its
+    /// comparison seal in the lifecycle owner. The opaque readback proves the
+    /// worker loaded the exact durable frame from that same store instance;
+    /// this method consumes it before publishing terminal response metadata.
+    #[cfg(any(not(test), feature = "bls"))]
+    pub(super) fn persist_completed_with_worker_readback(
+        &mut self,
+        authenticated_request: &AuthenticatedCertifiedBodyRequest,
+        body_readback: DurableCertifiedServeBodyReadbackV1,
+        expected_body_store: &V2BodyStoreInstanceIdentity,
+        response: &wire::CertifiedBodyResponse,
+    ) -> Result<DurableCertifiedServeCompletedReceipt, CertifiedServeTerminalPersistenceError> {
+        if authenticated_request.request_hash() != response.request_hash {
+            return Err(CertifiedServeTerminalPersistenceError::InputRejected(
+                CertifiedServePayloadStoreError::AuthenticatedRequestHashMismatch,
+            ));
+        }
+        if let Err(error) = self.validate_worker_readback_response_body(
+            authenticated_request.request(),
+            &body_readback,
+            expected_body_store,
+            response,
+        ) {
+            return Err(
+                if matches!(
+                    &error,
+                    CertifiedServePayloadStoreError::DurableBodyReceiptMismatch
+                        | CertifiedServePayloadStoreError::DurableResponseBodyMismatch
+                ) {
+                    CertifiedServeTerminalPersistenceError::InputRejected(error)
+                } else {
+                    CertifiedServeTerminalPersistenceError::StoreInvariant(error)
+                },
+            );
+        }
+        self.validate_completed_response(authenticated_request.request(), response)
+            .map_err(CertifiedServeTerminalPersistenceError::InputRejected)?;
+        self.persist_completed_response(authenticated_request.request(), response)
+    }
     fn persist_completed_response(
         &mut self,
         authenticated_request: &wire::CertifiedBodyRequest,
@@ -1945,6 +1988,40 @@ impl CertifiedServePayloadStoreV1 {
                 CertifiedServePayloadStoreError::InvalidDurableBody(error.to_string())
             })?;
         if canonical_body != response.body {
+            return Err(CertifiedServePayloadStoreError::DurableResponseBodyMismatch);
+        }
+        Ok(())
+    }
+    #[cfg(any(not(test), feature = "bls"))]
+    fn validate_worker_readback_response_body(
+        &self,
+        request: &wire::CertifiedBodyRequest,
+        body_readback: &DurableCertifiedServeBodyReadbackV1,
+        expected_body_store: &V2BodyStoreInstanceIdentity,
+        response: &wire::CertifiedBodyResponse,
+    ) -> Result<(), CertifiedServePayloadStoreError> {
+        if !body_readback.matches_store_instance(expected_body_store) {
+            return Err(CertifiedServePayloadStoreError::ForeignBodyStore);
+        }
+        let durable_body = body_readback.durable_body();
+        if durable_body.context_id() != self.context.id()
+            || durable_body.round() != request.round
+            || durable_body.subject() != request.subject
+            || response.manifest.round != request.round
+            || response.manifest.subject != request.subject
+            || durable_body.manifest_hash() != HashOf::new(&response.manifest)
+        {
+            return Err(CertifiedServePayloadStoreError::DurableBodyReceiptMismatch);
+        }
+        let canonical_body = body_readback.canonical_wire();
+        if u64::try_from(canonical_body.len()).ok() != Some(response.manifest.payload_size_bytes)
+            || Hash::new(canonical_body) != durable_body.subject().payload_hash
+        {
+            return Err(CertifiedServePayloadStoreError::InvalidDurableBody(
+                "worker readback lost its exact manifest/body binding".to_owned(),
+            ));
+        }
+        if canonical_body != response.body.as_slice() {
             return Err(CertifiedServePayloadStoreError::DurableResponseBodyMismatch);
         }
         Ok(())
@@ -2547,14 +2624,7 @@ mod tests {
             roster,
             nexus_amx_context_hash: Hash::new(b"Serve payload recovery AMX context"),
             execution_policy_hash: Hash::new(b"Serve payload recovery execution policy"),
-            da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 1_048_576,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 1_048_576,
-                max_chunk_count: 2,
-            },
+            da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
             leader_seed: [0xB7; 32],
         };
         let proofs_of_possession = keys

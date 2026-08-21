@@ -2276,12 +2276,56 @@ mod tests {
             FeePaymentIntent::authority(Vec::new(), None),
         )
         .sign(genesis_signer.private_key());
-        let genesis = SignedBlock::genesis(
+        let mut genesis = SignedBlock::genesis(
             vec![genesis_transaction],
             genesis_signer.private_key(),
             None,
             None,
         );
+        let entrypoint_hashes = genesis
+            .external_entrypoints_cloned()
+            .map(|entrypoint| entrypoint.hash())
+            .collect::<Vec<_>>();
+        genesis
+            .set_transaction_results(
+                Vec::new(),
+                &entrypoint_hashes,
+                vec![Ok(
+                    iroha_data_model::transaction::DataTriggerSequence::default(),
+                )],
+            )
+            .expect("attach canonical successful archive genesis result");
+        let final_signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::try_from_hash(genesis_signer.private_key(), genesis.hash())
+                .expect("sign result-bearing archive genesis"),
+        );
+        genesis
+            .replace_signatures(std::collections::BTreeSet::from([final_signature]))
+            .expect("replace result-bearing archive genesis signature");
+        genesis
+            .validate_entrypoint_merkle_cache()
+            .expect("archive genesis entrypoint Merkle cache must be canonical");
+        genesis
+            .validate_result_merkle_cache()
+            .expect("archive genesis result Merkle cache must be canonical");
+        assert_eq!(genesis.committed_fragment_count(), Some(1));
+        assert_eq!(
+            genesis.header().result_merkle_root(),
+            genesis
+                .result_merkle_commitment()
+                .map(|commitment| *commitment.root())
+        );
+        let mut final_signatures = genesis.signatures();
+        let final_signature = final_signatures
+            .next()
+            .expect("result-bearing archive genesis signature");
+        assert_eq!(final_signature.index(), 0);
+        assert!(final_signatures.next().is_none());
+        final_signature
+            .signature()
+            .verify_hash(genesis_signer.public_key(), genesis.hash())
+            .expect("verify result-bearing archive genesis signature");
         let genesis_hash = *genesis.hash().as_ref();
         let network_id = NetworkId::from_genesis_hash(genesis.hash());
         let kura = Kura::blank_kura_for_testing();

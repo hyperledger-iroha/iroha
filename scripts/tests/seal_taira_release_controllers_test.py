@@ -95,6 +95,8 @@ def _snapshot_args(source: Path, output: Path, forbidden: Path) -> list[str]:
 
 
 def test_controller_closures_are_exact_installed_operation_dependencies() -> None:
+    assert len(controller.LINUX_FILES) == len(set(controller.LINUX_FILES))
+    assert len(controller.MACOS_FILES) == len(set(controller.MACOS_FILES))
     assert "configs/soranexus/taira/prepare_taira_release_source.sh" not in (
         controller.LINUX_FILES + controller.MACOS_FILES
     )
@@ -134,6 +136,41 @@ def test_controller_closures_are_exact_installed_operation_dependencies() -> Non
         & controller.REQUIRED_FLAGS[("prepare-reset", None)]
     )
     assert "--kagemusha-release-root" in controller.INPUT_PATH_FLAGS
+    authenticated_controller_flag = "--authenticated-tool-controller"
+    authenticated_controller_digest_flag = (
+        "--trusted-authenticated-tool-controller-sha256"
+    )
+    assert authenticated_controller_flag in controller.OPERATION_FLAGS[
+        "prepare-reset"
+    ]
+    assert authenticated_controller_digest_flag in controller.OPERATION_FLAGS[
+        "prepare-reset"
+    ]
+    assert authenticated_controller_flag in controller.REQUIRED_FLAGS[
+        ("prepare-reset", None)
+    ]
+    assert authenticated_controller_digest_flag in controller.REQUIRED_FLAGS[
+        ("prepare-reset", None)
+    ]
+    assert authenticated_controller_flag in controller.INPUT_PATH_FLAGS
+    assert authenticated_controller_flag in controller.TRUSTED_EXECUTABLE_FLAGS
+    assert controller.EXECUTABLE_DIGEST_FLAGS[authenticated_controller_flag] == (
+        authenticated_controller_digest_flag
+    )
+    for role in ("macos-qualification", "macos-deploy"):
+        assert controller._expected_executable_identity(
+            role, "prepare-reset", authenticated_controller_flag
+        ) == "runtime"
+    assert "--genesis-native-verifier" in controller.INPUT_PATH_FLAGS
+    assert "--genesis-native-verifier" in controller.TRUSTED_EXECUTABLE_FLAGS
+    assert controller.EXECUTABLE_DIGEST_FLAGS["--genesis-native-verifier"] == (
+        "--trusted-genesis-native-verifier-sha256"
+    )
+    assert "--operator-status-client" in controller.INPUT_PATH_FLAGS
+    assert "--operator-status-client" in controller.TRUSTED_EXECUTABLE_FLAGS
+    assert controller.EXECUTABLE_DIGEST_FLAGS["--operator-status-client"] == (
+        "--trusted-operator-status-client-sha256"
+    )
     assert "seal" not in {action for contract in controller.ROLE_OPERATIONS.values() for action in contract[1]}
     assert "cleanup" not in {action for contract in controller.ROLE_OPERATIONS.values() for action in contract[1]}
     assert controller.ROLE_OPERATIONS["linux-boi-qualification"] == (
@@ -1683,14 +1720,14 @@ def test_prepare_reset_requires_complete_kagemusha_flag_pair(
         )
 
 
-def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema(
-    tmp_path: Path,
-) -> None:
+def _prepare_reset_controller_case(
+    tmp_path: Path, role: str = "macos-qualification",
+) -> tuple[list[str], dict[str, object], Path, Path, str]:
     handoff = tmp_path / "handoff"
     trusted = tmp_path / "trusted"
     handoff.mkdir(mode=0o711)
     trusted.mkdir(mode=0o700)
-    attestation = _attestation(handoff, trusted, "macos-qualification")
+    attestation = _attestation(handoff, trusted, role)
     runtime_root = Path(str(attestation["runtime_root"]))
     source_bundle = runtime_root / "source-bundle"
     privacy_release = runtime_root / "privacy-release"
@@ -1708,9 +1745,21 @@ def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema
             "path": str(source_bundle),
         }
     ]
+    controller_executable = Path("/usr/bin/false")
+    controller_sha256 = hashlib.sha256(
+        controller_executable.read_bytes()
+    ).hexdigest()
     executable = Path("/usr/bin/true")
     executable_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest()
     attestation["trusted_executables"] = [
+        {
+            "digest_flag": "--trusted-authenticated-tool-controller-sha256",
+            "flag": "--authenticated-tool-controller",
+            "operation": "prepare-reset",
+            "path": str(controller_executable),
+            "run_as": "runtime",
+            "sha256": controller_sha256,
+        },
         {
             "digest_flag": "--trusted-genesis-external-signer-sha256",
             "flag": "--genesis-external-signer",
@@ -1720,6 +1769,23 @@ def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema
             "sha256": executable_sha256,
         },
         {
+            "digest_flag": "--trusted-genesis-native-verifier-sha256",
+            "flag": "--genesis-native-verifier",
+            "operation": "prepare-reset",
+            "path": str(executable),
+            "run_as": "runtime",
+            "sha256": executable_sha256,
+        },
+        {
+            "digest_flag": "--trusted-operator-status-client-sha256",
+            "flag": "--operator-status-client",
+            "operation": "prepare-reset",
+            "path": str(executable),
+            "run_as": "runtime",
+            "sha256": executable_sha256,
+        },
+        {
+            "digest_flag": None,
             "flag": "--onboarding-token-hash-tool",
             "operation": "prepare-reset",
             "path": str(executable),
@@ -1734,6 +1800,12 @@ def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema
         "--privacy-release-dir", str(privacy_release),
         "--genesis-external-signer", str(executable),
         "--trusted-genesis-external-signer-sha256", executable_sha256,
+        "--authenticated-tool-controller", str(controller_executable),
+        "--trusted-authenticated-tool-controller-sha256", controller_sha256,
+        "--genesis-native-verifier", str(executable),
+        "--trusted-genesis-native-verifier-sha256", executable_sha256,
+        "--operator-status-client", str(executable),
+        "--trusted-operator-status-client-sha256", executable_sha256,
         "--onboarding-token-hash-tool", str(executable),
         "--irohad-sha256", "2" * 64,
         "--source-commit", "a" * 40,
@@ -1746,6 +1818,16 @@ def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema
         "--kagemusha-release-root", "/usr",
         "--kagemusha-activation-authority", "genesis-authority",
     ]
+    return args, attestation, output, controller_executable, controller_sha256
+
+
+@pytest.mark.parametrize("role", ("macos-qualification", "macos-deploy"))
+def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema(
+    tmp_path: Path, role: str,
+) -> None:
+    args, attestation, output, controller_executable, controller_sha256 = (
+        _prepare_reset_controller_case(tmp_path, role)
+    )
 
     staged, outputs = controller._validate_operation_args(
         "prepare-reset", args, attestation
@@ -1753,6 +1835,277 @@ def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema
 
     assert not staged
     assert outputs == {output}
+    trusted_controller = controller._trusted_executable_for(
+        attestation,
+        "prepare-reset",
+        "--authenticated-tool-controller",
+        controller_executable,
+    )
+    assert trusted_controller == {
+        "digest_flag": "--trusted-authenticated-tool-controller-sha256",
+        "flag": "--authenticated-tool-controller",
+        "operation": "prepare-reset",
+        "path": str(controller_executable),
+        "run_as": "runtime",
+        "sha256": controller_sha256,
+    }
+
+
+@pytest.mark.parametrize("role", ("macos-qualification", "macos-deploy"))
+@pytest.mark.parametrize(
+    "omitted_flag",
+    ("--kagemusha-release-root", "--kagemusha-activation-authority"),
+)
+def test_prepare_reset_rejects_omitted_kagemusha_pair_member(
+    tmp_path: Path, role: str, omitted_flag: str
+) -> None:
+    args, attestation, _output, _controller_executable, _controller_sha256 = (
+        _prepare_reset_controller_case(tmp_path, role)
+    )
+    index = args.index(omitted_flag)
+    del args[index : index + 2]
+
+    with pytest.raises(controller.ControllerSealError, match="supplied together"):
+        controller._validate_operation_args("prepare-reset", args, attestation)
+
+
+@pytest.mark.parametrize("role", ("macos-qualification", "macos-deploy"))
+def test_prepare_reset_rejects_substituted_kagemusha_release_root(
+    tmp_path: Path, role: str
+) -> None:
+    args, attestation, _output, _controller_executable, _controller_sha256 = (
+        _prepare_reset_controller_case(tmp_path, role)
+    )
+    substituted = tmp_path / "caller-owned-kagemusha-release"
+    substituted.mkdir(mode=0o755)
+    args[args.index("--kagemusha-release-root") + 1] = str(substituted)
+
+    with pytest.raises(
+        controller.ControllerSealError, match="root-owned and nonwritable"
+    ):
+        controller._validate_operation_args("prepare-reset", args, attestation)
+
+
+@pytest.mark.parametrize(
+    "omitted_flag",
+    (
+        "--authenticated-tool-controller",
+        "--trusted-authenticated-tool-controller-sha256",
+    ),
+)
+def test_prepare_reset_rejects_omitted_authenticated_controller_pair_member(
+    tmp_path: Path, omitted_flag: str
+) -> None:
+    args, attestation, _output, _controller_executable, _controller_sha256 = (
+        _prepare_reset_controller_case(tmp_path)
+    )
+    index = args.index(omitted_flag)
+    del args[index : index + 2]
+
+    with pytest.raises(
+        controller.ControllerSealError, match="mandatory options are absent"
+    ):
+        controller._validate_operation_args("prepare-reset", args, attestation)
+
+
+@pytest.mark.parametrize(
+    ("substituted_flag", "replacement", "message"),
+    (
+        (
+            "--authenticated-tool-controller",
+            "/usr/bin/true",
+            "lacks one exact trusted executable record",
+        ),
+        (
+            "--trusted-authenticated-tool-controller-sha256",
+            "0" * 64,
+            "trusted executable digest argument differs from trust",
+        ),
+    ),
+)
+def test_prepare_reset_rejects_substituted_authenticated_controller_pair_member(
+    tmp_path: Path,
+    substituted_flag: str,
+    replacement: str,
+    message: str,
+) -> None:
+    args, attestation, _output, _controller_executable, _controller_sha256 = (
+        _prepare_reset_controller_case(tmp_path)
+    )
+    args[args.index(substituted_flag) + 1] = replacement
+
+    with pytest.raises(controller.ControllerSealError, match=message):
+        controller._validate_operation_args("prepare-reset", args, attestation)
+
+
+def _assert_protected_prepare_reset_workflow_pins(workflow: str) -> None:
+    contracts = (
+        (
+            "macos-secret-free-qualification",
+            "macos-candidate-authority",
+            "QUALIFICATION_KAGEMUSHA_RELEASE_ROOT",
+            "TAIRA_QUALIFICATION_KAGEMUSHA_RELEASE_ROOT",
+            "QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY",
+            "TAIRA_QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY",
+        ),
+        (
+            "macos-deploy",
+            "macos-publish",
+            "TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT",
+            "TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT",
+            "TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY",
+            "TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY",
+        ),
+    )
+    for (
+        job,
+        next_job,
+        root_name,
+        root_variable,
+        authority_name,
+        authority_variable,
+    ) in contracts:
+        section = workflow.split(f"  {job}:\n", 1)[1].split(f"  {next_job}:\n", 1)[0]
+        assert section.count(
+            f"{root_name}: ${{{{ vars.{root_variable} }}}}"
+        ) == 1
+        assert section.count(
+            f"{authority_name}: ${{{{ vars.{authority_variable} }}}}"
+        ) == 1
+        assert section.count(
+            f'if [[ -z "${root_name}" || -z "${authority_name}" ]]; then'
+        ) == 1
+        assert section.count(f'[[ "${root_name}" == /* ]]') == 1
+        assert section.count(
+            f'test "$(cd "${root_name}" && pwd -P)" = "${root_name}"'
+        ) == 1
+        assert section.count(f'--kagemusha-release-root "${root_name}"') == 1
+        assert section.count(
+            f'--kagemusha-activation-authority "${authority_name}"'
+        ) == 1
+
+
+def test_protected_prepare_reset_workflow_owns_all_authenticated_pins() -> None:
+    workflow = (ROOT / ".github/workflows/publish_taira_validator.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert workflow.count("prepare-reset --") == 2
+    assert workflow.count(
+        "TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH: "
+        "${{ vars.TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH }}"
+    ) == 2
+    assert workflow.count(
+        "TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256: "
+        "${{ vars.TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256 }}"
+    ) == 2
+    assert workflow.count(
+        '--authenticated-tool-controller "$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH"'
+    ) == 2
+    assert workflow.count(
+        "--trusted-authenticated-tool-controller-sha256 "
+        '"$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256"'
+    ) == 2
+    for environment_name, flag, digest_flag in (
+        (
+            "TAIRA_GENESIS_NATIVE_VERIFIER",
+            "--genesis-native-verifier",
+            "--trusted-genesis-native-verifier-sha256",
+        ),
+        (
+            "TAIRA_OPERATOR_STATUS_CLIENT",
+            "--operator-status-client",
+            "--trusted-operator-status-client-sha256",
+        ),
+    ):
+        assert workflow.count(
+            f"{environment_name}_PATH: "
+            f"${{{{ vars.{environment_name}_PATH }}}}"
+        ) == 2
+        assert workflow.count(
+            f"{environment_name}_SHA256: "
+            f"${{{{ vars.{environment_name}_SHA256 }}}}"
+        ) == 2
+        assert workflow.count(f'{flag} "${environment_name}_PATH"') == 2
+        assert workflow.count(
+            f'{digest_flag} "${environment_name}_SHA256"'
+        ) == 2
+    _assert_protected_prepare_reset_workflow_pins(workflow)
+
+
+@pytest.mark.parametrize(
+    ("original", "replacement"),
+    (
+        (
+            "QUALIFICATION_KAGEMUSHA_RELEASE_ROOT: "
+            "${{ vars.TAIRA_QUALIFICATION_KAGEMUSHA_RELEASE_ROOT }}",
+            "QUALIFICATION_KAGEMUSHA_RELEASE_ROOT: "
+            "${{ vars.SUBSTITUTED_KAGEMUSHA_RELEASE_ROOT }}",
+        ),
+        (
+            "QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY: "
+            "${{ vars.TAIRA_QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY }}",
+            "QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY: "
+            "${{ vars.SUBSTITUTED_KAGEMUSHA_ACTIVATION_AUTHORITY }}",
+        ),
+        (
+            "TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT: "
+            "${{ vars.TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT }}",
+            "TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT: "
+            "${{ vars.SUBSTITUTED_KAGEMUSHA_RELEASE_ROOT }}",
+        ),
+        (
+            "TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY: "
+            "${{ vars.TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY }}",
+            "TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY: "
+            "${{ vars.SUBSTITUTED_KAGEMUSHA_ACTIVATION_AUTHORITY }}",
+        ),
+        (
+            '--kagemusha-release-root "$QUALIFICATION_KAGEMUSHA_RELEASE_ROOT"',
+            '--kagemusha-release-root "$SUBSTITUTED_KAGEMUSHA_RELEASE_ROOT"',
+        ),
+        (
+            '--kagemusha-activation-authority '
+            '"$QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY"',
+            '--kagemusha-activation-authority '
+            '"$SUBSTITUTED_KAGEMUSHA_ACTIVATION_AUTHORITY"',
+        ),
+        (
+            '--kagemusha-release-root "$TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT"',
+            '--kagemusha-release-root "$SUBSTITUTED_KAGEMUSHA_RELEASE_ROOT"',
+        ),
+        (
+            '--kagemusha-activation-authority '
+            '"$TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY"',
+            '--kagemusha-activation-authority '
+            '"$SUBSTITUTED_KAGEMUSHA_ACTIVATION_AUTHORITY"',
+        ),
+        (
+            'if [[ -z "$QUALIFICATION_KAGEMUSHA_RELEASE_ROOT" || -z '
+            '"$QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY" ]]; then',
+            'if [[ -z "$QUALIFICATION_KAGEMUSHA_RELEASE_ROOT" ]]; then',
+        ),
+        (
+            'if [[ -z "$TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT" || -z '
+            '"$TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY" ]]; then',
+            'if [[ -z "$TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT" ]]; then',
+        ),
+    ),
+)
+def test_protected_prepare_reset_wiring_rejects_omission_or_substitution(
+    original: str, replacement: str
+) -> None:
+    workflow = (ROOT / ".github/workflows/publish_taira_validator.yml").read_text(
+        encoding="utf-8"
+    )
+    assert workflow.count(original) == 1
+
+    for mutation in (
+        workflow.replace(original, "", 1),
+        workflow.replace(original, replacement, 1),
+    ):
+        with pytest.raises((AssertionError, IndexError)):
+            _assert_protected_prepare_reset_workflow_pins(mutation)
 
 
 def test_controller_has_no_generic_signing_or_direct_close_surface() -> None:

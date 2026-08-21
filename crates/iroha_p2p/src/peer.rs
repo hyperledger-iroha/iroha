@@ -1,6 +1,11 @@
 //! Tokio actor Peer
 use crate::{
-    ConsensusConfigCaps, ConsensusHandshakeCaps, ConsensusMode, Error, RelayRole, boilerplate::*,
+    ConsensusConfigCaps, ConsensusHandshakeCaps, ConsensusMode, Error, RelayRole,
+    boilerplate::*,
+    puzzle_work_admission::{
+        DEFAULT_INBOUND_VERIFY_CAPACITY, DEFAULT_OUTBOUND_MINT_CAPACITY,
+        SoranetPuzzleWorkAdmission, run_soranet_puzzle_work,
+    },
 };
 use bytes::{Buf, BufMut, BytesMut};
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -24,11 +29,13 @@ use norito::{
 };
 use rand::rand_core::TryCryptoRng;
 use rand::{SeedableRng, rngs::StdRng};
+#[cfg(test)]
+use std::num::NonZeroUsize;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     net::SocketAddr,
     sync::{
-        Arc, LazyLock, Mutex, Weak,
+        Arc, Mutex, Weak,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::SystemTime,
@@ -134,15 +141,6 @@ static HANDSHAKE_BUCKET_COUNTS: [AtomicU64; HN] = [
 ];
 static HANDSHAKE_MS_SUM: AtomicU64 = AtomicU64::new(0);
 static HANDSHAKE_MS_COUNT: AtomicU64 = AtomicU64::new(0);
-/// Process-wide admission for memory-hard `SoraNet` client-puzzle work.
-///
-/// Both outbound minting and attacker-triggerable inbound verification use the
-/// same permit. This bounds their combined Argon2 CPU and memory footprint
-/// across concurrent connections and compatible config reloads. Acquiring the
-/// permit before `spawn_blocking` also bounds blocking-pool work while leaving
-/// the async network executor available for consensus and handshake progress.
-static SORANET_PUZZLE_WORK_GATE: LazyLock<Arc<Semaphore>> =
-    LazyLock::new(|| Arc::new(Semaphore::new(1)));
 fn soranet_handshake_rng() -> Result<StdRng, Error> {
     StdRng::try_from_os_rng()
         .map_err(|err| Error::HandshakeSoranet(format!("SoraNet OS RNG failed: {err}")))
@@ -159,25 +157,6 @@ where
         Error::HandshakeSoranet(format!("SoraNet delegation challenge RNG failed: {error}"))
     })?;
     Ok(challenge)
-}
-async fn run_serialized_soranet_puzzle_work<T, F>(gate: Arc<Semaphore>, work: F) -> Result<T, Error>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T, Error> + Send + 'static,
-{
-    let permit = gate.acquire_owned().await.map_err(|error| {
-        Error::HandshakeSoranet(format!("SoraNet puzzle work gate closed: {error}"))
-    })?;
-    tokio::task::spawn_blocking(move || {
-        // Keep the permit inside the blocking task. If the surrounding
-        // handshake times out, Tokio cannot cancel already-running blocking
-        // work; retaining the permit prevents another connection from creating
-        // a concurrent Argon2 operation.
-        let _permit = permit;
-        work()
-    })
-    .await
-    .map_err(|error| Error::HandshakeSoranet(format!("SoraNet puzzle work task failed: {error}")))?
 }
 /// Runtime configuration shared across `SoraNet` handshake attempts.
 #[derive(Debug, Clone)]
@@ -198,6 +177,7 @@ pub struct SoranetHandshakeConfig {
     admission_token: Option<Arc<Vec<u8>>>,
     revocation_store: Option<Arc<Mutex<TicketRevocationStore>>>,
     revocation_store_error: Option<Arc<str>>,
+    puzzle_work_admission: Arc<SoranetPuzzleWorkAdmission>,
 }
 impl SoranetHandshakeConfig {
     pub(crate) fn new(
@@ -253,7 +233,22 @@ impl SoranetHandshakeConfig {
             admission_token: None,
             revocation_store,
             revocation_store_error: revocation_store_error.map(Arc::from),
+            puzzle_work_admission: Arc::new(SoranetPuzzleWorkAdmission::new(
+                DEFAULT_OUTBOUND_MINT_CAPACITY,
+                DEFAULT_INBOUND_VERIFY_CAPACITY,
+            )),
         }
+    }
+    pub(crate) fn with_puzzle_work_admission(
+        mut self,
+        admission: Arc<SoranetPuzzleWorkAdmission>,
+    ) -> Self {
+        self.puzzle_work_admission = admission;
+        self
+    }
+    #[cfg(test)]
+    pub(crate) fn puzzle_work_capacities(&self) -> (NonZeroUsize, NonZeroUsize) {
+        self.puzzle_work_admission.capacities()
     }
     fn effective_ticket_ttl(&self) -> Duration {
         self.pow_ticket_ttl
@@ -612,19 +607,22 @@ async fn mint_handshake_challenge(
 ) -> Result<(Option<MintedChallenge>, StdRng), Error> {
     // The ordinary hashcash loop is cheap and preserves the existing direct
     // path. Only the configured memory-hard Argon2 puzzle needs blocking-pool
-    // isolation and process-wide serialization.
+    // isolation and direction-aware process admission.
     if !config.pow_required() || config.puzzle_params.is_none() {
         let minted = config
             .mint_challenge_ticket(&transcript_hash, &mut rng)
             .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
         return Ok((minted, rng));
     }
-    run_serialized_soranet_puzzle_work(Arc::clone(&SORANET_PUZZLE_WORK_GATE), move || {
-        let minted = config
-            .mint_challenge_ticket(&transcript_hash, &mut rng)
-            .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
-        Ok((minted, rng))
-    })
+    run_soranet_puzzle_work(
+        config.puzzle_work_admission.outbound_mint_gate(),
+        move || {
+            let minted = config
+                .mint_challenge_ticket(&transcript_hash, &mut rng)
+                .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
+            Ok((minted, rng))
+        },
+    )
     .await
 }
 async fn verify_handshake_challenge(
@@ -633,10 +631,10 @@ async fn verify_handshake_challenge(
     transcript_hash: [u8; 32],
 ) -> Result<Option<ChallengeAdmission>, Error> {
     verify_handshake_challenge_with_gate(
-        config,
+        Arc::clone(&config),
         ticket,
         transcript_hash,
-        Arc::clone(&SORANET_PUZZLE_WORK_GATE),
+        config.puzzle_work_admission.inbound_verify_gate(),
     )
     .await
 }
@@ -653,7 +651,7 @@ async fn verify_handshake_challenge_with_gate(
             .verify_challenge_ticket(&ticket, &transcript_hash)
             .map_err(|error| Error::HandshakeSoranet(error.to_string()));
     }
-    run_serialized_soranet_puzzle_work(gate, move || {
+    run_soranet_puzzle_work(gate, move || {
         config
             .verify_challenge_ticket(&ticket, &transcript_hash)
             .map_err(|error| Error::HandshakeSoranet(error.to_string()))

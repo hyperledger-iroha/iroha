@@ -1,13 +1,13 @@
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn signed_query_proxy_does_not_resend_after_complete_rejection() {
-    let first_peer_id = checked_torii_test_peer_id(0x95, "derive retryable first proxy peer fixture key");
-    let second_peer_id = checked_torii_test_peer_id(0x96, "derive retryable second proxy peer fixture key");
+    let first_peer_id =
+        checked_torii_test_peer_id(0x95, "derive retryable first proxy peer fixture key");
+    let second_peer_id =
+        checked_torii_test_peer_id(0x96, "derive retryable second proxy peer fixture key");
     let route = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(3));
-    let request = signed_query_proxy_request_for_test(
-        Hash::new(b"signed-query-complete-rejection"),
-        route,
-    );
+    let request =
+        signed_query_proxy_request_for_test(Hash::new(b"signed-query-complete-rejection"), route);
     let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let attempts_ref = attempts.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
@@ -274,7 +274,8 @@ async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_compl
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
-    let peer_id = checked_torii_test_peer_id(0xac, "derive forged outcome-unknown proxy peer fixture key");
+    let peer_id =
+        checked_torii_test_peer_id(0xac, "derive forged outcome-unknown proxy peer fixture key");
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let (_app, request) =
         incoming_proxy_submit_fixture(0xad, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
@@ -332,7 +333,10 @@ async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritati
     let (app, request) =
         incoming_proxy_submit_fixture(0xee, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
     let final_authority = PeerId::from(app.torii_proxy_bridge_signer.public_key().clone());
-    let forwarding_authority = checked_torii_test_peer_id(0xef, "derive QueuePlanSynced forwarding-authority fixture key");
+    let forwarding_authority = checked_torii_test_peer_id(
+        0xef,
+        "derive QueuePlanSynced forwarding-authority fixture key",
+    );
     assert_ne!(forwarding_authority, final_authority);
     let final_authority_snapshot =
         exact_queue_plan_synced_acceptance_snapshot(&app, &request).await;
@@ -439,7 +443,6 @@ async fn proxied_transaction_submission_preserves_public_accept_and_prefer_contr
             "content-type",
             "preference-applied",
             "x-iroha-entrypoint-hash",
-            "x-iroha-transaction-hash",
             "x-iroha-signed-transaction-hash",
             "x-iroha-route-lane-id",
             "x-iroha-route-dataspace-id",
@@ -459,7 +462,8 @@ async fn proxied_transaction_submission_preserves_public_accept_and_prefer_contr
             Some("proxy")
         );
         let local_body = torii_body_bytes(local, "read local public submission response").await;
-        let proxied_body = torii_body_bytes(proxied, "read proxied public submission response").await;
+        let proxied_body =
+            torii_body_bytes(proxied, "read proxied public submission response").await;
         if minimal_response {
             assert!(local_body.is_empty());
             assert!(proxied_body.is_empty());
@@ -630,7 +634,8 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
             Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN"),
             "{label} must fail with the stable outcome-unknown code"
         );
-        let body = torii_body_bytes(response, "read indeterminate strict acceptance response").await;
+        let body =
+            torii_body_bytes(response, "read indeterminate strict acceptance response").await;
         let envelope: ErrorEnvelope =
             norito::decode_from_bytes(&body).expect("decode outcome-unknown response envelope");
         assert_eq!(
@@ -652,7 +657,10 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_post_admission_or_malformed_500_is_indeterminate() {
-    let peer_id = checked_torii_test_peer_id(0xb0, "derive strict post-admission failure proxy peer fixture key");
+    let peer_id = checked_torii_test_peer_id(
+        0xb0,
+        "derive strict post-admission failure proxy peer fixture key",
+    );
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let (app, request) =
         incoming_proxy_submit_fixture(0xb1, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
@@ -720,8 +728,10 @@ async fn queue_plan_synced_post_admission_or_malformed_500_is_indeterminate() {
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_post_dispatch_loss_is_exactly_indeterminate_for_each_transport() {
-    let p2p_peer_id = checked_torii_test_peer_id(0xa5, "derive post-dispatch P2P proxy peer fixture key");
-    let http_peer_id = checked_torii_test_peer_id(0xa6, "derive post-dispatch HTTP proxy peer fixture key");
+    let p2p_peer_id =
+        checked_torii_test_peer_id(0xa5, "derive post-dispatch P2P proxy peer fixture key");
+    let http_peer_id =
+        checked_torii_test_peer_id(0xa6, "derive post-dispatch HTTP proxy peer fixture key");
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     for (seed, candidate, expected_transport) in [
         (0xa7, ToriiProxyCandidate::P2p(p2p_peer_id), "p2p_proxy"),
@@ -881,7 +891,8 @@ async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
 #[tokio::test]
 async fn backpressured_response_admission_obeys_local_egress_deadline() {
     let network = iroha_core::IrohaNetwork::actor_backpressured_for_tests();
-    let target = checked_torii_test_peer_id(0xc7, "derive local egress-deadline target fixture key");
+    let target =
+        checked_torii_test_peer_id(0xc7, "derive local egress-deadline target fixture key");
     let request_id = Hash::new(b"backpressured-response-local-egress-deadline");
     let local_deadline = tokio::time::Instant::now() + Duration::from_millis(20);
     let result = tokio::time::timeout(
@@ -1029,7 +1040,8 @@ async fn queue_plan_synced_http_redirect_to_connect_loss_is_not_followed() {
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_before_dispatch_failure_remains_definitely_unavailable() {
-    let peer_id = checked_torii_test_peer_id(0xb5, "derive pre-dispatch strict proxy peer fixture key");
+    let peer_id =
+        checked_torii_test_peer_id(0xb5, "derive pre-dispatch strict proxy peer fixture key");
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let (_app, request) =
         incoming_proxy_submit_fixture(0xb6, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);

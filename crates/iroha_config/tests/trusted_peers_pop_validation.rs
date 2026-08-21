@@ -53,7 +53,13 @@ pop_hex = "{other_pop_hex}"
         other_pop_hex = other_pop_hex,
     );
     let user_cfg = build_user_config(&inline);
-    assert!(user_cfg.parse().is_ok());
+    let actual = user_cfg
+        .parse()
+        .expect("complete PoPs should admit both peers");
+    assert_eq!(
+        actual.common.trusted_peers.value().validator_roster_len(),
+        2
+    );
 }
 #[test]
 fn trusted_peers_pop_can_mark_validator_subset() {
@@ -81,6 +87,7 @@ pop_hex = "{base_pop_hex}"
         .parse()
         .expect("missing PoP should leave peer network-trusted but non-validator");
     let trusted = actual.common.trusted_peers.value();
+    assert_eq!(trusted.validator_roster_len(), 1);
     assert!(trusted.pops.contains_key(base.public_key()));
     assert!(
         !trusted.pops.contains_key(other.public_key()),
@@ -88,7 +95,7 @@ pop_hex = "{base_pop_hex}"
     );
 }
 #[test]
-fn trusted_peers_pop_empty_keeps_bls_trusted_peer_roster() {
+fn trusted_peers_pop_empty_parses_as_no_validator_credentials() {
     let base = base_keypair();
     let inline = format!(
         r#"
@@ -102,7 +109,7 @@ trusted_peers_pop = []
     let user_cfg = build_user_config(&inline);
     let actual = user_cfg
         .parse()
-        .expect("empty PoP map should keep the BLS trusted-peer roster");
+        .expect("empty PoP map is valid configuration with no validator credentials");
     assert!(actual.common.trusted_peers.value().pops.is_empty());
 }
 #[test]

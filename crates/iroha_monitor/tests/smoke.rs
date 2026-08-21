@@ -1,15 +1,28 @@
 //! Smoke tests for the refactored `iroha_monitor` CLI.
+#[path = "attach_render.rs"]
+mod attach_render;
+#[path = "http_limits.rs"]
+mod http_limits;
+#[path = "invalid_credentials.rs"]
+mod invalid_credentials;
 use std::{
     path::PathBuf,
     process::{Command, Stdio},
     thread,
     time::Duration,
 };
+fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 fn monitor_bin() -> Option<PathBuf> {
     std::env::var_os("CARGO_BIN_EXE_iroha_monitor").map(PathBuf::from)
 }
 #[test]
 fn spawn_lite_smoke_renders_frames() {
+    let _serial = crate::serial_guard();
     let Some(bin) = monitor_bin() else {
         eprintln!("skipping: monitor binary path not provided by cargo");
         return;
@@ -47,6 +60,7 @@ fn spawn_lite_smoke_renders_frames() {
 }
 #[test]
 fn headless_max_frames_triggers_auto_exit() {
+    let _serial = crate::serial_guard();
     let Some(bin) = monitor_bin() else {
         eprintln!("skipping: monitor binary path not provided by cargo");
         return;
@@ -73,6 +87,7 @@ fn headless_max_frames_triggers_auto_exit() {
 }
 #[test]
 fn attach_mode_with_stubs_runs_cleanly() {
+    let _serial = crate::serial_guard();
     let Some(addr1) = spawn_status_metrics_stub() else {
         eprintln!("skipping attach_mode_with_stubs_runs_cleanly: no stub addr");
         return;

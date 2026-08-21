@@ -27,10 +27,14 @@ public sealed class TransactionTtlContractTests
         Assert.Equal(
             TransactionBuilder.DefaultTimeToLiveMilliseconds,
             unsigned.TimeToLiveMilliseconds);
+        Assert.Equal(TransactionAdmissionIntent.QueuePlanSynced, unsigned.AdmissionIntent);
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(unsigned));
         Assert.Equal(
             TransactionBuilder.DefaultTimeToLiveMilliseconds,
             document.RootElement.GetProperty("time_to_live_ms").GetUInt64());
+        var admissionIntent = document.RootElement.GetProperty("admission_intent");
+        Assert.Equal("queue_plan_synced", admissionIntent.GetProperty("intent").GetString());
+        Assert.Equal(JsonValueKind.Null, admissionIntent.GetProperty("value").ValueKind);
 
         var signed = builder.BuildSigned(Convert.FromHexString(FixtureSeedHex));
         Assert.Equal(

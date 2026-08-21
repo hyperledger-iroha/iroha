@@ -634,15 +634,16 @@ def _load_applied_report(
         or absent != sorted(set(absent))
     ):
         _fail("applied report absent-child list is not exact")
+    genesis = _sha256(report["genesis_block_hash"], "deployed genesis block hash")
+    expected_network_id = taira_constants.network_id_from_genesis_hash(genesis)
     if (
         report["network_name"] != taira_constants.NETWORK_NAME
         or report["chain_id"] != taira_constants.CHAIN_ID
-        or report["network_id"] != taira_constants.NETWORK_ID
+        or report["network_id"] != expected_network_id
         or type(report["protocol_version"]) is not int
         or report["protocol_version"] != checker.PROTOCOL_VERSION
     ):
         _fail("applied report is not exact public Taira revision 4")
-    genesis = _sha256(report["genesis_block_hash"], "deployed genesis block hash")
     if int(genesis[-2:], 16) & 1 == 0:
         _fail("deployed genesis block hash lacks its Iroha marker bit")
     topology = _text(report["nexus_topology"], "deployed topology")

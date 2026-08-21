@@ -7,9 +7,12 @@ use super::{
     schema::{DurableContinuation, DurableContinuationEdge, DurablePayloadReference},
     work_registry::{
         BoundRecoveredLifecycleSignBroadcastAndSignSuccessor,
+        LiveValidateApplyRegistryPublicationError, LiveValidateReportRegistryPublicationError,
         LiveValidateSignRegistryPublicationError, PreparedCertifiedFetchStoreSuccessor,
         PreparedDurableStoreValidateSuccessor, PreparedInvalidBodyReportReplayPreAdmission,
-        PreparedLiveValidateSignRegistryPublication, PreparedReadyDurableValidateAdapterPreview,
+        PreparedLiveValidateApplyRegistryPublication,
+        PreparedLiveValidateReportRegistryPublication, PreparedLiveValidateSignRegistryPublication,
+        PreparedReadyDurableValidateAdapterPreview, PreparedReadyDurableValidateApplyPreAdmission,
         PreparedReadyDurableValidatePersistedSignPreAdmission,
         PreparedRecoveredDecisionFetchStoreSuccessor,
         PreparedRecoveredLifecycleSignBroadcastAndSignSuccessor,
@@ -374,6 +377,22 @@ impl SealedValidateSignProjectionPermit {
         }
     }
 }
+/// One-shot authority for projecting the body-frame-completed live Decision
+/// WAL Apply child from its fixed Validate transaction.
+pub(in crate::sumeragi) struct SealedValidateApplyProjectionPermit {
+    _linearity: SealedValidateApplyProjectionLinearity,
+}
+struct SealedValidateApplyProjectionLinearity;
+impl Drop for SealedValidateApplyProjectionLinearity {
+    fn drop(&mut self) {}
+}
+impl SealedValidateApplyProjectionPermit {
+    fn new() -> Self {
+        Self {
+            _linearity: SealedValidateApplyProjectionLinearity,
+        }
+    }
+}
 /// One-shot authority for reading the two admissions of a combined Sign result.
 ///
 /// WAL recovery retains both executable children in one opaque projection.
@@ -464,6 +483,28 @@ impl SealedValidateSignProjection {
     /// Close registry-derived coordinates under the transition permit.
     pub(super) fn from_registry(
         _permit: SealedValidateSignProjectionPermit,
+        lease: TurnLease,
+        candidate: CandidateAdmission,
+        parent_payload: DurablePayloadReference,
+    ) -> Self {
+        Self {
+            lease,
+            candidate,
+            parent_payload,
+        }
+    }
+}
+/// Opaque registry/adapter projection of one exact live-WAL Apply successor.
+#[must_use = "a sealed Validate Apply projection has not entered coordinator staging"]
+pub(super) struct SealedValidateApplyProjection {
+    lease: TurnLease,
+    candidate: CandidateAdmission,
+    parent_payload: DurablePayloadReference,
+}
+impl SealedValidateApplyProjection {
+    /// Close registry-derived coordinates under the transition permit.
+    pub(super) fn from_registry(
+        _permit: SealedValidateApplyProjectionPermit,
         lease: TurnLease,
         candidate: CandidateAdmission,
         parent_payload: DurablePayloadReference,
@@ -1260,43 +1301,20 @@ fn stage_body_stage_transition_with_payload_relation(
         child_digest,
     })
 }
-/// Fully reduced coordinator copy for one adjacent body-pipeline transition.
-///
-/// The live coordinator remains exclusively borrowed and untouched. The
-/// staged copy has already terminalized the claimed parent as `Advanced` and
-/// admitted its ready child, but this tranche deliberately exposes no commit,
-/// persistence, or state-extraction method.
-///
-/// TODO: Add the sole consuming publication only with the future composite
-/// registry/adapter transaction; dropping this token must remain a pure abort.
-#[must_use = "a staged body-pipeline coordinator cut has not been published"]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(super) struct PreparedBodyStageTransition<'a> {
-    _coordinator: &'a mut LifecycleCoordinator,
-    staged: LifecycleCoordinator,
-    edge: DurableContinuationEdge,
-    parent_ordinal: u128,
-    child_ordinal: u128,
-    owner: OwnerId,
-    child_slot: PhysicalSlotId,
-    child_digest: super::LifecycleDigest,
-}
-#[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
-enum SealedBodyStageSuccessor<'registry> {
-    CertifiedFetchStore(PreparedCertifiedFetchStoreSuccessor<'registry>),
-    DurableStoreValidate(PreparedDurableStoreValidateSuccessor<'registry>),
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+enum SealedBodyStageSuccessor<'registry, 'adapter> {
+    CertifiedFetchStore(PreparedCertifiedFetchStoreSuccessor<'registry, 'adapter>),
+    DurableStoreValidate(PreparedDurableStoreValidateSuccessor<'registry, 'adapter>),
 }
 /// Fully reduced coordinator copy retaining its move-only registry successor.
 ///
 /// The candidate was projected inside the closed successor token before the
-/// coordinator copy was cloned. This value keeps both exclusive borrows alive
-/// and exposes no commit, candidate, receipt, or state-extraction surface.
+/// coordinator copy was cloned. Registry and adapter authority remain
+/// exclusively borrowed until the exact LedgerV1 successor is fsynced.
 #[must_use = "a sealed body-pipeline coordinator cut has not been published"]
-#[cfg_attr(not(test), allow(dead_code))]
-#[cfg_attr(test, expect(dead_code, reason = "composite body-publication gap"))]
-pub(super) struct PreparedSealedBodyStageTransition<'coordinator, 'registry> {
-    _coordinator: &'coordinator mut LifecycleCoordinator,
-    _successor: SealedBodyStageSuccessor<'registry>,
+pub(super) struct PreparedSealedBodyStageTransition<'coordinator, 'registry, 'adapter> {
+    coordinator: &'coordinator mut LifecycleCoordinator,
+    successor: SealedBodyStageSuccessor<'registry, 'adapter>,
     staged: LifecycleCoordinator,
     edge: DurableContinuationEdge,
     parent_ordinal: u128,
@@ -1304,6 +1322,54 @@ pub(super) struct PreparedSealedBodyStageTransition<'coordinator, 'registry> {
     owner: OwnerId,
     child_slot: PhysicalSlotId,
     child_digest: super::LifecycleDigest,
+}
+impl PreparedSealedBodyStageTransition<'_, '_, '_> {
+    /// Fsync the exact parent-to-child LedgerV1 successor.
+    pub(super) fn persist_exact_successor(
+        &self,
+    ) -> Result<(), super::ledger::LifecycleLedgerError> {
+        self.coordinator
+            .persist_exact_staged_successor(&self.staged)
+    }
+    /// Publish registry, coordinator, and adapter state after successful fsync.
+    pub(super) fn commit_after_publication(self) {
+        let Self {
+            coordinator,
+            successor,
+            staged,
+            edge,
+            parent_ordinal,
+            child_ordinal,
+            owner,
+            child_slot,
+            child_digest,
+            ..
+        } = self;
+        assert!(staged.records.get(&parent_ordinal).is_some_and(|record| {
+            record.state == LifecycleState::Terminal(TerminalOutcome::Advanced)
+        }));
+        assert!(staged.records.get(&child_ordinal).is_some_and(|record| {
+            record.owner == owner
+                && record.state == LifecycleState::Ready
+                && record.physical_slots.get(&child_slot) == Some(&child_digest)
+        }));
+        match successor {
+            SealedBodyStageSuccessor::CertifiedFetchStore(successor) => {
+                assert_eq!(edge, DurableContinuationEdge::FetchToStore);
+                let adapter =
+                    successor.commit_after_publication(child_ordinal, child_slot, child_digest);
+                *coordinator = staged;
+                adapter.commit_after_durable_publication();
+            }
+            SealedBodyStageSuccessor::DurableStoreValidate(successor) => {
+                assert_eq!(edge, DurableContinuationEdge::StoreToValidate);
+                let adapter =
+                    successor.commit_after_publication(child_ordinal, child_slot, child_digest);
+                *coordinator = staged;
+                adapter.commit_after_durable_publication();
+            }
+        }
+    }
 }
 /// Fully staged recovered WAL Fetch-to-Store publication.
 ///
@@ -1537,16 +1603,20 @@ fn map_sealed_successor_projection_error(
 /// exclusively borrowed, and this inert tranche exposes no publication API.
 #[must_use = "a sealed no-successor Validate cut has not been published"]
 #[cfg_attr(not(test), allow(dead_code))]
-#[cfg_attr(
-    test,
-    expect(dead_code, reason = "no-successor atomic-publication gap")
-)]
 pub(super) struct PreparedSealedValidateNoSuccessorTransition<'coordinator, 'registry, 'adapter> {
-    _coordinator: &'coordinator mut LifecycleCoordinator,
-    _preview: PreparedReadyDurableValidateAdapterPreview<'registry, 'adapter>,
+    coordinator: &'coordinator mut LifecycleCoordinator,
+    preview: PreparedReadyDurableValidateAdapterPreview<'registry, 'adapter>,
     staged: LifecycleCoordinator,
     parent_ordinal: u128,
     released_consensus_reservation: bool,
+}
+/// Restart-only failure while publishing a terminal Validate row.
+#[must_use = "failed no-successor publication retains every staged authority"]
+pub(super) struct SealedValidateNoSuccessorPublicationError<'coordinator, 'registry, 'adapter> {
+    _coordinator: &'coordinator mut LifecycleCoordinator,
+    _preview: PreparedReadyDurableValidateAdapterPreview<'registry, 'adapter>,
+    _staged: LifecycleCoordinator,
+    _error: super::ledger::LifecycleLedgerError,
 }
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
 enum SealedValidateNoSuccessorTransitionFailure {
@@ -1560,6 +1630,47 @@ pub(super) struct SealedValidateNoSuccessorTransitionError<'registry, 'adapter> 
     _preview: PreparedReadyDurableValidateAdapterPreview<'registry, 'adapter>,
     _failure: SealedValidateNoSuccessorTransitionFailure,
 }
+/// Fully staged live Validate-to-Apply transaction retaining its WAL, body,
+/// registry, and adapter owners until LedgerV1 publication.
+#[must_use = "a sealed live Validate-to-Apply transition has not been published"]
+pub(super) struct PreparedSealedValidateApplyTransition<'coordinator, 'registry, 'adapter> {
+    coordinator: &'coordinator mut LifecycleCoordinator,
+    publication: PreparedReadyDurableValidateApplyPreAdmission<'registry, 'adapter>,
+    staged: LifecycleCoordinator,
+    lease: TurnLease,
+    parent_ordinal: u128,
+    child_ordinal: u128,
+    child_slot: PhysicalSlotId,
+    child_digest: super::LifecycleDigest,
+}
+#[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
+enum SealedValidateApplyTransitionFailure {
+    MissingLedgerStore,
+    Projection(SealedValidateTerminalProjectionError),
+    Stage(BodyStageTransitionError),
+}
+/// Pre-publication error retaining the complete live-WAL Apply join.
+#[must_use = "failed Validate-to-Apply staging still owns live WAL authority"]
+pub(super) struct SealedValidateApplyTransitionError<'registry, 'adapter> {
+    _publication: PreparedReadyDurableValidateApplyPreAdmission<'registry, 'adapter>,
+    _failure: SealedValidateApplyTransitionFailure,
+}
+#[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
+enum LiveValidateApplyPublicationFailure<'registry, 'adapter> {
+    Registry(LiveValidateApplyRegistryPublicationError<'registry, 'adapter>),
+    Ledger {
+        _error: super::ledger::LifecycleLedgerError,
+        _publication: PreparedLiveValidateApplyRegistryPublication<'registry, 'adapter>,
+    },
+}
+/// Restart-only Apply publication failure retaining the staged coordinator and
+/// detached registry/adapter authority.
+#[must_use = "failed live Validate-to-Apply publication requires restart"]
+pub(super) struct LiveValidateApplyPublicationError<'coordinator, 'registry, 'adapter> {
+    _coordinator: &'coordinator mut LifecycleCoordinator,
+    _staged: LifecycleCoordinator,
+    _failure: LiveValidateApplyPublicationFailure<'registry, 'adapter>,
+}
 /// Fully reduced Validate-to-report copy retaining every sealed authority cut.
 ///
 /// The report candidate was projected while nested inside the exact adapter
@@ -1568,14 +1679,11 @@ pub(super) struct SealedValidateNoSuccessorTransitionError<'registry, 'adapter> 
 /// commit, persistence, or installation surface exists on this value.
 #[must_use = "a sealed invalid-body report cut has not been published"]
 #[cfg_attr(not(test), allow(dead_code))]
-#[cfg_attr(
-    test,
-    expect(dead_code, reason = "invalid-body atomic-publication gap")
-)]
 pub(super) struct PreparedSealedValidateReportTransition<'coordinator, 'registry, 'adapter> {
-    _coordinator: &'coordinator mut LifecycleCoordinator,
-    _report: PreparedInvalidBodyReportReplayPreAdmission<'registry, 'adapter>,
+    coordinator: &'coordinator mut LifecycleCoordinator,
+    report: PreparedInvalidBodyReportReplayPreAdmission<'registry, 'adapter>,
     staged: LifecycleCoordinator,
+    lease: TurnLease,
     edge: DurableContinuationEdge,
     parent_ordinal: u128,
     child_ordinal: u128,
@@ -1637,6 +1745,7 @@ pub(super) struct LiveValidateSignPublicationError<'coordinator, 'registry, 'ada
 }
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
 enum SealedValidateReportTransitionFailure {
+    MissingLedgerStore,
     Projection(SealedValidateTerminalProjectionError),
     Stage(BodyStageTransitionError),
 }
@@ -1646,6 +1755,23 @@ enum SealedValidateReportTransitionFailure {
 pub(super) struct SealedValidateReportTransitionError<'registry, 'adapter> {
     _report: PreparedInvalidBodyReportReplayPreAdmission<'registry, 'adapter>,
     _failure: SealedValidateReportTransitionFailure,
+}
+#[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
+enum LiveValidateReportPublicationFailure<'registry, 'adapter> {
+    Registry(LiveValidateReportRegistryPublicationError<'registry, 'adapter>),
+    Ledger {
+        _error: super::ledger::LifecycleLedgerError,
+        _publication: PreparedLiveValidateReportRegistryPublication<'registry, 'adapter>,
+    },
+}
+/// Restart-only report publication failure retaining the staged coordinator
+/// and every detached registry/adapter authority.
+#[must_use = "failed live Validate-to-report publication requires restart"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) struct LiveValidateReportPublicationError<'coordinator, 'registry, 'adapter> {
+    _coordinator: &'coordinator mut LifecycleCoordinator,
+    _staged: LifecycleCoordinator,
+    _failure: LiveValidateReportPublicationFailure<'registry, 'adapter>,
 }
 impl LifecycleCoordinator {
     /// Stage the recovered payload-free Fetch and body-backed Store successor.
@@ -1860,10 +1986,6 @@ impl LifecycleCoordinator {
     /// completion. Busy, Apply, Persist, and Report branches cannot construct
     /// the opaque projection, and no receipt crosses this production seam.
     #[cfg_attr(not(test), allow(dead_code))]
-    #[cfg_attr(
-        test,
-        expect(dead_code, reason = "no-successor atomic-publication gap")
-    )]
     #[allow(clippy::result_large_err)]
     pub(super) fn prepare_sealed_validate_no_successor_transition<
         'coordinator,
@@ -1904,8 +2026,8 @@ impl LifecycleCoordinator {
             }
         };
         Ok(PreparedSealedValidateNoSuccessorTransition {
-            _coordinator: self,
-            _preview: preview,
+            coordinator: self,
+            preview,
             staged: transition.staged,
             parent_ordinal: transition.parent_ordinal,
             released_consensus_reservation: transition.released_consensus_reservation,
@@ -1916,15 +2038,15 @@ impl LifecycleCoordinator {
     /// The move-only successor owns the installed Fetch address, exact durable
     /// frame, child effect and pending binding, projected digest, and mandatory
     /// replay authority. No raw successor input crosses this production seam.
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[cfg_attr(test, expect(dead_code, reason = "composite body-publication gap"))]
-    pub(super) fn prepare_sealed_fetch_store_transition<'coordinator, 'registry>(
+    pub(super) fn prepare_sealed_fetch_store_transition<'coordinator, 'registry, 'adapter>(
         &'coordinator mut self,
         lease: &TurnLease,
         verified: &VerifiedHeightContext,
-        successor: PreparedCertifiedFetchStoreSuccessor<'registry>,
-    ) -> Result<PreparedSealedBodyStageTransition<'coordinator, 'registry>, BodyStageTransitionError>
-    {
+        successor: PreparedCertifiedFetchStoreSuccessor<'registry, 'adapter>,
+    ) -> Result<
+        PreparedSealedBodyStageTransition<'coordinator, 'registry, 'adapter>,
+        BodyStageTransitionError,
+    > {
         let candidate = successor
             .project_for_body_transition(lease, verified)
             .map_err(map_sealed_successor_projection_error)?;
@@ -1937,8 +2059,8 @@ impl LifecycleCoordinator {
             DurableContinuationEdge::FetchToStore,
         )?;
         Ok(PreparedSealedBodyStageTransition {
-            _coordinator: self,
-            _successor: SealedBodyStageSuccessor::CertifiedFetchStore(successor),
+            coordinator: self,
+            successor: SealedBodyStageSuccessor::CertifiedFetchStore(successor),
             staged: transition.staged,
             edge: DurableContinuationEdge::FetchToStore,
             parent_ordinal: transition.parent_ordinal,
@@ -1953,15 +2075,15 @@ impl LifecycleCoordinator {
     /// The Store token retains its registry borrow while it projects the child
     /// from the exact certified family and BodyFrame. The candidate's sealed
     /// payload is also the required parent payload and is never overwritten.
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[cfg_attr(test, expect(dead_code, reason = "composite body-publication gap"))]
-    pub(super) fn prepare_sealed_store_validate_transition<'coordinator, 'registry>(
+    pub(super) fn prepare_sealed_store_validate_transition<'coordinator, 'registry, 'adapter>(
         &'coordinator mut self,
         lease: &TurnLease,
         verified: &VerifiedHeightContext,
-        successor: PreparedDurableStoreValidateSuccessor<'registry>,
-    ) -> Result<PreparedSealedBodyStageTransition<'coordinator, 'registry>, BodyStageTransitionError>
-    {
+        successor: PreparedDurableStoreValidateSuccessor<'registry, 'adapter>,
+    ) -> Result<
+        PreparedSealedBodyStageTransition<'coordinator, 'registry, 'adapter>,
+        BodyStageTransitionError,
+    > {
         let candidate = successor
             .project_for_body_transition(lease, verified)
             .map_err(map_sealed_successor_projection_error)?;
@@ -1974,13 +2096,69 @@ impl LifecycleCoordinator {
             DurableContinuationEdge::StoreToValidate,
         )?;
         Ok(PreparedSealedBodyStageTransition {
-            _coordinator: self,
-            _successor: SealedBodyStageSuccessor::DurableStoreValidate(successor),
+            coordinator: self,
+            successor: SealedBodyStageSuccessor::DurableStoreValidate(successor),
             staged: transition.staged,
             edge: DurableContinuationEdge::StoreToValidate,
             parent_ordinal: transition.parent_ordinal,
             child_ordinal: transition.child_ordinal,
             owner: transition.owner,
+            child_slot: transition.child_slot,
+            child_digest: transition.child_digest,
+        })
+    }
+    /// Stage one exact validated body retirement and live-WAL Apply admission.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn prepare_sealed_validate_apply_transition<'coordinator, 'registry, 'adapter>(
+        &'coordinator mut self,
+        lease: &TurnLease,
+        verified: &VerifiedHeightContext,
+        publication: PreparedReadyDurableValidateApplyPreAdmission<'registry, 'adapter>,
+    ) -> Result<
+        PreparedSealedValidateApplyTransition<'coordinator, 'registry, 'adapter>,
+        SealedValidateApplyTransitionError<'registry, 'adapter>,
+    > {
+        if self.ledger_store.is_none() {
+            return Err(SealedValidateApplyTransitionError {
+                _publication: publication,
+                _failure: SealedValidateApplyTransitionFailure::MissingLedgerStore,
+            });
+        }
+        let projection = match publication.project_for_body_transition(
+            SealedValidateApplyProjectionPermit::new(),
+            lease,
+            verified,
+        ) {
+            Ok(projection) => projection,
+            Err(error) => {
+                return Err(SealedValidateApplyTransitionError {
+                    _publication: publication,
+                    _failure: SealedValidateApplyTransitionFailure::Projection(error),
+                });
+            }
+        };
+        let transition = match stage_body_stage_transition(
+            self,
+            &projection.lease,
+            projection.candidate,
+            projection.parent_payload,
+            DurableContinuationEdge::ValidateToApply,
+        ) {
+            Ok(transition) => transition,
+            Err(error) => {
+                return Err(SealedValidateApplyTransitionError {
+                    _publication: publication,
+                    _failure: SealedValidateApplyTransitionFailure::Stage(error),
+                });
+            }
+        };
+        Ok(PreparedSealedValidateApplyTransition {
+            coordinator: self,
+            publication,
+            staged: transition.staged,
+            lease: lease.clone(),
+            parent_ordinal: transition.parent_ordinal,
+            child_ordinal: transition.child_ordinal,
             child_slot: transition.child_slot,
             child_digest: transition.child_digest,
         })
@@ -1992,10 +2170,6 @@ impl LifecycleCoordinator {
     /// The claimed lease must retain the Consensus reservation authenticated by
     /// that same rejected completion.
     #[cfg_attr(not(test), allow(dead_code))]
-    #[cfg_attr(
-        test,
-        expect(dead_code, reason = "invalid-body atomic-publication gap")
-    )]
     #[allow(clippy::result_large_err)]
     pub(super) fn prepare_sealed_validate_report_transition<'coordinator, 'registry, 'adapter>(
         &'coordinator mut self,
@@ -2006,6 +2180,12 @@ impl LifecycleCoordinator {
         PreparedSealedValidateReportTransition<'coordinator, 'registry, 'adapter>,
         SealedValidateReportTransitionError<'registry, 'adapter>,
     > {
+        if self.ledger_store.is_none() {
+            return Err(SealedValidateReportTransitionError {
+                _report: report,
+                _failure: SealedValidateReportTransitionFailure::MissingLedgerStore,
+            });
+        }
         let projection = match report.project_for_body_transition(
             SealedInvalidBodyReportProjectionPermit::new(),
             lease,
@@ -2035,9 +2215,10 @@ impl LifecycleCoordinator {
             }
         };
         Ok(PreparedSealedValidateReportTransition {
-            _coordinator: self,
-            _report: report,
+            coordinator: self,
+            report,
             staged: transition.staged,
+            lease: lease.clone(),
             edge: DurableContinuationEdge::ValidateToInvalidBodyReport,
             parent_ordinal: transition.parent_ordinal,
             child_ordinal: transition.child_ordinal,
@@ -2045,6 +2226,161 @@ impl LifecycleCoordinator {
             child_slot: transition.child_slot,
             child_digest: transition.child_digest,
         })
+    }
+}
+impl<'coordinator, 'registry, 'adapter>
+    PreparedSealedValidateApplyTransition<'coordinator, 'registry, 'adapter>
+{
+    /// Reserve the exact Apply replacement, fsync LedgerV1, then publish only
+    /// infallible registry and adapter swaps.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn persist_and_publish(
+        self,
+    ) -> Result<(), LiveValidateApplyPublicationError<'coordinator, 'registry, 'adapter>> {
+        let Self {
+            coordinator,
+            publication,
+            staged,
+            lease,
+            parent_ordinal,
+            child_ordinal,
+            child_slot,
+            child_digest,
+        } = self;
+        debug_assert_eq!(lease.ordinal(), parent_ordinal);
+        let registry = match publication.prepare_registry_publication(
+            &lease,
+            child_ordinal,
+            child_slot,
+            child_digest,
+        ) {
+            Ok(registry) => registry,
+            Err(error) => {
+                coordinator.fault = Some(CoordinatorFault::DurabilityFailure);
+                return Err(LiveValidateApplyPublicationError {
+                    _coordinator: coordinator,
+                    _staged: staged,
+                    _failure: LiveValidateApplyPublicationFailure::Registry(error),
+                });
+            }
+        };
+        if let Err(error) = coordinator.persist_exact_staged_successor(&staged) {
+            coordinator.fault = Some(CoordinatorFault::DurabilityFailure);
+            return Err(LiveValidateApplyPublicationError {
+                _coordinator: coordinator,
+                _staged: staged,
+                _failure: LiveValidateApplyPublicationFailure::Ledger {
+                    _error: error,
+                    _publication: registry,
+                },
+            });
+        }
+        *coordinator = staged;
+        registry.publish_after_ledger_fsync();
+        Ok(())
+    }
+}
+impl<'coordinator, 'registry, 'adapter>
+    PreparedSealedValidateReportTransition<'coordinator, 'registry, 'adapter>
+{
+    /// Reserve the exact report replacement, fsync its LedgerV1 successor,
+    /// then publish only infallible registry and adapter swaps.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn persist_and_publish(
+        self,
+    ) -> Result<(), LiveValidateReportPublicationError<'coordinator, 'registry, 'adapter>> {
+        let Self {
+            coordinator,
+            report,
+            staged,
+            lease,
+            edge,
+            parent_ordinal,
+            child_ordinal,
+            owner,
+            child_slot,
+            child_digest,
+        } = self;
+        debug_assert_eq!(edge, DurableContinuationEdge::ValidateToInvalidBodyReport);
+        debug_assert_eq!(lease.ordinal(), parent_ordinal);
+        debug_assert_eq!(lease.owner(), owner);
+        let publication = match report.prepare_registry_publication(
+            &lease,
+            child_ordinal,
+            child_slot,
+            child_digest,
+        ) {
+            Ok(publication) => publication,
+            Err(error) => {
+                coordinator.fault = Some(CoordinatorFault::DurabilityFailure);
+                return Err(LiveValidateReportPublicationError {
+                    _coordinator: coordinator,
+                    _staged: staged,
+                    _failure: LiveValidateReportPublicationFailure::Registry(error),
+                });
+            }
+        };
+        if let Err(error) = coordinator.persist_exact_staged_successor(&staged) {
+            coordinator.fault = Some(CoordinatorFault::DurabilityFailure);
+            return Err(LiveValidateReportPublicationError {
+                _coordinator: coordinator,
+                _staged: staged,
+                _failure: LiveValidateReportPublicationFailure::Ledger {
+                    _error: error,
+                    _publication: publication,
+                },
+            });
+        }
+        *coordinator = staged;
+        publication.publish_after_ledger_fsync();
+        Ok(())
+    }
+}
+impl<'coordinator, 'registry, 'adapter>
+    PreparedSealedValidateNoSuccessorTransition<'coordinator, 'registry, 'adapter>
+{
+    /// Fsync the terminal LedgerV1 row before removing the volatile carrier and
+    /// committing the already-staged adapter state.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn persist_and_publish(
+        self,
+    ) -> Result<(), SealedValidateNoSuccessorPublicationError<'coordinator, 'registry, 'adapter>>
+    {
+        let Self {
+            coordinator,
+            preview,
+            staged,
+            parent_ordinal,
+            released_consensus_reservation,
+        } = self;
+        debug_assert!(staged.records.get(&parent_ordinal).is_some_and(
+            |record| record.state == LifecycleState::Terminal(TerminalOutcome::Advanced)
+        ));
+        debug_assert!(
+            staged
+                .durable_records
+                .get(&parent_ordinal)
+                .is_some_and(
+                    |metadata| metadata.continuation == DurableContinuation::AdvancedNoSuccessor
+                )
+        );
+        debug_assert_eq!(
+            released_consensus_reservation,
+            staged.capacity_generation[&CapacityClass::Consensus]
+                != coordinator.capacity_generation[&CapacityClass::Consensus]
+        );
+        if let Err(error) = coordinator.persist_exact_staged_successor(&staged) {
+            coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+            return Err(SealedValidateNoSuccessorPublicationError {
+                _coordinator: coordinator,
+                _preview: preview,
+                _staged: staged,
+                _error: error,
+            });
+        }
+        *coordinator = staged;
+        preview.publish_no_successor_after_ledger_fsync();
+        Ok(())
     }
 }
 impl<'coordinator, 'registry, 'adapter>
@@ -2080,6 +2416,7 @@ impl<'coordinator, 'registry, 'adapter>
         ) {
             Ok(registry) => registry,
             Err(error) => {
+                coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
                 return Err(LiveValidateSignPublicationError {
                     _coordinator: coordinator,
                     _staged: staged,
@@ -2089,6 +2426,7 @@ impl<'coordinator, 'registry, 'adapter>
         };
         debug_assert_eq!(lease.ordinal(), parent_ordinal);
         if let Err(error) = coordinator.persist_exact_staged_successor(&staged) {
+            coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
             return Err(LiveValidateSignPublicationError {
                 _coordinator: coordinator,
                 _staged: staged,

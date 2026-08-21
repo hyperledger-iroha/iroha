@@ -1084,11 +1084,14 @@ pub(crate) struct V2BodyStore {
     /// [`Self::revalidate_recovered_markers`] before constructing the runtime.
     pending_revalidation:
         BTreeMap<(wire::ConsensusRound, wire::BlockSubject), QuarantinedValidationOutcome>,
-    /// Outcome seals retired from restart authority by a missing sidecar.
+    /// Outcome seals retired from restart authority by a missing sidecar or
+    /// because authenticated WAL/finality replay did not name their key.
     ///
     /// These entries are comparison-only: an ordinary bounded retry must run
     /// the validator again and reproduce the exact durable outcome before it
-    /// can promote one. They are never exposed by a recovery catalog.
+    /// can promote one. Rejection identities are exposed only through a
+    /// deny-only catalog so a fresh local producer cannot launder an already
+    /// rejected pre-intent body into Proposal authority.
     retired_revalidation:
         BTreeMap<(wire::ConsensusRound, wire::BlockSubject), QuarantinedValidationOutcome>,
     validated: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
@@ -1327,6 +1330,40 @@ impl V2BodyStoreInstanceIdentity {
     /// Return whether both seals were projected from the same open store.
     pub(crate) fn same_instance(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+/// Move-only authority for one exact Certified-Serve body read from its live
+/// body-store instance.
+///
+/// Construction remains inside [`V2BodyStore`]. The owned receipt and bytes
+/// have therefore crossed the store's exact receipt, frame checksum, manifest,
+/// and canonical body validation before a worker can return them to the
+/// lifecycle owner. The comparison-only instance seal prevents an otherwise
+/// valid readback from a different open store from settling this owner's work.
+#[derive(Debug)]
+#[must_use = "a Certified-Serve body readback must remain attached to worker completion"]
+pub(in crate::sumeragi) struct DurableCertifiedServeBodyReadbackV1 {
+    durable_body: DurableBodyReceipt,
+    canonical_wire: Vec<u8>,
+    store_identity: V2BodyStoreInstanceIdentity,
+}
+impl DurableCertifiedServeBodyReadbackV1 {
+    /// Borrow the exact durable receipt revalidated by the worker-owned store.
+    pub(in crate::sumeragi) const fn durable_body(&self) -> &DurableBodyReceipt {
+        &self.durable_body
+    }
+
+    /// Borrow the exact canonical `SignedBlockWire` bytes loaded from the frame.
+    pub(in crate::sumeragi) fn canonical_wire(&self) -> &[u8] {
+        &self.canonical_wire
+    }
+
+    /// Compare this readback with the lifecycle owner's retained store seal.
+    pub(in crate::sumeragi) fn matches_store_instance(
+        &self,
+        expected: &V2BodyStoreInstanceIdentity,
+    ) -> bool {
+        self.store_identity.same_instance(expected)
     }
 }
 /// Body-store-private one-shot permit for binding a cold adapter body lookup.
@@ -1878,9 +1915,9 @@ impl V2BodyStore {
     /// Once Kura has a cryptographically verified finality artifact, losing
     /// candidates cannot be re-executed against the now-advanced world state
     /// and must never recover height-local vote authority. Their durable body
-    /// bytes remain available for bounded cleanup; their quarantined and
-    /// already-promoted marker capabilities are dropped from the in-memory
-    /// recovery catalogs.
+    /// bytes remain available for bounded cleanup. Their vote-authorizing
+    /// marker capabilities are removed; a quarantined rejection is retained
+    /// only as comparison-only denial against laundering the same local body.
     pub(crate) fn retain_recovered_markers_for_subject(
         &mut self,
         decision: VerifiedRecoveredFinalitySubject,
@@ -1889,8 +1926,7 @@ impl V2BodyStore {
             return Err(V2BodyStoreError::RecoveredFinalityContextMismatch);
         }
         let subject = decision.subject();
-        self.pending_revalidation
-            .retain(|(_, candidate), _| *candidate == subject);
+        self.retain_pending_revalidation(|(_, candidate)| *candidate == subject)?;
         self.validated
             .retain(|(_, candidate), _| *candidate == subject);
         self.rejected
@@ -1911,12 +1947,37 @@ impl V2BodyStore {
         if !authority.authorizes_context(&self.context) {
             return Err(V2BodyStoreError::RecoveredValidationAuthorityContextMismatch);
         }
-        self.pending_revalidation
-            .retain(|(round, subject), _| authority.authorizes(*round, *subject));
+        self.retain_pending_revalidation(|(round, subject)| {
+            authority.authorizes(*round, *subject)
+        })?;
         self.validated
             .retain(|(round, subject), _| authority.authorizes(*round, *subject));
         self.rejected
             .retain(|(round, subject), _| authority.authorizes(*round, *subject));
+        Ok(())
+    }
+    /// Move every marker outside one authenticated startup frontier into the
+    /// comparison-only retired catalog without discarding its rejection seal.
+    fn retain_pending_revalidation(
+        &mut self,
+        mut retain: impl FnMut(&(wire::ConsensusRound, wire::BlockSubject)) -> bool,
+    ) -> Result<(), V2BodyStoreError> {
+        let pending = std::mem::take(&mut self.pending_revalidation);
+        for (key, outcome) in pending {
+            if retain(&key) {
+                self.pending_revalidation.insert(key, outcome);
+                continue;
+            }
+            match self.retired_revalidation.entry(key) {
+                std::collections::btree_map::Entry::Vacant(slot) => {
+                    slot.insert(outcome);
+                }
+                std::collections::btree_map::Entry::Occupied(slot) if slot.get() == &outcome => {}
+                std::collections::btree_map::Entry::Occupied(_) => {
+                    return Err(V2BodyStoreError::ConflictingValidationOutcome);
+                }
+            }
+        }
         Ok(())
     }
     /// Require all restart markers to have crossed semantic revalidation.
@@ -1953,6 +2014,29 @@ impl V2BodyStore {
         &self,
     ) -> BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt> {
         self.validated.clone()
+    }
+    /// Snapshot semantically replayed deterministic-rejection receipts.
+    pub(crate) fn rejected_recovery_catalog(
+        &self,
+    ) -> BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt> {
+        self.rejected
+            .iter()
+            .map(|(key, rejected)| (*key, rejected.durable.clone()))
+            .collect()
+    }
+    /// Snapshot retired rejection receipts as comparison-only local-producer
+    /// denial. These receipts have not crossed semantic replay in this process
+    /// and therefore must never authorize a reducer `ValidationFailed` event.
+    pub(crate) fn retired_rejected_recovery_catalog(
+        &self,
+    ) -> BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt> {
+        self.retired_revalidation
+            .iter()
+            .filter(|(_, retired)| {
+                matches!(retired.outcome, ValidationOutcomeMarkerKind::Rejected(_))
+            })
+            .map(|(key, retired)| (*key, retired.durable.clone()))
+            .collect()
     }
     /// Reconstruct the exact fsynced body authority for a recovered Decision Store.
     ///
@@ -2350,6 +2434,23 @@ impl V2BodyStore {
         receipt: &DurableBodyReceipt,
     ) -> Result<Vec<u8>, V2BodyStoreError> {
         Ok(self.load_envelope(receipt)?.canonical_wire)
+    }
+    /// Read one exact Certified-Serve body and bind it to this live store.
+    ///
+    /// The returned move-only authority is minted only after the ordinary
+    /// receipt and frame revalidation succeeds. It lets the lifecycle owner
+    /// settle worker completion after launch has moved this store out of the
+    /// owner, without weakening the existing exact body-store boundary.
+    pub(in crate::sumeragi) fn read_durable_body_for_certified_serve(
+        &self,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<DurableCertifiedServeBodyReadbackV1, V2BodyStoreError> {
+        let canonical_wire = self.load_canonical_wire(receipt)?;
+        Ok(DurableCertifiedServeBodyReadbackV1 {
+            durable_body: receipt.clone(),
+            canonical_wire,
+            store_identity: self.instance_identity(),
+        })
     }
     /// Find the newest durable proposal round retaining one exact subject.
     ///

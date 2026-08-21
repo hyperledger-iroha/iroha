@@ -1294,12 +1294,7 @@ fn build_test_router() -> (Router, Arc<Metrics>, KeyPair) {
     let domain = Domain::new(domain_id).build(&account_id);
     let mut world = World::with([domain], [account], Vec::<AssetDefinition>::new());
     fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let mut state = State::new_for_testing(world, kura.clone(), query);
-    let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
-    state
-        .set_nexus(nexus)
-        .expect("enable Nexus for public-lane address parsing");
+    let state = State::new_for_testing(world, kura.clone(), query);
     let state = Arc::new(state);
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;

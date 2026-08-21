@@ -103,10 +103,10 @@ aliases return. On success it stops the peers and prints one bounded Norito JSON
 the disposable data root remains available for audit.
 
 Generated local validator configs pin the runtime-critical local defaults Mochi depends on:
-`nexus.enabled = false` unless explicitly enabled and `confidential.enabled = true`. Consensus mode
-is carried by the signed genesis/height context, so Mochi does not emit the retired mutable
-`sumeragi.consensus_mode` setting. If you enable Nexus, Mochi fails fast unless the selected profile
-generates an NPoS signed genesis.
+mandatory Nexus routing (with no availability switch) and `confidential.enabled = true`. Consensus mode is
+carried by the signed genesis/height context, so Mochi does not emit the retired mutable
+`sumeragi.consensus_mode` setting. The canonical one-lane topology works with permissioned
+consensus; Mochi requires an NPoS signed genesis for custom multi-lane topology.
 
 Mochi publishes configs and genesis as immutable generations under `generations/<generation-id>`.
 The closed `generation.json` inventory binds every artifact and its BLAKE3 digest; the

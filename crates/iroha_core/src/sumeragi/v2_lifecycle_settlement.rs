@@ -72,15 +72,20 @@ impl LifecycleCoordinator {
             return self.latch_settlement_fault(CoordinatorFault::StaleLease);
         }
         if lease.output_reservation().is_some() {
-            // TODO: The sole rejected-Validate transaction must either consume
-            // this reservation into its exact report child or release it on a
-            // typed non-report outcome. Generic settlement cannot distinguish
+            // The sealed rejected-Validate transaction consumes this
+            // reservation into its exact report child; typed non-report
+            // outcomes release it. Generic settlement cannot distinguish
             // those cuts and therefore retains the active lease fail-closed.
             return self.latch_settlement_fault(CoordinatorFault::InvalidTerminalOutcome);
         }
         if matches!(
             lease.work_class,
-            LifecycleWorkClass::Fetch | LifecycleWorkClass::Store | LifecycleWorkClass::Validate
+            LifecycleWorkClass::Fetch
+                | LifecycleWorkClass::Store
+                | LifecycleWorkClass::Validate
+                | LifecycleWorkClass::SignProposal
+                | LifecycleWorkClass::SignVote
+                | LifecycleWorkClass::SignTimeout
         ) && matches!(
             outcome,
             TurnOutcome::Advanced | TurnOutcome::Terminal(TerminalOutcome::Advanced)
@@ -95,7 +100,7 @@ impl LifecycleCoordinator {
                 }
                 let Some(producer_ordinal) = self.producer_debts.get(&lease.ordinal).copied()
                 else {
-                    return self.latch_settlement_fault(CoordinatorFault::InvalidTerminalOutcome);
+                    return self.latch_settlement_fault(CoordinatorFault::CapacityAccounting);
                 };
                 let Some(serve_record) = self.records.get(&lease.ordinal) else {
                     return self.latch_settlement_fault(CoordinatorFault::InvalidTerminalOutcome);

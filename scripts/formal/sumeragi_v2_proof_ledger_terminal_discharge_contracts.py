@@ -962,10 +962,10 @@ def _atomic_timeout_completion_source_fidelity_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "03681c3a3df1ab231d64ba64e62d7aea1e125b9bff3133ec81d4d3bce11f1f1e"
+        "958e018eb74a0a42cf5835a2a352a7cae0a7184e33b698ea9e210218bc526bed"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "3547a9c73f1341b63ca2dd1577441b73a8e0e614e09e43db954c6167bc7cbd7b"
+        "2c49ccb619002d185804b2fdd11d8b1bccf586157556b8580ea037a33039dee1"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
         "8fd2bbface65035fe2acc59274c514f88233875161915e02229851a3d08852a0"
@@ -974,13 +974,13 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "b78fe6b65194ff48919c35f8423f31714fb6da4a172d8a004720e5b23f0b0d50"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "edefb1d22f48bd04d00f95d711a87278f782982c6dadf58cbf182e00e8fc8f22"
+        "e6b475062844b5ce59169247298af412e62702f13935e67a335b74ec0e9c1b4b"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "08975bc7d7421c26ee3ab23892003d6938e4d61faba159a32932e081d0006b8c"
+        "7f06ff56307923598f212fae63cfae3c5159fab51d94f62805ddb66c091b7bec"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "1f8d40157775db4b4a6972801cd8022d059c048a3c21813c372a47664825cb04"
+        "ed40863dd1be76ee403f9a59f55a150d836ddd96ff0d93aa1ebeb05171d1d525"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
         "11f0d554e114b832ec31604a6fa3bb78e9ecbc965e0269be1bc5b3548ff8e519"
@@ -1669,27 +1669,6 @@ EffectExecutorStep::Advanced { .. } => {
                 "the production runner must reconcile the exact durable lock or Decision after every serialized transition",
             ),
         ),
-        "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-            (
-                """
-pub(crate) fn certified_serve_predecessor_completion_evidence(
-    &self,
-    runtime_capacity_available: bool,
-    serve_lifecycle_ordinal: u128,
-) -> Result<Option<ExactServePredecessorCompletionEvidence>, String> {
-    if serve_lifecycle_ordinal == 0 {
-        return Err("Sumeragi v2 Serve completion cut was zero".to_owned());
-    }
-    let ownership_position =
-        usize::from(!runtime_capacity_available && self.held_io_completion.is_some());
-    let io_ordinal = self
-        .io
-        .as_ref()
-        .and_then(|io| io.completion_ownership_at(ownership_position))
-""",
-                "selected-Serve completion evidence must project the exact held offset without consuming a completion",
-            ),
-        ),
         "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
             (
                 """
@@ -1906,28 +1885,6 @@ assert_eq!(reducer.volatile_prepare_counts(), (0, 1));
         "the delayed lower PrepareQC regression must prove a complete ignored stutter with no effects",
         errors,
     )
-    worker_path_source = sources.get(
-        "crates/iroha_core/src/sumeragi/v2_worker.rs"
-    )
-    if worker_path_source is not None:
-        worker_path, worker_source = worker_path_source
-        completion_projection = _require_qualified_rust_item(
-            worker_path,
-            worker_source,
-            "ProductionV2Services",
-            "certified_serve_predecessor_completion_evidence",
-            errors,
-            "non-consuming selected-Serve completion projection",
-        )
-        if completion_projection is not None and _token_sequence_count(
-            rust_code_tokens(completion_projection.body),
-            ("try_recv_completion_unacknowledged", "("),
-        ):
-            errors.append(
-                f"{worker_path}:{completion_projection.line}: selected-Serve "
-                "completion evidence must project the exact held offset "
-                "without consuming a completion"
-            )
     return errors
 
 

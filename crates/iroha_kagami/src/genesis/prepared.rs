@@ -1,0 +1,904 @@
+//! Independent, fail-closed admission for one prepared signed genesis bundle.
+
+use crate::{Outcome, RunArgs, tui};
+use clap::Parser;
+use color_eyre::eyre::{WrapErr as _, ensure};
+use iroha_config::parameters::actual;
+use iroha_crypto::{Hash, HashOf, PublicKey, sha256};
+use iroha_data_model::{
+    Encode,
+    account::{AccountId, address::ChainDiscriminantGuard},
+    block::BlockHeader,
+};
+use iroha_genesis::{
+    RawGenesisTransaction, read_genesis_manifest_bytes, read_signed_genesis_bytes,
+    validate_prepared_genesis_bundle,
+};
+use std::{
+    collections::BTreeSet,
+    io::{BufWriter, Write},
+    path::{Path, PathBuf},
+};
+
+const TAIRA_VALIDATOR_COUNT: usize = 4;
+
+/// Verify the exact semantic, signer, hash, and canonical-wire binding of a prepared genesis.
+#[derive(Clone, Debug, Parser)]
+pub struct Args {
+    /// Exact reviewed NEVO genesis before validator rendering.
+    #[arg(long, value_name = "PATH")]
+    reviewed_manifest: PathBuf,
+    /// Exact public validator roster used by the renderer.
+    #[arg(long, value_name = "PATH")]
+    validator_roster: PathBuf,
+    /// Exact config-bound genesis manifest used by the external signer.
+    #[arg(long, value_name = "PATH")]
+    bound_manifest: PathBuf,
+    /// Exact renderer output accepted by the external signer before config binding.
+    #[arg(long, value_name = "PATH")]
+    pre_sign_manifest: PathBuf,
+    /// Exact signed genesis in canonical framed Norito form.
+    #[arg(long, value_name = "PATH")]
+    signed_genesis: PathBuf,
+    /// Effective validator configs whose complete roster and policy must reproduce the signed
+    /// context. Repeat exactly four times in `taira-validator-1` through `-4` order.
+    #[arg(long = "peer-config", value_name = "PATH")]
+    peer_configs: Vec<PathBuf>,
+    /// Public key of the independently provisioned genesis signer.
+    #[arg(long, value_name = "PUBLIC_KEY")]
+    genesis_public_key: PublicKey,
+    /// Exact signed genesis block-header hash.
+    #[arg(long, value_name = "HASH")]
+    expected_hash: HashOf<BlockHeader>,
+}
+
+#[derive(norito::JsonSerialize)]
+struct Receipt {
+    schema: &'static str,
+    status: &'static str,
+    reviewed_manifest_sha256: String,
+    validator_roster_sha256: String,
+    bound_manifest_sha256: String,
+    pre_sign_manifest_sha256: String,
+    signed_genesis_sha256: String,
+    peer_config_sha256: Vec<String>,
+    peer_config_set_sha256: String,
+    genesis_public_key: String,
+    expected_hash: String,
+    validator_count: u64,
+    reviewed_transform_passed: bool,
+    allowed_transform_passed: bool,
+    staged_context_passed: bool,
+    full_core_validation_passed: bool,
+}
+
+struct ValidatorBinding {
+    slug: String,
+    account_id: String,
+    public_key: PublicKey,
+    pop: Vec<u8>,
+    pop_hex: String,
+}
+
+fn config_slug(path: &Path, index: usize) -> color_eyre::Result<String> {
+    let slug = path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or_else(|| color_eyre::eyre::eyre!("peer config lacks a UTF-8 validator directory"))?;
+    let expected = format!("taira-validator-{}", index + 1);
+    ensure!(
+        slug == expected,
+        "peer configs must be ordered in exact Taira validator directories; expected {expected}, saw {slug}"
+    );
+    Ok(slug.to_owned())
+}
+
+fn load_validator_configs(
+    paths: &[PathBuf],
+    manifest: &RawGenesisTransaction,
+    genesis_public_key: &PublicKey,
+    expected_hash: HashOf<BlockHeader>,
+) -> color_eyre::Result<(Vec<Vec<u8>>, Vec<actual::Root>, Vec<ValidatorBinding>)> {
+    ensure!(
+        paths.len() == TAIRA_VALIDATOR_COUNT,
+        "prepared Taira genesis requires exactly {TAIRA_VALIDATOR_COUNT} peer configs"
+    );
+    let mut bytes = Vec::with_capacity(paths.len());
+    let mut configs = Vec::with_capacity(paths.len());
+    let mut bindings = Vec::with_capacity(paths.len());
+    let mut roster = None;
+    let mut local_keys = BTreeSet::new();
+    for (index, path) in paths.iter().enumerate() {
+        let slug = config_slug(path, index)?;
+        let config_bytes = std::fs::read(path)
+            .wrap_err_with(|| format!("read effective validator config {}", path.display()))?;
+        let config = super::sign::load_peer_config_bytes(path, &config_bytes)?;
+        super::sign::ensure_peer_config_matches_manifest(&config, manifest)?;
+        ensure!(
+            config.genesis.public_key == *genesis_public_key,
+            "effective validator config {slug} genesis public key differs from the admitted signer"
+        );
+        ensure!(
+            config.genesis.expected_hash == expected_hash,
+            "effective validator config {slug} expected hash differs from the admitted signed genesis"
+        );
+        ensure!(
+            matches!(config.sumeragi.role, actual::NodeRole::Validator),
+            "effective validator config {slug} is not a validator"
+        );
+        let trusted = config.common.trusted_peers.value();
+        if let Some(expected_roster) = roster.as_ref() {
+            ensure!(
+                expected_roster == &trusted.pops,
+                "effective validator config {slug} has a different trusted PoP roster"
+            );
+        } else {
+            roster = Some(trusted.pops.clone());
+        }
+        let public_key = config.common.key_pair.public_key().clone();
+        ensure!(
+            trusted.myself.id().public_key() == &public_key,
+            "effective validator config {slug} local identity differs from trusted-roster self"
+        );
+        ensure!(
+            local_keys.insert(public_key.clone()),
+            "effective validator config {slug} duplicates a validator identity"
+        );
+        let pop = trusted.pops.get(&public_key).cloned().ok_or_else(|| {
+            color_eyre::eyre::eyre!(
+                "effective validator config {slug} identity is absent from its PoP roster"
+            )
+        })?;
+        iroha_crypto::bls_normal_pop_verify(&public_key, &pop)
+            .wrap_err_with(|| format!("verify effective validator {slug} PoP"))?;
+        bytes.push(config_bytes);
+        configs.push(config);
+        bindings.push(ValidatorBinding {
+            slug,
+            account_id: String::new(),
+            public_key,
+            pop_hex: hex::encode(&pop),
+            pop,
+        });
+    }
+    let roster = roster.expect("four peer configs yield a roster");
+    ensure!(
+        roster.len() == TAIRA_VALIDATOR_COUNT
+            && roster.keys().cloned().collect::<BTreeSet<_>>() == local_keys,
+        "effective validator identities do not exactly cover the four-key trusted PoP roster"
+    );
+    Ok((bytes, configs, bindings))
+}
+
+fn required_roster_string<'a>(
+    table: &'a toml::Table,
+    field: &str,
+    index: usize,
+) -> color_eyre::Result<&'a str> {
+    let value = table
+        .get(field)
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| {
+            color_eyre::eyre::eyre!(
+                "validator roster entry {} lacks string field `{field}`",
+                index + 1
+            )
+        })?;
+    ensure!(
+        !value.is_empty() && value.trim() == value,
+        "validator roster entry {} field `{field}` is not canonical",
+        index + 1
+    );
+    Ok(value)
+}
+
+fn bind_validator_roster(
+    roster_bytes: &[u8],
+    config_bindings: &[ValidatorBinding],
+    chain_discriminant: u16,
+) -> color_eyre::Result<Vec<ValidatorBinding>> {
+    let roster_text =
+        std::str::from_utf8(roster_bytes).wrap_err("validator roster is not canonical UTF-8")?;
+    let roster = roster_text
+        .parse::<toml::Table>()
+        .wrap_err("parse exact validator roster TOML")?;
+    let validators = roster
+        .get("validators")
+        .and_then(toml::Value::as_array)
+        .ok_or_else(|| color_eyre::eyre::eyre!("validator roster lacks `validators` array"))?;
+    ensure!(
+        validators.len() == TAIRA_VALIDATOR_COUNT,
+        "validator roster must contain exactly {TAIRA_VALIDATOR_COUNT} validators"
+    );
+    let _chain_discriminant = ChainDiscriminantGuard::enter(chain_discriminant);
+    let mut account_ids = BTreeSet::new();
+    validators
+        .iter()
+        .zip(config_bindings)
+        .enumerate()
+        .map(|(index, (value, configured))| {
+            let table = value.as_table().ok_or_else(|| {
+                color_eyre::eyre::eyre!("validator roster entry {} is not a table", index + 1)
+            })?;
+            let slug = required_roster_string(table, "slug", index)?;
+            ensure!(
+                slug == configured.slug,
+                "validator roster entry {} slug differs from its ordered peer config",
+                index + 1
+            );
+            let public_key_literal = required_roster_string(table, "public_key", index)?;
+            let public_key = public_key_literal
+                .parse::<PublicKey>()
+                .wrap_err_with(|| format!("parse validator roster public key for {slug}"))?;
+            ensure!(
+                public_key == configured.public_key
+                    && public_key_literal == configured.public_key.to_string(),
+                "validator roster public key for {slug} differs from its exact peer config"
+            );
+            let pop_hex = required_roster_string(table, "pop_hex", index)?;
+            let pop = hex::decode(pop_hex)
+                .wrap_err_with(|| format!("decode validator roster PoP for {slug}"))?;
+            ensure!(
+                pop == configured.pop,
+                "validator roster PoP for {slug} differs from its exact peer config"
+            );
+            let account_id_literal = required_roster_string(table, "account_id", index)?;
+            let account_id = AccountId::parse_encoded(account_id_literal)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .wrap_err_with(|| format!("parse validator roster account id for {slug}"))?;
+            ensure!(
+                account_id.to_string() == account_id_literal,
+                "validator roster account id for {slug} is not canonical for the reviewed chain"
+            );
+            ensure!(
+                account_ids.insert(account_id_literal.to_owned()),
+                "validator roster account id for {slug} is duplicated"
+            );
+            Ok(ValidatorBinding {
+                slug: slug.to_owned(),
+                account_id: account_id_literal.to_owned(),
+                public_key,
+                pop,
+                pop_hex: pop_hex.to_owned(),
+            })
+        })
+        .collect()
+}
+
+fn json_object(
+    entries: impl IntoIterator<Item = (&'static str, norito::json::Value)>,
+) -> norito::json::Value {
+    norito::json::Value::Object(
+        entries
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect(),
+    )
+}
+
+fn expected_pre_sign_value(
+    reviewed_bytes: &[u8],
+    _reviewed: &RawGenesisTransaction,
+    validators: &[ValidatorBinding],
+) -> color_eyre::Result<norito::json::Value> {
+    let mut value: norito::json::Value = norito::json::from_slice(reviewed_bytes)
+        .wrap_err("parse reviewed manifest as a semantic JSON value")?;
+    let transactions = value
+        .as_object_mut()
+        .and_then(|root| root.get_mut("transactions"))
+        .and_then(norito::json::Value::as_array_mut)
+        .ok_or_else(|| {
+            color_eyre::eyre::eyre!("reviewed manifest transactions must be an array")
+        })?;
+    ensure!(
+        !transactions.is_empty(),
+        "reviewed manifest transactions must not be empty"
+    );
+    let mut registered_accounts = BTreeSet::new();
+    for (index, transaction) in transactions.iter_mut().enumerate() {
+        let transaction = transaction.as_object_mut().ok_or_else(|| {
+            color_eyre::eyre::eyre!("reviewed manifest transaction {index} is not an object")
+        })?;
+        transaction.insert(
+            "topology".to_owned(),
+            norito::json::Value::Array(Vec::new()),
+        );
+        let instructions = transaction
+            .get("instructions")
+            .and_then(norito::json::Value::as_array)
+            .ok_or_else(|| {
+                color_eyre::eyre::eyre!(
+                    "reviewed manifest transaction {index} instructions must be an array"
+                )
+            })?;
+        for instruction in instructions {
+            let Some(register) = instruction
+                .as_object()
+                .and_then(|object| object.get("Register"))
+                .and_then(norito::json::Value::as_object)
+            else {
+                continue;
+            };
+            let Some(account_id) = register
+                .get("Account")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|account| account.get("id"))
+                .and_then(norito::json::Value::as_str)
+            else {
+                continue;
+            };
+            registered_accounts.insert(account_id.to_owned());
+        }
+    }
+
+    let instructions = validators
+        .iter()
+        .filter(|validator| !registered_accounts.contains(&validator.account_id))
+        .map(|validator| {
+            json_object([(
+                "Register",
+                json_object([(
+                    "Account",
+                    json_object([
+                        (
+                            "id",
+                            norito::json::Value::from(validator.account_id.clone()),
+                        ),
+                        (
+                            "metadata",
+                            json_object([
+                                (
+                                    "purpose",
+                                    norito::json::Value::from("taira_validator_payout_recipient"),
+                                ),
+                                (
+                                    "validator_slug",
+                                    norito::json::Value::from(validator.slug.clone()),
+                                ),
+                            ]),
+                        ),
+                    ]),
+                )]),
+            )])
+        })
+        .collect::<Vec<_>>();
+    let topology = validators
+        .iter()
+        .map(|validator| {
+            json_object([
+                (
+                    "peer",
+                    norito::json::Value::from(validator.public_key.to_string()),
+                ),
+                (
+                    "pop_hex",
+                    norito::json::Value::from(validator.pop_hex.clone()),
+                ),
+            ])
+        })
+        .collect::<Vec<_>>();
+    transactions.push(json_object([
+        ("instructions", norito::json::Value::Array(instructions)),
+        ("ivm_triggers", norito::json::Value::Array(Vec::new())),
+        ("topology", norito::json::Value::Array(topology)),
+    ]));
+    Ok(value)
+}
+
+fn config_set_sha256(digests: &[String]) -> String {
+    let mut encoded = digests.join("\n");
+    encoded.push('\n');
+    hex::encode(sha256(encoded.as_bytes()))
+}
+
+impl<T: Write> RunArgs<T> for Args {
+    fn run(self, writer: &mut BufWriter<T>) -> Outcome {
+        tui::status("Verifying prepared signed genesis bundle");
+        let reviewed_bytes = read_genesis_manifest_bytes(&self.reviewed_manifest)
+            .wrap_err("read reviewed genesis manifest under fixed resource bounds")?;
+        let reviewed = RawGenesisTransaction::from_json_slice(&reviewed_bytes)
+            .wrap_err("parse exact reviewed genesis manifest")?;
+        let validator_roster_bytes =
+            std::fs::read(&self.validator_roster).wrap_err("read exact public validator roster")?;
+        let manifest_bytes = read_genesis_manifest_bytes(&self.bound_manifest)
+            .wrap_err("read bound genesis manifest under fixed resource bounds")?;
+        let manifest = RawGenesisTransaction::from_json_slice(&manifest_bytes)
+            .wrap_err("parse exact bound genesis manifest")?;
+        let pre_sign_bytes = read_genesis_manifest_bytes(&self.pre_sign_manifest)
+            .wrap_err("read pre-sign genesis manifest under fixed resource bounds")?;
+        let pre_sign = RawGenesisTransaction::from_json_slice(&pre_sign_bytes)
+            .wrap_err("parse exact pre-sign genesis manifest")?;
+        let (peer_config_bytes, configs, config_bindings) = load_validator_configs(
+            &self.peer_configs,
+            &manifest,
+            &self.genesis_public_key,
+            self.expected_hash,
+        )?;
+        let validator_bindings = bind_validator_roster(
+            &validator_roster_bytes,
+            &config_bindings,
+            reviewed.chain_discriminant(),
+        )?;
+        let expected_pre_sign =
+            expected_pre_sign_value(&reviewed_bytes, &reviewed, &validator_bindings)?;
+        let observed_pre_sign: norito::json::Value = norito::json::from_slice(&pre_sign_bytes)
+            .wrap_err("parse pre-sign manifest as a semantic JSON value")?;
+        ensure!(
+            expected_pre_sign == observed_pre_sign,
+            "pre-sign genesis differs from the reviewed manifest outside the exact four-validator renderer transform"
+        );
+        let expected_bound = pre_sign
+            .with_sumeragi_v2_context_parameters(manifest.sumeragi_v2_context_parameters())
+            .with_consensus_meta();
+        ensure!(
+            expected_bound.encode() == manifest.encode(),
+            "bound genesis differs from the pre-sign manifest outside the exact staged-context transform"
+        );
+        let signed_bytes = read_signed_genesis_bytes(&self.signed_genesis)
+            .wrap_err("read signed genesis under fixed resource bounds")?;
+        let validated = validate_prepared_genesis_bundle(
+            &signed_bytes,
+            &manifest,
+            &self.genesis_public_key,
+            self.expected_hash,
+        )
+        .wrap_err("validate exact prepared genesis bundle")?;
+        iroha_core::validate_genesis_block(
+            validated.block(),
+            &AccountId::new(self.genesis_public_key.clone()),
+        )
+        .map_err(|error| {
+            color_eyre::eyre::eyre!("prepared genesis failed full core validation: {error}")
+        })?;
+        let signed_context = manifest.sumeragi_v2_context_parameters();
+        for (config, binding) in configs.iter().zip(&validator_bindings) {
+            let (nexus_amx_context_hash, execution_policy_hash) =
+                super::staged_signed_sumeragi_v2_context_hashes(
+                    &manifest,
+                    validated.block(),
+                    config,
+                )
+                .wrap_err_with(|| {
+                    format!(
+                        "restage signed genesis under effective validator policy {}",
+                        binding.slug
+                    )
+                })?;
+            ensure!(
+                nexus_amx_context_hash == Hash::prehashed(signed_context.nexus_amx_context_hash),
+                "effective validator {} Nexus/AMX context differs from signed genesis",
+                binding.slug
+            );
+            ensure!(
+                execution_policy_hash == Hash::prehashed(signed_context.execution_policy_hash),
+                "effective validator {} execution policy differs from signed genesis",
+                binding.slug
+            );
+        }
+        ensure!(
+            validated.validator_pops()
+                == &validator_bindings
+                    .iter()
+                    .map(|binding| (binding.public_key.clone(), binding.pop.clone()))
+                    .collect(),
+            "signed genesis validator roster differs from the exact four peer configs"
+        );
+        let peer_config_sha256 = peer_config_bytes
+            .iter()
+            .map(|bytes| hex::encode(sha256(bytes)))
+            .collect::<Vec<_>>();
+        let receipt = Receipt {
+            schema: "iroha.kagami.prepared-genesis-verification.v2",
+            status: "verified",
+            reviewed_manifest_sha256: hex::encode(sha256(&reviewed_bytes)),
+            validator_roster_sha256: hex::encode(sha256(&validator_roster_bytes)),
+            bound_manifest_sha256: hex::encode(sha256(&manifest_bytes)),
+            pre_sign_manifest_sha256: hex::encode(sha256(&pre_sign_bytes)),
+            signed_genesis_sha256: hex::encode(sha256(&signed_bytes)),
+            peer_config_set_sha256: config_set_sha256(&peer_config_sha256),
+            peer_config_sha256,
+            genesis_public_key: self.genesis_public_key.to_string(),
+            expected_hash: self.expected_hash.to_string(),
+            validator_count: u64::try_from(validated.validator_pops().len())
+                .expect("validator count fits u64"),
+            reviewed_transform_passed: true,
+            allowed_transform_passed: true,
+            staged_context_passed: true,
+            full_core_validation_passed: true,
+        };
+        writeln!(writer, "{}", norito::json::to_json(&receipt)?)?;
+        tui::success("Prepared signed genesis bundle verified");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_genesis::GenesisBuilder;
+
+    struct Fixture {
+        _directory: tempfile::TempDir,
+        reviewed: PathBuf,
+        roster: PathBuf,
+        manifest: PathBuf,
+        pre_sign: PathBuf,
+        signed: PathBuf,
+        configs: Vec<PathBuf>,
+        signer: KeyPair,
+        expected_hash: HashOf<BlockHeader>,
+    }
+
+    fn fixture() -> Fixture {
+        iroha_genesis::init_instruction_registry();
+        let directory = tempfile::tempdir().expect("create prepared Kagami fixture directory");
+        let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let defaults = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../defaults/kagami/iroha3-dev");
+        let sources = [
+            defaults.join("config.toml"),
+            defaults.join("config-peer-1.toml"),
+            defaults.join("config-peer-2.toml"),
+            defaults.join("config-peer-3.toml"),
+        ];
+        let mut config_tables = Vec::new();
+        let mut config_paths = Vec::new();
+        for (index, source) in sources.iter().enumerate() {
+            let mut table = std::fs::read_to_string(source)
+                .expect("read checked-in prepared-verifier config")
+                .parse::<toml::Table>()
+                .expect("parse checked-in prepared-verifier config");
+            table
+                .get_mut("genesis")
+                .and_then(toml::Value::as_table_mut)
+                .expect("fixture config genesis table")
+                .insert(
+                    "public_key".to_owned(),
+                    toml::Value::String(signer.public_key().to_string()),
+                );
+            let config_dir = directory
+                .path()
+                .join(format!("taira-validator-{}", index + 1));
+            std::fs::create_dir(&config_dir).expect("create fixture validator directory");
+            let path = config_dir.join("config.toml");
+            std::fs::write(
+                &path,
+                toml::to_string_pretty(&table).expect("render prepared-verifier config"),
+            )
+            .expect("write prepared-verifier config");
+            config_tables.push(table);
+            config_paths.push(path);
+        }
+        let configs = config_paths
+            .iter()
+            .map(|path| {
+                super::super::sign::load_peer_config(path).expect("load prepared-verifier config")
+            })
+            .collect::<Vec<_>>();
+        let _chain_discriminant =
+            ChainDiscriminantGuard::enter(*configs[0].common.chain_discriminant.value());
+        let validator_bindings = configs
+            .iter()
+            .enumerate()
+            .map(|(index, config)| {
+                let public_key = config.common.key_pair.public_key().clone();
+                let pop = config
+                    .common
+                    .trusted_peers
+                    .value()
+                    .pops
+                    .get(&public_key)
+                    .cloned()
+                    .expect("fixture validator has a PoP");
+                ValidatorBinding {
+                    slug: format!("taira-validator-{}", index + 1),
+                    account_id: AccountId::new(
+                        KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                            .public_key()
+                            .clone(),
+                    )
+                    .to_string(),
+                    public_key,
+                    pop_hex: hex::encode(&pop),
+                    pop,
+                }
+            })
+            .collect::<Vec<_>>();
+        let reviewed = GenesisBuilder::new_without_executor(configs[0].common.chain.clone(), ".")
+            .build_raw()
+            .with_chain_discriminant(*configs[0].common.chain_discriminant.value())
+            .with_consensus_meta();
+        let reviewed_bytes =
+            norito::json::to_vec_pretty(&reviewed).expect("encode reviewed fixture manifest");
+        let pre_sign_value =
+            expected_pre_sign_value(&reviewed_bytes, &reviewed, &validator_bindings)
+                .expect("render fixture validator transform");
+        let pre_sign_bytes =
+            norito::json::to_vec_pretty(&pre_sign_value).expect("encode pre-sign fixture manifest");
+        let pre_sign = RawGenesisTransaction::from_json_slice(&pre_sign_bytes)
+            .expect("parse pre-sign fixture manifest");
+        let da_proof_policies = Some(iroha_core::da::proof_policy_bundle(
+            &configs[0].nexus.lane_config,
+        ));
+        let confidential_policy_hash =
+            iroha_core::state::compute_genesis_confidential_policy_hash(&configs[0].zk);
+        let (manifest, signed) = super::super::bind_and_sign_staged_sumeragi_v2_context(
+            pre_sign.clone(),
+            &signer,
+            Some(&configs[0]),
+            da_proof_policies,
+            confidential_policy_hash,
+            Some(1_700_000_000_000),
+        )
+        .expect("bind and sign prepared Kagami fixture");
+        let signed = signed.0;
+        let expected_hash = signed.hash();
+        for (table, path) in config_tables.iter_mut().zip(&config_paths) {
+            table
+                .get_mut("genesis")
+                .and_then(toml::Value::as_table_mut)
+                .expect("fixture config genesis table")
+                .insert(
+                    "expected_hash".to_owned(),
+                    toml::Value::String(norito::literal::format(
+                        "hash",
+                        &expected_hash.to_string().to_ascii_uppercase(),
+                    )),
+                );
+            std::fs::write(
+                path,
+                toml::to_string_pretty(table).expect("render final verifier config"),
+            )
+            .expect("write final verifier config");
+        }
+        let reviewed_path = directory.path().join("genesis.reviewed.json");
+        let roster_path = directory.path().join("validator-roster.toml");
+        let manifest_path = directory.path().join("genesis.bound.json");
+        let pre_sign_path = directory.path().join("genesis.pre-sign.json");
+        let signed_path = directory.path().join("genesis.signed.nrt");
+        std::fs::write(&reviewed_path, reviewed_bytes).expect("write reviewed fixture manifest");
+        let roster_rows = validator_bindings
+            .iter()
+            .map(|binding| {
+                toml::Value::Table(toml::Table::from_iter([
+                    ("slug".to_owned(), toml::Value::String(binding.slug.clone())),
+                    (
+                        "account_id".to_owned(),
+                        toml::Value::String(binding.account_id.clone()),
+                    ),
+                    (
+                        "public_key".to_owned(),
+                        toml::Value::String(binding.public_key.to_string()),
+                    ),
+                    (
+                        "pop_hex".to_owned(),
+                        toml::Value::String(binding.pop_hex.clone()),
+                    ),
+                ]))
+            })
+            .collect();
+        let roster_table =
+            toml::Table::from_iter([("validators".to_owned(), toml::Value::Array(roster_rows))]);
+        std::fs::write(
+            &roster_path,
+            toml::to_string_pretty(&roster_table).expect("encode fixture validator roster"),
+        )
+        .expect("write fixture validator roster");
+        std::fs::write(
+            &manifest_path,
+            norito::json::to_vec_pretty(&manifest).expect("encode bound fixture manifest"),
+        )
+        .expect("write bound fixture manifest");
+        std::fs::write(&pre_sign_path, pre_sign_bytes).expect("write pre-sign fixture manifest");
+        std::fs::write(
+            &signed_path,
+            signed.encode_wire().expect("encode signed fixture genesis"),
+        )
+        .expect("write signed fixture genesis");
+        Fixture {
+            _directory: directory,
+            reviewed: reviewed_path,
+            roster: roster_path,
+            manifest: manifest_path,
+            pre_sign: pre_sign_path,
+            signed: signed_path,
+            configs: config_paths,
+            signer,
+            expected_hash,
+        }
+    }
+
+    fn run_fixture(
+        reviewed: PathBuf,
+        roster: PathBuf,
+        manifest: PathBuf,
+        pre_sign: PathBuf,
+        signed: PathBuf,
+        configs: Vec<PathBuf>,
+        signer: &KeyPair,
+        expected_hash: HashOf<BlockHeader>,
+    ) -> Outcome {
+        Args {
+            reviewed_manifest: reviewed,
+            validator_roster: roster,
+            bound_manifest: manifest,
+            pre_sign_manifest: pre_sign,
+            signed_genesis: signed,
+            peer_configs: configs,
+            genesis_public_key: signer.public_key().clone(),
+            expected_hash,
+        }
+        .run(&mut BufWriter::new(Vec::<u8>::new()))
+    }
+
+    #[test]
+    fn prepared_verifier_accepts_exact_bundle_and_rejects_signed_divergence() {
+        let fixture = fixture();
+        run_fixture(
+            fixture.reviewed.clone(),
+            fixture.roster.clone(),
+            fixture.manifest.clone(),
+            fixture.pre_sign.clone(),
+            fixture.signed.clone(),
+            fixture.configs.clone(),
+            &fixture.signer,
+            fixture.expected_hash,
+        )
+        .expect("accept exact prepared genesis bundle");
+
+        let original_reviewed = std::fs::read(&fixture.reviewed).expect("read reviewed fixture");
+        let mut generic_reviewed: norito::json::Value =
+            norito::json::from_slice(&original_reviewed).expect("parse reviewed fixture");
+        generic_reviewed
+            .as_object_mut()
+            .expect("reviewed fixture object")
+            .insert(
+                "chain".to_owned(),
+                norito::json::Value::String("generic-substitution-chain".to_owned()),
+            );
+        std::fs::write(
+            &fixture.reviewed,
+            norito::json::to_vec_pretty(&generic_reviewed)
+                .expect("encode generic reviewed fixture"),
+        )
+        .expect("write generic reviewed fixture");
+        let transform_error = run_fixture(
+            fixture.reviewed.clone(),
+            fixture.roster.clone(),
+            fixture.manifest.clone(),
+            fixture.pre_sign.clone(),
+            fixture.signed.clone(),
+            fixture.configs.clone(),
+            &fixture.signer,
+            fixture.expected_hash,
+        )
+        .expect_err("reject generic reviewed-genesis substitution");
+        assert!(transform_error.to_string().contains("renderer transform"));
+        std::fs::write(&fixture.reviewed, original_reviewed).expect("restore reviewed fixture");
+
+        let original_roster =
+            std::fs::read_to_string(&fixture.roster).expect("read roster fixture");
+        let mut spliced_roster = original_roster
+            .parse::<toml::Table>()
+            .expect("parse roster fixture");
+        let reviewed_manifest = RawGenesisTransaction::from_json_slice(
+            &std::fs::read(&fixture.reviewed).expect("reread reviewed fixture"),
+        )
+        .expect("parse restored reviewed fixture");
+        let _chain_discriminant =
+            ChainDiscriminantGuard::enter(reviewed_manifest.chain_discriminant());
+        let replacement_account = AccountId::new(
+            KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        )
+        .to_string();
+        spliced_roster
+            .get_mut("validators")
+            .and_then(toml::Value::as_array_mut)
+            .and_then(|validators| validators.get_mut(1))
+            .and_then(toml::Value::as_table_mut)
+            .expect("second validator roster table")
+            .insert(
+                "account_id".to_owned(),
+                toml::Value::String(replacement_account),
+            );
+        std::fs::write(
+            &fixture.roster,
+            toml::to_string_pretty(&spliced_roster).expect("encode spliced roster fixture"),
+        )
+        .expect("write spliced roster fixture");
+        let roster_error = run_fixture(
+            fixture.reviewed.clone(),
+            fixture.roster.clone(),
+            fixture.manifest.clone(),
+            fixture.pre_sign.clone(),
+            fixture.signed.clone(),
+            fixture.configs.clone(),
+            &fixture.signer,
+            fixture.expected_hash,
+        )
+        .expect_err("reject a payout-account splice in the public validator roster");
+        assert!(roster_error.to_string().contains("renderer transform"));
+        std::fs::write(&fixture.roster, original_roster).expect("restore roster fixture");
+
+        let original_manifest = std::fs::read(&fixture.manifest).expect("read bound fixture");
+        let mut spliced_manifest: norito::json::Value =
+            norito::json::from_slice(&original_manifest).expect("parse bound fixture");
+        spliced_manifest
+            .as_object_mut()
+            .expect("bound fixture object")
+            .get_mut("transactions")
+            .and_then(norito::json::Value::as_array_mut)
+            .expect("bound fixture transactions")
+            .push(norito::json::Value::Object(norito::json::native::Map::new()));
+        std::fs::write(
+            &fixture.manifest,
+            norito::json::to_vec_pretty(&spliced_manifest).expect("encode spliced bound fixture"),
+        )
+        .expect("write spliced bound fixture");
+        let bound_error = run_fixture(
+            fixture.reviewed.clone(),
+            fixture.roster.clone(),
+            fixture.manifest.clone(),
+            fixture.pre_sign.clone(),
+            fixture.signed.clone(),
+            fixture.configs.clone(),
+            &fixture.signer,
+            fixture.expected_hash,
+        )
+        .expect_err("reject signer-spliced pre-sign/bound transform");
+        assert!(bound_error.to_string().contains("staged-context transform"));
+        std::fs::write(&fixture.manifest, original_manifest).expect("restore bound fixture");
+
+        for config_index in 1..TAIRA_VALIDATOR_COUNT {
+            let config_path = &fixture.configs[config_index];
+            let original_config = std::fs::read_to_string(config_path).expect("read peer config");
+            let mut drifted_config = original_config
+                .parse::<toml::Table>()
+                .expect("parse peer config");
+            drifted_config.insert(
+                "pipeline".to_owned(),
+                toml::Value::Table(toml::Table::from_iter([(
+                    "amx_group_budget_ms".to_owned(),
+                    toml::Value::Integer(99_999),
+                )])),
+            );
+            std::fs::write(
+                config_path,
+                toml::to_string_pretty(&drifted_config).expect("render drifted peer config"),
+            )
+            .expect("write drifted peer config");
+            let context_error = run_fixture(
+                fixture.reviewed.clone(),
+                fixture.roster.clone(),
+                fixture.manifest.clone(),
+                fixture.pre_sign.clone(),
+                fixture.signed.clone(),
+                fixture.configs.clone(),
+                &fixture.signer,
+                fixture.expected_hash,
+            )
+            .expect_err("reject effective policy drift from signed context");
+            assert!(context_error.to_string().contains("context differs"));
+            std::fs::write(config_path, original_config).expect("restore peer config");
+        }
+
+        let mut mutated = std::fs::read(&fixture.signed).expect("read signed fixture");
+        mutated.push(0);
+        std::fs::write(&fixture.signed, mutated).expect("mutate signed fixture");
+        let _error = run_fixture(
+            fixture.reviewed,
+            fixture.roster,
+            fixture.manifest,
+            fixture.pre_sign,
+            fixture.signed,
+            fixture.configs,
+            &fixture.signer,
+            fixture.expected_hash,
+        )
+        .expect_err("reject a non-canonical signed-genesis mutation");
+    }
+}

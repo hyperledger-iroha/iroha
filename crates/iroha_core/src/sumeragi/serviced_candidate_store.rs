@@ -938,6 +938,23 @@ pub(crate) struct LeaderWireLifecycleStoreGate {
     max_frame_bytes: u64,
     state: Mutex<LeaderWireLifecycleState>,
 }
+/// Move-only proof that every physical ingress carrier supplied by one sealed
+/// fair queue was durably returned to selector-dormant ownership.
+///
+/// Exact gate and carrier equality is release-checked before this opaque proof
+/// is minted. It authorizes volatile release only after synchronous sidecar
+/// publication succeeds and is deliberately neither `Clone` nor `Copy`.
+#[must_use = "closed ingress retirement must authorize the volatile queue release"]
+pub(super) struct SealedLeaderWireIngressRetirementV1 {
+    _private: (),
+}
+impl SealedLeaderWireIngressRetirementV1 {
+    /// Consume the proof after the volatile queue and binding are gone.
+    pub(super) fn complete(self) {}
+    /// Drop the process-local proof at an injected process boundary.
+    #[cfg(test)]
+    pub(super) fn abandon_at_crash_cut(self) {}
+}
 /// Atomic per-height snapshot stored beside the safety WAL.
 #[derive(Debug)]
 pub(crate) struct ServicedCandidateStore {
@@ -1408,6 +1425,82 @@ impl LeaderWireLifecycleStoreGate {
             return Err(error);
         }
         Ok(())
+    }
+    /// Return every carrier still owned by a sealed fair queue to Dormant.
+    ///
+    /// The caller holds the fair-ingress service and state locks and supplies
+    /// its complete productive-carrier projection. Exact equality with the
+    /// durable Ingress set prevents a partial drain from orphaning either a
+    /// physical carrier or a sidecar owner. The returned move-only receipt is
+    /// minted only after the atomic replacement and directory sync complete.
+    pub(super) fn park_sealed_ingress(
+        self: &Arc<Self>,
+        carriers: BTreeMap<FairV2IngressLeaderWireSlot, FairV2IngressLeaderWireToken>,
+    ) -> Result<SealedLeaderWireIngressRetirementV1, String> {
+        if carriers.iter().any(|(slot, token)| {
+            slot != &token.slot
+                || !token.validate_exact(
+                    self.context_id,
+                    self.height,
+                    &self.roster,
+                    self.max_chunk_count,
+                )
+        }) {
+            return Err("sealed leader-wire ingress changed immutable geometry".to_owned());
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "leader-wire lifecycle store lock was poisoned".to_owned())?;
+        let durable_ingress = state
+            .records
+            .iter()
+            .filter_map(|(slot, record)| {
+                (record.status == LeaderWireLifecycleStatus::Ingress)
+                    .then(|| (slot.clone(), record.token.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        if durable_ingress != carriers
+            || carriers
+                .keys()
+                .any(|slot| state.replay_dormant.contains(slot))
+            || carriers.iter().any(|(slot, token)| {
+                state.records.get(slot).is_none_or(|record| {
+                    record.token != *token
+                        || record.status != LeaderWireLifecycleStatus::Ingress
+                        || record.runtime_owner.is_some()
+                        || record.terminal_evidence.is_some()
+                })
+            })
+        {
+            return Err(
+                "sealed leader-wire ingress disagreed with durable carrier ownership".to_owned(),
+            );
+        }
+        let previous = state.clone();
+        for (slot, token) in &carriers {
+            let record = state
+                .records
+                .get_mut(slot)
+                .expect("exact durable Ingress projection retains every supplied slot");
+            // The exact checks above deliberately remain hard release-mode
+            // checks. An Ingress row carrying downstream or terminal evidence
+            // is not a parkable physical owner.
+            debug_assert_eq!(record.token, *token);
+            debug_assert_eq!(record.status, LeaderWireLifecycleStatus::Ingress);
+            debug_assert!(record.runtime_owner.is_none());
+            debug_assert!(record.terminal_evidence.is_none());
+            record.status = LeaderWireLifecycleStatus::Dormant;
+            let inserted = state.replay_dormant.insert(slot.clone());
+            debug_assert!(inserted);
+        }
+        if !carriers.is_empty()
+            && let Err(error) = self.persist_locked(&state)
+        {
+            *state = previous;
+            return Err(error);
+        }
+        Ok(SealedLeaderWireIngressRetirementV1 { _private: () })
     }
     /// Atomically persist an Ingress owner before fair ingress returns Accepted.
     ///

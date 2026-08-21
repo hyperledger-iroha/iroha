@@ -489,7 +489,8 @@ fn pending_autonomous_lane_output(
 }
 
 #[test]
-fn applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only() {
+fn applied_height_handoff_retires_only_exact_same_finality_nonwinning_autonomous_outputs_atomically()
+ {
     let (base_service, validators) = fixture();
     let retired = crate::kura::tests::retired_autonomous_lane_attempt_fixture(&validators[0]);
     let (service, artifact, authority) =
@@ -845,6 +846,64 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
         "inspect rejected canonical body response",
     );
 }
+#[test]
+fn applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output() {
+    let lane_history = durable_lane_history_fixture();
+    let lane_kura = lane_history.kura;
+    let certificate = lane_history.certificate;
+    let lane_context = lane_history.context;
+    let lane_validators = lane_history.validators;
+    let parent_service =
+        service_for_history_context(Arc::clone(&lane_kura), lane_context, &lane_validators);
+    let (_, parent_artifact) = durable_finality_fixture(&parent_service, &lane_validators);
+    let mut service =
+        successor_service_for_history(Arc::clone(&lane_kura), &parent_artifact, &lane_validators);
+    let (receipt, applied_artifact) = durable_finality_fixture(&service, &lane_validators);
+    let target = service.context.roster[1].validator.clone();
+    let historical_output = BlockMessage::LaneBlockQc(certificate.commit_qc.clone());
+    install_exact_output_backpressure(&mut service);
+    service
+        .post_lane_block(target.clone(), historical_output.clone())
+        .expect("retain exact ordinary historical lane output");
+    let pending = service
+        .lock_pending_exact_output()
+        .expect("inspect historical lane certification claim");
+    assert_eq!(pending.fanouts.len(), 1);
+    assert!(matches!(
+        &pending.fanouts[0].rollover_claim,
+        ExactOutputRolloverClaim::HistoricalLaneCertification {
+            target: claimed_target,
+            source_height,
+            proposal_hash,
+            message_hash,
+            ..
+        } if claimed_target == &target
+            && *source_height == certificate.proposal.descriptor.proposal_height
+            && *proposal_hash == certificate.proposal.proposal_hash
+            && *message_hash == HashOf::new(&historical_output)
+    ));
+    drop(pending);
+    let lane_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
+        &applied_artifact,
+        Hash::new(b"unused ordinary historical lane witness"),
+    );
+    assert_eq!(
+        service
+            .handoff_applied_height_output_to_durable_reconstruction(
+                &receipt,
+                &applied_artifact,
+                &lane_authority,
+            )
+            .expect("ordinary historical output rereads its certificate and application receipt"),
+        1
+    );
+    assert!(
+        !service
+            .has_pending_exact_output()
+            .expect("inspect completed ordinary historical handoff")
+    );
+}
+
 #[test]
 fn applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate() {
     let lane_history = durable_lane_history_fixture();

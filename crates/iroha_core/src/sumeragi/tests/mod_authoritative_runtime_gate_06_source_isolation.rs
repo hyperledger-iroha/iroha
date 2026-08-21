@@ -29,16 +29,16 @@ fn fair_v2_ingress_wire_index_keeps_authenticated_origins_distinct() {
     let outsiders = validator_peers(2);
     let message = v2_message();
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             message.clone(),
-            Some(outsiders[0].clone()),
+            outsiders[0].clone(),
         )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             message,
-            Some(outsiders[1].clone()),
+            outsiders[1].clone(),
         )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -57,26 +57,29 @@ fn fair_v2_ingress_byte_quota_isolates_validator_sources() {
     assert_eq!(encoded_v2_len(&second), encoded_len);
     let source_capacity = encoded_len.checked_add(1).expect("ordinary byte partition");
     let ingress =
-        super::FairV2Ingress::new(12, source_capacity * 3, source_capacity, 0, encoded_len);
+        super::FairV2Ingress::new(12, source_capacity * 2, source_capacity, 0, encoded_len);
     ingress
         .configure_roster(validators.clone())
-        .expect("two validator and one anonymous byte partition fit exactly");
+        .expect("two validator byte partitions fit exactly");
     ingress.open().expect("open configured roster");
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(first, Some(validators[0].clone()),)),
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            first,
+            validators[0].clone(),
+        )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             second,
-            Some(validators[0].clone()),
+            validators[0].clone(),
         )),
         Err(super::FairV2IngressPushError::Full(_))
     ));
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             v2_message_with_bytes(2, 64),
-            Some(validators[1].clone()),
+            validators[1].clone(),
         )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));

@@ -6830,6 +6830,7 @@ mod tests {
         assert!(block_headers.windows(2).all(|wnd| wnd[0] >= wnd[1]));
         Ok(())
     }
+    include!("query/canonical_history_tests.rs");
     #[tokio::test]
     async fn find_blocks_and_headers_by_height() -> Result<()> {
         let state = state_with_test_blocks_and_transactions(10, 1, 1)?;
@@ -6874,27 +6875,6 @@ mod tests {
         )?
         .collect::<Vec<_>>();
         assert!(missing.is_empty());
-        Ok(())
-    }
-    #[tokio::test]
-    async fn find_block_header_by_hash() -> Result<()> {
-        let state = state_with_test_blocks_and_transactions(1, 1, 1)?;
-        let state_view = state.view();
-        let block = state_view
-            .all_blocks(nonzero!(1_usize))
-            .last()
-            .expect("state is empty");
-        let mut headers = FindBlockHeaders::new()
-            .execute(CompoundPredicate::PASS, &state_view)
-            .expect("Query execution should not fail");
-        let found = headers.any(|header| header.hash() == block.hash());
-        assert!(found, "Query should return the block header");
-        let unexpected_hash = HashOf::from_untyped_unchecked(Hash::new([42]));
-        let missing = FindBlockHeaders::new()
-            .execute(CompoundPredicate::PASS, &state_view)
-            .expect("Query execution should not fail")
-            .any(|header| header.hash() == unexpected_hash);
-        assert!(!missing, "Block header should not be found");
         Ok(())
     }
     #[tokio::test]

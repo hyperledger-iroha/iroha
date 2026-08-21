@@ -558,7 +558,7 @@ fn native_amx_prune_special_files_reject_bounded_payload_damage_without_unlinkin
 fn native_amx_prune_intent_v2_rejects_every_route_and_entry_geometry_mutation() {
     let temp_dir = TempDir::new().expect("Native prune semantic-matrix directory");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    config.roster_sidecar_retention =
+    config.lane_history_retention =
         NonZeroUsize::new(2).expect("two-pair Native prune retention");
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("initialize Native prune semantic-matrix Kura");
@@ -628,7 +628,7 @@ fn native_amx_prune_intent_v2_rejects_every_route_and_entry_geometry_mutation() 
     ));
     let mut mutation = base.clone();
     let max_entries =
-        Kura::native_amx_evidence_prune_intent_max_entries(config.roster_sidecar_retention)
+        Kura::native_amx_evidence_prune_intent_max_entries(config.lane_history_retention)
             .expect("derive Native prune semantic entry bound");
     let repeated = mutation.entries[0];
     mutation.entries.resize(
@@ -659,7 +659,7 @@ fn native_amx_prune_intent_v2_rejects_every_route_and_entry_geometry_mutation() 
 fn native_amx_prune_stable_and_temporary_conflict_preserves_both_and_all_evidence() {
     let temp_dir = TempDir::new().expect("Native prune stable/temp conflict directory");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    config.roster_sidecar_retention =
+    config.lane_history_retention =
         NonZeroUsize::new(2).expect("two-pair Native prune conflict retention");
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::new(&config, &lane_config)
@@ -702,7 +702,7 @@ fn native_amx_prune_stable_and_temporary_conflict_preserves_both_and_all_evidenc
 fn native_amx_prune_identical_stable_and_temporary_converge_idempotently() {
     let temp_dir = TempDir::new().expect("Native prune identical stable/temp directory");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    config.roster_sidecar_retention =
+    config.lane_history_retention =
         NonZeroUsize::new(1).expect("one-pair Native prune identical retention");
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::new(&config, &lane_config)
@@ -900,7 +900,7 @@ fn native_amx_prune_two_pair_partial_unlinks_recover_every_prefix_idempotently()
     for deleted_prefix in 0..=4 {
         let temp_dir = TempDir::new().expect("Native prune partial-prefix directory");
         let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        config.roster_sidecar_retention =
+        config.lane_history_retention =
             NonZeroUsize::new(2).expect("two-pair Native prune partial-prefix retention");
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) =
@@ -971,7 +971,7 @@ fn native_amx_prune_exact_object_removal_rejects_same_length_in_place_rewrites()
     for rewritten in ["first-target", "stable-intent"] {
         let temp_dir = TempDir::new().expect("Native prune in-place rewrite directory");
         let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        config.roster_sidecar_retention =
+        config.lane_history_retention =
             NonZeroUsize::new(1).expect("one-pair Native prune rewrite retention");
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
             .expect("initialize Native prune in-place rewrite Kura");
@@ -1132,7 +1132,7 @@ fn native_amx_configured_shared_two_family_budget_accepts_exact_boundaries_only(
     assert_eq!(
         kura.native_amx_evidence_prune_intent_max_bytes(),
         Kura::native_amx_evidence_prune_intent_max_bytes_for_retention(
-            config.roster_sidecar_retention,
+            config.lane_history_retention,
             V2_PENDING_CONTROL_SIDECAR_BYTES_MIN,
         )
         .expect("configured Native prune-intent budget")
@@ -1526,7 +1526,7 @@ fn native_amx_startup_retention_waits_for_complete_post_wsv_evidence() {
 fn native_amx_prepublication_retains_previous_pair_until_post_wsv_cleanup() {
     let temp_dir = TempDir::new().expect("prepublication retention Kura directory");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    config.roster_sidecar_retention =
+    config.lane_history_retention =
         NonZeroUsize::new(1).expect("one-record Native evidence retention");
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) =

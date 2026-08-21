@@ -165,24 +165,6 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
             errors,
         )
 
-    def test_prune_roster_generation_peak_edge_is_required(self) -> None:
-        mutated = self.model.replace(
-            '(Mode # "PrunePeakDropsRosterGeneration")',
-            "TRUE",
-            1,
-        )
-        self.assertNotEqual(mutated, self.model)
-        errors: list[str] = []
-        self.checker._validate_model_source(mutated, errors)
-        self.assertTrue(
-            any(
-                "AdmitPruneCapacityPeak" in error
-                and "PrunePeakDropsRosterGeneration" in error
-                for error in errors
-            ),
-            errors,
-        )
-
     def test_prune_reservation_envelope_peak_edge_is_required(self) -> None:
         mutated = self.model.replace(
             '(Mode # "PrunePeakDropsReservationEnvelope")',
@@ -366,13 +348,13 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
             "lane_history_compaction_recovery_before_capacity",
         )
 
-    def test_prune_peak_cannot_drop_commit_roster_generation(self) -> None:
+    def test_prune_peak_cannot_drop_pipeline_sidecar_rewrite(self) -> None:
         self.assert_source_mutation_rejected(
-            "crates/iroha_core/src/commit_roster_journal.rs",
-            "                self.generation_allocation_bytes\n"
-            "                    .checked_add(publication_peak)",
-            "                publication_peak.checked_add(0)",
-            "prune_roster_generation_peak_projection",
+            "crates/iroha_core/src/kura/prune_commit_merge_support.rs",
+            "        self.marker_stable_growth_bytes\n"
+            "            .checked_add(sidecar.sequential_peak_bytes)",
+            "        self.marker_stable_growth_bytes.checked_add(0)",
+            "prune_transaction_peak_projection",
         )
 
     def test_prune_peak_cannot_drop_reservation_envelope(self) -> None:
@@ -388,8 +370,8 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
         self.assert_source_mutation_rejected(
             "crates/iroha_core/src/kura.rs",
             "        let intent =\n"
-            "            self.seal_and_validate_canonical_prune_capacity_admission(KuraPruneIntentV2 {",
-            "        let intent = KuraPruneIntentV2 {",
+            "            self.seal_and_validate_canonical_prune_capacity_admission(KuraPruneIntentV3 {",
+            "        let intent = KuraPruneIntentV3 {",
             "prune_live_capacity_before_intent",
         )
 
@@ -400,33 +382,15 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
             "            kura.preflight_recovered_prune_capacity_before_mutation(intent)?;\n"
             "        }\n"
             "        kura.audit_retained_autonomous_lifecycle_cursor_generations()?;\n"
-            "\n"
             "        if !provisional_open {\n"
             "            kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;",
             "        kura.audit_retained_autonomous_lifecycle_cursor_generations()?;\n"
-            "\n"
             "        if !provisional_open {\n"
             "            kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;\n"
             "            if let Some(intent) = prune_intent.as_ref() {\n"
             "                kura.preflight_recovered_prune_capacity_before_mutation(intent)?;\n"
             "            }",
             "prune_startup_capacity_before_repair",
-        )
-
-    def test_prune_roster_mutation_cannot_bypass_authorized_projection(self) -> None:
-        self.assert_source_mutation_rejected(
-            "crates/iroha_core/src/kura/prune_recovery_capacity.rs",
-            ".truncate_to_height_with_projection(height, intent.capacity.roster)",
-            ".truncate_to_height(height)",
-            "prune_roster_authorized_mutation",
-        )
-
-    def test_prune_roster_publication_cannot_skip_generation_namespace_sync(self) -> None:
-        self.assert_source_mutation_rejected(
-            "crates/iroha_core/src/commit_roster_journal.rs",
-            "                sync_dir(&generations).map_err(|source| {",
-            "                acknowledge_generation_without_sync(&generations).map_err(|source| {",
-            "prune_roster_deterministic_publication",
         )
 
     def test_prune_recovery_split_cannot_lose_kura_include_owner(self) -> None:

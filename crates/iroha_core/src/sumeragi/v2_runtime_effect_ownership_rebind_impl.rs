@@ -52,6 +52,99 @@ impl RuntimeEffectOwnership {
             )
             .map_err(|_| "Sumeragi v2 exact effect rebind failed closed".to_owned())
     }
+    /// Bind a route-neutral semantic retry under the candidate's incumbent owner.
+    ///
+    /// Independent authenticated reducer turns can converge on the same local
+    /// candidate.  Their causal roots are intentionally different, while the
+    /// candidate kind and complete six-coordinate semantic statement are the
+    /// same.  The abstract `1 -> 1` transition must retain the first physical
+    /// owner rather than either replacing it or failing the whole height.
+    ///
+    /// This helper validates both exact bindings, the incoming concrete effect,
+    /// and equality of the complete candidate statement before copying only the
+    /// incoming macro-step positions onto the immutable incumbent owner.
+    pub(crate) fn adopt_incumbent_candidate_for_semantic_retry(
+        &self,
+        incoming: &Self,
+        effect: &AdapterEffect,
+    ) -> Result<Self, String> {
+        if !self.validate_bound_exact() || !incoming.validate_bound_exact() {
+            return Err(
+                "Sumeragi v2 semantic retry omitted an exact ownership binding".to_owned(),
+            );
+        }
+        let incumbent_binding = self
+            .binding
+            .as_ref()
+            .expect("validated bound ownership has one positional binding");
+        let incoming_binding = incoming
+            .binding
+            .as_ref()
+            .expect("validated bound ownership has one positional binding");
+        if incumbent_binding.candidate_kind == RUNTIME_CANDIDATE_KIND_NONE
+            || incumbent_binding.candidate_kind != incoming_binding.candidate_kind
+            || incumbent_binding.candidate_statement != incoming_binding.candidate_statement
+            || incumbent_binding.candidate_semantic_identity
+                != incoming_binding.candidate_semantic_identity
+        {
+            return Err(
+                "Sumeragi v2 semantic retry changed its candidate kind or statement".to_owned(),
+            );
+        }
+        let effect_kind = production_adapter_effect_kind(effect);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(effect),
+        );
+        if incoming_binding.effect_kind != effect_kind
+            || incoming_binding.effect_identity != effect_identity
+        {
+            return Err("Sumeragi v2 semantic retry changed its exact incoming effect".to_owned());
+        }
+        let statement = incoming_binding.candidate_statement.ok_or_else(|| {
+            "Sumeragi v2 semantic retry omitted its candidate statement".to_owned()
+        })?;
+        let candidate = production_adapter_effect_candidate_binding(effect, Some(&statement))?
+            .ok_or_else(|| {
+                "Sumeragi v2 semantic retry rebound to a non-candidate effect".to_owned()
+            })?;
+        let semantic_identity = runtime_effect_candidate_semantic_hash(
+            candidate.kind,
+            &candidate.semantic_identity,
+        );
+        if candidate.kind != incumbent_binding.candidate_kind
+            || candidate.statement != Some(statement)
+            || Some(semantic_identity) != incumbent_binding.candidate_semantic_identity
+        {
+            return Err(
+                "Sumeragi v2 semantic retry disagreed with its retained candidate".to_owned(),
+            );
+        }
+        let ownership = match self.causality {
+            RuntimeEffectCausality::Inherit => {
+                RuntimeEffectOwnership::inherited(self.owner.clone())
+            }
+            RuntimeEffectCausality::Fresh(kind) => {
+                RuntimeEffectOwnership::fresh(self.owner.clone(), kind)
+            }
+        };
+        let parent = matches!(ownership.causality, RuntimeEffectCausality::Inherit)
+            .then(|| ownership.owner.clone());
+        ownership
+            .bind_runtime_effect(
+                parent.as_ref(),
+                effect_kind,
+                &production_adapter_effect_semantic_identity(effect),
+                Some(&candidate),
+                incoming_binding.effect_position,
+                incoming_binding.effect_count,
+                incoming_binding.candidate_position,
+                incoming_binding.candidate_count,
+            )
+            .map_err(|_| {
+                "Sumeragi v2 semantic retry could not retain its incumbent owner".to_owned()
+            })
+    }
     /// Bind a later StoreBody or ValidateBody carrier to the one physical
     /// asynchronous task already serving its exact body stage.
     ///

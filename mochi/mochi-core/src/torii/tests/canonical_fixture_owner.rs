@@ -1,10 +1,9 @@
+use super::*;
 use std::{
     env,
     fs::{self, OpenOptions},
-    io::Write as _,
     path::{Path, PathBuf},
 };
-use super::*;
 const STAGE_ENV: &str = "IROHA_MOCHI_CANONICAL_FIXTURE_STAGE";
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

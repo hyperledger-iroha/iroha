@@ -233,14 +233,9 @@ fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
         .expect("mint independently admitted retry carrier");
     let retry = bind_fetch(&ordinary_fetch, retry_ordinal);
     assert_ne!(retry.owner(), incumbent.owner());
-    let (retry, retry_relation) = incumbent
-        .adopt_incumbent_fetch_for_retry_or_authority(&retry, &ordinary_fetch)
-        .expect("the exact retry adopts the incumbent physical Fetch owner");
-    assert_eq!(retry_relation, RuntimeFetchAuthorityRelation::Same);
-    assert_eq!(retry.owner(), incumbent.owner());
     let coalesced_retry = runtime
         .reserve_body_available_with_owner(tag, manifest.clone(), &retry)
-        .expect("an exact late Fetch retry keeps the queued incumbent");
+        .expect("a raw foreign-owner exact Fetch retry keeps the queued incumbent");
     assert!(!coalesced_retry.owns_new_slot());
     assert_eq!(
         coalesced_retry.lifecycle_owner().as_ref(),
@@ -268,14 +263,9 @@ fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
         .expect("mint independently admitted certified carrier");
     let upgrade = bind_fetch(&certified_fetch, upgrade_ordinal);
     assert_ne!(upgrade.owner(), incumbent.owner());
-    let (upgrade, upgrade_relation) = incumbent
-        .adopt_incumbent_fetch_for_retry_or_authority(&upgrade, &certified_fetch)
-        .expect("the certified retry upgrades the incumbent physical Fetch owner");
-    assert_eq!(upgrade_relation, RuntimeFetchAuthorityRelation::Upgrade);
-    assert_eq!(upgrade.owner(), incumbent.owner());
     let coalesced_upgrade = runtime
         .reserve_body_available_with_owner(tag, manifest.clone(), &upgrade)
-        .expect("a late certified Fetch keeps the exact queued completion owner");
+        .expect("a raw certified Fetch upgrades the exact queued completion owner");
     assert!(!coalesced_upgrade.owns_new_slot());
     assert_eq!(
         coalesced_upgrade.lifecycle_owner().as_ref(),
@@ -325,6 +315,102 @@ fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
         runtime.ingress.commands[0].candidate_semantic_statement,
         Some(upgraded_statement),
         "conflicting authority must not rewrite the retained statement",
+    );
+    assert!(runtime.fail_closed);
+}
+#[test]
+fn foreign_stale_store_authority_cannot_take_a_queued_terminal() {
+    let directory = TempDir::new().expect("temporary stale-store owner directory");
+    let (mut runtime, context, keys) =
+        authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+    let tag = runtime.round_tag();
+    let manifest = runtime_manifest(&context, 0xAC);
+    let store_effect = AdapterEffect::StoreBody {
+        tag,
+        round: manifest.round,
+        subject: manifest.subject,
+    };
+    let ordinary_ordinal = runtime
+        .ingress
+        .mint_non_fifo_lifecycle_ordinal()
+        .expect("mint the foreign ordinary Store lifecycle");
+    let ordinary_store = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&store_effect),
+        vec![RuntimeEffectOwnership::fresh_for_test(
+            tag,
+            ordinary_ordinal,
+        )],
+    )
+    .expect("bind a foreign ordinary Store carrier")
+    .pop()
+    .expect("one ordinary Store owner");
+    let mut commit = signed_runtime_quorum_certificate(&context, &keys, 0xAD);
+    commit.phase = wire::GlobalPhase::Commit;
+    commit.round = manifest.round;
+    commit.proposal_round = manifest.round;
+    commit.subject = manifest.subject;
+    let certified_fetch = AdapterEffect::FetchBody {
+        tag,
+        round: manifest.round,
+        subject: manifest.subject,
+        manifest: Some(manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: Some(commit),
+    };
+    let certified_ordinal = runtime
+        .ingress
+        .mint_non_fifo_lifecycle_ordinal()
+        .expect("mint the incumbent Commit Fetch lifecycle");
+    let certified_fetch_owner = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&certified_fetch),
+        vec![RuntimeEffectOwnership::fresh_for_test(
+            tag,
+            certified_ordinal,
+        )],
+    )
+    .expect("bind the incumbent Commit Fetch carrier")
+    .pop()
+    .expect("one certified Fetch owner");
+    let incumbent_store = certified_fetch_owner
+        .rebind_as_inherited_adapter_effect(&store_effect)
+        .expect("Commit Fetch authorizes the exact Store terminal");
+    assert_ne!(ordinary_store.owner(), incumbent_store.owner());
+    assert_eq!(
+        incumbent_store
+            .candidate_semantic_statement()
+            .zip(ordinary_store.candidate_semantic_statement())
+            .and_then(|(incumbent, incoming)| incumbent.fetch_authority_relation_to(incoming)),
+        Some(RuntimeFetchAuthorityRelation::Stale),
+        "the foreign ordinary Store must be strictly weaker than the retained Commit authority"
+    );
+    let durable = DurableBodyReceipt::for_test(
+        context.id(),
+        manifest.round,
+        manifest.subject,
+        HashOf::new(&manifest),
+    );
+    stage_owned_completion_for_queue_test(
+        &mut runtime,
+        tag,
+        AdapterCommand::BodyStored {
+            round: manifest.round,
+            subject: manifest.subject,
+            receipt: durable,
+        },
+        &incumbent_store,
+    );
+    let retained_statement = runtime.ingress.commands[0].candidate_semantic_statement;
+    assert!(
+        runtime
+            .body_pipeline_candidate_has_terminal(&store_effect, &ordinary_store)
+            .is_err(),
+        "a foreign stale Store authority must not take the retained terminal"
+    );
+    assert_eq!(runtime.queued_commands(), 1);
+    assert_eq!(
+        runtime.ingress.commands[0].candidate_semantic_statement,
+        retained_statement,
+        "rejected stale authority must not rewrite the terminal statement"
     );
     assert!(runtime.fail_closed);
 }
@@ -1288,125 +1374,6 @@ fn periodic_delay_is_bounded_and_absolute_timeout_has_priority() {
         runtime.driver.retransmits,
         vec![initial],
         "the absolute deadline cannot replenish a periodic owner ahead of timeout"
-    );
-}
-#[test]
-fn due_timeout_becomes_older_than_replenished_exact_serve_tickets() {
-    let start = Instant::now();
-    let initial = tag(0);
-    let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
-    let mut runtime = SerializedV2Runtime::with_driver_and_lifecycle_ordinals(
-        FakeDriver::new(initial),
-        start,
-        Duration::from_secs(10),
-        RuntimeQueueConfig::new(5, 1, 1),
-        Vec::new(),
-        lifecycle_ordinals.clone(),
-    )
-    .expect("construct runtime with the shared Serve source")
-    .0;
-    runtime
-        .arm_live_clocks(start)
-        .expect("arm shared-source runtime");
-    let first_barrier = lifecycle_ordinals
-        .reserve_one()
-        .expect("reserve first exact Serve occurrence");
-    assert!(
-        !runtime
-            .older_lifecycle_predates_exact_serve(start + Duration::from_secs(10), first_barrier,)
-            .expect("first barrier freezes the due timeout"),
-        "a clock first frozen behind this ticket cannot overtake it"
-    );
-    let second_barrier = lifecycle_ordinals
-        .reserve_one()
-        .expect("reserve a distinct retransmission occurrence");
-    assert!(
-        runtime
-            .older_lifecycle_predates_exact_serve(start + Duration::from_secs(10), second_barrier,)
-            .expect("replenished barrier validates against the same source"),
-        "the frozen timeout must predate every later exact ticket"
-    );
-    runtime
-        .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(10))
-        .expect("one bounded predecessor episode dispatches the timeout");
-    assert_eq!(runtime.driver.timeouts, vec![initial]);
-}
-#[test]
-fn restored_serve_high_watermark_precedes_startup_runtime_owner() {
-    let start = Instant::now();
-    let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(41);
-    let (mut runtime, startup) = SerializedV2Runtime::with_driver_and_lifecycle_ordinals(
-        FakeDriver::new(tag(0)),
-        start,
-        Duration::from_secs(10),
-        RuntimeQueueConfig::new(5, 1, 1),
-        vec![FakeEffect::other()],
-        lifecycle_ordinals.clone(),
-    )
-    .expect("construct restarted runtime after durable Serve waiter");
-    let ownership = runtime
-        .take_effect_ownership(startup.len())
-        .expect("startup owner retains exact lifecycle sidecar");
-    assert_eq!(ownership.len(), 1);
-    assert_eq!(ownership[0].owner().lifecycle_ordinal(), 42);
-    assert_eq!(
-        lifecycle_ordinals
-            .reserve_one()
-            .expect("later exact Serve ticket follows startup recovery"),
-        43
-    );
-}
-#[test]
-fn full_runtime_churn_cannot_cross_an_exact_serve_ordinal() {
-    let start = Instant::now();
-    let initial = tag(0);
-    let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
-    let mut runtime = SerializedV2Runtime::with_driver_and_lifecycle_ordinals(
-        FakeDriver::new(initial),
-        start,
-        Duration::from_secs(10),
-        RuntimeQueueConfig::new(6, 1, 1),
-        Vec::new(),
-        lifecycle_ordinals.clone(),
-    )
-    .expect("construct runtime with shared admission order")
-    .0;
-    runtime
-        .arm_live_clocks(start)
-        .expect("arm shared-source runtime");
-    enqueue_fake(
-        &mut runtime,
-        initial,
-        CommandClass::Normal,
-        FakeCommand::record(1),
-    )
-    .expect("admit the frozen predecessor");
-    let barrier = lifecycle_ordinals
-        .reserve_one()
-        .expect("reserve exact Serve position");
-    for value in 2..=3 {
-        enqueue_fake(
-            &mut runtime,
-            initial,
-            CommandClass::Normal,
-            FakeCommand::record(value),
-        )
-        .expect("fill only the later normal prefix");
-    }
-    assert!(
-        runtime
-            .older_lifecycle_predates_exact_serve(start, barrier)
-            .expect("compare the full runtime prefix")
-    );
-    runtime
-        .step_and_take_scheduler_ownership_for_test(start)
-        .expect("one bounded predecessor transition runs");
-    assert_eq!(runtime.driver.delivered, vec![(initial, 1)]);
-    assert_eq!(runtime.queued_commands(), 2);
-    assert!(
-        !runtime
-            .older_lifecycle_predates_exact_serve(start, barrier)
-            .expect("later churn remains behind the exact ticket")
     );
 }
 #[test]

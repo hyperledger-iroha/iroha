@@ -7995,10 +7995,16 @@ struct ServiceConfigSetPayload {
     config_name: String,
     value_json: Json,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedServiceConfigSetRequest {
-    payload: ServiceConfigSetPayload,
-    provenance: ManifestProvenance,
+macro_rules! signed_request_types {
+    ($($request:ident => $payload:ident;)+) => {
+        $(
+            #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+            struct $request {
+                payload: $payload,
+                provenance: ManifestProvenance,
+            }
+        )+
+    };
 }
 #[derive(
     Clone,
@@ -8011,11 +8017,6 @@ struct SignedServiceConfigSetRequest {
 struct ServiceConfigDeletePayload {
     service_name: String,
     config_name: String,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedServiceConfigDeleteRequest {
-    payload: ServiceConfigDeletePayload,
-    provenance: ManifestProvenance,
 }
 #[derive(
     Clone,
@@ -8030,11 +8031,6 @@ struct ServiceSecretSetPayload {
     secret_name: String,
     secret: SecretEnvelopeV1,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedServiceSecretSetRequest {
-    payload: ServiceSecretSetPayload,
-    provenance: ManifestProvenance,
-}
 #[derive(
     Clone,
     Debug,
@@ -8046,11 +8042,6 @@ struct SignedServiceSecretSetRequest {
 struct ServiceSecretDeletePayload {
     service_name: String,
     secret_name: String,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedServiceSecretDeleteRequest {
-    payload: ServiceSecretDeletePayload,
-    provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedBundleRequest {
@@ -8083,11 +8074,6 @@ struct RollbackPayload {
     #[norito(default)]
     target_version: Option<String>,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedRollbackRequest {
-    payload: RollbackPayload,
-    provenance: ManifestProvenance,
-}
 #[derive(
     Clone,
     Debug,
@@ -8104,11 +8090,6 @@ struct RolloutAdvancePayload {
     promote_to_percent: Option<u8>,
     governance_tx_hash: Hash,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedRolloutAdvanceRequest {
-    payload: RolloutAdvancePayload,
-    provenance: ManifestProvenance,
-}
 #[derive(
     Clone,
     Debug,
@@ -8123,11 +8104,6 @@ struct AgentDeployPayload {
     #[norito(default)]
     autonomy_budget_units: Option<u64>,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedAgentDeployRequest {
-    payload: AgentDeployPayload,
-    provenance: ManifestProvenance,
-}
 #[derive(
     Clone,
     Debug,
@@ -8139,11 +8115,6 @@ struct SignedAgentDeployRequest {
 struct AgentLeaseRenewPayload {
     apartment_name: String,
     lease_ticks: u64,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedAgentLeaseRenewRequest {
-    payload: AgentLeaseRenewPayload,
-    provenance: ManifestProvenance,
 }
 #[derive(
     Clone,
@@ -8199,11 +8170,6 @@ struct HfLeaseLeavePayload {
     #[norito(skip_serializing_if = "Option::is_none")]
     apartment_name: Option<String>,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedHfLeaseLeaveRequest {
-    payload: HfLeaseLeavePayload,
-    provenance: ManifestProvenance,
-}
 #[derive(
     Clone,
     Debug,
@@ -8247,11 +8213,6 @@ struct SignedHfLeaseRenewRequest {
 struct ModelHostAdvertisePayload {
     capability: SoraModelHostCapabilityRecordV1,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedModelHostAdvertiseRequest {
-    payload: ModelHostAdvertisePayload,
-    provenance: ManifestProvenance,
-}
 #[derive(
     Clone,
     Debug,
@@ -8264,11 +8225,6 @@ struct ModelHostHeartbeatPayload {
     validator_account_id: AccountId,
     heartbeat_expires_at_ms: u64,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedModelHostHeartbeatRequest {
-    payload: ModelHostHeartbeatPayload,
-    provenance: ManifestProvenance,
-}
 #[derive(
     Clone,
     Debug,
@@ -8279,11 +8235,6 @@ struct SignedModelHostHeartbeatRequest {
 )]
 struct ModelHostWithdrawPayload {
     validator_account_id: AccountId,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedModelHostWithdrawRequest {
-    payload: ModelHostWithdrawPayload,
-    provenance: ManifestProvenance,
 }
 #[derive(
     Clone,
@@ -8296,11 +8247,6 @@ struct SignedModelHostWithdrawRequest {
 struct AgentRestartPayload {
     apartment_name: String,
     reason: String,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedAgentRestartRequest {
-    payload: AgentRestartPayload,
-    provenance: ManifestProvenance,
 }
 #[derive(
     Clone,
@@ -8317,11 +8263,6 @@ struct AgentPolicyRevokePayload {
     #[norito(skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedAgentPolicyRevokeRequest {
-    payload: AgentPolicyRevokePayload,
-    provenance: ManifestProvenance,
-}
 #[derive(
     Clone,
     Debug,
@@ -8335,11 +8276,6 @@ struct AgentWalletSpendPayload {
     asset_definition: String,
     amount: Quantity,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedAgentWalletSpendRequest {
-    payload: AgentWalletSpendPayload,
-    provenance: ManifestProvenance,
-}
 #[derive(
     Clone,
     Debug,
@@ -8351,11 +8287,6 @@ struct SignedAgentWalletSpendRequest {
 struct AgentWalletApprovePayload {
     apartment_name: String,
     request_id: String,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedAgentWalletApproveRequest {
-    payload: AgentWalletApprovePayload,
-    provenance: ManifestProvenance,
 }
 #[derive(
     Clone,
@@ -8371,11 +8302,6 @@ struct AgentMessageSendPayload {
     channel: String,
     payload: String,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedAgentMessageSendRequest {
-    payload: AgentMessageSendPayload,
-    provenance: ManifestProvenance,
-}
 #[derive(
     Clone,
     Debug,
@@ -8387,11 +8313,6 @@ struct SignedAgentMessageSendRequest {
 struct AgentMessageAckPayload {
     apartment_name: String,
     message_id: String,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedAgentMessageAckRequest {
-    payload: AgentMessageAckPayload,
-    provenance: ManifestProvenance,
 }
 #[derive(
     Clone,
@@ -8407,11 +8328,6 @@ struct AgentArtifactAllowPayload {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     provenance_hash: Option<String>,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedAgentArtifactAllowRequest {
-    payload: AgentArtifactAllowPayload,
-    provenance: ManifestProvenance,
 }
 #[derive(
     Clone,
@@ -8432,11 +8348,6 @@ struct AgentAutonomyRunPayload {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     workflow_input_json: Option<String>,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedAgentAutonomyRunRequest {
-    payload: AgentAutonomyRunPayload,
-    provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AgentAutonomyFinalizeRequest {
@@ -8463,11 +8374,6 @@ struct TrainingJobStartPayload {
     compute_budget_units: u64,
     storage_budget_bytes: u64,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedTrainingJobStartRequest {
-    payload: TrainingJobStartPayload,
-    provenance: ManifestProvenance,
-}
 #[derive(
     Clone,
     Debug,
@@ -8483,11 +8389,6 @@ struct TrainingJobCheckpointPayload {
     checkpoint_size_bytes: u64,
     metrics_hash: Hash,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedTrainingJobCheckpointRequest {
-    payload: TrainingJobCheckpointPayload,
-    provenance: ManifestProvenance,
-}
 #[derive(
     Clone,
     Debug,
@@ -8500,11 +8401,6 @@ struct TrainingJobRetryPayload {
     service_name: String,
     job_id: String,
     reason: String,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedTrainingJobRetryRequest {
-    payload: TrainingJobRetryPayload,
-    provenance: ManifestProvenance,
 }
 #[derive(
     Clone,
@@ -8523,11 +8419,6 @@ struct ModelArtifactRegisterPayload {
     training_config_hash: Hash,
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedModelArtifactRegisterRequest {
-    payload: ModelArtifactRegisterPayload,
-    provenance: ManifestProvenance,
 }
 #[derive(
     Clone,
@@ -8551,11 +8442,6 @@ struct ModelWeightRegisterPayload {
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedModelWeightRegisterRequest {
-    payload: ModelWeightRegisterPayload,
-    provenance: ManifestProvenance,
-}
 #[derive(
     Clone,
     Debug,
@@ -8571,11 +8457,6 @@ struct ModelWeightPromotePayload {
     gate_approved: bool,
     gate_report_hash: Hash,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedModelWeightPromoteRequest {
-    payload: ModelWeightPromotePayload,
-    provenance: ManifestProvenance,
-}
 #[derive(
     Clone,
     Debug,
@@ -8589,11 +8470,6 @@ struct ModelWeightRollbackPayload {
     model_name: String,
     target_version: String,
     reason: String,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedModelWeightRollbackRequest {
-    payload: ModelWeightRollbackPayload,
-    provenance: ManifestProvenance,
 }
 #[derive(
     Clone,
@@ -8639,6 +8515,35 @@ struct SignedUploadedModelRegisterRequest {
     payload: UploadedModelRegisterPayload,
     bundle_provenance: ManifestProvenance,
     finalize_provenance: ManifestProvenance,
+}
+signed_request_types! {
+    SignedServiceConfigSetRequest => ServiceConfigSetPayload;
+    SignedServiceConfigDeleteRequest => ServiceConfigDeletePayload;
+    SignedServiceSecretSetRequest => ServiceSecretSetPayload;
+    SignedServiceSecretDeleteRequest => ServiceSecretDeletePayload;
+    SignedRollbackRequest => RollbackPayload;
+    SignedRolloutAdvanceRequest => RolloutAdvancePayload;
+    SignedAgentDeployRequest => AgentDeployPayload;
+    SignedAgentLeaseRenewRequest => AgentLeaseRenewPayload;
+    SignedHfLeaseLeaveRequest => HfLeaseLeavePayload;
+    SignedModelHostAdvertiseRequest => ModelHostAdvertisePayload;
+    SignedModelHostHeartbeatRequest => ModelHostHeartbeatPayload;
+    SignedModelHostWithdrawRequest => ModelHostWithdrawPayload;
+    SignedAgentRestartRequest => AgentRestartPayload;
+    SignedAgentPolicyRevokeRequest => AgentPolicyRevokePayload;
+    SignedAgentWalletSpendRequest => AgentWalletSpendPayload;
+    SignedAgentWalletApproveRequest => AgentWalletApprovePayload;
+    SignedAgentMessageSendRequest => AgentMessageSendPayload;
+    SignedAgentMessageAckRequest => AgentMessageAckPayload;
+    SignedAgentArtifactAllowRequest => AgentArtifactAllowPayload;
+    SignedAgentAutonomyRunRequest => AgentAutonomyRunPayload;
+    SignedTrainingJobStartRequest => TrainingJobStartPayload;
+    SignedTrainingJobCheckpointRequest => TrainingJobCheckpointPayload;
+    SignedTrainingJobRetryRequest => TrainingJobRetryPayload;
+    SignedModelArtifactRegisterRequest => ModelArtifactRegisterPayload;
+    SignedModelWeightRegisterRequest => ModelWeightRegisterPayload;
+    SignedModelWeightPromoteRequest => ModelWeightPromotePayload;
+    SignedModelWeightRollbackRequest => ModelWeightRollbackPayload;
 }
 struct SoracloudTempDir {
     path: PathBuf,
@@ -15938,34 +15843,56 @@ mod tests {
         fs::create_dir_all(&path).expect("create temp dir");
         path
     }
-    fn service_scaffold_args(
-        output_dir: PathBuf,
+    fn named_service_fixture(
+        temp_name: &str,
         service_name: &str,
         template: InitTemplate,
-    ) -> InitArgs {
-        InitArgs {
-            output_dir,
+    ) -> (PathBuf, InitOutput) {
+        let dir = temp_dir(temp_name);
+        let expectation = format!("{} init should succeed", template.as_str());
+        let output = InitArgs {
+            output_dir: dir.clone(),
             service_name: service_name.to_owned(),
             service_version: "1.0.0".to_owned(),
             template,
             overwrite: false,
         }
+        .run()
+        .expect(expectation);
+        (dir, output)
     }
-    fn app_scaffold_args(
-        output_dir: PathBuf,
-        app_name: &str,
-        template: AppInitTemplate,
-    ) -> AppInitArgs {
-        AppInitArgs {
-            output_dir,
-            app_name: app_name.to_owned(),
+    fn service_fixture(temp_name: &str, template: InitTemplate) -> (PathBuf, InitOutput) {
+        let service_name = match template {
+            InitTemplate::Baseline | InitTemplate::HttpService => "echo_console",
+            InitTemplate::Site => "docs_portal",
+            InitTemplate::Webapp => "agent_console",
+            InitTemplate::PiiApp => "clinic_console",
+            InitTemplate::HayahiApp => "hayahi_api",
+        };
+        named_service_fixture(temp_name, service_name, template)
+    }
+    fn app_fixture(temp_name: &str, template: AppInitTemplate) -> (PathBuf, AppInitOutput) {
+        let dir = temp_dir(temp_name);
+        let expectation = format!("{} init should succeed", template.as_str());
+        let output = AppInitArgs {
+            output_dir: dir.clone(),
+            app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template,
+            existing_repo: false,
             public_host: None,
             static_site_dist_dir: None,
-            existing_repo: false,
             overwrite: false,
         }
+        .run()
+        .expect(expectation);
+        (dir, output)
+    }
+    fn single_api_fixture(temp_name: &str) -> (PathBuf, AppInitOutput) {
+        app_fixture(temp_name, AppInitTemplate::SingleApi)
+    }
+    fn split_app_fixture(temp_name: &str) -> (PathBuf, AppInitOutput) {
+        app_fixture(temp_name, AppInitTemplate::SplitApp)
     }
     fn assert_request_has_no_inline_signing_fields(request: &impl JsonSerialize) {
         let Value::Object(body) =
@@ -15979,6 +15906,17 @@ mod tests {
                 "Soracloud request serialized retired field `{field}`"
             );
         }
+    }
+    fn assert_signed_request_signature(
+        request: &impl JsonSerialize,
+        provenance: &ManifestProvenance,
+        payload: &[u8],
+    ) {
+        provenance
+            .signature
+            .verify(&provenance.signer, payload)
+            .expect("signature should verify");
+        assert_request_has_no_inline_signing_fields(request);
     }
     #[test]
     fn template_renderer_is_single_pass_for_adversarial_substitutions() {
@@ -17306,6 +17244,73 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    fn run_generated_auth_harness(
+        dir_name: &str,
+        template: InitTemplate,
+        static_markers: &[&str],
+        harness_name: &str,
+        harness_index: usize,
+        with_state_file: bool,
+    ) {
+        let (service_name, server_path) = match template {
+            InitTemplate::Webapp => ("agent_console", "webapp/api/server.mjs"),
+            InitTemplate::PiiApp => ("clinic_console", "pii-app/api/server.mjs"),
+            _ => panic!("generated auth harness requires a webapp or pii-app template"),
+        };
+        let (dir, _) = named_service_fixture(dir_name, service_name, template);
+        let server_path = dir.join(server_path);
+        if !node_available() {
+            eprintln!("node unavailable; validating static auth markers in scaffold");
+            let api = fs::read_to_string(&server_path).expect("read generated auth API");
+            for marker in static_markers {
+                assert!(
+                    api.contains(marker),
+                    "generated auth API missing marker: {marker}"
+                );
+            }
+            return;
+        }
+        let harness_path = dir.join(harness_name);
+        let mut script = TEST_HARNESSES_V1[harness_index].to_owned();
+        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
+        if with_state_file {
+            script = script.replace(
+                "__STATE_FILE__",
+                &js_string_literal(&dir.join(".shared_auth_state.json")),
+            );
+        }
+        fs::write(&harness_path, script).expect("write node harness");
+        run_node_harness(&harness_path);
+    }
+    macro_rules! generated_auth_harness_test {
+        ($name:ident, $dir:literal, $template:expr, $markers:expr, $harness:literal, $index:literal, $with_state:literal) => {
+            #[test]
+            fn $name() {
+                run_generated_auth_harness(
+                    $dir,
+                    $template,
+                    $markers,
+                    $harness,
+                    $index,
+                    $with_state,
+                );
+            }
+        };
+    }
+    macro_rules! pii_startup_failure_test {
+        ($name:ident, $case:literal, $env:expr, $expected:literal, $markers:expr) => {
+            #[test]
+            fn $name() {
+                assert_generated_pii_app_startup_import_fails(
+                    concat!("pii_auth_", $case),
+                    concat!("pii_auth_", $case, "_fail.mjs"),
+                    $env,
+                    $expected,
+                    $markers,
+                );
+            }
+        };
+    }
     fn assert_generated_pii_app_startup_import_fails(
         dir_name: &str,
         harness_name: &str,
@@ -17313,10 +17318,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         expected_error: &str,
         static_markers: &[&str],
     ) {
-        let dir = temp_dir(dir_name);
-        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
-            .run()
-            .expect("pii-app init should succeed");
+        let (dir, _) = service_fixture(dir_name, InitTemplate::PiiApp);
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -17396,10 +17398,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         setup_before_import: &str,
         test_body: &str,
     ) {
-        let dir = temp_dir(dir_name);
-        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
-            .run()
-            .expect("pii-app init should succeed");
+        let (dir, _) = service_fixture(dir_name, InitTemplate::PiiApp);
         let server_path = dir.join("pii-app/api/server.mjs");
         let api = fs::read_to_string(&server_path).expect("read pii api");
         for marker in static_markers {
@@ -17794,10 +17793,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn status_args_can_resolve_service_filter_from_manifest_pair() {
-        let dir = temp_dir("status_service_filter_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture(
+            "status_service_filter_from_manifest_pair",
+            InitTemplate::HttpService,
+        );
         let status_payload =
             mock_control_plane_status_payload(&["echo_console", "unrelated_service"]);
         let server = MockHttpServer::start(BTreeMap::from([(
@@ -17853,10 +17852,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn status_args_reject_conflicting_service_name_against_manifest_pair() {
-        let dir = temp_dir("status_service_name_manifest_mismatch");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture(
+            "status_service_name_manifest_mismatch",
+            InitTemplate::HttpService,
+        );
         let server = MockHttpServer::start(BTreeMap::new());
         let error = StatusArgs {
             service_name: Some("wrong_name".to_owned()),
@@ -17890,10 +17889,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn config_status_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("config_status_service_filter_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture(
+            "config_status_service_filter_from_manifest_pair",
+            InitTemplate::HttpService,
+        );
         let response = norito::json!({
             "service_name": "echo_console",
             "configs": [
@@ -17959,10 +17958,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn secret_status_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("secret_status_service_filter_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture(
+            "secret_status_service_filter_from_manifest_pair",
+            InitTemplate::HttpService,
+        );
         let response = norito::json!({
             "service_name": "echo_console",
             "secrets": [
@@ -18027,10 +18026,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn rollback_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("rollback_service_name_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture(
+            "rollback_service_name_from_manifest_pair",
+            InitTemplate::HttpService,
+        );
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let rollback_response = norito::json!({ "tx_instructions": [] });
         let server = MockHttpServer::start(BTreeMap::from([
@@ -18105,10 +18104,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn rollout_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("rollout_service_name_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture(
+            "rollout_service_name_from_manifest_pair",
+            InitTemplate::HttpService,
+        );
         let status_payload = norito::json!({
             "schema_version": 1,
             "control_plane": {
@@ -18211,10 +18210,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn hf_deploy_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("hf_deploy_service_name_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture(
+            "hf_deploy_service_name_from_manifest_pair",
+            InitTemplate::HttpService,
+        );
         let key_pair = soracloud_fixture_key_pair(0x16);
         let authority = AccountId::new(key_pair.public_key().clone());
         let authority_id = authority.to_string();
@@ -18299,10 +18298,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn hf_status_args_can_attach_service_plan_from_manifest_pair() {
-        let dir = temp_dir("hf_status_service_plan_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture(
+            "hf_status_service_plan_from_manifest_pair",
+            InitTemplate::HttpService,
+        );
         let status_payload = norito::json!({
             "repo_id": "openai/gpt-oss",
             "storage_class": "Warm",
@@ -18363,10 +18362,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn hf_lease_leave_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("hf_lease_leave_service_name_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture(
+            "hf_lease_leave_service_name_from_manifest_pair",
+            InitTemplate::HttpService,
+        );
         let key_pair = soracloud_fixture_key_pair(0x17);
         let authority = AccountId::new(key_pair.public_key().clone());
         let authority_id = authority.to_string();
@@ -18439,10 +18438,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn hf_lease_renew_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("hf_lease_renew_service_name_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture(
+            "hf_lease_renew_service_name_from_manifest_pair",
+            InitTemplate::HttpService,
+        );
         let key_pair = soracloud_fixture_key_pair(0x1F);
         let authority = AccountId::new(key_pair.public_key().clone());
         let authority_id = authority.to_string();
@@ -18843,10 +18842,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     );
     #[test]
     fn model_upload_encryption_recipient_args_can_attach_service_plan_from_manifest_pair() {
-        let dir = temp_dir("model_upload_encryption_recipient_service_plan_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture(
+            "model_upload_encryption_recipient_service_plan_from_manifest_pair",
+            InitTemplate::HttpService,
+        );
         let recipient_response = json::Value::Object(norito::json::Map::from_iter([(
             "recipient".to_owned(),
             json::to_value(&sample_uploaded_model_encryption_recipient())
@@ -19160,12 +19159,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let request = signed_rollback_request("web_portal", None, Some(&authority), &key_pair)
             .expect("signed rollback request");
         let payload = encode_rollback_signature_payload(&request.payload).expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_rollout_request_uses_verifiable_signature() {
@@ -19182,12 +19176,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         )
         .expect("signed rollout request");
         let payload = encode_rollout_signature_payload(&request.payload).expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_agent_deploy_request_uses_verifiable_signature() {
@@ -19198,12 +19187,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .expect("signed agent deploy request");
         let payload =
             encode_agent_deploy_signature_payload(&request.payload).expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_agent_lease_renew_request_uses_verifiable_signature() {
@@ -19213,12 +19197,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signed agent lease renew request");
         let payload =
             encode_agent_lease_renew_signature_payload(&request.payload).expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_hf_deploy_request_uses_verifiable_signature() {
@@ -19240,11 +19219,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         )
         .expect("signed hf deploy request");
         let payload = encode_hf_deploy_signature_payload(&request.payload).expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
+        assert_signed_request_signature(&request, &request.provenance, &payload);
         assert_eq!(request.payload.model_name, "gpt-oss");
         request
             .generated_service_provenance
@@ -19274,7 +19249,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             )
             .expect("generated service provenance should verify");
         assert!(request.generated_apartment_provenance.is_some());
-        assert_request_has_no_inline_signing_fields(&request);
     }
     #[test]
     fn signed_hf_lease_leave_request_uses_verifiable_signature() {
@@ -19293,12 +19267,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed hf leave request");
         let payload =
             encode_hf_lease_leave_signature_payload(&request.payload).expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_hf_lease_renew_request_uses_verifiable_signature() {
@@ -19321,15 +19290,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed hf renew request");
         let payload =
             encode_hf_lease_renew_signature_payload(&request.payload).expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
+        assert_signed_request_signature(&request, &request.provenance, &payload);
         assert_eq!(request.payload.model_name, "gpt-oss");
         assert!(request.generated_service_provenance.is_some());
         assert!(request.generated_apartment_provenance.is_some());
-        assert_request_has_no_inline_signing_fields(&request);
     }
     #[test]
     fn signed_model_host_advertise_request_uses_supported_schema_version() {
@@ -19363,11 +19327,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed model host advertise request");
         let payload = encode_model_host_advertise_signature_payload(&request.payload)
             .expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
+        assert_signed_request_signature(&request, &request.provenance, &payload);
         assert_eq!(
             request.payload.capability.schema_version,
             SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1
@@ -19377,7 +19337,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             request.payload.capability.heartbeat_expires_at_ms
                 > request.payload.capability.advertised_at_ms
         );
-        assert_request_has_no_inline_signing_fields(&request);
     }
     #[test]
     fn signed_agent_restart_request_uses_verifiable_signature() {
@@ -19388,12 +19347,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .expect("signed agent restart request");
         let payload =
             encode_agent_restart_signature_payload(&request.payload).expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_agent_policy_revoke_request_uses_verifiable_signature() {
@@ -19409,12 +19363,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed agent policy revoke request");
         let payload =
             encode_agent_policy_revoke_signature_payload(&request.payload).expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_agent_wallet_spend_request_uses_verifiable_signature() {
@@ -19431,12 +19380,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed agent wallet spend request");
         let payload =
             encode_agent_wallet_spend_signature_payload(&request.payload).expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_agent_wallet_approve_request_uses_verifiable_signature() {
@@ -19451,12 +19395,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed agent wallet approve request");
         let payload = encode_agent_wallet_approve_signature_payload(&request.payload)
             .expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_agent_message_send_request_uses_verifiable_signature() {
@@ -19473,12 +19412,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed agent message send request");
         let payload =
             encode_agent_message_send_signature_payload(&request.payload).expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_agent_message_ack_request_uses_verifiable_signature() {
@@ -19493,12 +19427,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed agent message ack request");
         let payload =
             encode_agent_message_ack_signature_payload(&request.payload).expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_agent_artifact_allow_request_uses_verifiable_signature() {
@@ -19514,12 +19443,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed agent artifact allow request");
         let payload = encode_agent_artifact_allow_signature_payload(&request.payload)
             .expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_agent_autonomy_run_request_uses_verifiable_signature() {
@@ -19538,16 +19462,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed agent autonomy run request");
         let payload =
             encode_agent_autonomy_run_signature_payload(&request.payload).expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
+        assert_signed_request_signature(&request, &request.provenance, &payload);
         assert_eq!(
             request.payload.workflow_input_json.as_deref(),
             Some("{\"inputs\":[\"alpha\",\"beta\"],\"parameters\":{\"max_new_tokens\":4}}")
         );
-        assert_request_has_no_inline_signing_fields(&request);
     }
     #[test]
     fn signed_training_job_start_request_uses_verifiable_signature() {
@@ -19570,12 +19489,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed training start request");
         let payload =
             encode_training_job_start_signature_payload(&request.payload).expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_training_job_checkpoint_request_uses_verifiable_signature() {
@@ -19593,12 +19507,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed training checkpoint request");
         let payload = encode_training_job_checkpoint_signature_payload(&request.payload)
             .expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_training_job_retry_request_uses_verifiable_signature() {
@@ -19614,12 +19523,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed training retry request");
         let payload =
             encode_training_job_retry_signature_payload(&request.payload).expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_model_artifact_register_request_uses_verifiable_signature() {
@@ -19640,12 +19544,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed model artifact request");
         let payload = encode_model_artifact_register_signature_payload(&request.payload)
             .expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_model_weight_register_request_uses_verifiable_signature() {
@@ -19668,12 +19567,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed model weight register request");
         let payload = encode_model_weight_register_signature_payload(&request.payload)
             .expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_model_weight_promote_request_uses_verifiable_signature() {
@@ -19691,12 +19585,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed model weight promote request");
         let payload = encode_model_weight_promote_signature_payload(&request.payload)
             .expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn signed_model_weight_rollback_request_uses_verifiable_signature() {
@@ -19713,12 +19602,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("signed model weight rollback request");
         let payload = encode_model_weight_rollback_signature_payload(&request.payload)
             .expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert_request_has_no_inline_signing_fields(&request);
+        assert_signed_request_signature(&request, &request.provenance, &payload);
     }
     #[test]
     fn bundle_signature_payload_layout_is_canonical_layout() {
@@ -20460,10 +20344,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn deploy_returns_manifest_backed_service_projection() {
-        let dir = temp_dir("deploy_service_projection");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture("deploy_service_projection", InitTemplate::HttpService);
         let deploy_response = norito::json!({ "tx_instructions": [] });
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = MockHttpServer::start(BTreeMap::from([
@@ -20549,10 +20430,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn upgrade_returns_manifest_backed_service_projection() {
-        let dir = temp_dir("upgrade_service_projection");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture("upgrade_service_projection", InitTemplate::HttpService);
         let upgrade_response = norito::json!({ "tx_instructions": [] });
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = MockHttpServer::start(BTreeMap::from([
@@ -20638,10 +20516,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn init_http_service_template_scaffolds_inrou_service() {
-        let dir = temp_dir("http_service_template");
-        let output = service_scaffold_args(dir.clone(), "live_search", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, output) = named_service_fixture(
+            "http_service_template",
+            "live_search",
+            InitTemplate::HttpService,
+        );
         assert_eq!(output.template, "http-service");
         assert!(dir.join("http-service/app/server.mjs").exists());
         assert!(dir.join("http-service/build.sh").exists());
@@ -20865,10 +20744,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn generated_http_service_scaffold_smoke_serves_health_and_echo() {
-        let dir = temp_dir("http_service_smoke");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture("http_service_smoke", InitTemplate::HttpService);
         let server_path = dir.join("http-service/app/server.mjs");
         if !node_available() {
             let server = fs::read_to_string(&server_path).expect("read http-service server");
@@ -20886,10 +20762,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn local_plan_http_service_reports_workspace_scripts_and_hosted_runtime() {
-        let dir = temp_dir("http_service_local_plan");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture("http_service_local_plan", InitTemplate::HttpService);
         let output = LocalPlanArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
@@ -20947,10 +20820,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn local_plan_single_api_service_reports_deterministic_handler_routes() {
-        let dir = temp_dir("single_api_service_local_plan");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
-            .run()
-            .expect("single-api init should succeed");
+        let (dir, _) = single_api_fixture("single_api_service_local_plan");
         let output = LocalPlanArgs {
             container: dir.join("services/api/container_manifest.json"),
             service: dir.join("services/api/service_manifest.json"),
@@ -20996,10 +20866,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn local_dev_http_service_dry_run_reports_manifest_adjacent_script() {
-        let dir = temp_dir("http_service_local_dev_dry_run");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture("http_service_local_dev_dry_run", InitTemplate::HttpService);
         let output = LocalDevArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
@@ -21045,10 +20912,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         if !bash_available() {
             return;
         }
-        let dir = temp_dir("http_service_local_dev_run");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture("http_service_local_dev_run", InitTemplate::HttpService);
         let local_dev_script = dir.join("dev.sh");
         fs::write(&local_dev_script, STATIC_ASSETS_V1[0]).expect("write dev script");
         mark_template_file_executable(&local_dev_script).expect("mark dev executable");
@@ -21081,10 +20945,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         if !bash_available() {
             return;
         }
-        let dir = temp_dir("http_service_local_dev_interrupt");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture(
+            "http_service_local_dev_interrupt",
+            InitTemplate::HttpService,
+        );
         let local_dev_script = dir.join("dev.sh");
         fs::write(&local_dev_script, STATIC_ASSETS_V1[1]).expect("write interrupting dev script");
         mark_template_file_executable(&local_dev_script).expect("mark dev executable");
@@ -21117,10 +20981,8 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         if !bash_available() {
             return;
         }
-        let dir = temp_dir("http_service_build_and_sync_run");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) =
+            service_fixture("http_service_build_and_sync_run", InitTemplate::HttpService);
         let build_and_sync_script = dir.join("build-and-sync.sh");
         fs::write(&build_and_sync_script, STATIC_ASSETS_V1[2])
             .expect("write build-and-sync script");
@@ -21159,10 +21021,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn deploy_workspace_http_service_dry_run_reports_manifest_adjacent_script() {
-        let dir = temp_dir("http_service_deploy_workspace_dry_run");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture(
+            "http_service_deploy_workspace_dry_run",
+            InitTemplate::HttpService,
+        );
         let output = WorkspaceMutationArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
@@ -21212,10 +21074,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         if !bash_available() {
             return;
         }
-        let dir = temp_dir("http_service_deploy_workspace_run");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture(
+            "http_service_deploy_workspace_run",
+            InitTemplate::HttpService,
+        );
         let configs_path = dir.join("materials").join("configs.json");
         let secrets_path = dir.join("materials").join("secrets.json");
         fs::create_dir_all(configs_path.parent().expect("materials parent"))
@@ -21281,10 +21143,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         if !bash_available() {
             return;
         }
-        let dir = temp_dir("http_service_upgrade_workspace_run");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
+        let (dir, _) = service_fixture(
+            "http_service_upgrade_workspace_run",
+            InitTemplate::HttpService,
+        );
         let upgrade_script = dir.join("upgrade.sh");
         fs::write(&upgrade_script, STATIC_ASSETS_V1[4]).expect("write upgrade script");
         mark_template_file_executable(&upgrade_script).expect("mark upgrade executable");
@@ -21327,10 +21189,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn init_site_template_scaffolds_vue_and_sorafs_workflow() {
-        let dir = temp_dir("site_template");
-        let output = service_scaffold_args(dir.clone(), "docs_portal", InitTemplate::Site)
-            .run()
-            .expect("site init should succeed");
+        let (dir, output) = service_fixture("site_template", InitTemplate::Site);
         assert_eq!(output.template, "site");
         assert!(!dir.join("registry.json").exists());
         assert!(dir.join("site/package.json").exists());
@@ -21362,10 +21221,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn init_webapp_template_scaffolds_frontend_and_api() {
-        let dir = temp_dir("webapp_template");
-        let output = service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
-            .run()
-            .expect("webapp init should succeed");
+        let (dir, output) = service_fixture("webapp_template", InitTemplate::Webapp);
         assert_eq!(output.template, "webapp");
         assert!(dir.join("webapp/frontend/package.json").exists());
         assert!(dir.join("webapp/api/server.mjs").exists());
@@ -21430,10 +21286,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn init_pii_app_template_scaffolds_private_policy_workflows() {
-        let dir = temp_dir("pii_app_template");
-        let output = service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
-            .run()
-            .expect("pii-app init should succeed");
+        let (dir, output) = service_fixture("pii_app_template", InitTemplate::PiiApp);
         assert_eq!(output.template, "pii-app");
         assert!(dir.join("pii-app/frontend/package.json").exists());
         assert!(dir.join("pii-app/api/server.mjs").exists());
@@ -21537,10 +21390,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_init_single_api_template_scaffolds_admissible_root_binding_service() {
-        let dir = temp_dir("single_api_template");
-        let output = app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
-            .run()
-            .expect("single-api init should succeed");
+        let (dir, output) = single_api_fixture("single_api_template");
         assert_eq!(output.template, "single-api");
         assert!(dir.join("web/package.json").exists());
         assert!(dir.join("web/src/App.vue").exists());
@@ -21747,10 +21597,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn generated_single_api_dev_server_smoke_serves_healthz() {
-        let dir = temp_dir("single_api_dev_smoke");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
-            .run()
-            .expect("single-api init should succeed");
+        let (dir, _) = single_api_fixture("single_api_dev_smoke");
         let server_path = dir.join("services/api/dev-server.mjs");
         if !node_available() {
             let server = fs::read_to_string(&server_path).expect("read single-api dev server");
@@ -21776,10 +21623,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_init_split_app_template_scaffolds_live_and_vault_services() {
-        let dir = temp_dir("split_app_template");
-        let output = app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, output) = split_app_fixture("split_app_template");
         assert_eq!(output.template, "split-app");
         assert!(dir.join("frontend/src/App.vue").exists());
         assert!(dir.join("services/live/app/server.mjs").exists());
@@ -22305,10 +22149,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_local_plan_split_app_reports_mixed_routes_and_cid_gateway() {
-        let dir = temp_dir("split_app_local_plan");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_local_plan");
         let output = AppLocalPlanArgs {
             manifest: dir.join("app_manifest.json"),
         }
@@ -22439,10 +22280,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_local_plan_single_api_reports_child_service_workspace() {
-        let dir = temp_dir("single_api_app_local_plan");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
-            .run()
-            .expect("single-api init should succeed");
+        let (dir, _) = single_api_fixture("single_api_app_local_plan");
         let output = AppLocalPlanArgs {
             manifest: dir.join("app_manifest.json"),
         }
@@ -22494,10 +22332,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_local_dev_split_app_dry_run_reports_manifest_adjacent_script() {
-        let dir = temp_dir("split_app_local_dev_dry_run");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_local_dev_dry_run");
         let output = AppLocalDevArgs {
             manifest: dir.join("app_manifest.json"),
             dry_run: true,
@@ -22566,10 +22401,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         if !bash_available() {
             return;
         }
-        let dir = temp_dir("single_api_local_dev_run");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
-            .run()
-            .expect("single-api init should succeed");
+        let (dir, _) = single_api_fixture("single_api_local_dev_run");
         let local_dev_script = dir.join("dev.sh");
         fs::write(&local_dev_script, STATIC_ASSETS_V1[5]).expect("write test dev script");
         mark_template_file_executable(&local_dev_script).expect("mark dev executable");
@@ -22606,10 +22438,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         if !bash_available() {
             return;
         }
-        let dir = temp_dir("single_api_local_dev_interrupt");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
-            .run()
-            .expect("single-api init should succeed");
+        let (dir, _) = single_api_fixture("single_api_local_dev_interrupt");
         let local_dev_script = dir.join("dev.sh");
         fs::write(&local_dev_script, STATIC_ASSETS_V1[6]).expect("write interrupting dev script");
         mark_template_file_executable(&local_dev_script).expect("mark dev executable");
@@ -22637,10 +22466,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_build_and_sync_split_app_dry_run_reports_manifest_adjacent_script() {
-        let dir = temp_dir("split_app_build_and_sync_dry_run");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_build_and_sync_dry_run");
         let output = AppBuildAndSyncArgs {
             manifest: dir.join("app_manifest.json"),
             dry_run: true,
@@ -22707,10 +22533,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         if !bash_available() {
             return;
         }
-        let dir = temp_dir("single_api_build_and_sync_run");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
-            .run()
-            .expect("single-api init should succeed");
+        let (dir, _) = single_api_fixture("single_api_build_and_sync_run");
         let build_and_sync_script = dir.join("build-and-sync.sh");
         fs::write(&build_and_sync_script, STATIC_ASSETS_V1[7])
             .expect("write test build-and-sync script");
@@ -22752,10 +22575,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_doctor_workspace_split_app_dry_run_reports_manifest_adjacent_script() {
-        let dir = temp_dir("split_app_doctor_workspace_dry_run");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_doctor_workspace_dry_run");
         let output = AppDoctorWorkspaceArgs {
             manifest: dir.join("app_manifest.json"),
             dry_run: true,
@@ -22798,10 +22618,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         if !bash_available() {
             return;
         }
-        let dir = temp_dir("single_api_release_workspace_run");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
-            .run()
-            .expect("single-api init should succeed");
+        let (dir, _) = single_api_fixture("single_api_release_workspace_run");
         let release_script = dir.join("release.sh");
         fs::write(&release_script, STATIC_ASSETS_V1[8]).expect("write app release script");
         mark_template_file_executable(&release_script).expect("mark app release executable");
@@ -22861,10 +22678,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_deploy_workspace_split_app_dry_run_reports_manifest_adjacent_script() {
-        let dir = temp_dir("split_app_deploy_workspace_dry_run");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_deploy_workspace_dry_run");
         let output = AppWorkspaceMutationArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some("http://127.0.0.1:8080".to_owned()),
@@ -22931,10 +22745,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         if !bash_available() {
             return;
         }
-        let dir = temp_dir("single_api_upgrade_workspace_run");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
-            .run()
-            .expect("single-api init should succeed");
+        let (dir, _) = single_api_fixture("single_api_upgrade_workspace_run");
         let upgrade_script = dir.join("upgrade.sh");
         fs::write(&upgrade_script, STATIC_ASSETS_V1[9]).expect("write app upgrade script");
         mark_template_file_executable(&upgrade_script).expect("mark app upgrade executable");
@@ -22998,10 +22809,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_doctor_validates_split_app_release_contract() {
-        let dir = temp_dir("split_app_doctor");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_doctor");
         fs::create_dir_all(dir.join("frontend/dist")).expect("create frontend dist");
         fs::write(
             dir.join("frontend/dist/index.html"),
@@ -23061,10 +22869,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_doctor_rejects_any_hosted_live_route_outside_api_v1() {
-        let dir = temp_dir("split_app_doctor_rejects_hosted_prefix");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_doctor_rejects_hosted_prefix");
         fs::create_dir_all(dir.join("frontend/dist")).expect("create frontend dist");
         fs::write(
             dir.join("frontend/dist/index.html"),
@@ -23141,10 +22946,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_release_dry_run_reports_build_and_upsert_plan() {
-        let dir = temp_dir("split_app_release_dry_run");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_release_dry_run");
         let key_pair = soracloud_fixture_key_pair(0x40);
         let authority = AccountId::new(key_pair.public_key().clone());
         let output = AppReleaseArgs {
@@ -23183,10 +22985,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         if !bash_available() {
             return;
         }
-        let dir = temp_dir("split_app_release_run");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_release_run");
         let build_script = dir.join("build-and-sync.sh");
         fs::write(&build_script, STATIC_ASSETS_V1[10]).expect("write release build script");
         mark_template_file_executable(&build_script).expect("mark release build script executable");
@@ -23276,10 +23075,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         if !bash_available() {
             return;
         }
-        let dir = temp_dir("split_app_release_reuse_guest_images");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_release_reuse_guest_images");
         let build_script = dir.join("build-and-sync.sh");
         fs::write(&build_script, STATIC_ASSETS_V1[11]).expect("write release build script");
         mark_template_file_executable(&build_script).expect("mark release build script executable");
@@ -23395,10 +23191,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_local_plan_rejects_app_service_name_mismatch() {
-        let dir = temp_dir("split_app_local_plan_service_name_mismatch");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_local_plan_service_name_mismatch");
         let manifest_path = dir.join("app_manifest.json");
         let mut manifest: SoracloudAppManifestV1 = load_json(&manifest_path).expect("app manifest");
         manifest.services[0].service_name = "wrong_live_name".to_owned();
@@ -23417,10 +23210,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn generated_split_app_live_server_smoke_serves_hayahi_routes() {
-        let dir = temp_dir("split_app_live_smoke");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_live_smoke");
         let server_path = dir.join("services/live/app/server.mjs");
         if !node_available() {
             let server = fs::read_to_string(&server_path).expect("read split live server");
@@ -23459,10 +23249,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn generated_split_app_vault_dev_server_smoke_serves_auth_and_user_state() {
-        let dir = temp_dir("split_app_vault_dev_smoke");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_vault_dev_smoke");
         let server_path = dir.join("services/vault/dev-server.mjs");
         if !node_available() {
             let server = fs::read_to_string(&server_path).expect("read split vault dev server");
@@ -23482,10 +23269,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn generated_split_app_frontend_build_guard_enforces_live_same_host_api() {
-        let dir = temp_dir("split_app_frontend_guard");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_frontend_guard");
         let guard_path = dir.join("frontend/scripts/validate-production-env.mjs");
         if !node_available() {
             let guard = fs::read_to_string(&guard_path).expect("read build guard");
@@ -23690,10 +23474,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn init_hayahi_app_template_scaffolds_real_ivm_api_project() {
-        let dir = temp_dir("hayahi_app_template");
-        let output = service_scaffold_args(dir.clone(), "hayahi_api", InitTemplate::HayahiApp)
-            .run()
-            .expect("hayahi-app init should succeed");
+        let (dir, output) = service_fixture("hayahi_app_template", InitTemplate::HayahiApp);
         assert_eq!(output.template, "hayahi-app");
         assert!(dir.join("hayahi-app/package.json").exists());
         assert!(dir.join("hayahi-app/build.sh").exists());
@@ -23793,10 +23574,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn generated_webapp_auth_module_contains_replay_and_signature_guards() {
-        let dir = temp_dir("webapp_auth_markers");
-        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
-            .run()
-            .expect("webapp init should succeed");
+        let (dir, _) = service_fixture("webapp_auth_markers", InitTemplate::Webapp);
         let api = fs::read_to_string(dir.join("webapp/api/server.mjs")).expect("read api file");
         assert!(api.contains("AUTH_CHALLENGE_REPLAYED"));
         assert!(api.contains("AUTH_CHALLENGE_EXPIRED"));
@@ -23816,10 +23594,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn generated_pii_app_auth_module_contains_replay_and_signature_guards() {
-        let dir = temp_dir("pii_auth_markers");
-        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
-            .run()
-            .expect("pii-app init should succeed");
+        let (dir, _) = service_fixture("pii_auth_markers", InitTemplate::PiiApp);
         let api =
             fs::read_to_string(dir.join("pii-app/api/server.mjs")).expect("read pii api file");
         assert!(api.contains("AUTH_CHALLENGE_REPLAYED"));
@@ -23840,10 +23615,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn generated_hayahi_app_contract_contains_real_route_entrypoints() {
-        let dir = temp_dir("hayahi_auth_markers");
-        service_scaffold_args(dir.clone(), "hayahi_api", InitTemplate::HayahiApp)
-            .run()
-            .expect("hayahi-app init should succeed");
+        let (dir, _) = service_fixture("hayahi_auth_markers", InitTemplate::HayahiApp);
         let contract = fs::read_to_string(dir.join("hayahi-app/contract/hayahi_api.ko"))
             .expect("read hayahi contract");
         assert!(contract.contains("route: \"/api/v1/health\""));
@@ -23999,10 +23771,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn sync_manifests_generated_split_app_scaffold_refreshes_service_refs() {
-        let dir = temp_dir("sync_manifests_generated_split_app");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("sync_manifests_generated_split_app");
         fs::create_dir_all(dir.join("services/live/build")).expect("create live build dir");
         fs::create_dir_all(dir.join("services/vault/build")).expect("create vault build dir");
         fs::write(
@@ -24069,10 +23838,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn sync_manifests_generated_single_api_scaffold_refreshes_service_refs() {
-        let dir = temp_dir("sync_manifests_generated_single_api");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
-            .run()
-            .expect("single-api init should succeed");
+        let (dir, _) = single_api_fixture("sync_manifests_generated_single_api");
         fs::create_dir_all(dir.join("services/api/build")).expect("create api build dir");
         fs::write(
             dir.join("services/api/build/api-service.to"),
@@ -24109,10 +23875,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_status_filters_control_plane_status_to_split_app_services() {
-        let dir = temp_dir("split_app_status");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_status");
         let payload = norito::json!({
             "schema_version": 1,
             "control_plane": {
@@ -24318,10 +24081,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_status_keeps_missing_manifest_services_visible() {
-        let dir = temp_dir("split_app_status_missing_service");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_status_missing_service");
         let payload = norito::json!({
             "schema_version": 1,
             "control_plane": {
@@ -24406,10 +24166,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_status_projects_single_api_frontend_root_binding_url() {
-        let dir = temp_dir("single_api_status_root_binding");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
-            .run()
-            .expect("single-api init should succeed");
+        let (dir, _) = single_api_fixture("single_api_status_root_binding");
         let payload = norito::json!({
             "schema_version": 1,
             "control_plane": {
@@ -24491,10 +24248,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_deploy_single_api_root_binding_injects_reserved_static_site_config() {
-        let dir = temp_dir("single_api_root_binding_deploy");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
-            .run()
-            .expect("single-api init should succeed");
+        let (dir, _) = single_api_fixture("single_api_root_binding_deploy");
         fs::create_dir_all(dir.join("web/dist")).expect("create web dist dir");
         fs::write(
             dir.join("web/dist/index.html"),
@@ -24675,10 +24429,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_deploy_rejects_app_service_name_mismatch_before_network_mutation() {
-        let dir = temp_dir("app_deploy_service_name_mismatch");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("app_deploy_service_name_mismatch");
         let manifest_path = dir.join("app_manifest.json");
         let mut manifest: SoracloudAppManifestV1 = load_json(&manifest_path).expect("app manifest");
         manifest.services[0].service_name = "wrong_live_name".to_owned();
@@ -24703,10 +24454,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_deploy_uses_app_level_infra_endpoint_when_available() {
-        let dir = temp_dir("app_deploy_app_infra_endpoint");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SingleApi)
-            .run()
-            .expect("single-api init should succeed");
+        let (dir, _) = single_api_fixture("app_deploy_app_infra_endpoint");
         let manifest_path = dir.join("app_manifest.json");
         let mut manifest: SoracloudAppManifestV1 = load_json(&manifest_path).expect("app manifest");
         manifest.static_site = None;
@@ -24784,10 +24532,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_deploy_split_app_cid_only_skips_reserved_static_site_config() {
-        let dir = temp_dir("split_app_cid_only_deploy");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_cid_only_deploy");
         fs::create_dir_all(dir.join("frontend/dist")).expect("create frontend dist dir");
         fs::write(
             dir.join("frontend/dist/index.html"),
@@ -24986,10 +24731,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn app_upgrade_split_app_cid_only_keeps_route_projection() {
-        let dir = temp_dir("split_app_cid_only_upgrade");
-        app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
-            .run()
-            .expect("split-app init should succeed");
+        let (dir, _) = split_app_fixture("split_app_cid_only_upgrade");
         fs::create_dir_all(dir.join("frontend/dist")).expect("create frontend dist dir");
         fs::write(
             dir.join("frontend/dist/index.html"),
@@ -25119,635 +24861,374 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             );
         }
     }
-    #[test]
-    fn generated_webapp_auth_startup_fails_on_weak_session_key_in_strict_mode() {
-        let dir = temp_dir("webapp_auth_strict_key");
-        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
-            .run()
-            .expect("webapp init should succeed");
-        let server_path = dir.join("webapp/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static strict-session-key guard markers in scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read webapp api");
-            assert!(api.contains("SESSION_HMAC_KEY must be set to at least 32 characters"));
-            assert!(api.contains("resolveSessionHmacKey"));
-            return;
-        }
-        let harness_path = dir.join("webapp_auth_strict_key_fail.mjs");
-        let mut script = TEST_HARNESSES_V1[6].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_webapp_auth_startup_fails_on_invalid_auth_mode() {
-        let dir = temp_dir("webapp_auth_invalid_mode");
-        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
-            .run()
-            .expect("webapp init should succeed");
-        let server_path = dir.join("webapp/api/server.mjs");
-        if !node_available() {
-            eprintln!("node unavailable; validating static auth-mode guard markers in scaffold");
-            let api = fs::read_to_string(&server_path).expect("read webapp api");
-            assert!(api.contains("normalizeAuthMode"));
-            assert!(api.contains("AUTH_MODE must be strict or dev"));
-            return;
-        }
-        let harness_path = dir.join("webapp_auth_invalid_mode_fail.mjs");
-        let mut script = TEST_HARNESSES_V1[7].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_on_weak_session_key_in_strict_mode() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_strict_key",
-            "pii_auth_strict_key_fail.mjs",
-            &[("SESSION_HMAC_KEY", "too-short")],
-            "SESSION_HMAC_KEY must be set to at least 32 characters in strict/production mode",
-            &[
-                "SESSION_HMAC_KEY must be set to at least 32 characters",
-                "resolveSessionHmacKey",
-            ],
-        );
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_on_invalid_auth_mode() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_invalid_mode",
-            "pii_auth_invalid_mode_fail.mjs",
-            &[("AUTH_MODE", "permissive")],
-            "AUTH_MODE must be strict or dev, got: permissive",
-            &["normalizeAuthMode", "AUTH_MODE must be strict or dev"],
-        );
-    }
-    #[test]
-    fn generated_webapp_auth_startup_fails_when_external_state_is_required_without_adapter() {
-        let dir = temp_dir("webapp_auth_missing_external_adapter");
-        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
-            .run()
-            .expect("webapp init should succeed");
-        let server_path = dir.join("webapp/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static external-state requirement guard markers in scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read webapp api");
-            assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE"));
-            assert!(api.contains("__soracloudSharedStateAdapter"));
-            assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled"));
-            return;
-        }
-        let harness_path = dir.join("webapp_auth_external_state_required_fail.mjs");
-        let mut script = TEST_HARNESSES_V1[8].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_webapp_auth_startup_fails_when_external_state_is_defaulted_without_adapter() {
-        let dir = temp_dir("webapp_auth_default_external_adapter_required");
-        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
-            .run()
-            .expect("webapp init should succeed");
-        let server_path = dir.join("webapp/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static default external-state requirement markers in scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read webapp api");
-            assert!(api.contains("AUTH_MODE === \"strict\" || IS_PRODUCTION"));
-            assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled"));
-            return;
-        }
-        let harness_path = dir.join("webapp_auth_external_state_default_required_fail.mjs");
-        let mut script = TEST_HARNESSES_V1[9].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_webapp_auth_startup_fails_when_production_disables_external_state_requirement() {
-        let dir = temp_dir("webapp_auth_production_disables_external_state");
-        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
-            .run()
-            .expect("webapp init should succeed");
-        let server_path = dir.join("webapp/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static production external-state disable guard markers in scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read webapp api");
-            assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE cannot be disabled"));
-            return;
-        }
-        let harness_path = dir.join("webapp_auth_external_state_production_disable_fail.mjs");
-        let mut script = TEST_HARNESSES_V1[10].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_webapp_auth_startup_fails_with_invalid_external_state_adapter_shape() {
-        let dir = temp_dir("webapp_auth_invalid_external_adapter_shape");
-        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
-            .run()
-            .expect("webapp init should succeed");
-        let server_path = dir.join("webapp/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static invalid-external-adapter guard markers in scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read webapp api");
-            assert!(api.contains("__soracloudSharedStateAdapter"));
-            assert!(api.contains("must be a function"));
-            return;
-        }
-        let harness_path = dir.join("webapp_auth_invalid_external_adapter_shape_fail.mjs");
-        let mut script = TEST_HARNESSES_V1[11].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_webapp_auth_external_state_adapter_path_mints_sessions_without_file_fallback() {
-        let dir = temp_dir("webapp_auth_external_adapter");
-        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
-            .run()
-            .expect("webapp init should succeed");
-        let server_path = dir.join("webapp/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static external-state-adapter markers in scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read webapp api");
-            assert!(api.contains("__soracloudSharedStateAdapter"));
-            assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE"));
-            assert!(
-                api.contains("shared state adapter entries(prefix) must return [key, value][]")
-            );
-            return;
-        }
-        let harness_path = dir.join("webapp_auth_external_adapter_smoke.mjs");
-        let mut script = TEST_HARNESSES_V1[12].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_when_external_state_is_required_without_adapter() {
-        let dir = temp_dir("pii_auth_missing_external_adapter");
-        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
-            .run()
-            .expect("pii-app init should succeed");
-        let server_path = dir.join("pii-app/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static pii external-state requirement markers in scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read pii api");
-            assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE"));
-            assert!(api.contains("__soracloudSharedStateAdapter"));
-            assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled"));
-            return;
-        }
-        let harness_path = dir.join("pii_auth_external_state_required_fail.mjs");
-        let mut script = TEST_HARNESSES_V1[13].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_when_external_state_is_defaulted_without_adapter() {
-        let dir = temp_dir("pii_auth_default_external_adapter_required");
-        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
-            .run()
-            .expect("pii-app init should succeed");
-        let server_path = dir.join("pii-app/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static pii default external-state requirement markers in scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read pii api");
-            assert!(api.contains("AUTH_MODE === \"strict\" || IS_PRODUCTION"));
-            assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled"));
-            return;
-        }
-        let harness_path = dir.join("pii_auth_external_state_default_required_fail.mjs");
-        let mut script = TEST_HARNESSES_V1[14].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_when_production_disables_external_state_requirement() {
-        let dir = temp_dir("pii_auth_production_disables_external_state");
-        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
-            .run()
-            .expect("pii-app init should succeed");
-        let server_path = dir.join("pii-app/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static pii production external-state disable guard markers in scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read pii api");
-            assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE cannot be disabled"));
-            return;
-        }
-        let harness_path = dir.join("pii_auth_external_state_production_disable_fail.mjs");
-        let mut script = TEST_HARNESSES_V1[15].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_with_invalid_external_state_adapter_shape() {
-        let dir = temp_dir("pii_auth_invalid_external_adapter_shape");
-        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
-            .run()
-            .expect("pii-app init should succeed");
-        let server_path = dir.join("pii-app/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static pii invalid-external-adapter guard markers in scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read pii api");
-            assert!(api.contains("__soracloudSharedStateAdapter"));
-            assert!(api.contains("must be a function"));
-            return;
-        }
-        let harness_path = dir.join("pii_auth_invalid_external_adapter_shape_fail.mjs");
-        let mut script = TEST_HARNESSES_V1[16].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_pii_app_auth_external_state_adapter_path_mints_sessions_without_file_fallback() {
-        let dir = temp_dir("pii_auth_external_adapter");
-        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
-            .run()
-            .expect("pii-app init should succeed");
-        let server_path = dir.join("pii-app/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static pii external-state-adapter markers in scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read pii api");
-            assert!(api.contains("__soracloudSharedStateAdapter"));
-            assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE"));
-            assert!(
-                api.contains("shared state adapter entries(prefix) must return [key, value][]")
-            );
-            return;
-        }
-        let harness_path = dir.join("pii_auth_external_adapter_smoke.mjs");
-        let mut script = TEST_HARNESSES_V1[17].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_without_capability_map() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_missing_capability_map",
-            "pii_auth_missing_capability_map_fail.mjs",
-            &[("AUTH_CAPABILITY_MAP_JSON", "")],
+    generated_auth_harness_test!(
+        generated_webapp_auth_startup_fails_on_weak_session_key_in_strict_mode,
+        "webapp_auth_strict_key",
+        InitTemplate::Webapp,
+        &[
+            "SESSION_HMAC_KEY must be set to at least 32 characters",
+            "resolveSessionHmacKey"
+        ],
+        "webapp_auth_strict_key_fail.mjs",
+        6,
+        false,
+    );
+    generated_auth_harness_test!(
+        generated_webapp_auth_startup_fails_on_invalid_auth_mode,
+        "webapp_auth_invalid_mode",
+        InitTemplate::Webapp,
+        &["normalizeAuthMode", "AUTH_MODE must be strict or dev"],
+        "webapp_auth_invalid_mode_fail.mjs",
+        7,
+        false,
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_on_weak_session_key_in_strict_mode,
+        "strict_key",
+        &[("SESSION_HMAC_KEY", "too-short")],
+        "SESSION_HMAC_KEY must be set to at least 32 characters in strict/production mode",
+        &[
+            "SESSION_HMAC_KEY must be set to at least 32 characters",
+            "resolveSessionHmacKey",
+        ],
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_on_invalid_auth_mode,
+        "invalid_mode",
+        &[("AUTH_MODE", "permissive")],
+        "AUTH_MODE must be strict or dev, got: permissive",
+        &["normalizeAuthMode", "AUTH_MODE must be strict or dev"],
+    );
+    generated_auth_harness_test!(
+        generated_webapp_auth_startup_fails_when_external_state_is_required_without_adapter,
+        "webapp_auth_missing_external_adapter",
+        InitTemplate::Webapp,
+        &[
+            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE",
+            "__soracloudSharedStateAdapter",
+            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled"
+        ],
+        "webapp_auth_external_state_required_fail.mjs",
+        8,
+        false,
+    );
+    generated_auth_harness_test!(
+        generated_webapp_auth_startup_fails_when_external_state_is_defaulted_without_adapter,
+        "webapp_auth_default_external_adapter_required",
+        InitTemplate::Webapp,
+        &[
+            "AUTH_MODE === \"strict\" || IS_PRODUCTION",
+            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled"
+        ],
+        "webapp_auth_external_state_default_required_fail.mjs",
+        9,
+        false,
+    );
+    generated_auth_harness_test!(
+        generated_webapp_auth_startup_fails_when_production_disables_external_state_requirement,
+        "webapp_auth_production_disables_external_state",
+        InitTemplate::Webapp,
+        &["AUTH_REQUIRE_EXTERNAL_SHARED_STATE cannot be disabled"],
+        "webapp_auth_external_state_production_disable_fail.mjs",
+        10,
+        false,
+    );
+    generated_auth_harness_test!(
+        generated_webapp_auth_startup_fails_with_invalid_external_state_adapter_shape,
+        "webapp_auth_invalid_external_adapter_shape",
+        InitTemplate::Webapp,
+        &["__soracloudSharedStateAdapter", "must be a function"],
+        "webapp_auth_invalid_external_adapter_shape_fail.mjs",
+        11,
+        false,
+    );
+    generated_auth_harness_test!(
+        generated_webapp_auth_external_state_adapter_path_mints_sessions_without_file_fallback,
+        "webapp_auth_external_adapter",
+        InitTemplate::Webapp,
+        &[
+            "__soracloudSharedStateAdapter",
+            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE",
+            "shared state adapter entries(prefix) must return [key, value][]"
+        ],
+        "webapp_auth_external_adapter_smoke.mjs",
+        12,
+        false,
+    );
+    generated_auth_harness_test!(
+        generated_pii_app_auth_startup_fails_when_external_state_is_required_without_adapter,
+        "pii_auth_missing_external_adapter",
+        InitTemplate::PiiApp,
+        &[
+            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE",
+            "__soracloudSharedStateAdapter",
+            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled"
+        ],
+        "pii_auth_external_state_required_fail.mjs",
+        13,
+        false,
+    );
+    generated_auth_harness_test!(
+        generated_pii_app_auth_startup_fails_when_external_state_is_defaulted_without_adapter,
+        "pii_auth_default_external_adapter_required",
+        InitTemplate::PiiApp,
+        &[
+            "AUTH_MODE === \"strict\" || IS_PRODUCTION",
+            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled"
+        ],
+        "pii_auth_external_state_default_required_fail.mjs",
+        14,
+        false,
+    );
+    generated_auth_harness_test!(
+        generated_pii_app_auth_startup_fails_when_production_disables_external_state_requirement,
+        "pii_auth_production_disables_external_state",
+        InitTemplate::PiiApp,
+        &["AUTH_REQUIRE_EXTERNAL_SHARED_STATE cannot be disabled"],
+        "pii_auth_external_state_production_disable_fail.mjs",
+        15,
+        false,
+    );
+    generated_auth_harness_test!(
+        generated_pii_app_auth_startup_fails_with_invalid_external_state_adapter_shape,
+        "pii_auth_invalid_external_adapter_shape",
+        InitTemplate::PiiApp,
+        &["__soracloudSharedStateAdapter", "must be a function"],
+        "pii_auth_invalid_external_adapter_shape_fail.mjs",
+        16,
+        false,
+    );
+    generated_auth_harness_test!(
+        generated_pii_app_auth_external_state_adapter_path_mints_sessions_without_file_fallback,
+        "pii_auth_external_adapter",
+        InitTemplate::PiiApp,
+        &[
+            "__soracloudSharedStateAdapter",
+            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE",
+            "shared state adapter entries(prefix) must return [key, value][]"
+        ],
+        "pii_auth_external_adapter_smoke.mjs",
+        17,
+        false,
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_without_capability_map,
+        "missing_capability_map",
+        &[("AUTH_CAPABILITY_MAP_JSON", "")],
+        "AUTH_CAPABILITY_MAP_JSON must be provided for private endpoints",
+        &[
             "AUTH_CAPABILITY_MAP_JSON must be provided for private endpoints",
-            &[
-                "AUTH_CAPABILITY_MAP_JSON must be provided for private endpoints",
-                r#"parseCapabilityMap(process.env.AUTH_CAPABILITY_MAP_JSON ?? "", true)"#,
-            ],
-        );
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_on_invalid_capability_map_json() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_invalid_capability_map",
-            "pii_auth_invalid_capability_map_fail.mjs",
-            &[("AUTH_CAPABILITY_MAP_JSON", "{not-json")],
-            "AUTH_CAPABILITY_MAP_JSON is invalid JSON",
-            &["AUTH_CAPABILITY_MAP_JSON is invalid JSON"],
-        );
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_on_empty_capability_map_object() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_empty_capability_map_object",
-            "pii_auth_empty_capability_map_object_fail.mjs",
-            &[("AUTH_CAPABILITY_MAP_JSON", "{}")],
-            "AUTH_CAPABILITY_MAP_JSON must define at least one principal",
-            &["AUTH_CAPABILITY_MAP_JSON must define at least one principal"],
-        );
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_on_non_object_capability_map() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_non_object_capability_map",
-            "pii_auth_non_object_capability_map_fail.mjs",
-            &[("AUTH_CAPABILITY_MAP_JSON", "[]")],
-            "AUTH_CAPABILITY_MAP_JSON must be an object",
-            &["AUTH_CAPABILITY_MAP_JSON must be an object"],
-        );
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_on_invalid_capability_map_principal() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_invalid_capability_map_principal",
-            "pii_auth_invalid_capability_map_principal_fail.mjs",
-            &[(
-                "AUTH_CAPABILITY_MAP_JSON",
-                r#"{"not-a-public-key":["pii.records.read"]}"#,
-            )],
-            "AUTH_CAPABILITY_MAP_JSON principal must be 32 bytes of hex",
-            &["AUTH_CAPABILITY_MAP_JSON principal"],
-        );
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_on_empty_capability_array() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_empty_capability_array",
-            "pii_auth_empty_capability_array_fail.mjs",
-            &[(
-                "AUTH_CAPABILITY_MAP_JSON",
-                r#"{"1111111111111111111111111111111111111111111111111111111111111111":[]}"#,
-            )],
-            "AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays",
-            &["AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays"],
-        );
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_on_non_array_capability_value() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_non_array_capability_value",
-            "pii_auth_non_array_capability_value_fail.mjs",
-            &[(
-                "AUTH_CAPABILITY_MAP_JSON",
-                r#"{"1111111111111111111111111111111111111111111111111111111111111111":"pii.records.read"}"#,
-            )],
-            "AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays",
-            &["AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays"],
-        );
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_on_non_string_capability() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_non_string_capability",
-            "pii_auth_non_string_capability_fail.mjs",
-            &[(
-                "AUTH_CAPABILITY_MAP_JSON",
-                r#"{"1111111111111111111111111111111111111111111111111111111111111111":[42]}"#,
-            )],
-            "AUTH_CAPABILITY_MAP_JSON capability must be a string",
-            &["AUTH_CAPABILITY_MAP_JSON capability"],
-        );
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_on_blank_capability() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_blank_capability",
-            "pii_auth_blank_capability_fail.mjs",
-            &[(
-                "AUTH_CAPABILITY_MAP_JSON",
-                r#"{"1111111111111111111111111111111111111111111111111111111111111111":[" "]}"#,
-            )],
-            "AUTH_CAPABILITY_MAP_JSON capability must not be empty",
-            &["AUTH_CAPABILITY_MAP_JSON capability"],
-        );
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_on_invalid_public_base_url() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_invalid_public_base_url",
-            "pii_auth_invalid_public_base_url_fail.mjs",
-            &[("PUBLIC_BASE_URL", "http://")],
-            "PUBLIC_BASE_URL is invalid",
-            &["PUBLIC_BASE_URL is invalid"],
-        );
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_on_invalid_session_ttl() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_invalid_session_ttl",
-            "pii_auth_invalid_session_ttl_fail.mjs",
-            &[("AUTH_SESSION_TTL_SECS", "59")],
-            "AUTH_SESSION_TTL_SECS must be an integer in [60, 86400]",
-            &["AUTH_SESSION_TTL_SECS"],
-        );
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_on_non_numeric_session_ttl() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_non_numeric_session_ttl",
-            "pii_auth_non_numeric_session_ttl_fail.mjs",
-            &[("AUTH_SESSION_TTL_SECS", "not-a-number")],
-            "AUTH_SESSION_TTL_SECS must be an integer in [60, 86400]",
-            &["AUTH_SESSION_TTL_SECS"],
-        );
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_on_invalid_challenge_ttl() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_invalid_challenge_ttl",
-            "pii_auth_invalid_challenge_ttl_fail.mjs",
-            &[("AUTH_CHALLENGE_TTL_SECS", "4")],
-            "AUTH_CHALLENGE_TTL_SECS must be an integer in [5, 900]",
-            &["AUTH_CHALLENGE_TTL_SECS"],
-        );
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_on_challenge_ttl_above_max() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_challenge_ttl_above_max",
-            "pii_auth_challenge_ttl_above_max_fail.mjs",
-            &[("AUTH_CHALLENGE_TTL_SECS", "901")],
-            "AUTH_CHALLENGE_TTL_SECS must be an integer in [5, 900]",
-            &["AUTH_CHALLENGE_TTL_SECS"],
-        );
-    }
-    #[test]
-    fn generated_pii_app_auth_startup_fails_on_invalid_external_state_boolean() {
-        assert_generated_pii_app_startup_import_fails(
-            "pii_auth_invalid_external_state_boolean",
-            "pii_auth_invalid_external_state_boolean_fail.mjs",
-            &[("AUTH_REQUIRE_EXTERNAL_SHARED_STATE", "maybe")],
-            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE must be boolean (true/false/1/0)",
-            &["AUTH_REQUIRE_EXTERNAL_SHARED_STATE", "must be boolean"],
-        );
-    }
-    #[test]
-    fn generated_webapp_private_route_requires_non_empty_capability_map() {
-        let dir = temp_dir("webapp_auth_capability_map_required");
-        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
-            .run()
-            .expect("webapp init should succeed");
-        let server_path = dir.join("webapp/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static capability-map-required markers in webapp scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read webapp api");
-            assert!(api.contains("AUTH_CAPABILITY_MAP_REQUIRED"));
-            assert!(api.contains("capability map is required"));
-            return;
-        }
-        let harness_path = dir.join("webapp_auth_capability_map_required.mjs");
-        let mut script = TEST_HARNESSES_V1[18].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_webapp_auth_smoke_rejects_replay_and_supports_shared_sessions() {
-        let dir = temp_dir("webapp_auth_smoke");
-        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
-            .run()
-            .expect("webapp init should succeed");
-        let server_path = dir.join("webapp/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static webapp replay/session markers in scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read webapp api");
-            assert!(api.contains("AUTH_CHALLENGE_REPLAYED"));
-            assert!(api.contains("AUTH_CHALLENGE_EXPIRED"));
-            assert!(api.contains("AUTH_CHALLENGE_NOT_FOUND"));
-            assert!(api.contains("AUTH_CHALLENGE_PRINCIPAL_MISMATCH"));
-            assert!(api.contains("AUTH_SIGNATURE_INVALID"));
-            assert!(api.contains("SameSite=Strict"));
-            assert!(api.contains("/api/private/state"));
-            return;
-        }
-        let state_file = dir.join(".shared_auth_state.json");
-        let harness_path = dir.join("webapp_auth_smoke.mjs");
-        let mut script = TEST_HARNESSES_V1[19].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        script = script.replace("__STATE_FILE__", &js_string_literal(&state_file));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_webapp_auth_replay_lock_contention_is_fail_closed() {
-        let dir = temp_dir("webapp_auth_replay_lock_contention");
-        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
-            .run()
-            .expect("webapp init should succeed");
-        let server_path = dir.join("webapp/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static replay-lock contention markers in webapp scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read webapp api");
-            assert!(api.contains("acquireChallengeConsumeLock"));
-            assert!(api.contains("statePutIfAbsent"));
-            assert!(api.contains("AUTH_CHALLENGE_REPLAYED"));
-            return;
-        }
-        let harness_path = dir.join("webapp_auth_replay_lock_contention.mjs");
-        let mut script = TEST_HARNESSES_V1[20].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_pii_app_auth_replay_lock_contention_is_fail_closed() {
-        let dir = temp_dir("pii_auth_replay_lock_contention");
-        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
-            .run()
-            .expect("pii-app init should succeed");
-        let server_path = dir.join("pii-app/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static replay-lock contention markers in pii scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read pii api");
-            assert!(api.contains("acquireChallengeConsumeLock"));
-            assert!(api.contains("statePutIfAbsent"));
-            assert!(api.contains("AUTH_CHALLENGE_REPLAYED"));
-            return;
-        }
-        let harness_path = dir.join("pii_auth_replay_lock_contention.mjs");
-        let mut script = TEST_HARNESSES_V1[21].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_webapp_auth_smoke_rejects_origin_mismatch() {
-        let dir = temp_dir("webapp_auth_origin_mismatch");
-        service_scaffold_args(dir.clone(), "agent_console", InitTemplate::Webapp)
-            .run()
-            .expect("webapp init should succeed");
-        let server_path = dir.join("webapp/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static origin-mismatch markers in webapp scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read webapp api");
-            assert!(api.contains("AUTH_ORIGIN_MISMATCH"));
-            assert!(api.contains("requestOrigin(req)"));
-            assert!(api.contains("shouldUseSecureCookie"));
-            return;
-        }
-        let harness_path = dir.join("webapp_auth_origin_mismatch.mjs");
-        let mut script = TEST_HARNESSES_V1[22].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_pii_app_auth_smoke_rejects_origin_mismatch() {
-        let dir = temp_dir("pii_auth_origin_mismatch");
-        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
-            .run()
-            .expect("pii-app init should succeed");
-        let server_path = dir.join("pii-app/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static origin-mismatch markers in pii scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read pii api");
-            assert!(api.contains("AUTH_ORIGIN_MISMATCH"));
-            assert!(api.contains("requestOrigin(req)"));
-            assert!(api.contains("shouldUseSecureCookie"));
-            return;
-        }
-        let harness_path = dir.join("pii_auth_origin_mismatch.mjs");
-        let mut script = TEST_HARNESSES_V1[23].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-    #[test]
-    fn generated_pii_app_auth_smoke_enforces_capability_authorization() {
-        let dir = temp_dir("pii_auth_smoke");
-        service_scaffold_args(dir.clone(), "clinic_console", InitTemplate::PiiApp)
-            .run()
-            .expect("pii-app init should succeed");
-        let server_path = dir.join("pii-app/api/server.mjs");
-        if !node_available() {
-            eprintln!("node unavailable; validating static pii-app capability markers in scaffold");
-            let api = fs::read_to_string(&server_path).expect("read pii api");
-            assert!(api.contains("AUTH_FORBIDDEN"));
-            assert!(api.contains("required_capability"));
-            assert!(api.contains("pii.consent.grant"));
-            assert!(api.contains("pii.consent.revoke"));
-            assert!(api.contains("pii.records.retention.sweep"));
-            assert!(api.contains("pii.records.delete"));
-            assert!(api.contains("pii.records.read"));
-            return;
-        }
-        let state_file = dir.join(".shared_auth_state.json");
-        let harness_path = dir.join("pii_auth_smoke.mjs");
-        let mut script = TEST_HARNESSES_V1[24].to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        script = script.replace("__STATE_FILE__", &js_string_literal(&state_file));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
+            r#"parseCapabilityMap(process.env.AUTH_CAPABILITY_MAP_JSON ?? "", true)"#,
+        ],
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_on_invalid_capability_map_json,
+        "invalid_capability_map",
+        &[("AUTH_CAPABILITY_MAP_JSON", "{not-json")],
+        "AUTH_CAPABILITY_MAP_JSON is invalid JSON",
+        &["AUTH_CAPABILITY_MAP_JSON is invalid JSON"],
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_on_empty_capability_map_object,
+        "empty_capability_map_object",
+        &[("AUTH_CAPABILITY_MAP_JSON", "{}")],
+        "AUTH_CAPABILITY_MAP_JSON must define at least one principal",
+        &["AUTH_CAPABILITY_MAP_JSON must define at least one principal"],
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_on_non_object_capability_map,
+        "non_object_capability_map",
+        &[("AUTH_CAPABILITY_MAP_JSON", "[]")],
+        "AUTH_CAPABILITY_MAP_JSON must be an object",
+        &["AUTH_CAPABILITY_MAP_JSON must be an object"],
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_on_invalid_capability_map_principal,
+        "invalid_capability_map_principal",
+        &[(
+            "AUTH_CAPABILITY_MAP_JSON",
+            r#"{"not-a-public-key":["pii.records.read"]}"#,
+        )],
+        "AUTH_CAPABILITY_MAP_JSON principal must be 32 bytes of hex",
+        &["AUTH_CAPABILITY_MAP_JSON principal"],
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_on_empty_capability_array,
+        "empty_capability_array",
+        &[(
+            "AUTH_CAPABILITY_MAP_JSON",
+            r#"{"1111111111111111111111111111111111111111111111111111111111111111":[]}"#,
+        )],
+        "AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays",
+        &["AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays"],
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_on_non_array_capability_value,
+        "non_array_capability_value",
+        &[(
+            "AUTH_CAPABILITY_MAP_JSON",
+            r#"{"1111111111111111111111111111111111111111111111111111111111111111":"pii.records.read"}"#,
+        )],
+        "AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays",
+        &["AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays"],
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_on_non_string_capability,
+        "non_string_capability",
+        &[(
+            "AUTH_CAPABILITY_MAP_JSON",
+            r#"{"1111111111111111111111111111111111111111111111111111111111111111":[42]}"#,
+        )],
+        "AUTH_CAPABILITY_MAP_JSON capability must be a string",
+        &["AUTH_CAPABILITY_MAP_JSON capability"],
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_on_blank_capability,
+        "blank_capability",
+        &[(
+            "AUTH_CAPABILITY_MAP_JSON",
+            r#"{"1111111111111111111111111111111111111111111111111111111111111111":[" "]}"#,
+        )],
+        "AUTH_CAPABILITY_MAP_JSON capability must not be empty",
+        &["AUTH_CAPABILITY_MAP_JSON capability"],
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_on_invalid_public_base_url,
+        "invalid_public_base_url",
+        &[("PUBLIC_BASE_URL", "http://")],
+        "PUBLIC_BASE_URL is invalid",
+        &["PUBLIC_BASE_URL is invalid"],
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_on_invalid_session_ttl,
+        "invalid_session_ttl",
+        &[("AUTH_SESSION_TTL_SECS", "59")],
+        "AUTH_SESSION_TTL_SECS must be an integer in [60, 86400]",
+        &["AUTH_SESSION_TTL_SECS"],
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_on_non_numeric_session_ttl,
+        "non_numeric_session_ttl",
+        &[("AUTH_SESSION_TTL_SECS", "not-a-number")],
+        "AUTH_SESSION_TTL_SECS must be an integer in [60, 86400]",
+        &["AUTH_SESSION_TTL_SECS"],
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_on_invalid_challenge_ttl,
+        "invalid_challenge_ttl",
+        &[("AUTH_CHALLENGE_TTL_SECS", "4")],
+        "AUTH_CHALLENGE_TTL_SECS must be an integer in [5, 900]",
+        &["AUTH_CHALLENGE_TTL_SECS"],
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_on_challenge_ttl_above_max,
+        "challenge_ttl_above_max",
+        &[("AUTH_CHALLENGE_TTL_SECS", "901")],
+        "AUTH_CHALLENGE_TTL_SECS must be an integer in [5, 900]",
+        &["AUTH_CHALLENGE_TTL_SECS"],
+    );
+    pii_startup_failure_test!(
+        generated_pii_app_auth_startup_fails_on_invalid_external_state_boolean,
+        "invalid_external_state_boolean",
+        &[("AUTH_REQUIRE_EXTERNAL_SHARED_STATE", "maybe")],
+        "AUTH_REQUIRE_EXTERNAL_SHARED_STATE must be boolean (true/false/1/0)",
+        &["AUTH_REQUIRE_EXTERNAL_SHARED_STATE", "must be boolean"],
+    );
+    generated_auth_harness_test!(
+        generated_webapp_private_route_requires_non_empty_capability_map,
+        "webapp_auth_capability_map_required",
+        InitTemplate::Webapp,
+        &["AUTH_CAPABILITY_MAP_REQUIRED", "capability map is required"],
+        "webapp_auth_capability_map_required.mjs",
+        18,
+        false,
+    );
+    generated_auth_harness_test!(
+        generated_webapp_auth_smoke_rejects_replay_and_supports_shared_sessions,
+        "webapp_auth_smoke",
+        InitTemplate::Webapp,
+        &[
+            "AUTH_CHALLENGE_REPLAYED",
+            "AUTH_CHALLENGE_EXPIRED",
+            "AUTH_CHALLENGE_NOT_FOUND",
+            "AUTH_CHALLENGE_PRINCIPAL_MISMATCH",
+            "AUTH_SIGNATURE_INVALID",
+            "SameSite=Strict",
+            "/api/private/state"
+        ],
+        "webapp_auth_smoke.mjs",
+        19,
+        true,
+    );
+    generated_auth_harness_test!(
+        generated_webapp_auth_replay_lock_contention_is_fail_closed,
+        "webapp_auth_replay_lock_contention",
+        InitTemplate::Webapp,
+        &[
+            "acquireChallengeConsumeLock",
+            "statePutIfAbsent",
+            "AUTH_CHALLENGE_REPLAYED"
+        ],
+        "webapp_auth_replay_lock_contention.mjs",
+        20,
+        false,
+    );
+    generated_auth_harness_test!(
+        generated_pii_app_auth_replay_lock_contention_is_fail_closed,
+        "pii_auth_replay_lock_contention",
+        InitTemplate::PiiApp,
+        &[
+            "acquireChallengeConsumeLock",
+            "statePutIfAbsent",
+            "AUTH_CHALLENGE_REPLAYED"
+        ],
+        "pii_auth_replay_lock_contention.mjs",
+        21,
+        false,
+    );
+    generated_auth_harness_test!(
+        generated_webapp_auth_smoke_rejects_origin_mismatch,
+        "webapp_auth_origin_mismatch",
+        InitTemplate::Webapp,
+        &[
+            "AUTH_ORIGIN_MISMATCH",
+            "requestOrigin(req)",
+            "shouldUseSecureCookie"
+        ],
+        "webapp_auth_origin_mismatch.mjs",
+        22,
+        false,
+    );
+    generated_auth_harness_test!(
+        generated_pii_app_auth_smoke_rejects_origin_mismatch,
+        "pii_auth_origin_mismatch",
+        InitTemplate::PiiApp,
+        &[
+            "AUTH_ORIGIN_MISMATCH",
+            "requestOrigin(req)",
+            "shouldUseSecureCookie"
+        ],
+        "pii_auth_origin_mismatch.mjs",
+        23,
+        false,
+    );
+    generated_auth_harness_test!(
+        generated_pii_app_auth_smoke_enforces_capability_authorization,
+        "pii_auth_smoke",
+        InitTemplate::PiiApp,
+        &[
+            "AUTH_FORBIDDEN",
+            "required_capability",
+            "pii.consent.grant",
+            "pii.consent.revoke",
+            "pii.records.retention.sweep",
+            "pii.records.delete",
+            "pii.records.read"
+        ],
+        "pii_auth_smoke.mjs",
+        24,
+        true,
+    );
     #[test]
     fn generated_pii_app_auth_core_normalizes_capabilities_and_parses_success_values() {
         run_generated_pii_app_auth_core_harness(

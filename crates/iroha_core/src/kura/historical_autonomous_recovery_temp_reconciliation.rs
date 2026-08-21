@@ -299,7 +299,7 @@ impl Kura {
         let mut by_recovery = BTreeMap::new();
         let mut by_slot = BTreeMap::new();
         let mut by_proposal = BTreeMap::new();
-        let mut by_transaction = BTreeMap::new();
+        let mut by_entrypoint = BTreeMap::new();
         for artifact in artifacts {
             let record = &artifact.record;
             let descriptor = &record.payload.origin_proposal.descriptor;
@@ -334,8 +334,8 @@ impl Kura {
                 }
             }
             for key in &record.reservation_group.ordered_keys {
-                if by_transaction
-                    .insert(key.signed_transaction_hash, record.recovery_id)
+                if by_entrypoint
+                    .insert(key.entrypoint_hash, record.recovery_id)
                     .is_some_and(|existing| existing != record.recovery_id)
                 {
                     return Err(Self::invalid_historical_autonomous_recovery(

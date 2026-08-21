@@ -9,8 +9,10 @@ async fn handler_post_transaction_entrypoint_uses_authenticated_api_token_rate_l
         app_mut.require_api_token = true;
         app_mut.api_tokens_set = Arc::new(HashSet::from(["entrypoint-token".to_owned()]));
     }
-    let first_keypair = checked_torii_test_ed25519_keypair(0xc7, "derive first entrypoint API-token fixture key");
-    let second_keypair = checked_torii_test_ed25519_keypair(0xc8, "derive second entrypoint API-token fixture key");
+    let first_keypair =
+        checked_torii_test_ed25519_keypair(0xc7, "derive first entrypoint API-token fixture key");
+    let second_keypair =
+        checked_torii_test_ed25519_keypair(0xc8, "derive second entrypoint API-token fixture key");
     let network_id = *app.state.network_id_ref();
     let tx1 = signed_log_transaction_for_test(
         network_id,
@@ -26,10 +28,9 @@ async fn handler_post_transaction_entrypoint_uses_authenticated_api_token_rate_l
     );
     let mut headers = HeaderMap::new();
     headers.insert("x-api-token", HeaderValue::from_static("entrypoint-token"));
-    let first =
-        post_external_transaction_entrypoint_for_test(app.clone(), headers.clone(), tx1)
-            .await
-            .expect("first token-keyed entrypoint accepted");
+    let first = post_external_transaction_entrypoint_for_test(app.clone(), headers.clone(), tx1)
+        .await
+        .expect("first token-keyed entrypoint accepted");
     assert_eq!(first.status(), StatusCode::ACCEPTED);
     let err = match post_external_transaction_entrypoint_for_test(app, headers, tx2).await {
         Ok(_) => panic!("expected shared token rate limit"),
@@ -46,7 +47,10 @@ async fn handler_post_transaction_entrypoint_reports_full_queue_before_rate_limi
         app_mut.fee_policy = FeePolicy::Disabled;
     }
     install_single_slot_transaction_queue(&mut app);
-    let keypair = checked_torii_test_ed25519_keypair(0xcf, "derive entrypoint queue-before-rate-limit fixture key");
+    let keypair = checked_torii_test_ed25519_keypair(
+        0xcf,
+        "derive entrypoint queue-before-rate-limit fixture key",
+    );
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
     let tx1 = signed_log_transaction_for_test(
@@ -55,16 +59,20 @@ async fn handler_post_transaction_entrypoint_reports_full_queue_before_rate_limi
         "entrypoint-queue-before-rate-1",
         &keypair,
     );
-    let tx2 = signed_log_transaction_for_test(network_id, authority, "entrypoint-queue-before-rate-2", &keypair);
+    let tx2 = signed_log_transaction_for_test(
+        network_id,
+        authority,
+        "entrypoint-queue-before-rate-2",
+        &keypair,
+    );
     let mut headers = HeaderMap::new();
     headers.insert(
         "x-api-token",
         HeaderValue::from_static("entrypoint-queue-before-rate"),
     );
-    let first =
-        post_external_transaction_entrypoint_for_test(app.clone(), headers.clone(), tx1)
-            .await
-            .expect("first entrypoint should fill the queue");
+    let first = post_external_transaction_entrypoint_for_test(app.clone(), headers.clone(), tx1)
+        .await
+        .expect("first entrypoint should fill the queue");
     assert_eq!(first.status(), StatusCode::ACCEPTED);
     let err = match post_external_transaction_entrypoint_for_test(app.clone(), headers, tx2).await {
         Ok(_) => panic!("expected queue full before token rate limit"),
@@ -83,7 +91,10 @@ async fn handler_post_transaction_honors_prefer_return_minimal() {
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair = checked_torii_test_ed25519_keypair(0xc9, "derive minimal post-transaction response fixture key");
+    let keypair = checked_torii_test_ed25519_keypair(
+        0xc9,
+        "derive minimal post-transaction response fixture key",
+    );
     let authority = AccountId::new(keypair.public_key().clone());
     let transaction = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
@@ -106,7 +117,7 @@ async fn handler_post_transaction_honors_prefer_return_minimal() {
         Some(PREFER_RETURN_MINIMAL)
     );
     assert_eq!(
-        torii_response_header(&response, "x-iroha-transaction-hash"),
+        torii_response_header(&response, "x-iroha-entrypoint-hash"),
         Some(submitted_hash.as_str())
     );
     let body = torii_body_bytes(response, "body").await;
@@ -250,7 +261,8 @@ async fn transaction_batch_queue_capacity_rejects_before_transaction_decode() {
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
     install_single_slot_transaction_queue(&mut app);
-    let keypair = checked_torii_test_ed25519_keypair(0xaf, "derive batch queue-capacity fixture key");
+    let keypair =
+        checked_torii_test_ed25519_keypair(0xaf, "derive batch queue-capacity fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let transaction = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
@@ -294,10 +306,14 @@ async fn handler_post_transactions_batch_accepts_multiple_payloads() {
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair = checked_torii_test_ed25519_keypair(0xca, "derive post-transaction batch submit fixture key");
+    let keypair = checked_torii_test_ed25519_keypair(
+        0xca,
+        "derive post-transaction batch submit fixture key",
+    );
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = signed_log_transaction_for_test(network_id, authority.clone(), "batch-submit-1", &keypair);
+    let tx1 =
+        signed_log_transaction_for_test(network_id, authority.clone(), "batch-submit-1", &keypair);
     let tx2 = signed_log_transaction_for_test(network_id, authority, "batch-submit-2", &keypair);
     let payloads = vec![
         iroha_version::codec::EncodeVersioned::encode_versioned(&tx1),
@@ -327,7 +343,8 @@ async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_bat
         app_mut.require_api_token = true;
         app_mut.api_tokens_set = Arc::new(HashSet::from(["batch-token".to_owned()]));
     }
-    let keypair = checked_torii_test_ed25519_keypair(0xcb, "derive post-transaction batch token fixture key");
+    let keypair =
+        checked_torii_test_ed25519_keypair(0xcb, "derive post-transaction batch token fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
     let payloads = (0..3)
@@ -418,7 +435,8 @@ async fn handler_post_transactions_batch_rejects_invalid_ed25519_precheck_withou
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair = checked_torii_test_ed25519_keypair(0xd0, "derive invalid precheck batch fixture key");
+    let keypair =
+        checked_torii_test_ed25519_keypair(0xd0, "derive invalid precheck batch fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
     let tx1 = signed_log_transaction_for_test(
@@ -427,7 +445,8 @@ async fn handler_post_transactions_batch_rejects_invalid_ed25519_precheck_withou
         "batch-valid-before-invalid",
         &keypair,
     );
-    let tx2 = signed_log_transaction_for_test(network_id, authority, "batch-invalid-signature", &keypair);
+    let tx2 =
+        signed_log_transaction_for_test(network_id, authority, "batch-invalid-signature", &keypair);
     let tx2 = transaction_with_invalid_signature_for_test(tx2);
     let payloads = vec![
         iroha_version::codec::EncodeVersioned::encode_versioned(&tx1),
@@ -453,9 +472,11 @@ async fn handler_post_transactions_batch_rejects_invalid_ed25519_precheck_withou
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history() {
-    let keypair = checked_torii_test_ed25519_keypair(0xd1, "derive unfunded fee fixture authority key");
+    let keypair =
+        checked_torii_test_ed25519_keypair(0xd1, "derive unfunded fee fixture authority key");
     let authority = AccountId::new(keypair.public_key().clone());
-    let fee_sink_keypair = checked_torii_test_ed25519_keypair(0xd2, "derive unfunded fee fixture sink key");
+    let fee_sink_keypair =
+        checked_torii_test_ed25519_keypair(0xd2, "derive unfunded fee fixture sink key");
     let fee_sink = AccountId::new(fee_sink_keypair.public_key().clone());
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let fee_asset_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -499,7 +520,7 @@ async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history()
     );
     assert_eq!(app.queue.active_len(), 0);
     assert!(
-        !app.state.has_committed_transaction(tx_hash),
+        !app.state.has_committed_entrypoint(tx.hash_as_entrypoint()),
         "ingress rejection should not create committed history"
     );
     let explorer = super::handler_explorer_transaction_detail(
@@ -565,10 +586,12 @@ async fn handler_post_transaction_high_load_threshold_does_not_reject_before_enq
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = 1;
-    let keypair = checked_torii_test_ed25519_keypair(0xd3, "derive high-load threshold fixture key");
+    let keypair =
+        checked_torii_test_ed25519_keypair(0xd3, "derive high-load threshold fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = signed_log_transaction_for_test(network_id, authority.clone(), "early-shed-1", &keypair);
+    let tx1 =
+        signed_log_transaction_for_test(network_id, authority.clone(), "early-shed-1", &keypair);
     let tx2 = signed_log_transaction_for_test(network_id, authority, "early-shed-2", &keypair);
     let first = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &tx1)
         .await
@@ -587,10 +610,12 @@ async fn handler_post_transaction_allows_enqueue_when_queue_age_saturates() {
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair = checked_torii_test_ed25519_keypair(0xd4, "derive queue-age saturation fixture key");
+    let keypair =
+        checked_torii_test_ed25519_keypair(0xd4, "derive queue-age saturation fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = signed_log_transaction_for_test(network_id, authority.clone(), "age-shed-1", &keypair);
+    let tx1 =
+        signed_log_transaction_for_test(network_id, authority.clone(), "age-shed-1", &keypair);
     let tx2 = signed_log_transaction_for_test(network_id, authority, "age-shed-2", &keypair);
     let first = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &tx1)
         .await
@@ -626,7 +651,8 @@ async fn handler_post_transaction_returns_queue_full_only_for_real_capacity_over
     let keypair = checked_torii_test_ed25519_keypair(0xd5, "derive queue capacity fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = signed_log_transaction_for_test(network_id, authority.clone(), "queue-full-1", &keypair);
+    let tx1 =
+        signed_log_transaction_for_test(network_id, authority.clone(), "queue-full-1", &keypair);
     let tx2 = signed_log_transaction_for_test(network_id, authority, "queue-full-2", &keypair);
     let first = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &tx1)
         .await
@@ -649,10 +675,12 @@ async fn handler_post_transaction_does_not_early_shed_when_only_inflight_tx_is_o
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair = checked_torii_test_ed25519_keypair(0xd6, "derive in-flight queue age fixture key");
+    let keypair =
+        checked_torii_test_ed25519_keypair(0xd6, "derive in-flight queue age fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = signed_log_transaction_for_test(network_id, authority.clone(), "age-inflight-1", &keypair);
+    let tx1 =
+        signed_log_transaction_for_test(network_id, authority.clone(), "age-inflight-1", &keypair);
     let tx2 = signed_log_transaction_for_test(network_id, authority, "age-inflight-2", &keypair);
     let _ = app
         .queue
@@ -1577,39 +1605,39 @@ fn run_account_route_matrix_case(case: AccountRouteMatrixCase) {
     let governance_dataspace = DataSpaceId::new(1);
     let restricted_dataspace = DataSpaceId::new(10);
     let mut app = match case {
-        AccountRouteMatrixCase::AccountSigned => mk_app_state_for_tests_with_world(
-            world_with_account_bound_to_dataspace(
+        AccountRouteMatrixCase::AccountSigned => {
+            mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
                 &authority,
                 UniversalAccountId::from_hash(Hash::new(b"torii::target-account-routes")),
                 restricted_dataspace,
-            ),
-        ),
-        AccountRouteMatrixCase::AccountUnsigned => mk_app_state_for_tests_with_world(
-            world_with_account_bound_to_dataspace(
+            ))
+        }
+        AccountRouteMatrixCase::AccountUnsigned => {
+            mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
                 &authority,
                 UniversalAccountId::from_hash(Hash::new(b"torii::public-account-routes")),
                 restricted_dataspace,
-            ),
-        ),
+            ))
+        }
         AccountRouteMatrixCase::AccountAssets => {
             mk_app_state_for_tests_with_world(world_with_account(&authority))
         }
-        AccountRouteMatrixCase::PermissionsSigned => mk_app_state_for_tests_with_world(
-            world_with_account_bound_to_dataspace(
+        AccountRouteMatrixCase::PermissionsSigned => {
+            mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
                 &authority,
                 UniversalAccountId::from_hash(Hash::new(b"torii::permissions-account-routes")),
                 restricted_dataspace,
-            ),
-        ),
-        AccountRouteMatrixCase::PermissionsUnsigned => mk_app_state_for_tests_with_world(
-            world_with_account_bound_to_dataspace(
+            ))
+        }
+        AccountRouteMatrixCase::PermissionsUnsigned => {
+            mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
                 &authority,
                 UniversalAccountId::from_hash(Hash::new(
                     b"torii::permissions-public-account-routes",
                 )),
                 restricted_dataspace,
-            ),
-        ),
+            ))
+        }
         AccountRouteMatrixCase::TargetUnknown | AccountRouteMatrixCase::NexusTargetUnknown => {
             mk_app_state_for_tests()
         }
@@ -1657,11 +1685,9 @@ fn run_account_route_matrix_case(case: AccountRouteMatrixCase) {
         .map(|route| route.dataspace_id)
         .collect::<std::collections::BTreeSet<_>>();
     let expected = match case {
-        AccountRouteMatrixCase::AccountUnsigned
-        | AccountRouteMatrixCase::PermissionsUnsigned => std::collections::BTreeSet::from([
-            DataSpaceId::UNIVERSAL,
-            governance_dataspace,
-        ]),
+        AccountRouteMatrixCase::AccountUnsigned | AccountRouteMatrixCase::PermissionsUnsigned => {
+            std::collections::BTreeSet::from([DataSpaceId::UNIVERSAL, governance_dataspace])
+        }
         _ => std::collections::BTreeSet::from([
             DataSpaceId::UNIVERSAL,
             governance_dataspace,
@@ -2340,8 +2366,7 @@ async fn handler_space_directory_manifests_executes_configured_dataspace_route_l
         torii_response_header(&response, "x-iroha-route-dataspace-id"),
         Some(restricted_dataspace.as_u64().to_string().as_str())
     );
-    let json =
-        decode_torii_json(response, "manifest handler body", "manifest handler json").await;
+    let json = decode_torii_json(response, "manifest handler body", "manifest handler json").await;
     assert_eq!(json["total"].as_u64(), Some(1));
     let manifests = json["manifests"].as_array().expect("manifests array");
     assert_eq!(manifests.len(), 1);

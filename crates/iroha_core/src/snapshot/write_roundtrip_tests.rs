@@ -41,6 +41,18 @@ async fn can_read_snapshot_after_writing() {
 async fn generated_snapshot_passes_restart_validation_before_publication() {
     let state = state_factory();
     let snapshot_bytes = exact_snapshot_payload_bytes(&state);
+    let snapshot: json::Value =
+        json::from_slice(&snapshot_bytes).expect("writer snapshot must be canonical JSON");
+    let json::Value::Object(snapshot) = snapshot else {
+        panic!("writer snapshot must be an object");
+    };
+    for field in ["commit_topology", "prev_commit_topology"] {
+        let Some(json::Value::Object(cell)) = snapshot.get(field) else {
+            panic!("{field} must retain its exact MV cell envelope");
+        };
+        assert_eq!(cell.len(), 2, "{field} must retain exactly two MV roles");
+        assert!(cell.contains_key("revert") && cell.contains_key("blocks"));
+    }
     validate_generated_snapshot_for_restart(&state, &snapshot_bytes)
         .expect("writer-generated snapshot must survive restart initialization exactly");
 }
@@ -310,174 +322,6 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
     contract_bindings.commit();
 }
 #[tokio::test]
-async fn historical_finality_bundle_survives_validator_lifecycle_and_snapshot_restart() {
-    let _history_guard = crate::sumeragi::status::commit_history_test_guard();
-    crate::sumeragi::status::reset_commit_certs_for_tests();
-    let tmp_root = tempdir().expect("snapshot tempdir");
-    let store_dir = tmp_root.path().join("snapshot");
-    let kura_store_dir = tmp_root.path().join("kura");
-    let lane_config = LaneConfig::default();
-    let kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::new(&kura_config, &lane_config).expect("create persistent Kura");
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
-    let block1 = signed_block_with_transaction(accepted_log_transaction("historical-1"));
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
-    let block2 = signed_block_after_transaction(
-        accepted_log_transaction("historical-finality-snapshot-restart"),
-        Some(block1.as_ref()),
-    );
-    let block_hash = block2.hash();
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
-    let block3 = signed_block_after_transaction(
-        accepted_log_transaction("historical-3"),
-        Some(block2.as_ref()),
-    );
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
-    let historical_validator = checked_random_snapshot_bls_keypair();
-    let expected_pop = model_rotated_disabled_removed_validator(&mut state, &historical_validator);
-    let commit_qc =
-        signed_commit_qc_for_snapshot(&state.network_id, block_hash, 2, &historical_validator);
-    state.insert_commit_qc_for_testing(block_hash, commit_qc.clone());
-    store_complete_snapshot_commit_evidence_for_blocks(
-        &state,
-        &kura,
-        &[Arc::clone(&block1), Arc::clone(&block2), block3],
-    );
-    let snapshot_key = checked_random_snapshot_keypair();
-    try_write_snapshot(&state, &store_dir, &snapshot_key, TEST_CHUNK_SIZE)
-        .expect("write snapshot with historical finality archive");
-    let payload_len = kura
-        .advertise_required_replicas_for_bench(nonzero!(2_usize))
-        .expect("historical block payload length");
-    let freed = kura
-        .evict_block_bodies_for_bench(payload_len)
-        .expect("evict historical block into durable DA sidecar");
-    assert!(freed >= payload_len);
-    let expected_network_id = state.network_id.clone();
-    drop(state);
-    drop(kura);
-    let (kura, block_count) =
-        Kura::new(&kura_config, &lane_config).expect("reopen Kura after body eviction");
-    assert_eq!(
-        kura.get_block(nonzero!(2_usize)).map(|block| block.hash()),
-        Some(block_hash),
-        "reopened Kura must load the exact historical body from its DA sidecar"
-    );
-    assert!(
-        kura.read_roster_metadata(2).is_none(),
-        "fixture must require the snapshot archive rather than a Kura roster sidecar"
-    );
-    let restored = try_read_snapshot(
-        &store_dir,
-        &kura,
-        LiveQueryStore::start_test,
-        block_count,
-        TEST_CHUNK_SIZE,
-        snapshot_key.public_key(),
-        &expected_network_id,
-        &crate::state::default_zk_config(),
-        #[cfg(feature = "telemetry")]
-        StateTelemetry::new(<_>::default(), true),
-    )
-    .expect("restore historical finality archive from snapshot");
-    assert_eq!(
-        restored.commit_qc_for_block(2, block_hash),
-        Some(commit_qc.clone()),
-        "snapshot restart must restore the exact historical commit QC"
-    );
-    assert!(
-        crate::sumeragi::status::commit_qc_history().is_empty(),
-        "fixture must require durable state rather than process-local QC history"
-    );
-    let historical_id = derive_validator_key_id(historical_validator.public_key());
-    let restored_world = restored.world.view();
-    let historical_record = restored_world
-        .consensus_keys
-        .get(&historical_id)
-        .expect("restored historical consensus key");
-    assert_eq!(historical_record.status, ConsensusKeyStatus::Disabled);
-    assert_eq!(
-        historical_record.pop.as_deref(),
-        Some(expected_pop.as_slice())
-    );
-    assert!(
-        restored_world
-            .peers
-            .iter()
-            .all(|peer| { peer.public_key() != historical_validator.public_key() })
-    );
-    assert!(
-        restored_world
-            .consensus_keys
-            .iter()
-            .any(|(_, record)| { record.replaces.as_ref() == Some(&historical_id) })
-    );
-    drop(restored_world);
-    crate::sumeragi::status::reset_commit_certs_for_tests();
-}
-#[tokio::test]
-async fn signed_snapshot_rejects_malformed_historical_commit_qc_archive_entries() {
-    let tmp_root = tempdir().expect("snapshot tempdir");
-    let kura = Kura::blank_kura_for_testing();
-    let mut state = state_factory_with_kura_and_chain(
-        Arc::clone(&kura),
-        iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
-    );
-    let block = signed_block_with_transaction(accepted_log_transaction(
-        "malformed-historical-commit-qc-archive",
-    ));
-    let block_hash = block.hash();
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block));
-    let validator = checked_random_snapshot_bls_keypair();
-    let valid = signed_commit_qc_for_snapshot(&state.network_id, block_hash, 1, &validator);
-    let other_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE7; Hash::LENGTH]));
-    let malformed = [
-        ("wrong-phase", {
-            let mut qc = valid.clone();
-            qc.phase = Phase::Prepare;
-            qc
-        }),
-        ("wrong-height", {
-            let mut qc = valid.clone();
-            qc.height = 2;
-            qc
-        }),
-        ("wrong-subject-hash", {
-            let mut qc = valid;
-            qc.subject_block_hash = other_hash;
-            qc
-        }),
-    ];
-    let snapshot_key = checked_random_snapshot_keypair();
-    store_complete_snapshot_commit_evidence_for_blocks(&state, &kura, std::slice::from_ref(&block));
-    for (label, malformed_qc) in malformed {
-        state.insert_commit_qc_for_testing(block_hash, malformed_qc);
-        let store_dir = tmp_root.path().join(label);
-        try_write_snapshot(&state, &store_dir, &snapshot_key, TEST_CHUNK_SIZE)
-            .expect("write adversarially signed snapshot fixture");
-        let error = match try_read_snapshot(
-            &store_dir,
-            &kura,
-            LiveQueryStore::start_test,
-            BlockCount(1),
-            TEST_CHUNK_SIZE,
-            snapshot_key.public_key(),
-            &state.network_id,
-            &crate::state::default_zk_config(),
-            #[cfg(feature = "telemetry")]
-            StateTelemetry::new(<_>::default(), true),
-        ) {
-            Ok(_) => panic!("signed snapshot with malformed commit-QC archive must reject"),
-            Err(error) => error,
-        };
-        assert!(
-            matches!(error, TryReadError::Serialization(_)),
-            "unexpected {label} archive rejection: {error:?}"
-        );
-    }
-}
-#[tokio::test]
 async fn snapshot_roundtrip_preserves_exact_sccp_registry() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
@@ -534,9 +378,14 @@ async fn snapshot_roundtrip_preserves_exact_sccp_registry() {
 }
 #[tokio::test]
 async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
-    for (scope, expected_field) in [
-        ("root", "state.future_snapshot_field"),
-        ("world", "world.sccp_registry_v2"),
+    for (scope, field_name, expected_field) in [
+        (
+            "root",
+            "future_snapshot_field",
+            "state.future_snapshot_field",
+        ),
+        ("world", "sccp_registry_v2", "world.sccp_registry_v2"),
+        ("world", "commit_qcs", "world.commit_qcs"),
     ] {
         let tmp_root = tempdir().expect("temporary snapshot root");
         let store_dir = tmp_root.path().join("snapshot");
@@ -553,7 +402,7 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
             "root" => {
                 assert!(
                     snapshot_object
-                        .insert("future_snapshot_field".to_owned(), json::Value::Null,)
+                        .insert(field_name.to_owned(), json::Value::Null,)
                         .is_none()
                 );
             }
@@ -563,7 +412,7 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
                 };
                 assert!(
                     world
-                        .insert("sccp_registry_v2".to_owned(), json::Value::Null)
+                        .insert(field_name.to_owned(), json::Value::Null)
                         .is_none()
                 );
             }

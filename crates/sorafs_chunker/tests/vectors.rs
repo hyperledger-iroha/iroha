@@ -376,3 +376,6 @@ fn json_fixture_in_sync_with_vectors() {
     let expected_digests = vectors.blake3_digest_hexes();
     assert_eq!(digest_strings, expected_digests);
 }
+
+#[path = "backpressure.rs"]
+mod backpressure;

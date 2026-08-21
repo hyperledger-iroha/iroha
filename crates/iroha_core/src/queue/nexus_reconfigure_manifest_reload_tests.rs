@@ -47,7 +47,6 @@ fn nexus_reconfigure_does_not_revive_unknown_manifest_without_explicit_reload() 
     )
     .expect("expanded catalog");
     let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
     nexus.governance = governance;
     nexus.registry = registry_cfg;
     nexus.lane_catalog = expanded.clone();

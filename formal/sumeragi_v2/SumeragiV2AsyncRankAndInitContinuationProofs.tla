@@ -51,14 +51,14 @@ BY FS_EmptySet, Zenon
        AsyncProducerTypeInvariant, AsyncProducerTypeInvariantAt,
        AsyncProducerJournalClosed, AsyncProducerJournalClosedAt
 
-THEOREM AsyncInitEstablishesServeProducerEpisodeTypeInvariant ==
+THEOREM AsyncInitEstablishesServeProducerTurnTypeInvariant ==
   \A initialContext:
     AsyncInitAt(initialContext)
-      => AsyncServeProducerEpisodeTypeInvariant
+      => AsyncServeProducerTurnTypeInvariant
 BY Zenon
    DEF AsyncInitAt, AsyncBaseInitAt,
-       AsyncServeProducerEpisodeInit,
-       AsyncServeProducerEpisodeTypeInvariant
+       AsyncServeProducerTurnInit,
+       AsyncServeProducerTurnTypeInvariant
 
 THEOREM AsyncInitEstablishesSchedulerType ==
   \A initialContext:

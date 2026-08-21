@@ -1,10 +1,7 @@
 //! Re-sign a Norito-framed genesis block with the configured genesis key.
 use eyre::{Result, eyre};
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
-use iroha_data_model::{
-    block::SignedBlock,
-    confidential::{CONFIDENTIAL_RULES_VERSION, ConfidentialFeatureDigest},
-};
+use iroha_crypto::{Algorithm, KeyPair, MerkleTree, PrivateKey, SignatureOf};
+use iroha_data_model::block::{BlockSignature, SignedBlock};
 use std::{
     env,
     fs::{self, File},
@@ -17,7 +14,7 @@ fn main() -> Result<()> {
     let args = Args::parse()?;
     let key_pair = args.load_key_pair()?;
     let block = iroha_genesis::read_signed_genesis(&args.input)?;
-    let resigned = resign_block(&block, &key_pair, args.zk_policy_hash)?;
+    let resigned = resign_block(&block, &key_pair)?;
     let framed = resigned.encode_wire()?;
     if framed.len() > iroha_genesis::SIGNED_GENESIS_MAX_BYTES_V1 {
         return Err(eyre!(
@@ -43,7 +40,6 @@ struct Args {
     private_key_file: Option<PathBuf>,
     seed: Option<String>,
     algorithm: Algorithm,
-    zk_policy_hash: Option<[u8; 32]>,
 }
 impl Args {
     fn parse() -> Result<Self> {
@@ -53,7 +49,6 @@ impl Args {
         let mut private_key_file = None;
         let mut seed = None;
         let mut algorithm = Algorithm::default();
-        let mut zk_policy_hash = None;
         let mut args = env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -68,12 +63,6 @@ impl Args {
                     algorithm = next_value(&mut args, "--algorithm")?
                         .parse()
                         .map_err(|err| eyre!("invalid --algorithm: {err}"))?;
-                }
-                "--zk-policy-hash-hex" => {
-                    zk_policy_hash = Some(parse_hex_32(&next_value(
-                        &mut args,
-                        "--zk-policy-hash-hex",
-                    )?)?);
                 }
                 "-h" | "--help" => {
                     print_help();
@@ -102,7 +91,6 @@ impl Args {
             private_key_file,
             seed,
             algorithm,
-            zk_policy_hash,
         })
     }
     fn load_key_pair(&self) -> Result<KeyPair> {
@@ -166,82 +154,77 @@ fn next_value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<Str
 fn print_help() {
     println!(
         "Usage: genesis_resign --input genesis.signed.nrt --output fixed.nrt \\
-         (--seed SEED | --private-key HEX | --private-key-file PATH) [--algorithm ed25519] \\
-         [--zk-policy-hash-hex HEX]"
+         (--seed SEED | --private-key HEX | --private-key-file PATH) [--algorithm ed25519]"
     );
 }
-fn parse_hex_32(hex: &str) -> Result<[u8; 32]> {
-    let compact = hex.trim();
-    if compact.len() != 64 {
+fn validate_resignable_genesis(block: &SignedBlock) -> Result<()> {
+    if !block.header().is_genesis() {
+        return Err(eyre!("refusing to re-sign a non-genesis block"));
+    }
+    if !block.has_results() {
         return Err(eyre!(
-            "--zk-policy-hash-hex must be exactly 64 hexadecimal characters"
+            "refusing to re-sign a resultless genesis proposal; materialize execution results first"
         ));
     }
-    let mut bytes = [0_u8; 32];
-    for (index, byte) in bytes.iter_mut().enumerate() {
-        let start = index * 2;
-        *byte = u8::from_str_radix(&compact[start..start + 2], 16)
-            .map_err(|err| eyre!("invalid --zk-policy-hash-hex: {err}"))?;
+    let entrypoint_count = block.entrypoint_hashes().len();
+    let result_count = block.results().len();
+    if result_count != entrypoint_count {
+        return Err(eyre!(
+            "refusing to re-sign genesis with {result_count} results for {entrypoint_count} entrypoints"
+        ));
     }
-    Ok(bytes)
+    if block.results().any(|result| result.as_ref().is_err()) {
+        return Err(eyre!(
+            "refusing to re-sign genesis containing rejected execution results"
+        ));
+    }
+    block
+        .validate_entrypoint_merkle_cache()
+        .map_err(|error| eyre!("invalid genesis entrypoint Merkle cache: {error}"))?;
+    block
+        .validate_result_merkle_cache()
+        .map_err(|error| eyre!("invalid genesis result Merkle cache: {error}"))?;
+    let expected_result_root = block.result_hashes().collect::<MerkleTree<_>>().root();
+    if block.header().result_merkle_root() != expected_result_root {
+        return Err(eyre!(
+            "refusing to re-sign genesis with a non-canonical result Merkle root"
+        ));
+    }
+    let minimum_committed_fragments = u64::try_from(result_count)
+        .map_err(|_| eyre!("genesis result count exceeds the canonical u64 range"))?;
+    let actual_committed_fragments = block
+        .committed_fragment_count()
+        .ok_or_else(|| eyre!("genesis execution result is missing its committed fragment count"))?;
+    if actual_committed_fragments < minimum_committed_fragments {
+        return Err(eyre!(
+            "refusing to re-sign genesis with committed fragment count {actual_committed_fragments}; minimum {minimum_committed_fragments} for {result_count} successful result rows"
+        ));
+    }
+    Ok(())
 }
-fn confidential_features_with_policy_hash(
-    existing: Option<ConfidentialFeatureDigest>,
-    hash: [u8; 32],
-) -> ConfidentialFeatureDigest {
-    let mut digest = existing.unwrap_or_else(|| {
-        ConfidentialFeatureDigest::new(None, None, None, Some(CONFIDENTIAL_RULES_VERSION), None)
-    });
-    digest.zk_policy_hash = Some(hash);
-    digest
-}
-fn resign_block(
-    block: &SignedBlock,
-    key_pair: &KeyPair,
-    zk_policy_hash: Option<[u8; 32]>,
-) -> Result<SignedBlock> {
-    let transactions = block.external_transactions().cloned().collect::<Vec<_>>();
-    let confidential_features = zk_policy_hash.map_or_else(
-        || block.header().confidential_features,
-        |hash| {
-            Some(confidential_features_with_policy_hash(
-                block.header().confidential_features,
-                hash,
-            ))
-        },
+fn resign_block(block: &SignedBlock, key_pair: &KeyPair) -> Result<SignedBlock> {
+    validate_resignable_genesis(block)?;
+    let mut resigned = block.clone();
+    let signature = BlockSignature::new(
+        0,
+        SignatureOf::try_from_hash(key_pair.private_key(), resigned.hash())
+            .map_err(|error| eyre!("sign canonical genesis block: {error}"))?,
     );
-    SignedBlock::try_genesis_with_da_proof_policies(
-        transactions,
-        key_pair.private_key(),
-        confidential_features,
-        block.da_commitments().cloned(),
-        block.da_proof_policies().cloned(),
-    )
-    .map_err(|err| eyre!("rebuild canonical genesis block: {err}"))
+    resigned
+        .replace_signatures([signature].into_iter().collect())
+        .map_err(|error| eyre!("replace genesis signatures: {error}"))?;
+    Ok(resigned)
 }
 #[cfg(test)]
 mod tests {
-    use super::{
-        MAX_GENESIS_PRIVATE_KEY_FILE_BYTES, confidential_features_with_policy_hash, parse_hex_32,
-        read_genesis_private_key_file,
+    use super::{MAX_GENESIS_PRIVATE_KEY_FILE_BYTES, read_genesis_private_key_file, resign_block};
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::{
+        account::AccountId,
+        block::SignedBlock,
+        transaction::{FeePaymentIntent, TransactionBuilder},
+        trigger::DataTriggerSequence,
     };
-    use iroha_data_model::confidential::{CONFIDENTIAL_RULES_VERSION, ConfidentialFeatureDigest};
-    #[test]
-    fn parse_hex_32_accepts_exact_hash() {
-        let hash = parse_hex_32("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
-            .expect("valid hash");
-        assert_eq!(hash[0], 0x00);
-        assert_eq!(hash[1], 0x01);
-        assert_eq!(hash[31], 0x1f);
-    }
-    #[test]
-    fn parse_hex_32_rejects_bad_length_and_characters() {
-        assert!(parse_hex_32("00").is_err());
-        assert!(
-            parse_hex_32("zz0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
-                .is_err()
-        );
-    }
     #[test]
     fn private_key_reader_rejects_first_byte_over_limit() {
         let directory = tempfile::tempdir().expect("create private-key reader directory");
@@ -253,28 +236,77 @@ mod tests {
         assert!(error.to_string().contains("at most"));
     }
     #[test]
-    fn confidential_features_with_policy_hash_preserves_existing_commitments() {
-        let existing = ConfidentialFeatureDigest::new(
-            Some([0x11; 32]),
-            Some(7),
-            Some(9),
-            Some(3),
-            Some([0x22; 32]),
-        );
-        let updated = confidential_features_with_policy_hash(Some(existing), [0x33; 32]);
-        assert_eq!(updated.vk_set_hash, Some([0x11; 32]));
-        assert_eq!(updated.poseidon_params_id, Some(7));
-        assert_eq!(updated.pedersen_params_id, Some(9));
-        assert_eq!(updated.conf_rules_version, Some(3));
-        assert_eq!(updated.zk_policy_hash, Some([0x33; 32]));
+    fn resign_preserves_the_exact_genesis_body() {
+        let original_key = KeyPair::random();
+        let replacement_key = KeyPair::random();
+        let authority = AccountId::new(original_key.public_key().clone());
+        let transaction = TransactionBuilder::new_genesis(
+            authority,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(original_key.private_key());
+        let mut block =
+            SignedBlock::genesis(vec![transaction], original_key.private_key(), None, None);
+        let entrypoint_hashes = block.entrypoint_hashes().collect::<Vec<_>>();
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &entrypoint_hashes,
+                vec![Ok(DataTriggerSequence::default())],
+            )
+            .expect("attach executed genesis result");
+        block.set_committed_fragment_count(3);
+        assert!(block.has_results());
+        let resigned = resign_block(&block, &replacement_key).expect("re-sign genesis");
+        assert_eq!(resigned.payload(), block.payload());
+        assert_eq!(resigned.has_results(), block.has_results());
+        assert_eq!(resigned.committed_fragment_count(), Some(3));
+        let signatures = resigned.signatures().collect::<Vec<_>>();
+        assert_eq!(signatures.len(), 1);
+        signatures[0]
+            .signature()
+            .verify_hash(replacement_key.public_key(), resigned.hash())
+            .expect("replacement signature verifies");
     }
     #[test]
-    fn confidential_features_with_policy_hash_creates_v1_digest_when_missing() {
-        let updated = confidential_features_with_policy_hash(None, [0x44; 32]);
-        assert_eq!(updated.vk_set_hash, None);
-        assert_eq!(updated.poseidon_params_id, None);
-        assert_eq!(updated.pedersen_params_id, None);
-        assert_eq!(updated.conf_rules_version, Some(CONFIDENTIAL_RULES_VERSION));
-        assert_eq!(updated.zk_policy_hash, Some([0x44; 32]));
+    fn resign_rejects_resultless_genesis_proposal() {
+        let original_key = KeyPair::random();
+        let replacement_key = KeyPair::random();
+        let authority = AccountId::new(original_key.public_key().clone());
+        let transaction = TransactionBuilder::new_genesis(
+            authority,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(original_key.private_key());
+        let proposal =
+            SignedBlock::genesis(vec![transaction], original_key.private_key(), None, None);
+        let error = resign_block(&proposal, &replacement_key)
+            .expect_err("resultless genesis must not be blessed by re-signing");
+        assert!(error.to_string().contains("resultless genesis proposal"));
+    }
+    #[test]
+    fn resign_rejects_committed_fragment_count_below_result_count() {
+        let original_key = KeyPair::random();
+        let replacement_key = KeyPair::random();
+        let authority = AccountId::new(original_key.public_key().clone());
+        let transaction = TransactionBuilder::new_genesis(
+            authority,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(original_key.private_key());
+        let mut block =
+            SignedBlock::genesis(vec![transaction], original_key.private_key(), None, None);
+        let entrypoint_hashes = block.entrypoint_hashes().collect::<Vec<_>>();
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &entrypoint_hashes,
+                vec![Ok(DataTriggerSequence::default())],
+            )
+            .expect("attach executed genesis result");
+        block.set_committed_fragment_count(0);
+        let error = resign_block(&block, &replacement_key)
+            .expect_err("too-small fragment count must not be re-signed");
+        assert!(error.to_string().contains("minimum 1"));
     }
 }

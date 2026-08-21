@@ -406,6 +406,11 @@ test("Rust-owned grouped Native AMX v2 golden fixture is accepted", async () => 
           false,
           implementation,
         );
+        assert.equal(
+          leg.participant_proposal.payload_block_hint,
+          null,
+          implementation,
+        );
         assert.deepEqual(
           leg.participant_settlement.receipts.map((entry) => entry.source_id),
           fixtureDocument.golden.ordered_source_ids,

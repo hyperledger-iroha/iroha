@@ -9275,11 +9275,6 @@ impl Instruction {
         let status = json::from_str::<LaneLifecycleStatusV1>(status_json).map_err(|err| {
             PyValueError::new_err(format!("invalid Nexus lane lifecycle status JSON: {err}"))
         })?;
-        if !status.nexus_enabled {
-            return Err(PyValueError::new_err(
-                "Nexus lane lifecycle is disabled on the serving node",
-            ));
-        }
         let catalog = status.validate().map_err(|err| {
             PyValueError::new_err(format!("invalid Nexus lane lifecycle status: {err}"))
         })?;
@@ -14590,7 +14585,7 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        sorafs_orderbook_submission::inspect_sorafs_orderbook_submission_v1_py,
+        sorafs_orderbook_submission::inspect_sorafs_orderbook_submission_for_discriminant_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

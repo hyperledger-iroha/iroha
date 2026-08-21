@@ -183,7 +183,7 @@ impl QueuePlanAdmissionBindingV2 {
             network_id_digest: global_admission_identity.network_id_digest,
             request_id: global_admission_identity.request_id,
             entrypoint_hash: transaction.hash(),
-            signed_transaction_hash: signed_transaction_hash(transaction),
+            signed_transaction_hash: crate::tx::exact_signed_transaction_hash(transaction),
             routing_plan_digest: routing_plan.digest(),
             admission_context,
             enqueue_timestamp_ms,
@@ -309,14 +309,13 @@ impl QueuePlanAdmissionBindingV2 {
     }
     /// Validate the complete durable identity that authorizes a lane reservation Commit.
     ///
-    /// The compatibility queue hash is derived from the canonical entrypoint rather than trusted
-    /// from the reservation key. The exact coordinator and its admitting incarnation are then
-    /// recovered from this binding's immutable routing context. The binding hash authenticates the
-    /// original admission height, while the reservation key's distinct proposal height identifies
-    /// the later lane slot that actually took queue ownership.
+    /// The exact coordinator and its admitting incarnation are recovered from this binding's
+    /// immutable routing context. The binding hash authenticates the original admission height,
+    /// while the reservation key's distinct proposal height identifies the later lane slot that
+    /// actually took queue ownership.
     ///
     /// # Errors
-    /// Returns an error for a malformed reservation key or any entrypoint, queue hash, plan,
+    /// Returns an error for a malformed reservation key or any entrypoint, plan,
     /// backdated reservation height, coordinator, incarnation, or canonical binding-hash
     /// mismatch.
     pub(crate) fn validate_for_lane_reservation_commit(
@@ -325,8 +324,6 @@ impl QueuePlanAdmissionBindingV2 {
     ) -> Result<(), String> {
         key.validate().map_err(str::to_owned)?;
         self.validate_structure()?;
-        let compatibility_queue_hash =
-            HashOf::from_untyped_unchecked(Hash::from(self.entrypoint_hash.clone()));
         if key.proposal_height < self.admission_context.proposal_height {
             return Err(
                 "lane reservation proposal height precedes its durable QueuePlan admission"
@@ -334,7 +331,6 @@ impl QueuePlanAdmissionBindingV2 {
             );
         }
         if self.entrypoint_hash != key.entrypoint_hash
-            || compatibility_queue_hash != key.signed_transaction_hash
             || self.routing_plan_digest != key.routing_plan_digest
             || self.canonical_hash() != key.queue_plan_admission_binding_hash
         {
@@ -372,7 +368,7 @@ impl QueuePlanAdmissionBindingV2 {
     ) -> Result<(), String> {
         self.validate_structure()?;
         if self.entrypoint_hash != transaction.hash()
-            || self.signed_transaction_hash != signed_transaction_hash(transaction)
+            || self.signed_transaction_hash != crate::tx::exact_signed_transaction_hash(transaction)
         {
             return Err(
                 "QueuePlan admission binding has a different transaction identity".to_owned(),
@@ -421,15 +417,6 @@ impl QueuePlanAdmissionBindingV2 {
             version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
             binding_hash: self.canonical_hash(),
         }
-    }
-}
-fn signed_transaction_hash(
-    entrypoint: &TransactionEntrypoint,
-) -> Option<HashOf<SignedTransaction>> {
-    match entrypoint {
-        TransactionEntrypoint::External(signed) => Some(signed.hash()),
-        TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
-        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
     }
 }
 /// One compact signature over a shared QueuePlan admission binding.
@@ -620,7 +607,7 @@ pub fn decode_and_validate_queue_plan_admission_certificate_v2(
     network_id: &NetworkId,
     bytes: &[u8],
 ) -> Result<ValidatedQueuePlanAdmissionCertificateV2, String> {
-    let max_bytes = iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
+    let max_bytes = iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
     if bytes.is_empty() || bytes.len() > max_bytes {
         return Err("QueuePlan admission certificate is empty or oversized".to_owned());
     }
@@ -1272,7 +1259,10 @@ pub struct ToriiHostedHttpProxyRequestV1 {
 /// First-release queue admission contract for a proxied transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiProxyTransactionAdmissionV2 {
-    /// Acknowledge only after the exact QueuePlan certificate is globally committed.
+    /// Acknowledge after the exact `f + 1` QueuePlan certificate is durable.
+    ///
+    /// This admission receipt does not claim that a later carrier has applied
+    /// the binding to canonical WSV.
     ///
     /// Index two deliberately leaves both retired V1 tags invalid, so neither
     /// ordinary deferred admission nor its pre-global "synced" sibling can be
@@ -1626,9 +1616,6 @@ mod tests {
             .expect("single-route fixture has a coordinator");
         let key = crate::queue::LaneQueueReservationKeyV2 {
             version: crate::queue::LaneQueueReservationKeyV2::VERSION,
-            signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::from(
-                binding.entrypoint_hash.clone(),
-            )),
             entrypoint_hash: binding.entrypoint_hash.clone(),
             queue_plan_admission_binding_hash: binding.canonical_hash(),
             routing_plan_digest: binding.routing_plan_digest,

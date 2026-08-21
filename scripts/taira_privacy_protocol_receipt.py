@@ -352,19 +352,26 @@ def _fail(message: str) -> NoReturn:
     raise PrivacyProtocolEvidenceError(message)
 
 
-def require_controller_origin_authority_provisioned(
-    *, require_signing: bool = True
-) -> None:
+def _require_controller_origin_authority(*, require_signing: bool) -> None:
     """Authenticate the fixed privacy-protocol-origin authority service."""
 
     try:
-        taira_authority_client.preflight(
-            "privacy-protocol-origin", require_signing=require_signing
-        )
+        if require_signing:
+            taira_authority_client.preflight("privacy-protocol-origin")
+        else:
+            taira_authority_client.preflight(
+                "privacy-protocol-origin", require_signing=False
+            )
     except taira_authority_client.TairaAuthorityClientError as error:
         raise PrivacyProtocolEvidenceError(
             f"{CONTROLLER_ORIGIN_AUTHORITY_PROVISIONING_BARRIER}: {error}"
         ) from error
+
+
+def require_controller_origin_authority_provisioned() -> None:
+    """Authenticate the fixed privacy-protocol-origin authority service."""
+
+    _require_controller_origin_authority(require_signing=True)
 
 
 def transcript_name(index: int) -> str:
@@ -1167,7 +1174,7 @@ def verify_authenticated_evidence_directory(
 ) -> AuthenticatedPrivacyProtocolEvidence:
     """Historically verify deterministic sidecars without issuing a new receipt."""
 
-    require_controller_origin_authority_provisioned(require_signing=False)
+    _require_controller_origin_authority(require_signing=False)
     result, subject, artifacts = _validated_authority_request(
         root,
         expected_source=expected_source,

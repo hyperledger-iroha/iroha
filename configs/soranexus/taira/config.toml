@@ -34,7 +34,7 @@ address = "addr:0.0.0.0:1337#BF18"
 public_address = "addr:taira-validator-1.sora.org:1337#D426"
 max_frame_bytes = 23068700
 max_frame_bytes_block_sync = 23068672
-max_frame_bytes_tx_gossip = 11534336
+max_frame_bytes_tx_gossip = 13631488
 p2p_queue_cap_high = 65536
 p2p_queue_cap_low = 32768
 p2p_post_queue_cap = 65536
@@ -154,9 +154,14 @@ additional_permissions = []
 fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
 
 [[torii.account_onboarding.credentials]]
-id = "REPLACE_WITH_TAIRA_ONBOARDING_CREDENTIAL_ID"
-scope = { dataspace = "REPLACE_WITH_TAIRA_ONBOARDING_SCOPE" }
-token_hash = "REPLACE_WITH_TAIRA_ONBOARDING_TOKEN_HASH"
+id = "REPLACE_WITH_TAIRA_BOI_ONBOARDING_CREDENTIAL_ID"
+scope = { dataspace = "is2" }
+token_hash = "REPLACE_WITH_TAIRA_BOI_ONBOARDING_TOKEN_HASH"
+
+[[torii.account_onboarding.credentials]]
+id = "REPLACE_WITH_TAIRA_DPN_ONBOARDING_CREDENTIAL_ID"
+scope = { dataspace = "dpn" }
+token_hash = "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH"
 
 [torii.faucet]
 enabled = true
@@ -172,7 +177,9 @@ pow_max_anchor_age_blocks = 256
 pow_adaptive_lookback_blocks = 64
 pow_adaptive_claims_per_extra_bit = 0
 pow_adaptive_max_extra_bits = 0
-pow_vrf_seed_enabled = true
+# Fresh testnet generations have no finalized VRF epoch yet; keep the
+# anchor-hash+scrypt faucet usable from genesis.
+pow_vrf_seed_enabled = false
 
 [sorafs.storage]
 enabled = false
@@ -257,13 +264,13 @@ max_payload_bytes = 16777216
 proposal_queue_scan_multiplier = 4
 
 [sumeragi.queues]
-# This legacy universal-cohort baseline covers four validators, two
-# authenticated non-validator source lanes, and anonymous delivery. It is not
+# This universal-cohort baseline covers four validators and two authenticated
+# non-validator source lanes. Identityless ingress owns no partition. It is not
 # evidence that one four-validator roster backs all five physical dataspaces.
 # The validator-bundle renderer scales body_bytes to at least
-# (N + authenticated_non_validator_sources + 1) * body_source_bytes.
+# (N + authenticated_non_validator_sources) * body_source_bytes.
 authenticated_non_validator_sources = 2
-body_bytes = 242221056
+body_bytes = 207618048
 body_source_bytes = 34603008
 
 [confidential]
@@ -320,7 +327,7 @@ liquidity_profile = "tier1"
 volatility_class = "stable"
 
 [genesis]
-public_key = "ed0120CEF83A365F125EF1CB8F040290A4C5D23561A24CC4C6782AC07506C77003AF00"
+public_key = "ed0120403BA31890B09C40B7108A0AC1319D27C10FE5442027CF8333C5C3A09CBB0343"
 expected_hash_file = "/run/iroha/genesis.expected_hash"
 
 [streaming]
@@ -338,7 +345,6 @@ sm2_distid_default = "1234567812345678"
 allowed_curve_ids = [1, 3, 4]
 
 [nexus]
-enabled = true
 lane_count = 7
 
 [nexus.storage]
@@ -371,7 +377,9 @@ enabled = true
 # reserves index 7 for deterministic creation.
 min_lanes = 7
 max_lanes = 8
-target_block_ms = 1000
+# Match the canonical 4 s genesis cadence so healthy blocks do not look four
+# times slower than the autoscale target.
+target_block_ms = 4000
 scale_out_latency_ratio = 1.50
 scale_in_latency_ratio = 1.10
 scale_out_utilization_ratio = 0.75
@@ -407,7 +415,7 @@ description = "Primary execution lane"
 dataspace = "universal"
 storage = "full_replica"
 visibility = "public"
-metadata = { "scheduler.teu_capacity" = "50000000" }
+scheduler = { teu_capacity = 50000000 }
 
 [[nexus.lane_catalog]]
 index = 1
@@ -435,7 +443,7 @@ description = "Digital payments network traffic"
 dataspace = "dpn"
 storage = "full_replica"
 visibility = "restricted"
-metadata = { "scheduler.teu_capacity" = "25000000" }
+scheduler = { teu_capacity = 25000000 }
 
 [[nexus.lane_catalog]]
 index = 4
@@ -444,7 +452,7 @@ description = "External PoC traffic"
 dataspace = "is"
 storage = "full_replica"
 visibility = "restricted"
-metadata = { "scheduler.teu_capacity" = "25000000" }
+scheduler = { teu_capacity = 25000000 }
 
 [[nexus.lane_catalog]]
 index = 5
@@ -453,7 +461,7 @@ description = "Bank of Israel mobile-wallet traffic"
 dataspace = "is2"
 storage = "full_replica"
 visibility = "restricted"
-metadata = { "scheduler.teu_capacity" = "25000000" }
+scheduler = { teu_capacity = 25000000 }
 
 [[nexus.lane_catalog]]
 index = 6
@@ -462,7 +470,7 @@ description = "Central-bank service integration traffic"
 dataspace = "cbsi"
 storage = "full_replica"
 visibility = "restricted"
-metadata = { "scheduler.teu_capacity" = "25000000" }
+scheduler = { teu_capacity = 25000000 }
 
 # Physical data spaces only. Namespace, governance-module, and workload names
 # must not be promoted into this catalog.
@@ -528,7 +536,7 @@ description = "Route DPN authorities to the DPN dataspace"
 lane = 4
 dataspace = "is"
 [nexus.routing_policy.rules.matcher]
-account = "*@wonderland.is"
+account = "*@is"
 description = "Route the PoC authority to the private is dataspace"
 
 [[nexus.routing_policy.rules]]

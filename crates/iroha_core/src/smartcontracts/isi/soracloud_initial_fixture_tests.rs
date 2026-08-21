@@ -424,7 +424,7 @@ fn install_future_created_autoscale_lane(
     crate::state::attach_synthetic_autoscale_committee_for_test(&mut lane);
     let lane_count = NonZeroU32::new(lane_id.as_u32().saturating_add(1))
         .expect("future-created lane count must be nonzero");
-    state_transaction.nexus.enabled = true;
+
     state_transaction.nexus.autoscale.enabled = true;
     state_transaction.nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min");
     state_transaction.nexus.autoscale.max_lanes = lane_count;

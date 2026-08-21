@@ -2,7 +2,7 @@
 
 ## Current proof-ledger status
 
-The checked-in legacy/revision-3-rooted ledger declares 44 `tlaps_proved`, 3
+The checked-in revision-4 ledger declares 44 `tlaps_proved`, 3
 `cross_tool_proved`, 0 `specified_unproved`, 6 `trusted_contract`, and 1
 `out_of_scope`, with `machine_checked_completion: true`. This declaration is
 the byte-exact input to the release proof wave, not proof evidence by itself
@@ -184,24 +184,30 @@ the exact body, and activates its successor height.
 
 Failed views either decide or collect `q` timeout votes and rotate. Lemma 6
 eventually supplies a usable view; Lemma 5 completes both voting phases there.
-The full-body gate provides the body needed for application. Successor
-activation depends on durable application, not on completion of retryable
-old-height network output, lane sidecars, or cleanup.
-Those retryable historical lane obligations retain their predecessor
-descriptor and committee. A removed configured validator is an observer for
-successor global consensus and has no successor vote, while remaining eligible
-for a lane vote only when that exact frozen descriptor explicitly names it.
-The same rule applies to unfinished old descriptors and independently pinned
-current-height Nexus lane descriptors; neither borrows successor-global
-authority. A proof-carrying historical response from such a signer is bounded
-at successor ingress and revalidated against the exact outstanding request and
-old certificate before persistence.
+The full-body gate provides the body needed for global application. Successor
+activation additionally depends on the finalized predecessor completing its
+lane-durability preflight: late canonical ownership is rehydrated, bounded
+historical recovery is serviced, and every winning current-height lane has an
+exact Kura certificate plus its ordinary application receipt or autonomous
+durable record. Incomplete lane progress remains active-height-owned; the
+implementation has no volatile successor-owner alternative. Only then can the
+complete durable lane authority drain and seal exact output and transfer the
+remaining successor-owned sidecar state.
+Those lane obligations retain their predecessor descriptor and committee. A
+removed configured validator is an observer for successor global consensus and
+has no successor vote, while remaining eligible for a lane vote only when that
+exact frozen descriptor explicitly names it. The same rule applies to older
+descriptors and independently pinned current-height Nexus lane descriptors;
+neither borrows successor-global authority. During applied-height handoff, an
+already completed earlier-height lane output may be retired only after Kura
+independently rereads its exact certificate and application receipt (or the
+record-backed autonomous equivalent).
 
 This theorem does not cover a permanent partition, more than `f` Byzantine or
 unresponsive validators, nonterminating local work, exhausted finite counters,
-or a scheduler that never services an enabled action. Finalized-output repair
-remains required and retryable; it is removed only from the successor
-activation dependency.
+or a scheduler that never services an enabled action. Finalized-output and
+lane-durability repair remain required, bounded, retryable predecessor work;
+they are not discarded to make successor activation appear live.
 
 ### Revision-4 model status
 
@@ -582,7 +588,7 @@ type state: fail-stop admission precedes clock arming, status projection,
 observer installation, exact ingress/status publication, and readiness release;
 CompleteTip publication consumes its retained predecessor retirement. This is
 paired with a source-sealed consuming finalization chain which closes readiness
-and both ingress gates, joins exact Kura finality to adapter closure, retains
+and durable leader-wire ingress, joins exact Kura finality to adapter closure, retains
 the safety WAL through the existing durable output handoff, retires it only
 after that handoff, then refreshes Serve state and publishes
 all-row LedgerV1 retirement through opaque coordinator-owning tokens before
@@ -854,7 +860,7 @@ chunks if needed, reconstructs and validates the exact body, applies it, and
 advances its own height. None of these local transitions waits for every other
 correct node.
 
-The mechanization records the missing step under the legacy symbol
+The mechanization records the missing step under the historically retained symbol
 `LockedBodyReproposalProgressObligation`. Its first-release obligation is that
 a stable available retained lock must eventually commit in its old round, be
 re-proposed unchanged under a later new same-round origin, or be legitimately
@@ -993,7 +999,7 @@ The reviewed top-level inventory contains exactly 54 obligations: 44
 `out_of_scope`, with no `specified_unproved` rows. Sixteen source-bound
 proof/evidence decomposition leaves remain checked transitively through those
 top-level obligations and are not additional ledger rows.
-`machine_checked_completion` is true for this legacy/revision-3-rooted status
+`machine_checked_completion` is true for this reviewed revision-4 status
 inventory. It is not a deductive proof of revision 4, and the flag is not
 independent proof authority: release mode still requires fresh strict TLAPS,
 pinned Verus, derived cross-tool evidence, and the separate revision-4
@@ -1163,10 +1169,12 @@ startup and does not join; only exact
 Applied or Recovered publication joins. Production's earlier internal State
 application maps to that abstract Applied boundary only after canonical lane
 completion. If block sync installs that canonical ownership after adapter
-construction, production rehydrates its exact bounded proposal at rollover so
-the missing lane certificate remains recoverable. That delayed mapping is part
-of the promoted cross-tool target and still requires fresh exact-source release
-evidence. The concrete effect executor now coalesces
+construction, production rehydrates its exact bounded proposal while the
+finalized predecessor is still active, retransmits it as the certificate
+recovery source, and refuses to mint rollover authority until the recovered
+certificate and application receipt are durable. That delayed mapping is part
+of the promoted cross-tool target and still requires fresh exact-source
+release evidence. The concrete effect executor now coalesces
 every exact in-flight `Apply` rediscovery and retains the typed Kura finality
 receipt, exact artifact, and original reducer tag as a completion tombstone.
 An exact post-drain retry is absorbed; tag, subject, context, or CommitQC drift
@@ -1203,7 +1211,7 @@ No top-level assumption, axiom, or unledgered omitted proof can satisfy the
 release checker. A proofless release theorem is accepted only when its exact
 module and symbol are pinned as `specified_unproved`; it must be discharged by
 TLAPS before machine-checked completion can become true. This is a structural
-rule even outside release mode. The theorem-free compatibility shard
+rule even outside release mode. The theorem-free structural shard
 `SumeragiV2AsyncOutstandingLivenessDebt` and exactly two theorem-bearing
 scratch modules are non-release inventory.
 `SumeragiV2HistoricalLockedBodyRecoveryBridgeScratch` and
@@ -1286,14 +1294,16 @@ preventing one serviced owner from hiding another. Equal-count replacement
 and count-increasing replenishment remain explicit non-progress cases and
 require a prior finite or coalesced producer argument.
 
-The production queue closes the matching final-retirement race with a one-shot
-local handoff. The last owner in a frozen Serve batch arms
-`producer_episode_due` under the same mutex that retires it; fresh Serve
-admission is `Busy` while the handoff is due or while
-`producer_episode_active` owns its bounded outer turn. The runner atomically
-consumes due into active, and the local lease clears active before admission
-reopens. Rejected replenishment cannot mint either scheduler or logical
-lifecycle ordinals. Digest-refreshed mutations bind both Busy boundaries, the
+The production lifecycle closes the matching final-retirement race through one
+coordinator-owned transaction. A current-height Serve remains in fair ingress
+until the lifecycle selector authenticates its exact carrier, and capacity
+backpressure returns `CapacityPending` without removing that occurrence. A
+successful transaction attests the complete Ready census, claims the durable
+ledger row, reserves the exact worker target, and only then commits dequeue.
+The serialized proposal runner separately claims and settles `ProducerTurn`;
+there is no queue-local Serve gate, barrier, reservation, or producer episode.
+Rejected replenishment cannot mint either scheduler or logical lifecycle
+ordinals. Digest-refreshed mutations bind the coordinator transaction, the
 high-water marks, timeout-owner ordering, strict predecessor service, and the
 real timeout-certificate/EnterView suffix. This source refinement does not
 count replenishment as progress, add fairness, or promote a ledger row.
@@ -1481,7 +1491,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable regression evidence, not independent
 proof of the promoted obligations.
 
-The current pre-network release inventory names 860 tests across forty Rust
+The current pre-network release inventory names 864 tests across 43 Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1598,11 +1608,12 @@ Kura recovery regressions and the governance-unlock audit yield the 861-test,
 canonical-carrier completion regressions produced that historical 864-test,
 41-module checkpoint. Retiring the duplicate inline network-simulation rows
 yields the historical 856-test, 40-module checkpoint. The exact retired-attempt
-accessor, mixed-carrier successor, two-link cold-restart hydration, and
-noncanonical autonomous-output retirement regressions yield the
-current 860-test, 40-module inventory. The complete source-sealed
+accessor, mixed-carrier successor, two-link cold-restart hydration,
+noncanonical autonomous-output retirement, and the ordinary plus record-backed
+autonomous predecessor-durability regressions yield the
+current 864-test, 43-module inventory. The complete source-sealed
 pre-network corridor
-contains 88 legs. Six source-
+contains 91 legs. Six source-
 sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 Wire protocol version 1 uses positive `NonZeroU64` responder generation,
@@ -1672,11 +1683,11 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329`.
-The separate source-sealed G-UNIT inventory contains 527 focused tests,
-including 321 `iroha_core` tests. Its 528-line
+`c9972f55a17acbdcfacda42e3ca152d9705ec4e0f188a561f0c28990468ffe97`.
+The separate source-sealed G-UNIT inventory contains 522 focused tests,
+including 316 `iroha_core` tests. Its 523-line
 canonical TSV has SHA-256
-`5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d`;
+`e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`;
 the sealed Native rows cover exact per-route prevote-byte accounting,
 empty/hard-cap/overflow pair geometry, and precommit error classification.
 The added boundaries preserve the frozen predecessor CommitQC through
@@ -1708,13 +1719,13 @@ watchdog regressions. The 232-name baseline already included two exact locked-Co
 progress-witness regressions
 and six outer TransportCompletion-corridor regressions. The current
 geometry inventories five owners per validator, three owners for every one of
-the `H` simultaneously materialized authenticated non-validator lanes, and two
-anonymous owners (`5N+3H+2` total), including a roster-origin completion relayed
+the `H` simultaneously materialized authenticated non-validator lanes
+(`5N+3H` total), including a roster-origin completion relayed
 through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The four integration names share a module-filtered leg; the pre-network corridor
-now has 88 legs, including the governance-unlock audit module, the autonomous
+now has 91 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate
 exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
@@ -1722,12 +1733,12 @@ geometry modules, and source-sealed command-success legs. Its finality, offline
 compact-QC, and height-context proposal-origin
 modules each use a dedicated `iroha_data_model` leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the forty-module, eighty-eight-leg corridor. It
+tests are not claimed by the forty-three-module, ninety-one-leg corridor. It
 includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
 latest consumer, byte retirement, three-class production arbitration, the exact
-`5N+3H+2` ingress and `2N+3` deferred partitions, successor activation/recovery,
+`5N+3H` ingress and `2N+3` deferred partitions, successor activation/recovery,
 authenticated exact historical recovery, retained effect-capacity ownership,
 post-decision timeout/TC quiescence, and watchdog classification. It also pins
 the adapter's maximum flattened persistence macro-step at four effects within
@@ -1745,14 +1756,13 @@ certificate. Multiple distinct authenticated TCs, CommitQCs, or
 CommitQC-carrying recovery responses share that credit; every certificate
 after the first consumes ordinary Progress capacity, and the ordinary
 reservation is independent of whether the first certificate arrives before
-or after ordinary work. While an authenticated certified-body
-response remains retained, its escape episode is explicitly `Fresh`,
-`Charged`, or `Spent`: Fresh admits at most one new direct TC, CommitQC, or
-`CommitCertificateResponse` carrying a CommitQC root; Charged and Spent reject
-every further fresh root, and only claim retirement resets the latch.
-The claimed-response rank counts the exact frozen direct
-roots and their strictly decreasing trusted causal tail, so pacemaker priority
-cannot be replenished indefinitely. The standalone revision-4 kernel charges
+or after ordinary work. There is no response-local phase or resettable
+certificate latch. A selected `CertifiedResponse` remains ordinary FIFO work:
+a later `TimeoutVote` cannot cross it, while timeout control is a dependency
+only when it advances the current Proposal, vote, QC, or TimeoutVote owner. The
+claimed-response rank counts the exact direct roots already inside its frozen
+prefix and their strictly decreasing trusted causal tail, so later timeout
+traffic cannot replenish that prefix. The standalone revision-4 kernel charges
 an unpublished `BodyAvailable` token as an ordinary Completion owner and
 atomically replaces its conflicting proposal owner without changing physical
 occupancy. Production refinement additionally persists a complete Busy-
@@ -1803,7 +1813,7 @@ atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The
 preceding mutable-source discovery and direct execution evidence covered the
 earlier 168-name inventory. The latest fresh discovery checkpoint covered 738
-names; the current 860-name tree still requires a clean committed, detached,
+names; the current 864-name tree still requires a clean committed, detached,
 source-sealed serial release execution. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither

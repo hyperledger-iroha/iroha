@@ -321,7 +321,7 @@ mod tests {
         },
         nexus::{
             DataSpaceId, LaneFastpqProofMaterial, LaneFinalityAuthorityV1, LaneId,
-            LaneRelayEnvelope,
+            LaneRelayEnvelope, compute_settlement_hash,
         },
     };
     use iroha_p2p::network::RELIABLE_PROGRESS_LANE_RELAY_OWNER_CAPACITY;
@@ -539,6 +539,24 @@ mod tests {
         broadcaster
             .broadcast(vec![envelope])
             .expect("invalid relays are terminally filtered before actor admission");
+        assert!(network.sent().is_empty());
+        assert!(crate::sumeragi::status::lane_relay_envelopes_snapshot().is_empty());
+    }
+    #[test]
+    fn broadcaster_rejects_self_consistently_hashed_settlement_count_drift() {
+        let _guard = crate::sumeragi::status::lane_relay_test_guard();
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let network = MockNetwork::default();
+        let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
+        let mut envelope = sample_envelope(2, 4);
+        envelope.settlement_commitment.tx_count = 2;
+        envelope.settlement_hash = compute_settlement_hash(&envelope.settlement_commitment)
+            .expect("drifted settlement remains canonically hashable");
+
+        broadcaster
+            .broadcast(vec![envelope])
+            .expect("invalid relays are terminally filtered before actor admission");
+
         assert!(network.sent().is_empty());
         assert!(crate::sumeragi::status::lane_relay_envelopes_snapshot().is_empty());
     }

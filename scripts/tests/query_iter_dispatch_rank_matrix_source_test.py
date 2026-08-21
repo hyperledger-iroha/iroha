@@ -17,7 +17,7 @@ CORE_START = """    #[derive(Clone, Copy)]
     enum IterDispatchRankFixture"""
 CORE_END = """    #[tokio::test]
     async fn iter_dispatch_accounts_sort_ties_stable_by_id"""
-CORE_HASH = "0375a5b9b4b23bd909bea8acd87192e0c6633fce170f73c5d9bc0064065a1bf0"
+CORE_HASH = "4f9059090c56eb02a61edd2d0e47775d2c9103a2d628d1eb2075f1b9793c5d59"
 
 DIRECT_TESTS = (
     "iter_dispatch_sorts_and_paginates_end_to_end",

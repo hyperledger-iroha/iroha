@@ -11,11 +11,10 @@ const PRUNE_STAGE_BLOCK_DATA: usize = 5;
 const PRUNE_STAGE_DA_SIDECARS: usize = 6;
 const PRUNE_STAGE_MERGE_CARRIERS: usize = 7;
 const PRUNE_STAGE_MERGE_LOG: usize = 8;
-const PRUNE_STAGE_ROSTER: usize = 9;
-const PRUNE_STAGE_WSV_CHECKPOINTS: usize = 10;
-const PRUNE_STAGE_COMMIT_MANIFESTS: usize = 11;
-const PRUNE_STAGE_PIPELINE_SIDECARS: usize = 12;
-const PRUNE_STAGE_MEMORY: usize = 13;
+const PRUNE_STAGE_WSV_CHECKPOINTS: usize = 9;
+const PRUNE_STAGE_COMMIT_MANIFESTS: usize = 10;
+const PRUNE_STAGE_PIPELINE_SIDECARS: usize = 11;
+const PRUNE_STAGE_MEMORY: usize = 12;
 const PRUNE_SIDECAR_PROMOTION_DATA: usize = 1;
 const PRUNE_SIDECAR_PROMOTION_INDEX: usize = 2;
 #[derive(Clone, Copy)]
@@ -44,7 +43,6 @@ impl Drop for PruneInProgressGuard<'_> {
 type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
 type BlockHeightIndex = BTreeMap<HashOf<BlockHeader>, NonZeroUsize>;
 type TransactionEntrypointHeights = BTreeMap<HashOf<TransactionEntrypoint>, BTreeSet<NonZeroUsize>>;
-type TransactionHashHeights = BTreeMap<HashOf<SignedTransaction>, BTreeSet<NonZeroUsize>>;
 type OfflineOperationHeights = BTreeMap<(AccountId, [u8; 32]), BTreeSet<NonZeroUsize>>;
 type TransactionAuthorityHeights = BTreeMap<AccountId, BTreeSet<NonZeroUsize>>;
 type TransactionTimestampHeights = BTreeMap<u64, BTreeSet<NonZeroUsize>>;
@@ -71,7 +69,7 @@ struct MergeCarrierIndex {
 }
 /// Exact retained output for one indexed-sidecar rewrite in a canonical prune.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
-struct KuraPruneSidecarPairProjectionV2 {
+struct KuraPruneSidecarPairProjectionV3 {
     /// Whether this pair must be rewritten or removed.
     required: bool,
     /// Exact retained payload bytes written to the temporary data file.
@@ -79,32 +77,25 @@ struct KuraPruneSidecarPairProjectionV2 {
     /// Exact retained index bytes written to the temporary index file.
     retained_index_bytes: u64,
 }
-impl KuraPruneSidecarPairProjectionV2 {
+impl KuraPruneSidecarPairProjectionV3 {
     fn temp_pair_bytes(self) -> Option<u64> {
         self.retained_data_bytes
             .checked_add(self.retained_index_bytes)
     }
 }
-/// Authenticated sequential rewrite projection for both canonical sidecar pairs.
+/// Authenticated rewrite projection for the canonical pipeline sidecar pair.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
-struct KuraPruneSidecarRewriteProjectionV2 {
+struct KuraPruneSidecarRewriteProjectionV3 {
     /// Retained pipeline recovery data/index output.
-    pipeline: KuraPruneSidecarPairProjectionV2,
-    /// Retained roster metadata data/index output.
-    roster: KuraPruneSidecarPairProjectionV2,
-    /// Maximum temporary pair bytes allocated by the sequential rewrites.
+    pipeline: KuraPruneSidecarPairProjectionV3,
+    /// Temporary bytes allocated by the retained-pair rewrite.
     sequential_peak_bytes: u64,
 }
-impl KuraPruneSidecarRewriteProjectionV2 {
+impl KuraPruneSidecarRewriteProjectionV3 {
     #[cfg(test)]
     const fn none() -> Self {
         Self {
-            pipeline: KuraPruneSidecarPairProjectionV2 {
-                required: false,
-                retained_data_bytes: 0,
-                retained_index_bytes: 0,
-            },
-            roster: KuraPruneSidecarPairProjectionV2 {
+            pipeline: KuraPruneSidecarPairProjectionV3 {
                 required: false,
                 retained_data_bytes: 0,
                 retained_index_bytes: 0,
@@ -113,37 +104,29 @@ impl KuraPruneSidecarRewriteProjectionV2 {
         }
     }
     fn has_work(self) -> bool {
-        self.pipeline.required || self.roster.required
+        self.pipeline.required
     }
     fn is_canonical(self) -> bool {
         let Some(pipeline) = self.pipeline.temp_pair_bytes() else {
             return false;
         };
-        let Some(roster) = self.roster.temp_pair_bytes() else {
-            return false;
-        };
         (self.pipeline.required
             || (self.pipeline.retained_data_bytes == 0 && self.pipeline.retained_index_bytes == 0))
-            && (self.roster.required
-                || (self.roster.retained_data_bytes == 0 && self.roster.retained_index_bytes == 0))
-            && self.sequential_peak_bytes == pipeline.max(roster)
+            && self.sequential_peak_bytes == pipeline
     }
     fn authorizes(self, remaining: Self) -> bool {
         self.is_canonical()
             && remaining.is_canonical()
             && (!remaining.pipeline.required || self.pipeline.required)
-            && (!remaining.roster.required || self.roster.required)
             && remaining.pipeline.retained_data_bytes <= self.pipeline.retained_data_bytes
             && remaining.pipeline.retained_index_bytes <= self.pipeline.retained_index_bytes
-            && remaining.roster.retained_data_bytes <= self.roster.retained_data_bytes
-            && remaining.roster.retained_index_bytes <= self.roster.retained_index_bytes
             && remaining.sequential_peak_bytes <= self.sequential_peak_bytes
     }
 }
 /// Exact live capacity admission retained as forward-recovery authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct KuraPruneCapacityAdmissionV2 {
+struct KuraPruneCapacityAdmissionV3 {
     /// Physical Kura bytes before the intent is published.
     source_physical_bytes: u64,
     /// Pending canonical bytes excluded from the physical scan.
@@ -160,56 +143,50 @@ struct KuraPruneCapacityAdmissionV2 {
     marker_temporary_bytes: u64,
     /// Positive stable marker growth retained by later stages.
     marker_stable_growth_bytes: u64,
-    /// Exact commit-roster truncation publication shape.
-    roster: CommitRosterJournalPruneProjectionV2,
     /// Absolute no-deletion-credit peak admitted before the first write.
     admitted_peak_bytes: u64,
 }
-impl KuraPruneCapacityAdmissionV2 {
+impl KuraPruneCapacityAdmissionV3 {
     fn reserved_bytes(self) -> Option<u64> {
         self.pending_canonical_bytes
             .checked_add(self.post_wsv_reserved_bytes)
             .and_then(|bytes| bytes.checked_add(self.certified_bundle_reserved_bytes))
             .and_then(|bytes| bytes.checked_add(self.autonomous_terminal_reserved_bytes))
     }
-    fn transaction_peak_bytes(self, sidecar: KuraPruneSidecarRewriteProjectionV2) -> Option<u64> {
-        self.roster
-            .allocation_peak_with_sidecar(sidecar.sequential_peak_bytes)
-            .and_then(|bytes| self.marker_stable_growth_bytes.checked_add(bytes))
+    fn transaction_peak_bytes(self, sidecar: KuraPruneSidecarRewriteProjectionV3) -> Option<u64> {
+        self.marker_stable_growth_bytes
+            .checked_add(sidecar.sequential_peak_bytes)
             .map(|post_marker| self.marker_temporary_bytes.max(post_marker))
     }
-    fn required_peak_bytes(self, sidecar: KuraPruneSidecarRewriteProjectionV2) -> Option<u64> {
+    fn required_peak_bytes(self, sidecar: KuraPruneSidecarRewriteProjectionV3) -> Option<u64> {
         self.source_physical_bytes
             .checked_add(self.reserved_bytes()?)
             .and_then(|bytes| bytes.checked_add(self.intent_bytes))
             .and_then(|bytes| bytes.checked_add(self.transaction_peak_bytes(sidecar)?))
     }
-    fn is_canonical(self, sidecar: KuraPruneSidecarRewriteProjectionV2) -> bool {
+    fn is_canonical(self, sidecar: KuraPruneSidecarRewriteProjectionV3) -> bool {
         self.intent_bytes > 0
             && self.intent_bytes <= PRUNE_INTENT_MAX_BYTES as u64
             && self.marker_temporary_bytes > 0
             && self.marker_temporary_bytes <= MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES as u64
             && self.marker_stable_growth_bytes <= self.marker_temporary_bytes
-            && self.roster.is_canonical()
             && self.required_peak_bytes(sidecar) == Some(self.admitted_peak_bytes)
     }
     fn remaining_required_bytes(
         self,
         physical_bytes: u64,
-        remaining_roster: CommitRosterJournalPruneProjectionV2,
-        remaining_sidecar: KuraPruneSidecarRewriteProjectionV2,
+        remaining_sidecar: KuraPruneSidecarRewriteProjectionV3,
     ) -> Option<u64> {
-        remaining_roster
-            .allocation_peak_with_sidecar(remaining_sidecar.sequential_peak_bytes)
-            .and_then(|peak| physical_bytes.checked_add(peak))
+        physical_bytes
+            .checked_add(remaining_sidecar.sequential_peak_bytes)
             .and_then(|bytes| bytes.checked_add(self.reserved_bytes()?))
     }
 }
 /// Durable forward-recovery record for a canonical Kura prune transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct KuraPruneIntentV2 {
-    /// Intent schema version. Only version two is accepted.
+struct KuraPruneIntentV3 {
+    /// Intent schema version. Only version three is accepted.
     version: u8,
     /// Canonical height before the prune began.
     source_height: u64,
@@ -224,9 +201,9 @@ struct KuraPruneIntentV2 {
     /// Hash of the terminal retained merge entry, absent for an empty prefix.
     retained_merge_tip_hash: Option<HashOf<MergeLedgerEntry>>,
     /// Exact authenticated retained sidecar rewrite and allocation projection.
-    sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2,
+    sidecar_rewrite: KuraPruneSidecarRewriteProjectionV3,
     /// Exact capacity proof admitted before publication and reused after crash.
-    capacity: KuraPruneCapacityAdmissionV2,
+    capacity: KuraPruneCapacityAdmissionV3,
 }
 impl Kura {
     /// Detect prune recovery state without cleaning or applying it while the
@@ -234,7 +211,7 @@ impl Kura {
     fn read_prune_intent_for_startup(
         store_root: &Path,
         provisional: bool,
-    ) -> Result<Option<KuraPruneIntentV2>> {
+    ) -> Result<Option<KuraPruneIntentV3>> {
         if !provisional {
             return Self::read_prune_intent(store_root);
         }
@@ -388,7 +365,6 @@ struct TransactionEntrypointIndex {
     indexed_heights: BTreeSet<NonZeroUsize>,
     incomplete_merge_heights: BTreeSet<NonZeroUsize>,
     heights_by_entrypoint: TransactionEntrypointHeights,
-    heights_by_transaction: TransactionHashHeights,
     heights_by_offline_operation_id: OfflineOperationHeights,
     heights_by_authority: TransactionAuthorityHeights,
     heights_by_timestamp_ms: TransactionTimestampHeights,
@@ -401,7 +377,6 @@ impl TransactionEntrypointIndex {
             indexed_heights: BTreeSet::new(),
             incomplete_merge_heights: BTreeSet::new(),
             heights_by_entrypoint: BTreeMap::new(),
-            heights_by_transaction: BTreeMap::new(),
             heights_by_offline_operation_id: BTreeMap::new(),
             heights_by_authority: BTreeMap::new(),
             heights_by_timestamp_ms: BTreeMap::new(),

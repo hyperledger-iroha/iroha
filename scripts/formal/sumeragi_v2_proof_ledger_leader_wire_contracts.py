@@ -276,15 +276,8 @@ let ingress_predecessors = state
     _require_rust_token_sequence(
         ingress_path,
         ordinary_selector,
-        """
-self.try_recv_if_at_checked_classified(
-    service_attempt_at,
-    false,
-    FairV2IngressBarrierBypass::None,
-    predicate,
-)
-""",
-        "ordinary timestamped ingress must delegate with no barrier bypass",
+        "self.try_recv_if_at_checked_classified(service_attempt_at, false, predicate)",
+        "ordinary timestamped ingress must delegate to the single classifier",
         errors,
     )
 
@@ -321,7 +314,7 @@ self.try_recv_if_at_checked_classified(
         ingress_path,
         queue_gate,
         (),
-        "queue-local leader-wire and Serve gate verdict",
+        "queue-local leader-wire gate verdict",
         errors,
     )
     _require_rust_item_token_sha256(
@@ -330,7 +323,7 @@ self.try_recv_if_at_checked_classified(
         _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
             "fair_v2_ingress_queue_gate_verdict"
         ],
-        "queue-local leader-wire and Serve gate verdict",
+        "queue-local leader-wire gate verdict",
         errors,
     )
 
@@ -362,7 +355,6 @@ self.try_recv_if_at_checked_classified(
         """
 let leader_wire_projection = fair_v2_ingress_leader_wire_selector_projection(
     &state,
-    selected_serve_barrier,
     retire_obsolete_leader_wire,
     None,
 )?;
@@ -378,9 +370,7 @@ let verdict = fair_v2_ingress_queue_gate_verdict(
     source,
     lane,
     index,
-    &serve_projection,
     &leader_wire_projection,
-    barrier_bypass,
 );
 """,
         "every candidate must use the sealed queue-local gate verdict",
@@ -470,13 +460,6 @@ match active_carriers.first() {
         ),
         (
             """
-selected_carrier_ordinal
-    .is_some_and(|leader_ordinal| serve.carrier_ordinal() <= leader_ordinal)
-""",
-            "Serve-versus-leader arbitration must compare physical carrier ordinals",
-        ),
-        (
-            """
 index
     < owner
         .ingress_predecessors
@@ -498,6 +481,31 @@ index
             sequence,
             description,
             errors,
+        )
+    for item, stale_sequence, description in (
+        (
+            projection,
+            "selected_serve_barrier",
+            "leader-wire projection must not depend on a retired Serve barrier",
+        ),
+        (
+            selector,
+            "serve_projection",
+            "the physical selector must not recreate retired Serve arbitration",
+        ),
+        (
+            queue_gate,
+            "selected_serve",
+            "the queue-local gate must remain leader-wire-only",
+        ),
+    ):
+        _require_rust_token_sequence(
+            ingress_path,
+            item,
+            stale_sequence,
+            description,
+            errors,
+            count=0,
         )
     if projection is not None and _token_sequence_count(
         rust_code_tokens(projection.source),

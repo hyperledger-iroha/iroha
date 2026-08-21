@@ -210,7 +210,6 @@ fn configure_da_ingest_layer<'a>(
     override_policy: &PolicyNumbers,
 ) {
     layer
-        .write(["nexus", "enabled"], true)
         .write(
             ["torii", "da_ingest", "manifest_store_dir"],
             manifest_dir.display().to_string(),

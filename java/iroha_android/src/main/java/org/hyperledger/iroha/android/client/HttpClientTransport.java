@@ -96,9 +96,7 @@ public final class HttpClientTransport implements IrohaClient {
   private static final long U32_MAX = 4_294_967_295L;
   private static final String TRON_BASE58_ALPHABET =
       "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-  private static final List<String> TRANSACTION_HASH_HEADERS =
-      Collections.unmodifiableList(
-          Arrays.asList("x-iroha-transaction-hash", "x-iroha-tx-hash"));
+  private static final String ENTRYPOINT_HASH_HEADER = "x-iroha-entrypoint-hash";
 
   private final HttpTransportExecutor executor;
   private final ClientConfig config;
@@ -181,7 +179,7 @@ public final class HttpClientTransport implements IrohaClient {
                                 response.statusCode(),
                                 response.body(),
                                 response.message(),
-                                extractTransactionHash(response).orElse(null),
+                                extractEntrypointHash(response).orElse(null),
                                 extractRejectCode(response));
                         if (clientResponse.statusCode() < 200
                             || clientResponse.statusCode() >= 300) {
@@ -1370,7 +1368,7 @@ public final class HttpClientTransport implements IrohaClient {
                                 response.statusCode(),
                                 response.body(),
                                 response.message(),
-                                extractTransactionHash(response).orElse(hashHex),
+                                extractEntrypointHash(response).orElse(hashHex),
                                 extractRejectCode(response));
                         if (submissionOutcomeIsAmbiguous(clientResponse.statusCode())) {
                           final AmbiguousTransactionSubmissionException error =
@@ -1504,26 +1502,24 @@ public final class HttpClientTransport implements IrohaClient {
         response.headers(), "x-iroha-reject-code", response.body());
   }
 
-  private static Optional<String> extractTransactionHash(final TransportResponse response) {
+  private static Optional<String> extractEntrypointHash(final TransportResponse response) {
     if (response == null) {
       return Optional.empty();
     }
-    for (final String headerName : TRANSACTION_HASH_HEADERS) {
-      final List<String> values = response.headers().get(headerName);
-      if (values == null) {
-        continue;
-      }
-      for (final String value : values) {
-        final String normalized = normalizeTransactionHashHeader(value);
-        if (normalized != null) {
-          return Optional.of(normalized);
-        }
+    final List<String> values = response.headers().get(ENTRYPOINT_HASH_HEADER);
+    if (values == null) {
+      return Optional.empty();
+    }
+    for (final String value : values) {
+      final String normalized = normalizeEntrypointHashHeader(value);
+      if (normalized != null) {
+        return Optional.of(normalized);
       }
     }
     return Optional.empty();
   }
 
-  private static String normalizeTransactionHashHeader(final String value) {
+  private static String normalizeEntrypointHashHeader(final String value) {
     if (value == null) {
       return null;
     }

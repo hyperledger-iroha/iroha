@@ -87,7 +87,7 @@ impl Kura {
                 entry,
                 batch,
                 execution,
-                Self::merge_lane_block_artifact(execution),
+                Self::merge_lane_block_execution_source(execution),
                 carrier_height,
                 carrier_hash,
             );

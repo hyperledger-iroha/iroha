@@ -1,7 +1,7 @@
-use std::{collections::BTreeMap, marker::PhantomData, sync::OnceLock};
+use super::{default_oracle, *};
 use norito::codec::{DecodeAll, Encode};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-use super::{default_oracle, *};
+use std::{collections::BTreeMap, marker::PhantomData, sync::OnceLock};
 enum SnapshotJsonField<'a> {
     Borrowed(&'a str),
     #[cfg(test)]
@@ -15,19 +15,18 @@ impl<'a> SnapshotJsonField<'a> {
         let decoded: Result<T, json::Error> = match self {
             #[cfg(test)]
             Self::Owned(value) => json::value::from_value(value),
-            Self::Borrowed(raw) => {
+            Self::Borrowed(raw) => (|| {
                 let value = json::from_str::<T>(raw)?;
                 // TODO: Teach Norito JSON serialization to target a comparison sink so
                 // canonical verification does not need one field-sized temporary String.
                 let canonical = json::to_json(&value)?;
                 if canonical.as_bytes() != raw.as_bytes() {
-                    return Err(json::Error::InvalidField {
-                        field: field.to_owned(),
-                        message: "snapshot field is not canonically encoded".to_owned(),
-                    });
+                    return Err(json::Error::Message(
+                        "snapshot field is not canonically encoded".to_owned(),
+                    ));
                 }
                 Ok(value)
-            }
+            })(),
         };
         decoded.map_err(|error| json::Error::InvalidField {
             field: field.to_owned(),
@@ -489,7 +488,6 @@ impl KuraSeed {
             field: "state.durable_merge_ledger".to_owned(),
             message: error.to_string(),
         })?;
-        validate_restored_commit_qcs(&state)?;
         super::validate_sccp_state_local_profile(&state).map_err(|message| {
             json::Error::InvalidField {
                 field: "state.world.sccp".to_owned(),
@@ -498,30 +496,6 @@ impl KuraSeed {
         })?;
         Ok(state)
     }
-}
-fn validate_restored_commit_qcs(state: &State) -> Result<(), json::Error> {
-    let block_hashes = state.block_hashes.view();
-    let commit_qcs = state.world.commit_qcs.view();
-    for (archive_key, commit_qc) in commit_qcs.iter() {
-        let canonical_hash = commit_qc
-            .height
-            .checked_sub(1)
-            .and_then(|index| usize::try_from(index).ok())
-            .and_then(|index| block_hashes.get(index))
-            .copied();
-        if canonical_hash != Some(*archive_key)
-            || !super::commit_qc_matches_block(commit_qc, commit_qc.height, *archive_key)
-        {
-            return Err(json::Error::InvalidField {
-                field: "world.commit_qcs".to_owned(),
-                message: format!(
-                    "commit-QC archive entry {archive_key} is not an exact commit-phase certificate for its canonical height {}",
-                    commit_qc.height
-                ),
-            });
-        }
-    }
-    Ok(())
 }
 fn nexus_from_snapshot_runtime(
     runtime: SnapshotNexusRuntime,
@@ -1394,7 +1368,23 @@ fn take_topology_cell(
     map: &mut SnapshotJsonMap<'_>,
     key: &str,
 ) -> Result<Cell<Vec<PeerId>>, json::Error> {
-    take_required(map, key)
+    let value = map
+        .remove(key)
+        .ok_or_else(|| json::Error::missing_field(key))?;
+    match value {
+        SnapshotJsonField::Borrowed(raw) if raw.as_bytes().first() == Some(&b'[') => {
+            SnapshotJsonField::Borrowed(raw)
+                .decode_canonical(key)
+                .map(Cell::new)
+        }
+        #[cfg(test)]
+        SnapshotJsonField::Owned(json::Value::Array(values)) => {
+            SnapshotJsonField::Owned(json::Value::Array(values))
+                .decode_canonical(key)
+                .map(Cell::new)
+        }
+        other => other.decode_canonical(key),
+    }
 }
 fn reject_legacy_musubi_state(
     smart_contract_state: &Storage<StatePath, Vec<u8>>,

@@ -6,6 +6,7 @@ import java.util.Objects;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sccp.SccpV1;
@@ -148,6 +149,10 @@ final class SccpSubmitEncoding {
     if (!sameSccpFeePayerAndGasBound(expectedFeePayment, payload.feePayment())) {
       throw new IllegalArgumentException(
           "transaction payload changed the requested payer, sponsor revision, or gas bound");
+    }
+    if (payload.admissionIntent() != TransactionAdmissionIntent.QUEUE_PLAN_SYNCED) {
+      throw new IllegalArgumentException(
+          "transaction payload admission intent must be QueuePlanSynced");
     }
     if (creationTimeMs != null && payload.creationTimeMs() != creationTimeMs) {
       throw new IllegalArgumentException(

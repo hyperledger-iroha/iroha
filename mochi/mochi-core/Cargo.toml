@@ -1,5 +1,6 @@
 [package]
 name = "mochi-core"
+autotests = false
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
@@ -55,3 +56,7 @@ httpmock = "0.8.2"
 # Preserve the reviewed lock graph without restoring retired production edges.
 iroha_config.workspace = true
 iroha_core = { workspace = true, default-features = false }
+
+[[test]]
+name = "composer_drafts"
+path = "tests/composer_drafts.rs"

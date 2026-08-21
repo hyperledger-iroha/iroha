@@ -160,13 +160,6 @@ enum CanonicalRecoveryControlV1 {
     Shutdown,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CertifiedServeTurnV1 {
-    None,
-    Wait,
-    DrainOrdinary,
-}
-
 struct FinalizedLifecycleHeightV1 {
     verified_context: crate::sumeragi::v2::VerifiedHeightContext,
     lifecycle_storage_authority: crate::sumeragi::v2::RecoveredLifecycleStorageAuthorityV1,
@@ -441,6 +434,40 @@ pub(in crate::sumeragi) fn launch_non_pending_lifecycle_height_and_shutdown_for_
     Ok(context_id)
 }
 
+#[cfg(test)]
+/// Launch and activate one ordinary or CompleteTip lifecycle fixture.
+///
+/// The returned owner has crossed the real runner publication boundary. Tests
+/// must consume it through finalized rollover or orderly active shutdown.
+pub(in crate::sumeragi) fn launch_non_pending_lifecycle_height_and_activate_for_test(
+    owner: crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
+    inputs: ProductionLifecycleLaunchInputsV1,
+    complete_tip: Option<RetiredRecoveredCompleteTipActivationAuthorityV1>,
+    ingress_ready: &Arc<AtomicBool>,
+    block_ingress: &Arc<FairV2Ingress>,
+) -> Result<(ActivatedProductionLifecycleV1, wire::HeightContextId), V2RunnerError> {
+    let activation = complete_tip
+        .map(|authority| PendingSuccessorActivation::RecoveredCompleteTip { authority });
+    let mut preactivation = launch_non_pending_lifecycle_height(
+        owner,
+        inputs,
+        activation,
+        ingress_ready,
+        block_ingress,
+    )?;
+    let mut setup_runner = ProductionLifecyclePreActivationRunnerBorrowV1::for_test();
+    let context_id = preactivation.with_runner_setup(&mut setup_runner, |executor, services| {
+        if !services.matches_lifecycle_executor_output_guard(executor) {
+            return Err(V2RunnerError::RestartRequired);
+        }
+        Ok(executor.context().id())
+    })?;
+    let (_directive, local_proposal) =
+        preactivation.initialize_recovered_local_proposal(setup_runner)?;
+    let activated = preactivation.activate(Instant::now(), local_proposal)?;
+    Ok((activated, context_id))
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn recover_canonical_bodies_before_activation(
     preactivation: &mut ProductionLifecyclePreActivationHeightV1,
@@ -548,220 +575,11 @@ fn recover_canonical_bodies_before_activation(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-fn service_retained_certified_response(
-    receiver: &Arc<FairV2Ingress>,
-    executor: &mut V2EffectExecutor<SerializedV2Runtime>,
-    services: &mut ProductionV2Services,
-    lane_work: &mut V2LaneWorkAdapter,
-    output_guard: &Arc<ConsensusOutputGuard>,
-    kura: &Kura,
-    key_pair: &KeyPair,
-    block_sync_server: &mut V2BlockSyncServer,
-    block_sync: &mut V2BlockSyncDiscovery,
-    block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
-    npos_vrf: &mut V2NposVrfLifecycle,
-) -> Result<bool, V2RunnerError> {
-    if !executor.has_retained_certified_body_response() {
-        return Ok(false);
-    }
-    let target_ordinal = executor
-        .retained_certified_body_response_scheduler_ordinal()?
-        .ok_or_else(|| {
-            V2RunnerError::Service(
-                "retained certified body response lost its exact scheduler position".to_owned(),
-            )
-        })?;
-    services.drain_exact_serve_runtime_predecessor(executor, target_ordinal)?;
-    if executor
-        .older_runtime_lifecycle_predates_retained_response(Instant::now(), target_ordinal)?
-    {
-        advance_executor_once_before_exact_serve(receiver, executor, services)?;
-    }
-    if let Some(timeout_recovery_cut) = executor.timeout_recovery_lifecycle_cut()? {
-        services.drain_timeout_recovery_prefix_completion(executor, timeout_recovery_cut)?;
-    }
-    let response_backpressured = match executor.retry_retained_certified_body_response(services) {
-        Ok(_) => false,
-        Err(EffectTransportError::Backpressure) => true,
-        Err(EffectTransportError::FailClosed(reason)) => {
-            return Err(V2RunnerError::Service(reason));
-        }
-        Err(error) => {
-            iroha_logger::debug!(%error, "rejected retained certified body response");
-            false
-        }
-    };
-    if response_backpressured {
-        if executor.retained_response_may_admit_certified_fence_escape() {
-            drain_v2_ingress(
-                receiver,
-                executor,
-                services,
-                lane_work,
-                output_guard,
-                kura,
-                key_pair,
-                block_sync_server,
-                block_sync,
-                block_sync_request,
-                npos_vrf,
-                V2IngressDrainMode::CertifiedFenceEscape,
-                1,
-            )?;
-        }
-        drain_v2_ingress(
-            receiver,
-            executor,
-            services,
-            lane_work,
-            output_guard,
-            kura,
-            key_pair,
-            block_sync_server,
-            block_sync,
-            block_sync_request,
-            npos_vrf,
-            V2IngressDrainMode::TimeoutVoteEpisode,
-            1,
-        )?;
-        executor.reconcile_retained_response_certified_fence_escape_phase();
-        advance_pacemaker_once(receiver, executor, services)?;
-        executor.reconcile_retained_response_certified_fence_escape_phase();
-    }
-    Ok(true)
-}
-
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-fn service_certified_serve_barrier(
-    serve_barrier: Option<super::super::v2_worker::CertifiedServeBarrier>,
-    receiver: &Arc<FairV2Ingress>,
-    executor: &mut V2EffectExecutor<SerializedV2Runtime>,
-    services: &mut ProductionV2Services,
-    lane_work: &mut V2LaneWorkAdapter,
-    output_guard: &Arc<ConsensusOutputGuard>,
-    kura: &Kura,
-    key_pair: &KeyPair,
-    block_sync_server: &mut V2BlockSyncServer,
-    block_sync: &mut V2BlockSyncDiscovery,
-    block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
-    npos_vrf: &mut V2NposVrfLifecycle,
-) -> Result<CertifiedServeTurnV1, V2RunnerError> {
-    let Some(serve_barrier) = serve_barrier else {
-        return Ok(CertifiedServeTurnV1::None);
-    };
-    let mut older_predecessor_remains = false;
-    let completion_evidence = services
-        .certified_serve_predecessor_completion_evidence(
-            executor.remaining_completion_capacity() != 0,
-            serve_barrier.scheduler_ordinal(),
-        )
-        .map_err(V2RunnerError::Service)?;
-    let predecessor = executor.exact_serve_predecessor_observation(
-        Instant::now(),
-        serve_barrier.scheduler_ordinal(),
-        completion_evidence,
-    )?;
-    let predecessor_admission = predecessor
-        .should_open_predecessor_admission()
-        .then(|| {
-            services
-                .open_certified_serve_predecessor_admission(serve_barrier)
-                .map_err(V2RunnerError::Service)
-        })
-        .transpose()?;
-    if let Some(predecessor_admission) = predecessor_admission {
-        services
-            .drain_exact_serve_runtime_predecessor(executor, serve_barrier.scheduler_ordinal())?;
-        let completion_evidence = services
-            .certified_serve_predecessor_completion_evidence(
-                executor.remaining_completion_capacity() != 0,
-                serve_barrier.scheduler_ordinal(),
-            )
-            .map_err(V2RunnerError::Service)?;
-        let predecessor = executor.exact_serve_predecessor_observation(
-            Instant::now(),
-            serve_barrier.scheduler_ordinal(),
-            completion_evidence,
-        )?;
-        if predecessor.has_runnable_predecessor()
-            && services
-                .certified_serve_predecessor_capacity_available(serve_barrier)
-                .map_err(V2RunnerError::Service)?
-        {
-            advance_executor_once_before_exact_serve(receiver, executor, services)?;
-        }
-        drain_v2_ingress(
-            receiver,
-            executor,
-            services,
-            lane_work,
-            output_guard,
-            kura,
-            key_pair,
-            block_sync_server,
-            block_sync,
-            block_sync_request,
-            npos_vrf,
-            V2IngressDrainMode::CertifiedFenceEscape,
-            1,
-        )?;
-        let completion_evidence = services
-            .certified_serve_predecessor_completion_evidence(
-                executor.remaining_completion_capacity() != 0,
-                serve_barrier.scheduler_ordinal(),
-            )
-            .map_err(V2RunnerError::Service)?;
-        let predecessor = executor.exact_serve_predecessor_observation(
-            Instant::now(),
-            serve_barrier.scheduler_ordinal(),
-            completion_evidence,
-        )?;
-        older_predecessor_remains = predecessor.has_runnable_predecessor();
-        predecessor_admission
-            .finish()
-            .map_err(V2RunnerError::Service)?;
-    }
-    service_certified_serve_barrier_liveness_turn(false, |action| match action {
-        CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode => drain_v2_ingress(
-            receiver,
-            executor,
-            services,
-            lane_work,
-            output_guard,
-            kura,
-            key_pair,
-            block_sync_server,
-            block_sync,
-            block_sync_request,
-            npos_vrf,
-            V2IngressDrainMode::TimeoutVoteEpisode,
-            1,
-        ),
-        CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
-            if let Some(timeout_recovery_cut) = executor.timeout_recovery_lifecycle_cut()? {
-                services
-                    .drain_timeout_recovery_prefix_completion(executor, timeout_recovery_cut)?;
-            }
-            Ok(())
-        }
-        CertifiedServeBarrierLivenessAction::Pacemaker => {
-            advance_pacemaker_once(receiver, executor, services)
-        }
-    })?;
-    if older_predecessor_remains {
-        return Ok(CertifiedServeTurnV1::Wait);
-    }
-    services.drain_certified_serve_predecessor_completion(executor)?;
-    Ok(CertifiedServeTurnV1::DrainOrdinary)
-}
-
 /// Consume one ready lifecycle height through exact output handoff, store
 /// retirement, and worker cleanup around a caller-authenticated successor.
 pub(in crate::sumeragi) fn finalize_lifecycle_height<T>(
     activated: ActivatedProductionLifecycleV1,
     active_runner: &mut ProductionLifecycleActiveRunnerBorrowV1,
-    producer_episode: Option<super::super::v2_worker::CertifiedServeProducerEpisode>,
     mut lane_work: V2LaneWorkAdapter,
     control_queue_capacity: usize,
     cleanup_supervisor: &mut V2CleanupSupervisor,
@@ -779,9 +597,6 @@ pub(in crate::sumeragi) fn finalize_lifecycle_height<T>(
     V2RunnerError,
 > {
     let finalized = activated.into_finalized_rollover(active_runner)?;
-    // Ingress is now closed and its exact runner authority retired, so a
-    // network Serve cannot enter between producer release and finalization.
-    drop(producer_episode);
     let (next_context, prepared_successor) = {
         let (receipt, artifact) = finalized.finality();
         prepare_successor(receipt, artifact, &mut lane_work)?
@@ -802,7 +617,6 @@ fn run_lifecycle_active_height(
     mut activated: ActivatedProductionLifecycleV1,
     mut active_runner: ProductionLifecycleActiveRunnerBorrowV1,
     mut lane_work: V2LaneWorkAdapter,
-    mut committed_lane_status_publisher: CommittedLaneStatusPublisher,
     context: &wire::HeightContext,
     context_store: &crate::sumeragi::v2_context_store::V2ContextStore,
     state: &Arc<State>,
@@ -839,9 +653,10 @@ fn run_lifecycle_active_height(
     let mut next_npos_vrf_retransmit = deadline_after(height_started_at, retransmit_interval);
     let mut block_sync_request = None;
     let mut admitted_discovered_commit_qc = false;
+    let mut producer_claim = LifecycleProducerClaimDispositionV1::initial();
+    let mut canonical_lane_body_recovered = false;
 
     loop {
-        committed_lane_status_publisher.publish_if_changed(&lane_work);
         cleanup_supervisor.reap_finished();
         if output_guard.restart_required() {
             return Err(V2RunnerError::RestartRequired);
@@ -852,21 +667,9 @@ fn run_lifecycle_active_height(
         }
         liveness_watchdog.poll(Instant::now());
 
-        let (certified_serve_barrier, retained_response) = activated.with_runner_runtime(
+        activated.with_runner_runtime(
             &mut active_runner,
-            |_owner, executor, services, _local_proposal| {
-                if let Some(scheduler_ordinal) = services
-                    .dormant_certified_serve_ingress_scheduler_ordinal()
-                    .map_err(V2RunnerError::Service)?
-                {
-                    let _ = services.fail_closed_dormant_certified_serve(scheduler_ordinal);
-                    return Err(V2RunnerError::RestartRequired);
-                }
-                // Snapshot and validate the exact raw-admission barrier before
-                // retained-response work, matching the serialized legacy turn.
-                let certified_serve_barrier = services
-                    .certified_serve_barrier()
-                    .map_err(V2RunnerError::Service)?;
+            |_owner, _executor, services, _local_proposal| {
                 let now = Instant::now();
                 if now >= next_npos_vrf_retransmit {
                     broadcast_npos_vrf_messages(
@@ -876,86 +679,9 @@ fn run_lifecycle_active_height(
                     )?;
                     next_npos_vrf_retransmit = deadline_after(now, retransmit_interval);
                 }
-                let retained_response = service_retained_certified_response(
-                    receiver,
-                    executor,
-                    services,
-                    &mut lane_work,
-                    output_guard,
-                    kura.as_ref(),
-                    &common_config.key_pair,
-                    block_sync_server,
-                    block_sync,
-                    &mut block_sync_request,
-                    npos_vrf,
-                )?;
-                Ok::<_, V2RunnerError>((certified_serve_barrier, retained_response))
+                Ok::<_, V2RunnerError>(())
             },
         )?;
-        if retained_response {
-            committed_lane_status_publisher.publish_if_changed(&lane_work);
-            let _ = wake_rx.recv_timeout(IDLE_POLL);
-            continue;
-        }
-
-        let serve_turn = activated.with_runner_runtime(
-            &mut active_runner,
-            |_owner, executor, services, _local_proposal| {
-                service_certified_serve_barrier(
-                    certified_serve_barrier,
-                    receiver,
-                    executor,
-                    services,
-                    &mut lane_work,
-                    output_guard,
-                    kura.as_ref(),
-                    &common_config.key_pair,
-                    block_sync_server,
-                    block_sync,
-                    &mut block_sync_request,
-                    npos_vrf,
-                )
-            },
-        )?;
-        match serve_turn {
-            CertifiedServeTurnV1::None => {}
-            CertifiedServeTurnV1::Wait => {
-                committed_lane_status_publisher.publish_if_changed(&lane_work);
-                let _ = wake_rx.recv_timeout(IDLE_POLL);
-                continue;
-            }
-            CertifiedServeTurnV1::DrainOrdinary => {
-                drain_lifecycle_v2_ingress(
-                    &mut activated,
-                    &mut active_runner,
-                    receiver,
-                    &mut lane_work,
-                    kura.as_ref(),
-                    &common_config.key_pair,
-                    block_sync_server,
-                    block_sync,
-                    &mut block_sync_request,
-                    npos_vrf,
-                    1,
-                )?;
-                committed_lane_status_publisher.publish_if_changed(&lane_work);
-                let _ = wake_rx.recv_timeout(IDLE_POLL);
-                continue;
-            }
-        }
-
-        let certified_serve_producer_episode = activated.with_runner_runtime(
-            &mut active_runner,
-            |_owner, _executor, services, _local_proposal| {
-                services
-                    .try_begin_certified_serve_producer_episode()
-                    .map_err(V2RunnerError::Service)
-            },
-        )?;
-        let Some(certified_serve_producer_episode) = certified_serve_producer_episode else {
-            let _ = wake_rx.recv_timeout(IDLE_POLL);
-            continue;
-        };
 
         let discovery_was_outstanding = activated.with_runner_runtime(
             &mut active_runner,
@@ -1034,7 +760,7 @@ fn run_lifecycle_active_height(
             },
         )?;
 
-        drain_lifecycle_v2_ingress(
+        let drain_disposition = drain_lifecycle_v2_ingress(
             &mut activated,
             &mut active_runner,
             receiver,
@@ -1046,9 +772,15 @@ fn run_lifecycle_active_height(
             &mut block_sync_request,
             npos_vrf,
             body_queue_capacity,
+            producer_claim,
         )?;
+        producer_claim = drain_disposition.producer_claim();
         if discovery_was_outstanding && block_sync_request.is_none() {
             admitted_discovered_commit_qc = true;
+        }
+        if drain_disposition.requires_yield() {
+            let _ = wake_rx.recv_timeout(IDLE_POLL);
+            continue;
         }
 
         let ready_to_finish = activated.with_runner_runtime(
@@ -1139,12 +871,104 @@ fn run_lifecycle_active_height(
                 Ok::<_, V2RunnerError>(executor.ready_to_finish())
             },
         )?;
-        committed_lane_status_publisher.publish_if_changed(&lane_work);
-        if ready_to_finish {
+        if pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel) {
+            let active_view = activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, executor, _services, _local_proposal| {
+                    executor
+                        .local_proposal_directive()
+                        .map(|directive| directive.tag().view())
+                },
+            )?;
+            if !lane_work.refresh_pending_queue_plan_admission_handoffs(active_view)? {
+                pending_queue_plan_admission_dirty.store(true, Ordering::Release);
+            }
+        }
+
+        let producer_turn =
+            match activated.claim_producer_turn_for_local_proposal(&mut active_runner) {
+                Ok(claimed) => claimed,
+                Err(error) => {
+                    iroha_logger::error!(?error, "Sumeragi v2 ProducerTurn claim failed closed");
+                    output_guard.close_admission_for_restart();
+                    return Err(V2RunnerError::RestartRequired);
+                }
+            };
+        if !ready_to_finish || producer_turn.is_some() {
+            let scheduled = activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, executor, services, local_proposal| {
+                    schedule_local_proposal(
+                        candidate_limits,
+                        context,
+                        local_validator,
+                        &common_config.key_pair,
+                        output_guard.as_ref(),
+                        state.as_ref(),
+                        queue,
+                        kura.as_ref(),
+                        first_height_genesis,
+                        height_started_at,
+                        block_cadence,
+                        &mut local_proposal.state,
+                        executor,
+                        services,
+                        &mut lane_work,
+                        npos_vrf,
+                        retransmit_interval,
+                    )?;
+                    dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)
+                },
+            );
+            if let Err(error) = scheduled {
+                output_guard.close_admission_for_restart();
+                drop(producer_turn);
+                return Err(error);
+            }
+        }
+        if let Some(claimed) = producer_turn {
+            let attempted =
+                claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner));
+            if let Err(error) =
+                activated.settle_producer_turn_after_local_proposal(&mut active_runner, attempted)
+            {
+                iroha_logger::error!(
+                    failure = ?error.failure(),
+                    "ProducerTurn terminal settlement requires restart"
+                );
+                output_guard.close_admission_for_restart();
+                return Err(V2RunnerError::RestartRequired);
+            }
+        }
+
+        let rollover_ready = if ready_to_finish {
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, executor, services, _local_proposal| {
+                    if !services.matches_lifecycle_lane_work(&lane_work) {
+                        return Err(V2RunnerError::Service(
+                            "finalized lifecycle borrowed a foreign lane-work adapter".to_owned(),
+                        ));
+                    }
+                    super::preflight_finalized_lane_rollover(
+                        executor,
+                        &mut lane_work,
+                        &mut canonical_lane_body_recovered,
+                    )
+                },
+            )?
+        } else {
+            false
+        };
+        if ready_to_finish && !rollover_ready {
+            let _ = wake_rx.recv_timeout(IDLE_POLL);
+            continue;
+        }
+
+        if rollover_ready {
             let (prepared_successor, retained_merge_sidecars, cleanup) = finalize_lifecycle_height(
                 activated,
                 &mut active_runner,
-                Some(certified_serve_producer_episode),
                 lane_work,
                 control_queue_capacity,
                 cleanup_supervisor,
@@ -1219,6 +1043,24 @@ fn run_lifecycle_active_height(
                     ))
                 },
             )?;
+            let PreparedLifecycleSuccessorV1 {
+                verified_context,
+                lifecycle_storage_authority,
+                pending_activation,
+                receipt_height,
+                receipt_context_id,
+                receipt_block_hash,
+            } = prepared_successor;
+            let (cleanup, lifecycle_storage_authority) =
+                cleanup.bind_successor_storage(lifecycle_storage_authority)?;
+            let prepared_successor = PreparedLifecycleSuccessorV1 {
+                verified_context,
+                lifecycle_storage_authority,
+                pending_activation,
+                receipt_height,
+                receipt_context_id,
+                receipt_block_hash,
+            };
             if let Some(warning) = cleanup.wal_retirement_warning() {
                 iroha_logger::warn!(
                     height = prepared_successor.receipt_height,
@@ -1249,46 +1091,6 @@ fn run_lifecycle_active_height(
             }));
         }
 
-        if pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel) {
-            let active_view = activated.with_runner_runtime(
-                &mut active_runner,
-                |_owner, executor, _services, _local_proposal| {
-                    executor
-                        .local_proposal_directive()
-                        .map(|directive| directive.tag().view())
-                },
-            )?;
-            if !lane_work.refresh_pending_queue_plan_admission_handoffs(active_view)? {
-                pending_queue_plan_admission_dirty.store(true, Ordering::Release);
-            }
-        }
-
-        activated.with_runner_runtime(
-            &mut active_runner,
-            |_owner, executor, services, local_proposal| {
-                schedule_local_proposal(
-                    candidate_limits,
-                    context,
-                    local_validator,
-                    &common_config.key_pair,
-                    output_guard.as_ref(),
-                    state.as_ref(),
-                    queue,
-                    kura.as_ref(),
-                    first_height_genesis,
-                    height_started_at,
-                    block_cadence,
-                    &mut local_proposal.state,
-                    executor,
-                    services,
-                    &mut lane_work,
-                    npos_vrf,
-                    retransmit_interval,
-                )?;
-                dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)
-            },
-        )?;
-        committed_lane_status_publisher.publish_if_changed(&lane_work);
         let _ = wake_rx.recv_timeout(IDLE_POLL);
     }
 }
@@ -1748,13 +1550,6 @@ pub(super) fn run_non_pending_lifecycle_loop(
                     })?;
                 lane_work.install_lane_drain_queue(Arc::clone(&queue))?;
                 lane_work.activate_after_lane_drain_queue_install(&queue)?;
-                if let Some(scheduler_ordinal) = services
-                    .dormant_certified_serve_ingress_scheduler_ordinal()
-                    .map_err(V2RunnerError::Service)?
-                {
-                    let _ = services.fail_closed_dormant_certified_serve(scheduler_ordinal);
-                    return Err(V2RunnerError::RestartRequired);
-                }
                 let _ = reconcile_executor_locked_body(executor, services)?;
                 let startup_directive = executor.local_proposal_directive()?;
                 lane_work.retain_merge_sidecars_for_global_view(
@@ -1770,8 +1565,6 @@ pub(super) fn run_non_pending_lifecycle_loop(
                 dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
                 Ok(lane_work)
             })?;
-        let mut committed_lane_status_publisher = CommittedLaneStatusPublisher::default();
-        committed_lane_status_publisher.publish_if_changed(&lane_work);
         let (_initial_directive, local_proposal) =
             preactivation.initialize_recovered_local_proposal(setup_runner)?;
         // Startup repair is not live-height cadence. Arm activation, proposal,
@@ -1796,7 +1589,6 @@ pub(super) fn run_non_pending_lifecycle_loop(
             activated,
             active_runner,
             lane_work,
-            committed_lane_status_publisher,
             &context,
             &context_store,
             &state,

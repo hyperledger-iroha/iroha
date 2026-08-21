@@ -3,11 +3,9 @@ use super::super::{
     FairV2Ingress, FairV2IngressClass, FairV2IngressDequeueDisposition, FairV2IngressEntry,
     FairV2IngressLeaderWirePhase, FairV2IngressLeaderWireSelectorProjection,
     FairV2IngressLeaderWireToken, FairV2IngressOwnershipEvidence, FairV2IngressQueueGateVerdict,
-    FairV2IngressServeSelectorProjection, FairV2IngressSource, FairV2IngressSourceClass,
-    FairV2IngressState, FairV2IngressWireKey, InboundBlockMessage,
-    fair_v2_ingress_leader_wire_selector_projection, fair_v2_ingress_queue_gate_verdict,
-    fair_v2_ingress_serve_selector_projection, message::BlockMessage,
-    select_fair_v2_ingress_candidate,
+    FairV2IngressSource, FairV2IngressSourceClass, FairV2IngressState, FairV2IngressWireKey,
+    InboundBlockMessage, fair_v2_ingress_leader_wire_selector_projection,
+    fair_v2_ingress_queue_gate_verdict, message::BlockMessage, select_fair_v2_ingress_candidate,
 };
 use super::schema::{LifecycleContext, LifecycleDigest};
 use iroha_crypto::Hash;
@@ -96,8 +94,6 @@ pub(in crate::sumeragi) enum FairIngressQueueCutError {
     MissingTargetContext,
     /// The target wire context disagrees with the bound fair-ingress height.
     ForeignTargetContext,
-    /// The bound Certified-Serve selector authority is absent or inconsistent.
-    InvalidServeAuthority,
     /// The bound leader-wire selector authority is absent or inconsistent.
     InvalidLeaderWireAuthority,
     /// A prepared witness was presented to a different queue instance.
@@ -127,7 +123,6 @@ struct FrozenFairIngressOccurrence {
     source_class: FairV2IngressSourceClass,
     class: FairV2IngressClass,
     leader_wire_token: Option<FairV2IngressLeaderWireToken>,
-    serve_reservation: FrozenServeReservation,
     queue_gate: FairV2IngressQueueGateVerdict,
     obsolete: bool,
 }
@@ -140,7 +135,6 @@ impl PartialEq for FrozenFairIngressOccurrence {
             && self.source_class == other.source_class
             && self.class == other.class
             && self.leader_wire_token == other.leader_wire_token
-            && self.serve_reservation == other.serve_reservation
             && self.queue_gate == other.queue_gate
             && self.obsolete == other.obsolete
     }
@@ -195,12 +189,6 @@ impl FairIngressSelectorOccurrence {
         Arc::clone(&self.inbound)
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FrozenServeReservation {
-    Absent,
-    PresentUnselected,
-    MatchesSelected,
-}
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FrozenQueueGeometry<S, V> {
     ready_prefix: Vec<S>,
@@ -224,7 +212,6 @@ pub(super) struct FairIngressQueueCut<'a> {
     geometry: FrozenQueueGeometry<FairV2IngressSource, FrozenFairIngressOccurrence>,
     selector_occurrences: BTreeMap<u64, FairIngressSelectorOccurrence>,
     pending_identities: BTreeMap<u64, PendingFairIngressIdentity>,
-    serve_projection: FairV2IngressServeSelectorProjection,
     leader_wire_projection: FairV2IngressLeaderWireSelectorProjection,
     selected_identity: PendingFairIngressIdentity,
     selected_positions: FairIngressQueuePositions,
@@ -245,7 +232,6 @@ pub(super) struct FairIngressTurnCut<'a> {
     physical_cut: u128,
     geometry: FrozenQueueGeometry<FairV2IngressSource, FrozenFairIngressOccurrence>,
     selector_occurrences: BTreeMap<u64, FairIngressSelectorOccurrence>,
-    serve_projection: FairV2IngressServeSelectorProjection,
     leader_wire_projection: FairV2IngressLeaderWireSelectorProjection,
     bound_context: Option<(wire::HeightContextId, wire::Height)>,
     selected_source_index: usize,
@@ -264,7 +250,7 @@ pub(super) enum FairIngressTurnContextCut<'a> {
 /// Borrow-free opaque witness of one fully revalidated pre-cut queue.
 ///
 /// The witness deliberately retains the complete comparable geometry and both
-/// transitional barrier projections. A future synchronous transaction can
+/// transitional leader-wire barrier projection. A future synchronous transaction can
 /// consume it under fresh service/state locks and reject any pre-cut reorder,
 /// removal, coalescence, gate change, or ownership mutation. It exposes no
 /// constructor, clone, or general mutation surface; its sole dequeue is the
@@ -275,7 +261,6 @@ pub(super) struct PreparedFairIngressQueueWitness {
     physical_cut: u128,
     geometry: FrozenQueueGeometry<FairV2IngressSource, FrozenFairIngressOccurrence>,
     pending_identities: BTreeMap<u64, PendingFairIngressIdentity>,
-    serve_projection: FairV2IngressServeSelectorProjection,
     leader_wire_projection: FairV2IngressLeaderWireSelectorProjection,
     selected_identity: PendingFairIngressIdentity,
     selected_positions: FairIngressQueuePositions,
@@ -289,13 +274,15 @@ struct PreparedFairIngressQueueSelection {
 }
 /// Prevalidated exact dequeue retaining the queue's exclusive service lock.
 ///
-/// Producers may append beyond the frozen cut, but no competing consumer can
-/// change or remove the selected prefix between this preflight and LedgerV1
-/// publication. Consequently the post-fsync dequeue is assertion-only.
+/// The producer-publication fence excludes every queue-state producer
+/// mutation between this final preflight and the post-LedgerV1 dequeue. No
+/// competing consumer can change or remove the selected prefix either.
+/// Consequently the post-fsync dequeue is assertion-only.
 #[must_use = "locked fair-ingress dequeue must commit or retain its witness"]
 pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
     queue: &'a FairV2Ingress,
     _service_guard: MutexGuard<'a, ()>,
+    _producer_publication_guard: MutexGuard<'a, ()>,
     witness: PreparedFairIngressQueueWitness,
     selection: PreparedFairIngressQueueSelection,
 }
@@ -323,7 +310,7 @@ impl PreparedFairIngressQueueWitness {
     /// the sealed selector preparation boundary.
     pub(super) fn is_internally_exact(&self) -> bool {
         let selected_ordinal = self.selected_identity.physical_admission_ordinal;
-        let _retained_barrier_projections = (&self.serve_projection, &self.leader_wire_projection);
+        let _retained_barrier_projection = &self.leader_wire_projection;
         self.physical_cut > u128::from(selected_ordinal)
             && self.geometry.positions.len() == self.pending_identities.len()
             && self
@@ -359,6 +346,7 @@ impl PreparedFairIngressQueueWitness {
             return Err((FairIngressQueueCutError::QueueCutChanged, self));
         }
         let service_guard = queue.service_lock.lock();
+        let producer_publication_guard = queue.producer_publication_lock.lock();
         let selection = match self.revalidate_for_commit(queue) {
             Ok(selection) if selection.disposition == self.selected_disposition => selection,
             Ok(_) => return Err((FairIngressQueueCutError::QueueCutChanged, self)),
@@ -372,6 +360,7 @@ impl PreparedFairIngressQueueWitness {
         Ok(LockedPreparedFairIngressExactDequeue {
             queue,
             _service_guard: service_guard,
+            _producer_publication_guard: producer_publication_guard,
             witness: self,
             selection,
         })
@@ -466,29 +455,17 @@ impl PreparedFairIngressQueueWitness {
     ) -> Result<PreparedFairIngressQueueSelection, FairIngressQueueCutError> {
         let state = queue.state.lock();
         validate_live_queue_structure(&state)?;
-        let serve_projection =
-            fair_v2_ingress_serve_selector_projection(&state, Some(self.physical_cut))
-                .map_err(|_| FairIngressQueueCutError::InvalidServeAuthority)?;
-        let leader_wire_projection = fair_v2_ingress_leader_wire_selector_projection(
-            &state,
-            serve_projection.selected_barrier,
-            true,
-            Some(self.physical_cut),
-        )
-        .map_err(|_| FairIngressQueueCutError::InvalidLeaderWireAuthority)?;
-        let (current, selector_occurrences) = freeze_live_geometry(
-            &state,
-            self.physical_cut,
-            &serve_projection,
-            &leader_wire_projection,
-        )?;
+        let leader_wire_projection =
+            fair_v2_ingress_leader_wire_selector_projection(&state, true, Some(self.physical_cut))
+                .map_err(|_| FairIngressQueueCutError::InvalidLeaderWireAuthority)?;
+        let (current, selector_occurrences) =
+            freeze_live_geometry(&state, self.physical_cut, &leader_wire_projection)?;
         if !state
             .ready
             .iter()
             .take(self.geometry.ready_prefix.len())
             .eq(self.geometry.ready_prefix.iter())
             || current != self.geometry
-            || serve_projection != self.serve_projection
             || leader_wire_projection != self.leader_wire_projection
         {
             return Err(FairIngressQueueCutError::QueueCutChanged);
@@ -586,25 +563,14 @@ impl PreparedFairIngressQueueWitness {
         if validate_live_queue_structure(state).is_err() {
             return false;
         }
-        let Ok(serve_projection) =
-            fair_v2_ingress_serve_selector_projection(state, Some(self.physical_cut))
+        let Ok(leader_wire_projection) =
+            fair_v2_ingress_leader_wire_selector_projection(state, true, Some(self.physical_cut))
         else {
             return false;
         };
-        let Ok(leader_wire_projection) = fair_v2_ingress_leader_wire_selector_projection(
-            state,
-            serve_projection.selected_barrier,
-            true,
-            Some(self.physical_cut),
-        ) else {
-            return false;
-        };
-        let Ok((current, selector_occurrences)) = freeze_live_geometry(
-            state,
-            self.physical_cut,
-            &serve_projection,
-            &leader_wire_projection,
-        ) else {
+        let Ok((current, selector_occurrences)) =
+            freeze_live_geometry(state, self.physical_cut, &leader_wire_projection)
+        else {
             return false;
         };
         drop(selector_occurrences);
@@ -624,7 +590,6 @@ impl PreparedFairIngressQueueWitness {
                 .take(self.geometry.ready_prefix.len())
                 .eq(self.geometry.ready_prefix.iter())
             && current == self.geometry
-            && serve_projection == self.serve_projection
             && leader_wire_projection == self.leader_wire_projection
     }
 }
@@ -634,13 +599,14 @@ impl LockedPreparedFairIngressExactDequeue<'_> {
         let Self {
             queue,
             _service_guard,
+            _producer_publication_guard,
             witness,
             selection,
         } = self;
         let mut state = queue.state.lock();
         assert!(
             witness.metadata_matches_locked(&state),
-            "locked recovered Fetch ingress prefix changed after LedgerV1 publication"
+            "locked lifecycle ingress prefix changed after LedgerV1 publication"
         );
         let dequeued = queue
             .dequeue_selected_locked(
@@ -652,8 +618,9 @@ impl LockedPreparedFairIngressExactDequeue<'_> {
                 true,
                 Instant::now(),
             )
-            .expect("prevalidated recovered Fetch dequeue is infallible after publication");
+            .expect("prevalidated lifecycle dequeue is infallible after publication");
         drop(state);
+        drop(_producer_publication_guard);
         drop(_service_guard);
         dequeued
     }
@@ -695,7 +662,6 @@ impl FairIngressQueueCut<'_> {
             geometry,
             selector_occurrences: _,
             pending_identities,
-            serve_projection,
             leader_wire_projection,
             selected_identity,
             selected_positions,
@@ -708,7 +674,6 @@ impl FairIngressQueueCut<'_> {
             physical_cut,
             geometry,
             pending_identities,
-            serve_projection,
             leader_wire_projection,
             selected_identity,
             selected_positions,
@@ -726,25 +691,14 @@ impl FairIngressQueueCut<'_> {
         if validate_live_queue_structure(&state).is_err() {
             return false;
         }
-        let Ok(serve_projection) =
-            fair_v2_ingress_serve_selector_projection(&state, Some(self.physical_cut))
+        let Ok(leader_wire_projection) =
+            fair_v2_ingress_leader_wire_selector_projection(&state, true, Some(self.physical_cut))
         else {
             return false;
         };
-        let Ok(leader_wire_projection) = fair_v2_ingress_leader_wire_selector_projection(
-            &state,
-            serve_projection.selected_barrier,
-            true,
-            Some(self.physical_cut),
-        ) else {
-            return false;
-        };
-        let Ok((current, selector_occurrences)) = freeze_live_geometry(
-            &state,
-            self.physical_cut,
-            &serve_projection,
-            &leader_wire_projection,
-        ) else {
+        let Ok((current, selector_occurrences)) =
+            freeze_live_geometry(&state, self.physical_cut, &leader_wire_projection)
+        else {
             return false;
         };
         if !state
@@ -753,7 +707,6 @@ impl FairIngressQueueCut<'_> {
             .take(self.geometry.ready_prefix.len())
             .eq(self.geometry.ready_prefix.iter())
             || current != self.geometry
-            || serve_projection != self.serve_projection
             || leader_wire_projection != self.leader_wire_projection
         {
             return false;
@@ -809,25 +762,14 @@ impl FairIngressQueueCut<'_> {
         if validate_live_queue_structure(&state).is_err() {
             return false;
         }
-        let Ok(serve_projection) =
-            fair_v2_ingress_serve_selector_projection(&state, Some(self.physical_cut))
+        let Ok(leader_wire_projection) =
+            fair_v2_ingress_leader_wire_selector_projection(&state, true, Some(self.physical_cut))
         else {
             return false;
         };
-        let Ok(leader_wire_projection) = fair_v2_ingress_leader_wire_selector_projection(
-            &state,
-            serve_projection.selected_barrier,
-            true,
-            Some(self.physical_cut),
-        ) else {
-            return false;
-        };
-        let Ok((current, _)) = freeze_live_geometry(
-            &state,
-            self.physical_cut,
-            &serve_projection,
-            &leader_wire_projection,
-        ) else {
+        let Ok((current, _)) =
+            freeze_live_geometry(&state, self.physical_cut, &leader_wire_projection)
+        else {
             return false;
         };
         state.leader_wire_context == Some(self.bound_context)
@@ -837,7 +779,6 @@ impl FairIngressQueueCut<'_> {
                 .take(self.geometry.ready_prefix.len())
                 .eq(self.geometry.ready_prefix.iter())
             && current == self.geometry
-            && serve_projection == self.serve_projection
             && leader_wire_projection == self.leader_wire_projection
     }
 }
@@ -856,7 +797,6 @@ impl<'a> FairIngressQueueCut<'a> {
             geometry,
             selector_occurrences,
             pending_identities: _,
-            serve_projection,
             leader_wire_projection,
             selected_identity,
             selected_positions,
@@ -876,7 +816,6 @@ impl<'a> FairIngressQueueCut<'a> {
             physical_cut,
             geometry,
             selector_occurrences,
-            serve_projection,
             leader_wire_projection,
             bound_context: Some(bound_context),
             selected_source_index,
@@ -949,7 +888,6 @@ impl<'a> FairIngressTurnCut<'a> {
             physical_cut,
             geometry,
             selector_occurrences,
-            serve_projection,
             leader_wire_projection,
             bound_context: _,
             selected_source_index: _,
@@ -965,7 +903,6 @@ impl<'a> FairIngressTurnCut<'a> {
             geometry,
             selector_occurrences,
             pending_identities,
-            serve_projection,
             leader_wire_projection,
             selected_identity,
             selected_positions,
@@ -1025,9 +962,8 @@ impl FairV2Ingress {
     /// followed by ordinary reselection. It uses the production
     /// strict-before-dependency selector, keeps obsolete false-predicate
     /// retirement, and retains the service guard across the caller's stateful
-    /// Certified-Serve preparation. A false predicate never removes or rotates
-    /// an occurrence; the selected Serve gate therefore continues to prevent a
-    /// later carrier from leapfrogging its off-queue backpressure debt.
+    /// lifecycle preparation. A false predicate never removes or rotates an
+    /// occurrence.
     pub(super) fn capture_next_ingress_turn_cut(
         &self,
         mut predicate: impl FnMut(&FairIngressSelectorOccurrence) -> bool,
@@ -1042,22 +978,11 @@ impl FairV2Ingress {
         let physical_cut = u128::from(state.last_admission_ordinal)
             .checked_add(1)
             .ok_or(FairIngressQueueCutError::PositionOverflow)?;
-        let serve_projection =
-            fair_v2_ingress_serve_selector_projection(&state, Some(physical_cut))
-                .map_err(|_| FairIngressQueueCutError::InvalidServeAuthority)?;
-        let leader_wire_projection = fair_v2_ingress_leader_wire_selector_projection(
-            &state,
-            serve_projection.selected_barrier,
-            true,
-            Some(physical_cut),
-        )
-        .map_err(|_| FairIngressQueueCutError::InvalidLeaderWireAuthority)?;
-        let (geometry, selector_occurrences) = freeze_live_geometry(
-            &state,
-            physical_cut,
-            &serve_projection,
-            &leader_wire_projection,
-        )?;
+        let leader_wire_projection =
+            fair_v2_ingress_leader_wire_selector_projection(&state, true, Some(physical_cut))
+                .map_err(|_| FairIngressQueueCutError::InvalidLeaderWireAuthority)?;
+        let (geometry, selector_occurrences) =
+            freeze_live_geometry(&state, physical_cut, &leader_wire_projection)?;
         let bound_context = state.leader_wire_context;
         drop(state);
         validate_frozen_ownership_outside_state(&geometry, &selector_occurrences)?;
@@ -1111,7 +1036,6 @@ impl FairV2Ingress {
             physical_cut,
             geometry,
             selector_occurrences,
-            serve_projection,
             leader_wire_projection,
             bound_context,
             selected_source_index,
@@ -1170,22 +1094,11 @@ impl FairV2Ingress {
         let physical_cut = u128::from(state.last_admission_ordinal)
             .checked_add(1)
             .ok_or(FairIngressQueueCutError::PositionOverflow)?;
-        let serve_projection =
-            fair_v2_ingress_serve_selector_projection(&state, Some(physical_cut))
-                .map_err(|_| FairIngressQueueCutError::InvalidServeAuthority)?;
-        let leader_wire_projection = fair_v2_ingress_leader_wire_selector_projection(
-            &state,
-            serve_projection.selected_barrier,
-            true,
-            Some(physical_cut),
-        )
-        .map_err(|_| FairIngressQueueCutError::InvalidLeaderWireAuthority)?;
-        let (geometry, selector_occurrences) = freeze_live_geometry(
-            &state,
-            physical_cut,
-            &serve_projection,
-            &leader_wire_projection,
-        )?;
+        let leader_wire_projection =
+            fair_v2_ingress_leader_wire_selector_projection(&state, true, Some(physical_cut))
+                .map_err(|_| FairIngressQueueCutError::InvalidLeaderWireAuthority)?;
+        let (geometry, selector_occurrences) =
+            freeze_live_geometry(&state, physical_cut, &leader_wire_projection)?;
         let bound_context = state.leader_wire_context;
         drop(state);
         validate_frozen_ownership_outside_state(&geometry, &selector_occurrences)?;
@@ -1256,7 +1169,6 @@ impl FairV2Ingress {
             geometry,
             selector_occurrences,
             pending_identities,
-            serve_projection,
             leader_wire_projection,
             selected_identity,
             selected_positions,
@@ -1346,7 +1258,6 @@ fn mint_pending_identities(
 fn freeze_live_geometry(
     state: &FairV2IngressState,
     physical_cut: u128,
-    serve_projection: &FairV2IngressServeSelectorProjection,
     leader_wire_projection: &FairV2IngressLeaderWireSelectorProjection,
 ) -> Result<
     (
@@ -1363,27 +1274,15 @@ fn freeze_live_geometry(
             if u128::from(entry.admission_ordinal) >= physical_cut {
                 continue;
             }
-            let queue_gate = fair_v2_ingress_queue_gate_verdict(
-                source,
-                lane,
-                index,
-                serve_projection,
-                leader_wire_projection,
-                super::super::FairV2IngressBarrierBypass::None,
-            );
+            let queue_gate =
+                fair_v2_ingress_queue_gate_verdict(source, lane, index, leader_wire_projection);
             let obsolete = entry
                 .leader_wire_token
                 .as_ref()
                 .is_some_and(|token| leader_wire_projection.obsolete_tokens.contains(token));
             frozen.push(FrozenQueueOccurrence {
                 physical_admission_ordinal: entry.admission_ordinal,
-                value: exact_occurrence_projection(
-                    source,
-                    entry,
-                    serve_projection.selected_barrier,
-                    queue_gate,
-                    obsolete,
-                )?,
+                value: exact_occurrence_projection(source, entry, queue_gate, obsolete)?,
             });
             if selector_occurrences
                 .insert(
@@ -1485,9 +1384,7 @@ fn validate_live_queue_structure(
                     .checked_add(1)
                     .ok_or(FairIngressQueueCutError::PositionOverflow)?;
             }
-            if !matches!(source, FairV2IngressSource::Anonymous)
-                && super::super::fair_v2_ingress_is_certified_fence_escape(&entry.inbound)
-            {
+            if super::super::fair_v2_ingress_is_certified_fence_escape(&entry.inbound) {
                 certified_fence_escape_len = certified_fence_escape_len
                     .checked_add(1)
                     .ok_or(FairIngressQueueCutError::PositionOverflow)?;
@@ -1577,10 +1474,10 @@ fn entry_storage_is_exact(
     let Some(key) = entry.wire_key.as_ref() else {
         return false;
     };
-    let expected_source = match entry.inbound.via() {
-        Some(peer) if state.roster.contains(peer) => FairV2IngressSource::Validator(peer.clone()),
-        Some(peer) => FairV2IngressSource::Authenticated(peer.clone()),
-        None => FairV2IngressSource::Anonymous,
+    let expected_source = if state.roster.contains(entry.inbound.via()) {
+        FairV2IngressSource::Validator(entry.inbound.via().clone())
+    } else {
+        FairV2IngressSource::Authenticated(entry.inbound.via().clone())
     };
     let Some(ownership) = entry.inbound.ingress_ownership() else {
         return false;
@@ -1591,7 +1488,7 @@ fn entry_storage_is_exact(
         && *source == expected_source
         && entry.class == FairV2IngressClass::classify(&entry.inbound)
         && entry.encoded_len == entry.encoded_bytes.len()
-        && key.origin.as_ref() == entry.inbound.sender()
+        && &key.origin == entry.inbound.sender()
         && ownership.first.physical_admission_ordinal == entry.admission_ordinal
         && ownership.runtime_physical_cut.is_none()
         && ownership.leader_wire_runtime_receipt.is_none()
@@ -1601,7 +1498,7 @@ fn entry_storage_is_exact(
         && ownership.first.encoded_len == entry.encoded_len
         && ownership.first.class == entry.class
         && ownership.first.semantic_owner_source == *source
-        && ownership.first.semantic_origin.as_ref() == entry.inbound.sender()
+        && &ownership.first.semantic_origin == entry.inbound.sender()
         && snapshot.first.physical_admission_ordinal == entry.admission_ordinal
         && snapshot.runtime_physical_cut.is_none()
         && snapshot.leader_wire_runtime_receipt.is_none()
@@ -1611,7 +1508,7 @@ fn entry_storage_is_exact(
         && snapshot.first.encoded_len == entry.encoded_len
         && snapshot.first.class == entry.class
         && snapshot.first.semantic_owner_source == *source
-        && snapshot.first.semantic_origin.as_ref() == entry.inbound.sender()
+        && &snapshot.first.semantic_origin == entry.inbound.sender()
 }
 fn select_positions<S, V>(
     geometry: &FrozenQueueGeometry<S, V>,
@@ -1698,7 +1595,6 @@ where
 fn exact_occurrence_projection(
     source: &FairV2IngressSource,
     entry: &FairV2IngressEntry,
-    selected_serve_barrier: Option<super::super::v2_worker::CertifiedServeBarrier>,
     queue_gate: FairV2IngressQueueGateVerdict,
     obsolete: bool,
 ) -> Result<FrozenFairIngressOccurrence, FairIngressQueueCutError> {
@@ -1723,16 +1619,6 @@ fn exact_occurrence_projection(
     {
         return Err(FairIngressQueueCutError::InvalidOccurrenceIdentity);
     }
-    let serve_reservation = match entry.certified_serve_reservation.as_ref() {
-        None => FrozenServeReservation::Absent,
-        Some(reservation)
-            if selected_serve_barrier
-                .is_some_and(|barrier| reservation.matches_barrier(barrier)) =>
-        {
-            FrozenServeReservation::MatchesSelected
-        }
-        Some(_) => FrozenServeReservation::PresentUnselected,
-    };
     Ok(FrozenFairIngressOccurrence {
         wire_key: key.clone(),
         encoded_hash: key.hash,
@@ -1741,7 +1627,6 @@ fn exact_occurrence_projection(
         source_class: source.class(),
         class: entry.class,
         leader_wire_token: entry.leader_wire_token.clone(),
-        serve_reservation,
         queue_gate,
         obsolete,
     })
@@ -1831,31 +1716,11 @@ fn target_lifecycle_context(
             | wire::ConsensusMessageV2Payload::VrfReveal(_) => return None,
         },
         BlockMessage::V2(_) => return None,
-        BlockMessage::BlockCreated(_)
-        | BlockMessage::BlockSyncUpdate(_)
-        | BlockMessage::FetchBlockBody(_)
-        | BlockMessage::BlockBodyResponse(_)
-        | BlockMessage::CertifiedBlockFetch(_)
-        | BlockMessage::VrfCommit(_)
-        | BlockMessage::VrfReveal(_)
-        | BlockMessage::ExecWitness(_)
-        | BlockMessage::RbcInitRequest(_)
-        | BlockMessage::RbcChunkRequest(_)
-        | BlockMessage::RbcInit(_)
-        | BlockMessage::RbcChunk(_)
-        | BlockMessage::RbcChunkCompact(_)
-        | BlockMessage::RbcReady(_)
-        | BlockMessage::RbcDeliver(_)
-        | BlockMessage::FetchPendingBlock(_)
-        | BlockMessage::KuraReplicaAdvert(_)
-        | BlockMessage::ProposalHint(_)
-        | BlockMessage::Proposal(_)
+        BlockMessage::KuraReplicaAdvert(_)
         | BlockMessage::LaneBlockProposal(_)
         | BlockMessage::LaneExecutablePayload(_)
         | BlockMessage::LaneBlockNewViewVote(_)
         | BlockMessage::LaneBlockNewViewCertificate(_)
-        | BlockMessage::QcVote(_)
-        | BlockMessage::Qc(_)
         | BlockMessage::LaneBlockVote(_)
         | BlockMessage::LaneBlockQc(_)
         | BlockMessage::LaneBlockCertificate(_)
@@ -1879,9 +1744,9 @@ fn pending_identity(
     append_field(&mut projection, &context_id.encode());
     projection.extend_from_slice(&height.to_le_bytes());
     super::super::fair_v2_ingress_append_source_identity(&mut projection, source);
-    super::super::fair_v2_ingress_append_optional_peer_identity(
+    super::super::fair_v2_ingress_append_peer_identity(
         &mut projection,
-        occurrence.wire_key.origin.as_ref(),
+        &occurrence.wire_key.origin,
     );
     projection.extend_from_slice(occurrence.wire_key.hash.as_ref());
     projection.extend_from_slice(occurrence.encoded_hash.as_ref());
@@ -1899,7 +1764,6 @@ fn pending_identity(
     projection.push(match occurrence.source_class {
         FairV2IngressSourceClass::Validator => 0,
         FairV2IngressSourceClass::Authenticated => 1,
-        FairV2IngressSourceClass::Anonymous => 2,
     });
     projection.push(match occurrence.class {
         FairV2IngressClass::Auxiliary => 0,
@@ -1913,11 +1777,6 @@ fn pending_identity(
             append_field(&mut projection, &token.encode());
         }
     }
-    projection.push(match occurrence.serve_reservation {
-        FrozenServeReservation::Absent => 0,
-        FrozenServeReservation::PresentUnselected => 1,
-        FrozenServeReservation::MatchesSelected => 2,
-    });
     projection.push(match occurrence.queue_gate {
         FairV2IngressQueueGateVerdict::Blocked => 0,
         FairV2IngressQueueGateVerdict::Strict => 1,
@@ -2077,9 +1936,9 @@ mod tests {
         ingress.open().expect("open atomic commit fixture");
         let message = commit_certificate_request(context_id, HEIGHT, &peer, signature_byte);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 message.clone(),
-                Some(peer.clone()),
+                peer.clone(),
             )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
@@ -2282,7 +2141,9 @@ mod tests {
             ),
         ] {
             assert!(matches!(
-                ingress.try_push(InboundBlockMessage::new(message, Some(source))),
+                ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                    message, source
+                )),
                 Ok(FairV2IngressPushDisposition::Enqueued)
             ));
         }
@@ -2369,7 +2230,7 @@ mod tests {
             b"lifecycle-ingress-foreign-context",
         )));
         let peer = PeerId::from(KeyPair::random().public_key().clone());
-        let ingress = FairV2Ingress::new(4, 1024 * 1024, 512 * 1024, 0, 0);
+        let ingress = FairV2Ingress::new(7, 1024 * 1024, 512 * 1024, 0, 0);
         ingress
             .configure_roster([peer.clone()])
             .expect("configure foreign-winner lane");
@@ -2377,7 +2238,10 @@ mod tests {
         ingress.open().expect("open foreign-winner ingress");
         let message = commit_certificate_request(foreign_context, HEIGHT, &peer, 9);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(message.clone(), Some(peer))),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                message.clone(),
+                peer
+            )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
 
@@ -2416,9 +2280,9 @@ mod tests {
         ingress.open().expect("open ordinary-head ingress");
         let ordinary = commit_certificate_request(context_id, HEIGHT, &peer, 1);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 ordinary.clone(),
-                Some(peer.clone()),
+                peer.clone(),
             )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
@@ -2433,9 +2297,9 @@ mod tests {
         };
         response.signature.clear();
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 invalid_response.clone(),
-                Some(peer.clone()),
+                peer.clone(),
             )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
@@ -2464,7 +2328,7 @@ mod tests {
         )));
         let first = PeerId::from(KeyPair::random().public_key().clone());
         let second = PeerId::from(KeyPair::random().public_key().clone());
-        let ingress = FairV2Ingress::new(16, 1024 * 1024, 512 * 1024, 0, 512 * 1024);
+        let ingress = FairV2Ingress::new(16, 2 * 1024 * 1024, 512 * 1024, 0, 512 * 1024);
         ingress
             .configure_roster([first.clone(), second.clone()])
             .expect("two validator lanes fit the identity test queue");
@@ -2472,17 +2336,17 @@ mod tests {
         ingress.open().expect("open identity test ingress");
         let response = certified_body_response(context_id, HEIGHT);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 response.clone(),
-                Some(first.clone()),
+                first.clone(),
             )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
         let first_ordinal = ingress.state.lock().last_admission_ordinal;
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 response.clone(),
-                Some(second.clone()),
+                second.clone(),
             )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
@@ -2515,30 +2379,26 @@ mod tests {
         assert!(cut.pre_cut_is_intact());
         drop(cut);
 
-        let rotated = FairV2Ingress::new(16, 1024 * 1024, 512 * 1024, 0, 512 * 1024);
+        let rotated = FairV2Ingress::new(16, 3 * 1024 * 1024, 1024 * 1024, 0, 512 * 1024);
         rotated
             .configure_roster([first.clone(), second.clone()])
             .expect("two validator lanes fit the fair-selection rotation queue");
         rotated.state.lock().leader_wire_context = Some((context_id, HEIGHT));
         rotated.open().expect("open fair-selection rotation queue");
-        let first_message = certified_body_response(context_id, HEIGHT);
-        let mut second_same_source = first_message.clone();
-        let BlockMessage::V2(second_message) = &mut second_same_source else {
-            unreachable!("certified response fixture is Sumeragi V2")
-        };
-        let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) =
-            &mut second_message.payload
-        else {
-            unreachable!("certified response fixture retains its payload class")
-        };
-        response.signature[0] ^= 1;
+        let first_message = commit_certificate_request(context_id, HEIGHT, &first, 1);
+        let second_same_source = commit_certificate_request(context_id, HEIGHT, &first, 2);
         for (message, source) in [
             (first_message, first.clone()),
             (second_same_source, first.clone()),
-            (certified_body_response(context_id, HEIGHT), second.clone()),
+            (
+                commit_certificate_request(context_id, HEIGHT, &second, 3),
+                second.clone(),
+            ),
         ] {
             assert!(matches!(
-                rotated.try_push(InboundBlockMessage::new(message, Some(source))),
+                rotated.try_push(InboundBlockMessage::from_authenticated_peer(
+                    message, source
+                )),
                 Ok(FairV2IngressPushDisposition::Enqueued)
             ));
         }
@@ -2620,9 +2480,9 @@ mod tests {
         ingress.open().expect("open test ingress");
         let target_message = commit_certificate_request(context_id, HEIGHT, &first, 1);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 target_message.clone(),
-                Some(first.clone()),
+                first.clone(),
             )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
@@ -2663,9 +2523,9 @@ mod tests {
         assert!(!selector_row.is_obsolete());
         assert_same_v2_message(selector_row.inbound().message(), &target_message);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 commit_certificate_request(context_id, HEIGHT, &second, 2),
-                Some(second),
+                second,
             )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
@@ -2674,7 +2534,10 @@ mod tests {
             "a newly ready source at the physical cut cannot change the frozen prefix"
         );
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(target_message, Some(first))),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                target_message,
+                first
+            )),
             Ok(FairV2IngressPushDisposition::Coalesced)
         ));
         assert!(
@@ -2787,12 +2650,6 @@ mod tests {
             assert!(lane.pending_wire.insert(removed_key));
         }
         assert!(recaptured.pre_cut_is_intact());
-        ingress.state.lock().requires_certified_serve_gate = true;
-        assert!(
-            !recaptured.pre_cut_is_intact(),
-            "a newly required but unbound Serve authority must invalidate the cut"
-        );
-        ingress.state.lock().requires_certified_serve_gate = false;
         ingress.state.lock().requires_leader_wire_lifecycle_gate = true;
         assert!(
             !recaptured.pre_cut_is_intact(),
@@ -2823,7 +2680,7 @@ mod tests {
             (retained_second, second.clone()),
         ] {
             assert!(matches!(
-                ingress.try_push(InboundBlockMessage::new(message, Some(via))),
+                ingress.try_push(InboundBlockMessage::from_authenticated_peer(message, via)),
                 Ok(FairV2IngressPushDisposition::Enqueued)
             ));
         }
@@ -2885,7 +2742,9 @@ mod tests {
         ingress.open().expect("open append fixture");
         let selected = commit_certificate_request(context_id, HEIGHT, &first, 1);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(selected, Some(first))),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                selected, first
+            )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
         let selected_ordinal = ingress.state.lock().last_admission_ordinal;
@@ -2895,7 +2754,10 @@ mod tests {
             .into_prepared_witness();
         let appended = commit_certificate_request(context_id, HEIGHT, &second, 2);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(appended.clone(), Some(second),)),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                appended.clone(),
+                second,
+            )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
         let append_ordinal = ingress.state.lock().last_admission_ordinal;
@@ -2924,7 +2786,10 @@ mod tests {
             .expect("capture target before same-wire coalescence")
             .into_prepared_witness();
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(message.clone(), Some(peer))),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                message.clone(),
+                peer
+            )),
             Ok(FairV2IngressPushDisposition::Coalesced)
         ));
         let before = {
@@ -2953,6 +2818,165 @@ mod tests {
         assert!(find_entry_by_physical_ordinal(&state, ordinal).is_some());
     }
     #[test]
+    fn locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit() {
+        let (ingress, context, peer, message, ordinal) = single_commit_request_ingress(8);
+        let expected = message.clone();
+        let witness = ingress
+            .capture_lifecycle_queue_cut(ordinal)
+            .expect("capture target before final publication lock")
+            .into_prepared_witness();
+        let locked = match witness.lock_exact_dequeue_retaining(&ingress, context, ordinal) {
+            Ok(locked) => locked,
+            Err((error, _witness)) => panic!("final publication lock failed: {error:?}"),
+        };
+        assert!(
+            ingress.producer_publication_lock.try_lock().is_none(),
+            "the exact dequeue must retain the producer fence before publication"
+        );
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let ingress = &ingress;
+            scope.spawn(move || {
+                started_tx
+                    .send(())
+                    .expect("same-wire producer start receiver remains live");
+                let result =
+                    ingress.try_push(InboundBlockMessage::from_authenticated_peer(message, peer));
+                result_tx
+                    .send(result)
+                    .expect("same-wire producer result receiver remains live");
+            });
+            started_rx
+                .recv()
+                .expect("same-wire producer reaches the fenced operation");
+            std::thread::yield_now();
+            assert!(matches!(
+                result_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ));
+
+            let (dequeued, disposition) = locked.commit();
+            assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit);
+            drop(dequeued);
+            assert!(matches!(
+                result_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("same-wire producer resumes after exact dequeue"),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+        });
+
+        let state = ingress.state.lock();
+        assert_eq!(state.len, 1);
+        assert!(state.last_admission_ordinal > ordinal);
+        let retained = find_entry_by_physical_ordinal(&state, state.last_admission_ordinal)
+            .expect("retransmission owns one new physical occurrence");
+        assert_same_v2_message(retained.inbound.message(), &expected);
+    }
+    #[test]
+    fn locked_publication_fence_serializes_unrelated_append_and_preserves_it() {
+        let (ingress, context, peer, _selected, ordinal) = single_commit_request_ingress(9);
+        let (context_id, height) = ingress
+            .state
+            .lock()
+            .leader_wire_context
+            .expect("fixture binds one exact wire context");
+        let appended = commit_certificate_request(context_id, height, &peer, 10);
+        let expected = appended.clone();
+        let witness = ingress
+            .capture_lifecycle_queue_cut(ordinal)
+            .expect("capture target before unrelated producer")
+            .into_prepared_witness();
+        let locked = match witness.lock_exact_dequeue_retaining(&ingress, context, ordinal) {
+            Ok(locked) => locked,
+            Err((error, _witness)) => panic!("final publication lock failed: {error:?}"),
+        };
+        assert!(ingress.producer_publication_lock.try_lock().is_none());
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let ingress = &ingress;
+            scope.spawn(move || {
+                started_tx
+                    .send(())
+                    .expect("append producer start receiver remains live");
+                let result =
+                    ingress.try_push(InboundBlockMessage::from_authenticated_peer(appended, peer));
+                result_tx
+                    .send(result)
+                    .expect("append producer result receiver remains live");
+            });
+            started_rx
+                .recv()
+                .expect("append producer reaches the fenced operation");
+            std::thread::yield_now();
+            assert!(matches!(
+                result_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ));
+
+            let (dequeued, disposition) = locked.commit();
+            assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit);
+            drop(dequeued);
+            assert!(matches!(
+                result_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("append producer resumes after exact dequeue"),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+        });
+
+        assert_eq!(ingress.len(), 1);
+        let retained = ingress
+            .try_recv()
+            .expect("unrelated post-publication append remains queued");
+        assert_same_v2_message(retained.message(), &expected);
+    }
+    #[test]
+    fn dropping_locked_publication_fence_releases_producer_without_dequeue() {
+        let (ingress, context, peer, selected, ordinal) = single_commit_request_ingress(11);
+        let (context_id, height) = ingress
+            .state
+            .lock()
+            .leader_wire_context
+            .expect("fixture binds one exact wire context");
+        let appended = commit_certificate_request(context_id, height, &peer, 12);
+        let witness = ingress
+            .capture_lifecycle_queue_cut(ordinal)
+            .expect("capture target before droppable publication fence")
+            .into_prepared_witness();
+        let locked = match witness.lock_exact_dequeue_retaining(&ingress, context, ordinal) {
+            Ok(locked) => locked,
+            Err((error, _witness)) => panic!("final publication lock failed: {error:?}"),
+        };
+        assert!(ingress.producer_publication_lock.try_lock().is_none());
+        drop(locked);
+        assert!(
+            ingress.producer_publication_lock.try_lock().is_some(),
+            "dropping an unpublished exact dequeue releases its producer fence"
+        );
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                appended.clone(),
+                peer,
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+
+        assert_eq!(ingress.len(), 2);
+        let retained_selected = ingress
+            .try_recv()
+            .expect("dropping the locked preparation leaves the target queued");
+        assert_same_v2_message(retained_selected.message(), &selected);
+        let retained_append = ingress
+            .try_recv()
+            .expect("producer resumes after the unpublished preparation drops");
+        assert_same_v2_message(retained_append.message(), &appended);
+    }
+    #[test]
     fn prepared_commit_rejects_pre_cut_reorder_without_dequeue() {
         const HEIGHT: wire::Height = 29;
         let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
@@ -2968,9 +2992,9 @@ mod tests {
         ingress.open().expect("open reorder fixture");
         for (signature, peer) in [(1, first), (2, second)] {
             assert!(matches!(
-                ingress.try_push(InboundBlockMessage::new(
+                ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                     commit_certificate_request(context_id, HEIGHT, &peer, signature),
-                    Some(peer),
+                    peer,
                 )),
                 Ok(FairV2IngressPushDisposition::Enqueued)
             ));

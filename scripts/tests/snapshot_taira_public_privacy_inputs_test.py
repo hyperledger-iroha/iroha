@@ -24,6 +24,12 @@ TEST_NETWORK_ID = (
 FOREIGN_NETWORK_ID = (
     "hash:A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A5#E8B5"
 )
+PUBLIC_TEST_KEYS = (
+    bytes.fromhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"),
+    bytes.fromhex("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"),
+    bytes.fromhex("fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025"),
+    bytes.fromhex("ec172b93ad5e563bf4932c70e1245034c35467ef2efd4d64ebf819683467e2bf"),
+)
 
 
 def _sha256(label: bytes) -> str:
@@ -152,11 +158,44 @@ def _release_payloads() -> dict[str, bytes]:
         }
     )
 
-    genesis = json.loads(TAIRA_GENESIS.read_bytes())
+    composer = snapshotter.nevo_composer
+    base_genesis_bytes = TAIRA_GENESIS.read_bytes()
+    base_config_bytes = TAIRA_CONFIG.read_bytes()
+    genesis = composer._parse_base_genesis(base_genesis_bytes)
+    nevo_inputs = composer.PublicInputs(
+        onboarding_authority_account_id=composer._encode_taira_i105_account(
+            composer.ED25519_SINGLE_CONTROLLER_PREFIX + PUBLIC_TEST_KEYS[0]
+        ),
+        api_signer_account_id=composer._encode_taira_i105_account(
+            composer.ED25519_SINGLE_CONTROLLER_PREFIX + PUBLIC_TEST_KEYS[1]
+        ),
+        dpn_inori_account_id=composer._encode_taira_i105_account(
+            composer.ED25519_SINGLE_CONTROLLER_PREFIX + PUBLIC_TEST_KEYS[2]
+        ),
+        dpn_epr_guard_account_id=composer._encode_taira_i105_account(
+            composer.ED25519_SINGLE_CONTROLLER_PREFIX + PUBLIC_TEST_KEYS[3]
+        ),
+        is2_onboarding_token_hash=f"blake3:{_sha256(b'synthetic-is2-token-hash')}",
+        dpn_onboarding_token_hash=f"blake3:{_sha256(b'synthetic-dpn-token-hash')}",
+    )
+    nevo_config = composer._parse_base_config(base_config_bytes, genesis)
+    genesis = composer.compose_genesis(genesis, nevo_inputs, nevo_config)
+    genesis_payload = composer._pretty_json_bytes(genesis)
+    canonical_inputs = composer._canonical_json_bytes(nevo_inputs.as_dict())
+    nevo_review = composer.build_review_manifest(
+        inputs=nevo_inputs,
+        canonical_inputs=canonical_inputs,
+        config=nevo_config,
+        base_genesis_bytes=base_genesis_bytes,
+        base_config_bytes=base_config_bytes,
+        unsigned_genesis_bytes=genesis_payload,
+        instruction_count=len(genesis["transactions"][-1]["instructions"]),
+    )
     return {
         "bootle_lantern_broker_public.json": broker_payload,
         "config.toml": _release_config(provider_digest),
-        "genesis.json": _pretty_json(genesis),
+        "genesis.json": genesis_payload,
+        "nevo-reset.review.json": composer._pretty_json_bytes(nevo_review),
         "privacy_bootstrap_plan.json": _pretty_json(plan),
     }
 
@@ -253,10 +292,10 @@ def test_embedded_projection_fingerprints_match_canonical_templates() -> None:
         snapshotter._semantic_bytes(base_config, "test config")
     ).hexdigest() == snapshotter.CONFIG_PUBLIC_BASE_SHA256
 
-    genesis = json.loads(TAIRA_GENESIS.read_bytes())
-    assert hashlib.sha256(
-        snapshotter._semantic_bytes(genesis, "test genesis")
-    ).hexdigest() == snapshotter.GENESIS_PUBLIC_BASE_SHA256
+    review = json.loads(_release_payloads()["nevo-reset.review.json"])
+    assert review["base_genesis_sha256"] == hashlib.sha256(
+        TAIRA_GENESIS.read_bytes()
+    ).hexdigest()
     plan = json.loads(TAIRA_PLAN.read_bytes())
     assert tuple(
         (row["index"], row["label"], row["statement_type"])
@@ -291,7 +330,11 @@ def test_embedded_projection_fingerprints_match_canonical_templates() -> None:
             "/run/secrets/onboarding.key",
         ),
         (
-            "REPLACE_WITH_TAIRA_ONBOARDING_TOKEN_HASH",
+            "REPLACE_WITH_TAIRA_BOI_ONBOARDING_TOKEN_HASH",
+            hashlib.sha256(b"real BOI bearer token").hexdigest(),
+        ),
+        (
+            "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH",
             hashlib.sha256(b"real bearer token").hexdigest(),
         ),
         (

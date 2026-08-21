@@ -1,9 +1,7 @@
 //! Metrics and status reporting.
 //!
-//! This module still exposes the single-lane TEU gauges used before the Nexus scheduler becomes
-//! active. The wiring mirrors the future Nexus layout (lanes and data-spaces) so callers can adopt
-//! the eventual multi-lane feeds by swapping in the real scheduler hooks once they land; until then
-//! we keep the fallback values in this module to avoid breaking operator dashboards.
+//! Aggregate TEU gauges and per-lane/dataspace instruments are updated together for the mandatory
+//! Nexus scheduler so operators can inspect both network-wide and routed scheduler activity.
 pub mod capability;
 mod manifest_status;
 #[cfg(feature = "telemetry")]
@@ -15,7 +13,7 @@ use crate::{
     gossiper::{GossipPlane, gossip_plane_label},
     governance::manifest::{LaneManifestRegistryHandle, LaneManifestStatus},
     json_macros::{JsonDeserialize, JsonSerialize},
-    kura::Kura,
+    kura::{DurableV2FinalityTelemetrySummary, Kura},
     nexus::space_directory::SpaceDirectoryManifestSet,
     queue::{Queue, QueueLimits},
     state::{State, WorldReadOnly},
@@ -46,7 +44,6 @@ use iroha_data_model::{
     Identifiable,
     asset::AssetDefinitionId,
     block::BlockHeader,
-    consensus::Qc,
     nexus::{
         AxtPolicySnapshot, AxtRejectReason, DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId,
         LaneStorageProfile, LaneVisibility, PublicLaneValidatorStatus, UniversalAccountId,
@@ -110,7 +107,7 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     sync::{
         Arc, RwLock as StdRwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -119,7 +116,6 @@ use std::{
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
 const PHASE_PREPARE: &str = "prepare";
 const PHASE_COMMIT: &str = "commit";
-const PHASE_NEW_VIEW: &str = "new_view";
 const PIPELINE_BUCKET_LABELS: [&str; 8] = ["1", "2", "4", "8", "16", "32", "64", "128"];
 fn quantity_metric_parts(amount: &Quantity) -> (u64, u64) {
     let units = amount
@@ -573,6 +569,40 @@ pub struct AxtRejectHint {
     /// Reason label for the rejection (e.g., `era`, `sub_nonce`, `expiry`).
     pub reason: AxtRejectReason,
 }
+struct CommitQcTelemetryPublisher {
+    metrics: Arc<Metrics>,
+    update: StdRwLock<()>,
+}
+impl CommitQcTelemetryPublisher {
+    fn new(metrics: Arc<Metrics>) -> Self {
+        Self {
+            metrics,
+            update: StdRwLock::new(()),
+        }
+    }
+    fn publish(&self, summary: DurableV2FinalityTelemetrySummary) {
+        let _update_guard = self
+            .update
+            .write()
+            .expect("commit QC telemetry summary lock poisoned");
+        let current = (
+            self.metrics.sumeragi_commit_qc_height.get(),
+            self.metrics.sumeragi_commit_qc_view.get(),
+        );
+        if summary.position() < current {
+            return;
+        }
+        self.metrics.sumeragi_commit_qc_height.set(summary.height());
+        self.metrics.sumeragi_commit_qc_view.set(summary.view());
+        self.metrics.sumeragi_commit_qc_epoch.set(summary.epoch());
+        self.metrics
+            .sumeragi_commit_qc_signatures_total
+            .set(summary.signatures_total());
+        self.metrics
+            .sumeragi_commit_qc_validator_set_len
+            .set(summary.validator_set_len());
+    }
+}
 /// Slice of metrics used to be used from within [`State`].
 ///
 /// Needed to brake the circular dependency from [`Telemetry`] to [`State`].
@@ -580,7 +610,7 @@ pub struct AxtRejectHint {
 pub struct StateTelemetry {
     metrics: Arc<Metrics>,
     enabled: Arc<AtomicBool>,
-    nexus_enabled: Arc<AtomicBool>,
+    commit_qc_publisher: Arc<CommitQcTelemetryPublisher>,
     time_source: TimeSource,
     lane_metadata: Arc<StdRwLock<BTreeMap<u32, LaneMetadataSnapshot>>>,
     dataspace_metadata: Arc<StdRwLock<BTreeMap<u64, DataspaceMetadataSnapshot>>>,
@@ -593,49 +623,6 @@ pub struct StateTelemetry {
     axt_reject_hints: Arc<StdRwLock<BTreeMap<DataSpaceId, AxtRejectHint>>>,
     #[cfg(feature = "telemetry")]
     governance_status_cache: Arc<Mutex<BTreeMap<[u8; 32], crate::state::GovernanceProposalStatus>>>,
-}
-fn reset_nexus_metrics(metrics: &Metrics) {
-    metrics.nexus_lane_configured_total.set(0);
-    metrics.nexus_lane_id_placeholder.set(0);
-    metrics.nexus_dataspace_id_placeholder.set(0);
-    metrics.nexus_lane_governance_sealed.reset();
-    metrics.nexus_lane_governance_sealed_total.set(0);
-    metrics
-        .nexus_lane_governance_sealed_aliases
-        .write()
-        .expect("lane governance aliases lock poisoned")
-        .clear();
-    metrics.nexus_lane_block_height.reset();
-    metrics.nexus_lane_finality_lag_slots.reset();
-    metrics.nexus_lane_settlement_backlog_xor.reset();
-    metrics.nexus_public_lane_validator_total.reset();
-    metrics.nexus_public_lane_validator_activation_total.reset();
-    metrics.nexus_public_lane_validator_reject_total.reset();
-    metrics.nexus_public_lane_stake_bonded.reset();
-    metrics.nexus_public_lane_unbond_pending.reset();
-    metrics.nexus_public_lane_reward_total.reset();
-    metrics.nexus_public_lane_slash_total.reset();
-    metrics.nexus_scheduler_lane_teu_capacity.reset();
-    metrics.nexus_scheduler_lane_teu_slot_committed.reset();
-    metrics.nexus_scheduler_lane_trigger_level.reset();
-    metrics.nexus_scheduler_starvation_bound_slots.reset();
-    metrics.nexus_scheduler_lane_teu_slot_breakdown.reset();
-    metrics.nexus_scheduler_lane_teu_deferral_total.reset();
-    metrics.nexus_scheduler_lane_headroom_events_total.reset();
-    metrics.nexus_scheduler_must_serve_truncations_total.reset();
-    metrics.nexus_scheduler_dataspace_teu_backlog.reset();
-    metrics.nexus_scheduler_dataspace_age_slots.reset();
-    metrics.nexus_scheduler_dataspace_virtual_finish.reset();
-    metrics
-        .nexus_scheduler_lane_teu_status
-        .write()
-        .expect("lane TEU status cache lock poisoned")
-        .clear();
-    metrics
-        .nexus_scheduler_dataspace_teu_status
-        .write()
-        .expect("dataspace TEU status cache lock poisoned")
-        .clear();
 }
 include!("telemetry/enabled_metric_macros.rs");
 impl StateTelemetry {
@@ -657,10 +644,11 @@ impl StateTelemetry {
         let soranet_privacy = Arc::new(
             SoranetSecureAggregator::new(privacy_config).expect("valid SoraNet privacy config"),
         );
+        let commit_qc_publisher = Arc::new(CommitQcTelemetryPublisher::new(Arc::clone(&metrics)));
         let telemetry = Self {
             metrics,
             enabled: Arc::new(AtomicBool::new(enabled)),
-            nexus_enabled: Arc::new(AtomicBool::new(true)),
+            commit_qc_publisher,
             time_source: TimeSource::new_system(),
             lane_metadata: Arc::new(StdRwLock::new(BTreeMap::new())),
             dataspace_metadata: Arc::new(StdRwLock::new(BTreeMap::new())),
@@ -731,11 +719,6 @@ impl StateTelemetry {
         lane_catalog: &LaneCatalog,
         dataspace_catalog: &DataSpaceCatalog,
     ) {
-        if !self.nexus_enabled() {
-            self.reset_nexus_lane_metrics();
-            self.clear_nexus_cache_state();
-            return;
-        }
         self.metrics
             .nexus_lane_configured_total
             .set(u64::from(lane_catalog.lane_count().get()));
@@ -769,13 +752,15 @@ impl StateTelemetry {
                     .get(&lane.dataspace_id.as_u64())
                     .map(|entry| entry.alias.clone());
                 let scheduler_teu_capacity = lane
-                    .metadata
-                    .get("scheduler.teu_capacity")
-                    .and_then(|raw| raw.trim().parse::<u64>().ok());
+                    .scheduler
+                    .as_ref()
+                    .and_then(|policy| policy.teu_capacity)
+                    .map(NonZeroU64::get);
                 let scheduler_starvation_bound_slots = lane
-                    .metadata
-                    .get("scheduler.starvation_bound_slots")
-                    .and_then(|raw| raw.trim().parse::<u64>().ok());
+                    .scheduler
+                    .as_ref()
+                    .and_then(|policy| policy.starvation_bound_slots)
+                    .map(NonZeroU64::get);
                 guard.insert(
                     lane.id.as_u32(),
                     LaneMetadataSnapshot {
@@ -1177,7 +1162,7 @@ impl StateTelemetry {
         swapline: Option<(&str, u128)>,
         buffer: Option<&crate::block::SettlementBufferSnapshot>,
     ) {
-        if !self.nexus_lane_metrics_enabled() {
+        if !self.is_enabled() {
             return;
         }
         let lane_label = lane_id.as_u32().to_string();
@@ -1220,7 +1205,7 @@ impl StateTelemetry {
         source_token: &str,
         count: u64,
     ) {
-        if !self.nexus_lane_metrics_enabled() || count == 0 {
+        if !self.is_enabled() || count == 0 {
             return;
         }
         self.metrics.inc_settlement_conversion_total(
@@ -1238,7 +1223,7 @@ impl StateTelemetry {
         dataspace_label: &str,
         haircut_micro: u128,
     ) {
-        if !self.nexus_lane_metrics_enabled() || haircut_micro == 0 {
+        if !self.is_enabled() || haircut_micro == 0 {
             return;
         }
         self.metrics
@@ -1252,7 +1237,7 @@ impl StateTelemetry {
         previous: Option<&PublicLaneValidatorStatus>,
         current: &PublicLaneValidatorStatus,
     ) {
-        if !self.nexus_lane_metrics_enabled() {
+        if !self.is_enabled() {
             return;
         }
         if let Some(prev) = previous {
@@ -1266,7 +1251,7 @@ impl StateTelemetry {
     /// Record a rejected public-lane validator operation grouped by reason.
     #[cfg(feature = "telemetry")]
     pub fn record_public_lane_validator_reject(&self, reason: &str) {
-        if !self.nexus_lane_metrics_enabled() {
+        if !self.is_enabled() {
             return;
         }
         self.metrics
@@ -1327,7 +1312,7 @@ impl StateTelemetry {
     /// Increment the slash counter for a public lane.
     #[cfg(feature = "telemetry")]
     pub fn record_public_lane_slash(&self, lane_id: LaneId) {
-        if !self.nexus_lane_metrics_enabled() {
+        if !self.is_enabled() {
             return;
         }
         let lane_label = Self::lane_label(lane_id);
@@ -1343,7 +1328,7 @@ impl StateTelemetry {
         status: &PublicLaneValidatorStatus,
         delta: i64,
     ) {
-        if !self.nexus_lane_metrics_enabled() {
+        if !self.is_enabled() {
             return;
         }
         let lane_label = Self::lane_label(lane_id);
@@ -1363,7 +1348,7 @@ impl StateTelemetry {
         amount: &Quantity,
         increase: bool,
     ) {
-        if !self.nexus_lane_metrics_enabled() {
+        if !self.is_enabled() {
             return;
         }
         let lane_label = Self::lane_label(lane_id);
@@ -1384,7 +1369,7 @@ impl StateTelemetry {
     #[cfg(feature = "telemetry")]
     /// Record a public-lane validator activation event.
     pub fn record_public_lane_validator_activation(&self, lane_id: LaneId, epoch: u64) {
-        if !self.nexus_lane_metrics_enabled() {
+        if !self.is_enabled() {
             return;
         }
         let lane_label = Self::lane_label(lane_id);
@@ -2213,19 +2198,12 @@ impl StateTelemetry {
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::Relaxed)
     }
-    /// Whether Nexus lane/dataspace telemetry is allowed.
-    #[inline]
-    pub fn nexus_enabled(&self) -> bool {
-        self.nexus_enabled.load(Ordering::Relaxed)
-    }
-    /// Enable or disable Nexus lane/dataspace telemetry.
-    #[inline]
-    pub fn set_nexus_enabled(&self, enabled: bool) {
-        self.nexus_enabled.store(enabled, Ordering::Relaxed);
-        if !enabled {
-            self.reset_nexus_lane_metrics();
-            self.clear_nexus_cache_state();
-        }
+    /// Publish a Kura-authenticated durable v2 finality summary monotonically.
+    pub(crate) fn record_durable_v2_finality_summary(
+        &self,
+        summary: DurableV2FinalityTelemetrySummary,
+    ) {
+        self.commit_qc_publisher.publish(summary);
     }
     /// Record the latest storage budget usage for a component.
     pub fn record_storage_budget_usage(&self, component: &'static str, used: u64, limit: u64) {
@@ -2279,52 +2257,6 @@ impl StateTelemetry {
         direction: &'static str,
         bytes: u64,
     ) {
-    }
-    /// Whether Nexus lane/dataspace metrics should be emitted.
-    #[inline]
-    fn nexus_lane_metrics_enabled(&self) -> bool {
-        self.is_enabled() && self.nexus_enabled()
-    }
-    fn reset_nexus_lane_metrics(&self) {
-        reset_nexus_metrics(&self.metrics);
-    }
-    fn clear_nexus_cache_state(&self) {
-        self.space_directory_active_index
-            .write()
-            .expect("space directory active index lock poisoned")
-            .clear();
-        self.lane_metadata
-            .write()
-            .expect("lane metadata lock poisoned")
-            .clear();
-        self.dataspace_metadata
-            .write()
-            .expect("dataspace metadata lock poisoned")
-            .clear();
-        self.lane_manifest_registry
-            .write()
-            .expect("lane manifest registry lock poisoned")
-            .take();
-        self.axt_policy_snapshot_version.store(0, Ordering::Relaxed);
-        self.axt_proof_cache
-            .write()
-            .expect("AXT proof cache lock poisoned")
-            .clear();
-        self.axt_last_policy_reject
-            .write()
-            .expect("AXT last reject cache lock poisoned")
-            .take();
-        self.axt_reject_hints
-            .write()
-            .expect("AXT reject hints cache lock poisoned")
-            .clear();
-        #[cfg(feature = "telemetry")]
-        {
-            self.governance_status_cache
-                .lock()
-                .expect("governance status cache lock poisoned")
-                .clear();
-        }
     }
     /// Enable or disable telemetry observations at runtime.
     #[inline]
@@ -2487,7 +2419,7 @@ impl StateTelemetry {
     #[cfg(feature = "telemetry")]
     /// Record per-lane pipeline summary data for the latest block.
     pub fn record_lane_pipeline_summary(&self, lane_id: LaneId, summary: LanePipelineSummary) {
-        if !self.nexus_lane_metrics_enabled() {
+        if !self.is_enabled() {
             return;
         }
         let (lane_label, dataspace_label) = self.lane_label_values(lane_id);
@@ -2554,7 +2486,7 @@ impl StateTelemetry {
         head_height: u64,
         rbc_bytes_total: u64,
     ) {
-        if !self.nexus_lane_metrics_enabled() {
+        if !self.is_enabled() {
             return;
         }
         self.record_lane_with_dataspace(lane_id, dataspace_id);
@@ -2580,7 +2512,7 @@ impl StateTelemetry {
         dataspace_id: DataSpaceId,
         outcome: &str,
     ) {
-        if !self.nexus_lane_metrics_enabled() {
+        if !self.is_enabled() {
             return;
         }
         self.record_lane_with_dataspace(lane_id, dataspace_id);
@@ -2620,7 +2552,7 @@ impl StateTelemetry {
         dataspace_id: DataSpaceId,
         summary: DataspacePipelineSummary,
     ) {
-        if !self.nexus_lane_metrics_enabled() {
+        if !self.is_enabled() {
             return;
         }
         self.with_dataspace_snapshot(lane_id, dataspace_id, |entry| {
@@ -2665,7 +2597,7 @@ impl StateTelemetry {
                 snapshot_version,
             });
         }
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             let lane_label = lane.as_u32().to_string();
             let reason_label = reason.label();
             self.metrics
@@ -2679,7 +2611,7 @@ impl StateTelemetry {
     ///
     /// Canonical `event` labels: `cache_hit` and `cache_miss`.
     pub fn note_axt_policy_snapshot_cache_event(&self, event: &'static str) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.metrics
                 .axt_policy_snapshot_cache_events_total
                 .with_label_values(&[event])
@@ -2690,7 +2622,7 @@ impl StateTelemetry {
     ///
     /// Canonical `event` labels: `hit`, `miss`, `expired`, `cleared`, `pruned`.
     pub fn note_axt_proof_cache_event(&self, event: &'static str) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.metrics
                 .axt_proof_cache_events_total
                 .with_label_values(&[event])
@@ -3013,7 +2945,7 @@ impl StateTelemetry {
         tenant: &str,
         cause: &'static str,
     ) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_with_dataspace(lane_id, dataspace_id);
             let tenant_trimmed = tenant.trim();
             let tenant_label = if tenant_trimmed.is_empty() {
@@ -3126,7 +3058,7 @@ impl StateTelemetry {
     }
     /// Record per-lane TEU metrics for the latest scheduler envelope.
     pub fn record_nexus_scheduler_lane_teu(&self, lane_id: LaneId, update: LaneTeuGaugeUpdate) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             self.metrics
@@ -3178,7 +3110,7 @@ impl StateTelemetry {
         reason: &'static str,
         amount: u64,
     ) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             self.metrics
@@ -3192,7 +3124,7 @@ impl StateTelemetry {
     }
     /// Increment the must-serve truncation counter for the provided lane.
     pub fn inc_nexus_scheduler_must_serve_truncations(&self, lane_id: LaneId, amount: u64) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             self.metrics
@@ -3212,7 +3144,7 @@ impl StateTelemetry {
         dataspace_id: DataSpaceId,
         update: DataspaceTeuGaugeUpdate,
     ) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             let ds_label = dataspace_id.as_u64().to_string();
@@ -3244,7 +3176,7 @@ impl StateTelemetry {
         tenant: &str,
         field: &'static str,
     ) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_with_dataspace(lane_id, dataspace_id);
             let tenant_trimmed = tenant.trim();
             let tenant_label = if tenant_trimmed.is_empty() {
@@ -3272,7 +3204,7 @@ impl StateTelemetry {
         score_bps: Option<u16>,
         latency_ms: Option<u64>,
     ) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_with_dataspace(lane_id, dataspace_id);
             let tenant_trimmed = tenant.trim();
             let tenant_label = if tenant_trimmed.is_empty() {
@@ -3381,7 +3313,7 @@ impl StateTelemetry {
         tenant: &str,
         direction: &'static str,
     ) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_with_dataspace(lane_id, dataspace_id);
             let tenant_trimmed = tenant.trim();
             let tenant_label = if tenant_trimmed.is_empty() {
@@ -3412,7 +3344,7 @@ impl StateTelemetry {
         engine_id: &str,
         status: &'static str,
     ) {
-        if !self.nexus_lane_metrics_enabled() {
+        if !self.is_enabled() {
             return;
         }
         self.record_lane_with_dataspace(lane_id, dataspace_id);
@@ -3455,14 +3387,14 @@ impl StateTelemetry {
     }
     /// Set DAG conflict rate in basis points for the latest validated block.
     pub fn set_pipeline_conflict_rate_bps(&self, lane_id: LaneId, bps: u64) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_conflict_rate_bps.set(bps);
         }
     }
     /// Set overlay counters for the latest validated block.
     pub fn set_pipeline_overlays(&self, lane_id: LaneId, overlays: u64, total_instructions: u64) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_overlay_count.set(overlays);
             self.metrics
@@ -3474,7 +3406,7 @@ impl StateTelemetry {
     #[cfg(feature = "telemetry")]
     #[allow(dead_code)]
     pub(crate) fn inc_pipeline_access_set_source(&self, source: AccessSetSource, count: u64) {
-        if self.nexus_lane_metrics_enabled() && count > 0 {
+        if self.is_enabled() && count > 0 {
             let label = access_set_source_label(source);
             self.metrics
                 .pipeline_access_set_source_total
@@ -3667,7 +3599,7 @@ impl StateTelemetry {
         max_size: u64,
         buckets: [u64; 8],
     ) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_comp_count.set(count);
             self.metrics.pipeline_comp_max.set(max_size);
@@ -3682,14 +3614,14 @@ impl StateTelemetry {
     }
     /// Set peak layer width (max txs in any layer) for the latest validated block.
     pub fn set_pipeline_peak_layer_width(&self, lane_id: LaneId, width: u64) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_peak_layer_width.set(width);
         }
     }
     /// Set average and median layer widths (rounded to integers).
     pub fn set_pipeline_layer_avg_median(&self, lane_id: LaneId, avg: u64, median: u64) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_layer_avg_width.set(avg);
             self.metrics.pipeline_layer_median_width.set(median);
@@ -3697,7 +3629,7 @@ impl StateTelemetry {
     }
     /// Set layer-width histogram buckets. Buckets `le` = [1,2,4,8,16,32,64,128]. Values are layer counts per bucket.
     pub fn set_pipeline_layer_width_hist(&self, lane_id: LaneId, buckets: [u64; 8]) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             for (le, val) in PIPELINE_BUCKET_LABELS.iter().zip(buckets.iter()) {
                 self.metrics
@@ -3709,14 +3641,14 @@ impl StateTelemetry {
     }
     /// Set scheduler layer count for the latest validated block.
     pub fn set_pipeline_layer_count(&self, lane_id: LaneId, count: u64) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_layer_count.set(count);
         }
     }
     /// Set scheduler utilization (percent 0..100) for the latest validated block.
     pub fn set_pipeline_scheduler_utilization_pct(&self, lane_id: LaneId, pct: u64) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             self.metrics
                 .pipeline_scheduler_utilization_pct
@@ -3725,28 +3657,28 @@ impl StateTelemetry {
     }
     /// Set total Norito-encoded overlay bytes for the latest validated block.
     pub fn set_pipeline_overlay_bytes(&self, lane_id: LaneId, total_bytes: u64) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_overlay_bytes.set(total_bytes);
         }
     }
     /// Set detached pipeline counters for the latest validated block.
     pub fn set_pipeline_detached_prepared(&self, lane_id: LaneId, count: u64) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_detached_prepared.set(count);
         }
     }
     /// Set detached-merged counter for the latest validated block.
     pub fn set_pipeline_detached_merged(&self, lane_id: LaneId, count: u64) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_detached_merged.set(count);
         }
     }
     /// Set detached-fallback counter for the latest validated block.
     pub fn set_pipeline_detached_fallback(&self, lane_id: LaneId, count: u64) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_detached_fallback.set(count);
         }
@@ -3758,7 +3690,7 @@ impl StateTelemetry {
         reason: &'static str,
         count: u64,
     ) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             self.metrics
                 .pipeline_detached_fallback_reason
@@ -3797,7 +3729,7 @@ impl StateTelemetry {
     }
     /// Observe a pipeline stage timing (milliseconds) labeled by `stage`.
     pub fn observe_pipeline_stage_ms(&self, lane_id: LaneId, stage: &'static str, ms: f64) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             self.metrics
@@ -3808,7 +3740,7 @@ impl StateTelemetry {
     }
     /// Observe AMX prepare latency (milliseconds) for the provided lane.
     pub fn observe_amx_prepare_ms(&self, lane_id: LaneId, ms: f64) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             self.metrics
@@ -3819,7 +3751,7 @@ impl StateTelemetry {
     }
     /// Observe AMX commit latency (milliseconds) for the provided lane.
     pub fn observe_amx_commit_ms(&self, lane_id: LaneId, ms: f64) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             self.metrics
@@ -3830,7 +3762,7 @@ impl StateTelemetry {
     }
     /// Observe IVM execution latency (milliseconds) for the provided lane.
     pub fn observe_ivm_exec_ms(&self, lane_id: LaneId, ms: f64) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             self.metrics
@@ -3841,7 +3773,7 @@ impl StateTelemetry {
     }
     /// Increment the AMX abort counter for the provided lane/stage.
     pub fn inc_amx_abort(&self, lane_id: LaneId, stage: &'static str) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             self.metrics
@@ -3858,7 +3790,7 @@ impl StateTelemetry {
         multi_msg_agg: u64,
         deterministic: u64,
     ) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_sig_bls_agg_same.set(same_msg_agg);
             self.metrics.pipeline_sig_bls_agg_multi.set(multi_msg_agg);
@@ -3869,7 +3801,7 @@ impl StateTelemetry {
     }
     /// Increment cumulative BLS aggregate verification counters for the provided lane/result.
     pub fn inc_pipeline_sig_bls_result(&self, lane_id: LaneId, same_message: bool, success: bool) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             let result_label = if success { "success" } else { "failure" };
@@ -3895,7 +3827,7 @@ impl StateTelemetry {
     /// Get cumulative BLS aggregate counters broken down by result (success, failure).
     /// Returns ((`same_success`, `same_failure`), (`multi_success`, `multi_failure`)).
     pub fn pipeline_sig_bls_result_totals(&self) -> ((u64, u64), (u64, u64)) {
-        if !self.nexus_lane_metrics_enabled() {
+        if !self.is_enabled() {
             return ((0, 0), (0, 0));
         }
         let lane_label = self.metrics.nexus_lane_id_placeholder.get().to_string();
@@ -4167,7 +4099,6 @@ impl core::fmt::Debug for StateTelemetry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("StateTelemetry")
             .field("enabled", &self.enabled.load(Ordering::Relaxed))
-            .field("nexus_enabled", &self.nexus_enabled.load(Ordering::Relaxed))
             .finish_non_exhaustive()
     }
 }
@@ -4680,8 +4611,8 @@ pub struct Telemetry {
     last_reported_block: Arc<RwLock<Option<BlockCommitReport>>>,
     metrics: Arc<Metrics>,
     enabled: Arc<AtomicBool>,
+    commit_qc_publisher: Arc<CommitQcTelemetryPublisher>,
     sync_requested: Arc<AtomicBool>,
-    nexus_enabled: Arc<AtomicBool>,
     time_source: TimeSource,
     soranet_privacy: Arc<SoranetSecureAggregator>,
     #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
@@ -4701,8 +4632,8 @@ impl Clone for Telemetry {
             last_reported_block: Arc::clone(&self.last_reported_block),
             metrics: Arc::clone(&self.metrics),
             enabled: Arc::clone(&self.enabled),
+            commit_qc_publisher: Arc::clone(&self.commit_qc_publisher),
             sync_requested: Arc::clone(&self.sync_requested),
-            nexus_enabled: Arc::clone(&self.nexus_enabled),
             time_source: self.time_source.clone(),
             soranet_privacy: Arc::clone(&self.soranet_privacy),
             micropayment_samples,
@@ -5047,13 +4978,14 @@ impl Telemetry {
             SoranetSecureAggregator::new(PrivacyBucketConfig::default())
                 .expect("valid default SoraNet privacy config"),
         );
+        let commit_qc_publisher = Arc::new(CommitQcTelemetryPublisher::new(Arc::clone(&metrics)));
         let telemetry = Telemetry {
             actor,
             last_reported_block: Arc::new(RwLock::new(None)),
             metrics,
             enabled: Arc::new(AtomicBool::new(enabled)),
+            commit_qc_publisher,
             sync_requested: Arc::new(AtomicBool::new(false)),
-            nexus_enabled: Arc::new(AtomicBool::new(true)),
             time_source: TimeSource::new_system(),
             soranet_privacy,
             micropayment_samples: Self::default_micropayment_samples(),
@@ -5081,24 +5013,6 @@ impl Telemetry {
     #[inline]
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::Relaxed)
-    }
-    /// Whether Nexus lane/dataspace telemetry is allowed.
-    #[inline]
-    pub fn nexus_enabled(&self) -> bool {
-        self.nexus_enabled.load(Ordering::Relaxed)
-    }
-    /// Enable or disable Nexus lane/dataspace telemetry.
-    #[inline]
-    pub fn set_nexus_enabled(&self, enabled: bool) {
-        self.nexus_enabled.store(enabled, Ordering::Relaxed);
-        if !enabled {
-            reset_nexus_metrics(&self.metrics);
-        }
-    }
-    /// Whether Nexus lane/dataspace metrics should be emitted.
-    #[inline]
-    fn nexus_lane_metrics_enabled(&self) -> bool {
-        self.is_enabled() && self.nexus_enabled()
     }
     /// Enable or disable telemetry observations at runtime.
     #[inline]
@@ -5308,12 +5222,6 @@ impl Telemetry {
         }
     }
     telemetry_atomic_enabled_metric_methods_early_return! {
-    /// Record which roster source was used for a block-sync update.
-    [note_block_sync_roster_source(source: &str) =>
-        .sumeragi_block_sync_roster_source_total.with_label_values(&[source]).inc();]
-    /// Record why a block-sync update was dropped due to roster validation.
-    [note_block_sync_roster_drop(reason: &str) =>
-        .sumeragi_block_sync_roster_drop_total.with_label_values(&[reason]).inc();]
     /// Record that a block-sync `ShareBlocks` batch was dropped as unsolicited.
     [note_block_sync_unsolicited_share_blocks_drop() =>
         .sumeragi_block_sync_share_blocks_unsolicited_total.inc();]
@@ -5455,12 +5363,15 @@ impl Telemetry {
         }
     }
     fn record_consensus_message(&self, msg: &BlockMessage, sent: bool) {
-        match msg {
-            BlockMessage::QcVote(vote) => {
+        let BlockMessage::V2(message) = msg else {
+            return;
+        };
+        use iroha_data_model::block::consensus_v2::{ConsensusMessageV2Payload, GlobalPhase};
+        match &message.payload {
+            ConsensusMessageV2Payload::Vote(vote) => {
                 let phase_label = match vote.phase {
-                    crate::sumeragi::consensus::Phase::Prepare => PHASE_PREPARE,
-                    crate::sumeragi::consensus::Phase::Commit => PHASE_COMMIT,
-                    crate::sumeragi::consensus::Phase::NewView => PHASE_NEW_VIEW,
+                    GlobalPhase::Prepare => PHASE_PREPARE,
+                    GlobalPhase::Commit => PHASE_COMMIT,
                 };
                 if sent {
                     self.metrics
@@ -5474,11 +5385,10 @@ impl Telemetry {
                         .inc();
                 }
             }
-            BlockMessage::Qc(cert) => {
+            ConsensusMessageV2Payload::QuorumCertificate(cert) => {
                 let phase_label = match cert.phase {
-                    crate::sumeragi::consensus::Phase::Prepare => PHASE_PREPARE,
-                    crate::sumeragi::consensus::Phase::Commit => PHASE_COMMIT,
-                    crate::sumeragi::consensus::Phase::NewView => PHASE_NEW_VIEW,
+                    GlobalPhase::Prepare => PHASE_PREPARE,
+                    GlobalPhase::Commit => PHASE_COMMIT,
                 };
                 if sent {
                     self.metrics
@@ -6358,7 +6268,7 @@ impl Telemetry {
     }
     /// Update per-lane RBC backlog gauges.
     pub fn set_rbc_lane_backlog(&self, entries: &[crate::sumeragi::status::LaneRbcSnapshot]) {
-        if !self.nexus_lane_metrics_enabled() {
+        if !self.is_enabled() {
             return;
         }
         let metrics = &self.metrics;
@@ -7133,21 +7043,6 @@ impl Telemetry {
                 .set(required);
         }
     }
-    /// Record the latest commit certificate summary (best-effort).
-    pub fn set_commit_qc_summary(&self, cert: &Qc) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_commit_qc_height.set(cert.height);
-            self.metrics.sumeragi_commit_qc_view.set(cert.view);
-            self.metrics.sumeragi_commit_qc_epoch.set(cert.epoch);
-            self.metrics.sumeragi_commit_qc_signatures_total.set(
-                u64::try_from(crate::sumeragi::consensus::qc_signer_count(cert))
-                    .unwrap_or(u64::MAX),
-            );
-            self.metrics
-                .sumeragi_commit_qc_validator_set_len
-                .set(u64::try_from(cert.validator_set.len()).unwrap_or(u64::MAX));
-        }
-    }
     /// Report the event of block commit, measuring the block time.
     pub fn report_block_commit_blocking(&self, block_header: &BlockHeader) {
         let report = BlockCommitReport::new(block_header, &self.time_source);
@@ -7170,10 +7065,8 @@ impl Telemetry {
             };
             self.metrics.da_quorum_ratio.set(ratio);
         }
-        // This function is called from within the main loop. Avoid
-        // `blocking_write`: async tests and runtime-driven commit paths can
-        // execute this code on a Tokio worker thread, where blocking the
-        // runtime panics.
+        // This runs in the main loop. Avoid `blocking_write`: async tests and runtime-driven
+        // commit paths can execute on a Tokio worker, where blocking the runtime panics.
         match self.last_reported_block.try_write() {
             Ok(mut lock) => *lock = Some(report),
             Err(_) if tokio::runtime::Handle::try_current().is_ok() => {
@@ -7216,8 +7109,7 @@ impl Telemetry {
         refresh_ivm_cache_metrics(&self.metrics);
         &self.metrics
     }
-    /// Refresh lazy metrics before returning, bounded so callers can fall back
-    /// to the last snapshot when the telemetry actor is unavailable.
+    /// Refresh lazy metrics within a bound, falling back when the actor is unavailable.
     #[cfg(feature = "telemetry")]
     pub async fn metrics_fresh(&self) -> &Metrics {
         if let Err(err) = self.synchronize_metrics().await {
@@ -7231,8 +7123,7 @@ impl Telemetry {
         refresh_ivm_cache_metrics(&self.metrics);
         &self.metrics
     }
-    /// Refresh lazy metrics and report synchronization failure to callers that
-    /// must not publish a stale mixed-frontier snapshot.
+    /// Refresh lazy metrics, reporting failure when callers cannot publish stale state.
     #[cfg(feature = "telemetry")]
     pub async fn metrics_fresh_checked(&self) -> Result<&Metrics, String> {
         if let Err(err) = self.synchronize_metrics().await {
@@ -7312,8 +7203,8 @@ impl From<StateTelemetry> for Telemetry {
             last_reported_block: Arc::new(RwLock::new(None)),
             metrics: st.metrics.clone(),
             enabled: st.enabled.clone(),
+            commit_qc_publisher: Arc::clone(&st.commit_qc_publisher),
             sync_requested: Arc::new(AtomicBool::new(false)),
-            nexus_enabled: st.nexus_enabled.clone(),
             time_source: TimeSource::new_system(),
             soranet_privacy: st.soranet_privacy(),
             micropayment_samples: Self::default_micropayment_samples(),
@@ -7708,10 +7599,7 @@ impl Actor {
             .set(iroha_p2p::network::cap_violations_health());
         caps.with_label_values(&["Other"])
             .set(iroha_p2p::network::cap_violations_other());
-        // Optional: reconnect successes (uncomment if exposed in metrics)
-        // self.metrics
-        //     .p2p_dns_reconnect_success_total
-        //     .set(iroha_p2p::network::dns_reconnect_success_count());
+        // Reconnect-success export remains pending a dedicated metrics counter.
         let mut last_reported_block = {
             let mut lock = self.last_reported_block.write().await;
             if lock.is_none() {
@@ -7870,9 +7758,8 @@ impl Actor {
                 iroha_logger::error!("Failed to get genesis block from Kura.");
             }
         }
-        // Below metrics could be out of sync with the "latest block" metric,
-        // since the world snapshot might be potentially ahead of the last reported block.
-        // This is fine because this time window _should_ be very narrow.
+        // These metrics may briefly lead "latest block" when the world snapshot is ahead;
+        // that observation window should remain very narrow.
         self.metrics.domains.set(world_view.domains().len() as u64);
         for domain in world_view.domains_iter() {
             match self
@@ -7975,6 +7862,7 @@ pub fn start(
     let last_reported_block = Arc::new(RwLock::new(None));
     let enabled_arc = Arc::new(AtomicBool::new(enabled));
     let sync_requested = Arc::new(AtomicBool::new(false));
+    let commit_qc_publisher = Arc::new(CommitQcTelemetryPublisher::new(Arc::clone(&metrics)));
     let soranet_privacy = Arc::new(
         SoranetSecureAggregator::new(PrivacyBucketConfig::default())
             .expect("valid default SoraNet privacy config"),
@@ -7985,8 +7873,8 @@ pub fn start(
             last_reported_block: last_reported_block.clone(),
             metrics: metrics.clone(),
             enabled: enabled_arc.clone(),
+            commit_qc_publisher,
             sync_requested: sync_requested.clone(),
-            nexus_enabled: Arc::new(AtomicBool::new(true)),
             time_source: time_source.clone(),
             soranet_privacy: Arc::clone(&soranet_privacy),
             micropayment_samples: Telemetry::default_micropayment_samples(),
@@ -8031,7 +7919,7 @@ mod tests {
         prelude::World,
         query::store::LiveQueryStore,
         state::StateReadOnly,
-        sumeragi::{consensus, message::BlockMessage, network_topology::Topology, status},
+        sumeragi::{message::BlockMessage, network_topology::Topology, status},
         tx::AcceptedTransaction,
     };
     use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
@@ -8047,7 +7935,6 @@ mod tests {
         account::{Account, AccountId},
         asset::{AssetDefinitionId, AssetId},
         block::consensus_v2::{NPOS_TAG, PERMISSIONED_TAG},
-        consensus::VALIDATOR_SET_HASH_VERSION_V1,
         events::{
             data::space_directory::{SpaceDirectoryEvent, SpaceDirectoryManifestRevoked},
             time::{ExecutionTime, TimeEventFilter},
@@ -8587,40 +8474,15 @@ mod tests {
         assert_eq!(metrics.torii_da_chunking_seconds.get_sample_count(), 1);
     }
     #[test]
-    fn commit_qc_summary_metrics_updated() {
+    fn state_telemetry_conversion_shares_durable_qc_publisher() {
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        let peer_a = checked_peer_id();
-        let peer_b = checked_peer_id();
-        let validator_set = vec![peer_a, peer_b];
-        let validator_set_hash = HashOf::new(&validator_set);
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; 32]));
-        let cert = Qc {
-            phase: consensus::Phase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            height: 42,
-            view: 7,
-            epoch: 1,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: consensus::PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: validator_set.clone(),
-            aggregate: consensus::QcAggregate {
-                signers_bitmap: Vec::new(),
-                bls_aggregate_signature: Vec::new(),
-            },
-        };
-        telemetry.set_commit_qc_summary(&cert);
-        assert_eq!(metrics.sumeragi_commit_qc_height.get(), 42);
-        assert_eq!(metrics.sumeragi_commit_qc_view.get(), 7);
-        assert_eq!(metrics.sumeragi_commit_qc_epoch.get(), 1);
-        assert_eq!(metrics.sumeragi_commit_qc_signatures_total.get(), 0);
-        assert_eq!(metrics.sumeragi_commit_qc_validator_set_len.get(), 2);
+        let state_telemetry = StateTelemetry::new(metrics, true);
+        let expected_publisher = Arc::clone(&state_telemetry.commit_qc_publisher);
+        let telemetry = Telemetry::from(state_telemetry);
+        assert!(Arc::ptr_eq(
+            &telemetry.commit_qc_publisher,
+            &expected_publisher
+        ));
     }
     #[test]
     fn isi_metrics_record_when_enabled() {
@@ -8672,20 +8534,6 @@ mod tests {
         assert_eq!(histogram.get_sample_count(), 0);
     }
     #[test]
-    fn block_sync_roster_source_metric_increments() {
-        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.note_block_sync_roster_source("commit_roster_journal");
-        telemetry.note_block_sync_roster_source("commit_roster_journal");
-        assert_eq!(
-            metrics
-                .sumeragi_block_sync_roster_source_total
-                .with_label_values(&["commit_roster_journal"])
-                .get(),
-            2
-        );
-    }
-    #[test]
     fn view_change_cause_metric_increments_for_validation_reject() {
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         let telemetry = Telemetry::new(metrics.clone(), true);
@@ -8705,19 +8553,6 @@ mod tests {
         assert!(
             ts > 0,
             "view-change cause gauge should record a timestamp for validation_reject"
-        );
-    }
-    #[test]
-    fn block_sync_roster_drop_metric_increments() {
-        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.note_block_sync_roster_drop("missing");
-        assert_eq!(
-            metrics
-                .sumeragi_block_sync_roster_drop_total
-                .with_label_values(&["missing"])
-                .get(),
-            1
         );
     }
     #[test]
@@ -9757,56 +9592,6 @@ mod tests {
         );
     }
     #[test]
-    fn lane_relay_emergency_override_metric_skips_when_nexus_disabled() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = StateTelemetry::new(metrics.clone(), true);
-        let lane_id = LaneId::SINGLE;
-        let dataspace_id = DataSpaceId::UNIVERSAL;
-        telemetry.set_nexus_enabled(false);
-        telemetry.record_lane_relay_emergency_override(lane_id, dataspace_id, "missing");
-        let lane_label = lane_id.as_u32().to_string();
-        let dataspace_label = dataspace_id.as_u64().to_string();
-        assert_eq!(
-            metrics
-                .lane_relay_emergency_override_total
-                .with_label_values(&[lane_label.as_str(), dataspace_label.as_str(), "missing",])
-                .get(),
-            0
-        );
-    }
-    #[test]
-    fn nexus_disable_clears_dataspace_teu_status_cache() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = StateTelemetry::new(metrics.clone(), true);
-        let lane_id = LaneId::SINGLE;
-        let dataspace_id = DataSpaceId::new(7);
-        telemetry.record_nexus_scheduler_dataspace_teu(
-            lane_id,
-            dataspace_id,
-            DataspaceTeuGaugeUpdate {
-                backlog: 12,
-                age_slots: 3,
-                virtual_finish: 9,
-            },
-        );
-        let key = (lane_id.as_u32(), dataspace_id.as_u64());
-        assert!(
-            metrics
-                .nexus_scheduler_dataspace_teu_status
-                .read()
-                .expect("dataspace TEU status cache lock poisoned")
-                .contains_key(&key)
-        );
-        telemetry.set_nexus_enabled(false);
-        assert!(
-            metrics
-                .nexus_scheduler_dataspace_teu_status
-                .read()
-                .expect("dataspace TEU status cache lock poisoned")
-                .is_empty()
-        );
-    }
-    #[test]
     fn amx_metrics_recorded() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
@@ -10736,10 +10521,9 @@ mod tests {
         );
     }
     #[test]
-    fn state_telemetry_pipeline_dag_emits_without_nexus() {
+    fn state_telemetry_pipeline_dag_emits() {
         let metrics = Arc::new(Metrics::default());
         let st = StateTelemetry::new(metrics.clone(), true);
-        st.set_nexus_enabled(false);
         st.set_pipeline_dag(LaneId::SINGLE, 7, 3);
         assert_eq!(metrics.pipeline_dag_vertices.get(), 7);
         assert_eq!(metrics.pipeline_dag_edges.get(), 3);
@@ -10769,26 +10553,42 @@ mod tests {
     }
     #[test]
     fn consensus_message_counters_update() {
+        use iroha_data_model::block::consensus_v2 as wire;
+
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(metrics.clone(), true);
-        let vote_hash = HashOf::<iroha_data_model::block::Header>::from_untyped_unchecked(
-            Hash::prehashed([0x11; Hash::LENGTH]),
-        );
-        let vote = consensus::Vote {
-            phase: consensus::Phase::Prepare,
-            block_hash: vote_hash,
-            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"telemetry-v2-context",
+        )));
+        let round = wire::ConsensusRound {
+            context_id,
             height: 1,
             view: 1,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            highest_qc: None,
-            signer: 0,
-            bls_sig: Vec::new(),
         };
-        let vote_msg = BlockMessage::QcVote(vote.clone());
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH])),
+            payload_hash: Hash::new(b"telemetry-v2-payload"),
+        };
+        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+            Hash::new(b"telemetry-parent-state"),
+            Hash::new(b"telemetry-post-state"),
+            Hash::new(b"telemetry-ordinary-writes"),
+            1,
+            Hash::new(b"telemetry-executed-wire"),
+        );
+        let vote = wire::Vote {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Prepare,
+            subject,
+            execution_commitment,
+            signer: 0,
+            signature: vec![1],
+        };
+        let vote_msg = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(vote),
+        ));
         telemetry.note_consensus_message_sent(&vote_msg);
         telemetry.note_consensus_message_received(&vote_msg);
         assert_eq!(
@@ -10805,31 +10605,18 @@ mod tests {
                 .get(),
             1
         );
-        let qc_hash = HashOf::<iroha_data_model::block::Header>::from_untyped_unchecked(
-            Hash::prehashed([0x22; Hash::LENGTH]),
-        );
-        let validator_set = vec![checked_peer_id()];
-        let qc = consensus::Qc {
-            phase: consensus::Phase::Commit,
-            subject_block_hash: qc_hash,
-            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            height: 2,
-            view: 3,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: consensus::PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: consensus::QcAggregate {
-                signers_bitmap: vec![0x01],
-                bls_aggregate_signature: Vec::new(),
-            },
+        let qc = wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signers: vec![0],
+            aggregate_signature: vec![2],
         };
-        let qc_msg = BlockMessage::Qc(qc.clone());
+        let qc_msg = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(qc),
+        ));
         telemetry.note_consensus_message_sent(&qc_msg);
         telemetry.note_consensus_message_received(&qc_msg);
         assert_eq!(
@@ -10967,62 +10754,6 @@ mod tests {
             .get(&(lane_id.as_u32(), dataspace_id.as_u64()))
             .expect("dataspace snapshot missing");
         assert_eq!(ds_snapshot.tx_served, 5);
-    }
-    #[test]
-    fn nexus_lane_metrics_skipped_when_disabled() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = StateTelemetry::new(metrics.clone(), true);
-        telemetry.set_nexus_enabled(false);
-        telemetry.record_nexus_scheduler_lane_teu(
-            LaneId::SINGLE,
-            LaneTeuGaugeUpdate {
-                capacity: 50,
-                committed: 25,
-                buckets: NexusLaneTeuBuckets {
-                    floor: 10,
-                    headroom: 40,
-                    must_serve: 0,
-                    circuit_breaker: 0,
-                },
-                trigger_level: 1,
-                starvation_bound_slots: 4,
-            },
-        );
-        telemetry.inc_nexus_scheduler_lane_teu_deferral(LaneId::SINGLE, "cap_exceeded", 2);
-        telemetry.record_nexus_scheduler_dataspace_teu(
-            LaneId::SINGLE,
-            DataSpaceId::UNIVERSAL,
-            DataspaceTeuGaugeUpdate {
-                backlog: 9,
-                age_slots: 3,
-                virtual_finish: 11,
-            },
-        );
-        telemetry.set_pipeline_layer_count(LaneId::SINGLE, 7);
-        let lane_label = LaneId::SINGLE.as_u32().to_string();
-        let ds_label = DataSpaceId::UNIVERSAL.as_u64().to_string();
-        assert_eq!(
-            metrics
-                .nexus_scheduler_lane_teu_capacity
-                .with_label_values(&[lane_label.as_str()])
-                .get(),
-            0
-        );
-        assert_eq!(
-            metrics
-                .nexus_scheduler_lane_teu_deferral_total
-                .with_label_values(&[lane_label.as_str(), "cap_exceeded"])
-                .get(),
-            0
-        );
-        assert_eq!(
-            metrics
-                .nexus_scheduler_dataspace_teu_backlog
-                .with_label_values(&[lane_label.as_str(), ds_label.as_str()])
-                .get(),
-            0
-        );
-        assert_eq!(metrics.pipeline_layer_count.get(), 0);
     }
     #[test]
     fn sumeragi_new_view_counters_and_highest_qc_gauge() {
@@ -12348,7 +12079,7 @@ mod tests {
                 .with_label_values(&[PERMISSIONED_TAG])
                 .get(),
             baseline_permissioned + 1,
-            "prevote timeout metric should increment for the Iroha 2 mode tag"
+            "prevote timeout metric should increment for the permissioned mode tag"
         );
         assert_eq!(
             metrics
@@ -12899,76 +12630,6 @@ mod tests {
                 .get(),
             0,
             "disabled telemetry must not record outcomes"
-        );
-    }
-    #[test]
-    fn nexus_lane_metrics_reset_when_disabled() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
-        metrics
-            .nexus_lane_block_height
-            .with_label_values(&["0", "global"])
-            .set(5);
-        metrics
-            .nexus_scheduler_lane_teu_capacity
-            .with_label_values(&["0"])
-            .set(10);
-        metrics
-            .nexus_public_lane_validator_total
-            .with_label_values(&["0", "active"])
-            .set(2);
-        telemetry.set_nexus_enabled(false);
-        assert_eq!(metrics.nexus_lane_configured_total.get(), 0);
-        let lane_block_height = metrics.nexus_lane_block_height.collect();
-        assert!(
-            lane_block_height
-                .iter()
-                .all(|family| family.get_metric().is_empty()),
-            "lane block height metrics should reset when Nexus is disabled"
-        );
-        let lane_teu_capacity = metrics.nexus_scheduler_lane_teu_capacity.collect();
-        assert!(
-            lane_teu_capacity
-                .iter()
-                .all(|family| family.get_metric().is_empty()),
-            "scheduler lane metrics should reset when Nexus is disabled"
-        );
-        let public_lane_validators = metrics.nexus_public_lane_validator_total.collect();
-        assert!(
-            public_lane_validators
-                .iter()
-                .all(|family| family.get_metric().is_empty()),
-            "public-lane validator metrics should reset when Nexus is disabled"
-        );
-        assert!(
-            telemetry
-                .lane_metadata
-                .read()
-                .expect("lane metadata lock")
-                .is_empty()
-        );
-        assert!(
-            telemetry
-                .dataspace_metadata
-                .read()
-                .expect("dataspace metadata lock")
-                .is_empty()
-        );
-        assert!(
-            telemetry
-                .metrics
-                .nexus_lane_governance_sealed_aliases
-                .read()
-                .expect("lane alias cache lock")
-                .is_empty()
-        );
-        assert!(
-            telemetry
-                .metrics
-                .nexus_scheduler_lane_teu_status
-                .read()
-                .expect("lane TEU status cache lock")
-                .is_empty()
         );
     }
     #[test]

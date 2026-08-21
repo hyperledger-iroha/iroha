@@ -2355,8 +2355,8 @@ Runtime to zero.  A certified-response claim has two different obligations:
 
   1. while exact Completion admission is blocked, consume the finite weighted
      set of direct certified roots and their trusted causal descendants; one
-     Fresh potential pays for the only root which may still enter the retained
-     response episode;
+     capacity unit accounts for the only root which may still occupy the
+     generic certified-fence credit;
   2. after Completion admission opens, reach the positive-budget Ingress turn
      which consumes the already-claimed response.
 
@@ -2392,12 +2392,6 @@ CertifiedResponseClaimPacemakerWorkDebt(node) ==
     CertifiedResponseClaimDirectPacemakerWorkTokens(node)
       \cup CertifiedResponseClaimCausalPacemakerWorkTokens(node))
 
-CertifiedResponseClaimFreshEscapePotential(node) ==
-  IF /\ CertifiedResponseClaimRecordsAt(node) # {}
-     /\ RetainedCertifiedFenceEscapePhase(node) = "Fresh"
-  THEN 19
-  ELSE 0
-
 CertifiedResponseClaimPacemakerDebtBound ==
   19 * (AsyncQueueCapacity + AsyncCausalCandidateLifecycleCapacity + 1)
 
@@ -2405,7 +2399,6 @@ CertifiedResponseClaimCapacityDebt(node) ==
   IF CanEnqueueCertifiedResponse(node)
   THEN 0
   ELSE 1 + CertifiedResponseClaimPacemakerWorkDebt(node)
-           + CertifiedResponseClaimFreshEscapePotential(node)
 
 CertifiedResponseClaimOpenInnerRank(node) ==
   <<0, DrainableIngressTurnReachRank(node)>>
@@ -2466,7 +2459,6 @@ BY AsyncStrongTypeProjectsAsyncType,
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimPacemakerDebtBound,
        CertifiedPacemakerRootIndices, CertifiedPacemakerCausalIndices,
        AsyncCausalExactRemainingOccurrenceBudget,
@@ -2714,7 +2706,6 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -2735,10 +2726,9 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
        LocalAdmissionStep, LocalAdmissionCanAdvance,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncQueueDepth,
        AsyncControlServiceSlotTransition,
-       AsyncCertifiedFenceEscapeStateAfterRuntime,
-       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
+       AsyncAllVars
 
 THEOREM ClaimedResponseBlockedLocalPredecessorDecreasesAux ==
   \A node \in ValidatorIds:
@@ -2759,7 +2749,6 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -2783,10 +2772,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        LocalAdmissionCanAdvance,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse,
        CanEnqueueClass, AsyncQueueDepth,
-       RetainedCertifiedFenceEscapePhase,
        AsyncControlServiceSlotTransition,
-       AsyncCertifiedFenceEscapeStateAfterRuntime,
-       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
+       AsyncAllVars
 
 THEOREM ClaimedResponseBlockedIngressDecreasesAux ==
   \A node \in ValidatorIds:
@@ -2809,7 +2796,6 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -2838,10 +2824,7 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncCandidateHasCertifiedFenceRoot,
        CertifiedPacemakerRootIndices, CertifiedPacemakerCausalIndices,
        AsyncCausalExactRemainingOccurrenceBudget,
-       RetainedCertifiedFenceEscapePhase,
        AsyncControlServiceSlotTransition,
-       AsyncCertifiedFenceEscapeStateAfterRuntime,
-       RetainedCertifiedFenceEscapePhaseAfter,
        AsyncCertifiedResponseClaimStateAfterRetirement,
        AsyncCertifiedResponseClaimStateAfterAdmission, AsyncAllVars
 
@@ -2864,7 +2847,6 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -2888,10 +2870,9 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        RemoveNextDeferredCommand, DiscardCommand,
        AdvanceNextDeferredClass, DeferredQueueNonempty,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncQueueDepth,
        AsyncControlServiceSlotTransition,
-       AsyncCertifiedFenceEscapeStateAfterRuntime,
-       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
+       AsyncAllVars
 
 THEOREM ClaimedResponseDeferredTagDecreasesAux ==
   \A node \in ValidatorIds:
@@ -2912,7 +2893,6 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -2935,10 +2915,9 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        SerializedRuntimePrecedesServeIngressStep, DeferredTagStep,
        DeferredTimeoutStep, DeferredRetransmitStep,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncQueueDepth,
        AsyncControlServiceSlotTransition,
-       AsyncCertifiedFenceEscapeStateAfterRuntime,
-       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
+       AsyncAllVars
 
 THEOREM ClaimedResponseDirectTimeoutDecreasesAux ==
   \A node \in ValidatorIds:
@@ -2959,7 +2938,6 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -2982,10 +2960,9 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        SerializedRuntimePrecedesServeIngressStep,
        DirectTimeoutStep, TimeoutDue,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncQueueDepth,
        AsyncControlServiceSlotTransition,
-       AsyncCertifiedFenceEscapeStateAfterRuntime,
-       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
+       AsyncAllVars
 
 THEOREM ClaimedResponseFifoRuntimeDecreasesCapacityDebt ==
   \A node \in ValidatorIds:
@@ -3007,7 +2984,6 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -3042,10 +3018,7 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncCausalExactRemainingOccurrenceBudget,
        AsyncQueuedClassCount, AsyncQueuedNoncompletionCount,
        AsyncQueueDepth, NodeQueueNonempty,
-       RetainedCertifiedFenceEscapePhase,
        AsyncControlServiceSlotTransition,
-       AsyncCertifiedFenceEscapeStateAfterRuntime,
-       RetainedCertifiedFenceEscapePhaseAfter,
        AsyncCertifiedResponseClaimStateAfterRetirement,
        AsyncCertifiedResponseClaimStateAfterAdmission, AsyncAllVars
 
@@ -3069,7 +3042,6 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -3093,10 +3065,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        DirectRetransmitStep,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
        AsyncQueueDepth, NodeQueueNonempty,
-       RetainedCertifiedFenceEscapePhase,
        AsyncControlServiceSlotTransition,
-       AsyncCertifiedFenceEscapeStateAfterRuntime,
-       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
+       AsyncAllVars
 
 THEOREM ClaimedResponseIdleRuntimeOpensSlot ==
   \A node \in ValidatorIds:
@@ -3118,7 +3088,6 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -3141,10 +3110,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        SerializedRuntimePrecedesServeIngressStep, IdleRuntimeStep,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
        AsyncQueueDepth, NodeQueueNonempty,
-       RetainedCertifiedFenceEscapePhase,
        AsyncControlServiceSlotTransition,
-       AsyncCertifiedFenceEscapeStateAfterRuntime,
-       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
+       AsyncAllVars
 
 THEOREM ClaimedResponseSerializedRunnerRuntimeDecreasesAux ==
   \A node \in ValidatorIds:
@@ -3188,10 +3155,10 @@ PROOF
 The barrier-only pacemaker arm was previously absent from the RunNode case
 split.  Its direct TC/CommitQC root and every trusted descendant are charged
 by remaining-work tokens. Removing either selected occurrence consumes
-strictly more weight than its successor batch can recreate. The Fresh token
-pays for the sole concurrently admissible root and disappears atomically when
-that root charges the retained-response episode. A direct timeout instead
-strictly consumes the existing Ready timeout component.
+strictly more weight than its successor batch can recreate. The outer capacity
+unit accounts for the sole concurrently admissible root while generic
+certified-fence accounting charges its physical occurrence. A direct timeout
+instead strictly consumes the existing Ready timeout component.
 ***************************************************************************)
 THEOREM ClaimedResponseSerializedCertifiedPacemakerDecreasesAux ==
   \A node \in ValidatorIds:
@@ -3213,7 +3180,6 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimPacemakerDebtBound,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
@@ -3243,10 +3209,7 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        FreshCommandSuccessors, CommandSuccessors,
        DirectTimeoutStep, TimeoutDue,
        CertifiedResponseClaimsAt, CertifiedResponseClaimRecordsAt,
-       RetainedCertifiedFenceEscapePhase,
        AsyncControlServiceSlotTransition,
-       AsyncCertifiedFenceEscapeStateAfterRuntime,
-       RetainedCertifiedFenceEscapePhaseAfter,
        AsyncCertifiedResponseClaimStateAfterRetirement,
        AsyncCertifiedResponseClaimStateAfterAdmission,
        CanEnqueueCertifiedResponse, CanEnqueueClass,
@@ -3277,7 +3240,6 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -3300,10 +3262,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncServeIngressTargetOnlyTurn,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse,
        CanEnqueueClass, AsyncQueueDepth,
-       RetainedCertifiedFenceEscapePhase,
        AsyncControlServiceSlotTransition,
-       AsyncCertifiedFenceEscapeStateAfterRuntime,
-       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
+       AsyncAllVars
 
 THEOREM ClaimedResponseSameNodeRunProducesAuxOutcome ==
   \A node \in ValidatorIds:
@@ -3347,7 +3307,6 @@ PROOF
              CertifiedResponseClaimPacemakerWorkDebt,
              CertifiedResponseClaimDirectPacemakerWorkTokens,
              CertifiedResponseClaimCausalPacemakerWorkTokens,
-             CertifiedResponseClaimFreshEscapePotential,
              CertifiedResponseClaimBlockerRank,
              CertifiedResponseClaimOpenBlockerRank,
              CertifiedResponseClaimOpenDeferredRank,
@@ -3368,10 +3327,9 @@ PROOF
              AsyncCandidateProducerContinuationExactRuntimeReplayStep,
              EnqueueCandidate, CertifiedResponseClaimsAt,
              CanEnqueueCertifiedResponse, CanEnqueueClass,
-             AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+             AsyncQueueDepth,
              AsyncControlServiceSlotTransition,
-             AsyncCertifiedFenceEscapeStateAfterRuntime,
-             RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
+             AsyncAllVars
     <2>2. CASE LocalAdmissionStep(node)
       BY <1>1, <2>2, ClaimedResponseBlockedLocalDecreasesAux
     <2>3. CASE IngressDrainStep(node)
@@ -3417,7 +3375,6 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -3435,10 +3392,9 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        RuntimeReachRank, RunNode, RunNodeWork,
        RunHistoricalServer, RunHistoricalRecoveryNode,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncQueueDepth,
        AsyncControlServiceSlotTransition,
-       AsyncCertifiedFenceEscapeStateAfterRuntime,
-       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
+       AsyncAllVars
 
 THEOREM ClaimedResponseClockPreservesOrDecreasesAux ==
   \A node \in ValidatorIds:
@@ -3457,7 +3413,6 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -3478,10 +3433,9 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
        AsyncTick, AsyncNonClockVars, CertifiedResponseClaimsAt,
        CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncQueueDepth,
        AsyncControlServiceSlotTransition,
-       AsyncCertifiedFenceEscapeStateAfterRuntime,
-       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
+       AsyncAllVars
 
 THEOREM ClaimedResponseIoPreservesAux ==
   \A node \in ValidatorIds:
@@ -3507,7 +3461,6 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -3527,10 +3480,9 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
        EnqueueIoLocalControlWork, CertifiedResponseClaimsAt,
        CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncQueueDepth,
        AsyncControlServiceSlotTransition,
-       AsyncCertifiedFenceEscapeStateAfterRuntime,
-       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
+       AsyncAllVars
 
 THEOREM ClaimedResponseNetworkOrFaultPreservesAux ==
   \A node \in ValidatorIds:
@@ -3549,7 +3501,6 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -3567,10 +3518,9 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        RuntimeReachRank, AsyncNetworkStep, AdmitIngressPacket,
        AsyncFaultStep, PreGstCrash, InjectUntrustedTransportCompletion,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncQueueDepth,
        AsyncControlServiceSlotTransition,
-       AsyncCertifiedFenceEscapeStateAfterRuntime,
-       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
+       AsyncAllVars
 
 THEOREM ClaimedResponseOuterPrefixPreservesAux ==
   \A node \in ValidatorIds:
@@ -3593,7 +3543,6 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        CertifiedResponseClaimPacemakerWorkDebt,
        CertifiedResponseClaimDirectPacemakerWorkTokens,
        CertifiedResponseClaimCausalPacemakerWorkTokens,
-       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -3613,10 +3562,9 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        DirectHistoricalCommitCertificateDiscoveryStep,
        CommitCertificateDiscoveryStepWork,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncQueueDepth,
        AsyncControlServiceSlotTransition,
-       AsyncCertifiedFenceEscapeStateAfterRuntime,
-       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
+       AsyncAllVars
 
 THEOREM ClaimedResponseBlockedAuxStep ==
   \A node \in ValidatorIds:
@@ -3642,7 +3590,6 @@ PROOF
              CertifiedResponseClaimPacemakerWorkDebt,
              CertifiedResponseClaimDirectPacemakerWorkTokens,
              CertifiedResponseClaimCausalPacemakerWorkTokens,
-             CertifiedResponseClaimFreshEscapePotential,
              CertifiedResponseClaimBlockerRank,
              CertifiedResponseClaimOpenBlockerRank,
              CertifiedResponseClaimOpenDeferredRank,
@@ -3726,7 +3673,6 @@ PROOF
                CertifiedResponseClaimPacemakerWorkDebt,
                CertifiedResponseClaimDirectPacemakerWorkTokens,
                CertifiedResponseClaimCausalPacemakerWorkTokens,
-               CertifiedResponseClaimFreshEscapePotential,
                CertifiedResponseClaimBlockerRank,
                CertifiedResponseClaimOpenBlockerRank,
                CertifiedResponseClaimOpenDeferredRank,
@@ -3746,10 +3692,8 @@ PROOF
                AsyncSchedulerExceptServiceActivation,
                CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse,
                CanEnqueueClass, AsyncQueueDepth,
-               RetainedCertifiedFenceEscapePhase,
                AsyncControlServiceSlotTransition,
-               AsyncCertifiedFenceEscapeStateAfterRuntime,
-               RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
+               AsyncAllVars
       <3> QED BY <2>2, <3>0, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
            <3>7, <3>8, <3>9, <3>10, <3>11
            DEF AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,

@@ -1013,669 +1013,6 @@ fn retained_recovery_retry_consumes_decision_retirement_terminal_same_cycle() {
     assert!(!executor.status().fail_closed);
 }
 #[test]
-fn ready_body_backpressure_retains_exact_ingress_until_capacity_retry() {
-    let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::new(8, 1, 1, 4));
-    let mut services = fixture.services();
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: Vec::new(),
-                certificate: None,
-            }],
-            &mut services,
-        )
-        .expect("fetch");
-    let fetch_task = services.fetch_tasks[0].clone();
-    assert!(matches!(
-        executor.complete_body_reconstruction(
-            &fetch_task,
-            fixture.manifest.clone(),
-            fixture.body.clone(),
-            &mut services,
-        ),
-        Err(EffectTransportError::Backpressure)
-    ));
-    assert!(!executor.status().fail_closed);
-    let mut wrong = fixture.body.clone();
-    wrong[0] ^= 1;
-    assert!(matches!(
-        executor.complete_body_reconstruction(
-            &fetch_task,
-            fixture.manifest.clone(),
-            wrong,
-            &mut services,
-        ),
-        Err(EffectTransportError::BodyMismatch(_))
-    ));
-    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-    let sources = certified_sources(&fixture, &prepare);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: sources,
-                certificate: Some(prepare.clone()),
-            }],
-            &mut services,
-        )
-        .expect("upgrade the retained fetch with certified authority");
-    let request = services
-        .fetch_tasks
-        .last()
-        .and_then(BodyFetchTask::certified_request)
-        .expect("signed certified request");
-    let mut response = wire::CertifiedBodyResponse {
-        request_hash: HashOf::new(request),
-        manifest: fixture.manifest.clone(),
-        body: fixture.body.clone(),
-        responder: 0,
-        signature: Vec::new(),
-    };
-    response.signature = Signature::new(
-        fixture.validator_keys[0].private_key(),
-        &response.signature_preimage(),
-    )
-    .payload()
-    .to_vec();
-    let responder = fixture.context.roster[0].validator.clone();
-    let (_leader_wire_directory, leader_wire_ingress, leader_wire_gate, ingress_ownership) =
-        certified_response_runtime_ingress_ownership(&fixture, &response, responder.clone());
-    let expected_terminal = LeaderWireRuntimeTerminal::Volatile(
-        ingress_ownership
-            .leader_wire_runtime_receipt()
-            .expect("production response owns a runtime receipt")
-            .clone(),
-    );
-    let response_envelope = wire::ConsensusMessageV2::new(
-        wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response.clone()),
-    );
-    assert!(matches!(
-        executor.accept_certified_body_response_with_ingress_ownership(
-            response,
-            &responder,
-            &ingress_ownership,
-            &mut services,
-        ),
-        Err(EffectTransportError::Backpressure)
-    ));
-    assert_eq!(executor.pending_fetches.len(), 1);
-    assert_eq!(executor.certified_work.len(), 1);
-    assert_eq!(executor.outstanding_requests.len(), 1);
-    assert!(executor.has_retained_certified_body_response());
-    let retained_scheduler_ordinal = executor
-        .retained_certified_body_response_scheduler_ordinal()
-        .expect("read retained response ordinal")
-        .expect("retained response owns one scheduler position");
-    assert!(!executor.can_admit_local_proposal());
-    assert!(
-        !executor.retained_dispatch_allows_network_ingress(&response_envelope.payload),
-        "later ingress remains behind the exact retained completion"
-    );
-    assert!(
-        executor.outstanding_requests.response_claim_count() == 0,
-        "capacity rejection precedes response-occurrence acquisition"
-    );
-    assert!(services.leader_wire_terminals.is_empty());
-    let live_response_restore = leader_wire_gate.restore().expect("read live response gate");
-    assert_eq!(live_response_restore.records().len(), 1);
-    assert_eq!(
-        live_response_restore.records()[0].status(),
-        super::super::serviced_candidate_store::LeaderWireLifecycleStatus::Runtime,
-        "capacity backpressure must retain the runtime owner"
-    );
-    assert_eq!(
-        live_response_restore.records()[0].runtime_owner(),
-        ingress_ownership
-            .leader_wire_runtime_receipt()
-            .map(|receipt| receipt.owner()),
-        "capacity backpressure must retain the exact runtime identity"
-    );
-    assert!(matches!(
-        leader_wire_ingress.try_push(InboundBlockMessage::new(
-            BlockMessage::V2(response_envelope.clone()),
-            Some(responder.clone()),
-        )),
-        Ok(crate::sumeragi::FairV2IngressPushDisposition::Coalesced)
-    ));
-    assert!(
-        leader_wire_ingress.try_recv().is_none(),
-        "an exact retransmission coalesces into the retained runtime owner"
-    );
-    assert!(!executor.status().fail_closed);
-
-    executor.config.max_ready_body_bytes = u64::try_from(fixture.body.len()).expect("body length");
-    services.retry_certified_fetch_once = true;
-    assert_eq!(
-        executor.retry_retained_certified_body_response(&mut services),
-        Err(EffectTransportError::Backpressure),
-        "the typed retryable service boundary retains the production carrier",
-    );
-    assert!(executor.has_retained_certified_body_response());
-    assert_eq!(
-        executor
-            .retained_certified_body_response_scheduler_ordinal()
-            .expect("read typed-retry response ordinal"),
-        Some(retained_scheduler_ordinal),
-        "typed retry preserves the original leader-wire ticket",
-    );
-    assert_eq!(executor.outstanding_requests.response_claim_count(), 1);
-    assert_eq!(executor.pending_fetches.len(), 1);
-    assert_eq!(executor.certified_work.len(), 1);
-    let retained_runtime_token = executor
-        .body_ownership_projection()
-        .runtime_body_reservation
-        .expect("typed retry retains the successfully reserved runtime token");
-    assert_eq!(retained_runtime_token.tag(), tag(0));
-    assert_eq!(retained_runtime_token.manifest(), &fixture.manifest);
-    assert!(services.completed_certified_fetches.is_empty());
-    assert!(services.leader_wire_terminals.is_empty());
-    let typed_retry_restore = leader_wire_gate
-        .restore()
-        .expect("read typed-retry response gate");
-    assert_eq!(typed_retry_restore.records().len(), 1);
-    assert_eq!(
-        typed_retry_restore.records()[0].status(),
-        super::super::serviced_candidate_store::LeaderWireLifecycleStatus::Runtime,
-        "typed retry cannot tombstone the retained leader-wire ticket",
-    );
-    assert_eq!(
-        typed_retry_restore.records()[0].runtime_owner(),
-        ingress_ownership
-            .leader_wire_runtime_receipt()
-            .map(|receipt| receipt.owner()),
-        "typed retry must preserve the exact runtime identity",
-    );
-    assert!(!executor.status().fail_closed);
-    let mut timeout = timeout_at_view(&fixture, 0);
-    timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
-    executor.runtime.round_tag = Some(tag(1));
-    executor
-        .consume_effects(
-            vec![AdapterEffect::EnterView {
-                tag: tag(1),
-                certificate: timeout,
-                protected_lock: Some(prepare),
-            }],
-            &mut services,
-        )
-        .expect("the protecting TC rebinds the retained response pipeline");
-    assert_eq!(executor.pending_fetches.len(), 1);
-    assert!(
-        executor
-            .pending_fetches
-            .values()
-            .all(|pending| pending.task.tag == tag(1))
-    );
-    let rebound_runtime_token = executor
-        .body_ownership_projection()
-        .runtime_body_reservation
-        .expect("EnterView preserves the unpublished runtime token");
-    assert_eq!(rebound_runtime_token.tag(), tag(1));
-    assert_eq!(rebound_runtime_token.manifest(), &fixture.manifest);
-    assert_eq!(
-        rebound_runtime_token.owns_new_slot(),
-        retained_runtime_token.owns_new_slot(),
-        "view rebinding cannot replace the physical reservation",
-    );
-    assert!(executor.runtime.completions.is_empty());
-    assert!(executor.has_retained_certified_body_response());
-    assert_eq!(
-        executor
-            .retained_certified_body_response_scheduler_ordinal()
-            .expect("read rebound response ordinal"),
-        Some(retained_scheduler_ordinal),
-        "EnterView cannot remint the retained leader-wire ticket",
-    );
-    assert!(!executor.status().fail_closed);
-    assert_eq!(
-        executor
-            .retry_retained_certified_body_response(&mut services)
-            .expect("same response succeeds after capacity is available"),
-        Some(CompletionDisposition::Accepted)
-    );
-    assert!(!executor.has_retained_certified_body_response());
-    assert_eq!(
-        services.leader_wire_terminals,
-        vec![expected_terminal.clone()]
-    );
-    let LeaderWireRuntimeTerminal::Volatile(runtime) = &expected_terminal else {
-        panic!("certified response completion must publish a volatile terminal");
-    };
-    leader_wire_ingress
-        .mark_leader_wire_volatile_terminal(runtime)
-        .expect("production terminal hook retires the response runtime owner");
-    let terminal_restore = leader_wire_gate
-        .restore()
-        .expect("read terminal response gate");
-    assert_eq!(terminal_restore.records().len(), 1);
-    assert_eq!(
-        terminal_restore.records()[0].status(),
-        super::super::serviced_candidate_store::LeaderWireLifecycleStatus::VolatileTerminal,
-        "only the explicit terminal hook may tombstone the runtime owner",
-    );
-    assert_eq!(
-        leader_wire_gate
-            .earliest_ingress_scheduler_ordinal()
-            .expect("read retired response gate"),
-        None
-    );
-    assert!(matches!(
-        leader_wire_ingress.try_push(InboundBlockMessage::new(
-            BlockMessage::V2(response_envelope),
-            Some(responder),
-        )),
-        Ok(crate::sumeragi::FairV2IngressPushDisposition::Coalesced)
-    ));
-    assert!(
-        leader_wire_ingress.try_recv().is_none(),
-        "the volatile tombstone cannot resurrect the drained response stage"
-    );
-    assert!(executor.pending_fetches.is_empty());
-    assert!(executor.certified_work.is_empty());
-    assert!(executor.outstanding_requests.is_empty());
-    assert!(matches!(
-        executor.runtime.completions.as_slice(),
-        [RuntimeCompletion::BodyAvailable(completion_tag, manifest)]
-            if *completion_tag == tag(1) && manifest == &fixture.manifest
-    ));
-    assert_eq!(services.completed_certified_fetches, vec![fetch_task.id()]);
-    assert!(!executor.status().fail_closed);
-}
-#[test]
-fn tc_retires_unprotected_retryable_body_token_before_the_next_fetch() {
-    let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::default());
-    let mut services = fixture.services();
-    let prepare_a = fixture.qc(wire::GlobalPhase::Prepare);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: certified_sources(&fixture, &prepare_a),
-                certificate: Some(prepare_a),
-            }],
-            &mut services,
-        )
-        .expect("begin the fetch later superseded by a different lock");
-    let task_a = services.fetch_tasks[0].clone();
-    let response_a = signed_certified_response(
-        &fixture,
-        &task_a,
-        fixture.manifest.clone(),
-        fixture.body.clone(),
-        0,
-    );
-    let responder = fixture.context.roster[0].validator.clone();
-    let (_directory, _ingress, _gate, ingress_ownership) =
-        certified_response_runtime_ingress_ownership(&fixture, &response_a, responder.clone());
-    services.retry_certified_fetch_once = true;
-    assert_eq!(
-        executor.accept_certified_body_response_with_ingress_ownership(
-            response_a,
-            &responder,
-            &ingress_ownership,
-            &mut services,
-        ),
-        Err(EffectTransportError::Backpressure),
-    );
-    assert!(executor.has_retained_certified_body_response());
-    assert_eq!(executor.outstanding_requests.response_claim_count(), 1);
-    assert_eq!(
-        executor
-            .body_ownership_projection()
-            .runtime_body_reservation
-            .as_ref()
-            .map(BodyAvailableReservation::tag),
-        Some(tag(0)),
-    );
-    let timeout = timeout_at_view(&fixture, 0);
-    executor.runtime.round_tag = Some(tag(1));
-    executor
-        .consume_effects(
-            vec![AdapterEffect::EnterView {
-                tag: tag(1),
-                certificate: timeout,
-                protected_lock: None,
-            }],
-            &mut services,
-        )
-        .expect("the TC retires the unprotected stale fetch and its token");
-    assert!(executor.pending_fetches.is_empty());
-    assert!(executor.certified_work.is_empty());
-    assert!(executor.outstanding_requests.is_empty());
-    assert_eq!(services.cancelled_fetches, vec![task_a.id()]);
-    assert!(
-        executor
-            .body_ownership_projection()
-            .runtime_body_reservation
-            .is_none(),
-        "retiring the fetch must release its unpublished Completion owner",
-    );
-    assert!(executor.runtime.completions.is_empty());
-    assert!(matches!(
-        executor.retry_retained_certified_body_response(&mut services),
-        Err(EffectTransportError::Authentication(
-            V2TransportError::UnsolicitedResponse(_)
-        ))
-    ));
-    assert!(!executor.has_retained_certified_body_response());
-    let (subject_b, body_b) = distinct_body(&fixture);
-    let manifest_b = canonical_payload_manifest(
-        &fixture.context,
-        round(&fixture.context, 1),
-        subject_b,
-        &body_b,
-    );
-    let mut prepare_b = fixture.qc(wire::GlobalPhase::Prepare);
-    prepare_b.round = manifest_b.round;
-    prepare_b.proposal_round = manifest_b.round;
-    prepare_b.subject = manifest_b.subject;
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(1),
-                round: manifest_b.round,
-                subject: manifest_b.subject,
-                manifest: Some(manifest_b.clone()),
-                certified_sources: certified_sources(&fixture, &prepare_b),
-                certificate: Some(prepare_b),
-            }],
-            &mut services,
-        )
-        .expect("the installed protected body acquires the released pipeline");
-    let task_b = services
-        .fetch_tasks
-        .last()
-        .expect("replacement fetch")
-        .clone();
-    assert_eq!(
-        executor
-            .complete_body_reconstruction(&task_b, manifest_b.clone(), body_b, &mut services,)
-            .expect("the next body publishes after stale-token retirement"),
-        CompletionDisposition::Accepted,
-    );
-    assert!(matches!(
-        executor.runtime.completions.as_slice(),
-        [RuntimeCompletion::BodyAvailable(completion_tag, manifest)]
-            if *completion_tag == tag(1) && manifest == &manifest_b
-    ));
-    assert!(!executor.status().fail_closed);
-}
-#[test]
-fn body_fetch_authority_upgrades_monotonically_in_both_orders() {
-    let fixture = Fixture::new();
-    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-    let sources = certified_sources(&fixture, &prepare);
-    let mut executor = fixture.executor(EffectQueueConfig::default());
-    let mut services = fixture.services();
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: Vec::new(),
-                certificate: None,
-            }],
-            &mut services,
-        )
-        .expect("proposal starts ordinary acquisition");
-    let work_id = services.fetch_tasks[0].id();
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: sources.clone(),
-                certificate: Some(prepare.clone()),
-            }],
-            &mut services,
-        )
-        .expect("PrepareQC adds certified authority");
-    let upgraded = services.fetch_tasks.last().expect("upgraded task");
-    assert_eq!(upgraded.id(), work_id);
-    assert_eq!(upgraded.manifest(), Some(&fixture.manifest));
-    assert_eq!(
-        upgraded
-            .certified_request()
-            .map(|request| &request.certificate),
-        Some(&prepare)
-    );
-    assert_eq!(executor.pending_fetches.len(), 1);
-    assert_eq!(executor.outstanding_requests.len(), 1);
-    let first_request = upgraded
-        .certified_request()
-        .expect("first certified authority")
-        .clone();
-    let commit = fixture.qc(wire::GlobalPhase::Commit);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: sources.clone(),
-                certificate: Some(commit),
-            }],
-            &mut services,
-        )
-        .expect("later same-subject QC retransmits first authority");
-    assert_eq!(
-        services
-            .fetch_tasks
-            .last()
-            .and_then(BodyFetchTask::certified_request),
-        Some(&first_request)
-    );
-    assert_eq!(executor.outstanding_requests.len(), 1);
-    let mut executor = fixture.executor(EffectQueueConfig::default());
-    let mut services = fixture.services();
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: None,
-                certified_sources: sources.clone(),
-                certificate: Some(prepare.clone()),
-            }],
-            &mut services,
-        )
-        .expect("PrepareQC starts certified acquisition");
-    let work_id = services.fetch_tasks[0].id();
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: sources,
-                certificate: Some(prepare.clone()),
-            }],
-            &mut services,
-        )
-        .expect("proposal adds manifest authority");
-    let upgraded = services.fetch_tasks.last().expect("upgraded task");
-    assert_eq!(upgraded.id(), work_id);
-    assert_eq!(upgraded.manifest(), Some(&fixture.manifest));
-    assert_eq!(
-        upgraded
-            .certified_request()
-            .map(|request| &request.certificate),
-        Some(&prepare)
-    );
-    assert_eq!(executor.pending_fetches.len(), 1);
-    assert_eq!(executor.outstanding_requests.len(), 1);
-}
-#[test]
-fn hybrid_reconstruction_wins_and_retires_certified_request() {
-    let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::default());
-    let mut services = fixture.services();
-    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-    let sources = certified_sources(&fixture, &prepare);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: sources,
-                certificate: Some(prepare),
-            }],
-            &mut services,
-        )
-        .expect("start hybrid acquisition");
-    let task = services.fetch_tasks[0].clone();
-    assert_eq!(
-        executor
-            .complete_body_reconstruction(
-                &task,
-                fixture.manifest.clone(),
-                fixture.body.clone(),
-                &mut services,
-            )
-            .expect("authenticated reconstruction wins"),
-        CompletionDisposition::Accepted
-    );
-    assert!(executor.pending_fetches.is_empty());
-    assert!(executor.certified_work.is_empty());
-    assert!(executor.outstanding_requests.is_empty());
-    assert!(services.completed_certified_fetches.is_empty());
-}
-#[test]
-fn authenticated_genesis_satisfies_later_view_fetch_through_normal_body_pipeline() {
-    let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::default());
-    let mut services = fixture.services();
-    executor
-        .install_authenticated_genesis_body(&fixture.block)
-        .expect("retain authenticated staged genesis");
-    let manifest = manifest_at_view(&fixture, 5);
-    let round = manifest.round;
-    let subject = manifest.subject;
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(5),
-                round,
-                subject,
-                manifest: Some(manifest.clone()),
-                certified_sources: Vec::new(),
-                certificate: None,
-            }],
-            &mut services,
-        )
-        .expect("derive the later-view manifest from authenticated genesis");
-    assert!(services.fetch_tasks.is_empty());
-    assert!(executor.pending_fetches.is_empty());
-    assert_eq!(executor.ready_bodies.len(), 1);
-    assert_eq!(executor.ready_bodies[&(round, subject)].manifest, manifest);
-    assert_eq!(
-        executor.ready_bodies[&(round, subject)].bytes.as_ref(),
-        fixture.body.as_slice()
-    );
-    assert!(executor.durable_bodies.is_empty());
-    assert!(executor.validated_bodies.is_empty());
-    assert_eq!(
-        executor.runtime.completions,
-        vec![RuntimeCompletion::BodyAvailable(tag(5), manifest.clone())]
-    );
-    executor
-        .consume_effects(
-            vec![AdapterEffect::StoreBody {
-                tag: tag(5),
-                round,
-                subject,
-            }],
-            &mut services,
-        )
-        .expect("enter the ordinary durable-store stage");
-    assert_eq!(services.store_tasks.len(), 1);
-    assert_eq!(services.store_tasks[0].manifest(), &manifest);
-    assert_eq!(
-        services.store_tasks[0].canonical_wire(),
-        fixture.body.as_slice()
-    );
-    let store_id = services.store_tasks[0].id();
-    let store_completion = services.execute_store(store_id);
-    executor
-        .complete_body_store(store_completion, &mut services)
-        .expect("complete the current-round durable store");
-    assert_eq!(executor.durable_bodies[&(round, subject)].round(), round);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::ValidateBody {
-                tag: tag(5),
-                round,
-                subject,
-            }],
-            &mut services,
-        )
-        .expect("enter ordinary deterministic validation");
-    assert_eq!(services.validation_tasks.len(), 1);
-    assert_eq!(services.validation_tasks[0].round(), round);
-    assert_eq!(services.validation_tasks[0].subject(), subject);
-    assert!(executor.validated_bodies.is_empty());
-}
-#[test]
-fn authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally() {
-    let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::default());
-    let mut services = fixture.services();
-    executor
-        .install_authenticated_genesis_body(&fixture.block)
-        .expect("retain authenticated staged genesis");
-    let certificate = fixture.qc(wire::GlobalPhase::Commit);
-    let sources = certified_sources(&fixture, &certificate);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: None,
-                certified_sources: sources,
-                certificate: Some(certificate),
-            }],
-            &mut services,
-        )
-        .expect("consume certified Decision from authenticated local genesis");
-    assert!(services.fetch_tasks.is_empty());
-    assert!(executor.pending_fetches.is_empty());
-    assert!(executor.certified_work.is_empty());
-    assert!(executor.outstanding_requests.is_empty());
-    assert_eq!(
-        executor.ready_bodies[&(fixture.manifest.round, fixture.manifest.subject)].manifest,
-        fixture.manifest
-    );
-    assert_eq!(
-        executor.runtime.completions,
-        vec![RuntimeCompletion::BodyAvailable(
-            tag(0),
-            fixture.manifest.clone()
-        )]
-    );
-}
-#[test]
 fn authenticated_genesis_cache_does_not_satisfy_a_different_subject() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
@@ -1967,6 +1304,17 @@ fn apply_retransmissions_reuse_one_work_slot() {
     assert_eq!(services.apply_tasks.len(), 9);
     assert_eq!(services.apply_tasks[8].certificate(), &certificate);
     assert!(!executor.status().fail_closed);
+    executor.runtime.effect_owners.clear();
+    executor
+        .consume_effects(vec![effect], &mut services)
+        .expect("an exact duplicate decision carrier retains the live Apply owner");
+    assert_eq!(services.apply_tasks.len(), 10);
+    assert_eq!(services.apply_tasks[9].id(), id);
+    assert_eq!(
+        services.apply_tasks[9].lifecycle_ordinal(),
+        lifecycle_ordinal
+    );
+    assert!(!executor.status().fail_closed);
     let mut conflicting = fixture.qc(wire::GlobalPhase::Commit);
     conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
         Hash::new(b"conflicting terminal parent state"),
@@ -1988,7 +1336,7 @@ fn apply_retransmissions_reuse_one_work_slot() {
         Err(EffectExecutorError::Contract(reason))
             if reason == "conflicting Apply retransmission for one height"
     ));
-    assert_eq!(services.apply_tasks.len(), 9);
+    assert_eq!(services.apply_tasks.len(), 10);
     assert!(executor.status().fail_closed);
 }
 #[test]
@@ -2035,7 +1383,13 @@ fn apply_retransmission_after_durable_finality_does_not_schedule_a_second_write(
     // the production timer/CommitQC race which rediscovered Apply first.
     // The runtime retains its authoritative incarnation after finality;
     // the durable completion itself remains the exact retry tombstone.
-    for _ in 0..8 {
+    executor.runtime.effect_owners.clear();
+    executor
+        .consume_effects(vec![effect.clone()], &mut services)
+        .expect("coalesce a foreign-owner exact Apply after durable finality");
+    assert_eq!(services.apply_tasks.len(), 1);
+    assert_eq!(executor.runtime.completions, completions_before);
+    for _ in 0..7 {
         executor
             .consume_effects(vec![effect.clone()], &mut services)
             .expect("coalesce post-finality Apply retransmission");
@@ -2184,90 +1538,6 @@ fn tc_body_rebind_preserves_the_exact_fetch_until_reconstruction_completes() {
     assert!(!executor.status().fail_closed);
 }
 #[test]
-fn tc_body_rebind_preserves_certified_request_ownership_through_signed_response() {
-    let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1_048_576, 1));
-    let mut services = fixture.services();
-    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-    let original_tag = EventTag::new(1, 0, Generation::new(70));
-    let rebound_tag = EventTag::new(1, 1, Generation::new(71));
-    let sources = certified_sources(&fixture, &prepare);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: original_tag,
-                round: prepare.round,
-                subject: prepare.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: sources,
-                certificate: Some(prepare.clone()),
-            }],
-            &mut services,
-        )
-        .expect("begin exact certified acquisition");
-    let original = services.fetch_tasks[0].clone();
-    let work_id = original.id();
-    let request = original
-        .certified_request()
-        .expect("certified acquisition owns one signed request")
-        .clone();
-    let request_hash = HashOf::new(&request);
-    assert_eq!(executor.certified_work.get(&request_hash), Some(&work_id));
-    assert_eq!(executor.outstanding_requests.len(), 1);
-    let mut timeout = timeout_at_view(&fixture, 0);
-    timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
-    executor.runtime.round_tag = Some(rebound_tag);
-    executor.runtime.locked_body = Some((prepare.round, prepare.subject));
-    executor
-        .consume_effects(
-            vec![AdapterEffect::EnterView {
-                tag: rebound_tag,
-                certificate: timeout,
-                protected_lock: Some(prepare.clone()),
-            }],
-            &mut services,
-        )
-        .expect("rebind the certified acquisition across TC installation");
-    let rebound = executor.pending_fetches[&work_id].task.clone();
-    assert!(rebound.rebinds_consumer_of(&original));
-    assert_eq!(rebound.certified_request(), Some(&request));
-    assert_eq!(executor.certified_work.get(&request_hash), Some(&work_id));
-    assert_eq!(executor.outstanding_requests.len(), 1);
-    let mut response = wire::CertifiedBodyResponse {
-        request_hash,
-        manifest: fixture.manifest.clone(),
-        body: fixture.body.clone(),
-        responder: 0,
-        signature: Vec::new(),
-    };
-    response.signature = Signature::new(
-        fixture.validator_keys[0].private_key(),
-        &response.signature_preimage(),
-    )
-    .payload()
-    .to_vec();
-    assert_eq!(
-        executor
-            .accept_certified_body_response(
-                response,
-                &fixture.context.roster[0].validator,
-                &mut services,
-            )
-            .expect("the original signed request authorizes the rebound response"),
-        CompletionDisposition::Accepted
-    );
-    assert!(executor.pending_fetches.is_empty());
-    assert!(executor.certified_work.is_empty());
-    assert!(executor.outstanding_requests.is_empty());
-    assert_eq!(services.completed_certified_fetches, vec![work_id]);
-    assert!(matches!(
-        executor.runtime.completions.as_slice(),
-        [RuntimeCompletion::BodyAvailable(tag, manifest)]
-            if *tag == rebound_tag && manifest == &fixture.manifest
-    ));
-    assert!(!executor.status().fail_closed);
-}
-#[test]
 fn tc_body_rebind_uses_the_effective_local_lock_when_the_tc_omits_or_lowers_it() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1_048_576, 1));
@@ -2292,6 +1562,7 @@ fn tc_body_rebind_uses_the_effective_local_lock_when_the_tc_omits_or_lowers_it()
         .expect("begin local-lock fetch");
     let work_id = services.fetch_tasks[0].id();
     let omitted = timeout_at_view(&fixture, 1);
+    executor.runtime.round_tag = Some(consumer_tag(2));
     executor
         .consume_effects(
             vec![AdapterEffect::EnterView {
@@ -2304,6 +1575,7 @@ fn tc_body_rebind_uses_the_effective_local_lock_when_the_tc_omits_or_lowers_it()
         .expect("an omitted TC high cannot lower the effective local lock");
     let mut lowered = timeout_at_view(&fixture, 2);
     lowered.groups[0].highest_prepare_qc = Some(fixture.qc(wire::GlobalPhase::Prepare));
+    executor.runtime.round_tag = Some(consumer_tag(3));
     executor
         .consume_effects(
             vec![AdapterEffect::EnterView {
@@ -2338,6 +1610,7 @@ fn enter_view_rejects_a_tc_high_without_an_effective_protected_lock() {
     let mut services = fixture.services();
     let mut timeout = timeout_at_view(&fixture, 0);
     timeout.groups[0].highest_prepare_qc = Some(fixture.qc(wire::GlobalPhase::Prepare));
+    executor.runtime.round_tag = Some(tag(1));
     assert!(matches!(
         executor.consume_effects(
             vec![AdapterEffect::EnterView {
@@ -2368,6 +1641,7 @@ fn enter_view_rejects_a_protected_lock_with_a_conflicting_execution_commitment()
         1,
         Hash::new(b"conflicting EnterView executed block"),
     );
+    executor.runtime.round_tag = Some(tag(1));
 
     assert!(matches!(
         executor.consume_effects(

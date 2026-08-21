@@ -82,7 +82,7 @@ const PROFILE_GENESIS_CREATION_TIME_MS: u64 = 1_700_000_000_000;
 const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
 const TAIRA_MAX_FRAME_BYTES: usize = 23_068_700;
 const TAIRA_MAX_FRAME_BYTES_BLOCK_SYNC: usize = 23_068_672;
-const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 11_534_336;
+const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 13_631_488;
 const NEXUS_XOR_ASSET_DEFINITION_ID_REQUIRED: &str =
     "iroha3-nexus profile generation requires --nexus-xor-asset-definition-id <BASE58>";
 fn format_toml_integer_u64(value: u64) -> String {
@@ -117,7 +117,6 @@ fn rendered_nexus_topology(spec: &ProfileSpec) -> &'static str {
     match spec.slug {
         "iroha3-taira" => {
             r#"[nexus]
-enabled = true
 lane_count = 7
 
 [[nexus.lane_catalog]]
@@ -331,7 +330,6 @@ instruction = "smartcontract::deploy"
         }
         "iroha3-nexus" => {
             r#"[nexus]
-enabled = true
 lane_count = 3
 
 [[nexus.lane_catalog]]
@@ -380,7 +378,6 @@ instruction = "smartcontract::deploy"
         }
         _ => {
             r#"[nexus]
-enabled = true
 lane_count = 3
 "#
         }
@@ -1218,7 +1215,6 @@ allow_tool_prefixes = ["iroha."]
     let source_partitions = peers
         .len()
         .checked_add(authenticated_non_validator_sources)
-        .and_then(|count| count.checked_add(1))
         .expect("profile ingress source-partition count must fit usize");
     let body_bytes = source_partitions
         .checked_mul(body_source_bytes)
@@ -2534,6 +2530,24 @@ mod tests {
     }
     #[test]
     fn taira_peer_configs_pin_reviewed_network_frame_corridor() {
+        let max_transaction_bytes = usize::try_from(
+            iroha_data_model::parameter::system::defaults::transaction::max_tx_bytes().get(),
+        )
+        .expect("transaction maximum fits usize");
+        let admission_certificate_bytes =
+            iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
+        let duplicated_plan_and_envelope_headroom = 2 * 1024 * 1024;
+        assert!(
+            TAIRA_MAX_FRAME_BYTES_TX_GOSSIP
+                >= max_transaction_bytes
+                    + admission_certificate_bytes
+                    + duplicated_plan_and_envelope_headroom,
+            "Taira transaction gossip must fit one maximum transaction, its QueuePlan certificate, the duplicated routing plan, and framing"
+        );
+        assert!(
+            TAIRA_MAX_FRAME_BYTES_TX_GOSSIP < TAIRA_MAX_FRAME_BYTES,
+            "the topic-specific plaintext cap must remain below the global P2P frame corridor"
+        );
         let frame_caps = [
             ("max_frame_bytes", TAIRA_MAX_FRAME_BYTES),
             (
@@ -2743,7 +2757,6 @@ mod tests {
             let expected_body_bytes = peers
                 .len()
                 .checked_add(authenticated_non_validator_sources)
-                .and_then(|count| count.checked_add(1))
                 .and_then(|count| count.checked_mul(body_source_bytes))
                 .expect("test profile ingress geometry fits usize")
                 .max(default_body_bytes);
@@ -2754,7 +2767,7 @@ mod tests {
                      body_bytes = {expected_body_bytes}\n\
                      body_source_bytes = {body_source_bytes}\n"
                 )),
-                "profile {} must allocate one isolated byte partition per validator, authenticated non-validator source, and anonymous source",
+                "profile {} must allocate one isolated byte partition per validator and authenticated non-validator source",
                 profile.slug
             );
         }

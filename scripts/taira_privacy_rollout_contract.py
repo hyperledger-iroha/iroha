@@ -48,7 +48,7 @@ FROZEN_CARGO_LOCK_SHA256 = (
     "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
 )
 EXACT12_MATRIX_SHA256 = (
-    "7336d0221fddc51486ee53d4203f5a92d560d0ec9104a49de25896a8b10673d0"
+    "f75eeba824067aaf903fd8060c967190e37073dc07e487c81c265018a1c00f38"
 )
 CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -187,19 +187,28 @@ def _fail(message: str) -> NoReturn:
     raise RolloutContractError(message)
 
 
-def require_authenticated_rollout_observation_authority_provisioned(
-    *, require_signing: bool = True
+def _require_authenticated_rollout_observation_authority(
+    *, require_signing: bool
 ) -> None:
     """Authenticate the fixed rollout-observation binding and live service."""
 
     try:
-        taira_authority_client.preflight(
-            "rollout-observation", require_signing=require_signing
-        )
+        if require_signing:
+            taira_authority_client.preflight("rollout-observation")
+        else:
+            taira_authority_client.preflight(
+                "rollout-observation", require_signing=False
+            )
     except taira_authority_client.TairaAuthorityClientError as error:
         raise RolloutContractError(
             f"{AUTHENTICATED_ROLLOUT_OBSERVATION_PROVISIONING_ERROR}: {error}"
         ) from error
+
+
+def require_authenticated_rollout_observation_authority_provisioned() -> None:
+    """Authenticate the fixed rollout-observation binding and live service."""
+
+    _require_authenticated_rollout_observation_authority(require_signing=True)
 
 
 def canonical_json_bytes(value: object) -> bytes:
@@ -1246,9 +1255,7 @@ def verify_authenticated_result(
 ) -> tuple[str, str]:
     """Historically verify one observation receipt without issuing another."""
 
-    require_authenticated_rollout_observation_authority_provisioned(
-        require_signing=False
-    )
+    _require_authenticated_rollout_observation_authority(require_signing=False)
     identifiers = _validate_unsigned_result_structure(result, plan=plan)
     try:
         envelope = taira_authority_client.decode_canonical_json(
@@ -1282,9 +1289,7 @@ def verify_authenticated_result_files(
     # This native authentication is deliberately before the first caller path
     # read.  ``verify_authenticated_result`` repeats it immediately before the
     # native historical-verification operation.
-    require_authenticated_rollout_observation_authority_provisioned(
-        require_signing=False
-    )
+    _require_authenticated_rollout_observation_authority(require_signing=False)
     plan = _load(plan_path, MAX_PLAN_BYTES, "rollout plan")
     result = _load(result_path, MAX_RESULT_BYTES, "rollout observation")
     authority_envelope = _read_stable(

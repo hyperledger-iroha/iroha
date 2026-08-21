@@ -806,7 +806,7 @@ account = source.get("account") or {}
 public_key = account.get("public_key")
 private_key = account.get("private_key")
 chain_discriminant = account.get("chain_discriminant")
-domain = account.get("domain", "wonderland.universal")
+domain = account.get("domain", "sora.universal")
 basic_auth = source.get("basic_auth")
 transaction = source.get("transaction") or {}
 nonce = transaction.get("nonce", False)
@@ -831,7 +831,7 @@ if chain_discriminant is not None and not isinstance(chain_discriminant, int):
 if chain_discriminant is not None and chain_discriminant != 369:
     raise SystemExit("write canary config must use Taira chain discriminant 369")
 if not isinstance(domain, str) or not domain:
-    domain = "wonderland.universal"
+    domain = "sora.universal"
 elif "." not in domain:
     domain = f"{domain}.universal"
 if not isinstance(nonce, bool):

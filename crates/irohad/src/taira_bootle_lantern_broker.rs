@@ -334,10 +334,17 @@ impl TairaBootleLanternIssuanceBrokerBackendV1 {
             .as_exact_32()
             .ok_or(TairaBootleLanternBrokerErrorV1::CredentialRejected)?;
         let issuer_result = (|| {
+            // The governed issuer policy is genesis material, so its parameter identity must be
+            // stable before the signed genesis header (and therefore NetworkId) exists. Keep the
+            // deployment NetworkId in the runtime qualification and principal bindings below,
+            // but derive the genesis policy only from stable chain/provider identities and the
+            // owner-private issuer seed. This permits a reviewed pre-sign export followed by an
+            // exact final-NetworkId export without changing the registration instruction.
+            let chain_id = config.chain_id.to_string();
             let parameter_id = derive_nonzero_digest_v1(
                 PARAMETER_ID_DOMAIN_V1,
                 &[
-                    config.network_id.as_bytes(),
+                    chain_id.as_bytes(),
                     config.handle.as_bytes(),
                     &config.revision.to_be_bytes(),
                     config.issuer_id.as_bytes(),
@@ -1436,8 +1443,15 @@ mod tests {
         issuer_seed: [u8; 32],
         bearer_token: Vec<u8>,
     ) -> TairaBootleLanternIssuanceBrokerBackendV1 {
+        backend_with_config_and_seed_v1(public_config_v1(), issuer_seed, bearer_token)
+    }
+    fn backend_with_config_and_seed_v1(
+        config: TairaBootleLanternBrokerPublicConfigV1,
+        issuer_seed: [u8; 32],
+        bearer_token: Vec<u8>,
+    ) -> TairaBootleLanternIssuanceBrokerBackendV1 {
         TairaBootleLanternIssuanceBrokerBackendV1::from_credentials_v1(
-            public_config_v1(),
+            config,
             CredentialBundleV1 {
                 issuer_seed: SecretMaterialV1::new(issuer_seed.to_vec()),
                 bearer_token: SecretMaterialV1::new(bearer_token),
@@ -1563,6 +1577,57 @@ mod tests {
                 .computed_record_digest()
                 .expect("compute exact policy digest"),
             policy.record_digest
+        );
+    }
+    #[test]
+    fn final_signed_network_id_changes_qualification_but_not_genesis_instruction() {
+        let staging = backend_with_config_and_seed_v1(
+            public_config_v1(),
+            issuer_seed_v1(),
+            bearer_token_v1(),
+        );
+        let mut final_config = public_config_v1();
+        final_config.network_id = network_id_v1(b"final-signed-genesis-header");
+        let final_network = backend_with_config_and_seed_v1(
+            final_config,
+            issuer_seed_v1(),
+            bearer_token_v1(),
+        );
+
+        assert_eq!(
+            staging.policy(),
+            final_network.policy(),
+            "genesis policy must not depend on the post-sign NetworkId"
+        );
+        let staging_export: norito::json::Value = norito::json::from_str(
+            &staging
+                .render_public_export_v1()
+                .expect("render staging-network public export"),
+        )
+        .expect("decode staging-network public export");
+        let final_export: norito::json::Value = norito::json::from_str(
+            &final_network
+                .render_public_export_v1()
+                .expect("render final-network public export"),
+        )
+        .expect("decode final-network public export");
+        assert_eq!(
+            staging_export.get("registration_instruction_norito_hex"),
+            final_export.get("registration_instruction_norito_hex"),
+            "supplying the final signed genesis hash must not change genesis instructions"
+        );
+        assert_eq!(
+            staging_export.get("registration_instruction_norito_sha256"),
+            final_export.get("registration_instruction_norito_sha256")
+        );
+        assert_ne!(
+            staging_export.get("network_id"),
+            final_export.get("network_id")
+        );
+        assert_ne!(
+            staging.public_qualification(),
+            final_network.public_qualification(),
+            "runtime qualification must remain bound to the final deployment NetworkId"
         );
     }
     #[test]

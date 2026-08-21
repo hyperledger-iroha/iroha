@@ -347,87 +347,6 @@ assert_eq!(
             errors,
         )
 
-    rebind_token_regression = _require_rust_item(
-        effects_path,
-        source,
-        "ready_body_backpressure_retains_exact_ingress_until_capacity_retry",
-        errors,
-    )
-    _require_rust_item_token_sha256(
-        effects_path,
-        rebind_token_regression,
-        _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256[
-            "ready_body_backpressure_retains_exact_ingress_until_capacity_retry"
-        ],
-        "protected-view unpublished BodyAvailable rebind regression",
-        errors,
-    )
-    for required, description in (
-        (
-            """
-assert_eq!(retained_runtime_token.tag(), tag(0));
-assert_eq!(retained_runtime_token.manifest(), &fixture.manifest);
-""",
-            "protected-view regression must begin with the typed-Retryable exact token in the old incarnation",
-        ),
-        (
-            """
-let mut timeout = timeout_at_view(&fixture, 0);
-timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
-executor.runtime.round_tag = Some(tag(1));
-executor
-    .consume_effects(
-        vec![AdapterEffect::EnterView {
-            tag: tag(1),
-            certificate: timeout,
-            protected_lock: Some(prepare),
-        }],
-        &mut services,
-    )
-""",
-            "protected-view regression must bind the same highest PrepareQC into the TC and installed lock",
-        ),
-        (
-            """
-assert_eq!(rebound_runtime_token.tag(), tag(1));
-assert_eq!(rebound_runtime_token.manifest(), &fixture.manifest);
-assert_eq!(
-    rebound_runtime_token.owns_new_slot(),
-    retained_runtime_token.owns_new_slot(),
-    "view rebinding cannot replace the physical reservation",
-);
-""",
-            "protected-view regression must move the token without replacing its physical reservation",
-        ),
-        (
-            """
-assert!(executor.runtime.completions.is_empty());
-assert!(executor.has_retained_certified_body_response());
-assert_eq!(
-executor
-    .retained_certified_body_response_scheduler_ordinal()
-    .expect("read rebound response ordinal"),
-Some(retained_scheduler_ordinal),
-"EnterView cannot remint the retained leader-wire ticket",
-""",
-            "protected-view regression must preserve the retained leader-wire scheduler ordinal",
-        ),
-        (
-            """
-[RuntimeCompletion::BodyAvailable(completion_tag, manifest)]
-    if *completion_tag == tag(1) && manifest == &fixture.manifest
-""",
-            "protected-view regression must materialize exactly one completion in the rebound incarnation",
-        ),
-    ):
-        _require_rust_token_sequence(
-            effects_path,
-            rebind_token_regression,
-            required,
-            description,
-            errors,
-        )
-
     tc_token_regression = _require_rust_item(
         effects_path,
         source,
@@ -635,9 +554,8 @@ fn retained_dispatch_allows_network_ingress(
     payload: &wire::ConsensusMessageV2Payload,
 ) -> bool {
     network_ingress_is_certified_fence_escape(payload)
-        || (self.retained_certified_body_response.is_none()
-            && (self.retained_effect_batch.is_none() && self.parked_effect_batch.is_none()
-                || !Self::network_ingress_requires_reducer_order(payload)))
+        || (self.retained_effect_batch.is_none() && self.parked_effect_batch.is_none()
+            || !Self::network_ingress_requires_reducer_order(payload))
 }
 """,
         "retained dispatch transport completion and certified fence-escape policy",

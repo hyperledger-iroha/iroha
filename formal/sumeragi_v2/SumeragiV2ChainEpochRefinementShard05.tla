@@ -9,13 +9,13 @@ THEOREM IndexedFixedCorridorDeadlineProjectionIsExact ==
 BY DEF IndexedAsync!AsyncFixedCorridorDeadlineReceipts,
        IndexedFixedCorridorDeadlines
 
-THEOREM IndexedServeProducerEpisodeDueProjectionIsExact ==
+THEOREM IndexedServeProducerTurnDueProjectionIsExact ==
   IndexedAsyncStateShape
     => \A initialContext \in AdmissibleContextRecords:
-         IndexedAsync(initialContext)!AsyncServeProducerEpisodeDebt
-           = IndexedServeProducerEpisodeDue(initialContext)
-BY DEF IndexedAsync!AsyncServeProducerEpisodeDebt,
-       IndexedServeProducerEpisodeDue
+         IndexedAsync(initialContext)!AsyncServeProducerTurnDebt
+           = IndexedServeProducerTurnDue(initialContext)
+BY DEF IndexedAsync!AsyncServeProducerTurnDebt,
+       IndexedServeProducerTurnDue
 
 (***************************************************************************
 The producer journal is part of the authoritative transition state.  These
@@ -62,11 +62,11 @@ BY Isa
        VerificationCore, VerificationScheduler, VerificationRecovery,
        VerificationProducer,
        VerificationFixedCorridorDeadlines,
-       VerificationServeProducerEpisodeDue,
+       VerificationServeProducerTurnDue,
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
        IndexedRecovery, IndexedProducer,
        IndexedFixedCorridorDeadlines,
-       IndexedServeProducerEpisodeDue
+       IndexedServeProducerTurnDue
 
 (***************************************************************************
 The seven Serve lifecycle fields are pinned separately from the aggregate

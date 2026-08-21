@@ -26,7 +26,7 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
                 &queue,
                 &state,
                 &dir,
-                accepted_tx_by_someone(&time_source),
+                accepted_queue_plan_tx_by_someone(&time_source),
             );
         }
         let scope = lane_reservation_scope(
@@ -148,7 +148,7 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
                     &queue,
                     &state,
                     &dir,
-                    accepted_tx_by_someone(&time_source),
+                    accepted_queue_plan_tx_by_someone(&time_source),
                 );
             }
             let scope = lane_reservation_scope(
@@ -187,7 +187,7 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
                     let ordered_records = barrier
                         .ordered_keys
                         .iter()
-                        .map(|key| store.live_by_hash[&key.signed_transaction_hash].clone())
+                        .map(|key| store.live_by_entrypoint[&key.entrypoint_hash].clone())
                         .collect();
                     drop(store);
                     queue
@@ -211,10 +211,9 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
                     .as_ref()
                     .header();
             let mut state_block = state.block(block_header);
-            state_block.transactions.insert_block(
-                HashSet::from([keys[0].signed_transaction_hash]),
-                nonzero!(1_usize),
-            );
+            state_block
+                .transactions
+                .insert_block(HashSet::from([keys[0].entrypoint_hash]), nonzero!(1_usize));
             state_block
                 .commit()
                 .expect("commit exact startup-terminal identity");
@@ -370,7 +369,7 @@ fn ambiguous_reservation_compaction_fails_closed_after_terminal_application() {
         &queue,
         &state,
         &dir,
-        accepted_tx_by_someone(&time_source),
+        accepted_queue_plan_tx_by_someone(&time_source),
     );
     let key = *queue
         .reserve_transactions_for_lane(

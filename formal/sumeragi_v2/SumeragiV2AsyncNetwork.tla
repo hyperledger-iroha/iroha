@@ -2449,7 +2449,7 @@ VARIABLES
   asyncProducerKnownObligations,
   asyncProducerConsumedEpisodes,
   asyncProducerOriginHistory,
-  asyncServeProducerEpisodeDue
+  asyncServeProducerTurnReady
 
 AsyncSchedulerVars ==
   <<asyncNow, asyncCommandQueues, asyncNextCommandClass,
@@ -2630,14 +2630,14 @@ AsyncProducerVars ==
 
 AsyncAllVars ==
   <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars,
-    asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>
+    asyncFixedCorridorDeadlines, asyncServeProducerTurnReady>>
 
-AsyncServeProducerEpisodeDebt ==
-  asyncServeProducerEpisodeDue
+AsyncServeProducerTurnDebt ==
+  asyncServeProducerTurnReady
 
 AsyncServiceActivationFrameVars ==
   <<gst, vars, AsyncSchedulerExceptServiceActivation, AsyncRecoveryVars,
-    AsyncProducerVars, asyncServeProducerEpisodeDue>>
+    AsyncProducerVars, asyncServeProducerTurnReady>>
 
 (***************************************************************************
 The control service table is one bounded per-height structure.  Its
@@ -2659,11 +2659,6 @@ CertifiedResponseClaimRecordsAt(recipient) ==
 
 AsyncNextCertifiedResponseClaimOrdinal(node) ==
   asyncControlServiceState.certifiedResponseNextOrdinal[node]
-
-RetainedCertifiedFenceEscapePhases == {"Fresh", "Charged", "Spent"}
-
-RetainedCertifiedFenceEscapePhase(node) ==
-  asyncControlServiceState.certifiedFenceEscapePhase[node]
 
 AsyncCandidateServiceMarkers ==
   asyncControlServiceState.candidateServiceMarkers
@@ -3580,7 +3575,6 @@ AsyncControlServiceStateTypeInvariant ==
   /\ DOMAIN asyncControlServiceState =
        {"nextOrdinal", "slots",
         "certifiedResponseNextOrdinal", "certifiedResponseClaims",
-        "certifiedFenceEscapePhase",
         "candidateServiceNextOrdinal", "candidateServiceMarkers",
         "candidateTerminalTombstones",
         "producerContinuations",
@@ -3596,8 +3590,6 @@ AsyncControlServiceStateTypeInvariant ==
        \in [ValidatorIds -> (Nat \ {0})]
   /\ asyncControlServiceState.certifiedResponseNextOrdinal
        \in [ValidatorIds -> (Nat \ {0})]
-  /\ asyncControlServiceState.certifiedFenceEscapePhase
-       \in [ValidatorIds -> RetainedCertifiedFenceEscapePhases]
   /\ asyncControlServiceState.candidateServiceNextOrdinal
        \in [ValidatorIds -> (Nat \ {0})]
   /\ asyncControlServiceState.candidateLifecycleNextOrdinal
@@ -3641,9 +3633,6 @@ AsyncControlServiceStateTypeInvariant ==
   /\ AsyncCandidateProducerContinuationLifecycleCoverageInvariant
   /\ Cardinality(AsyncCertifiedResponseClaimRecords)
        <= Cardinality(ValidatorIds)
-  /\ \A node \in ValidatorIds:
-       CertifiedResponseClaimRecordsAt(node) = {}
-         => RetainedCertifiedFenceEscapePhase(node) = "Fresh"
   /\ Cardinality(AsyncCandidateServiceTombstones)
        <= AsyncCandidateServiceRecordCapacity
   /\ Cardinality(AsyncCandidateProducerContinuations)
@@ -4638,7 +4627,7 @@ ReserveExactServeCapacityVia(node, candidate, authenticatedSource) ==
      /\ authenticatedSource \in AsyncAuthenticatedDeliverySources
      /\ AsyncServeSourceAttemptRecords(node, identity) = {}
      /\ ~AsyncServeIngressAdmissionOwned(node, identity)
-     /\ ~asyncServeProducerEpisodeDue[node]
+     /\ ~asyncServeProducerTurnReady[node]
      /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
      /\ AsyncServeOffQueueReservations(node) = {}
      /\ ~AsyncServeLifecycleFamilyOwned(node, family)
@@ -4690,7 +4679,7 @@ AdvanceExactServeCapacityVia(node, candidate, authenticatedSource) ==
      /\ authenticatedSource \in AsyncAuthenticatedDeliverySources
      /\ AsyncServeSourceAttemptRecords(node, identity) = {}
      /\ ~AsyncServeIngressAdmissionOwned(node, identity)
-     /\ ~asyncServeProducerEpisodeDue[node]
+     /\ ~asyncServeProducerTurnReady[node]
      /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
      /\ AsyncServeOffQueueReservations(node) = {}
      /\ ~AsyncServeLifecycleOwned(node, identity)
@@ -4984,48 +4973,6 @@ CanEnqueueCertifiedResponse(node) ==
 \* further certificates consume the ordinary Progress allocation.
 CanEnqueueCertifiedFenceEscape(node) ==
   CanEnqueueWithCertifiedFenceCredit(node, "Progress", TRUE)
-
-(***************************************************************************
-An admitted certified-body response is a linear Completion owner.  While that
-owner is retained, only the Fresh phase may admit one new direct authenticated
-TC, CommitQC, or CommitCertificateResponse carrying a CommitQC root. Admission
-charges the episode in the same global transition. Charged and Spent reject
-every later fresh certified ingress, even when that later root would fit inside
-ordinary Progress capacity; roots which were already queued when the claim
-arrived remain independently owned and bounded by the physical FIFO.
-***************************************************************************)
-RetainedCertifiedBodyResponseMayAdmitCertifiedFenceEscape(node) ==
-  \/ CertifiedResponseClaimRecordsAt(node) = {}
-  \/ RetainedCertifiedFenceEscapePhase(node) = "Fresh"
-
-AsyncQueueDepthAfter(node) == Len(asyncCommandQueues'[node])
-
-AsyncQueuedClassCountAfter(node, commandClass) ==
-  Cardinality(
-    {index \in 1..AsyncQueueDepthAfter(node):
-       asyncCommandQueues'[node][index].class = commandClass})
-
-AsyncQueuedNoncompletionCountAfter(node) ==
-  AsyncQueuedClassCountAfter(node, "Normal")
-    + AsyncQueuedClassCountAfter(node, "Progress")
-
-AsyncQueuedCertifiedFenceEscapeCountAfter(node) ==
-  Cardinality(
-    {index \in 1..AsyncQueueDepthAfter(node):
-       AsyncQueuedCandidateIsCertifiedFenceEscape(
-         asyncCommandQueues'[node][index])})
-
-AsyncCertifiedFenceCreditAfter(node) ==
-  IF AsyncQueuedCertifiedFenceEscapeCountAfter(node) = 0 THEN 0 ELSE 1
-
-CanEnqueueCertifiedResponseAfter(node) ==
-  LET credit == AsyncCertifiedFenceCreditAfter(node)
-  IN /\ AsyncQueueDepthAfter(node) < AsyncQueueCapacity
-     /\ AsyncQueueDepthAfter(node) + 1
-          <= AsyncOrdinaryCompletionLimit + credit
-     /\ AsyncQueuedClassCountAfter(node, "Normal") <= AsyncNormalLimit
-     /\ AsyncQueuedNoncompletionCountAfter(node)
-          <= AsyncProgressLimit + credit
 
 SequenceSet(sequence) == {sequence[index]: index \in 1..Len(sequence)}
 
@@ -7222,8 +7169,6 @@ EnqueueCandidate(candidate) ==
   IN /\ ~AsyncCandidateServiceCoalesced(candidate)
      /\ \/ /\ AsyncCandidateIsDirectCertifiedFenceEscape(candidate)
               /\ CanEnqueueCertifiedFenceEscape(node)
-              /\ RetainedCertifiedBodyResponseMayAdmitCertifiedFenceEscape(
-                   node)
         \/ /\ AsyncCandidateProducerContinuationOrdinaryEnqueuePreservesReplayPrefix(
                  candidate)
               /\ ~AsyncCandidateIsDirectCertifiedFenceEscape(candidate)
@@ -11502,7 +11447,7 @@ ExactServeTransportAdmissionCanAdvanceVia(
           THEN TRUE
      ELSE IF AsyncServeLifecycleConflict(node, request)
           THEN TRUE
-          ELSE /\ ~asyncServeProducerEpisodeDue[node]
+          ELSE /\ ~asyncServeProducerTurnReady[node]
                /\ IF ~AsyncServeLifecycleFamilyOwned(node, family)
                   THEN /\ AsyncServeIngressLifecycleOwnerIdentities(
                              node) = {}
@@ -12325,7 +12270,7 @@ ExactServeIngressNeedsQueueSlot(node, request) ==
        /\ ~AsyncServeLifecycleConflict(node, request)
 
 (***************************************************************************
-A terminal lifecycle is a retained response cache, not a request sink.  An
+A terminal lifecycle is a terminal response cache, not a request sink.  An
 exact retransmission re-emits the cached output into the ordinary bounded
 transport corridor while the old ingress/Serve stage remains retired.
 ***************************************************************************)
@@ -13406,26 +13351,20 @@ AsyncLeaderWireIngressPrefixCleared(owner) ==
   \A predecessorSource \in AsyncIngressSources:
     owner.ingressPredecessors[predecessorSource] = 0
 
-AsyncTimeoutRecoveryVoteBarrierException(node, source, index) ==
-  LET item == asyncIngressLanes[node][source][index]
-  IN /\ source = item.source
-     /\ source \in ValidatorIds
-     /\ AsyncTimeoutRecoveryVoteAdmissionRequired(node, item)
-     /\ AsyncTimeoutRecoveryVoteCandidateDefined(node, item)
-     /\ AsyncTimeoutRecoveryVoteAdmissionPlan(node, item)
-          \cap {"FirstAdmission", "CoalescedRetry"} # {}
-     /\ IngressItemCanDrain(node, item)
-
-AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier(
-    node, source, index, owner) ==
-  /\ owner.phase = "CertifiedResponse"
-  /\ owner.status = "Ingress"
-  \* Production acquires the response claim only after fair-ingress dequeue.
-  \* Requiring that claim here would circularly strand an unsolicited or
-  \* not-yet-authenticated bounded response carrier ahead of this vote.  The
-  \* exact retained phase, rather than response authority, is the barrier
-  \* classification; the vote still passes its independent episode gate.
-  /\ AsyncTimeoutRecoveryVoteBarrierException(node, source, index)
+\* Timeout control is a dependency only for a live control owner that it can
+\* advance.  A CertifiedResponse is not such an owner: it remains strict FIFO
+\* work and must leave the queue before a later TimeoutVote can be selected.
+AsyncTimeoutControlDependencyAdvancesLeaderWire(item, owner) ==
+  /\ owner.phase
+       \in {"Proposal", "PrepareVote", "CommitVote",
+            "PrepareQC", "CommitQC", "TimeoutVote"}
+  /\ item.kind \in {"TimeoutVote", "TimeoutCertificate"}
+  /\ AsyncControlItemContext(item) = owner.context
+  /\ DeliveryHeight(item) = owner.height
+  /\ IF item.kind = "TimeoutVote"
+     THEN /\ owner.phase # "TimeoutVote"
+          /\ DeliveryView(item) \in owner.view..(owner.view + 1)
+     ELSE DeliveryView(item) >= owner.view
 
 AsyncServeIngressIndexMayPrecedeAdmittedTarget(node, source, index) ==
   IF ~AsyncServeIngressOwnsSharedPhysicalTurn(node)
@@ -13440,8 +13379,6 @@ AsyncServeIngressIndexMayPrecedeAdmittedTarget(node, source, index) ==
              /\ AsyncServeLogicalRequestIdentity(node, item)
                   = ownerIdentity
           \/ AsyncCertifiedFenceEscapeItem(item)
-          \/ AsyncTimeoutRecoveryVoteBarrierException(
-               node, source, index)
 
 AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget(
     node, source, index) ==
@@ -13454,8 +13391,7 @@ AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget(
           \/ /\ AsyncLeaderWireAdmissionMatchesRecord(item, owner)
              /\ AsyncLeaderWireIngressPrefixCleared(owner)
           \/ AsyncCertifiedFenceEscapeAdvancesLeaderWire(item, owner)
-          \/ AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier(
-               node, source, index, owner)
+          \/ AsyncTimeoutControlDependencyAdvancesLeaderWire(item, owner)
 
 THEOREM AsyncLeaderWireCarrierCannotBypassFrozenPrefix ==
   \A node \in ValidatorIds:
@@ -13472,6 +13408,27 @@ THEOREM AsyncLeaderWireCarrierCannotBypassFrozenPrefix ==
                   node, source, index)
 BY Isa DEF AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget,
            AsyncLeaderWireIngressPrefixCleared, IngressLane
+
+THEOREM AsyncOrdinarySelectorPreservesCertifiedResponseBeforeTimeoutVote ==
+  \A node \in ValidatorIds:
+    \A source \in AsyncIngressSources:
+      \A index \in 1..Len(IngressLane(node, source)):
+        LET owner == AsyncLeaderWireEarliestPhysicalIngressRecord(node)
+            item == IngressLane(node, source)[index]
+        IN /\ AsyncLeaderWireIngressOwnsSharedPhysicalTurn(node)
+           /\ owner.phase = "CertifiedResponse"
+           /\ owner.status = "Ingress"
+           /\ item.kind = "TimeoutVote"
+           /\ index > owner.ingressPredecessors[source]
+           => ~AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget(
+                  node, source, index)
+BY Isa DEF AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget,
+           AsyncLeaderWireIngressPrefixCleared,
+           AsyncTimeoutControlDependencyAdvancesLeaderWire,
+           AsyncCertifiedFenceEscapeAdvancesLeaderWire,
+           AsyncCertifiedFenceEscapeItem, AsyncCertifiedFenceEscapeKinds,
+           AsyncLeaderWireAdmissionMatchesRecord,
+           AsyncLeaderWireLifecycleSlot, IngressLane
 
 THEOREM AsyncCertifiedFenceEscapeCrossesSelectedServeBarrier ==
   \A node \in ValidatorIds:
@@ -15232,13 +15189,13 @@ RuntimeStep(node) ==
         /\ IdleRuntimeStep(node)
 
 (***************************************************************************
-The ingress-barrier exception is selected-owner exact.  Merely having some
+Runtime lifecycle priority is selected-owner exact.  Merely having some
 older queued or timeout lifecycle is insufficient: the prioritized Runtime
 macro-step itself must name that lifecycle, its immutable physical root must
 precede the selected ingress owner, and only then may its logical ordinal win.
 Each deferred or direct retransmit instead names its own frozen periodic
 episode ordinal.  Idle and any later Completion/Progress command cannot
-borrow the exception from an unrelated old owner or from a post-cut
+borrow priority from an unrelated old owner or from a post-cut
 descendant retaining an old logical ordinal.
 ***************************************************************************)
 AsyncSelectedRuntimeIsDeferredRetransmit(node) ==
@@ -16890,57 +16847,49 @@ BY Isa
        AsyncServeIngressAdmissionRecords
 
 (***************************************************************************
-The concrete queue lock publishes one one-shot producer debt when the last
-selected Serve ingress occurrence retires without promoting another waiter.
-Fresh Serve admission is already blocked above while this bit is set.  The
-next ordinary runner turn atomically consumes the bit; TLA actions have no
-intermediate call frame, so `ActiveThisStep` is deliberately action-local
-rather than another persistent state or a new fairness assumption.
+The lifecycle ledger publishes one adjacent ProducerTurn only when a Serve
+worker completion durably closes with the canonical response.  The Ready bit
+is therefore a projection of coordinator state, not a queue-local episode or
+ingress-retirement side effect.  It survives same-height restart and is
+consumed only by the next bounded runner proposal attempt.
 
-Restart and receiver teardown clear the volatile bit.  They are classified by
-their inner state transformers instead of the enclosing pre-GST wrappers, so
-the dependency graph remains acyclic.  Normal final drains arm the bit only
-when both the logical ingress-owner set and every off-queue reservation are
-empty afterwards.  A materialized Serve I/O job may remain, matching the Rust
-separation between physical ingress retirement and logical Serve completion.
+Fresh Serve admission remains blocked while this projection is Ready.  That
+models the coordinator's ProducerHandoffBarrier: later physical ingress may
+wait, but no second Serve lifecycle can overtake the Ready ProducerTurn.  TLA
+actions have no intermediate call frame, so `AttemptThisStep` denotes the
+serialized bounded runner pass rather than another persistent state or
+fairness assumption.
 ***************************************************************************)
-AsyncServeProducerEpisodeRestartStep(node) ==
+AsyncServeProducerTurnRestartStep(node) ==
   \/ ResetNodeSchedulerForRestart(node, <<>>)
   \/ ResetNodeSchedulerForRestart(
        node, FreshRestartCandidateSequence(RestartReplay(node)))
 
-AsyncServeProducerEpisodeReceiverCloseStep(node) ==
-  \E reservation \in asyncServeReservations:
-    /\ reservation.node = node
-    /\ PreGstServeReceiverCloseRollback(
-         node, reservation.identity)
+AsyncServeProducerTurnCompletionStep(node) ==
+  /\ AsyncIoQueueDepth(node) > 0
+  /\ LET job == Head(asyncIoQueues[node])
+     IN /\ job.class = "Serve"
+        /\ AsyncServeReconstructedTerminalOutcome(
+             node, job.candidate.item) = AsyncServeResponseOutcome
+        /\ ServiceIoWorkerWork(node)
+        /\ AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
+        /\ AsyncServeOffQueueReservations(node)' = {}
 
-AsyncServeProducerEpisodeFinalRetirementStep(node) ==
-  /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
-  /\ AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
-  /\ AsyncServeOffQueueReservations(node)' = {}
-  /\ \/ DrainFairIngressSelected(node)
-     \/ DrainHistoricalIngressSelected(node)
-     \/ DrainInterruptedTipRecoveryIngressSelected(node)
-
-AsyncServeProducerEpisodeActiveThisStep(node) ==
-  /\ asyncServeProducerEpisodeDue[node]
+AsyncServeProducerTurnAttemptThisStep(node) ==
+  /\ asyncServeProducerTurnReady[node]
   /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
   /\ AsyncServeOffQueueReservations(node) = {}
   /\ \/ RunNodeWork(node)
      \/ RunHistoricalServer(node)
 
-AsyncServeProducerEpisodeTransition ==
-  asyncServeProducerEpisodeDue' =
+AsyncServeProducerTurnTransition ==
+  asyncServeProducerTurnReady' =
     [node \in ValidatorIds |->
-       IF AsyncServeProducerEpisodeRestartStep(node)
-            \/ AsyncServeProducerEpisodeReceiverCloseStep(node)
-       THEN FALSE
-       ELSE IF AsyncServeProducerEpisodeFinalRetirementStep(node)
-            THEN TRUE
-            ELSE IF AsyncServeProducerEpisodeActiveThisStep(node)
-                 THEN FALSE
-                 ELSE asyncServeProducerEpisodeDue[node]]
+       IF AsyncServeProducerTurnCompletionStep(node)
+       THEN TRUE
+       ELSE IF AsyncServeProducerTurnAttemptThisStep(node)
+            THEN FALSE
+            ELSE asyncServeProducerTurnReady[node]]
 
 \* Every action named by weak fairness is the exact fully framed AsyncNext arm,
 \* not only its inner scheduler or reducer component.  These suffixes bind
@@ -16956,7 +16905,7 @@ AsyncCoreOuterFrame ==
   /\ UNCHANGED <<height, context>>
   /\ AsyncFixedCorridorDeadlineTransition
   /\ AsyncProducerProjectionStep
-  /\ AsyncServeProducerEpisodeTransition
+  /\ AsyncServeProducerTurnTransition
 
 AsyncNonCrashOuterFrame ==
   /\ UNCHANGED up
@@ -17689,21 +17638,21 @@ AsyncNonCrashStep ==
   \/ /\ RearmResponsiveRecovery
      /\ UNCHANGED up
 
-AsyncServeProducerEpisodeMeasure(node) ==
-  IF asyncServeProducerEpisodeDue[node] THEN 1 ELSE 0
+AsyncServeProducerTurnMeasure(node) ==
+  IF asyncServeProducerTurnReady[node] THEN 1 ELSE 0
 
-THEOREM AsyncServeProducerEpisodeMeasureIsFinite ==
-  asyncServeProducerEpisodeDue \in [ValidatorIds -> BOOLEAN]
+THEOREM AsyncServeProducerTurnMeasureIsFinite ==
+  asyncServeProducerTurnReady \in [ValidatorIds -> BOOLEAN]
     => \A node \in ValidatorIds:
-         /\ AsyncServeProducerEpisodeMeasure(node) \in Nat
-         /\ AsyncServeProducerEpisodeMeasure(node) <= 1
-BY Isa DEF AsyncServeProducerEpisodeMeasure
+         /\ AsyncServeProducerTurnMeasure(node) \in Nat
+         /\ AsyncServeProducerTurnMeasure(node) <= 1
+BY Isa DEF AsyncServeProducerTurnMeasure
 
-THEOREM AsyncServeProducerEpisodeBlocksFreshServeAdmission ==
+THEOREM AsyncServeProducerTurnBlocksFreshServeAdmission ==
   \A node \in ValidatorIds,
      candidate \in AsyncCandidateSet,
      authenticatedSource \in AsyncAuthenticatedDeliverySources:
-    asyncServeProducerEpisodeDue[node]
+    asyncServeProducerTurnReady[node]
       => /\ ~ReserveExactServeCapacityVia(
                   node, candidate, authenticatedSource)
          /\ ~AdvanceExactServeCapacityVia(
@@ -17711,30 +17660,36 @@ THEOREM AsyncServeProducerEpisodeBlocksFreshServeAdmission ==
 BY DEF ReserveExactServeCapacityVia,
        AdvanceExactServeCapacityVia
 
-THEOREM AsyncServeProducerEpisodeFinalRetirementArmsOneShotDebt ==
+THEOREM AsyncServeCompletionArmsOneShotProducerTurn ==
   \A node \in ValidatorIds:
-    /\ AsyncServeProducerEpisodeTransition
-    /\ AsyncServeProducerEpisodeFinalRetirementStep(node)
-    /\ ~AsyncServeProducerEpisodeRestartStep(node)
-    /\ ~AsyncServeProducerEpisodeReceiverCloseStep(node)
-      => /\ asyncServeProducerEpisodeDue'[node]
-         /\ AsyncServeProducerEpisodeMeasure(node)' = 1
-BY Isa DEF AsyncServeProducerEpisodeTransition,
-           AsyncServeProducerEpisodeMeasure
+    /\ AsyncServeProducerTurnTransition
+    /\ AsyncServeProducerTurnCompletionStep(node)
+      => /\ asyncServeProducerTurnReady'[node]
+         /\ AsyncServeProducerTurnMeasure(node)' = 1
+BY Isa DEF AsyncServeProducerTurnTransition,
+           AsyncServeProducerTurnMeasure
 
-THEOREM AsyncServeProducerEpisodeRunnerTurnStrictlyConsumesDebt ==
+THEOREM AsyncServeProducerTurnRunnerAttemptStrictlyConsumesDebt ==
   \A node \in ValidatorIds:
-    /\ AsyncServeProducerEpisodeTransition
-    /\ AsyncServeProducerEpisodeActiveThisStep(node)
-    /\ ~AsyncServeProducerEpisodeRestartStep(node)
-    /\ ~AsyncServeProducerEpisodeReceiverCloseStep(node)
-    /\ ~AsyncServeProducerEpisodeFinalRetirementStep(node)
-      => /\ ~asyncServeProducerEpisodeDue'[node]
-         /\ AsyncServeProducerEpisodeMeasure(node)' + 1
-              = AsyncServeProducerEpisodeMeasure(node)
-BY Isa DEF AsyncServeProducerEpisodeTransition,
-           AsyncServeProducerEpisodeActiveThisStep,
-           AsyncServeProducerEpisodeMeasure
+    /\ AsyncServeProducerTurnTransition
+    /\ AsyncServeProducerTurnAttemptThisStep(node)
+    /\ ~AsyncServeProducerTurnCompletionStep(node)
+      => /\ ~asyncServeProducerTurnReady'[node]
+         /\ AsyncServeProducerTurnMeasure(node)' + 1
+              = AsyncServeProducerTurnMeasure(node)
+BY Isa DEF AsyncServeProducerTurnTransition,
+           AsyncServeProducerTurnAttemptThisStep,
+           AsyncServeProducerTurnMeasure
+
+THEOREM AsyncServeProducerTurnRestartPreservesDebt ==
+  \A node \in ValidatorIds:
+    /\ AsyncServeProducerTurnTransition
+    /\ AsyncServeProducerTurnRestartStep(node)
+    /\ ~AsyncServeProducerTurnCompletionStep(node)
+    /\ ~AsyncServeProducerTurnAttemptThisStep(node)
+      => asyncServeProducerTurnReady'[node]
+           = asyncServeProducerTurnReady[node]
+BY Isa DEF AsyncServeProducerTurnTransition
 
 (***************************************************************************
 One global frame owns the bounded control-slot table, the recipient-local
@@ -17906,7 +17861,6 @@ AsyncControlServiceStateAfterReset(state, resetNodes) ==
    certifiedResponseNextOrdinal |->
      state.certifiedResponseNextOrdinal,
    certifiedResponseClaims |-> state.certifiedResponseClaims,
-   certifiedFenceEscapePhase |-> state.certifiedFenceEscapePhase,
    candidateServiceNextOrdinal |->
      state.candidateServiceNextOrdinal,
    candidateServiceMarkers |->
@@ -18011,7 +17965,6 @@ AsyncControlServiceStateAfterAdmission(state, item) ==
       certifiedResponseNextOrdinal |->
         state.certifiedResponseNextOrdinal,
       certifiedResponseClaims |-> state.certifiedResponseClaims,
-      certifiedFenceEscapePhase |-> state.certifiedFenceEscapePhase,
       candidateServiceNextOrdinal |->
         state.candidateServiceNextOrdinal,
       candidateServiceMarkers |->
@@ -18050,7 +18003,6 @@ AsyncControlServiceStateAfterService(state, item) ==
    certifiedResponseNextOrdinal |->
      state.certifiedResponseNextOrdinal,
    certifiedResponseClaims |-> state.certifiedResponseClaims,
-   certifiedFenceEscapePhase |-> state.certifiedFenceEscapePhase,
    candidateServiceNextOrdinal |->
      state.candidateServiceNextOrdinal,
    candidateServiceMarkers |->
@@ -18085,13 +18037,7 @@ AsyncCertifiedResponseClaimStateAfterRetirement(state) ==
           state.certifiedResponseClaims,
           asyncActiveRequests',
           asyncCertifiedResponseClaim')
-  IN [state EXCEPT
-        !.certifiedResponseClaims = retained,
-        !.certifiedFenceEscapePhase =
-          [node \in ValidatorIds |->
-             IF {record \in retained: record.recipient = node} = {}
-             THEN "Fresh"
-             ELSE state.certifiedFenceEscapePhase[node]]]
+  IN [state EXCEPT !.certifiedResponseClaims = retained]
 
 (***************************************************************************
 The claim and leader-wire lifecycle are installed by the same hidden-ingress
@@ -18233,37 +18179,7 @@ AsyncCertifiedResponseClaimStateAfterAdmission(state, item) ==
               episodeSchedulerCeiling, physicalCut,
               targetCausalOrigin, targetLeaderWireOwnerIdentity,
               frozenCandidateOrigins, frozenServeSources,
-              frozenContinuationSources, frozenLeaderWireIdentities)},
-        !.certifiedFenceEscapePhase[recipient] =
-          IF AsyncCertifiedFenceCredit(recipient) = 1
-          THEN "Charged"
-          ELSE "Fresh"]
-
-(***************************************************************************
-Reconcile the retained-response latch against the post-action runtime FIFO.
-Fresh charges as soon as one exact direct certificate root is present.
-Charged becomes Spent only after that credit disappears while the claimed
-Completion is still capacity blocked.  Spent is absorbing for the lifetime of
-the claim, even if an already-owned replay root later rematerializes.  Claim
-retirement alone returns the node to the absent/default Fresh state.
-***************************************************************************)
-RetainedCertifiedFenceEscapePhaseAfter(state, node) ==
-  IF CertifiedResponseClaimRecordsAtIn(state, node) = {}
-  THEN "Fresh"
-  ELSE CASE /\ state.certifiedFenceEscapePhase[node] = "Fresh"
-             /\ AsyncCertifiedFenceCreditAfter(node) = 1
-            -> "Charged"
-       [] /\ state.certifiedFenceEscapePhase[node] = "Charged"
-             /\ AsyncCertifiedFenceCreditAfter(node) = 0
-             /\ ~CanEnqueueCertifiedResponseAfter(node)
-            -> "Spent"
-       [] OTHER -> state.certifiedFenceEscapePhase[node]
-
-AsyncCertifiedFenceEscapeStateAfterRuntime(state) ==
-  [state EXCEPT
-     !.certifiedFenceEscapePhase =
-       [node \in ValidatorIds |->
-          RetainedCertifiedFenceEscapePhaseAfter(state, node)]]
+              frozenContinuationSources, frozenLeaderWireIdentities)}]
 
 (***************************************************************************
 FIFO or Busy-deferred execution retires the exact candidate only after its
@@ -22119,8 +22035,6 @@ AsyncControlServiceSlotTransition ==
       lifecycleFinalState ==
         AsyncCandidateLifecycleStateAfterOrdinaryIngressAdmission(
           timeoutVoteState)
-      finalState ==
-        AsyncCertifiedFenceEscapeStateAfterRuntime(lifecycleFinalState)
   IN /\ AsyncFreshLeaderWireLifecycleAdmissionsAreSingularThisStep
      /\ AsyncFreshLeaderWireLifecycleAdmissionOrdinalMatchesIn(
           compactedState)
@@ -22146,17 +22060,17 @@ AsyncControlServiceSlotTransition ==
           AsyncNewCandidateLifecycleOriginsForNodeIn(
             serveIngressState, node)
             \subseteq AsyncOrderedScheduledOriginsForNodeAfter(node)
-     /\ AsyncCandidateLifecyclePerNodeCapacityRespected(finalState)
-     /\ AsyncCandidateServiceOwnerPartitionInvariantIn(finalState)
-     /\ AsyncCandidateProducerContinuationPartitionInvariantIn(finalState)
-     /\ AsyncCandidateProducerSemanticHandoffCoverageAfterIn(finalState)
+     /\ AsyncCandidateLifecyclePerNodeCapacityRespected(lifecycleFinalState)
+     /\ AsyncCandidateServiceOwnerPartitionInvariantIn(lifecycleFinalState)
+     /\ AsyncCandidateProducerContinuationPartitionInvariantIn(lifecycleFinalState)
+     /\ AsyncCandidateProducerSemanticHandoffCoverageAfterIn(lifecycleFinalState)
      /\ Cardinality(
-          finalState.candidateServiceMarkers
-            \cup finalState.candidateTerminalTombstones)
+          lifecycleFinalState.candidateServiceMarkers
+            \cup lifecycleFinalState.candidateTerminalTombstones)
           <= AsyncCandidateServiceRecordCapacity
-     /\ Cardinality(finalState.producerContinuations)
+     /\ Cardinality(lifecycleFinalState.producerContinuations)
           <= AsyncCandidateProducerContinuationCapacity
-     /\ asyncControlServiceState' = finalState
+     /\ asyncControlServiceState' = lifecycleFinalState
 
 (***************************************************************************
 The indexed height product begins from the exact standalone initializer.  Its
@@ -24421,7 +24335,7 @@ AsyncNext ==
   /\ AsyncIngressPhysicalOrdinalTransition
   /\ AsyncServiceActivationTransition
   /\ AsyncProducerProjectionStep
-  /\ AsyncServeProducerEpisodeTransition
+  /\ AsyncServeProducerTurnTransition
   /\ UNCHANGED <<height, context>>
   /\ [Next]_vars
 
@@ -25846,7 +25760,7 @@ BY SameHeightRestartPreservesServeHighWatermarks,
 \* those redundant copies as well.
 AsyncOriginalAllVars ==
   <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars,
-    asyncServeProducerEpisodeDue>>
+    asyncServeProducerTurnReady>>
 
 AsyncNextBeforeFixedCorridorDeadlineReceipt ==
   \E nextOriginal:
@@ -26979,8 +26893,6 @@ AsyncTransportInit ==
         certifiedResponseNextOrdinal |->
           [node \in ValidatorIds |-> 1],
         certifiedResponseClaims |-> {},
-        certifiedFenceEscapePhase |->
-          [node \in ValidatorIds |-> "Fresh"],
         candidateServiceNextOrdinal |->
           [node \in ValidatorIds |-> 1],
         candidateServiceMarkers |-> {},
@@ -27117,8 +27029,8 @@ AsyncProducerInit ==
   /\ asyncProducerConsumedEpisodes = {}
   /\ asyncProducerOriginHistory = {}
 
-AsyncServeProducerEpisodeInit ==
-  asyncServeProducerEpisodeDue =
+AsyncServeProducerTurnInit ==
+  asyncServeProducerTurnReady =
     [node \in ValidatorIds |-> FALSE]
 
 AsyncBaseInitAt(initialContext) ==
@@ -27131,7 +27043,7 @@ AsyncBaseInitAt(initialContext) ==
   /\ AsyncIngressInit
   /\ AsyncRecoveryInit
   /\ AsyncProducerInit
-  /\ AsyncServeProducerEpisodeInit
+  /\ AsyncServeProducerTurnInit
 
 AsyncBaseInit == AsyncBaseInitAt(ContextRecord(0, <<>>))
 
@@ -29544,12 +29456,12 @@ AsyncProducerTypeInvariant ==
     asyncProducerKnownObligations,
     asyncProducerConsumedEpisodes,
     asyncProducerOriginHistory)
-AsyncServeProducerEpisodeTypeInvariant ==
-  asyncServeProducerEpisodeDue \in [ValidatorIds -> BOOLEAN]
+AsyncServeProducerTurnTypeInvariant ==
+  asyncServeProducerTurnReady \in [ValidatorIds -> BOOLEAN]
 
-AsyncServeProducerEpisodeOwnershipInvariant ==
+AsyncServeProducerTurnOwnershipInvariant ==
   \A node \in ValidatorIds:
-    asyncServeProducerEpisodeDue[node]
+    asyncServeProducerTurnReady[node]
       => /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
          /\ AsyncServeOffQueueReservations(node) = {}
 
@@ -29565,7 +29477,7 @@ AsyncTypeInvariant ==
   /\ TypeInvariant
   /\ AsyncSchedulerTypeInvariant
   /\ AsyncProducerTypeInvariant
-  /\ AsyncServeProducerEpisodeTypeInvariant
+  /\ AsyncServeProducerTurnTypeInvariant
   /\ AsyncServiceActivationPairInvariant
   /\ ReceivedTimeoutVotePoolInvariant
 
@@ -29606,8 +29518,8 @@ AsyncStrongTypeInvariant ==
   /\ StrongInductiveInvariant
   /\ AsyncSchedulerTypeInvariant
   /\ AsyncProducerTypeInvariant
-  /\ AsyncServeProducerEpisodeTypeInvariant
-  /\ AsyncServeProducerEpisodeOwnershipInvariant
+  /\ AsyncServeProducerTurnTypeInvariant
+  /\ AsyncServeProducerTurnOwnershipInvariant
   /\ AsyncServiceActivationPairInvariant
   /\ AsyncControlServiceStateTypeInvariant
   /\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant
@@ -30228,19 +30140,6 @@ AsyncCompletionReserveInvariant ==
                 => ~CanEnqueueClass(node, "Progress"))
           /\ (ordinaryOccupied >= AsyncOrdinaryCompletionLimit
                 => ~CanEnqueueClass(node, "Completion"))
-
-AsyncCertifiedFenceEscapeEpisodeInvariant ==
-  \A node \in ValidatorIds:
-    /\ RetainedCertifiedFenceEscapePhase(node)
-         \in RetainedCertifiedFenceEscapePhases
-    /\ (CertifiedResponseClaimRecordsAt(node) = {}
-          => RetainedCertifiedFenceEscapePhase(node) = "Fresh")
-    /\ (RetainedCertifiedFenceEscapePhase(node) \in {"Charged", "Spent"}
-          => ~RetainedCertifiedBodyResponseMayAdmitCertifiedFenceEscape(node))
-    /\ (/\ CertifiedResponseClaimRecordsAt(node) # {}
-         /\ RetainedCertifiedFenceEscapePhase(node) = "Fresh"
-          => AsyncQueuedCertifiedFenceEscapeCount(node) = 0)
-    /\ AsyncQueuedCertifiedFenceEscapeCount(node) <= AsyncQueueCapacity
 
 AsyncIoReservationInvariant ==
   /\ AsyncIoWorkCapacity <= AsyncCompletionReserve

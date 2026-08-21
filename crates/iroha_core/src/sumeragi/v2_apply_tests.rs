@@ -201,9 +201,8 @@ fn reconcile_lane_reservation_ownership(
     }
 }
 #[test]
-fn reservation_route_accepts_only_canonical_disabled_single_lane_coordinates() {
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.enabled = false;
+fn reservation_route_accepts_only_canonical_default_single_lane_coordinates() {
+    let nexus = iroha_config::parameters::actual::Nexus::default();
     assert!(reservation_route_is_active(
         &nexus,
         LaneId::SINGLE,
@@ -242,9 +241,9 @@ fn finalize_certified_merge_reservations_for_test(
         );
     }
     for (transaction_hash, _) in groups.iter().flatten() {
-        if !state.has_committed_transaction(*transaction_hash) {
-            return Err(V2ReservationLifecycleError::UncommittedMergeTransaction {
-                transaction_hash: *transaction_hash,
+        if !state.has_committed_entrypoint(*transaction_hash) {
+            return Err(V2ReservationLifecycleError::UncommittedMergeEntrypoint {
+                entrypoint_hash: *transaction_hash,
             });
         }
     }

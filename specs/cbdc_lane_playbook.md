@@ -42,12 +42,9 @@ visibility = "restricted"
 lane_type = "cbdc_private"
 governance = "central_bank_multisig"
 settlement = "xor_dual_fund"
-metadata.scheduler.teu_capacity = "1500"
-metadata.scheduler.starvation_bound_slots = "6"
-metadata.settlement.buffer_account = "buffer::cbdc_treasury"
-metadata.settlement.buffer_asset = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-metadata.settlement.buffer_capacity = "1500"
-metadata.telemetry.contact = "ops@cb.example"
+scheduler = { teu_capacity = 1500, starvation_bound_slots = 6 }
+settlement_buffer = { account_id = "<canonical-i105-account-id>", asset_definition_id = "61CtjvNd9T3THAR65GsMVHr82Bjc", capacity = "1500" }
+metadata = { "telemetry.contact" = "ops@cb.example" }
 
 [[nexus.dataspace_catalog]]
 alias = "cbdc.core"
@@ -84,7 +81,7 @@ description = "Route CBDC contracts to the restricted lane"
 
 **Notes**
 
-- `metadata.scheduler.teu_capacity` and `metadata.scheduler.starvation_bound_slots` feed the TEU gauges exercised by `integration_tests/tests/scheduler_teu.rs`. Operators must keep them in sync with acceptance results so `nexus_scheduler_lane_teu_capacity` matches the template.
+- The typed scheduler descriptor's `teu_capacity` and `starvation_bound_slots` values feed the TEU gauges exercised by `integration_tests/tests/scheduler_teu.rs`. Both values are positive integers. The settlement buffer requires an exact domainless I105 account, canonical asset-definition address, and positive canonical XOR quantity.
 - Every dataspace alias above must appear in governance manifests and capability manifests (see below) so admission rejects drift automatically.
 
 ### 1.2 Lane manifest skeleton

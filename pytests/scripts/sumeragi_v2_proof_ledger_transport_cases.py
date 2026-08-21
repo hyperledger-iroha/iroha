@@ -1021,8 +1021,8 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
     core_path = geometry_root / "crates/iroha_core/src/sumeragi/mod.rs"
     core_source = core_path.read_text(encoding="utf-8")
     core_source = core_source.replace(
-        "    Authenticated(PeerId),\n    Anonymous,",
-        "    Authenticated,\n    Anonymous,",
+        "    Authenticated(PeerId),\n}",
+        "    Authenticated,\n}",
         1,
     )
     core_path.write_text(core_source, encoding="utf-8")
@@ -1031,9 +1031,9 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         core_path,
         "fair_v2_ingress_required_capacity",
         "authenticated_non_validator_source_capacity\n"
-        "                .checked_mul(2)",
+        "            .checked_mul(3)",
         "authenticated_non_validator_source_capacity\n"
-        "                .checked_mul(1)",
+        "            .checked_mul(2)",
     )
     mutate_rust_item_source(
         module,
@@ -1066,7 +1066,7 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
     mutate_rust_item_source(
         module,
         core_path,
-        "try_recv_if_at_checked_classified",
+        "dequeue_selected_locked",
         "} else if matches!(&source, FairV2IngressSource::Authenticated(_)) {",
         "} else if false && matches!(&source, FairV2IngressSource::Authenticated(_)) {",
     )
@@ -1083,8 +1083,8 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
     defaults_path = geometry_root / "crates/iroha_config/src/parameters/defaults.rs"
     defaults_source = defaults_path.read_text(encoding="utf-8")
     defaults_source = defaults_source.replace(
-        "+ 2 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()",
-        "+ QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()",
+        "3 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()",
+        "2 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()",
         1,
     )
     defaults_path.write_text(defaults_source, encoding="utf-8")
@@ -1121,15 +1121,19 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         module,
         kagami_path,
         "localnet_sumeragi_body_bytes",
-        ".checked_add(LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)",
-        ".checked_add(0)",
+        "actual::sumeragi_v2_body_ingress_required_byte_capacity(\n"
+        "        validator_count,\n"
+        "        LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,",
+        "actual::sumeragi_v2_body_ingress_required_byte_capacity(\n"
+        "        validator_count,\n"
+        "        0,",
     )
 
     renderer_path = geometry_root / "scripts/render_taira_validator_bundle.py"
     renderer_source = renderer_path.read_text(encoding="utf-8")
     renderer_source = renderer_source.replace(
-        "validator_count + authenticated_non_validator_sources + 1",
-        "validator_count + 1",
+        "source_count = validator_count + authenticated_non_validator_sources",
+        "source_count = validator_count",
         1,
     )
     renderer_path.write_text(renderer_source, encoding="utf-8")
@@ -1148,8 +1152,8 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
     readme_source = readme_path.read_text(encoding="utf-8")
     readme_path.write_text(
         readme_source.replace(
-            "validator_count + authenticated_non_validator_sources + 1",
-            "validator_count + 1",
+            "validator_count + authenticated_non_validator_sources",
+            "validator_count",
             1,
         ),
         encoding="utf-8",
@@ -1159,20 +1163,21 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         geometry_root
     )
     for expected_error in (
-        "three-way fair-ingress source ownership inventory",
-        "semantic duplicate route attachment precedes authenticated non-validator lane-cap admission",
-        "authenticated non-validator lane cap excludes validator and anonymous lanes",
+        "two-way authenticated fair-ingress source ownership inventory",
+        "semantic duplicate coalescing must precede new-lane admission",
+        "authenticated non-validator lane cap excludes validator lanes",
         "empty authenticated non-validator lanes release their bounded churn slot",
-        "exact default 5N+3H+2 outer-ingress message geometry",
+        "exact default 5N+3H outer-ingress message geometry",
         "production H comes from Sumeragi ingress configuration rather than reply-route R",
         "root configuration derives R from the effective explicit or lane-profile network geometry",
         "root configuration rejects H greater than exact-output reply-source R",
         "shared Sumeragi fingerprint projection carries H beside ingress capacities",
-        "localnet aggregate bytes scale by N+H+1",
-        "Taira renderer scales aggregate bytes by N+H+1",
-        "default seven-validator Taira profile pins H=2 and ten source partitions",
-        "production Taira profile pins H=2 and seven source partitions",
-        "Taira operator documentation states N+H+1 byte scaling",
+        "localnet aggregate bytes scale by N+H",
+        "Taira renderer must derive one exact N+H source count before "
+        "checked aggregate-byte multiplication",
+        "default seven-validator Taira profile pins H=2 and nine source partitions",
+        "production Taira profile pins H=2 and six source partitions",
+        "Taira operator documentation states N+H byte scaling",
     ):
         assert any(expected_error in error for error in geometry_errors), (
             expected_error,
@@ -1341,8 +1346,8 @@ def test_transport_geometry_source_fidelity_rejects_taira_semantic_mutants(
     renderer_source = renderer_path.read_text(encoding="utf-8")
     renderer_path.write_text(
         renderer_source.replace(
-            "validator_count + authenticated_non_validator_sources + 1",
-            "validator_count + 1",
+            "source_count = validator_count + authenticated_non_validator_sources",
+            "source_count = validator_count",
             1,
         ),
         encoding="utf-8",
@@ -1366,7 +1371,8 @@ def test_transport_geometry_source_fidelity_rejects_taira_semantic_mutants(
     )
     errors = module._transport_geometry_production_source_fidelity_errors(repo_root)
     for expected in (
-        "Taira renderer scales aggregate bytes by N+H+1",
+        "Taira renderer must derive one exact N+H source count before "
+        "checked aggregate-byte multiplication",
         "production Taira genesis DA pins the revision-4 protocol ceiling",
         "production Taira genesis admits one maximum privacy transaction",
         "default Taira genesis must parse with unique keys",
@@ -1403,13 +1409,13 @@ def test_transport_geometry_source_fidelity_rejects_sm_distid_bit_length_mutant(
     (
         (
             "fair_v2_ingress_required_capacity",
-            ".checked_mul(4)",
             ".checked_mul(3)",
+            ".checked_mul(2)",
         ),
         (
             "fair_v2_ingress_lane_protected_slots",
-            "4_usize.saturating_sub(depth)",
             "3_usize.saturating_sub(depth)",
+            "2_usize.saturating_sub(depth)",
         ),
         (
             "fair_v2_ingress_required_manifest_bytes",
@@ -1527,9 +1533,9 @@ def test_transport_geometry_source_fidelity_rejects_short_exact_progress_bound(
         ),
         (
             "try_recv_if_at_checked",
-            "FairV2IngressBarrierBypass::None,",
-            "FairV2IngressBarrierBypass::TimeoutVoteEpisode,",
-            "ordinary timestamped ingress must delegate with no barrier bypass",
+            "self.try_recv_if_at_checked_classified(service_attempt_at, false, predicate)",
+            "self.try_recv_if_at_checked_classified(service_attempt_at, true, predicate)",
+            "ordinary timestamped ingress must delegate to the single classifier",
         ),
     ),
 )
@@ -1602,8 +1608,8 @@ def test_transport_geometry_reviewed_ingress_items_survive_digest_refresh(
             for error in leader_errors
         ), leader_errors
         assert any(
-            "ordinary timestamped ingress must pass "
-            "FairV2IngressBarrierBypass::None" in error
+            "ordinary timestamped ingress must use the same classifier "
+            "without a bypass policy" in error
             and "exact reviewed token digest" not in error
             for error in timeout_errors
         ), timeout_errors
@@ -1887,16 +1893,14 @@ def test_transport_geometry_source_fidelity_rejects_startup_cap_bypass(
         ),
         (
             "nonzero!(\n"
-            "        5 * MAX_VALIDATORS_PER_HEIGHT\n"
-            "            + 3 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()\n"
-            "            + 2\n"
+            "        5 * MAX_VALIDATORS_PER_HEIGHT + 3 * "
+            "QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()\n"
             "    )",
             "nonzero!(\n"
-            "        4 * MAX_VALIDATORS_PER_HEIGHT\n"
-            "            + 3 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()\n"
-            "            + 2\n"
+            "        4 * MAX_VALIDATORS_PER_HEIGHT + 3 * "
+            "QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()\n"
             "    )",
-            "exact default 5N+3H+2 outer-ingress message geometry",
+            "exact default 5N+3H outer-ingress message geometry",
         ),
     ),
 )

@@ -244,7 +244,7 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
         (
             "native_amx_participant_applications_diagnostics",
             "durable_lane_diagnostics",
-            "durable_queue.as_ref()",
+            "Option::as_ref(&durable_queue)",
             "autonomous_lane_execution_diagnostics",
             "autonomous_lane_execution_diagnostics_with_queue",
             "validate_autonomous_lane_executions",

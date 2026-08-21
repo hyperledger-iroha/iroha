@@ -35,10 +35,3 @@ fn vrf_reveal_roundtrip_codec() {
     let dec = VrfReveal::decode(&mut &bytes[..]).expect("decode vrf reveal");
     assert_eq!(reveal, dec);
 }
-#[test]
-fn reconfig_roundtrip_codec() {
-    let reconfig = sample_reconfig();
-    let bytes = reconfig.encode();
-    let dec = Reconfig::decode(&mut &bytes[..]).expect("decode reconfig");
-    assert_eq!(reconfig, dec);
-}

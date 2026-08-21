@@ -3,14 +3,12 @@
 //! For usage examples see [`iroha_version_derive::declare_versioned`].
 #![allow(unexpected_cfgs)]
 use core::ops::Range;
-use std::{format, string::String, vec::Vec};
-pub mod build_line;
-pub use crate::build_line::BuildLine;
 /// Re-export derive macros that assist with declaring versioned enums.
 #[cfg(feature = "derive")]
 pub use iroha_version_derive::*;
 /// Re-export Norito codec helpers required by consumers of versioned types.
 pub use norito::codec::{Decode, DecodeAll, Encode};
+use std::{format, string::String, vec::Vec};
 /// JSON field name storing the version discriminator.
 pub const VERSION_FIELD_NAME: &str = "version";
 /// JSON field name storing the versioned payload.

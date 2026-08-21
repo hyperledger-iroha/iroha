@@ -4,14 +4,10 @@
 mod gov_zk_referendum_window_guard;
 #[path = "../implicit_account_receive.rs"]
 mod implicit_account_receive;
-#[path = "../isi_gas_fees.rs"]
-mod isi_gas_fees;
 #[path = "../ivm_admission_unknown_syscall.rs"]
 mod ivm_admission_unknown_syscall;
 #[path = "../ivm_codec_helpers.rs"]
 mod ivm_codec_helpers;
-#[path = "../ivm_corehost_axt.rs"]
-mod ivm_corehost_axt;
 #[path = "../ivm_corehost_domain.rs"]
 mod ivm_corehost_domain;
 #[path = "../ivm_corehost_goldilocks.rs"]
@@ -56,7 +52,3 @@ mod nexus_policies;
 mod oracle;
 #[path = "../overlay_bounds.rs"]
 mod overlay_bounds;
-#[path = "../overlay_chunking.rs"]
-mod overlay_chunking;
-#[path = "../overlay_workers_parity.rs"]
-mod overlay_workers_parity;

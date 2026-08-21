@@ -242,7 +242,9 @@ def make_harness(tmp_path: Path) -> Harness:
         "end_block_hash": end_hash,
         "end_height": 12,
         "genesis_block_hash": genesis_hash,
-        "network_id": handoff.taira_constants.NETWORK_ID,
+        "network_id": handoff.taira_constants.network_id_from_genesis_hash(
+            genesis_hash
+        ),
         "network_name": handoff.taira_constants.NETWORK_NAME,
         "nexus_topology": topology_text,
         "peer_count": 4,

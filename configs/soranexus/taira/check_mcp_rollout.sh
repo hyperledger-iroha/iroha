@@ -166,7 +166,9 @@ runtime-only config path, preferring `/run/secrets/taira-canary-client.toml`
 when that directory is writable and otherwise falling back to
 `${TMPDIR:-/tmp}`. If that file does not exist, automatic bootstrap additionally
 requires `--onboarding-token-file ABSOLUTE_PATH`; the credential remains in its
-owner-private source file and is passed only to the bootstrap subprocess. An
+owner-private source file and is passed only to the bootstrap subprocess. That
+file must contain the bearer token for the DPN-scoped onboarding credential;
+automatic bootstrap creates a dataspace-root `<label>@dpn` alias. An
 explicit `--write-config` must already exist and is read without modification;
 the script never overwrites operator-supplied signing material. Automatic
 bootstrap posts the current universal-account DTO to `/v1/accounts/onboard`,
@@ -438,7 +440,7 @@ if not isinstance(rules, list):
     fail("nexus.routing_policy.rules is not an array")
 expected_rules = [
     (3, "dpn", "account", "*@dpn"),
-    (4, "is", "account", "*@wonderland.is"),
+    (4, "is", "account", "*@is"),
     (5, "is2", "account", "*@boi.is2"),
     (5, "is2", "account", "*@leumi.is2"),
     (5, "is2", "account", "*@hapoalim.is2"),
@@ -1114,11 +1116,9 @@ operator_protected_url() {
   path="${target%%\?*}"
   case "$path" in
     /v1/sumeragi/status|/v1/sumeragi/diagnostics|/v1/sumeragi/leader|\
-    /v1/sumeragi/bls-keys|/v1/sumeragi/qc|/v1/sumeragi/checkpoints|\
-    /v1/sumeragi/commit-certificates|/v1/sumeragi/validator-sets|\
-    /v1/sumeragi/validator-sets/*|/v1/sumeragi/consensus-keys|\
-    /v1/sumeragi/key-lifecycle|/v1/sumeragi/telemetry|/v1/sumeragi/params|\
-    /v1/sumeragi/commit-qcs/*|/v1/sumeragi/evidence|/v1/sumeragi/evidence/count|\
+    /v1/sumeragi/bls-keys|/v1/sumeragi/qc|\
+    /v1/sumeragi/consensus-keys|/v1/sumeragi/key-lifecycle|\
+    /v1/sumeragi/params|/v1/sumeragi/evidence|/v1/sumeragi/evidence/count|\
     /v1/sumeragi/vrf/penalties/*|/v1/sumeragi/vrf/epoch/*|/v1/peers|\
     /v1/time/status|/v1/pipeline/preflight|/v1/pipeline/policy|\
     /v1/pipeline/proof-retention|/v1/pipeline/recovery/*|\
@@ -2269,8 +2269,16 @@ def fail(message):
 
 if not isinstance(payload, dict) or payload.get("version") != 1:
     fail("unsupported lifecycle payload")
-if payload.get("nexus_enabled") is not True:
-    fail("Nexus routing is not enabled")
+expected_fields = {
+    "version",
+    "lane_count",
+    "lanes",
+    "catalog_hash",
+    "incarnations",
+    "incarnation_root",
+}
+if set(payload) != expected_fields:
+    fail("lifecycle payload fields do not match the current V1 layout")
 lane_count = payload.get("lane_count")
 if isinstance(lane_count, bool) or lane_count != expected_lane_count:
     fail(f"lane_count must be exactly {expected_lane_count}, observed {lane_count!r}")
@@ -3136,8 +3144,8 @@ check_route_parity() {
     "SCCP typed registry discovery route"
   check_route_status "$label" GET "${root_url}/v1/zk/proofs/count" "200" \
     "ZK proof count route"
-  check_route_status "$label" GET "${root_url}/v1/sumeragi/validator-sets" "200" \
-    "validator-set snapshot route"
+  check_route_status "$label" GET "${root_url}/v1/sumeragi/validator-sets" "404" \
+    "retired legacy validator-set route must remain unmounted" "" "route_not_found"
   check_route_status "$label" GET "${root_url}/v1/nexus/public-lanes/${lane_id}/validators" "200" \
     "public-lane validator snapshot route"
   check_route_status "$label" GET "${root_url}/v1/nexus/public-lanes/${lane_id}/stake" "200" \
@@ -3283,7 +3291,7 @@ build_write_canary_config() {
   local time_to_live_ms="$4"
   local status_timeout_ms="$5"
 
-  python3 - "$source_config" "$target_torii_url" "$output_config" "$time_to_live_ms" "$status_timeout_ms" "$EXPECTED_TAIRA_CHAIN_ID" <<'PY'
+  python3 - "$source_config" "$target_torii_url" "$output_config" "$time_to_live_ms" "$status_timeout_ms" "$EXPECTED_TAIRA_CHAIN_ID" "$OPERATOR_NETWORK_ID" <<'PY'
 import sys
 
 try:
@@ -3303,6 +3311,7 @@ except ModuleNotFoundError:
     time_to_live_ms,
     status_timeout_ms,
     expected_chain_id,
+    expected_network_id,
 ) = sys.argv[1:]
 with open(source_path, "rb") as handle:
     source = tomllib.load(handle)
@@ -3329,6 +3338,11 @@ if chain != expected_chain_id:
     )
 if not isinstance(network_id, str) or not network_id:
     raise SystemExit("write canary config is missing a top-level `network_id` value")
+if network_id != expected_network_id:
+    raise SystemExit(
+        "write canary config `network_id` must match the exact operator NetworkId "
+        f"`{expected_network_id}`"
+    )
 if not isinstance(public_key, str) or not public_key:
     raise SystemExit("write canary config is missing `account.public_key`")
 if not isinstance(private_key, str) or not private_key:
@@ -3469,7 +3483,9 @@ ensure_write_canary_config() {
     --onboarding-token-file "$ROLLOUT_CANARY_ONBOARDING_TOKEN_FILE"
     --output-config "$WRITE_CONFIG"
     --chain-id "$EXPECTED_TAIRA_CHAIN_ID"
+    --network-id "$OPERATOR_NETWORK_ID"
     --alias-prefix "$ROLLOUT_CANARY_ALIAS_PREFIX"
+    --domain dpn
     --time-to-live-ms "$ROLLOUT_CANARY_TIME_TO_LIVE_MS"
     --status-timeout-ms "$status_timeout_ms"
   )

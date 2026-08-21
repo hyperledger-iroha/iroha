@@ -1,9 +1,9 @@
-//! Multi-version append-only key value storage for transactions
+//! Multi-version append-only storage for canonical transaction entrypoint identities.
 #![allow(clippy::disallowed_types)]
 use arc_swap::ArcSwapOption;
 use dashmap::DashMap;
 use iroha_crypto::HashOf;
-use iroha_data_model::prelude::SignedTransaction;
+use iroha_data_model::prelude::TransactionEntrypoint;
 use mv::json::JsonKeyCodec;
 use norito::json::{
     self, FastJsonWrite, JsonDeserialize as JsonDeserializeTrait,
@@ -20,12 +20,12 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-type Key = HashOf<SignedTransaction>;
+type Key = HashOf<TransactionEntrypoint>;
 type Value = NonZeroUsize;
 type DirectGeneration = u64;
-/// Multi-version append-only key value storage for transactions
+/// Multi-version append-only key value storage for transaction entrypoints.
 /// This is analogue of [`mv::storage::Storage`] or `HashMap<Key, Value>`.
-/// Contains hashes of transactions mapped onto block height where they are stored.
+/// Contains canonical entrypoint hashes mapped onto the block height where they are stored.
 ///
 /// * Q: Why don't we use `HashMap`/`BTreeMap`?
 ///   A: Because we need multi-version storage with transactional behaviour
@@ -37,11 +37,11 @@ pub struct TransactionsStorage {
     /// Latest block. Stored separately because of reverts.
     /// `None` when there are no blocks yet, otherwise must be not `None`.
     latest_block: ArcSwapOption<BlockInfo>,
-    /// Map with aggregated transactions of multiple blocks, EXCEPT for the latest block. Entries
+    /// Map with aggregated entrypoints of multiple blocks, EXCEPT for the latest block. Entries
     /// are retained only for finalised blocks (with heights strictly lower than the current latest
     /// block) so that stale transactions are discarded after rollbacks.
     blocks: DashMap<Key, Value>,
-    /// Transaction memberships committed by direct, non-canonical lane-block
+    /// Entrypoint memberships committed by direct, non-canonical lane-block
     /// application. These entries do not advance `latest_block`.
     direct_committed: DashMap<Key, DirectMembership>,
     direct_commit_generation: AtomicU64,
@@ -80,21 +80,21 @@ impl TransactionsStorage {
             direct_generation: self.direct_commit_generation.load(Ordering::Acquire),
         }
     }
-    /// Return the latest committed block height recorded by transaction storage.
+    /// Return the latest committed block height recorded by entrypoint storage.
     pub(crate) fn latest_height(&self) -> usize {
         self.latest_block
             .load()
             .as_ref()
             .map_or(0, |block| block.height.get())
     }
-    /// Record transaction hashes committed by a non-canonical state application.
+    /// Record entrypoint identities committed by a non-canonical state application.
     ///
     /// Direct standalone lane-block application mutates WSV without appending a canonical block
     /// hash. These hashes must still be visible to duplicate admission checks, but they must not
-    /// advance the transaction store's latest canonical block height.
-    pub(crate) fn record_direct_committed_membership(
+    /// advance the entrypoint store's latest canonical block height.
+    pub(crate) fn record_direct_committed_entrypoint_membership(
         &self,
-        transactions: impl IntoIterator<Item = HashOf<SignedTransaction>>,
+        entrypoints: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
         height: NonZeroUsize,
     ) {
         let _guard = self.write_lock.lock();
@@ -103,9 +103,9 @@ impl TransactionsStorage {
             .load(Ordering::Relaxed)
             .saturating_add(1);
         let mut recorded = false;
-        for transaction in transactions {
+        for entrypoint in entrypoints {
             self.direct_committed
-                .insert(transaction, DirectMembership { height, generation });
+                .insert(entrypoint, DirectMembership { height, generation });
             recorded = true;
         }
         if recorded {
@@ -835,7 +835,7 @@ mod tests {
         let [key] = get_keys();
         let [height] = get_values();
         let storage = TransactionsStorage::new();
-        storage.record_direct_committed_membership([key], height);
+        storage.record_direct_committed_entrypoint_membership([key], height);
         assert_eq!(storage.latest_height(), 0);
         assert_eq!(storage.view().get(&key), Some(height));
     }
@@ -845,7 +845,7 @@ mod tests {
         let [height] = get_values();
         let storage = TransactionsStorage::new();
         let view_before_direct_commit = storage.view();
-        storage.record_direct_committed_membership([key], height);
+        storage.record_direct_committed_entrypoint_membership([key], height);
         assert_eq!(view_before_direct_commit.get(&key), None);
         assert_eq!(storage.view().get(&key), Some(height));
     }
@@ -854,7 +854,7 @@ mod tests {
         let [direct_key, canonical_key, reverted_key, replacement_key] = get_keys();
         let [height1, height2] = get_values();
         let storage = TransactionsStorage::new();
-        storage.record_direct_committed_membership([direct_key], height2);
+        storage.record_direct_committed_entrypoint_membership([direct_key], height2);
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[canonical_key], height1);
@@ -881,7 +881,7 @@ mod tests {
         let [key] = get_keys();
         let [height] = get_values();
         let storage = TransactionsStorage::new();
-        storage.record_direct_committed_membership([key], height);
+        storage.record_direct_committed_entrypoint_membership([key], height);
         let json = norito::json::to_json(&storage.view()).unwrap();
         let restored: TransactionsStorage = norito::json::from_str(&json).unwrap();
         assert_eq!(restored.latest_height(), 0);

@@ -30,7 +30,12 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
     "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_pre_admission.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_execution_impl.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_execution.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_sidecar.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs",
@@ -38,19 +43,24 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
     "crates/iroha_core/src/sumeragi/v2_lifecycle_concrete_admission.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority_live_wal.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_validate_sidecar.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
     "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
     "crates/iroha_core/src/sumeragi/v2_apply_tests.rs",
     "crates/iroha_core/src/sumeragi/v2_transport.rs",
     "crates/iroha_core/src/sumeragi/v2_worker.rs",
+    "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
+    "crates/iroha_core/src/sumeragi/v2_worker_io_execution.rs",
+    "crates/iroha_core/src/sumeragi/v2_worker_exact_output.rs",
+    "crates/iroha_core/src/sumeragi/v2_worker_services.rs",
+    "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
     "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
     "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
     "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs",
     "crates/iroha_core/src/sumeragi/v2_runner/preactivation_ingress.rs",
     "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-    "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_operations.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs",
@@ -68,7 +78,7 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
 )
 assert len(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES)
-) == 64
+) == 74
 
 
 def test_successor_run_inner_parser_rejects_neighbor_lookalike(
@@ -169,14 +179,14 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "fail-stop initial Proposal WAL append must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services.rs",
         "fn prepare_wal_append_permit(",
         "&& !self.wal_append.attempted",
         "|| !self.wal_append.attempted",
         "armed Proposal reservation lends WAL authority without parts must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services.rs",
         "fn abort_before_publication(",
         "assert!(\n            !self.wal_append.attempted",
         "debug_assert!(\n            !self.wal_append.attempted",
@@ -402,6 +412,48 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
         "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        "services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));",
+        "let _ = services;",
+        "production lifecycle finalization behavior must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        "super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeQueued,",
+        "super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending,",
+        "production lifecycle finalization behavior must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        ") => {}\n                    ProductionLifecycleIngressTurnV1::PassThrough(runner)",
+        ") => { consume_prepared_ordinary_ingress_turn(); }\n                    ProductionLifecycleIngressTurnV1::PassThrough(runner)",
+        "direct lifecycle Certified-Serve dispatch must use the opaque checked-transition gate",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        "!selected.restart_required()",
+        "false",
+        "production lifecycle finalization behavior must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        ".claim_producer_turn_for_local_proposal(&mut serve_runner)",
+        ".claim_unreviewed_producer_turn_for_local_proposal(&mut serve_runner)",
+        "production lifecycle finalization behavior must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        ".settle_producer_turn_after_local_proposal(&mut serve_runner, attempted_producer)",
+        ".settle_unreviewed_producer_turn_after_local_proposal(&mut serve_runner, attempted_producer)",
+        "production lifecycle finalization behavior must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
         ".retain_merge_sidecars_for_global_view(",
         ".retain_merge_sidecars_for_global_view_removed(",
         "production lifecycle finalization behavior must preserve exact production order",
@@ -514,8 +566,8 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
         "fn composite_recovered_completion_dispatches_one_ranked_sign_and_preserves_the_other()",
-        "ProductionRecoveredCompletionDispatchV1::SignQueued { ordinal: paired }",
-        "ProductionRecoveredCompletionDispatchV1::CapacityUnavailable",
+        "ProductionCompletionDispatchV1::SignQueued { ordinal: paired }",
+        "ProductionCompletionDispatchV1::CapacityUnavailable",
         "composite recovered Completion Sign selection behavior",
     ),
     (
@@ -540,14 +592,14 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "composite recovered Completion worker Fetch ownership behavior",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
         "fn capture_recovered_completion_capacity_census(",
         "let fanout = self.recovered_decision_fetch_fanout(&owner)?;",
         "let fanout = None;",
         "joint recovered Completion physical-corridor census",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
         "fn capture_recovered_completion_capacity_census(",
         "let pending = self.lock_pending_exact_output()?;",
         "let pending = self.lock_pending_exact_output_removed()?;",
@@ -555,38 +607,38 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_recovered_completion_with_runner_debt(",
+        "fn dispatch_completion_with_runner_debt(",
         "for ordinal in &exact_ready {",
         "for ordinal in exact_ready.iter().take(1) {",
         "all-row recovered Completion authentication and selection",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_recovered_completion_with_runner_debt(",
+        "fn dispatch_completion_with_runner_debt(",
         "capture_recovered_completion_capacity_census(probes)",
         "capture_recovered_completion_capacity_census_removed(probes)",
         "all-row recovered Completion authentication and selection",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_recovered_completion_with_runner_debt(",
+        "fn dispatch_completion_with_runner_debt(",
         "authenticated_ready_row_with_physical_capacity(",
         "authenticated_ready_row(",
         "all-row recovered Completion authentication and selection",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_recovered_completion_with_runner_debt(",
-        "census.select_fetch(ordinal)",
-        "census.select_sign(ordinal)",
+        "fn dispatch_completion_with_runner_debt(",
+        ".select_fetch(ordinal)",
+        ".select_sign(ordinal)",
         "all-row recovered Completion authentication and selection",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-        "pub(in crate::sumeragi) fn drive_completion_turn<'cursor>(",
-        "owner.dispatch_recovered_completion_with_runner_debt(",
+        "pub(in crate::sumeragi) fn drive_ready_completion_turn<'cursor>(",
+        "owner.dispatch_completion_with_runner_debt(",
         "owner.dispatch_recovered_decision_apply_with_runner_debt(",
-        "unified recovered Completion composite dispatch",
+        "fresh lifecycle Completion Ready-work dispatch",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
@@ -612,8 +664,8 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
         "fn bls_decision_fetch_repairs_and_coalesces_without_rewrite()",
-        "ProductionRecoveredCompletionDispatchV1::SignQueued",
-        "ProductionRecoveredCompletionDispatchV1::FetchDispatched",
+        "ProductionCompletionDispatchV1::SignQueued",
+        "ProductionCompletionDispatchV1::FetchDispatched",
         "genuine recovered Fetch composite-dispatch behavior",
     ),
     (
@@ -626,15 +678,15 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
         "fn bls_decision_fetch_repairs_and_coalesces_without_rewrite()",
-        "dispatch_recovered_completion_for_test(",
+        "dispatch_completion_for_test(",
         "dispatch_recovered_decision_fetch(",
         "genuine recovered Fetch composite-dispatch behavior",
     ),
     (
         "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
         "fn bls_decision_fetch_repairs_and_coalesces_without_rewrite()",
-        "ProductionRecoveredCompletionDispatchV1::FetchDispatched",
-        "ProductionRecoveredCompletionDispatchV1::CapacityUnavailable",
+        "ProductionCompletionDispatchV1::FetchDispatched",
+        "ProductionCompletionDispatchV1::CapacityUnavailable",
         "genuine recovered Fetch composite-dispatch behavior",
     ),
     (
@@ -669,7 +721,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
         "Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::Service {",
         "ProductionLifecycleIngressSelectionV1::RestartRequired",
-        "ProductionLifecycleIngressSelectionV1::Retry",
+        "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchPreparationRetry",
         "recovered Fetch Phase-A service failure",
     ),
     (
@@ -701,48 +753,58 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "exact queue-owned physical dequeue",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-        "fn prepare_and_dequeue_current_certified_serve<'cursor>(",
-        "ProductionCurrentCertifiedServePreparationV1::Retain => {\n"
-        "            operation.complete();",
-        "ProductionCurrentCertifiedServePreparationV1::Retain => {\n"
-        "            drop(operation);",
-        "stateful selected Serve fail-stop transaction",
+        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
+        "fn prepare_current_certified_serve_pre_admission(",
+        "CurrentCertifiedServePreAdmissionV1::AuthenticatedNegative {",
+        "CurrentCertifiedServePreAdmissionV1::Negative {",
+        "shared current Serve transport/authentication classifier",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
         "fn prepare_decided_lane_recovery_ingress(",
-        "Some(decided_subject),",
-        "None,",
-        "terminal recovery must bind both invalid-version and current-height Serve classifiers",
+        "if request.round.height == active_height {\n"
+        "        return DecidedLaneRecoveryIngressPreparation::CurrentServeRetain;\n"
+        "    }",
+        "if request.round.height == active_height {\n"
+        "        return DecidedLaneRecoveryIngressPreparation::LeaderWireRetire;\n"
+        "    }",
+        "terminal recovery classifies current Serve as retained",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
+        "fn authorize_decided_lane_recovery_drain(",
+        "DecidedLaneRecoveryIngressPreparation::CurrentServeRetain => {\n"
+        "            DecidedLaneRecoveryDrainDecision::Retain\n"
+        "        }",
+        "DecidedLaneRecoveryIngressPreparation::CurrentServeRetain => {\n"
+        "            DecidedLaneRecoveryDrainDecision::Authorized(\n"
+        "                DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,\n"
+        "            )\n"
+        "        }",
+        "terminal recovery denies current-Serve dequeue authority",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
         "fn drain_decided_lane_recovery_ingress(",
-        ".authenticate_certified_body_request(request, sender)",
-        ".authenticate_certified_body_request_unchecked(request, sender)",
-        "live terminal drain authenticates before checked authorization",
+        "DecidedLaneRecoveryDrainDecision::Retain => false,",
+        "DecidedLaneRecoveryDrainDecision::Retain => true,",
+        "live terminal drain retains current Serve before checked dequeue",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-        "fn authorize_decided_lane_recovery_drain<",
-        "ordinary_ingress_consumer::authorize_current_certified_serve_pre_dequeue(",
-        "ordinary_ingress_consumer::authorize_current_certified_serve_pre_dequeue_unchecked(",
-        "terminal recovery translates only the shared durable preparation",
-    ),
-    (
-        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
-        "impl CurrentCertifiedServePreDequeueAuthorizer for ProductionV2Services",
-        "self.stage_certified_serve_rejection(request_hash, outcome)",
-        "Ok(())",
-        "production current Serve authorizer omits",
+        "fn authorize_decided_lane_recovery_drain(",
+        ") -> DecidedLaneRecoveryDrainDecision {\n    match preparation {",
+        ") -> DecidedLaneRecoveryDrainDecision {\n"
+        "    let _legacy = CertifiedServeAdmission;\n"
+        "    match preparation {",
+        "terminal recovery cannot mint coordinator-owned Serve authority",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-        "match cut.dequeue_exact_retaining() {",
-        "Some(prepared),",
-        "None,",
-        "stateful selected Serve fail-stop transaction",
+        "pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(",
+        "self.pending_ingress_capacity.take()",
+        "self.pending_ingress_capacity.as_ref()",
+        "ordinary/recovered ingress owner order",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
@@ -957,9 +1019,9 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
         "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {",
-        "recovered_decision_fetch_body_completion:\n        Option<PreparedRecoveredDecisionFetchBodyCompletionV1>,",
-        "recovered_decision_fetch_body_completion: (),",
-        "launched recovered Decision Fetch Drop order must preserve exact production order",
+        "pending_lifecycle_completion: Option<PendingLifecycleCompletionV1>,",
+        "pending_lifecycle_completion: (),",
+        "launched unified lifecycle completion/capacity Drop order must preserve exact production order",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
@@ -984,16 +1046,16 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-        "fn bind_certified_serve(",
-        "self.ingress.bind_certified_serve_gate(gate.clone())",
-        "Ok(())",
+        "fn bind(",
+        "ingress.bind_leader_wire_lifecycle_gate(",
+        "ingress.bind_unreviewed_leader_wire_lifecycle_gate(",
         "sealed leader-wire launch binding omits production refinement tokens",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
         "fn retire(&mut self) -> Result<(), String>",
-        ".unbind_height_ingress_gates(certified_serve_gate, leader_wire_gate)",
-        ".unbind_certified_serve_gate(certified_serve_gate)",
+        "self.ingress.retire_leader_wire_lifecycle_gate(&gate)",
+        "self.ingress.retire_unreviewed_leader_wire_lifecycle_gate(&gate)",
         "sealed leader-wire launch binding omits production refinement tokens",
     ),
     (
@@ -1001,13 +1063,6 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "fn consume_prepared_dequeued_v2_ingress(",
         ".serve_historical_body(kura, request, &sender, local_key)",
         ".serve_historical_body(kura, context_store, request, &sender, local_key)",
-        "historical ingress routing omits production refinement tokens",
-    ),
-    (
-        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
-        "fn consume_prepared_dequeued_v2_ingress(",
-        "executor.accept_certified_body_response_with_ingress_ownership(\n                response,\n                &sender,\n                &ingress_ownership,\n                services,\n            )",
-        "executor.accept_certified_body_response_with_ingress_ownership(\n                response,\n                &sender,\n                ingress_ownership,\n                services,\n            )",
         "historical ingress routing omits production refinement tokens",
     ),
     (
@@ -1082,10 +1137,10 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-        "fn drain_v2_ingress(",
-        "consume_prepared_dequeued_v2_ingress(",
-        "consume_unsealed_v2_ingress(",
-        "legacy and lifecycle ordinary ingress share one post-dequeue tail",
+        "fn drain_decided_lane_recovery_ingress(",
+        "commit_decided_lane_recovery_drain(authorization, &mut committer)",
+        "commit_unchecked_decided_lane_recovery_drain(authorization, &mut committer)",
+        "live terminal drain retains current Serve before checked dequeue",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
@@ -1256,7 +1311,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "consuming activated Serve retirement fixture must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery_decision_classifier_cases.rs",
         "fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_sources()",
         "decision.subject.block_hash,",
         "HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b\"wrong pending block\")),",
@@ -1326,7 +1381,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "lifecycle-owned recovered Sign dispatch must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
         "impl PreparedRecoveredLifecycleSignCompletionV1",
         "result.is_exact()",
         "true",
@@ -1396,14 +1451,14 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "restart-safe recovered signed-Broadcast refanout must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
         "fn capture_recovered_lifecycle_signed_broadcast_refanout(",
         "authority.consume_for_service(RecoveredLifecycleSignBroadcastOutputPermitV1::new())",
         "authority.into_parts()",
         "durable recovered signed-Broadcast service capture omits production refinement tokens",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
         "fn capture_recovered_lifecycle_cold_proposal_message(",
         "pending.prepare_atomic_fanout_batch(fanouts)",
         "Ok(None)",
@@ -1425,14 +1480,14 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
-        "fn assemble_storage_only_with_recovered_phase_broadcast_and_durable_fetch_startup(",
+        "fn assemble_storage_only_with_recovered_phase_broadcast_and_body_pipeline_startup(",
         "RecoveredWalStartupProjectionV1::PhaseBroadcast(projection, broadcast)",
         "RecoveredWalStartupProjectionV1::PhaseVote(projection)",
         "cold recovered phase-Broadcast storage assembly omits production refinement tokens",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
-        "fn assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_durable_fetch_startup(",
+        "fn assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_body_pipeline_startup(",
         "RecoveredWalStartupProjectionV1::PhaseBroadcastAndNextSign(",
         "RecoveredWalStartupProjectionV1::PhaseBroadcast(",
         "cold recovered signed-Broadcast storage census omits production refinement tokens",
@@ -1475,8 +1530,8 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
         "fn open_recovered_phase_vote_branch(",
-        "Self::prepare_recovered_phase_vote_cold_adapter_stage(persisted, &body_store)",
-        "Self::prepare_recovered_phase_vote_cold_adapter_stage_unchecked(persisted, &body_store)",
+        "Self::prepare_recovered_phase_vote_cold_adapter_stage(",
+        "Self::prepare_recovered_phase_vote_cold_adapter_stage_unchecked(",
         "cold recovered phase owner handoff",
     ),
     (
@@ -1508,56 +1563,56 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "cold recovered phase owner handoff",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
         "fn prepare_recovered_lifecycle_sign_completion_with_body<'executor>(",
         ".prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)",
         ".prepare_recovered_lifecycle_sign_completion(completion)",
         "single-preview recovered next-Vote body service join must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
         "fn capture_recovered_lifecycle_proposal_exact_output(",
         "if self.proposal_work_retired",
         "if false",
         "recovered Proposal output must remain terminal after Decision",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
         "fn capture_recovered_lifecycle_proposal_exact_output(",
         "identity.same_instance(&body_store_identity)",
         "true",
         "recovered Proposal exact-output capture must retain its body-store owner",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
         "fn capture_recovered_lifecycle_proposal_exact_output(",
         "Arc::ptr_eq(&self.output_guard, &authority_output_guard)",
         "true",
         "recovered Proposal exact-output capture must retain its output guard",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
         "fn capture_recovered_lifecycle_proposal_exact_output(",
         "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(\n                retry_authority,\n            )",
         "RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(unreachable!())",
         "recovered Proposal capacity retry must remain source-token guarded",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_exact_output.rs",
         "fn prepare_atomic_fanout_batch(",
         "if !self.ownership_capacity_available(&additions)?",
         "if false",
         "atomic Proposal fanout preflight must preserve aggregate capacity",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_exact_output.rs",
         "fn prepare_atomic_fanout_batch(",
         "aggregate.checked_add(count)",
         "aggregate.saturating_add(count)",
         "atomic Proposal fanout preflight must preserve aggregate capacity",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
         "fn capture_recovered_lifecycle_proposal_exact_output(",
         "proposal\n            .validate(&self.context)",
         "Ok::<(), String>(())\n            .map_err(|error| error.to_string())",
@@ -1712,8 +1767,8 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_recovered_completion_with_runner_debt(",
-        "registration.commit(prepared)",
+        "fn dispatch_completion_with_runner_debt(",
+        "registration.commit(prepared, wait_source)",
         "registration.abort(prepared)",
         "lifecycle-owned recovered Decision Fetch dispatch must preserve exact production order",
     ),
@@ -1739,7 +1794,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "recovered Decision Fetch response claim publication must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
         "fn take_io_completion(&mut self, runtime_capacity_available: bool)",
         "owned.recovered_decision_fetch.is_some()",
         "false",
@@ -1782,7 +1837,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
-        "fn exactly_matches_successor_owner(",
+        "fn matches_successor_owner_ledger(",
         ".validate_authenticated_cut(&owner.serve_payloads)",
         ".validate_authenticated_cut_for_mutation(&owner.serve_payloads)",
         "CompleteTip canonical predecessor store join omits production refinement tokens",
@@ -1987,7 +2042,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "production lifecycle owner Kura seal omits production refinement tokens",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
         "pub(in crate::sumeragi) fn start_with_apply_service(",
         "apply_service.matches_lifecycle_launch(&state, &kura, &context, &validator_set_pops)",
         "true",
@@ -2015,14 +2070,14 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "Kura-bound production lifecycle launch must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
         "pub(in crate::sumeragi) fn start_with_apply_service(",
         "            Some(payload_store_identity),",
         "            None,",
         "recovered startup must transfer the exact Certified-Serve payload-store identity",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
         "pub(in crate::sumeragi) fn matches_lifecycle_payload_store(",
         "service_identity.same_instance(owner_identity)",
         "true",
@@ -2095,7 +2150,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
         "fn retire(&mut self) -> Result<(), String>",
-        "self.ingress.unbind_leader_wire_lifecycle_gate(gate)?",
+        "self.ingress.retire_leader_wire_lifecycle_gate(&gate)?",
         "self.gate = None;",
         "sealed leader-wire launch binding omits production refinement tokens",
     ),
@@ -2144,12 +2199,12 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
         "fn authorizes_retained_successor(",
-        "self.predecessor_store.load().ok().as_ref() == Some(&self.predecessor_ledger)",
+        "self.successor_store.load().ok().as_ref() == Some(&self.successor_ledger)",
         "true",
         "CompleteTip restart publication authority must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
         "fn open_ingress_for_active_height(",
         "output_guard.begin_fail_stop_operation()",
         "output_guard.acquire()",
@@ -2170,7 +2225,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "non-pending lifecycle live successor startup must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
         "fn initial_block_sync_deadline(",
         "if eager_recovery {\n        height_started_at\n    } else {",
         "if eager_recovery {\n"
@@ -2194,7 +2249,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "ordinary lifecycle successor handoff must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
         "const fn retain_eager_block_sync(",
         "recovering_interrupted_tip || admitted_discovered_commit_qc",
         "{ let _ = admitted_discovered_commit_qc; recovering_interrupted_tip }",
@@ -2418,7 +2473,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2.rs",
-        "fn install_registry_and_commit_adapter(",
+        "impl PreparedReadyDurableValidatePersistedSign<'_> {",
         "if self.adapter.status_publication_enabled {",
         "if true {",
         "Ready-Validate direct status publication must remain latch-dominated",
@@ -2477,7 +2532,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 328
+) == 333
 
 
 @pytest.mark.parametrize(
@@ -2570,15 +2625,13 @@ def test_replayed_proposal_owner_semantics_survive_digest_refresh(
         tmp_path
         / "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_02.rs"
     )
-    test_name = (
-        "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner"
-    )
+    test_name = "recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade"
     mutate_rust_item_source(
         module,
         replay_path,
         test_name,
-        'let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);',
-        "let foreign_lock = directive(Some(subject), None);",
+        "recovered.exactly_matches_directive(upgraded_lock),",
+        "!recovered.exactly_matches_directive(upgraded_lock),",
     )
     item = module.rust_items(
         replay_path.read_text(encoding="utf-8"), test_name
@@ -2592,7 +2645,7 @@ def test_replayed_proposal_owner_semantics_survive_digest_refresh(
     )
 
     assert any(
-        "the replay-owner regression must reject foreign subjects, mismatched rounds, and decided lifecycles"
+        "the recovered-attempt regression must prove affine same-view suppression across a lock upgrade while rejecting foreign rounds and decisions"
         in error
         for error in errors
     ), errors
@@ -2685,32 +2738,34 @@ def test_borrow_bound_outer_ingress_cursor_mutations_fail_closed(
 
 
 def test_borrow_bound_outer_ingress_reordering_fails_closed(tmp_path: Path) -> None:
-    """The checked ingress receive cannot move before serialized Runtime service."""
+    """Ingress cannot replace the serialized Runtime lifecycle target."""
 
     module = load_checker()
     local_runner_service_fixture(tmp_path, module)
     drain_path = (
         tmp_path
-        / "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs"
+        / "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs"
     )
     source = drain_path.read_text(encoding="utf-8")
-    (drain,) = module.rust_items(source, "drain_v2_ingress")
+    (drain,) = module.rust_items(source, "drain_lifecycle_v2_ingress")
     assert module._borrow_bound_outer_ingress_order_errors(drain_path, drain) == []
-    selector = "try_recv_if_checked_retiring_obsolete_with_barrier_bypass"
-    advance = "advance_executor(receiver, executor, services, 1)?;"
-    mutated = drain.source.replace(selector, "removed_checked_selector", 1)
-    mutated = mutated.replace(
-        advance,
-        "receiver.try_recv_if_checked_retiring_obsolete_with_barrier_bypass("
-        "FairV2IngressBarrierBypass::None, |_| false);\n            " + advance,
+    mutated = drain.source.replace(
+        "LifecycleRunnerRankTarget::Runtime =>",
+        "LifecycleRunnerRankTarget::Ingress =>",
         1,
     )
-    drain_path.write_text(source.replace(drain.source, mutated, 1), encoding="utf-8")
+    drain_path.write_text(
+        source.replace(drain.source, mutated, 1), encoding="utf-8"
+    )
     (mutated_drain,) = module.rust_items(
-        drain_path.read_text(encoding="utf-8"), "drain_v2_ingress"
+        drain_path.read_text(encoding="utf-8"),
+        "drain_lifecycle_v2_ingress",
     )
 
     errors = module._borrow_bound_outer_ingress_order_errors(
         drain_path, mutated_drain
     )
-    assert any("serialized advance_executor turn" in error for error in errors), errors
+    assert any(
+        "serialized advance_executor turn before the single ingress owner" in error
+        for error in errors
+    ), errors

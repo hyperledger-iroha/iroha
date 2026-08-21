@@ -730,23 +730,24 @@ invocations (`GOV_SUBMIT`, `GOV_FETCH`, `ISO_MESSAGE_KIND`, `ISO_MESSAGE_ID`, po
 interval overrides, and the required Torii/AUTHORITY/PRIVATE_KEY_HEX triplet) so the same
 scripts can be dropped into staging rehearals or release workflows without bespoke glue.
 
-## Sumeragi availability telemetry
+## Sumeragi availability diagnostics
 
 Reliable broadcast (RBC) remains an internal Sumeragi v2 data-availability
 mechanism. The first-release Torii catalog does not expose global per-session
 RBC sampling, delivery, or collector-plan routes, and the JS SDK does not
-provide clients for those retired paths. Use the aggregate telemetry endpoint
-for operational visibility:
+provide clients for those retired paths. Use the authenticated status and
+diagnostics reads for consensus state, and the Prometheus endpoint for
+node-local transport observations:
 
 ```js
-const telemetry = await torii.getSumeragiTelemetryTyped();
-console.log("pending RBC sessions", telemetry.rbc_backlog.pending_sessions);
-console.log("availability votes", telemetry.availability.total_votes_ingested);
+const status = await torii.getSumeragiStatusTyped();
+const diagnostics = await torii.getSumeragiDiagnosticsTyped();
+console.log("height", status.height);
+console.log("diagnostics", diagnostics);
 ```
 
-Use `getSumeragiStatusTyped()` for the compact consensus reducer state. Treat
-the aggregate RBC and collector fields as telemetry only; they are not a
-light-client proof API and must not be used as transaction-finality evidence.
+These operational reads are not a light-client proof API and must not be used
+as transaction-finality evidence.
 
 ## Testing & CI
 

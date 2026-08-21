@@ -36,6 +36,7 @@ import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.nexus.UaidPortfolioQuery
@@ -1888,6 +1889,23 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun feePaymentJsonRequiresExplicitNullableGasLimit() {
+        val missingGas = JsonParser.parse(
+            """{"payer":"authority","value":{"charge_limits":[]}}""",
+        )
+        assertFailsWith<IllegalArgumentException> {
+            FeePaymentJson.parse(missingGas, "fee payment")
+        }
+
+        val explicitNull = JsonParser.parse(
+            """{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}}""",
+        )
+        val parsed = FeePaymentJson.parse(explicitNull, "fee payment")
+        assertIs<FeePaymentIntent.Authority>(parsed)
+        assertNull(parsed.gasLimit)
+    }
+
+    @Test
     fun quoteFeesRejectsLegacyIdentityAndGenesisDomainsBeforeDispatch() {
         val executor = StubResponseExecutor(200, ByteArray(0))
         val transport = HttpClientTransport.withExecutor(
@@ -2495,6 +2513,13 @@ class HttpClientTransportTest {
                 request,
                 VerifyingKeyDraftOperation.REGISTER,
                 authority = testAccountId(0x59),
+            ),
+        )
+        expectReject(
+            verifyingKeyTransactionPayload(
+                request,
+                VerifyingKeyDraftOperation.REGISTER,
+                admissionIntent = TransactionAdmissionIntent.ORDINARY,
             ),
         )
 
@@ -3661,6 +3686,7 @@ class HttpClientTransportTest {
         networkId: NetworkId = verifyingKeyNetworkId,
         authority: String = request["authority"] as String,
         instructions: List<InstructionBox>? = null,
+        admissionIntent: TransactionAdmissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
     ): ByteArray {
         val discriminant = requireNotNull(AccountAddress.detectI105Discriminant(authority))
         val instructionList = instructions ?: listOf(
@@ -3675,6 +3701,7 @@ class HttpClientTransportTest {
                 timeToLiveMs = 5_000L,
                 nonce = 1L,
                 feePayment = testFeePayment(),
+                admissionIntent = admissionIntent,
             ),
         )
     }
@@ -3711,6 +3738,7 @@ class HttpClientTransportTest {
                 timeToLiveMs = 5_000L,
                 nonce = seed.toLong() + 1L,
                 feePayment = testFeePayment(),
+                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
                 metadata = mapOf("note" to JsonValue.string("tx-$seed")),
             ),
         )
@@ -4542,7 +4570,7 @@ class HttpClientTransportTest {
                     .setStatusCode(202)
                     .setBody(byteArrayOf())
                 if (submitHeaderHash != null) {
-                    builder.addHeader("x-iroha-transaction-hash", submitHeaderHash)
+                    builder.addHeader("x-iroha-entrypoint-hash", submitHeaderHash)
                 }
                 return CompletableFuture.completedFuture(builder.build())
             }

@@ -47,12 +47,12 @@ fn recovered_sign_completion_classifies_only_lost_or_post_publication_owners_for
 
 #[test]
 fn completion_classifier_consumes_composite_fetch_and_refanout_results() {
-    let dispatched = ProductionLifecycleCompletionSelectionV1::RecoveredIoDispatch(Ok(
-        ProductionRecoveredCompletionDispatchV1::CapacityUnavailable,
+    let dispatched = ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(Ok(
+        ProductionCompletionDispatchV1::CapacityUnavailable,
     ));
     assert!(!dispatched.restart_required());
-    let dispatch_error = ProductionLifecycleCompletionSelectionV1::RecoveredIoDispatch(Err(
-        ProductionRecoveredCompletionDispatchErrorV1::InvalidReadyCensus,
+    let dispatch_error = ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(Err(
+        ProductionCompletionDispatchErrorV1::InvalidReadyCensus,
     ));
     assert!(dispatch_error.restart_required());
 

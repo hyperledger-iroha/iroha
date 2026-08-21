@@ -592,7 +592,6 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
         )))
         .with_config_layer(|layer| {
             layer
-                .write(["nexus", "enabled"], true)
                 .write(
                     ["nexus", "fees", "fee_asset_id"],
                     nexus_fee_asset_id_literal(),
@@ -754,7 +753,6 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
         )))
         .with_config_layer(|layer| {
             layer
-                .write(["nexus", "enabled"], true)
                 .write(
                     ["nexus", "fees", "fee_asset_id"],
                     nexus_fee_asset_id_literal(),

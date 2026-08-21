@@ -198,19 +198,6 @@ fn carrier_replacement_filters_persistence_and_output_sources_together() {
             .as_ref()
             .is_some_and(|hint| hint.proposal_block_hash == winning_subject.block_hash)
     }));
-    adapter.pending_committed_lanes.clear();
-    adapter
-        .committed_lane_outputs
-        .push_back(PendingCommittedLaneOutput {
-            next_validator: sessions[0].commit_qc.validator_set.len(),
-            session: sessions[0].clone(),
-        });
-    let revision_before_output_only_prune = adapter.committed_lane_status_revision;
-    adapter.retain_committed_lane_outputs_for_subject(winning_subject);
-    assert_ne!(
-        adapter.committed_lane_status_revision, revision_before_output_only_prune,
-        "removing only an output-owner copy must invalidate the status projection"
-    );
 }
 #[test]
 fn completed_commit_qc_round_robin_does_not_restart_ahead_of_pending_source() {
@@ -1646,7 +1633,6 @@ fn merge_entry_from_reference(
         activation_root: Hash::new(b"historical sidecar activations"),
         lane_snapshots: Vec::new(),
         lane_drain_certificates: Vec::new(),
-        queue_plan_admissions: Vec::new(),
         execution_batch: None,
         global_state_root: Hash::new(state_root),
         merge_qc: reference.merge_qc.clone(),
@@ -2283,7 +2269,6 @@ fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() 
         &keys,
         &autonomous_proposal,
         autonomous_entrypoint,
-        AutonomousAuthorRule::Autonomous,
         b"mixed-raw-successor-queue-plan-admission-binding",
         b"mixed-raw-successor-reservation-owner",
         "deterministic mixed-carrier autonomous producer",

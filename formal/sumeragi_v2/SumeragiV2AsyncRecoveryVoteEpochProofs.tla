@@ -1427,11 +1427,11 @@ BY Zenon
        AsyncProducerJournalClosed, AsyncProducerJournalClosedAt,
        AsyncProducerVars
 
-THEOREM AsyncServeProducerEpisodeFramePreservesTypeInvariant ==
-  /\ AsyncServeProducerEpisodeTypeInvariant
-  /\ UNCHANGED asyncServeProducerEpisodeDue
-  => AsyncServeProducerEpisodeTypeInvariant'
-BY Zenon DEF AsyncServeProducerEpisodeTypeInvariant
+THEOREM AsyncServeProducerTurnFramePreservesTypeInvariant ==
+  /\ AsyncServeProducerTurnTypeInvariant
+  /\ UNCHANGED asyncServeProducerTurnReady
+  => AsyncServeProducerTurnTypeInvariant'
+BY Zenon DEF AsyncServeProducerTurnTypeInvariant
 
 
 THEOREM AsyncStrongTypeProjectsAsyncType ==
@@ -1459,16 +1459,16 @@ BY AsyncTimeoutRecoveryRolloverInstanceStartsEmpty, Isa
        AsyncTimeoutRecoveryEpisodes,
        AsyncTimeoutRecoveryEpisodesIn
 
-THEOREM AsyncInitEstablishesServeProducerEpisodeInvariants ==
+THEOREM AsyncInitEstablishesServeProducerTurnInvariants ==
   \A initialContext:
     AsyncInitAt(initialContext)
-      => /\ AsyncServeProducerEpisodeTypeInvariant
-         /\ AsyncServeProducerEpisodeOwnershipInvariant
+      => /\ AsyncServeProducerTurnTypeInvariant
+         /\ AsyncServeProducerTurnOwnershipInvariant
 BY Isa
    DEF AsyncInitAt, AsyncBaseInitAt,
-       AsyncServeProducerEpisodeInit,
-       AsyncServeProducerEpisodeTypeInvariant,
-       AsyncServeProducerEpisodeOwnershipInvariant
+       AsyncServeProducerTurnInit,
+       AsyncServeProducerTurnTypeInvariant,
+       AsyncServeProducerTurnOwnershipInvariant
 
 THEOREM AsyncInitEstablishesStrongTypeInvariant ==
   \A initialContext:
@@ -1537,9 +1537,9 @@ PROOF
          AsyncInitEstablishesOrdinaryIngressCarrierOwnership
     <2>3f. AsyncProducerTypeInvariant
       BY <1>1, AsyncInitEstablishesProducerTypeInvariant
-    <2>3p. /\ AsyncServeProducerEpisodeTypeInvariant
-             /\ AsyncServeProducerEpisodeOwnershipInvariant
-      BY <1>1, AsyncInitEstablishesServeProducerEpisodeInvariants
+    <2>3p. /\ AsyncServeProducerTurnTypeInvariant
+             /\ AsyncServeProducerTurnOwnershipInvariant
+      BY <1>1, AsyncInitEstablishesServeProducerTurnInvariants
     <2>3t. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant
       BY <1>1, AsyncInitEstablishesTimeoutRecoveryCurrentBoundary
     <2>4. ReceivedTimeoutVotePoolInvariant
@@ -1602,8 +1602,8 @@ PROOF
     <2>1. /\ StrongInductiveInvariant
            /\ AsyncSchedulerTypeInvariant
            /\ AsyncProducerTypeInvariant
-           /\ AsyncServeProducerEpisodeTypeInvariant
-           /\ AsyncServeProducerEpisodeOwnershipInvariant
+           /\ AsyncServeProducerTurnTypeInvariant
+           /\ AsyncServeProducerTurnOwnershipInvariant
            /\ AsyncServiceActivationPairInvariant
            /\ AsyncControlServiceStateTypeInvariant
            /\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant
@@ -1619,8 +1619,8 @@ PROOF
            /\ HistoricalLockRestartAuthoritySourceRetentionInvariant
            /\ AsyncGstRecoveryPhaseInvariant
            /\ AsyncSerializedBusyKernelInvariant
-           /\ AsyncServeProducerEpisodeTypeInvariant
-           /\ AsyncServeProducerEpisodeOwnershipInvariant
+           /\ AsyncServeProducerTurnTypeInvariant
+           /\ AsyncServeProducerTurnOwnershipInvariant
            /\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
     <2>2. UNCHANGED vars
@@ -1685,14 +1685,14 @@ PROOF
     <2>4e. AsyncProducerTypeInvariant'
       BY <1>1, <2>1, AsyncProducerVarsFramePreservesTypeInvariant
          DEF AsyncAllVars
-    <2>4f. AsyncServeProducerEpisodeTypeInvariant'
+    <2>4f. AsyncServeProducerTurnTypeInvariant'
       BY <1>1, <2>1,
-         AsyncServeProducerEpisodeFramePreservesTypeInvariant
+         AsyncServeProducerTurnFramePreservesTypeInvariant
          DEF AsyncAllVars
-    <2>4g. AsyncServeProducerEpisodeOwnershipInvariant'
+    <2>4g. AsyncServeProducerTurnOwnershipInvariant'
       BY <1>1, <2>1, Isa
          DEF AsyncAllVars, AsyncSchedulerVars,
-             AsyncServeProducerEpisodeOwnershipInvariant,
+             AsyncServeProducerTurnOwnershipInvariant,
              AsyncServeIngressLifecycleOwnerIdentities,
              AsyncServeIngressAdmissionIdentities,
              AsyncServeOffQueueReservations
@@ -1725,12 +1725,12 @@ PROOF
     <2>8. AsyncSerializedBusyKernelInvariant'
       BY <2>1, <2>2,
          CoreVarsStutterPreservesSerializedBusyKernelInvariant
-    <2>8p. /\ AsyncServeProducerEpisodeTypeInvariant'
-             /\ AsyncServeProducerEpisodeOwnershipInvariant'
+    <2>8p. /\ AsyncServeProducerTurnTypeInvariant'
+             /\ AsyncServeProducerTurnOwnershipInvariant'
       BY <1>1, <2>1, Isa
          DEF AsyncAllVars, AsyncSchedulerVars,
-             AsyncServeProducerEpisodeTypeInvariant,
-             AsyncServeProducerEpisodeOwnershipInvariant,
+             AsyncServeProducerTurnTypeInvariant,
+             AsyncServeProducerTurnOwnershipInvariant,
              AsyncServeIngressLifecycleOwnerIdentities,
              AsyncServeIngressAdmissionIdentities,
              AsyncServeOffQueueReservations,
@@ -2539,14 +2539,14 @@ BY RunNodeWorkPreservesEmptyServeIngressOwners,
    Isa
    DEF AsyncRunnerStep, RunNode, RunHistoricalRecoveryNode
 
-THEOREM AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue ==
+THEOREM AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileProducerTurnReady ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
-    /\ asyncServeProducerEpisodeDue[node]
+    /\ asyncServeProducerTurnReady[node]
     /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
     /\ AsyncNetworkStep
     => AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
-BY AsyncServeProducerEpisodeBlocksFreshServeAdmission,
+BY AsyncServeProducerTurnBlocksFreshServeAdmission,
    PopSelectedIngressDoesNotCreateServeIngressOwners,
    HiddenIngressAdmissionPreservesOtherNodeOwners,
    ServeIngressAdmissionStutterPreservesOwnerIdentities,
@@ -2565,14 +2565,14 @@ BY AsyncServeProducerEpisodeBlocksFreshServeAdmission,
        AsyncIoVars, AsyncIoExceptServeAttemptsVars,
        AsyncServeLifecycleVars, AsyncServeIngressAdmissionVars
 
-THEOREM AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue ==
+THEOREM AsyncNextPreservesEmptyServeIngressOwnersWhileProducerTurnReady ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
-    /\ asyncServeProducerEpisodeDue[node]
+    /\ asyncServeProducerTurnReady[node]
     /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
     /\ AsyncNext
     => AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
-BY AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue,
+BY AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileProducerTurnReady,
    RunnerStepPreservesEmptyServeIngressOwners,
    FaultStepPreservesEmptyServeIngressOwners,
    PopSelectedIngressDoesNotCreateServeIngressOwners,
@@ -4544,106 +4544,97 @@ BY AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
        CandidateScheduledIn, EnqueueCandidate,
        AsyncAllVars, AsyncSchedulerVars
 
-THEOREM AsyncNextPreservesServeProducerEpisodeTypeInvariant ==
-  /\ AsyncServeProducerEpisodeTypeInvariant
+THEOREM AsyncNextPreservesServeProducerTurnTypeInvariant ==
+  /\ AsyncServeProducerTurnTypeInvariant
   /\ AsyncNext
-  => AsyncServeProducerEpisodeTypeInvariant'
+  => AsyncServeProducerTurnTypeInvariant'
 PROOF
-  <1>1. ASSUME AsyncServeProducerEpisodeTypeInvariant,
+  <1>1. ASSUME AsyncServeProducerTurnTypeInvariant,
                 AsyncNext
-         PROVE AsyncServeProducerEpisodeTypeInvariant'
-    <2>1. asyncServeProducerEpisodeDue
+         PROVE AsyncServeProducerTurnTypeInvariant'
+    <2>1. asyncServeProducerTurnReady
              \in [ValidatorIds -> BOOLEAN]
-      BY <1>1 DEF AsyncServeProducerEpisodeTypeInvariant
-    <2>2. AsyncServeProducerEpisodeTransition
+      BY <1>1 DEF AsyncServeProducerTurnTypeInvariant
+    <2>2. AsyncServeProducerTurnTransition
       BY <1>1 DEF AsyncNext
     <2>3. \A node \in ValidatorIds:
-             (IF AsyncServeProducerEpisodeRestartStep(node)
-                   \/ AsyncServeProducerEpisodeReceiverCloseStep(node)
-              THEN FALSE
-              ELSE IF AsyncServeProducerEpisodeFinalRetirementStep(node)
-                   THEN TRUE
-                   ELSE IF AsyncServeProducerEpisodeActiveThisStep(node)
-                        THEN FALSE
-                        ELSE asyncServeProducerEpisodeDue[node])
+             (IF AsyncServeProducerTurnCompletionStep(node)
+              THEN TRUE
+              ELSE IF AsyncServeProducerTurnAttemptThisStep(node)
+                   THEN FALSE
+                   ELSE asyncServeProducerTurnReady[node])
                \in BOOLEAN
       <3>1. ASSUME NEW node \in ValidatorIds
-             PROVE (IF AsyncServeProducerEpisodeRestartStep(node)
-                          \/ AsyncServeProducerEpisodeReceiverCloseStep(node)
-                    THEN FALSE
-                    ELSE IF AsyncServeProducerEpisodeFinalRetirementStep(node)
-                         THEN TRUE
-                         ELSE IF AsyncServeProducerEpisodeActiveThisStep(node)
-                              THEN FALSE
-                              ELSE asyncServeProducerEpisodeDue[node])
+             PROVE (IF AsyncServeProducerTurnCompletionStep(node)
+                    THEN TRUE
+                    ELSE IF AsyncServeProducerTurnAttemptThisStep(node)
+                         THEN FALSE
+                         ELSE asyncServeProducerTurnReady[node])
                      \in BOOLEAN
-        <4>1. asyncServeProducerEpisodeDue[node] \in BOOLEAN
+        <4>1. asyncServeProducerTurnReady[node] \in BOOLEAN
           BY <2>1, <3>1, FunctionValueHasCodomain
         <4> QED BY <4>1, Isa
       <3> QED BY <3>1
     <2>4. [node \in ValidatorIds |->
-             IF AsyncServeProducerEpisodeRestartStep(node)
-                  \/ AsyncServeProducerEpisodeReceiverCloseStep(node)
-             THEN FALSE
-             ELSE IF AsyncServeProducerEpisodeFinalRetirementStep(node)
-                  THEN TRUE
-                  ELSE IF AsyncServeProducerEpisodeActiveThisStep(node)
-                       THEN FALSE
-                       ELSE asyncServeProducerEpisodeDue[node]]
+             IF AsyncServeProducerTurnCompletionStep(node)
+             THEN TRUE
+             ELSE IF AsyncServeProducerTurnAttemptThisStep(node)
+                  THEN FALSE
+                  ELSE asyncServeProducerTurnReady[node]]
              \in [ValidatorIds -> BOOLEAN]
       BY <2>3, Isa
-    <2>5. asyncServeProducerEpisodeDue'
+    <2>5. asyncServeProducerTurnReady'
              \in [ValidatorIds -> BOOLEAN]
       BY <2>2, <2>4
-         DEF AsyncServeProducerEpisodeTransition
+         DEF AsyncServeProducerTurnTransition
     <2> QED BY <2>5
-         DEF AsyncServeProducerEpisodeTypeInvariant
+         DEF AsyncServeProducerTurnTypeInvariant
   <1> QED BY <1>1
 
-THEOREM AsyncNextPreservesServeProducerEpisodeInvariants ==
+THEOREM AsyncNextPreservesServeProducerTurnInvariants ==
   /\ AsyncStrongTypeInvariant
   /\ AsyncNext
-  => /\ AsyncServeProducerEpisodeTypeInvariant'
-     /\ AsyncServeProducerEpisodeOwnershipInvariant'
+  => /\ AsyncServeProducerTurnTypeInvariant'
+     /\ AsyncServeProducerTurnOwnershipInvariant'
 PROOF
   <1>1. ASSUME AsyncStrongTypeInvariant,
               AsyncNext
-         PROVE /\ AsyncServeProducerEpisodeTypeInvariant'
-               /\ AsyncServeProducerEpisodeOwnershipInvariant'
+         PROVE /\ AsyncServeProducerTurnTypeInvariant'
+               /\ AsyncServeProducerTurnOwnershipInvariant'
     <2>1. /\ StrongInductiveInvariant
            /\ AsyncTypeInvariant
            /\ AsyncRecoveryTypeInvariant
-           /\ AsyncServeProducerEpisodeTypeInvariant
-           /\ AsyncServeProducerEpisodeOwnershipInvariant
+           /\ AsyncServeProducerTurnTypeInvariant
+           /\ AsyncServeProducerTurnOwnershipInvariant
       BY <1>1, AsyncStrongTypeProjectsAsyncType
          DEF AsyncStrongTypeInvariant
-    <2>2. AsyncServeProducerEpisodeTypeInvariant'
+    <2>2. AsyncServeProducerTurnTypeInvariant'
       BY <1>1, <2>1,
-         AsyncNextPreservesServeProducerEpisodeTypeInvariant
+         AsyncNextPreservesServeProducerTurnTypeInvariant
     <2>3. AsyncSchedulerTypeInvariant'
       BY <1>1, <2>1, AsyncNextPreservesSchedulerType
     <2>4. \A node \in ValidatorIds:
-             asyncServeProducerEpisodeDue'[node]
+             asyncServeProducerTurnReady'[node]
                => /\ AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
                   /\ AsyncServeOffQueueReservations(node)' = {}
       <3>1. ASSUME NEW node \in ValidatorIds,
-                    asyncServeProducerEpisodeDue'[node]
+                    asyncServeProducerTurnReady'[node]
              PROVE /\ AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
                    /\ AsyncServeOffQueueReservations(node)' = {}
-        <4>1. CASE AsyncServeProducerEpisodeFinalRetirementStep(node)
+        <4>1. CASE AsyncServeProducerTurnCompletionStep(node)
           BY <4>1
-             DEF AsyncServeProducerEpisodeFinalRetirementStep
-        <4>2. CASE ~AsyncServeProducerEpisodeFinalRetirementStep(node)
-          <5>1. asyncServeProducerEpisodeDue[node]
+             DEF AsyncServeProducerTurnCompletionStep
+        <4>2. CASE ~AsyncServeProducerTurnCompletionStep(node)
+          <5>1. asyncServeProducerTurnReady[node]
             BY <1>1, <3>1, <4>2, Isa
-               DEF AsyncNext, AsyncServeProducerEpisodeTransition
+               DEF AsyncNext, AsyncServeProducerTurnTransition
           <5>2. /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
                  /\ AsyncServeOffQueueReservations(node) = {}
             BY <2>1, <3>1, <5>1
-               DEF AsyncServeProducerEpisodeOwnershipInvariant
+               DEF AsyncServeProducerTurnOwnershipInvariant
           <5>3. AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
             BY <1>1, <2>1, <3>1, <5>1, <5>2,
-               AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue
+               AsyncNextPreservesEmptyServeIngressOwnersWhileProducerTurnReady
           <5>4. AsyncServeOffQueueReservations(node)' = {}
             <6>1. ASSUME AsyncServeOffQueueReservations(node)' # {}
                    PROVE FALSE
@@ -4673,8 +4664,8 @@ PROOF
           <5> QED BY <5>3, <5>4
         <4> QED BY <4>1, <4>2
       <3> QED BY <3>1
-    <2>5. AsyncServeProducerEpisodeOwnershipInvariant'
-      BY <2>4 DEF AsyncServeProducerEpisodeOwnershipInvariant
+    <2>5. AsyncServeProducerTurnOwnershipInvariant'
+      BY <2>4 DEF AsyncServeProducerTurnOwnershipInvariant
     <2> QED BY <2>2, <2>5
   <1> QED BY <1>1
 

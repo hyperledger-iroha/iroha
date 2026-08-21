@@ -105,8 +105,8 @@ pub mod isi {
             LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneRelayEmergencyValidatorSet, LaneRelayEnvelopeRef,
             VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
             VerifiedFeeSponsorVaultAllocation, VerifiedLaneRelayRecord,
-            fee_sponsor_vault_allocation_claim_digest, fee_sponsor_vault_source_state_root,
-            lane_relay_fastpq_claim_digest,
+            fee_sponsor_vault_allocation_claim_digest, fee_sponsor_vault_policy_commitment,
+            fee_sponsor_vault_source_state_root, lane_relay_fastpq_claim_digest,
         },
         parameter::Parameter,
         prelude::*,
@@ -3720,7 +3720,7 @@ pub mod isi {
             .map_err(Error::from)?;
         if let Some(binding) = policy.treasury_payout_binding.as_ref() {
             if binding.treasury_account_id != policy.treasury_account_id
-                || binding.sbd_asset_id != policy.ds_asset_id
+                || binding.ds_asset_id != policy.ds_asset_id
                 || binding.contract_address.subject_id() != policy.treasury_account_id
             {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -4071,18 +4071,18 @@ pub mod isi {
                     ),
                 ));
             }
-            let sbd_definition = state_transaction
+            let ds_definition = state_transaction
                 .world
-                .asset_definition(&self.payout_binding.sbd_asset_id)
+                .asset_definition(&self.payout_binding.ds_asset_id)
                 .map_err(Error::from)?;
-            if sbd_definition.spec().scale()
+            if ds_definition.spec().scale()
                 != Some(u32::from(
                     iroha_data_model::validation_fee::VALIDATION_FEE_DS_SCALE,
                 ))
             {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
-                        "validation-fee payout lifecycle SBD asset scale must be 2".into(),
+                        "validation-fee payout lifecycle DS asset scale must be 2".into(),
                     ),
                 ));
             }
@@ -6651,7 +6651,7 @@ pub mod isi {
     ) -> Permission {
         iroha_executor_data_model::permission::asset::CanTransferAsset {
             asset: AssetId::new(
-                binding.sbd_asset_id.clone(),
+                binding.ds_asset_id.clone(),
                 binding.treasury_account_id.clone(),
             ),
         }
@@ -6799,7 +6799,7 @@ pub mod isi {
             (
                 validation_fee_payout_effect_permission(binding),
                 binding.pool_vault_account_id.clone(),
-                "the wrapper SBD asset transfer effect",
+                "the wrapper DS asset transfer effect",
             ),
         ]
     }
@@ -9215,7 +9215,9 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if self.owner != *authority {
+            if self.owner != *authority
+                && !crate::executor::is_initial_genesis_context(state_transaction)
+            {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "owner must equal authority".into(),
                 ));
@@ -11444,13 +11446,11 @@ pub mod isi {
                         "an SCCP destination proof for this exact outbound lane and message has already been accepted",
                     ));
                 }
-                // Reserve two passes over the full admitted Taira roster before cryptographically
-                // validating any proof-controlled public keys: one for key validation/hash reconstruction and
-                // one for the worst-case all-signer PoP/aggregate contribution. Canonical parsing
-                // above is bounded by the byte preflight and exposes the durable replay key, so an
-                // exact retained replay does not consume verifier work. The proof-count cap is one
-                // per transaction, so this conservative reservation cannot crowd out another
-                // legitimate proof in the same transaction.
+                // Reserve two full Taira-roster passes before validating proof-controlled keys:
+                // one for key/hash reconstruction, one for worst-case signer PoP/aggregation.
+                // Bounded parsing exposes the replay key, so exact replay consumes no verifier work.
+                // The one-proof transaction cap prevents this conservative reservation from
+                // crowding out another legitimate proof.
                 state_transaction.register_sccp_proof(
                     proof_size,
                     crate::state::SccpVerifierWorkV1 {
@@ -12088,11 +12088,6 @@ pub mod isi {
                 "bridge receipt requires an active transaction lane",
             ));
         };
-        if !state_transaction.nexus.enabled {
-            return Err(invalid_bridge_receipt(
-                "bridge receipt requires nexus.enabled=true",
-            ));
-        }
         if nexus_active_lane_dataspace(current_lane_id, &state_transaction.nexus).is_none() {
             return Err(invalid_bridge_receipt(format!(
                 "bridge receipt requires active Nexus lane {current_lane_id}"
@@ -12808,11 +12803,6 @@ pub mod isi {
                 "SCCP message recording requires an active transaction lane".into(),
             ));
         };
-        if !state_transaction.nexus.enabled {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "SCCP message recording requires nexus.enabled=true".into(),
-            ));
-        }
         let Some(active_dataspace_id) = nexus_active_lane_dataspace_at_height(
             lane_id,
             &state_transaction.nexus,
@@ -15445,11 +15435,9 @@ pub mod isi {
                 .world
                 .domain_endorsement_policies
                 .get(&canonical_id)
-                .map_or(
-                    state_transaction.nexus.enabled
-                        && state_transaction.nexus.endorsement.quorum > 0,
-                    |policy| policy.required,
-                );
+                .map_or(state_transaction.nexus.endorsement.quorum > 0, |policy| {
+                    policy.required
+                });
             if requires_endorsement {
                 validate_domain_endorsement(&canonical_id, &domain.metadata, state_transaction)?;
             }
@@ -15559,8 +15547,7 @@ pub mod isi {
                     .cloned()
             })
             .or_else(|| {
-                if state_transaction.nexus.enabled && state_transaction.nexus.endorsement.quorum > 0
-                {
+                if state_transaction.nexus.endorsement.quorum > 0 {
                     Some(DomainEndorsementPolicy {
                         committee_id: "default".to_owned(),
                         max_endorsement_age: u64::MAX,
@@ -15643,10 +15630,7 @@ pub mod isi {
                 } else {
                     Some(DomainCommittee {
                         committee_id: policy.committee_id.clone(),
-                        members: keys
-                            .iter()
-                            .filter_map(|key| PublicKey::from_str(key).ok())
-                            .collect(),
+                        members: keys.iter().cloned().collect(),
                         quorum: state_transaction.nexus.endorsement.quorum,
                         metadata: Metadata::default(),
                     })
@@ -15958,11 +15942,6 @@ pub mod isi {
                     "not permitted: CanManageLaneRelayEmergency".into(),
                 ));
             }
-            if !state_transaction.nexus.enabled {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "lane relay emergency override requires nexus.enabled=true".into(),
-                ));
-            }
             if !state_transaction.nexus.lane_relay_emergency.enabled {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "lane relay emergency override requires nexus.lane_relay_emergency.enabled=true"
@@ -16126,11 +16105,6 @@ pub mod isi {
         ) -> Result<(), Error> {
             // Registration is permissionless transport. Durable authority comes exclusively from
             // the finalized lane-committee QC authenticated before either state key is written.
-            if !state_transaction.nexus.enabled {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "verified lane relay registration requires nexus.enabled=true".into(),
-                ));
-            }
             if self.effect_proof_blob.is_some() {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
@@ -16395,12 +16369,15 @@ pub mod isi {
                 )
                 .into());
             }
-            let verified_fastpq = fastpq_prover::verify_axt_proof_envelope(&proof_envelope)
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("verified lane relay FASTPQ verification failed: {err}").into(),
-                    )
-                })?;
+            let verified_fastpq = fastpq_prover::verify_axt_proof_envelope_with_outer_metadata(
+                &proof_envelope,
+                proof_blob.expiry_slot,
+            )
+            .map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("verified lane relay FASTPQ verification failed: {err}").into(),
+                )
+            })?;
             let execution_commitment = state_transaction
                 .finalized_lane_relay_execution_commitment(&envelope)
                 .map_err(|err| {
@@ -16512,11 +16489,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !state_transaction.nexus.enabled {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "verified fee sponsor vault allocation requires nexus.enabled=true".into(),
-                ));
-            }
             if *self.program_revision() == 0 {
                 return Err(invalid_fee_sponsor_program(
                     "verified fee sponsor vault allocation revision must be non-zero",
@@ -16614,6 +16586,26 @@ pub mod isi {
                     "verified fee sponsor vault allocation manifest root cannot be zeroed",
                 ));
             }
+            let frozen_policy = state_transaction
+                .axt_execution_policy_snapshot()
+                .ok_or_else(|| {
+                    invalid_fee_sponsor_program(
+                        "verified fee sponsor vault allocation requires a frozen AXT policy snapshot",
+                    )
+                })?
+                .entries
+                .into_iter()
+                .find(|entry| entry.dsid == *self.source_dataspace_id())
+                .ok_or_else(|| {
+                    invalid_fee_sponsor_program(
+                        "verified fee sponsor vault allocation source dataspace has no frozen AXT policy",
+                    )
+                })?;
+            if frozen_policy.policy.manifest_root != *self.manifest_root() {
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault allocation manifest root does not match the frozen AXT policy",
+                ));
+            }
             let proof_blob = self.proof_blob().clone();
             if proof_blob.payload.is_empty() {
                 return Err(invalid_fee_sponsor_program(
@@ -16627,6 +16619,11 @@ pub mod isi {
                     "verified fee sponsor vault allocation proof expired at slot {expiry_slot}",
                 )));
             }
+            if proof_blob.expiry_slot != Some(*self.expires_at_height()) {
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault proof expiry must equal the allocation lease expiry",
+                ));
+            }
             let proof_envelope = norito::decode_canonical::<AxtProofEnvelope>(&proof_blob.payload)
                 .map_err(|err| {
                     invalid_fee_sponsor_program(format!(
@@ -16638,6 +16635,11 @@ pub mod isi {
             {
                 return Err(invalid_fee_sponsor_program(
                     "verified fee sponsor vault proof source dataspace or manifest root mismatch",
+                ));
+            }
+            if proof_envelope.da_commitment.is_some() {
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault proof must not carry a DA commitment",
                 ));
             }
             if let Some(committed_amount) = proof_envelope.committed_amount {
@@ -16679,6 +16681,13 @@ pub mod isi {
                     "verified fee sponsor vault proof has the wrong source or effect type",
                 ));
             }
+            let expected_policy_commitment =
+                fee_sponsor_vault_policy_commitment(self.manifest_root());
+            if binding.policy_commitment != hex::encode(expected_policy_commitment.as_ref()) {
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault proof policy commitment mismatch",
+                ));
+            }
             let expected_claim_digest = fee_sponsor_vault_allocation_claim_digest(&claim);
             if binding.claim_digest != hex::encode(expected_claim_digest.as_ref()) {
                 return Err(invalid_fee_sponsor_program(
@@ -16695,13 +16704,15 @@ pub mod isi {
                     "verified fee sponsor vault proof asset binding mismatch",
                 ));
             }
-            let verified_fastpq = fastpq_prover::verify_axt_proof_envelope(&proof_envelope)
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("verified fee sponsor vault FASTPQ verification failed: {err}",)
-                            .into(),
-                    )
-                })?;
+            let verified_fastpq = fastpq_prover::verify_axt_proof_envelope_with_outer_metadata(
+                &proof_envelope,
+                proof_blob.expiry_slot,
+            )
+            .map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("verified fee sponsor vault FASTPQ verification failed: {err}",).into(),
+                )
+            })?;
             let record = VerifiedFeeSponsorVaultAllocation::new(
                 program_id.clone(),
                 *self.program_revision(),
@@ -16823,6 +16834,9 @@ pub mod isi {
         program_id: &iroha_data_model::nexus::FeeSponsorProgramId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        if crate::executor::is_initial_genesis_context(state_transaction) {
+            return Ok(());
+        }
         let delegated = state_transaction
             .world
             .account_permissions
@@ -17553,16 +17567,26 @@ pub mod isi {
                 program_id.sponsor.clone(),
                 fee_sponsor_asset_scope(&definition, dataspace),
             );
-            Transfer::<Asset, Quantity, Account>::asset_quantity(
-                source,
-                self.amount().clone(),
-                state_transaction
-                    .nexus
-                    .fees
-                    .sponsor_vault_custody_account_id
-                    .clone(),
-            )
-            .execute(authority, state_transaction)?;
+            if crate::executor::is_initial_genesis_context(state_transaction) {
+                crate::smartcontracts::isi::asset::isi::execute_initial_genesis_fee_sponsor_funding_transfer(
+                    state_transaction,
+                    authority,
+                    &program_id,
+                    source,
+                    self.amount().clone(),
+                )?;
+            } else {
+                Transfer::<Asset, Quantity, Account>::asset_quantity(
+                    source,
+                    self.amount().clone(),
+                    state_transaction
+                        .nexus
+                        .fees
+                        .sponsor_vault_custody_account_id
+                        .clone(),
+                )
+                .execute(authority, state_transaction)?;
+            }
             let key = FeeSponsorVaultKey {
                 program_id: program_id.clone(),
                 asset_definition_id: self.asset_definition_id().clone(),
@@ -19340,6 +19364,7 @@ pub mod isi {
                     verifier_version: "v1".to_owned(),
                     target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
                     effect_binding: None,
+                    remote_spend_intent_commitments: Vec::new(),
                 },
             )
         }
@@ -19963,7 +19988,6 @@ pub mod isi {
             }
         }
         fn set_current_lane_for_test(stx: &mut StateTransaction<'_, '_>, lane_id: LaneId) {
-            stx.nexus.enabled = true;
             stx.current_lane_id = Some(lane_id);
         }
         #[derive(Clone)]
@@ -21629,22 +21653,6 @@ pub mod isi {
             }
         }
         #[test]
-        fn record_sccp_message_rejects_when_nexus_disabled() {
-            blank_test_state_transaction!(state, block, stx);
-            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
-            stx.nexus.enabled = false;
-            let payload = sora_outbound_sccp_payload(50);
-            sccp_message!(key, instruction, payload);
-            let err = instruction
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("SCCP outbox recording must reject when Nexus is disabled");
-            assert!(
-                format!("{err:?}").contains("requires nexus.enabled=true"),
-                "unexpected error: {err:?}"
-            );
-            assert!(stx.world.sccp_outbound_pending_messages.get(&key).is_none());
-        }
-        #[test]
         fn record_sccp_message_rejects_missing_lane_context() {
             blank_test_state_transaction!(state, block, stx);
             stx.sccp_ivm_proved_execution_binding = Some(test_sccp_ivm_proved_execution_binding());
@@ -21731,7 +21739,6 @@ pub mod isi {
                 ],
             )
             .expect("recreated SCCP lane catalog");
-            stx.nexus.enabled = true;
             stx.nexus.dataspace_catalog = dataspace_catalog.clone();
             stx.world.dataspace_catalog = dataspace_catalog;
             stx.nexus.lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
@@ -21839,7 +21846,6 @@ pub mod isi {
             )
             .expect("future autoscale SCCP lane catalog");
             configure_universal_dataspace(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.autoscale.enabled = true;
             stx.nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
             stx.nexus.autoscale.max_lanes = NonZeroU32::new(8).expect("nonzero max lanes");
@@ -23314,6 +23320,7 @@ seiyaku GovernanceLifecycle {
                 verifier_version: "v1".to_string(),
                 target_dsids: vec![10],
                 effect_binding: None,
+                remote_spend_intent_commitments: Vec::new(),
             };
             let lane_finality_statement_hash = envelope
                 .lane_finality_statement_hash()
@@ -24845,7 +24852,6 @@ seiyaku GovernanceLifecycle {
         }
         fn configure_active_test_lanes(stx: &mut StateTransaction<'_, '_>, lane_ids: &[LaneId]) {
             assert!(!lane_ids.is_empty(), "test lane catalog cannot be empty");
-            stx.nexus.enabled = true;
             configure_universal_dataspace(stx);
             let lanes = lane_ids
                 .iter()
@@ -24881,7 +24887,6 @@ seiyaku GovernanceLifecycle {
         }
         fn enable_sccp_recording_for_test(stx: &mut StateTransaction<'_, '_>, lane_id: LaneId) {
             stx.sccp_ivm_proved_execution_binding = Some(test_sccp_ivm_proved_execution_binding());
-            stx.nexus.enabled = true;
             stx.current_lane_id = Some(lane_id);
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -28620,30 +28625,6 @@ seiyaku GovernanceLifecycle {
             }));
         }
         #[test]
-        fn record_bridge_receipt_rejects_when_nexus_disabled() {
-            blank_state_transaction!(state, block, state_block, stx);
-            let (_, proof_hash) = seed_generic_bridge_proof_for_receipt_test(&mut stx, 12);
-            set_current_lane_for_test(&mut stx, LaneId::SINGLE);
-            stx.nexus.enabled = false;
-            stx.world.internal_event_buf.clear();
-            let receipt = bridge_receipt_for_test(proof_hash);
-            let err = RecordBridgeReceipt::new(receipt)
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("bridge receipt must reject when Nexus is disabled");
-            assert!(
-                format!("{err:?}").contains("requires nexus.enabled=true"),
-                "unexpected error: {err:?}"
-            );
-            assert!(
-                stx.bridge_receipt_proofs_available_in_tx
-                    .contains(&proof_hash),
-                "disabled Nexus validation must not consume proof marker"
-            );
-            assert!(stx.world.internal_event_buf.iter().all(|event| {
-                !matches!(event.as_ref(), DataEvent::Bridge(BridgeEvent::Emitted(_)))
-            }));
-        }
-        #[test]
         fn record_bridge_receipt_rejects_mismatched_transaction_lane() {
             blank_state_transaction!(state, block, state_block, stx);
             configure_active_test_lanes(&mut stx, &[LaneId::SINGLE, LaneId::new(7)]);
@@ -29126,7 +29107,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_requires_permission() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29161,35 +29141,9 @@ seiyaku GovernanceLifecycle {
             );
         }
         #[test]
-        fn set_lane_relay_emergency_validators_rejects_when_nexus_disabled() {
-            blank_state_transaction!(state, block, state_block, stx);
-            bootstrap_alice_account(&mut stx);
-            configure_universal_dataspace(&mut stx);
-            stx.nexus.lane_relay_emergency.enabled = true;
-            let authority = register_multisig_authority(&mut stx, 3, 5);
-            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
-            stx.nexus.enabled = false;
-            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer = seed_live_peer(&mut stx, &peer_keypair);
-            let err = SetLaneRelayEmergencyValidators {
-                lane_id: LaneId::new(0),
-                peers: vec![peer],
-                expires_at_height: Some(12),
-                metadata: Metadata::default(),
-            }
-            .execute(&authority, &mut stx)
-            .expect_err("nexus disabled should be rejected");
-            assert!(matches!(
-                err,
-                InstructionExecutionError::InvariantViolation(msg)
-                    if msg.as_ref() == "lane relay emergency override requires nexus.enabled=true"
-            ));
-        }
-        #[test]
         fn set_lane_relay_emergency_validators_rejects_when_disabled() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
@@ -29214,7 +29168,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_requires_multisig_authority() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             grant_manage_lane_relay_emergency_permission(&mut stx, &ALICE_ID);
@@ -29240,7 +29193,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_rejects_unknown_lane() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29266,7 +29218,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_rejects_stale_geometry_lane() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29327,7 +29278,6 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.autoscale.enabled = true;
             stx.nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
             stx.nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
@@ -29384,7 +29334,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_rejects_unregistered_peer() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29412,7 +29361,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_rejects_peer_without_live_consensus_key() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29441,7 +29389,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_rejects_peer_outside_commit_topology() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29480,7 +29427,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_requires_expiry_for_non_empty_roster() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29505,7 +29451,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_rejects_expiry_beyond_max_ttl() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29530,7 +29475,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_inserts_and_deduplicates() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29571,7 +29515,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_clears_on_empty_list() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -30119,13 +30062,12 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn register_domain_requires_endorsement_when_configured() {
             blank_state_transaction!(state, block, state_block, stx);
-            stx.nexus.enabled = true;
             let kp = checked_keypair();
             stx.nexus.endorsement.quorum = 1;
             stx.nexus
                 .endorsement
                 .committee_keys
-                .push(kp.public_key().to_string());
+                .insert(kp.public_key().clone());
             let endorsement_key_id =
                 ConsensusKeyId::new(ConsensusKeyRole::Endorsement, "committee-key");
             let endorsement_record = ConsensusKeyRecord {
@@ -30186,13 +30128,12 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn register_domain_rejects_missing_endorsement_when_quorum_set() {
             blank_state_transaction!(state, block, state_block, stx);
-            stx.nexus.enabled = true;
             stx.nexus.endorsement.quorum = 1;
             let kp = checked_keypair();
             stx.nexus
                 .endorsement
                 .committee_keys
-                .push(kp.public_key().to_string());
+                .insert(kp.public_key().clone());
             let endorsement_key_id =
                 ConsensusKeyId::new(ConsensusKeyRole::Endorsement, "committee-key");
             let endorsement_record = ConsensusKeyRecord {
@@ -30219,13 +30160,12 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn register_domain_duplicate_does_not_persist_endorsement() {
             blank_state_transaction!(state, block, state_block, stx);
-            stx.nexus.enabled = true;
             stx.nexus.endorsement.quorum = 1;
             let kp = checked_keypair();
             stx.nexus
                 .endorsement
                 .committee_keys
-                .push(kp.public_key().to_string());
+                .insert(kp.public_key().clone());
             let endorsement_key_id =
                 ConsensusKeyId::new(ConsensusKeyRole::Endorsement, "committee-key");
             let endorsement_record = ConsensusKeyRecord {
@@ -30319,13 +30259,12 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn register_domain_rejects_expired_endorsement() {
             blank_state_transaction!(state, block, state_block, stx);
-            stx.nexus.enabled = true;
             let kp = checked_keypair();
             stx.nexus.endorsement.quorum = 1;
             stx.nexus
                 .endorsement
                 .committee_keys
-                .push(kp.public_key().to_string());
+                .insert(kp.public_key().clone());
             let endorsement_key_id =
                 ConsensusKeyId::new(ConsensusKeyRole::Endorsement, "committee-key");
             let endorsement_record = ConsensusKeyRecord {
@@ -34789,9 +34728,10 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn register_domain_rejects_missing_endorsement_when_required() {
             let mut state = blank_test_state();
-            state.nexus.get_mut().enabled = true;
+
             state.nexus.get_mut().endorsement.quorum = 1;
-            state.nexus.get_mut().endorsement.committee_keys = vec!["noop".to_string()];
+            state.nexus.get_mut().endorsement.committee_keys =
+                BTreeSet::from([checked_keypair().public_key().clone()]);
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(5).unwrap(),
                 None,
@@ -34821,10 +34761,10 @@ seiyaku GovernanceLifecycle {
             let mut state = blank_test_state();
             let kp_a = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let kp_b = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            state.nexus.get_mut().enabled = true;
+
             state.nexus.get_mut().endorsement.quorum = 2;
             state.nexus.get_mut().endorsement.committee_keys =
-                vec![kp_a.public_key().to_string(), kp_b.public_key().to_string()];
+                BTreeSet::from([kp_a.public_key().clone(), kp_b.public_key().clone()]);
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(7).unwrap(),
                 None,
@@ -34878,9 +34818,10 @@ seiyaku GovernanceLifecycle {
         fn domain_endorsement_rejects_window_and_dataspace_mismatch() {
             let mut state = blank_test_state();
             let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            state.nexus.get_mut().enabled = true;
+
             state.nexus.get_mut().endorsement.quorum = 1;
-            state.nexus.get_mut().endorsement.committee_keys = vec![kp.public_key().to_string()];
+            state.nexus.get_mut().endorsement.committee_keys =
+                BTreeSet::from([kp.public_key().clone()]);
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(9).unwrap(),
                 None,

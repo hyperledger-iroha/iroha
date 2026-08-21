@@ -357,7 +357,6 @@ const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze(
   ),
 );
 const INNER_HEADER_PADDING_BY_WIRE_ID = Object.freeze({});
-
 const BASE58_LOOKUP = new Map(
   Array.from(BASE58_ALPHABET, (char, index) => [char, BigInt(index)]),
 );
@@ -366,7 +365,6 @@ const instructionCache =
   globalThis[INSTRUCTION_CACHE_SYMBOL] ??
   (globalThis[INSTRUCTION_CACHE_SYMBOL] = new Map());
 let noritoLengthFlags = 0;
-
 class BufferReader {
   constructor(buffer, context, lengthFlags = noritoLengthFlags) {
     this.buffer = buffer;
@@ -374,35 +372,30 @@ class BufferReader {
     this.lengthFlags = lengthFlags;
     this.offset = 0;
   }
-
   readU8(name) {
     this.#ensureAvailable(1, name);
     const value = this.buffer[this.offset];
     this.offset += 1;
     return value;
   }
-
   readU16LE(name) {
     this.#ensureAvailable(2, name);
     const value = this.buffer.readUInt16LE(this.offset);
     this.offset += 2;
     return value;
   }
-
   readU32LE(name) {
     this.#ensureAvailable(4, name);
     const value = this.buffer.readUInt32LE(this.offset);
     this.offset += 4;
     return value;
   }
-
   readU64LE(name) {
     this.#ensureAvailable(8, name);
     const value = this.buffer.readBigUInt64LE(this.offset);
     this.offset += 8;
     return value;
   }
-
   readLength(name) {
     if ((this.lengthFlags & COMPACT_LEN_FLAG) !== 0) {
       const [value, bytesRead] = decodeUnsignedLeb128(
@@ -415,7 +408,6 @@ class BufferReader {
     }
     return bigintToSafeNumber(this.readU64LE(name), `${this.context}.${name}`);
   }
-
   readBytes(length, name) {
     const safeLength = Number(length);
     this.#ensureAvailable(safeLength, name);
@@ -2166,6 +2158,14 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
         `${context}.transaction intent projection changed independent field ${field}`,
       );
     }
+  }
+  if (
+    unsignedFields.admission_intent.length !== 4 ||
+    unsignedFields.admission_intent.readUInt32LE(0) !== 0
+  ) {
+    throw new TypeError(
+      `${context}.unsignedTransactionPayloadNorito.admission_intent must be TransactionAdmissionIntent::Ordinary`,
+    );
   }
   const expectedCreationTime = 1_700_000_000_000n + BigInt(rowIndex);
   if (

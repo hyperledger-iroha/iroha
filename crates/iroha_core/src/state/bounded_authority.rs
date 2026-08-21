@@ -116,6 +116,7 @@ pub(super) fn live_manifest_validator_account_peers(
     live.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
     live
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub(super) fn stake_elected_validator_accounts(
     world: &impl WorldReadOnly,
     lane_id: LaneId,

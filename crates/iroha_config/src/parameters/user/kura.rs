@@ -22,20 +22,12 @@ pub struct Kura {
         default = "defaults::kura::BLOCKS_IN_MEMORY"
     )]
     pub blocks_in_memory: NonZeroUsize,
-    /// Number of recent committed non-genesis roster records retained for block-sync validation.
-    /// Genesis is pinned separately, and one additional row is reserved for an authenticated
-    /// pre-Kura successor.
+    /// Number of recent lane-history entries retained alongside the block store.
     #[config(
-        env = "KURA_BLOCK_SYNC_ROSTER_RETENTION",
-        default = "defaults::kura::BLOCK_SYNC_ROSTER_RETENTION"
+        env = "KURA_LANE_HISTORY_RETENTION",
+        default = "defaults::kura::LANE_HISTORY_RETENTION"
     )]
-    pub block_sync_roster_retention: NonZeroUsize,
-    /// Number of recent roster sidecars retained alongside the block store.
-    #[config(
-        env = "KURA_ROSTER_SIDECAR_RETENTION",
-        default = "defaults::kura::ROSTER_SIDECAR_RETENTION"
-    )]
-    pub roster_sidecar_retention: NonZeroUsize,
+    pub lane_history_retention: NonZeroUsize,
     /// Distinct remote peers that must advertise a canonical block before local body eviction.
     #[config(
         env = "KURA_EVICTION_REQUIRED_REPLICAS",
@@ -87,8 +79,7 @@ impl Kura {
             store_dir,
             max_disk_usage_bytes,
             blocks_in_memory,
-            block_sync_roster_retention,
-            roster_sidecar_retention,
+            lane_history_retention,
             eviction_required_replicas,
             replica_advert_evictable_window,
             replica_advert_ttl_ms,
@@ -115,8 +106,7 @@ impl Kura {
             store_dir,
             max_disk_usage_bytes,
             blocks_in_memory,
-            block_sync_roster_retention,
-            roster_sidecar_retention,
+            lane_history_retention,
             replica_advert,
             debug_output_new_blocks,
             merge_ledger_cache_capacity,

@@ -129,61 +129,6 @@ fn durable_sign_preemption_orders_speculative_certified_and_locked_fetches() {
     assert!(!executor.status().fail_closed);
 }
 #[test]
-fn durable_sign_preemption_retires_a_retryable_body_token() {
-    let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1 << 20, 2));
-    let mut services = fixture.services();
-    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: certified_sources(&fixture, &prepare),
-                certificate: Some(prepare),
-            }],
-            &mut services,
-        )
-        .expect("fill pending-work capacity with one certified fetch");
-    let task = services.fetch_tasks[0].clone();
-    let response = signed_certified_response(
-        &fixture,
-        &task,
-        fixture.manifest.clone(),
-        fixture.body.clone(),
-        0,
-    );
-    services.retry_certified_fetch_once = true;
-    assert_eq!(
-        executor.accept_certified_body_response(
-            response,
-            &fixture.context.roster[0].validator,
-            &mut services,
-        ),
-        Err(EffectTransportError::Backpressure),
-    );
-    assert!(
-        executor
-            .body_ownership_projection()
-            .runtime_body_reservation
-            .is_some(),
-        "typed Retryable owns the unpublished Completion token",
-    );
-    executor
-        .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
-        .expect("durable signing preempts the retryable fetch and its token");
-    assert_eq!(services.cancelled_fetches, vec![task.id()]);
-    assert!(executor.pending_fetches.is_empty());
-    assert!(executor.certified_work.is_empty());
-    assert!(executor.outstanding_requests.is_empty());
-    assert!(executor.runtime.reserved_body_available.is_none());
-    assert!(executor.runtime.completions.is_empty());
-    assert_eq!(executor.pending_signatures.len(), 1);
-    assert!(!executor.status().fail_closed);
-}
-#[test]
 fn retained_producer_suffix_allows_exact_payload_chunk_to_release_fetch_capacity() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1 << 20, 2));
@@ -237,83 +182,6 @@ fn retained_producer_suffix_allows_exact_payload_chunk_to_release_fetch_capacity
         )
         .expect("exact chunk reconstruction releases pending-work capacity");
     assert!(executor.pending_fetches.is_empty());
-    assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
-    assert_eq!(
-        executor
-            .step(Instant::now(), &mut services)
-            .expect("released capacity drains the retained producer"),
-        EffectExecutorStep::Advanced { effects: 1 }
-    );
-    assert_eq!(executor.pending_signatures.len(), 1);
-    assert!(executor.retained_effect_batch.is_none());
-    assert!(!executor.status().fail_closed);
-}
-#[test]
-fn retained_producer_suffix_allows_exact_certified_response_to_release_fetch_capacity() {
-    let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1 << 20, 1));
-    let mut services = fixture.services();
-    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: certified_sources(&fixture, &prepare),
-                certificate: Some(prepare),
-            }],
-            &mut services,
-        )
-        .expect("start exact certified body acquisition");
-    let task = services.fetch_tasks[0].clone();
-    executor.protected_decision = Some((
-        fixture.manifest.round,
-        fixture.manifest.round,
-        fixture.manifest.subject,
-        fixture_execution_commitment(),
-    ));
-    executor
-        .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
-        .expect("retain the producer behind decided-body fetch capacity");
-    assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
-    let response = signed_certified_response(
-        &fixture,
-        &task,
-        fixture.manifest.clone(),
-        fixture.body.clone(),
-        0,
-    );
-    assert!(executor.retained_dispatch_allows_network_ingress(
-        &wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response.clone())
-    ));
-    let discovery_response = wire::CommitCertificateResponse {
-        request_hash: HashOf::from_untyped_unchecked(Hash::new(
-            b"retained suffix CommitQC request",
-        )),
-        certificate: fixture.qc(wire::GlobalPhase::Commit),
-        responder: fixture.context.roster[0].validator.clone(),
-        signature: Vec::new(),
-    };
-    assert!(
-        executor.retained_dispatch_allows_network_ingress(
-            &wire::ConsensusMessageV2Payload::CommitCertificateResponse(discovery_response)
-        ),
-        "an authenticated discovery CommitQC can retire a hung signing fence"
-    );
-    assert_eq!(
-        executor
-            .accept_certified_body_response(
-                response,
-                &fixture.context.roster[0].validator,
-                &mut services,
-            )
-            .expect("transport-only response reaches the exact live fetch"),
-        CompletionDisposition::Accepted
-    );
-    assert!(executor.pending_fetches.is_empty());
-    assert!(executor.outstanding_requests.is_empty());
     assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
     assert_eq!(
         executor
@@ -386,12 +254,10 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
         std::slice::from_ref(&effect),
         vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 999)],
     )
-    .expect("construct an independently owned mutation candidate");
-    assert!(matches!(
-        executor.retain_effect_batch(vec![effect.clone()], conflicting),
-        Err(EffectExecutorError::Contract(reason))
-            if reason.contains("owner replacement")
-    ));
+    .expect("construct an independently produced semantic retry");
+    executor
+        .retain_effect_batch(vec![effect.clone()], conflicting)
+        .expect("independent causal producer coalesces under the incumbent Sign owner");
     assert_eq!(executor.pending_signatures.len(), 1);
     assert_eq!(services.sign_tasks.len(), 1);
     assert!(executor.retained_effect_batch.is_none());
@@ -411,12 +277,10 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
             1_000,
         )],
     )
-    .expect("construct a local-incarnation owner replacement");
-    assert!(matches!(
-        executor.retain_effect_batch(vec![effect], reincarnated),
-        Err(EffectExecutorError::Contract(reason))
-            if reason.contains("owner replacement")
-    ));
+    .expect("construct a later-incarnation semantic retry");
+    executor
+        .retain_effect_batch(vec![effect], reincarnated)
+        .expect("later causal producer cannot replace the incumbent Sign owner");
     assert_eq!(executor.pending_signatures.len(), 1);
     assert_eq!(services.sign_tasks.len(), 1);
     assert!(executor.retained_effect_batch.is_none());
@@ -466,13 +330,18 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
     );
     let foreign_owner = foreign[1].owner().clone();
     assert_ne!(foreign[1].owner(), incumbent.owner());
-    assert!(matches!(
-        fetch_executor.retain_effect_batch(retry_effects, foreign),
-        Err(EffectExecutorError::Contract(reason))
-            if reason.contains("owner replacement")
-    ));
+    fetch_executor
+        .retain_effect_batch(retry_effects, foreign)
+        .expect("exact duplicate Fetch adopts the incumbent task owner");
+    assert_eq!(
+        fetch_executor
+            .drain_retained_effect_batch(&mut fetch_services, false)
+            .expect("redispatch the exact incumbent Fetch task"),
+        2,
+        "the unrelated broadcast and coalesced Fetch each dispatch once"
+    );
     assert_eq!(fetch_executor.pending_fetches.len(), 1);
-    assert_eq!(fetch_services.fetch_tasks.len(), 1);
+    assert_eq!(fetch_services.fetch_tasks.len(), 2);
     let retained_fetch = fetch_executor
         .pending_fetches
         .values()
@@ -489,7 +358,7 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
     assert!(fetch_executor.retained_effect_batch.is_none());
     let external = fetch_executor
         .external_lifecycle_owners()
-        .expect("inspect external lifecycle ownership after rejecting replacement");
+        .expect("inspect external lifecycle ownership after coalescing the retry");
     assert!(
         external.iter().all(|owner| owner != incumbent.owner()),
         "passive network Fetch ownership is deliberately not runnable clock work"
@@ -569,12 +438,21 @@ fn runtime_terminal_body_candidate_stutters_before_cached_redispatch() {
         .pop()
         .expect("one foreign body-stage owner");
         assert_ne!(foreign, bound);
-        assert!(matches!(
-            executor.retain_effect_batch(vec![effect], vec![foreign]),
-            Err(EffectExecutorError::Runtime(reason))
-                if reason.contains("owner replacement")
-        ));
+        executor
+            .retain_effect_batch(vec![effect], vec![foreign])
+            .expect("an exact foreign carrier stutters under the terminal owner");
+        assert_eq!(executor.runtime.terminal_body_candidate_commits, 2);
+        assert_eq!(
+            executor.runtime.terminal_body_candidate_owners[&identity], bound,
+            "candidate-specific terminal ownership remains unchanged"
+        );
+        assert!(executor.pending_stores.is_empty());
+        assert!(executor.pending_validations.is_empty());
+        assert!(services.store_tasks.is_empty());
+        assert!(services.validation_tasks.is_empty());
+        assert!(executor.runtime.completions.is_empty());
         assert!(executor.retained_effect_batch.is_none());
+        assert!(!executor.status().fail_closed);
     }
 }
 #[test]
@@ -698,7 +576,19 @@ fn authority_transition_reuses_one_physical_store_and_validation_task() {
     };
     let (ordinary_store, ordinary_validate) = stage_owners(&ordinary_fetch, 7_001);
     let (decision_store, decision_validate) = stage_owners(&decision_fetch, 7_002);
+    let (duplicate_store, duplicate_validate) = stage_owners(&ordinary_fetch, 7_003);
     assert_ne!(ordinary_store.owner(), decision_store.owner());
+    assert_ne!(ordinary_store.owner(), duplicate_store.owner());
+    assert_eq!(
+        ordinary_store.candidate_semantic_identity(),
+        duplicate_store.candidate_semantic_identity(),
+        "an exact duplicate carrier has the same route-neutral Store identity"
+    );
+    assert_eq!(
+        ordinary_validate.candidate_semantic_identity(),
+        duplicate_validate.candidate_semantic_identity(),
+        "an exact duplicate carrier has the same route-neutral Validate identity"
+    );
     assert_ne!(
         ordinary_store.candidate_semantic_identity(),
         decision_store.candidate_semantic_identity(),
@@ -723,6 +613,16 @@ fn authority_transition_reuses_one_physical_store_and_validation_task() {
         .expect("start ordinary physical Store task");
     let store_id = store_services.store_tasks[0].id();
     let next_work_id = store_executor.next_work_id;
+    store_executor
+        .retain_effect_batch(vec![store.clone()], vec![duplicate_store])
+        .expect("exact duplicate Store adopts the ordinary task owner");
+    assert_eq!(
+        store_executor
+            .drain_retained_effect_batch(&mut store_services, false)
+            .expect("redispatch the exact incumbent Store task"),
+        1
+    );
+    assert_eq!(store_executor.next_work_id, next_work_id);
     store_executor
         .retain_effect_batch(vec![store.clone()], vec![decision_store])
         .expect("Decision Store adopts the ordinary task owner");
@@ -779,6 +679,16 @@ fn authority_transition_reuses_one_physical_store_and_validation_task() {
         .ownership()
         .clone();
     let next_work_id = validation_executor.next_work_id;
+    validation_executor
+        .retain_effect_batch(vec![validate.clone()], vec![duplicate_validate])
+        .expect("exact duplicate Validate adopts the ordinary task owner");
+    assert_eq!(
+        validation_executor
+            .drain_retained_effect_batch(&mut validation_services, false)
+            .expect("redispatch the exact incumbent validation task"),
+        1
+    );
+    assert_eq!(validation_executor.next_work_id, next_work_id);
     validation_executor
         .retain_effect_batch(vec![validate.clone()], vec![decision_validate.clone()])
         .expect("Decision Validate adopts the in-flight ordinary task owner");
@@ -844,7 +754,7 @@ fn authority_transition_reuses_one_physical_store_and_validation_task() {
         certified_sources: Vec::new(),
         certificate: Some(conflicting_decision),
     };
-    let (_, conflicting_validate) = stage_owners(&conflicting_fetch, 7_003);
+    let (_, conflicting_validate) = stage_owners(&conflicting_fetch, 7_004);
     assert!(
         decision_validate
             .adopt_incumbent_body_stage_for_retry_or_authority(&conflicting_validate, &validate,)

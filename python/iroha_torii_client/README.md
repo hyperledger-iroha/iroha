@@ -192,7 +192,7 @@ receipt = client.submit_sorafs_orderbook_order(
 ```
 
 The provider must implement
-`inspect_sorafs_orderbook_submission_v1(...)` and
+`inspect_sorafs_orderbook_submission_for_discriminant_v1(...)` and
 `verify_sorafs_orderbook_submission_receipt_v1(...)`. Without both, or without
 the exact expected network, deployment I105 chain discriminant, and receipt
 signer, submission fails before HTTP.

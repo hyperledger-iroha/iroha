@@ -339,7 +339,8 @@ fn signed_genesis_validator_pops(
 /// Compute the canonical Nexus/AMX commitment from a validated genesis state
 /// block without committing that block. The projection binds every Nexus and
 /// deterministic AMX input used by proposal assembly or validation, plus the
-/// canonically ordered active public-lane validator records.
+/// canonically ordered active public-lane validator records and the complete
+/// retained lane-incarnation lineage, including retired lane identifiers.
 #[must_use]
 pub fn staged_genesis_nexus_amx_context_hash(staged: &StateBlock<'_>) -> Hash {
     let active_validators = staged
@@ -350,22 +351,15 @@ pub fn staged_genesis_nexus_amx_context_hash(staged: &StateBlock<'_>) -> Hash {
         .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
         .map(|(key, record)| (key.clone(), record.clone()))
         .collect::<Vec<_>>();
-    let lane_lifecycle = staged
-        .nexus
-        .lane_catalog
-        .lanes()
+    let retained_lane_lineage = staged
+        .lane_incarnation_lineage_for_snapshot()
         .iter()
         .map(
-            |lane| iroha_config::parameters::actual::SumeragiV2LaneLifecycleEntry {
-                lane_id: lane.id,
-                incarnation: *staged
-                    .lane_incarnations
-                    .get(&lane.id)
-                    .expect("validated staged genesis has every active lane incarnation"),
-                activation_height: *staged
-                    .lane_incarnation_activation_heights
-                    .get(&lane.id)
-                    .expect("validated staged genesis has every lane activation height"),
+            |(&lane_id, lineage)| iroha_config::parameters::actual::SumeragiV2LaneLifecycleEntry {
+                lane_id,
+                generation: lineage.generation,
+                incarnation: lineage.incarnation,
+                activation_height: lineage.activation_height,
             },
         )
         .collect::<Vec<_>>();
@@ -373,7 +367,7 @@ pub fn staged_genesis_nexus_amx_context_hash(staged: &StateBlock<'_>) -> Hash {
         &staged.nexus,
         &staged.pipeline,
         &active_validators,
-        &lane_lifecycle,
+        &retained_lane_lineage,
     )
 }
 fn verify_staged_nexus_amx_context_hash(
@@ -391,7 +385,7 @@ fn verify_staged_nexus_amx_context_hash(
 ///
 /// # Errors
 ///
-/// Returns an error if an enabled Nexus policy has no authenticated runtime policy set.
+/// Returns an error if the Nexus policy has no authenticated runtime policy set.
 pub fn staged_genesis_execution_policy_hash(
     staged: &StateBlock<'_>,
 ) -> Result<Hash, V2GenesisBootstrapError> {
@@ -704,11 +698,8 @@ pub(crate) fn finalized_next_epoch_snapshot(
                 epoch,
             )
             .ok_or(V2ContextBuildError::MissingFinalizedEpochRoster)?;
-            let active_lanes = state
-                .nexus()
-                .enabled
-                .then(|| nexus_active_lane_ids(state.nexus()));
-            strict_v2_voting_roster(state.world(), &elected, active_lanes.as_ref())?
+            let active_lanes = nexus_active_lane_ids(state.nexus());
+            strict_v2_voting_roster(state.world(), &elected, Some(&active_lanes))?
         }
     };
     let quorum = wire::DualQuorum::from_roster(&roster)?;
@@ -1215,7 +1206,6 @@ mod tests {
         let baseline = lane_hash_world(&records);
         let mut changed_catalog = lane_hash_world(&records);
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.enabled = true;
         nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {

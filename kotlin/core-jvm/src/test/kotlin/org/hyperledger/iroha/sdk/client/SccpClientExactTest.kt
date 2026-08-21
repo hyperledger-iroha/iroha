@@ -20,6 +20,7 @@ import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.norito.CRC64
@@ -72,6 +73,7 @@ class SccpClientExactTest {
                 creationTimeMs = 7,
                 executable = Executable.instructions(emptyList()),
                 feePayment = FeePaymentIntent.authority(emptyList()),
+                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             ),
         )
         val transaction = Base64.getEncoder().encodeToString(transactionBytes)
@@ -83,6 +85,7 @@ class SccpClientExactTest {
                     creationTimeMs = 7,
                     executable = Executable.instructions(emptyList()),
                     feePayment = FeePaymentIntent.authority(emptyList(), 9),
+                    admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
                 ),
             ),
         )
@@ -134,6 +137,22 @@ class SccpClientExactTest {
             signedMessage.toJsonBytes(),
             "/v1/bridge/messages",
         )
+        val ordinaryTransaction = Base64.getEncoder().encodeToString(
+            NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
+                NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+                    .decodeTransaction(transactionBytes)
+                    .copy(admissionIntent = TransactionAdmissionIntent.ORDINARY),
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            destinationRequest(
+                authority = authority,
+                destinationProofB64 = artifact,
+                signatureB64 = signature,
+                transactionPayloadB64 = ordinaryTransaction,
+                creationTimeMs = 7,
+            )
+        }
 
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.preflightSccpBridgeSubmitJson(
@@ -196,6 +215,7 @@ class SccpClientExactTest {
                     creationTimeMs = 7,
                     executable = Executable.instructions(emptyList()),
                     feePayment = feePayment,
+                    admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
                 ),
             )
 
@@ -375,6 +395,7 @@ class SccpClientExactTest {
                     creationTimeMs = 7,
                     executable = Executable.instructions(emptyList()),
                     feePayment = FeePaymentIntent.authority(emptyList()),
+                    admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
                 ),
             ),
         )
@@ -465,6 +486,7 @@ class SccpClientExactTest {
                 creationTimeMs = 7,
                 executable = Executable.instructions(emptyList()),
                 feePayment = FeePaymentIntent.authority(emptyList()),
+                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             ),
         )
         val transaction = Base64.getEncoder().encodeToString(transactionBytes)
@@ -509,6 +531,7 @@ class SccpClientExactTest {
                     creationTimeMs = 7,
                     executable = Executable.instructions(emptyList()),
                     feePayment = FeePaymentIntent.authority(emptyList()),
+                    admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
                 ),
             ),
         )
@@ -1472,6 +1495,7 @@ class SccpClientExactTest {
                 creationTimeMs = 10,
                 executable = Executable.instructions(emptyList()),
                 feePayment = FeePaymentIntent.authority(emptyList()),
+                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             ),
         )
         val transaction = Base64.getEncoder().encodeToString(transactionBytes)
@@ -1495,6 +1519,20 @@ class SccpClientExactTest {
         assertFalse(parsed.submitted)
         assertEquals(SccpPayloadKindV1.TRANSFER, parsed.payloadKind)
         assertEquals(hash(0x41), parsed.routeConfigurationHashHex)
+
+        val ordinaryTransactionBytes = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+            .encodeTransaction(
+                NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+                    .decodeTransaction(transactionBytes)
+                    .copy(admissionIntent = TransactionAdmissionIntent.ORDINARY),
+            )
+        response["transaction_payload_b64"] = Base64.getEncoder().encodeToString(ordinaryTransactionBytes)
+        response["signing_message_b64"] = Base64.getEncoder().encodeToString(IrohaHash.prehash(ordinaryTransactionBytes))
+        assertFailsWith<IllegalArgumentException> {
+            SccpBridgeSubmitResponseParser.parse(jsonBytes(response))
+        }
+        response["transaction_payload_b64"] = transaction
+        response["signing_message_b64"] = signing
 
         response["backend"] = "tron-groth16-bn254-v1"
         assertFailsWith<IllegalArgumentException> {

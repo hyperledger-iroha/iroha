@@ -14,6 +14,7 @@ const AUTHORIZED_PARENT_EPOCH: u64 = 1_786_749_503;
 const PROJECTION_SCHEMA: &str = "iroha.kagemusha.authenticated_source_seal_projection.v1";
 const OBSERVED_SCHEMA: &str = "iroha.kagemusha.source_seal_build_script_observed.v1";
 const OUTER_POLICY_SCHEMA: &str = "iroha.kagemusha.cprime_source_seal_outer_policy.v1";
+const CAPTURE_RECEIPT_SCHEMA: &str = "iroha.kagemusha.cargo_unit_graph_capture_receipt.v1";
 const UNIT_GRAPH_NORMALIZATION: &str = "cargo-unit-graph-v1-package-root-relative-src-path-source-cache-placeholders-sorted-compact-lf-v1";
 const EXPECTED_FEATURE_ENVS: &[&str] = &[
     "CARGO_FEATURE_BLS",
@@ -43,8 +44,9 @@ const EXPLICIT_FEATURES_JSON: &str = concat!(
     "\"iroha_core/kagemusha-candidate-source-seal\"]"
 );
 const SEMANTIC_ARGV_JSON: &str = concat!(
-    "[\"build\",\"--release\",\"--locked\",\"--target-dir\",",
-    "\"<EXTERNAL_TARGET_DIR>\",\"-p\",\"iroha_core\",\"--features\",",
+    "[\"build\",\"--release\",\"--locked\",\"--offline\",\"--target\",",
+    "\"aarch64-apple-darwin\",\"--target-dir\",\"<EXTERNAL_TARGET_DIR>\",",
+    "\"-p\",\"iroha_core\",\"--features\",",
     "\"iroha_core/dev-tools,iroha_core/kagemusha-candidate-source-seal,",
     "iroha_core/kagemusha-candidate-evidence-lab\",\"--bin\",",
     "\"kagemusha_recursive_spend_v4_bundle\",\"--jobs\",\"1\",",
@@ -96,10 +98,30 @@ fn embed_exact_kagemusha_source_seal() {
     let source_tree_sha256 = required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_TREE_SHA256", 64);
     let reviewed_cargo_binary_sha256 =
         required_lower_hex_env("KAGEMUSHA_BUILD_REVIEWED_CARGO_BINARY_SHA256", 64);
+    let reviewed_cargo_binary_size = required_decimal_env(
+        "KAGEMUSHA_BUILD_REVIEWED_CARGO_BINARY_SIZE_BYTES",
+        1,
+        512 * 1024 * 1024,
+    );
     let reviewed_rustc_binary_sha256 =
         required_lower_hex_env("KAGEMUSHA_BUILD_REVIEWED_RUSTC_BINARY_SHA256", 64);
-    require_actual_tool_digest("CARGO", &reviewed_cargo_binary_sha256, "Cargo");
-    require_actual_tool_digest("RUSTC", &reviewed_rustc_binary_sha256, "rustc");
+    let reviewed_rustc_binary_size = required_decimal_env(
+        "KAGEMUSHA_BUILD_REVIEWED_RUSTC_BINARY_SIZE_BYTES",
+        1,
+        512 * 1024 * 1024,
+    );
+    require_actual_tool_identity(
+        "CARGO",
+        &reviewed_cargo_binary_sha256,
+        reviewed_cargo_binary_size,
+        "Cargo",
+    );
+    require_actual_tool_identity(
+        "RUSTC",
+        &reviewed_rustc_binary_sha256,
+        reviewed_rustc_binary_size,
+        "rustc",
+    );
     let closure_sha256 =
         required_lower_hex_env("KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256", 64);
     let closure_hex =
@@ -124,9 +146,25 @@ fn embed_exact_kagemusha_source_seal() {
     );
     let execution_policy_sha256 =
         required_lower_hex_env("KAGEMUSHA_BUILD_EXECUTION_POLICY_SHA256", 64);
+    let build_inputs_sha256 = required_lower_hex_env("KAGEMUSHA_BUILD_BUILD_INPUTS_SHA256", 64);
+    let build_inputs_hex =
+        required_lower_hex_env_bounded("KAGEMUSHA_BUILD_BUILD_INPUTS_HEX", 2, 16_384);
+    let build_inputs = decode_hex(&build_inputs_hex, "build-input closure");
+    validate_one_line_canonical_ascii(&build_inputs, 8_192, "build-input closure");
+    assert_eq!(
+        sha256_hex(&build_inputs),
+        build_inputs_sha256,
+        "build-input closure bytes differ from their SHA-256"
+    );
     let unit_graph_sha256 = required_lower_hex_env("KAGEMUSHA_BUILD_UNIT_GRAPH_SHA256", 64);
     let unit_graph_size =
         required_decimal_env("KAGEMUSHA_BUILD_UNIT_GRAPH_SIZE_BYTES", 1, 16 * 1024 * 1024);
+    let raw_unit_graph_sha256 = required_lower_hex_env("KAGEMUSHA_BUILD_UNIT_GRAPH_RAW_SHA256", 64);
+    let raw_unit_graph_size = required_decimal_env(
+        "KAGEMUSHA_BUILD_UNIT_GRAPH_RAW_SIZE_BYTES",
+        1,
+        16 * 1024 * 1024,
+    );
     let unit_count = required_decimal_env("KAGEMUSHA_BUILD_UNIT_GRAPH_UNITS", 1, 100_000);
     let package_count = required_decimal_env("KAGEMUSHA_BUILD_UNIT_GRAPH_PACKAGES", 1, 100_000);
     let custom_build_units = required_decimal_env(
@@ -141,24 +179,56 @@ fn embed_exact_kagemusha_source_seal() {
     );
     let iroha_core_units =
         required_decimal_env("KAGEMUSHA_BUILD_UNIT_GRAPH_IROHA_CORE_UNITS", 1, unit_count);
+    let capture_exit_status =
+        required_decimal_env("KAGEMUSHA_BUILD_UNIT_GRAPH_CAPTURE_EXIT_STATUS", 0, 255);
+    assert_eq!(
+        capture_exit_status, 0,
+        "sealed Cargo graph capture did not succeed"
+    );
+    let capture_stderr_sha256 =
+        required_lower_hex_env("KAGEMUSHA_BUILD_UNIT_GRAPH_CAPTURE_STDERR_SHA256", 64);
+    let capture_stderr_size = required_decimal_env(
+        "KAGEMUSHA_BUILD_UNIT_GRAPH_CAPTURE_STDERR_SIZE_BYTES",
+        0,
+        16 * 1024 * 1024,
+    );
     let projection = format!(
         concat!(
             "{{\"build_script_observed\":{{\"debug_assertions\":false,",
             "\"features\":{RESOLVED_FEATURES_JSON},\"host\":\"aarch64-apple-darwin\",",
             "\"num_jobs\":1,\"opt_level\":\"3\",\"profile\":\"release\",",
             "\"schema\":\"{OBSERVED_SCHEMA}\",\"target\":\"aarch64-apple-darwin\"}},",
-            "\"outer_policy\":{{\"cargo\":{{\"binary\":\"kagemusha_recursive_spend_v4_bundle\",",
+            "\"outer_policy\":{{\"build_inputs_hex\":\"{build_inputs_hex}\",",
+            "\"build_inputs_sha256\":\"{build_inputs_sha256}\",",
+            "\"cargo\":{{\"binary\":\"kagemusha_recursive_spend_v4_bundle\",",
             "\"explicit_features\":{EXPLICIT_FEATURES_JSON},\"package\":\"iroha_core\",",
             "\"profile\":\"release\",\"semantic_argv\":{SEMANTIC_ARGV_JSON},",
             "\"target\":\"aarch64-apple-darwin\",\"unit_graph\":{{",
+            "\"capture_receipt\":{{\"build_inputs_sha256\":\"{build_inputs_sha256}\",",
+            "\"cargo_binary_sha256\":\"{reviewed_cargo_binary_sha256}\",",
+            "\"exit_status\":{capture_exit_status},",
+            "\"raw_stdout_sha256\":\"{raw_unit_graph_sha256}\",",
+            "\"raw_stdout_size_bytes\":{raw_unit_graph_size},",
+            "\"rustc_binary_sha256\":\"{reviewed_rustc_binary_sha256}\",",
+            "\"schema\":\"{CAPTURE_RECEIPT_SCHEMA}\",",
+            "\"source_commit\":\"{source_commit}\",",
+            "\"source_tree_sha256\":\"{source_tree_sha256}\",",
+            "\"stderr_sha256\":\"{capture_stderr_sha256}\",",
+            "\"stderr_size_bytes\":{capture_stderr_size}}},",
             "\"custom_build_packages\":{custom_build_packages},",
             "\"custom_build_units\":{custom_build_units},",
             "\"iroha_core_units\":{iroha_core_units},",
             "\"normalization\":\"{UNIT_GRAPH_NORMALIZATION}\",",
-            "\"packages\":{package_count},\"sha256\":\"{unit_graph_sha256}\",",
+            "\"packages\":{package_count},\"raw_sha256\":\"{raw_unit_graph_sha256}\",",
+            "\"raw_size_bytes\":{raw_unit_graph_size},",
+            "\"sha256\":\"{unit_graph_sha256}\",",
             "\"size_bytes\":{unit_graph_size},\"units\":{unit_count}}}}},",
             "\"execution_policy_sha256\":\"{execution_policy_sha256}\",",
-            "\"schema\":\"{OUTER_POLICY_SCHEMA}\"}},",
+            "\"schema\":\"{OUTER_POLICY_SCHEMA}\",\"toolchain\":{{",
+            "\"cargo\":{{\"binary_sha256\":\"{reviewed_cargo_binary_sha256}\",",
+            "\"binary_size_bytes\":{reviewed_cargo_binary_size}}},",
+            "\"rustc\":{{\"binary_sha256\":\"{reviewed_rustc_binary_sha256}\",",
+            "\"binary_size_bytes\":{reviewed_rustc_binary_size}}}}}}},",
             "\"reviewed_source_closure_hex\":\"{closure_hex}\",",
             "\"reviewed_source_closure_sha256\":\"{closure_sha256}\",",
             "\"schema\":\"{PROJECTION_SCHEMA}\",\"source_authority\":{{",
@@ -186,11 +256,23 @@ fn embed_exact_kagemusha_source_seal() {
         iroha_core_units = iroha_core_units,
         UNIT_GRAPH_NORMALIZATION = UNIT_GRAPH_NORMALIZATION,
         package_count = package_count,
+        raw_unit_graph_sha256 = raw_unit_graph_sha256,
+        raw_unit_graph_size = raw_unit_graph_size,
         unit_graph_sha256 = unit_graph_sha256,
         unit_graph_size = unit_graph_size,
         unit_count = unit_count,
+        capture_exit_status = capture_exit_status,
+        capture_stderr_sha256 = capture_stderr_sha256,
+        capture_stderr_size = capture_stderr_size,
+        CAPTURE_RECEIPT_SCHEMA = CAPTURE_RECEIPT_SCHEMA,
+        build_inputs_hex = build_inputs_hex,
+        build_inputs_sha256 = build_inputs_sha256,
         execution_policy_sha256 = execution_policy_sha256,
         OUTER_POLICY_SCHEMA = OUTER_POLICY_SCHEMA,
+        reviewed_cargo_binary_sha256 = reviewed_cargo_binary_sha256,
+        reviewed_cargo_binary_size = reviewed_cargo_binary_size,
+        reviewed_rustc_binary_sha256 = reviewed_rustc_binary_sha256,
+        reviewed_rustc_binary_size = reviewed_rustc_binary_size,
         closure_hex = closure_hex,
         closure_sha256 = closure_sha256,
         PROJECTION_SCHEMA = PROJECTION_SCHEMA,
@@ -250,7 +332,12 @@ fn embed_exact_kagemusha_source_seal() {
     );
 }
 
-fn require_actual_tool_digest(environment_name: &str, expected_sha256: &str, label: &str) {
+fn require_actual_tool_identity(
+    environment_name: &str,
+    expected_sha256: &str,
+    expected_size: u64,
+    label: &str,
+) {
     let path = env::var_os(environment_name)
         .unwrap_or_else(|| panic!("{environment_name} is required for a sealed build"));
     let path = Path::new(&path);
@@ -260,8 +347,8 @@ fn require_actual_tool_digest(environment_name: &str, expected_sha256: &str, lab
     let metadata = fs::metadata(&canonical)
         .unwrap_or_else(|error| panic!("sealed {label} metadata is unavailable: {error}"));
     assert!(
-        metadata.is_file() && metadata.len() > 0,
-        "sealed {label} path is not a nonempty regular file"
+        metadata.is_file() && metadata.len() == expected_size,
+        "sealed {label} path does not have the authenticated size"
     );
     let bytes = fs::read(&canonical)
         .unwrap_or_else(|error| panic!("sealed {label} bytes are unavailable: {error}"));

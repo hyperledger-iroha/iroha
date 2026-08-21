@@ -468,6 +468,31 @@ impl Actor {
                 ));
             }
         }
+        for (name, requested, active) in [
+            (
+                "outbound_mint_capacity",
+                update.outbound_mint_capacity,
+                pow.outbound_mint_capacity.get(),
+            ),
+            (
+                "inbound_verify_capacity",
+                update.inbound_verify_capacity,
+                pow.inbound_verify_capacity.get(),
+            ),
+        ] {
+            let Some(requested) = requested else { continue };
+            if !(1..=SoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION).contains(&requested) {
+                return Err(format!(
+                    "SoraNet {name} must be in 1..={}",
+                    SoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION
+                ));
+            }
+            if requested != active {
+                return Err(format!(
+                    "SoraNet {name} cannot change while the network runtime is active; restart required"
+                ));
+            }
+        }
         if let Some(puzzle_update) = &update.puzzle {
             if matches!(puzzle_update.enabled, Some(false)) {
                 return Err(
@@ -627,6 +652,8 @@ mod tests {
                 max_future_skew_secs: Some(999),
                 min_ticket_ttl_secs: None,
                 ticket_ttl_secs: None,
+                outbound_mint_capacity: None,
+                inbound_verify_capacity: None,
                 puzzle: Some(SoranetHandshakePuzzleUpdate {
                     enabled: Some(true),
                     memory_kib,
@@ -696,6 +723,16 @@ mod tests {
             assert_eq!(pow.max_future_skew, original_skew);
             assert_eq!(pow.puzzle, original_puzzle);
         }
+        let mut pow = SoranetPow::default();
+        let mut update = update(None, None, None, None);
+        update.outbound_mint_capacity = Some(2);
+        let error = Actor::apply_pow_update(&mut pow, &update)
+            .expect_err("live puzzle-work capacity change must require restart");
+        assert!(
+            error.contains("restart required"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(pow.outbound_mint_capacity.get(), 1);
     }
     #[allow(clippy::too_many_lines)]
     fn test_config() -> Root {
@@ -1195,15 +1232,13 @@ mod tests {
                 max_disk_usage_bytes:
                     iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: NonZeroUsize::new(10).unwrap(),
+                lane_history_retention:
+                    iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
                     iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
                 fsync_mode: iroha_config::kura::FsyncMode::Batched,
                 fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-                block_sync_roster_retention:
-                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-                roster_sidecar_retention:
-                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
                 replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             },
             sumeragi: Sumeragi::default(),
@@ -2010,6 +2045,8 @@ mod tests {
                     max_future_skew_secs: Some(1200),
                     min_ticket_ttl_secs: Some(90),
                     ticket_ttl_secs: Some(240),
+                    outbound_mint_capacity: None,
+                    inbound_verify_capacity: None,
                     signed_ticket_public_key_hex: None,
                     puzzle: Some(SoranetHandshakePuzzleUpdate {
                         enabled: Some(true),
@@ -2118,6 +2155,8 @@ mod tests {
                         max_future_skew_secs: None,
                         min_ticket_ttl_secs: None,
                         ticket_ttl_secs: None,
+                        outbound_mint_capacity: None,
+                        inbound_verify_capacity: None,
                         signed_ticket_public_key_hex: None,
                         puzzle: None,
                     }),
@@ -2152,6 +2191,8 @@ mod tests {
                         max_future_skew_secs: None,
                         min_ticket_ttl_secs: None,
                         ticket_ttl_secs: None,
+                        outbound_mint_capacity: None,
+                        inbound_verify_capacity: None,
                         signed_ticket_public_key_hex: None,
                         puzzle: Some(SoranetHandshakePuzzleUpdate {
                             enabled: Some(false),
@@ -2186,6 +2227,8 @@ mod tests {
             max_future_skew_secs: Some(30),
             min_ticket_ttl_secs: Some(15),
             ticket_ttl_secs: Some(45),
+            outbound_mint_capacity: None,
+            inbound_verify_capacity: None,
             signed_ticket_public_key_hex: None,
             puzzle: Some(SoranetHandshakePuzzleUpdate {
                 enabled: Some(true),

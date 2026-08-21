@@ -53,6 +53,8 @@ final class ToriiDaIngestTests: XCTestCase {
         XCTAssertEqual(codec, ["application/octet-stream"])
         let erasure = try XCTUnwrap(json["erasure_profile"] as? [String: Any])
         XCTAssertEqual(erasure["row_parity_stripes"] as? Int, 0)
+        XCTAssertEqual(json["compression"] as? String, "Identity")
+        XCTAssertTrue(json["norito_manifest"] is NSNull)
 
         let digestTuple = try XCTUnwrap(json["client_blob_id"] as? [[NSNumber]])
         XCTAssertEqual(digestTuple.first?.count, 32)
@@ -131,6 +133,11 @@ final class ToriiDaIngestTests: XCTestCase {
                 "manifest_hash":\(digestJSON),
                 "storage_ticket":\(digestJSON),
                 "pdp_commitment":"SGVsbG8=",
+                "stripe_layout":{
+                    "total_stripes":4,
+                    "shards_per_stripe":12,
+                    "row_parity_stripes":1
+                },
                 "queued_at_unix":1700000000,
                 "operator_signature":"DEADBEEF",
                 "rent_quote":{
@@ -152,13 +159,64 @@ final class ToriiDaIngestTests: XCTestCase {
         XCTAssertEqual(receipt.storageTicket.count, 32)
         XCTAssertEqual(receipt.operatorSignatureHex, "DEADBEEF")
         XCTAssertEqual(receipt.pdpCommitment, Data("Hello".utf8))
-        let rentQuote = try XCTUnwrap(receipt.rentQuote)
+        XCTAssertEqual(receipt.stripeLayout.rowParityStripes, 1)
+        let rentQuote = receipt.rentQuote
         XCTAssertEqual(rentQuote.baseRentMicro, "100")
         XCTAssertEqual(rentQuote.protocolReserveMicro, "25")
         XCTAssertEqual(rentQuote.providerRewardMicro, "75")
         XCTAssertEqual(rentQuote.pdpBonusMicro, "5")
         XCTAssertEqual(rentQuote.potrBonusMicro, "3")
         XCTAssertEqual(rentQuote.egressCreditPerGibMicro, "2")
+    }
+
+    func testReceiptRequiresCurrentFieldsAndRejectsUnknownFields() throws {
+        let canonical = canonicalReceiptObject()
+        let decoded = try JSONDecoder().decode(
+            ToriiDaIngestReceipt.self,
+            from: JSONSerialization.data(withJSONObject: canonical)
+        )
+        XCTAssertNil(decoded.pdpCommitment, "an explicit null PDP slot remains valid")
+
+        for field in ["pdp_commitment", "stripe_layout", "rent_quote"] {
+            var missing = canonical
+            missing.removeValue(forKey: field)
+            let data = try JSONSerialization.data(withJSONObject: missing)
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiDaIngestReceipt.self, from: data),
+                "missing current field \(field) must reject"
+            )
+        }
+
+        var missingRowParity = canonical
+        var stripe = try XCTUnwrap(missingRowParity["stripe_layout"] as? [String: Any])
+        stripe.removeValue(forKey: "row_parity_stripes")
+        missingRowParity["stripe_layout"] = stripe
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiDaIngestReceipt.self,
+                from: JSONSerialization.data(withJSONObject: missingRowParity)
+            )
+        )
+
+        var unknownReceipt = canonical
+        unknownReceipt["pre_release_extension"] = true
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiDaIngestReceipt.self,
+                from: JSONSerialization.data(withJSONObject: unknownReceipt)
+            )
+        )
+
+        var unknownStripe = canonical
+        stripe = try XCTUnwrap(unknownStripe["stripe_layout"] as? [String: Any])
+        stripe["pre_release_extension"] = true
+        unknownStripe["stripe_layout"] = stripe
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiDaIngestReceipt.self,
+                from: JSONSerialization.data(withJSONObject: unknownStripe)
+            )
+        )
     }
 
     func testRentQuoteRejectsFractionalNumber() {
@@ -246,6 +304,35 @@ final class ToriiDaIngestTests: XCTestCase {
     private func makeDaOwner(privateKey: Curve25519.Signing.PrivateKey) throws -> String {
         try AccountAddress.fromAccount(publicKey: privateKey.publicKey.rawRepresentation)
             .toI105(networkPrefix: AccountId.defaultNetworkPrefix)
+    }
+
+    private func canonicalReceiptObject() -> [String: Any] {
+        let digest = Array(0..<32)
+        return [
+            "client_blob_id": [digest],
+            "lane_id": 5,
+            "epoch": 7,
+            "blob_hash": [digest],
+            "chunk_root": [digest],
+            "manifest_hash": [digest],
+            "storage_ticket": [digest],
+            "pdp_commitment": NSNull(),
+            "stripe_layout": [
+                "total_stripes": 4,
+                "shards_per_stripe": 12,
+                "row_parity_stripes": 1
+            ],
+            "queued_at_unix": 1_700_000_000,
+            "rent_quote": [
+                "base_rent": 100,
+                "protocol_reserve": 25,
+                "provider_reward": 75,
+                "pdp_bonus": 5,
+                "potr_bonus": 3,
+                "egress_credit_per_gib": 2
+            ],
+            "operator_signature": "DEADBEEF"
+        ]
     }
 
     private func encodeEd25519Multihash(_ publicKey: Data) -> String {

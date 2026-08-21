@@ -10,6 +10,7 @@ import os
 import re
 import stat
 import subprocess
+import unicodedata
 from dataclasses import dataclass
 from ipaddress import ip_address
 from pathlib import Path
@@ -41,6 +42,12 @@ KAGEMUSHA_MANAGED_CONFIG_KEYS = (
 MIN_VALIDATORS = 4
 # Mirrors `iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT`.
 MAX_VALIDATORS = 31
+# Rust's TOML representation and the canonical config parser admit signed
+# 64-bit integers only.
+TOML_I64_MAX = (1 << 63) - 1
+# Mirrors the Rust default, which reserves five positions per protocol-maximum
+# validator and three per default authenticated non-validator source.
+SUMERAGI_DEFAULT_BODY_CAPACITY = 5 * MAX_VALIDATORS + 3 * 2
 # A syntactically valid, marker-bearing Iroha hash used only by the private
 # pre-signing render. The external signer replaces it with the signed genesis
 # hash before any runtime bundle is published.
@@ -49,6 +56,10 @@ GENESIS_EXPECTED_HASH_PLACEHOLDER = (
 )
 GENESIS_EXPECTED_HASH_RE = re.compile(r"[0-9a-f]{64}")
 TAIRA_CHAIN_DISCRIMINANT = taira_constants.CHAIN_DISCRIMINANT
+# Sponsored onboarding is intentionally limited to the three application
+# dataspaces present in the reviewed Taira catalog. Public `universal` and
+# service-only `cbsi` identities require their own governed provisioning paths.
+TAIRA_ACCOUNT_ONBOARDING_DATASPACES = frozenset({"dpn", "is", "is2"})
 MIB = 1024 * 1024
 # First-release privacy admission permits one 9 MiB action per 10 MiB
 # transaction. Revision 4 caps the complete canonical consensus payload at
@@ -89,9 +100,10 @@ TAIRA_BODY_SOURCE_MIN_BYTES = (
 TAIRA_BODY_SOURCE_BYTES = ((TAIRA_BODY_SOURCE_MIN_BYTES + MIB - 1) // MIB) * MIB
 # Exact completion/P2P geometry is checked by the node at height activation.
 # The deployment rounds its maximum block-sync plaintext frame to the next MiB
-# and its maximum 10 MiB transaction frame to the next MiB. The global cap adds
-# the first-release ChaCha20-Poly1305 nonce/tag to the block-sync ceiling.
-TAIRA_TX_GOSSIP_PLAINTEXT_FRAME_BYTES = 11 * MIB
+# and its reviewed maximum transaction envelope plus QueuePlan/routing headroom
+# to 13 MiB. The global cap adds the first-release ChaCha20-Poly1305 nonce/tag
+# to the block-sync ceiling.
+TAIRA_TX_GOSSIP_PLAINTEXT_FRAME_BYTES = 13 * MIB
 TAIRA_BLOCK_SYNC_PLAINTEXT_FRAME_BYTES = 22 * MIB
 TAIRA_AEAD_FRAME_OVERHEAD_BYTES = 12 + 16
 TAIRA_MAX_FRAME_BYTES = (
@@ -194,15 +206,23 @@ class RosterDefaults:
 
 
 @dataclass(frozen=True)
+class AccountOnboardingCredentialSecrets:
+    """Runtime-only token material for one scoped onboarding client."""
+
+    id: str
+    api_token: str
+    scope_dataspace: str
+
+
+@dataclass(frozen=True)
 class SharedSecrets:
     """Runtime-only shared secret material injected into rendered configs."""
 
     account_onboarding_authority: str | None = None
     account_onboarding_private_key: str | None = None
-    account_onboarding_api_token: str | None = None
-    account_onboarding_credential_id: str | None = None
-    account_onboarding_scope_domain: str | None = None
-    account_onboarding_scope_dataspace: str | None = None
+    account_onboarding_credentials: tuple[
+        AccountOnboardingCredentialSecrets, ...
+    ] = ()
     torii_faucet_authority: str | None = None
     torii_faucet_private_key: str | None = None
     kagemusha_commands_private_key: str | None = None
@@ -364,6 +384,11 @@ def _require_positive_integer(payload: dict[str, Any], key: str, context: str) -
     value = payload.get(key)
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{context} field `{key}` must be a positive integer")
+    if value > TOML_I64_MAX:
+        raise ValueError(
+            f"{context} field `{key}` must not exceed {TOML_I64_MAX}, "
+            "the Rust/TOML signed 64-bit integer maximum"
+        )
     return value
 
 
@@ -433,7 +458,67 @@ def _scaled_sumeragi_body_bytes(template: dict[str, Any], validator_count: int) 
             f"{TAIRA_AEAD_FRAME_OVERHEAD_BYTES} AEAD bytes beyond "
             "`max_frame_bytes_block_sync`"
         )
-    minimum = (validator_count + authenticated_non_validator_sources + 1) * source_bytes
+    source_count = validator_count + authenticated_non_validator_sources
+    if source_count > TOML_I64_MAX:
+        raise ValueError(
+            "derived Sumeragi body source partition count "
+            f"{source_count} exceeds the Rust/TOML signed 64-bit integer maximum "
+            f"of {TOML_I64_MAX}"
+        )
+    if source_bytes > TOML_I64_MAX // source_count:
+        raise ValueError(
+            "derived `sumeragi.queues.body_bytes` exceeds the Rust/TOML signed "
+            f"64-bit integer maximum of {TOML_I64_MAX}; reduce "
+            "`authenticated_non_validator_sources` or `body_source_bytes`"
+        )
+    minimum = source_count * source_bytes
+    return max(configured, minimum)
+
+
+def _scaled_sumeragi_bodies(template: dict[str, Any], validator_count: int) -> int:
+    """Return a roster-aware canonical body-message queue capacity."""
+
+    if (
+        isinstance(validator_count, bool)
+        or not isinstance(validator_count, int)
+        or validator_count < 0
+    ):
+        raise ValueError("validator count must be a non-negative integer")
+    sumeragi = template.get("sumeragi")
+    if not isinstance(sumeragi, dict):
+        raise ValueError("config template must define a `[sumeragi]` table")
+    queues = sumeragi.get("queues")
+    if not isinstance(queues, dict):
+        raise ValueError("config template must define a `[sumeragi.queues]` table")
+    context = "config template `[sumeragi.queues]`"
+    configured = (
+        SUMERAGI_DEFAULT_BODY_CAPACITY
+        if "bodies" not in queues
+        else _require_positive_integer(queues, "bodies", context)
+    )
+    authenticated_non_validator_sources = _require_positive_integer(
+        queues, "authenticated_non_validator_sources", context
+    )
+    if validator_count > TOML_I64_MAX // 5:
+        raise ValueError(
+            "derived `sumeragi.queues.bodies` exceeds the Rust/TOML signed "
+            f"64-bit integer maximum of {TOML_I64_MAX}; reduce the validator roster"
+        )
+    validator_slots = validator_count * 5
+    if authenticated_non_validator_sources > TOML_I64_MAX // 3:
+        raise ValueError(
+            "derived `sumeragi.queues.bodies` exceeds the Rust/TOML signed "
+            f"64-bit integer maximum of {TOML_I64_MAX}; reduce the validator "
+            "roster or `authenticated_non_validator_sources`"
+        )
+    authenticated_slots = authenticated_non_validator_sources * 3
+    if validator_slots > TOML_I64_MAX - authenticated_slots:
+        raise ValueError(
+            "derived `sumeragi.queues.bodies` exceeds the Rust/TOML signed "
+            f"64-bit integer maximum of {TOML_I64_MAX}; reduce the validator "
+            "roster or `authenticated_non_validator_sources`"
+        )
+    minimum = validator_slots + authenticated_slots
     return max(configured, minimum)
 
 
@@ -686,8 +771,8 @@ def _canonical_torii_origin(value: str, context: str) -> str:
     return f"https://{canonical_host}"
 
 
-def _blake3_token_hash(token: str, native_tool: Path | None = None) -> str:
-    """Return the canonical digest stored in account-onboarding config."""
+def _account_onboarding_token_bytes(token: str) -> bytes:
+    """Validate one runtime token without requiring the hashing dependency."""
 
     try:
         token_bytes = token.encode("ascii")
@@ -701,6 +786,13 @@ def _blake3_token_hash(token: str, native_tool: Path | None = None) -> str:
         raise ValueError(
             "onboarding token must contain only non-whitespace printable ASCII bytes"
         )
+    return token_bytes
+
+
+def _blake3_token_hash(token: str, native_tool: Path | None = None) -> str:
+    """Return the canonical digest stored in account-onboarding config."""
+
+    token_bytes = _account_onboarding_token_bytes(token)
     if native_tool is not None:
         if not native_tool.is_absolute():
             raise ValueError("native onboarding-token hash tool must be absolute")
@@ -772,7 +864,7 @@ def _blake3_token_hash(token: str, native_tool: Path | None = None) -> str:
         raise SystemExit(
             "install scripts/requirements.txt before rendering Taira bundles"
         ) from error
-    return f"blake3:{blake3.blake3(token.encode('utf-8')).hexdigest()}"
+    return f"blake3:{blake3.blake3(token_bytes).hexdigest()}"
 
 
 def _write_private_text(path: Path, value: str) -> None:
@@ -898,33 +990,77 @@ def _validate_account_onboarding_secrets(shared: SharedSecrets, context: str) ->
     fields = {
         "account_onboarding_authority": shared.account_onboarding_authority,
         "account_onboarding_private_key": shared.account_onboarding_private_key,
-        "account_onboarding_api_token": shared.account_onboarding_api_token,
-        "account_onboarding_credential_id": shared.account_onboarding_credential_id,
     }
-    scopes = [
-        shared.account_onboarding_scope_domain,
-        shared.account_onboarding_scope_dataspace,
-    ]
-    if any(value is not None for value in (*fields.values(), *scopes)):
+    if (
+        any(value is not None for value in fields.values())
+        or shared.account_onboarding_credentials
+    ):
         missing = [key for key, value in fields.items() if value is None]
+        if not shared.account_onboarding_credentials:
+            missing.append("account_onboarding_credentials")
         if missing:
             raise ValueError(
                 f"{context} account onboarding is incomplete; missing "
                 + ", ".join(missing)
             )
-        if sum(value is not None for value in scopes) != 1:
+
+        seen_ids: set[str] = set()
+        seen_tokens: set[str] = set()
+        configured_scopes: set[str] = set()
+        for credential in shared.account_onboarding_credentials:
+            if credential.id in seen_ids:
+                raise ValueError(
+                    f"{context} account onboarding credential id `{credential.id}` is duplicated"
+                )
+            seen_ids.add(credential.id)
+            if credential.api_token in seen_tokens:
+                raise ValueError(
+                    f"{context} account onboarding credentials must not reuse API tokens"
+                )
+            seen_tokens.add(credential.api_token)
+            configured_scopes.add(credential.scope_dataspace)
+            # Validate the runtime secret shape before any output directory is
+            # created. The digest is derived with the selected native helper,
+            # when supplied, immediately before rendering.
+            _account_onboarding_token_bytes(credential.api_token)
+        missing_required_scopes = sorted({"dpn", "is2"}.difference(configured_scopes))
+        if missing_required_scopes:
             raise ValueError(
-                f"{context} account onboarding must set exactly one of "
-                "account_onboarding_scope_domain or account_onboarding_scope_dataspace"
+                f"{context} account onboarding credentials must include distinct "
+                "credentials for the required `dpn` and `is2` dataspaces; missing "
+                + ", ".join(missing_required_scopes)
             )
-        if shared.account_onboarding_scope_domain is not None:
-            raise ValueError(
-                f"{context} BOI/Taira onboarding must use a deployed Taira dataspace, not a domain"
-            )
-        if shared.account_onboarding_scope_dataspace not in {"is", "is2"}:
-            raise ValueError(
-                f"{context} BOI/Taira onboarding dataspace must be exactly `is` or `is2`"
-            )
+
+
+def _validate_account_onboarding_catalog(
+    shared: SharedSecrets, template: dict[str, Any], context: str
+) -> None:
+    """Require every onboarding scope to exist in the rendered Taira catalog."""
+
+    if not shared.account_onboarding_credentials:
+        return
+    nexus = template.get("nexus")
+    catalog = nexus.get("dataspace_catalog") if isinstance(nexus, dict) else None
+    if not isinstance(catalog, list):
+        raise ValueError(
+            f"{context} must contain `nexus.dataspace_catalog` for onboarding scope validation"
+        )
+    aliases = {
+        entry.get("alias")
+        for entry in catalog
+        if isinstance(entry, dict) and isinstance(entry.get("alias"), str)
+    }
+    missing = sorted(
+        {
+            credential.scope_dataspace
+            for credential in shared.account_onboarding_credentials
+        }.difference(aliases)
+    )
+    if missing:
+        raise ValueError(
+            f"{context} account onboarding scopes are absent from "
+            "`nexus.dataspace_catalog`: " + ", ".join(missing)
+        )
 
 
 def _validate_mandatory_soracloud_runtime_signer(
@@ -1159,6 +1295,79 @@ def _optional_string_list(
     if len(set(normalized)) != len(normalized):
         raise ValueError(f"{context} field `{key}` must not contain duplicates")
     return tuple(normalized)
+
+
+def _account_onboarding_credentials(
+    payload: dict[str, Any], context: str
+) -> tuple[AccountOnboardingCredentialSecrets, ...]:
+    """Parse the explicit shared onboarding credential array."""
+
+    raw_credentials = payload.get("account_onboarding_credentials")
+    if raw_credentials is None:
+        return ()
+    if not isinstance(raw_credentials, list) or not raw_credentials:
+        raise ValueError(
+            f"{context} field `account_onboarding_credentials` must be a non-empty array"
+        )
+
+    credentials: list[AccountOnboardingCredentialSecrets] = []
+    expected_fields = {"id", "api_token", "scope_dataspace"}
+    for index, raw_credential in enumerate(raw_credentials, start=1):
+        credential_context = (
+            f"{context} account_onboarding_credentials entry #{index}"
+        )
+        if not isinstance(raw_credential, dict):
+            raise ValueError(f"{credential_context} must be a TOML table")
+        unknown_fields = sorted(set(raw_credential).difference(expected_fields))
+        if unknown_fields:
+            raise ValueError(
+                f"{credential_context} contains unknown fields: "
+                + ", ".join(unknown_fields)
+            )
+        missing_fields = sorted(expected_fields.difference(raw_credential))
+        if missing_fields:
+            raise ValueError(
+                f"{credential_context} is incomplete; missing "
+                + ", ".join(missing_fields)
+            )
+        values: dict[str, str] = {}
+        for field in expected_fields:
+            value = raw_credential[field]
+            if not isinstance(value, str) or not value or value != value.strip():
+                raise ValueError(
+                    f"{credential_context} field `{field}` must be an exact non-empty string"
+                )
+            values[field] = value
+
+        credential_id = values["id"]
+        if (
+            len(credential_id.encode("utf-8")) > 255
+            or unicodedata.normalize("NFC", credential_id) != credential_id
+            or any(
+                character.isspace() or unicodedata.category(character) == "Cc"
+                for character in credential_id
+            )
+            or any(character in "@#$" for character in credential_id)
+        ):
+            raise ValueError(
+                f"{credential_context} field `id` must be a canonical Iroha Name"
+            )
+
+        scope_dataspace = values["scope_dataspace"]
+        if scope_dataspace not in TAIRA_ACCOUNT_ONBOARDING_DATASPACES:
+            allowed = ", ".join(sorted(TAIRA_ACCOUNT_ONBOARDING_DATASPACES))
+            raise ValueError(
+                f"{credential_context} field `scope_dataspace` must name one of "
+                f"the reviewed Taira application dataspaces: {allowed}"
+            )
+        credentials.append(
+            AccountOnboardingCredentialSecrets(
+                id=credential_id,
+                api_token=values["api_token"],
+                scope_dataspace=scope_dataspace,
+            )
+        )
+    return tuple(credentials)
 
 
 def _validate_ed25519_public_key(value: str, context: str) -> None:
@@ -1415,14 +1624,21 @@ def load_secret_material(path: Path) -> SecretMaterial:
         raise ValueError(f"secrets file `{path}` field `shared` must be a TOML table")
     legacy_onboarding_fields = sorted(
         field
-        for field in ("torii_onboarding_authority", "torii_onboarding_private_key")
+        for field in (
+            "torii_onboarding_authority",
+            "torii_onboarding_private_key",
+            "account_onboarding_api_token",
+            "account_onboarding_credential_id",
+            "account_onboarding_scope_domain",
+            "account_onboarding_scope_dataspace",
+        )
         if field in shared_raw
     )
     if legacy_onboarding_fields:
         raise ValueError(
             f"secrets file `{path}` uses removed onboarding fields: "
             + ", ".join(legacy_onboarding_fields)
-            + "; use account_onboarding_* fields"
+            + "; use `[[shared.account_onboarding_credentials]]` entries"
         )
     removed_offline_enrollment_fields = sorted(
         field
@@ -1484,18 +1700,8 @@ def load_secret_material(path: Path) -> SecretMaterial:
         account_onboarding_private_key=_optional_string(
             shared_raw, "account_onboarding_private_key", f"secrets file `{path}`"
         ),
-        account_onboarding_api_token=_optional_string(
-            shared_raw, "account_onboarding_api_token", f"secrets file `{path}`"
-        ),
-        account_onboarding_credential_id=_optional_string(
-            shared_raw, "account_onboarding_credential_id", f"secrets file `{path}`"
-        ),
-        account_onboarding_scope_domain=_optional_string(
-            shared_raw, "account_onboarding_scope_domain", f"secrets file `{path}`"
-        ),
-        account_onboarding_scope_dataspace=_optional_string(
+        account_onboarding_credentials=_account_onboarding_credentials(
             shared_raw,
-            "account_onboarding_scope_dataspace",
             f"secrets file `{path}`",
         ),
         torii_faucet_authority=_optional_string(
@@ -1993,6 +2199,34 @@ def load_roster(
     return validators
 
 
+def _render_account_onboarding_credentials(
+    credentials: tuple[AccountOnboardingCredentialSecrets, ...],
+    token_hashes: dict[str, str],
+) -> list[str]:
+    """Render the complete structural Torii credential array without raw tokens."""
+
+    rendered: list[str] = []
+    for index, credential in enumerate(credentials):
+        try:
+            token_hash = token_hashes[credential.id]
+        except KeyError as error:
+            raise ValueError(
+                f"missing token hash for onboarding credential `{credential.id}`"
+            ) from error
+        if index:
+            rendered.append("")
+        rendered.extend(
+            [
+                "[[torii.account_onboarding.credentials]]",
+                f"id = {_quote_toml(credential.id)}",
+                "scope = { dataspace = "
+                f"{_quote_toml(credential.scope_dataspace)} }}",
+                f"token_hash = {_quote_toml(token_hash)}",
+            ]
+        )
+    return rendered
+
+
 def render_validator_config(
     template_text: str,
     validator: ValidatorEntry,
@@ -2001,7 +2235,7 @@ def render_validator_config(
     soranet_transport_private_key_file: Path,
     shared_secrets: SharedSecrets | None = None,
     onboarding_private_key_file: Path | None = None,
-    onboarding_token_hash: str | None = None,
+    onboarding_token_hashes: dict[str, str] | None = None,
     faucet_private_key_file: Path | None = None,
     kagemusha_commands_private_key_file: Path | None = None,
     streaming_identity_private_key_file: Path | None = None,
@@ -2010,6 +2244,7 @@ def render_validator_config(
     kagemusha_release_policy_path: Path | None = None,
     kagemusha_artifact_dir: Path | None = None,
     kagemusha_catalog_qualification_seal_path: Path | None = None,
+    sumeragi_bodies: int | None = None,
     sumeragi_body_bytes: int | None = None,
     genesis_expected_hash: str | None = None,
     genesis_file: Path | None = None,
@@ -2019,15 +2254,19 @@ def render_validator_config(
 
     current_section: str | None = None
     skipping_array: str | None = None
+    bodies_rewritten = False
     body_bytes_rewritten = False
     genesis_expected_hash_rewritten = False
     genesis_file_rewritten = False
     kagemusha_offline_section_seen = False
     receipt_signer_written = False
+    onboarding_credentials_written = False
+    skipping_onboarding_credential_template = False
     rendered: list[str] = []
     trusted_peers_lines = _render_trusted_peers(validators)
     trusted_peers_pop_lines = _render_trusted_peers_pop(validators)
     shared = shared_secrets or SharedSecrets()
+    resolved_onboarding_token_hashes = onboarding_token_hashes or {}
     if (kagemusha_release_policy_path is None) != (kagemusha_artifact_dir is None):
         raise ValueError(
             "Kagemusha release policy and artifact directory must be supplied together"
@@ -2048,9 +2287,30 @@ def render_validator_config(
                 skipping_array = None
             continue
 
+        if shared.account_onboarding_credentials:
+            if stripped == "[[torii.account_onboarding.credentials]]":
+                if not onboarding_credentials_written:
+                    rendered.extend(
+                        _render_account_onboarding_credentials(
+                            shared.account_onboarding_credentials,
+                            resolved_onboarding_token_hashes,
+                        )
+                    )
+                    onboarding_credentials_written = True
+                current_section = stripped
+                skipping_onboarding_credential_template = True
+                continue
+            if skipping_onboarding_credential_template:
+                if not stripped.startswith("["):
+                    continue
+                skipping_onboarding_credential_template = False
+
         if stripped.startswith("[[") or stripped.startswith("["):
             current_section = stripped
             rendered.append(raw_line)
+            if current_section == "[sumeragi.queues]" and sumeragi_bodies is not None:
+                rendered.append(f"bodies = {sumeragi_bodies}")
+                bodies_rewritten = True
             if current_section == "[torii]":
                 if (
                     validator.receipt_public_key is None
@@ -2173,7 +2433,12 @@ def render_validator_config(
                     'expected_hash_file = "/run/iroha/genesis.expected_hash"'
                 )
             else:
-                rendered.append(f'expected_hash = "{genesis_expected_hash}"')
+                # Inline config hashes use the Norito JSON literal grammar; the
+                # signer/file contract remains raw lowercase hexadecimal.
+                expected_hash_literal = _format_literal(
+                    "hash", genesis_expected_hash.upper()
+                )
+                rendered.append(f'expected_hash = "{expected_hash_literal}"')
             continue
 
         if current_section == "[network]" and stripped.startswith("address = "):
@@ -2181,6 +2446,12 @@ def render_validator_config(
             continue
         if current_section == "[network]" and stripped.startswith("public_address = "):
             rendered.append(f"public_address = {_quote_toml(validator.public_address)}")
+            continue
+        if (
+            current_section == "[sumeragi.queues]"
+            and stripped.partition("=")[0].strip() == "bodies"
+            and sumeragi_bodies is not None
+        ):
             continue
         if (
             current_section == "[sumeragi.queues]"
@@ -2215,41 +2486,6 @@ def render_validator_config(
             rendered.append(
                 f"private_key_file = {_quote_toml(str(onboarding_private_key_file))}"
             )
-            continue
-        if (
-            current_section == "[[torii.account_onboarding.credentials]]"
-            and stripped.startswith("id = ")
-            and shared.account_onboarding_credential_id is not None
-        ):
-            rendered.append(
-                f"id = {_quote_toml(shared.account_onboarding_credential_id)}"
-            )
-            continue
-        if (
-            current_section == "[[torii.account_onboarding.credentials]]"
-            and stripped.startswith("scope = ")
-            and (
-                shared.account_onboarding_scope_domain is not None
-                or shared.account_onboarding_scope_dataspace is not None
-            )
-        ):
-            if shared.account_onboarding_scope_domain is not None:
-                rendered.append(
-                    "scope = { domain = "
-                    f"{_quote_toml(shared.account_onboarding_scope_domain)} }}"
-                )
-            else:
-                rendered.append(
-                    "scope = { dataspace = "
-                    f"{_quote_toml(shared.account_onboarding_scope_dataspace or '')} }}"
-                )
-            continue
-        if (
-            current_section == "[[torii.account_onboarding.credentials]]"
-            and stripped.startswith("token_hash = ")
-            and onboarding_token_hash is not None
-        ):
-            rendered.append(f"token_hash = {_quote_toml(onboarding_token_hash)}")
             continue
         if (
             current_section == "[torii.faucet]"
@@ -2397,6 +2633,11 @@ def render_validator_config(
     rendered_text = "\n".join(rendered)
     if not rendered_text.endswith("\n"):
         rendered_text += "\n"
+    if sumeragi_bodies is not None and not bodies_rewritten:
+        raise ValueError(
+            f"rendered config for `{validator.slug}` could not rewrite the "
+            "`[sumeragi.queues] bodies` assignment"
+        )
     if sumeragi_body_bytes is not None and not body_bytes_rewritten:
         raise ValueError(
             f"rendered config for `{validator.slug}` could not rewrite the "
@@ -2410,6 +2651,11 @@ def render_validator_config(
     if not receipt_signer_written:
         raise ValueError(
             f"rendered config for `{validator.slug}` lacks the mandatory `[torii]` table"
+        )
+    if shared.account_onboarding_credentials and not onboarding_credentials_written:
+        raise ValueError(
+            f"rendered config for `{validator.slug}` lacks the mandatory "
+            "`[[torii.account_onboarding.credentials]]` template"
         )
     if genesis_file is not None and not genesis_file_rewritten:
         raise ValueError(
@@ -2456,16 +2702,22 @@ def render_bundle(
         raise ValueError(
             "only must identify one validator in the canonical Taira roster"
         )
-    resolved_onboarding_token_hash: str | None = None
-    if (
-        secret_material is not None
-        and secret_material.shared.account_onboarding_api_token is not None
-    ):
-        resolved_onboarding_token_hash = _blake3_token_hash(
-            secret_material.shared.account_onboarding_api_token,
-            onboarding_token_hash_tool,
-        )
+    resolved_onboarding_token_hashes: dict[str, str] = {}
+    if secret_material is not None:
+        resolved_onboarding_token_hashes = {
+            credential.id: _blake3_token_hash(
+                credential.api_token,
+                onboarding_token_hash_tool,
+            )
+            for credential in secret_material.shared.account_onboarding_credentials
+        }
     template = _load_toml(base_config_path)
+    if secret_material is not None:
+        _validate_account_onboarding_catalog(
+            secret_material.shared,
+            template,
+            f"base config `{base_config_path}`",
+        )
     settlement = template.get("settlement", {})
     offline = settlement.get("offline", {}) if isinstance(settlement, dict) else {}
     managed_kagemusha_keys = (
@@ -2482,6 +2734,7 @@ def render_bundle(
     _validate_privacy_issuer_template(template, validators)
     _validate_receipt_signer_template(template)
     sumeragi_body_bytes = _scaled_sumeragi_body_bytes(template, len(validators))
+    sumeragi_bodies = _scaled_sumeragi_bodies(template, len(validators))
     template_text = base_config_path.read_text(encoding="utf-8")
     path_root = bundle_root if bundle_root is not None else install_root
     install_root_text = str(path_root)
@@ -2596,10 +2849,10 @@ def render_bundle(
                     runtime_dir / "onboarding-signer.key",
                     shared.account_onboarding_private_key,
                 )
-            if shared.account_onboarding_api_token is not None:
+            if shared.account_onboarding_credentials:
                 _write_private_text(
                     runtime_dir / "onboarding-token",
-                    shared.account_onboarding_api_token,
+                    shared.account_onboarding_credentials[0].api_token,
                 )
             if shared.torii_faucet_private_key is not None:
                 faucet_private_key_file = installed_runtime_dir / "faucet-signer.key"
@@ -2635,7 +2888,7 @@ def render_bundle(
                 soranet_transport_private_key_file=soranet_transport_private_key_file,
                 shared_secrets=secret_material.shared if secret_material else None,
                 onboarding_private_key_file=onboarding_private_key_file,
-                onboarding_token_hash=resolved_onboarding_token_hash,
+                onboarding_token_hashes=resolved_onboarding_token_hashes,
                 faucet_private_key_file=faucet_private_key_file,
                 kagemusha_commands_private_key_file=kagemusha_commands_private_key_file,
                 streaming_identity_private_key_file=streaming_identity_private_key_file,
@@ -2657,6 +2910,7 @@ def render_bundle(
                     and include_kagemusha_qualification_seal
                     else None
                 ),
+                sumeragi_bodies=sumeragi_bodies,
                 sumeragi_body_bytes=sumeragi_body_bytes,
                 genesis_expected_hash=genesis_expected_hash,
                 genesis_file=genesis_file,
@@ -2722,6 +2976,7 @@ def main(argv: list[str] | None = None) -> int:
         "--genesis-expected-hash",
         help=(
             "exact lowercase consensus-header hash printed by `kagami genesis sign`; "
+            "the inline config value is emitted as an uppercase CRC-bound hash literal; "
             "omit only for the non-runnable pre-signing bundle"
         ),
     )

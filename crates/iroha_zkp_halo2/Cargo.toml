@@ -1,5 +1,6 @@
 [package]
 name = "iroha_zkp_halo2"
+autotests = false
 version.workspace = true
 edition = "2024"
 license = "Apache-2.0"
@@ -38,3 +39,7 @@ goldilocks_backend = []
 [[bench]]
 name = "bench_ipa"
 harness = false
+
+[[test]]
+name = "vega_engine_reachability"
+path = "tests/vega_engine_reachability.rs"

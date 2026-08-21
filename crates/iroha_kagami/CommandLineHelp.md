@@ -95,8 +95,8 @@ Guided node/bootstrap flow for configuring a peer against an existing network pr
 * `--profile <PROFILE>` — Optional preset profile; if omitted, the wizard prompts for one
 
   Possible values:
-  - `iroha2`:
-    Vanilla single-lane Iroha 2 style network (no Sora profile needed)
+  - `local`:
+    Canonical single-lane local network (no Sora profile needed)
   - `nexus`:
     Sora Nexus (mainnet)
   - `taira`:
@@ -144,13 +144,7 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 * `--fresh-random-keys` — Generate every private key from a fresh OS-random, process-local seed.
 
    The seed is never accepted through argv, written to the generated bundle, or printed. This mode is intended for real first-release custody; use `--seed` only for reproducible development fixtures.
-* `--build-line <LINE>` — Select the build line (`iroha2` or `iroha3`) for genesis compatibility. Defaults to `iroha3`; consensus still defaults to `permissioned` unless a profile or perf preset requires `npos`
-
-  Default value: `iroha3`
-
-  Possible values: `iroha2`, `iroha3`
-
-* `--sora-profile <PROFILE>` — Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS). Requires `--build-line iroha3` and at least 4 peers
+* `--sora-profile <PROFILE>` — Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS). Requires at least 4 peers
 
   Possible values: `dataspace`, `nexus`
 
@@ -363,7 +357,7 @@ Generate a genesis configuration and standard-output in JSON format
 * `--ivm-dir <PATH>` — Relative path from the directory of output file to the directory that contains IVM bytecode libraries
 * `--genesis-public-key <MULTI_HASH>`
 * `--ivm-gas-limit-per-block <U64>` — Optional: set the custom parameter `ivm_gas_limit_per_block` (u64) in genesis so all peers agree on the block gas budget. If omitted, a sensible default (1,680,000) is applied
-* `--consensus-mode <MODE>` — Select the consensus mode snapshot to seed in the genesis parameters (public dataspace requires NPoS; other Iroha3 dataspaces may use permissioned or NPoS; Iroha2 defaults to permissioned)
+* `--consensus-mode <MODE>` — Select the consensus mode snapshot to seed in the genesis parameters (public dataspace requires NPoS; other dataspaces may use permissioned or NPoS)
 
   Possible values: `permissioned`, `npos`
 
@@ -532,7 +526,7 @@ Verify an ABI-21/V4 release and atomically write its typed promotion record
 
 Build one release-bound activation instruction from an authenticated V4 catalog
 
-**Usage:** `kagami kagemusha prepare-activation-v4 --artifact-root <ARTIFACT_ROOT> --release-policy <RELEASE_POLICY> --manifest-sha256 <MANIFEST_SHA256> --verifier-version <VERIFIER_VERSION> --device-attestation-policy <DEVICE_ATTESTATION_POLICY> --output <OUTPUT>`
+**Usage:** `kagami kagemusha prepare-activation-v4 --artifact-root <ARTIFACT_ROOT> --release-policy <RELEASE_POLICY> --manifest-sha256 <MANIFEST_SHA256> --verifier-version <VERIFIER_VERSION> --device-attestation-policy <DEVICE_ATTESTATION_POLICY> --policy-evaluation-time-ms <POLICY_EVALUATION_TIME_MS> --output <OUTPUT>`
 
 ###### **Options:**
 
@@ -541,7 +535,8 @@ Build one release-bound activation instruction from an authenticated V4 catalog
 * `--manifest-sha256 <MANIFEST_SHA256>` — Exact lowercase SHA-256 directory name of the release to activate
 * `--verifier-version <VERIFIER_VERSION>` — Next atomic Eq/Ep verifier version observed from live consensus state
 * `--device-attestation-policy <DEVICE_ATTESTATION_POLICY>` — Exact governed verifier policy derived from authenticated physical-device evidence. The policy and release are embedded in one composite consensus instruction
-* `--output <OUTPUT>` — New private file receiving a JSON array accepted by `iroha multisig propose`
+* `--policy-evaluation-time-ms <POLICY_EVALUATION_TIME_MS>` — Explicit Unix timestamp used for the same certificate-validity checks as consensus. The activation is checked again against its actual block timestamp on every validator
+* `--output <OUTPUT>` — New private file receiving a JSON array accepted by `iroha ledger multisig propose`
 
 
 
@@ -636,7 +631,7 @@ Validate an emitted exact-12 instruction set and its digest inventory
 
 Compose a complete secret-free Taira release plan, config, and genesis
 
-**Usage:** `kagami privacy-bootstrap render-taira-release-v1 --activation-instructions <ACTIVATION_INSTRUCTIONS> --activation-report <ACTIVATION_REPORT> --broker-public-export <BROKER_PUBLIC_EXPORT> --plan-template <PLAN_TEMPLATE> --config-template <CONFIG_TEMPLATE> --genesis-template <GENESIS_TEMPLATE> --plan-output <PLAN_OUTPUT> --config-output <CONFIG_OUTPUT> --genesis-output <GENESIS_OUTPUT> --broker-public-output <BROKER_PUBLIC_OUTPUT>`
+**Usage:** `kagami privacy-bootstrap render-taira-release-v1 --activation-instructions <ACTIVATION_INSTRUCTIONS> --activation-report <ACTIVATION_REPORT> --broker-public-export <BROKER_PUBLIC_EXPORT> --plan-template <PLAN_TEMPLATE> --config-template <CONFIG_TEMPLATE> --genesis-template <GENESIS_TEMPLATE> --nevo-review <NEVO_REVIEW> --plan-output <PLAN_OUTPUT> --config-output <CONFIG_OUTPUT> --genesis-output <GENESIS_OUTPUT> --broker-public-output <BROKER_PUBLIC_OUTPUT>`
 
 ###### **Options:**
 
@@ -646,6 +641,8 @@ Compose a complete secret-free Taira release plan, config, and genesis
 * `--plan-template <PLAN_TEMPLATE>` — Canonical disabled Taira privacy plan template
 * `--config-template <CONFIG_TEMPLATE>` — Canonical disabled peer-1 Taira config template
 * `--genesis-template <GENESIS_TEMPLATE>` — Canonical Taira genesis without privacy bootstrap instructions
+
+* `--nevo-review <NEVO_REVIEW>` — Deterministic public NEVO review manifest binding the genesis template
 * `--plan-output <PLAN_OUTPUT>` — Fresh output path for the complete public release plan
 * `--config-output <CONFIG_OUTPUT>` — Fresh output path for the complete peer-1 release config
 * `--genesis-output <GENESIS_OUTPUT>` — Fresh output path for the complete release genesis

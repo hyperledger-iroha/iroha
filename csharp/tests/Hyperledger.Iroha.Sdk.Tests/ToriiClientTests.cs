@@ -143,7 +143,6 @@ public sealed partial class ToriiClientTests
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var metrics = await client.GetMetricsAsync(cancellationToken: TestContext.Current.CancellationToken);
-
         Assert.Equal("iroha_blocks_total 7\n", metrics);
         Assert.Equal("/v1/metrics", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
@@ -28732,6 +28731,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             VkOption(VkUInt64(100_000)),
             [0],
             feePayment,
+            VkUInt32(1),
             VkUInt64(0),
             [0]);
     }

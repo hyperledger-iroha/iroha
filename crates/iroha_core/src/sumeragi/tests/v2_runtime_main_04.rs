@@ -267,9 +267,9 @@ fn pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot() {
     let message = signed_runtime_timeout_vote(&context, &keys, 0, 1);
     let source = context.roster[1].validator.clone();
     assert!(matches!(
-        leader_wire_ingress.try_push(InboundBlockMessage::new(
+        leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(message.clone()),
-            Some(source),
+            source,
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -444,7 +444,7 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
         .pop_first()
         .expect("four-validator universe is non-empty");
     assert!(
-        runtime.timeout_recovery_lifecycle_cut().is_err(),
+        runtime.emitted_timeout_recovery_owner().is_err(),
         "a changed frozen roster universe must invalidate the episode"
     );
     runtime
@@ -454,8 +454,9 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
         .timeout_vote_owner_universe = frozen_universe;
     assert_eq!(
         runtime
-            .timeout_recovery_lifecycle_cut()
-            .expect("the restored roster universe validates"),
+            .emitted_timeout_recovery_owner()
+            .expect("the restored roster universe validates")
+            .map(|owner| owner.lifecycle_ordinal()),
         Some(timeout_ordinal)
     );
     for signer in [1_u32, 2_u32] {
@@ -478,9 +479,9 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
             .validator
             .clone();
         assert!(matches!(
-            leader_wire_ingress.try_push(InboundBlockMessage::new(
+            leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 BlockMessage::V2(message.clone()),
-                Some(source.clone()),
+                source.clone(),
             )),
             Ok(super::super::FairV2IngressPushDisposition::Enqueued)
         ));
@@ -548,9 +549,9 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
             "each distinct roster source increases the finite count once"
         );
         assert!(matches!(
-            leader_wire_ingress.try_push(InboundBlockMessage::new(
+            leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 BlockMessage::V2(message),
-                Some(source),
+                source,
             )),
             Ok(super::super::FairV2IngressPushDisposition::Coalesced)
         ));
@@ -605,9 +606,9 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
     let third_message = signed_runtime_timeout_vote(&context, &keys, 0, 3);
     let third_source = context.roster[3].validator.clone();
     assert!(matches!(
-        leader_wire_ingress.try_push(InboundBlockMessage::new(
+        leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(third_message),
-            Some(third_source),
+            third_source,
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -818,9 +819,9 @@ fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admissi
         .timeout_owner_physical_cut
         .expect("timeout freezes the restored receiver cut");
     assert!(matches!(
-        restored_ingress.try_push(InboundBlockMessage::new(
+        restored_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(message.clone()),
-            Some(source),
+            source,
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -946,16 +947,16 @@ fn exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot() 
     );
     let mut source_substituted = retained.clone();
     let substituted_source = PeerId::from(KeyPair::random().public_key().clone());
-    source_substituted.direct[0].first.wire_key.origin = Some(substituted_source.clone());
-    source_substituted.direct[0].first.semantic_origin = Some(substituted_source.clone());
-    source_substituted.direct[0].first.authenticated_via = Some(substituted_source.clone());
+    source_substituted.direct[0].first.wire_key.origin = substituted_source.clone();
+    source_substituted.direct[0].first.semantic_origin = substituted_source.clone();
+    source_substituted.direct[0].first.authenticated_via = substituted_source.clone();
     source_substituted.direct[0].first.authenticated_source =
         super::super::FairV2IngressSource::Validator(substituted_source.clone());
     source_substituted.direct[0].first.semantic_owner_source =
         super::super::FairV2IngressSource::Validator(substituted_source.clone());
-    source_substituted.direct[0].latest.wire_key.origin = Some(substituted_source.clone());
-    source_substituted.direct[0].latest.semantic_origin = Some(substituted_source.clone());
-    source_substituted.direct[0].latest.authenticated_via = Some(substituted_source.clone());
+    source_substituted.direct[0].latest.wire_key.origin = substituted_source.clone();
+    source_substituted.direct[0].latest.semantic_origin = substituted_source.clone();
+    source_substituted.direct[0].latest.authenticated_via = substituted_source.clone();
     source_substituted.direct[0].latest.authenticated_source =
         super::super::FairV2IngressSource::Validator(substituted_source.clone());
     source_substituted.direct[0].latest.semantic_owner_source =
@@ -1624,8 +1625,9 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
         .pop()
         .expect("one Fetch has one exact owner");
     let fetch_pending = fetch_ownership
-        .pending_adapter_effect_binding(fetch_effect)
-        .expect("Fetch owns one exact pending binding");
+        .current_effect_producer(fetch_effect)
+        .expect("Fetch owns one exact producer")
+        .mint_pending_binding();
     let fetch_replay = fetch_ownership
         .exact_remote_proposal_fetch_replay(fetch_effect)
         .expect("authenticated Proposal attaches its replay origin");
@@ -1679,8 +1681,9 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
         .pop()
         .expect("one Store has one exact owner");
     let store_pending = store_ownership
-        .pending_adapter_effect_binding(store_effect)
-        .expect("Store owns one exact pending binding");
+        .current_effect_producer(store_effect)
+        .expect("Store owns one exact producer")
+        .mint_pending_binding();
     assert!(fetch_replay.exactly_projects_store(store_effect, &store_pending));
     let foreign_store_ownership = bind_adapter_effect_batch_ownership(
         core::slice::from_ref(store_effect),
@@ -1690,8 +1693,9 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
     .pop()
     .expect("one foreign Store owner");
     let foreign_store_pending = foreign_store_ownership
-        .pending_adapter_effect_binding(store_effect)
-        .expect("foreign Store has one binding");
+        .current_effect_producer(store_effect)
+        .expect("foreign Store has one producer")
+        .mint_pending_binding();
     assert!(
         fetch_replay
             .clone()
@@ -1753,8 +1757,9 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
         .pop()
         .expect("one Validate has one exact owner");
     let validate_pending = validate_ownership
-        .pending_adapter_effect_binding(validate_effect)
-        .expect("Validate owns one exact pending binding");
+        .current_effect_producer(validate_effect)
+        .expect("Validate owns one exact producer")
+        .mint_pending_binding();
     let foreign_validate_ownership = bind_adapter_effect_batch_ownership(
         core::slice::from_ref(validate_effect),
         vec![RuntimeEffectOwnership::fresh_for_test(tag, 98_002)],
@@ -1763,8 +1768,9 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
     .pop()
     .expect("one foreign Validate owner");
     let foreign_validate_pending = foreign_validate_ownership
-        .pending_adapter_effect_binding(validate_effect)
-        .expect("foreign Validate has one binding");
+        .current_effect_producer(validate_effect)
+        .expect("foreign Validate has one producer")
+        .mint_pending_binding();
     assert!(
         stored_replay
             .clone()

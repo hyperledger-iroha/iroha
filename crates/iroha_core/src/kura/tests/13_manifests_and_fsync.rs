@@ -500,10 +500,8 @@ fn fast_init_rewrites_tampered_hash_file() {
                 iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention:
+                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),
@@ -537,10 +535,8 @@ fn fast_init_prunes_truncated_block_data() {
                 iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention:
+                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),

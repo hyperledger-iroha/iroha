@@ -278,7 +278,9 @@ def make_fixture() -> EvidenceFixture:
         "restart_generation": restart_generation,
         "network_name": checker.taira_constants.NETWORK_NAME,
         "chain_id": checker.taira_constants.CHAIN_ID,
-        "network_id": checker.taira_constants.NETWORK_ID,
+        "network_id": checker.taira_constants.network_id_from_genesis_hash(
+            str(genesis_block_hash["value"])
+        ),
         "protocol_version": checker.PROTOCOL_VERSION,
         "genesis_block_hash": copy.deepcopy(genesis_block_hash),
         "deployment_completed_at_unix_ms": started_ms - 300,
@@ -659,7 +661,9 @@ def make_fixture() -> EvidenceFixture:
             "name": checker.taira_constants.NETWORK_NAME,
             "deployment": "public",
             "chain_id": checker.taira_constants.CHAIN_ID,
-            "network_id": checker.taira_constants.NETWORK_ID,
+            "network_id": checker.taira_constants.network_id_from_genesis_hash(
+                str(genesis_block_hash["value"])
+            ),
             "protocol_version": checker.PROTOCOL_VERSION,
             "genesis_block_hash": copy.deepcopy(genesis_block_hash),
         },

@@ -101,6 +101,7 @@ const INSTRUCTION_BOX_SCHEMA_HASH = Buffer.from(
 const MAX_BROWSER_INSTRUCTIONS = 64;
 const MAX_CONTRACT_ARGUMENT_RECORD_BYTES = 1024 * 1024;
 const MAX_CONTRACT_ENTRYPOINT_BYTES = 1024;
+const TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG = 1;
 const SMART_CONTRACT_DEPLOYMENT_WIRE_IDS = new Set([
   "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk",
   "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload",
@@ -1264,6 +1265,7 @@ function encodeTransactionPayload(normalized, executable) {
     option(normalized.ttlMs === null ? null : u64(normalized.ttlMs)),
     option(normalized.nonce === null ? null : u32(normalized.nonce)),
     feePaymentArchive(normalized.feePayment),
+    u32(TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG),
     metadataArchive(normalized.metadata),
     Buffer.of(0),
   ]);
@@ -1777,6 +1779,18 @@ function validateFeePaymentArchive(payload, context) {
   return { gasLimit };
 }
 
+function validateTransactionAdmissionIntentArchive(payload, expectedTag, context) {
+  const reader = new Reader(payload, context);
+  const tag = reader.readU32("intent");
+  reader.assertEof();
+  if (tag !== expectedTag) {
+    fail(
+      UNSUPPORTED_PAYLOAD,
+      `${context} must be TransactionAdmissionIntent::QueuePlanSynced`,
+    );
+  }
+}
+
 function validateFrame(frame, context) {
   if (frame.length < 40 || frame.subarray(0, 4).toString("ascii") !== "NRT0") {
     fail(MALFORMED_PAYLOAD, `${context} is not an NRT0 frame`);
@@ -2256,6 +2270,11 @@ function validateTransactionPayloadEnvelope(
     "transaction payload.feePayment",
   );
   validateFeePayment?.(executableValidation, feePayment);
+  validateTransactionAdmissionIntentArchive(
+    reader.readField("admissionIntent"),
+    TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
+    "transaction payload.admissionIntent",
+  );
   rejectLegacyFeeMetadata(
     validateMetadataArchive(
       reader.readField("metadata"),
@@ -2413,6 +2432,11 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
   validateFeePaymentArchive(
     reader.readField("feePayment"),
     "verifying-key transaction payload.feePayment",
+  );
+  validateTransactionAdmissionIntentArchive(
+    reader.readField("admissionIntent"),
+    TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
+    "verifying-key transaction payload.admissionIntent",
   );
   rejectLegacyFeeMetadata(
     validateMetadataArchive(

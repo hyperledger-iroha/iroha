@@ -85,6 +85,10 @@ PUBLIC_PRIVACY_INPUTS = {
     ),
     "config.toml": ("provenance/privacy-bootstrap/config.toml", 8 * 1024 * 1024),
     "genesis.json": ("provenance/privacy-bootstrap/genesis.json", 16 * 1024 * 1024),
+    "nevo-reset.review.json": (
+        "provenance/privacy-bootstrap/nevo-reset.review.json",
+        4 * 1024 * 1024,
+    ),
     "privacy_bootstrap_plan.json": (
         "provenance/privacy-bootstrap/privacy_bootstrap_plan.json",
         8 * 1024 * 1024,
@@ -185,7 +189,7 @@ def _verify_public_privacy_inputs(
     expected_names = sorted(PUBLIC_PRIVACY_INPUTS)
     if scan_inventory_paths(public_input_root) != expected_names:
         raise FinalizationError(
-            "trusted public privacy input inventory is not exactly four files"
+            "trusted public privacy input inventory is not exactly five files"
         )
     digests: dict[str, str] = {}
     captures: dict[str, tuple[object, bytes, object, bytes]] = {}

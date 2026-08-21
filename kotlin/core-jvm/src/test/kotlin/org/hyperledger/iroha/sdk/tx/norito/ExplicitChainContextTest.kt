@@ -113,7 +113,7 @@ class ExplicitChainContextTest {
     fun `transfer decoder projects only the caller selected chain`() {
         val owner = account(0x44, TAIRA)
         val destination = account(0x45, TAIRA)
-        val assetId = "$SBD_ASSET_DEFINITION_ID#$owner"
+        val assetId = "$DS_ASSET_DEFINITION_ID#$owner"
         val instruction = TransferWirePayloadEncoder.encodeAssetTransfer(
             assetId,
             "10",
@@ -287,7 +287,7 @@ class ExplicitChainContextTest {
             .fromAccount(publicKey, "ed25519")
             .toI105(TAIRA)
         val instruction = RegisterZkAssetInstruction.builder()
-            .setAsset(SBD_ASSET_DEFINITION_ID)
+            .setAsset(DS_ASSET_DEFINITION_ID)
             .build()
         assertFailsWith<IllegalArgumentException> {
             NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
@@ -315,8 +315,8 @@ class ExplicitChainContextTest {
         SignedTransaction(payload, ByteArray(64) { 0x55.toByte() }, ByteArray(0), schemaName)
 
     private fun swapMetadataEntries(canonicalPayload: ByteArray): ByteArray {
-        val fields = decodeSizedFields(canonicalPayload, 9)
-        val metadata = NoritoDecoder(fields[7], NoritoCodec.DEFAULT_FLAGS)
+        val fields = decodeSizedFields(canonicalPayload, 10)
+        val metadata = NoritoDecoder(fields[8], NoritoCodec.DEFAULT_FLAGS)
         assertEquals(2L, metadata.readLength(false))
         val first = readSizedField(metadata)
         val second = readSizedField(metadata)
@@ -326,7 +326,7 @@ class ExplicitChainContextTest {
         swapped.writeLength(2, false)
         writeSizedField(swapped, second)
         writeSizedField(swapped, first)
-        fields[7] = swapped.toByteArray()
+        fields[8] = swapped.toByteArray()
         return encodeSizedFields(fields)
     }
 
@@ -406,7 +406,7 @@ class ExplicitChainContextTest {
     private companion object {
         const val TAIRA = SccpV1.TAIRA_I105_DISCRIMINANT_V1
         const val OTHER = AccountAddress.DEFAULT_I105_DISCRIMINANT
-        // Low-level codecs receive the exact typed ID resolved from the app's `sbd#cbsi` selector.
-        const val SBD_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
+        // Low-level codecs receive the exact typed ID resolved from the app's `ds#boi.is` selector.
+        const val DS_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
     }
 }

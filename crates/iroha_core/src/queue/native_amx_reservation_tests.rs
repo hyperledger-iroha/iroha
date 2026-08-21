@@ -16,15 +16,12 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
         store_dir: WithOrigin::inline(kura_dir.path().join("kura")),
         max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+        lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
         debug_output_new_blocks: false,
         merge_ledger_cache_capacity:
             iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-        block_sync_roster_retention:
-            iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-        roster_sidecar_retention:
-            iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let (kura, _) =
@@ -49,7 +46,6 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
         .restore_kura_lane_segments_before_startup_replay()
         .expect("restore reservation-test startup cursor");
     let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
     nexus.fees.base_fee = Quantity::zero();
     nexus.fees.per_byte_fee = Quantity::zero();
     nexus.fees.per_instruction_fee = Quantity::zero();
@@ -87,7 +83,7 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
         )
         .expect("install Native AMX queue-plan journal");
     let (authority, authority_keypair) = gen_account_in("wonderland");
-    let transaction = accepted_tx_with(
+    let transaction = accepted_queue_plan_tx_with(
         authority.clone(),
         &authority_keypair,
         &time_source,

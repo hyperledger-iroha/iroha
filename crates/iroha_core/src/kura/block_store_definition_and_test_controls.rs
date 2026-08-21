@@ -662,11 +662,6 @@ impl Kura {
         record.artifact = artifact;
         std::fs::write(&path, record.encode()).map_err(|err| Error::IO(err, path))
     }
-    #[allow(dead_code)] // Used by the feature-gated Sumeragi actor regression suite.
-    pub(crate) fn fail_next_roster_sidecar_writes_for_tests(&self, count: usize) {
-        self.fail_next_roster_sidecar_writes
-            .store(count, Ordering::Relaxed);
-    }
 }
 /// Loaded block count
 #[derive(Clone, Copy, Debug)]

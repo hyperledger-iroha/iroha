@@ -915,11 +915,6 @@ fn build_lane_lifecycle_transaction(
             signer.label()
         )));
     }
-    if !status.nexus_enabled {
-        return Err(ToriiError::Decode(
-            "Nexus lane lifecycle is disabled on the serving node".to_owned(),
-        ));
-    }
     let catalog = status
         .validate()
         .map_err(|err| ToriiError::Decode(format!("invalid lane lifecycle status: {err}")))?;
@@ -3637,11 +3632,6 @@ impl ToriiClient {
             )));
         }
         let status = self.fetch_lane_lifecycle_status().await?;
-        if !status.nexus_enabled {
-            return Err(ToriiError::Decode(
-                "Nexus lane lifecycle is disabled on the serving node".to_owned(),
-            ));
-        }
         let current_catalog = status
             .validate()
             .map_err(|err| ToriiError::Decode(format!("invalid lane lifecycle status: {err}")))?;

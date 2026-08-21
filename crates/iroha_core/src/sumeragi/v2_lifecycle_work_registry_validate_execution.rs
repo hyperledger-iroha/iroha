@@ -67,6 +67,21 @@ impl PreparedDurableValidateCompletion<'_> {
 // DURABLE_VALIDATE_WAIT_DISPATCH_IMPLEMENTATION_BEGIN
 #[cfg_attr(not(test), allow(dead_code))]
 impl DurableValidateDispatch {
+    /// Recheck the registry-attested immutable worker key before queue publication.
+    pub(in crate::sumeragi) fn matches_dispatch_key(
+        &self,
+        key: super::LifecycleValidateDispatchKeyV1,
+    ) -> bool {
+        self.request.address.owner == key.owner()
+            && self.request.address.ordinal == key.lifecycle_ordinal()
+            && self.request.address.slot == key.slot()
+            && self.request.incumbent_digest == key.digest()
+            && self.request.lifecycle_key.context().as_bytes()
+                == self.request.round.context_id.0.as_ref()
+            && self.request.lifecycle_key.round().height() == self.request.round.height
+            && self.request.lifecycle_key.phase() == super::LifecyclePhase::Validate
+            && self.request.lifecycle_stage.kind() == super::LifecycleStageKind::ValidateBody
+    }
     /// Execute the exact request after its claimed lifecycle row became an
     /// external wait.
     ///
@@ -74,7 +89,7 @@ impl DurableValidateDispatch {
     /// reconstructs and returns the complete dispatch, including its exact
     /// wake authority, so retry cannot mint a second request or wait token.
     #[allow(clippy::result_large_err)]
-    pub(super) fn execute<F, E>(
+    pub(in crate::sumeragi) fn execute<F, E>(
         self,
         body_store: &mut V2BodyStore,
         validator: F,
@@ -92,6 +107,16 @@ impl DurableValidateDispatch {
 }
 #[cfg_attr(not(test), allow(dead_code))]
 impl ExecutedDurableValidateDispatch {
+    /// Recheck the immutable worker key retained from command through completion.
+    pub(in crate::sumeragi) fn matches_dispatch_key(
+        &self,
+        key: super::LifecycleValidateDispatchKeyV1,
+    ) -> bool {
+        self.executed.request.address.owner == key.owner()
+            && self.executed.request.address.ordinal == key.lifecycle_ordinal()
+            && self.executed.request.address.slot == key.slot()
+            && self.executed.request.incumbent_digest == key.digest()
+    }
     /// Borrow the closed result without separating it from wake authority.
     pub(super) const fn outcome(&self) -> &DurableBodyValidationOutcome {
         self.executed.outcome()
@@ -194,8 +219,9 @@ impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
     }
     /// Retain a missing merge-sidecar result without changing either live row.
     ///
-    /// TODO: Consume this token only in a sealed sidecar registration plus
-    /// same-row wake transaction; raw wait authority remains inaccessible.
+    /// The lifecycle sidecar owner consumes this token only in its sealed
+    /// registration and same-row wake transaction; raw wait authority remains
+    /// inaccessible.
     pub(super) fn defer_merge_sidecar(self) -> DeferredDurableValidateDispatch {
         debug_assert!(self.authority.is_deferred_merge_sidecar());
         debug_assert!(self.dispatch.outcome().missing_merge_sidecar().is_some());
@@ -433,8 +459,36 @@ impl Drop for StagedDurableValidateCompletion<'_> {
 }
 #[cfg_attr(not(test), allow(dead_code))]
 impl DeferredDurableValidateDispatch {
+    /// Recheck the immutable worker key without exposing the retained request.
+    pub(in crate::sumeragi) fn matches_dispatch_key(
+        &self,
+        key: super::LifecycleValidateDispatchKeyV1,
+    ) -> bool {
+        self.dispatch.matches_dispatch_key(key)
+    }
+
+    /// Project the sole durable sidecar-registration identity from the sealed
+    /// request, missing-sidecar outcome, and exact Waiting generation.
+    pub(in crate::sumeragi) fn sidecar_registration_identity(
+        &self,
+        key: super::LifecycleValidateDispatchKeyV1,
+    ) -> Option<super::validate_sidecar::LifecycleValidateSidecarRegistrationIdentityV1> {
+        self.matches_dispatch_key(key).then(|| {
+            let request = &self.dispatch.executed.request;
+            super::validate_sidecar::LifecycleValidateSidecarRegistrationIdentityV1::from_sealed_dispatch(
+                key,
+                request.lifecycle_key,
+                request.lifecycle_stage,
+                request.round,
+                request.subject,
+                self.dispatch.wake.wait_token,
+                self.missing_reference().clone(),
+            )
+        })?
+    }
+
     /// Borrow the exact missing sidecar reference without exposing wake parts.
-    pub(super) fn missing_reference(&self) -> &CertifiedMergeLedgerReference {
+    pub(in crate::sumeragi) fn missing_reference(&self) -> &CertifiedMergeLedgerReference {
         self.dispatch
             .outcome()
             .missing_merge_sidecar()
@@ -545,6 +599,10 @@ impl PreparedDurableCertifiedFetchCompletion<'_> {
     /// Borrow the opaque durable projection used by the coordinator's staged cut.
     pub(super) const fn ready_projection(&self) -> &DurableCertifiedFetchReplayProjectionV1 {
         &self.ready_projection
+    }
+    /// Borrow the exact durable body authority retained for terminal publication.
+    pub(super) const fn durable_body_receipt(&self) -> &DurableBodyReceipt {
+        self.durable_receipt.durable_body()
     }
     /// Revalidate the selector-retained exact response before LedgerV1 fsync.
     ///
@@ -728,7 +786,7 @@ fn exact_selected_response_matches(
     let Some(response) = selected_certified_response(inbound) else {
         return false;
     };
-    inbound.sender() == Some(authenticated_responder)
+    inbound.sender() == authenticated_responder
         && ingress_identity_matches_round(ingress_identity, response.manifest.round)
         && response.request_hash == request_hash
         && HashOf::new(response) == response_hash
@@ -784,6 +842,25 @@ fn certified_pipeline_replay_evidence_for_test(
     CertifiedValidateReplayEvidenceV1,
 )> {
     let certificate = certified_pipeline_prepare_certificate_for_test(manifest, receipt);
+    certified_pipeline_replay_evidence_with_certificate_for_test(
+        tag,
+        manifest,
+        receipt,
+        validate_pending,
+        certificate,
+    )
+}
+#[cfg(test)]
+fn certified_pipeline_replay_evidence_with_certificate_for_test(
+    tag: EventTag,
+    manifest: &wire::PayloadManifest,
+    receipt: &DurableBodyReceipt,
+    validate_pending: &PendingRuntimeEffectBinding,
+    certificate: wire::QuorumCertificate,
+) -> Option<(
+    CertifiedStoreReplayEvidenceV1,
+    CertifiedValidateReplayEvidenceV1,
+)> {
     let fetch_effect = AdapterEffect::FetchBody {
         tag,
         round: manifest.round,

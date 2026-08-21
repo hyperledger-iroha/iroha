@@ -456,8 +456,11 @@ pub enum Error {
         /// Height whose finality path already contains a different artifact.
         height: u64,
     },
-    /// Failed to load or persist the structurally validated legacy commit-roster archive.
-    CommitRosterJournal(#[from] CommitRosterJournalError),
+    /// Retired first-release-incompatible Kura artifact remains at `{path:?}`
+    RetiredKuraArtifact {
+        /// Exact retired artifact that must be removed by the operator.
+        path: PathBuf,
+    },
     /// Canonical-chain mutation from height `{rewrite_from_height}` would rewrite durable Sumeragi-v2 finality at height `{finalized_height}`
     FinalizedV2BlockMutation {
         /// First canonical height the requested mutation could replace or remove.

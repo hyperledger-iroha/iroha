@@ -1542,7 +1542,7 @@ fn validate_lane_executable_payload_body(
         return Err(LaneAutonomousArtifactError::NativeAmxReceiptMismatch);
     }
     let mut reservation_digests = BTreeSet::new();
-    let mut signed_transaction_hashes = BTreeSet::new();
+    let mut reservation_entrypoint_hashes = BTreeSet::new();
     for ((((entrypoint, entrypoint_hash), key), routing_plan), native_amx_receipt) in entrypoints
         .iter()
         .zip(entrypoint_hashes)
@@ -1554,7 +1554,7 @@ fn validate_lane_executable_payload_body(
             entrypoint.clone(),
         ));
         if key.validate().is_err()
-            || key.signed_transaction_hash != accepted.hash()
+            || key.entrypoint_hash != accepted.hash_as_entrypoint()
             || Hash::from(key.entrypoint_hash) != *entrypoint_hash
             || key.lane_id != descriptor.lane_id
             || key.dataspace_id != descriptor.dataspace_id
@@ -1568,7 +1568,7 @@ fn validate_lane_executable_payload_body(
             || key.coordinator_leg.route.lane_id != descriptor.lane_id
             || key.coordinator_leg.route.dataspace_id != descriptor.dataspace_id
             || !reservation_digests.insert(key.digest())
-            || !signed_transaction_hashes.insert(key.signed_transaction_hash)
+            || !reservation_entrypoint_hashes.insert(key.entrypoint_hash)
         {
             return Err(LaneAutonomousArtifactError::ReservationMismatch);
         }
@@ -1580,7 +1580,7 @@ fn validate_lane_executable_payload_body(
         if !crate::native_amx::receipt_shape_matches_coordinator_payload(
             native_amx_receipt.as_ref(),
             routing_plan,
-            accepted.hash().as_ref(),
+            accepted.hash_as_entrypoint().as_ref(),
             *entrypoint_hash,
             network_id,
             origin_proposal,
@@ -6053,16 +6053,12 @@ mod tests {
             .iter()
             .find(|keypair| keypair.public_key() == producer.public_key())
             .expect("producer fixture key");
-        let accepted = AcceptedTransaction::new_unchecked_entrypoint(std::borrow::Cow::Owned(
-            entrypoint.clone(),
-        ));
         let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
         ));
         let reservation = LaneQueueReservationKeyV2 {
             version: LaneQueueReservationKeyV2::VERSION,
-            signed_transaction_hash: accepted.hash(),
             entrypoint_hash: entrypoint.hash(),
             queue_plan_admission_binding_hash: Hash::new(
                 b"lane-consensus-queue-plan-admission-binding",

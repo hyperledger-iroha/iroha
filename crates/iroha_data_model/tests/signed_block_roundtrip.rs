@@ -63,13 +63,13 @@ fn signed_block_roundtrip_via_norito() {
         "genesis must have one signature"
     );
     assert_eq!(
-        block.transactions_vec().len(),
+        block.external_transactions().len(),
         txs.len(),
         "payload should retain all genesis transactions"
     );
     assert!(
-        block.has_results(),
-        "genesis blocks now carry an empty results envelope for deterministic hashing"
+        block.is_resultless_proposal(),
+        "the raw genesis constructor must not invent execution results"
     );
     let expected_hashes: Vec<_> = txs
         .iter()
@@ -89,7 +89,7 @@ fn signed_block_roundtrip_via_norito() {
         "result merkle root remains unset for empty results"
     );
     let tx_sig_len = {
-        let tx = block.transactions_vec().first().expect("tx");
+        let tx = block.external_transactions().next().expect("tx");
         let mut buf = Vec::new();
         norito::core::serialize_to_buffer(tx.signature(), &mut buf).expect("serialize signature");
         buf.len()

@@ -120,11 +120,19 @@ class FakeAuthority:
         monkeypatch.setattr(client, "verify_receipt", self.verify_receipt)
         monkeypatch.setattr(client, "finalize_deployment", self.finalize_deployment)
 
-    def preflight(self, role: str) -> dict[str, object]:
+    def preflight(
+        self, role: str, *, require_signing: bool = True
+    ) -> dict[str, object]:
         self.events.append(("preflight", role, None))
         if not self.available:
             raise client.TairaAuthorityClientError("authenticated fake unavailable")
-        return {"role": role, "status": "ready"}
+        return {
+            "client_uid": governance_fixture.AUTHENTICATED_CLIENT_UID,
+            "require_signing": require_signing,
+            "role": role,
+            "service_uid": 71,
+            "status": "ready",
+        }
 
     @staticmethod
     def _manifest(
@@ -738,6 +746,11 @@ def test_deploy_public_dry_run_uses_authenticated_nonconsuming_lease(
     monkeypatch.setattr(deploy, "require_inputs_match_admission", lambda *_args: None)
     monkeypatch.setattr(
         deploy, "require_admission_archive_unchanged", lambda _admission: None
+    )
+    monkeypatch.setattr(
+        deploy,
+        "require_mutable_bundle_identities",
+        lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
         deploy,

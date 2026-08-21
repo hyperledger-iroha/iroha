@@ -10891,11 +10891,12 @@ fileprivate enum ToriiVerifyingKeyDraftValidation {
         let timeToLive = try transaction.takeField("time_to_live_ms")
         let nonce = try transaction.takeField("nonce")
         let feePayment = try transaction.takeField("fee_payment")
+        let admissionIntent = try transaction.takeField("admission_intent")
         let metadata = try transaction.takeField("metadata")
         let attachments = try transaction.takeField("attachments")
         guard transaction.isFinished,
               creationTime.count == MemoryLayout<UInt64>.size else {
-            throw invalid("transaction_payload_b64 must contain exactly one canonical nine-field TransactionPayload")
+            throw invalid("transaction_payload_b64 must contain exactly one canonical ten-field TransactionPayload")
         }
 
         let decodedNetworkId = try decodeNetworkDomain(domain)
@@ -10924,6 +10925,9 @@ fileprivate enum ToriiVerifyingKeyDraftValidation {
             try SccpSubmitValidation.requireEmptyTransactionMetadata(metadata)
         } catch {
             throw invalid("verifying-key transaction fee payment or metadata is not canonical")
+        }
+        guard admissionIntent == TransactionAdmissionIntentV1.queuePlanSynced.norito else {
+            throw invalid("verifying-key transaction admission intent is not QueuePlanSynced")
         }
         try requireAbsentOption(attachments, field: "attachments")
         try requireRequestedInstruction(
@@ -18833,8 +18837,7 @@ public struct ToriiGovernanceUnlockStatsResponse: Decodable, Sendable {
 
 public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
     public struct Payload: Decodable, Sendable {
-        public let txHash: String
-        public let entrypointHash: String?
+        public let entrypointHash: String
         public let signedTransactionHash: String?
         public let submittedAtMs: UInt64
         public let submittedAtHeight: UInt64
@@ -18842,7 +18845,6 @@ public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
         public let signerValue: ToriiJSONValue
 
         private enum CodingKeys: String, CodingKey {
-            case txHash = "tx_hash"
             case entrypointHash = "entrypoint_hash"
             case signedTransactionHash = "signed_transaction_hash"
             case submittedAtMs = "submitted_at_ms"
@@ -18850,14 +18852,12 @@ public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
             case signer
         }
 
-        public init(txHash: String,
+        public init(entrypointHash: String,
                     submittedAtMs: UInt64,
                     submittedAtHeight: UInt64,
                     signer: String,
-                    entrypointHash: String? = nil,
                     signedTransactionHash: String? = nil,
                     signerValue: ToriiJSONValue? = nil) {
-            self.txHash = txHash
             self.entrypointHash = entrypointHash
             self.signedTransactionHash = signedTransactionHash
             self.submittedAtMs = submittedAtMs
@@ -18867,13 +18867,16 @@ public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
         }
 
         public init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            txHash = try ToriiSubmitTransactionResponse.decodeReceiptFieldString(
-                from: container,
-                key: .txHash,
-                field: "payload.tx_hash"
+            try rejectUnknownJSONFields(
+                from: decoder,
+                allowed: [
+                    "entrypoint_hash", "signed_transaction_hash", "submitted_at_ms",
+                    "submitted_at_height", "signer",
+                ],
+                debugName: "transaction submission receipt payload"
             )
-            entrypointHash = try ToriiSubmitTransactionResponse.decodeOptionalReceiptFieldString(
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            entrypointHash = try ToriiSubmitTransactionResponse.decodeReceiptFieldString(
                 from: container,
                 key: .entrypointHash,
                 field: "payload.entrypoint_hash"
@@ -18920,6 +18923,11 @@ public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
     }
 
     public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["payload", "signature"],
+            debugName: "transaction submission receipt"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         payload = try container.decode(Payload.self, forKey: .payload)
         signatureValue = try container.decode(ToriiJSONValue.self, forKey: .signature)
@@ -18930,8 +18938,8 @@ public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
         )
     }
 
-    /// Convenience accessor for transaction hash.
-    public var hash: String { payload.txHash }
+    /// Convenience accessor for the canonical transaction entrypoint hash.
+    public var hash: String { payload.entrypointHash }
 
     private static func decodeReceiptFieldString<K: CodingKey>(
         from container: KeyedDecodingContainer<K>,
@@ -18951,7 +18959,16 @@ public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
         key: K,
         field: String
     ) throws -> String? {
-        guard container.contains(key), try !container.decodeNil(forKey: key) else {
+        guard container.contains(key) else {
+            throw DecodingError.keyNotFound(
+                key,
+                .init(
+                    codingPath: container.codingPath,
+                    debugDescription: "\(field) is required even when null"
+                )
+            )
+        }
+        guard try !container.decodeNil(forKey: key) else {
             return nil
         }
         return try decodeReceiptFieldString(from: container, key: key, field: field)
@@ -20595,16 +20612,19 @@ public struct ToriiNativeAmxParticipantLaneBlockDescriptor: Decodable, Sendable,
 public struct ToriiNativeAmxParticipantLaneBlockProposal: Decodable, Sendable, Equatable {
     public let descriptor: ToriiNativeAmxParticipantLaneBlockDescriptor
     public let proposalHash: String
+    /// Uninhabited control-only field. The wire key is required and its value must be `null`.
+    public let payloadBlockHint: Never?
 
     private enum CodingKeys: String, CodingKey {
         case descriptor
         case proposalHash = "proposal_hash"
+        case payloadBlockHint = "payload_block_hint"
     }
 
     public init(from decoder: Decoder) throws {
         try rejectUnknownNativeAmxFields(
             from: decoder,
-            allowed: ["descriptor", "proposal_hash"],
+            allowed: ["descriptor", "proposal_hash", "payload_block_hint"],
             context: "native AMX participant lane-block proposal"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -20618,6 +20638,25 @@ public struct ToriiNativeAmxParticipantLaneBlockProposal: Decodable, Sendable, E
             container: container,
             field: "native AMX participant proposal_hash"
         )
+        guard container.contains(.payloadBlockHint) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.payloadBlockHint,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription:
+                        "native AMX participant payload_block_hint is required and must be null"
+                )
+            )
+        }
+        guard try container.decodeNil(forKey: .payloadBlockHint) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .payloadBlockHint,
+                in: container,
+                debugDescription:
+                    "native AMX participant payload_block_hint must be null"
+            )
+        }
+        payloadBlockHint = nil
         guard let computedProposalHash = ToriiNativeAmxWire.proposalHash(descriptor),
               proposalHash == computedProposalHash
         else {
@@ -22721,12 +22760,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         completion: @escaping (Result<ToriiSumeragiDiagnosticsSnapshot, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
         runTask(completion) { try await self.getSumeragiDiagnostics() }
-    }
-
-    @discardableResult
-    public func getSumeragiCommitQc(blockHashHex: String,
-                                    completion: @escaping (Result<ToriiSumeragiCommitQcRecord, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getSumeragiCommitQc(blockHashHex: blockHashHex) }
     }
 
     // MARK: - Governance (Completion)
@@ -25697,11 +25730,11 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
         let allowedFields: Set<String> = [
             "domain", "authority", "creation_time_ms", "instructions",
-            "time_to_live_ms", "nonce", "fee_payment", "metadata", "attachments",
+            "time_to_live_ms", "nonce", "fee_payment", "admission_intent", "metadata", "attachments",
         ]
         let requiredFields: Set<String> = [
             "domain", "authority", "creation_time_ms", "instructions",
-            "time_to_live_ms", "fee_payment", "metadata",
+            "time_to_live_ms", "fee_payment", "admission_intent", "metadata", "attachments",
         ]
         guard Set(unsignedPayload.keys).isSubset(of: allowedFields),
               requiredFields.isSubset(of: Set(unsignedPayload.keys)) else {
@@ -25747,6 +25780,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         _ = try feeValue.decode(as: FeePaymentIntent.self)
+        guard case let .object(admissionIntent)? = unsignedPayload["admission_intent"],
+              Set(admissionIntent.keys) == Set(["intent", "value"]),
+              case let .string(intent)? = admissionIntent["intent"],
+              intent == "ordinary" || intent == "queue_plan_synced",
+              case .null? = admissionIntent["value"] else {
+            throw ToriiClientError.invalidPayload(
+                "unsignedPayload.admission_intent must be an exact TransactionAdmissionIntent object."
+            )
+        }
         guard case let .number(timeToLiveMs)? = unsignedPayload["time_to_live_ms"],
               timeToLiveMs.isFinite,
               timeToLiveMs > 0,
@@ -27477,16 +27519,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         try rejectDuplicateJSONKeys(data, context: "Sumeragi diagnostics response")
         return try decodeJSON(ToriiSumeragiDiagnosticsSnapshot.self, from: data)
     }
-    public func getSumeragiCommitQc(blockHashHex: String) async throws -> ToriiSumeragiCommitQcRecord {
-        let normalized = try ToriiClient.normalizeHex32(blockHashHex, field: "block_hash")
-        let request = try makeOperatorGetRequest(
-            path: "/v1/sumeragi/commit-qcs/\(normalized)",
-            headers: ["Accept": "application/json"]
-        )
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiSumeragiCommitQcRecord.self, from: data)
-    }
-
     public func getStatusSnapshot() async throws -> ToriiStatusSnapshot {
         let sequence = statusState.reserveSequence()
         let request = try makeRequest(path: "/v1/status",

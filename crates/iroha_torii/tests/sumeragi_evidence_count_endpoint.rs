@@ -7,46 +7,94 @@ use iroha_core::{
     kura::Kura,
     query::{insert_evidence_record_for_test, store::LiveQueryStore},
     state::{State as CoreState, World},
-    sumeragi::consensus::{
-        Evidence, EvidenceKind, EvidencePayload, Phase, Qc, QcAggregate, default_chain_order_hash,
-    },
+    sumeragi::consensus::{Evidence, SumeragiV2EquivocationEvidence},
     telemetry::StateTelemetry,
 };
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    block::{BlockHeader, consensus::EvidenceRecord},
-    consensus::VALIDATOR_SET_HASH_VERSION_V1,
+    NetworkId,
+    block::{
+        BlockHeader,
+        consensus::EvidenceRecord,
+        consensus_v2::{
+            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+            SumeragiV2Equivocation, ValidatorPower, Vote,
+        },
+    },
+    peer::PeerId,
 };
 use iroha_torii::handle_v1_sumeragi_evidence_count;
 use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
-fn make_invalid_commit_qc_evidence(height: u64, seed: u8) -> Evidence {
-    let subject = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([seed; 32]));
-    let certificate = Qc {
-        phase: Phase::Prepare,
-        subject_block_hash: subject,
-        parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-        post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+fn make_phase_vote_evidence(height: u64, seed: u8) -> Evidence {
+    let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+        .expect("derive evidence fixture key");
+    let roster = vec![ValidatorPower {
+        validator: PeerId::new(key_pair.public_key().clone()),
+        power: 1,
+    }];
+    let context = HeightContext {
+        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        )),
+        protocol_version: PROTOCOL_VERSION,
+        height,
+        epoch: 0,
+        epoch_end_height: height,
+        next_epoch_snapshot: None,
+        mode: ConsensusMode::Permissioned,
+        parent_commit_qc: None,
+        snapshot_bootstrap: None,
+        quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
+        roster,
+        nexus_amx_context_hash: Hash::new(b"evidence count nexus context"),
+        execution_policy_hash: Hash::new(b"evidence count execution policy"),
+        da_layout: DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 4,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 1024,
+            max_chunk_count: 512,
+        },
+        leader_seed: [seed; Hash::LENGTH],
+    };
+    let round = ConsensusRound {
+        context_id: context.id(),
         height,
         view: 0,
-        epoch: 0,
-        chain_order_hash: default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: "test-mode".to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x11; 32])),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: Vec::new(),
-        aggregate: QcAggregate {
-            signers_bitmap: vec![0x01],
-            bls_aggregate_signature: Vec::new(),
+    };
+    let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new(b"evidence count parent state"),
+        Hash::new(b"evidence count post state"),
+        Hash::new(b"evidence count ordinary writes"),
+        1,
+        Hash::new([seed]),
+    );
+    let vote = |subject_seed: u8| Vote {
+        round,
+        proposal_round: round,
+        phase: GlobalPhase::Prepare,
+        subject: BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed(
+                [subject_seed; Hash::LENGTH],
+            )),
+            payload_hash: Hash::new([subject_seed]),
         },
+        execution_commitment,
+        signer: 0,
+        signature: vec![subject_seed; 96],
     };
     Evidence {
-        kind: EvidenceKind::InvalidQc,
-        payload: EvidencePayload::InvalidQc {
-            certificate,
-            reason: "test".to_string(),
+        equivocation: SumeragiV2EquivocationEvidence {
+            context,
+            proofs_of_possession: vec![vec![seed; 96]],
+            conflict: SumeragiV2Equivocation::PhaseVote {
+                first: vote(seed),
+                second: vote(seed.wrapping_add(1)),
+            },
         },
     }
 }
@@ -91,7 +139,7 @@ async fn evidence_count_endpoint_reports_increase() {
     let state_mut = Arc::get_mut(&mut state).expect("state Arc should be uniquely owned here");
     // Insert two WSV-backed evidence records
     for (idx, seed) in [0x11u8, 0x22].iter().enumerate() {
-        let ev = make_invalid_commit_qc_evidence((idx + 1) as u64, *seed);
+        let ev = make_phase_vote_evidence((idx + 1) as u64, *seed);
         let record = EvidenceRecord {
             evidence: ev,
             recorded_at_height: (idx + 1) as u64,

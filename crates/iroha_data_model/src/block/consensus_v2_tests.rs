@@ -454,6 +454,249 @@ mod tests {
         )
         .expect("canonical fixture execution commitment")
     }
+    #[test]
+    fn current_consensus_nullable_layouts_roundtrip_exactly() {
+        macro_rules! assert_roundtrip {
+            ($ty:ty, $value:expr) => {{
+                let value: $ty = $value;
+                let encoded = value.encode();
+                let mut cursor = encoded.as_slice();
+                let decoded = <$ty>::decode_all(&mut cursor).expect("decode current layout");
+                assert_eq!(decoded, value);
+            }};
+        }
+
+        let context = context(&[1, 1, 1, 1]);
+        let round = round(&context, 0);
+        let subject = BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"current genesis subject")),
+            payload_hash: Hash::new(b"current genesis payload"),
+        };
+        let commitment = execution_commitment(0x51);
+        let timeout_vote = TimeoutVote {
+            round,
+            highest_prepare_qc: None,
+            signer: 0,
+            signature: vec![0x52; 48],
+        };
+        let timeout_signature = TimeoutVoteSignaturePayload {
+            protocol_version: PROTOCOL_VERSION,
+            round,
+            highest_prepare_qc: None,
+        };
+        let timeout_certificate = TimeoutCertificate {
+            round,
+            groups: vec![TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0x53; 48],
+            }],
+        };
+        let timeout_ref = timeout_certificate.as_ref();
+        let parent_justification = ParentCommitJustification { certificate: None };
+        let timeout_justification = TimeoutJustification {
+            timeout_certificate: timeout_certificate.clone(),
+            highest_prepare_qc: None,
+        };
+        let native_leaf = NativeAmxApplicationManifestLeafV1 {
+            version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(8),
+            lane_incarnation: Hash::new(b"current native leaf incarnation"),
+            participant_height: 1,
+            participant_view: 0,
+            predecessor_height: 0,
+            predecessor_descriptor_hash: None,
+            descriptor_hash: Hash::new(b"current native leaf descriptor"),
+            proposal_hash: Hash::new(b"current native leaf proposal"),
+            settlement_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"current native leaf settlement",
+            )),
+            members: Vec::new(),
+            application_block_height: 1,
+            application_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"current native leaf application",
+            )),
+            executed_block_wire_hash: Hash::new(b"current native leaf wire"),
+        };
+
+        assert_roundtrip!(HeightContext, context);
+        assert_roundtrip!(BlockSubject, subject);
+        assert_roundtrip!(NativeAmxApplicationManifestLeafV1, native_leaf);
+        assert_roundtrip!(ExecutionCommitment, commitment);
+        assert_roundtrip!(TimeoutVote, timeout_vote);
+        assert_roundtrip!(TimeoutVoteSignaturePayload, timeout_signature);
+        assert_roundtrip!(TimeoutCertificate, timeout_certificate);
+        assert_roundtrip!(TimeoutCertificateRef, timeout_ref);
+        assert_roundtrip!(ParentCommitJustification, parent_justification);
+        assert_roundtrip!(TimeoutJustification, timeout_justification);
+    }
+    #[test]
+    fn pre_release_consensus_layouts_cannot_omit_nullable_slots() {
+        #[derive(Encode)]
+        struct PreReleaseHeightContextPrefix {
+            network_id: NetworkId,
+            protocol_version: u16,
+            height: Height,
+            epoch: u64,
+            epoch_end_height: Height,
+        }
+        #[derive(Encode)]
+        struct PreReleaseBlockSubject {
+            block_hash: HashOf<BlockHeader>,
+            payload_hash: Hash,
+        }
+        #[derive(Encode)]
+        struct PreReleaseNativeLeafPrefix {
+            version: u16,
+            lane_id: LaneId,
+            dataspace_id: DataSpaceId,
+            lane_incarnation: Hash,
+            participant_height: u64,
+            participant_view: u64,
+            predecessor_height: u64,
+        }
+        #[derive(Encode)]
+        struct PreReleaseExecutionCommitmentPrefix {
+            parent_state_root: Hash,
+            post_state_root: Hash,
+            ordinary_writes_root: Hash,
+        }
+        #[derive(Encode)]
+        struct PreReleaseTimeoutVote {
+            round: ConsensusRound,
+            signer: ValidatorIndex,
+            signature: Vec<u8>,
+        }
+        #[derive(Encode)]
+        struct PreReleaseTimeoutVoteSignaturePayload {
+            protocol_version: u16,
+            round: ConsensusRound,
+        }
+        #[derive(Encode)]
+        struct PreReleaseTimeoutVoteGroup {
+            signers: Vec<ValidatorIndex>,
+            aggregate_signature: Vec<u8>,
+        }
+        #[derive(Encode)]
+        struct PreReleaseTimeoutCertificateRefPrefix {
+            round: ConsensusRound,
+        }
+        #[derive(Encode)]
+        struct PreReleaseTimeoutJustification {
+            timeout_certificate: TimeoutCertificate,
+        }
+        macro_rules! assert_rejected {
+            ($ty:ty, $encoded:expr, $label:literal) => {{
+                let encoded = $encoded;
+                let mut cursor = encoded.as_slice();
+                assert!(<$ty>::decode_all(&mut cursor).is_err(), $label);
+            }};
+        }
+
+        let context = context(&[1, 1, 1, 1]);
+        let round = round(&context, 0);
+        let timeout_certificate = TimeoutCertificate {
+            round,
+            groups: vec![TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0x61; 48],
+            }],
+        };
+        assert_rejected!(
+            HeightContext,
+            PreReleaseHeightContextPrefix {
+                network_id: context.network_id,
+                protocol_version: context.protocol_version,
+                height: context.height,
+                epoch: context.epoch,
+                epoch_end_height: context.epoch_end_height,
+            }
+            .encode(),
+            "a shortened height context must not infer nullable consensus anchors"
+        );
+        assert_rejected!(
+            BlockSubject,
+            PreReleaseBlockSubject {
+                block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xFE; Hash::LENGTH])),
+                payload_hash: Hash::new(b"pre-release subject payload"),
+            }
+            .encode(),
+            "a subject without its parent slot must fail closed"
+        );
+        assert_rejected!(
+            NativeAmxApplicationManifestLeafV1,
+            PreReleaseNativeLeafPrefix {
+                version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+                lane_id: LaneId::new(7),
+                dataspace_id: DataSpaceId::new(8),
+                lane_incarnation: Hash::new(b"pre-release native leaf"),
+                participant_height: 1,
+                participant_view: 0,
+                predecessor_height: 0,
+            }
+            .encode(),
+            "a Native AMX leaf without its predecessor slot must fail closed"
+        );
+        assert_rejected!(
+            ExecutionCommitment,
+            PreReleaseExecutionCommitmentPrefix {
+                parent_state_root: Hash::new(b"pre-release parent state"),
+                post_state_root: Hash::new(b"pre-release post state"),
+                ordinary_writes_root: Hash::new(b"pre-release ordinary writes"),
+            }
+            .encode(),
+            "an execution commitment without its top-up slot must fail closed"
+        );
+        assert_rejected!(
+            TimeoutVote,
+            PreReleaseTimeoutVote {
+                round,
+                signer: 7,
+                signature: vec![0x62; 48],
+            }
+            .encode(),
+            "a timeout vote without its highest-PrepareQC slot must fail closed"
+        );
+        assert_rejected!(
+            TimeoutVoteSignaturePayload,
+            PreReleaseTimeoutVoteSignaturePayload {
+                protocol_version: PROTOCOL_VERSION,
+                round,
+            }
+            .encode(),
+            "a timeout signature payload without its highest-PrepareQC slot must fail closed"
+        );
+        assert_rejected!(
+            TimeoutVoteGroup,
+            PreReleaseTimeoutVoteGroup {
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0x63; 48],
+            }
+            .encode(),
+            "a timeout group without its highest-PrepareQC slot must fail closed"
+        );
+        assert_rejected!(
+            TimeoutCertificateRef,
+            PreReleaseTimeoutCertificateRefPrefix { round }.encode(),
+            "a timeout reference without its highest-PrepareQC slot must fail closed"
+        );
+        assert_rejected!(
+            ParentCommitJustification,
+            Vec::<u8>::new(),
+            "a parent justification without its certificate slot must fail closed"
+        );
+        assert_rejected!(
+            TimeoutJustification,
+            PreReleaseTimeoutJustification {
+                timeout_certificate,
+            }
+            .encode(),
+            "a timeout justification without its highest-PrepareQC slot must fail closed"
+        );
+    }
     fn qc(
         context: &HeightContext,
         view: View,
@@ -2513,130 +2756,8 @@ mod tests {
             Err(Error::TimeoutNotBeforeCurrentView)
         );
     }
-    #[cfg(feature = "json")]
-    #[test]
-    fn status_and_consensus_envelope_json_reject_unknown_nested_fields() {
-        let context = context(&[1, 1, 1, 1]);
-        let mut snapshot = status(&context);
-        snapshot.highest_prepare_qc =
-            Some(qc(&context, 2, GlobalPhase::Prepare, vec![0, 1, 2]).as_ref());
-        let mut top = norito::json::to_value(&snapshot).expect("serialize status");
-        top.as_object_mut()
-            .expect("status object")
-            .insert("unknown".to_owned(), norito::json::Value::Bool(true));
-        assert!(norito::json::from_value::<SumeragiV2Status>(top).is_err());
-        let mut nested = norito::json::to_value(&snapshot).expect("serialize status");
-        nested
-            .as_object_mut()
-            .expect("status object")
-            .get_mut("highest_prepare_qc")
-            .and_then(norito::json::Value::as_object_mut)
-            .expect("QC reference object")
-            .insert("unknown".to_owned(), norito::json::Value::Bool(true));
-        assert!(norito::json::from_value::<SumeragiV2Status>(nested).is_err());
-        let envelope =
-            ConsensusMessageV2::new(ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
-                manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"manifest")),
-                index: 0,
-                bytes: vec![1],
-                sender: 0,
-                signature: vec![2],
-            }));
-        let mut nested_envelope =
-            norito::json::to_value(&envelope).expect("serialize nested envelope");
-        nested_envelope
-            .as_object_mut()
-            .expect("envelope object")
-            .get_mut("payload")
-            .and_then(norito::json::Value::as_object_mut)
-            .expect("payload variant object")
-            .get_mut("message")
-            .and_then(norito::json::Value::as_object_mut)
-            .expect("payload message object")
-            .insert("unknown".to_owned(), norito::json::Value::Bool(true));
-        assert!(
-            norito::json::from_value::<ConsensusMessageV2>(nested_envelope).is_err(),
-            "nested consensus payload must reject unknown fields"
-        );
-        let mut envelope_json = norito::json::to_value(&envelope).expect("serialize envelope");
-        envelope_json
-            .as_object_mut()
-            .expect("envelope object")
-            .insert("unknown".to_owned(), norito::json::Value::Bool(true));
-        assert!(norito::json::from_value::<ConsensusMessageV2>(envelope_json).is_err());
-    }
-    #[cfg(feature = "json")]
-    #[test]
-    fn execution_commitment_json_requires_explicit_finality_and_merge_manifests() {
-        use iroha_schema::{IntoSchema as _, Metadata};
-        let schema = ExecutionCommitment::schema();
-        let Metadata::Struct(metadata) = schema
-            .get::<ExecutionCommitment>()
-            .expect("execution commitment schema")
-        else {
-            panic!("execution commitment schema must be a struct");
-        };
-        let merge_carrier = metadata
-            .declarations
-            .iter()
-            .find(|field| field.name == "merge_carrier")
-            .expect("merge carrier schema declaration");
-        assert_eq!(
-            merge_carrier.ty,
-            core::any::TypeId::of::<Option<MergeCarrierCommitmentV1>>()
-        );
-        let lane_finality_manifest = metadata
-            .declarations
-            .iter()
-            .find(|field| field.name == "lane_finality_manifest")
-            .expect("lane finality manifest schema declaration");
-        assert_eq!(
-            lane_finality_manifest.ty,
-            core::any::TypeId::of::<Option<MerkleTreeCommitment<LaneFinalityStatement>>>()
-        );
-        let carrier_free = ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"json parent"),
-            Hash::new(b"json post"),
-            Hash::new(b"json ordinary"),
-            1,
-            Hash::new(b"json executed wire"),
-        );
-        let with_carrier = ExecutionCommitment {
-            merge_carrier: Some(MergeCarrierCommitmentV1::new(
-                HashOf::from_untyped_unchecked(Hash::new(b"json merge entry")),
-            )),
-            ..carrier_free
-        };
-        for commitment in [carrier_free, with_carrier] {
-            let value = norito::json::to_value(&commitment).expect("serialize commitment");
-            assert!(value.get("merge_carrier").is_some());
-            assert!(value.get("lane_finality_manifest").is_some());
-            let decoded = norito::json::from_value::<ExecutionCommitment>(value)
-                .expect("explicit merge carrier projection decodes");
-            assert_eq!(decoded, commitment);
-            assert_eq!(decoded.encode(), commitment.encode());
-        }
-        let mut missing = norito::json::to_value(&carrier_free).expect("serialize commitment");
-        missing
-            .as_object_mut()
-            .expect("commitment is an object")
-            .remove("merge_carrier");
-        let error = norito::json::from_value::<ExecutionCommitment>(missing)
-            .expect_err("omitted merge carrier must reject");
-        assert!(error.to_string().contains("missing field `merge_carrier`"));
-        let mut missing = norito::json::to_value(&carrier_free).expect("serialize commitment");
-        missing
-            .as_object_mut()
-            .expect("commitment is an object")
-            .remove("lane_finality_manifest");
-        let error = norito::json::from_value::<ExecutionCommitment>(missing)
-            .expect_err("omitted lane finality manifest must reject");
-        assert!(
-            error
-                .to_string()
-                .contains("missing field `lane_finality_manifest`")
-        );
-    }
+    // Keep the JSON wire-contract matrix isolated from the core consensus tests.
+    include!("consensus_v2_json_tests.rs");
     #[test]
     fn leader_rotation_is_power_independent_and_wraps_roster() {
         let equal = context(&[1, 1, 1, 1]);

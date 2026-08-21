@@ -39,7 +39,7 @@ New local devnet, guided:
 kagami localnet-wizard
 ```
 
-Existing network / peer config, guided:
+Existing Sora network / observer peer config, guided:
 
 ```bash
 kagami wizard --profile nexus
@@ -85,9 +85,9 @@ directory containing newline-terminated `public.key` and owner-only
 `private.key` files, refuses to reuse a non-empty directory, and never prints
 the private key.
 
-The generator commands print a concise summary with generated paths, the primary
-Torii URL, and exact next commands. `localnet` and `wizard` also emit a
-generated `README.md` into the output directory.
+The generator commands print a concise summary with generated paths and the
+next safe handoff. `localnet` and `wizard` also emit a generated `README.md`
+into the output directory.
 
 ## Main Flows
 
@@ -103,10 +103,14 @@ generated `README.md` into the output directory.
   path before signalling a live process, so stale or reused pids are left alone.
 
 `kagami wizard`
-- Guided peer/bootstrap flow for configuring a node against an existing profile
+- Guided observer-onboarding flow for an existing Sora Nexus or Taira network;
+  use `localnet-wizard` for a new generic network
 - Supports interactive and fully flag-driven non-interactive use
-- Writes `config.toml`, `genesis.json`, and a generated guide with the exact
-  `iroha3d` launch command
+- Requires the operator-authenticated full validator peer/PoP roster encoded by
+  the network's signed genesis; the generated local peer is not promoted to validator
+- Stages `config.toml`, a reference `genesis.json` manifest, and a generated
+  guide that requires the network-authoritative signed genesis block and exact
+  hash before showing the final `iroha3d` launch step
 
 `kagami localnet`
 - Bare-metal local network generator

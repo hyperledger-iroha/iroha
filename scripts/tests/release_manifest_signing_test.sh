@@ -15,7 +15,6 @@ signature="$tmp_dir/release_manifest.json.sig"
 public_output="$tmp_dir/release_manifest.json.pub"
 
 mkdir -m 0755 "$artifact_dir"
-printf 'iroha2\n' > "$artifact_dir/iroha2.tar.zst"
 printf 'iroha3\n' > "$artifact_dir/iroha3.tar.zst"
 printf 'shared\n' > "$artifact_dir/shared.tar.zst"
 python3 - "$repo_root/scripts" "$artifact_dir" "$manifest" <<'PY'
@@ -30,7 +29,7 @@ artifact_dir = Path(sys.argv[2])
 manifest_path = Path(sys.argv[3])
 rows = []
 checksums = []
-for profile in ("iroha2", "iroha3", "shared"):
+for profile in ("iroha3", "shared"):
     name = f"{profile}.tar.zst"
     payload = (artifact_dir / name).read_bytes()
     digest = hashlib.sha256(payload).hexdigest()

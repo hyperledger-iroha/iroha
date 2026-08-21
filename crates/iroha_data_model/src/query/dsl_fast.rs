@@ -526,6 +526,16 @@ enum CompoundPredicateWireRef<'a> {
     Json(&'a str),
     TxPredicate(&'a CommittedTxPredicate),
 }
+impl CompoundPredicateWireRef<'_> {
+    fn encoded_variant_len(payload: usize, self_delimiting: bool) -> Option<usize> {
+        let outer = if self_delimiting && norito::core::use_packed_struct() {
+            0
+        } else {
+            norito::core::len_prefix_len(payload)
+        };
+        4_usize.checked_add(outer)?.checked_add(payload)
+    }
+}
 impl norito::core::NoritoSerialize for CompoundPredicateWireRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let mut field = norito::core::DeriveSmallBuf::new();
@@ -549,10 +559,12 @@ impl norito::core::NoritoSerialize for CompoundPredicateWireRef<'_> {
         match self {
             Self::Pass => Some(4),
             Self::Json(raw) => {
-                norito::core::NoritoSerialize::encoded_len_hint(raw)?.checked_add(12)
+                let payload = norito::core::NoritoSerialize::encoded_len_hint(raw)?;
+                Self::encoded_variant_len(payload, true)
             }
             Self::TxPredicate(tree) => {
-                norito::core::NoritoSerialize::encoded_len_hint(*tree)?.checked_add(12)
+                let payload = norito::core::NoritoSerialize::encoded_len_hint(*tree)?;
+                Self::encoded_variant_len(payload, false)
             }
         }
     }
@@ -561,18 +573,11 @@ impl norito::core::NoritoSerialize for CompoundPredicateWireRef<'_> {
             Self::Pass => Some(4),
             Self::Json(raw) => {
                 let payload = norito::core::NoritoSerialize::encoded_len_exact(raw)?;
-                let outer = if norito::core::use_packed_struct() {
-                    0
-                } else {
-                    norito::core::len_prefix_len(payload)
-                };
-                4_usize.checked_add(outer)?.checked_add(payload)
+                Self::encoded_variant_len(payload, true)
             }
             Self::TxPredicate(tree) => {
                 let payload = norito::core::NoritoSerialize::encoded_len_exact(*tree)?;
-                4_usize
-                    .checked_add(norito::core::len_prefix_len(payload))?
-                    .checked_add(payload)
+                Self::encoded_variant_len(payload, false)
             }
         }
     }
@@ -1048,12 +1053,57 @@ mod codec_tests {
     use iroha_primitives::json::Json;
     use norito::NoritoSerialize;
     use std::time::Duration;
-    fn bare_bytes(value: &dyn NoritoSerialize) -> Vec<u8> {
-        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    fn bare_bytes_with_flags(value: &dyn NoritoSerialize, flags: u8) -> Vec<u8> {
+        let _flags = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
         let mut encoder = norito::core::Encoder::for_buffer(&mut bytes);
         value.serialize(&mut encoder).expect("encode bare value");
         bytes
+    }
+    fn bare_bytes(value: &dyn NoritoSerialize) -> Vec<u8> {
+        bare_bytes_with_flags(value, norito::core::default_encode_flags())
+    }
+    fn assert_wire_lengths_match_active_layout<T: 'static>(predicate: &CompoundPredicate<T>) {
+        let wire = predicate.to_wire();
+        for flags in [
+            norito::core::default_encode_flags(),
+            norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT,
+        ] {
+            let predicate_bytes = bare_bytes_with_flags(predicate, flags);
+            let wire_bytes = bare_bytes_with_flags(&wire, flags);
+            let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(
+                &predicate_bytes, &wire_bytes,
+                "wire bytes for flags {flags:#04x}"
+            );
+            assert_eq!(
+                predicate.encoded_len_hint(),
+                wire.encoded_len_hint(),
+                "wire length hints for flags {flags:#04x}"
+            );
+            assert_eq!(
+                predicate.encoded_len_exact(),
+                wire.encoded_len_exact(),
+                "wire exact lengths for flags {flags:#04x}"
+            );
+            assert_eq!(
+                norito::core::encoded_payload_len(predicate).expect("count borrowed wire bytes"),
+                predicate_bytes.len(),
+                "counted borrowed wire length for flags {flags:#04x}"
+            );
+            assert_eq!(
+                norito::core::encoded_payload_len(&wire).expect("count owned wire bytes"),
+                wire_bytes.len(),
+                "counted owned wire length for flags {flags:#04x}"
+            );
+            if let Some(exact) = predicate.encoded_len_exact() {
+                assert_eq!(
+                    exact,
+                    predicate_bytes.len(),
+                    "advertised exact wire length for flags {flags:#04x}"
+                );
+            }
+        }
     }
     #[allow(clippy::needless_pass_by_value)]
     fn expect_committed_tx_tree(predicate: CompoundPredicate<query::CommittedTransaction>) -> P {
@@ -1162,6 +1212,21 @@ mod codec_tests {
             norito::decode_from_bytes(&bytes).expect("decode json predicate");
         assert!(matches!(decoded.to_wire(), CompoundPredicateWire::Json(_)));
         assert_eq!(decoded.json_payload(), predicate.json_payload());
+    }
+    #[test]
+    fn compound_predicate_wire_lengths_follow_active_v1_layout() {
+        let json = CompoundPredicate::<Domain>::build(|p| p.exists("id"));
+        let tree = CompoundPredicate::<query::CommittedTransaction>::from_committed_tx_predicate(
+            P::And(vec![P::ResultEq(true), P::TsGte(10)]),
+        );
+        assert_wire_lengths_match_active_layout(&json);
+        assert_wire_lengths_match_active_layout(&tree);
+        let packed_flags =
+            norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
+        let _flags = norito::core::DecodeFlagsGuard::enter(packed_flags);
+        assert!(json.encoded_len_exact().is_some());
+        assert_eq!(tree.encoded_len_hint(), None);
+        assert_eq!(tree.encoded_len_exact(), None);
     }
     #[test]
     fn raw_json_predicate_retained_graph_is_measured_and_limited() {

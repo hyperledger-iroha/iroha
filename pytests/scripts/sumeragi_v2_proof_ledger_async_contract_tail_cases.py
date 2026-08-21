@@ -738,7 +738,7 @@ def test_async_deductive_and_finite_specs_cannot_be_conflated(tmp_path: Path) ->
 AsyncSchedulerVars == <<schedulerState>>
 AsyncRecoveryVars == <<recoveryPhase, recoveryQueue>>
 AsyncProducerVars == <<producerKnown, producerConsumed, producerHistory>>
-AsyncAllVars == <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>
+AsyncAllVars == <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerTurnReady>>
 AsyncFairnessAt(initialContext) == WF_AsyncAllVars(AsyncNext)
 AsyncFairness == AsyncFairnessAt(ContextRecord(0, <<>>))
 AsyncBaseInitAt(initialContext) == TRUE

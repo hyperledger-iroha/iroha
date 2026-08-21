@@ -856,7 +856,10 @@ async fn soracloud_status_handler_returns_snapshot_sections() {
             "failed_admissions section should be present",
         ),
         ("control_plane", "control_plane section should be present"),
-        ("runtime_manager", "runtime_manager section should be present"),
+        (
+            "runtime_manager",
+            "runtime_manager section should be present",
+        ),
     ] {
         assert!(
             payload
@@ -920,9 +923,7 @@ async fn soracloud_status_routing_for_test(
         .clone()
 }
 fn soracloud_routing_count(routing: &norito::json::Map, field: &str) -> Option<u64> {
-    routing
-        .get(field)
-        .and_then(norito::json::Value::as_u64)
+    routing.get(field).and_then(norito::json::Value::as_u64)
 }
 fn soracloud_routing_lane_ids(routing: &norito::json::Map, field: &str) -> Option<Vec<u64>> {
     routing
@@ -961,7 +962,6 @@ async fn soracloud_status_routing_counts_only_active_autoscale_capacity_lanes() 
     )
     .expect("future-created autoscale lane catalog");
     let mut nexus = iroha_config::parameters::actual::Nexus {
-        enabled: true,
         lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
         lane_catalog,
         ..iroha_config::parameters::actual::Nexus::default()
@@ -1012,7 +1012,6 @@ async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
     )
     .expect("sparse lane catalog");
     let nexus = iroha_config::parameters::actual::Nexus {
-        enabled: true,
         lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
         lane_catalog,
         ..iroha_config::parameters::actual::Nexus::default()
@@ -1431,15 +1430,6 @@ async fn telemetry_handlers_ok() {
     .await
     .expect("ok");
     assert!(!text.is_empty());
-    let resp = super::handler_sumeragi_phases(
-        State(app.clone()),
-        headers.clone(),
-        crate::loopback_connect_info(),
-    )
-    .await
-    .expect("ok")
-    .into_response();
-    assert_eq!(resp.status(), axum::http::StatusCode::OK);
     // QC and leader endpoints
     let resp = super::handler_sumeragi_qc(
         State(app.clone()),
@@ -1527,54 +1517,6 @@ async fn telemetry_handlers_ok() {
         .expect("ok")
         .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-}
-#[cfg(feature = "telemetry")]
-#[tokio::test]
-async fn telemetry_commit_qc_null_on_empty() {
-    let app = mk_app_state_for_tests();
-    let headers = HeaderMap::new();
-    let sample_hash = format!("{}", iroha_crypto::Hash::new(b"torii-telemetry-test"));
-    let resp = super::handler_commit_qc(
-        State(app.clone()),
-        headers,
-        crate::loopback_connect_info(),
-        None,
-        axum::extract::Path(sample_hash),
-    )
-    .await
-    .expect("ok")
-    .into_response();
-    assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(resp.into_body())
-        .await
-        .unwrap()
-        .to_bytes();
-    let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
-    assert!(v.get("subject_block_hash").is_some());
-    assert!(v.get("commit_qc").is_some());
-    let resp = super::handler_commit_qc(
-        State(app),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        Some(crate::utils::extractors::ExtractAccept(
-            HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
-        )),
-        axum::extract::Path(format!(
-            "{}",
-            iroha_crypto::Hash::new(b"torii-telemetry-test")
-        )),
-    )
-    .await
-    .expect("ok")
-    .into_response();
-    assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    let bytes = http_body_util::BodyExt::collect(resp.into_body())
-        .await
-        .unwrap()
-        .to_bytes();
-    let decoded_opt: Option<Qc> =
-        norito::decode_from_bytes(&bytes).expect("decode commit_qc norito");
-    assert!(decoded_opt.is_none());
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -1692,12 +1634,7 @@ impl RuntimeApiRouterFixture {
             kura.clone(),
             LiveQueryStore::start_test(),
         ));
-        Self::with_runtime(
-            chain_id,
-            kura,
-            state,
-            routing::MaybeTelemetry::disabled(),
-        )
+        Self::with_runtime(chain_id, kura, state, routing::MaybeTelemetry::disabled())
     }
 
     fn with_runtime(
@@ -1840,10 +1777,6 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn appeal_finance_publication_routes_are_read_only() {
-    use std::{
-        fs,
-        path::{Path, PathBuf},
-    };
     use axum::{
         body::Body,
         extract::ConnectInfo,
@@ -1853,6 +1786,10 @@ async fn appeal_finance_publication_routes_are_read_only() {
         GovernanceDagRuntimeProviderQualificationV1, GovernanceDagRuntimeSigner,
         GovernanceDagSealedCheckpointStore, GovernanceDagSealedStateRecord,
         GovernanceDagSealedStateSlot, NodeHandle, NodeRuntimeDeps,
+    };
+    use std::{
+        fs,
+        path::{Path, PathBuf},
     };
     use tower::ServiceExt as _;
     #[derive(Debug)]
@@ -2175,11 +2112,7 @@ async fn sorafs_capacity_declare_route_is_mounted_in_api_router() {
     request
         .extensions_mut()
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-    let response = fixture
-        .router
-        .oneshot(request)
-        .await
-        .expect("response");
+    let response = fixture.router.oneshot(request).await.expect("response");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 #[cfg(feature = "app_api")]
@@ -2272,11 +2205,7 @@ async fn sccp_recent_messages_route_survives_soracloud_fallback() {
             [127, 0, 0, 1],
             0,
         ))));
-    let response = fixture
-        .router
-        .oneshot(request)
-        .await
-        .expect("response");
+    let response = fixture.router.oneshot(request).await.expect("response");
     assert_eq!(response.status(), StatusCode::OK);
     let body = torii_body_bytes(response, "body").await;
     let text = String::from_utf8(body.to_vec()).expect("utf8");

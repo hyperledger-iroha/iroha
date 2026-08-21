@@ -543,7 +543,7 @@ impl LaneReservationReconciliationPlan {
                                 }
                             })?;
                     for key in &keys {
-                        if !strictly_absent_hashes.insert(key.signed_transaction_hash) {
+                        if !strictly_absent_hashes.insert(key.entrypoint_hash) {
                             return Err(
                                 V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
                                     detail: "strict-absence planner groups overlap one Queue owner"
@@ -638,7 +638,7 @@ impl LaneReservationReconciliationPlan {
         }
         let expected_strictly_absent = direct_release
             .iter()
-            .map(|key| key.signed_transaction_hash)
+            .map(|key| key.entrypoint_hash)
             .collect::<BTreeSet<_>>();
         if strictly_absent_hashes != expected_strictly_absent {
             return Err(
@@ -654,8 +654,8 @@ impl LaneReservationReconciliationPlan {
 }
 fn exact_pending_merge_for_group(
     group: &LaneQueueReservationReconciliationGroupV1,
-    pending_by_transaction: &BTreeMap<
-        HashOf<SignedTransaction>,
+    pending_by_entrypoint: &BTreeMap<
+        HashOf<TransactionEntrypoint>,
         (
             HashOf<MergeLedgerEntry>,
             crate::queue::LaneQueueReservationKeyV2,
@@ -669,8 +669,7 @@ fn exact_pending_merge_for_group(
     let mut entry_hash = None;
     let mut matched = 0usize;
     for key in &group.ordered_keys {
-        let Some((candidate_hash, pending_key)) =
-            pending_by_transaction.get(&key.signed_transaction_hash)
+        let Some((candidate_hash, pending_key)) = pending_by_entrypoint.get(&key.entrypoint_hash)
         else {
             continue;
         };
@@ -723,7 +722,7 @@ fn exact_committed_carrier_height_for_group(
         let mut heights = heights.iter().copied();
         let Some(height) = heights.next() else {
             return Err(V2ReservationLifecycleError::MissingCommittedBinding {
-                transaction_hash: key.signed_transaction_hash,
+                entrypoint_hash: key.entrypoint_hash,
             });
         };
         if heights.next().is_some() || exact_carrier.is_some_and(|existing| existing != height) {

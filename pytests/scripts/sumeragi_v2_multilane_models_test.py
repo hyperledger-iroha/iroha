@@ -286,13 +286,13 @@ def test_kura_replica_retention_contract_rejects_relayed_ingress_drift(
     )
     replace_once(
         path,
-        "authenticated_via.as_ref() != Some(&advertised_keeper)",
-        "authenticated_via.is_none()",
+        "authenticated_via != advertised_keeper",
+        "authenticated_via == advertised_keeper",
     )
     errors = validate_kura_retention_fixture(tmp_path, module, contract)
     assert any(
         "admit_kura_replica_advert_ingress" in error
-        and "authenticated_via.as_ref() != Some(&advertised_keeper)" in error
+        and "authenticated_via != advertised_keeper" in error
         for error in errors
     ), errors
 
@@ -756,14 +756,16 @@ def test_queue_plan_pending_membership_contract_rejects_roster_bound_drift(
     path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
     replace_once(
         path,
-        "const MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS: usize =\n"
-        "    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSIONS;",
+        "const MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS: usize = "
+        "MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK;",
         "const MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS: usize = usize::MAX;",
     )
     errors = validate_queue_plan_pending_membership_fixture(
         tmp_path, module, models
     )
-    assert any("exact merge-admission consensus bound" in error for error in errors), errors
+    assert any(
+        "exact block/proposal admission consensus bound" in error for error in errors
+    ), errors
 
 
 def test_queue_plan_pending_membership_contract_rejects_unbounded_roster_scan(
@@ -897,7 +899,7 @@ def assert_inflight_order_drift_rejected(
     ("symbol", "token"),
     (
         (
-            "queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set",
+            "assert_queue_plan_native_batch_rollback_is_atomic",
             "failed whole-list staging must restore the exact prior overlay",
         ),
         (
@@ -1838,15 +1840,15 @@ def test_inflight_layout_contract_rejects_early_autonomous_queue_plan_cleanup(
     path = tmp_path / "crates/iroha_core/src/sumeragi/v2_apply.rs"
     replace_once(
         path,
-        "                .filter(|transaction_hash| {\n"
-        "                    !staged_merge_queue_reservation_hashes.contains(transaction_hash)\n"
+        "                .filter(|entrypoint_hash| {\n"
+        "                    !staged_merge_queue_reservation_hashes.contains(entrypoint_hash)\n"
         "                }),\n",
         "                ,\n",
     )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
         "V2ApplyService::validate_and_apply" in error
-        and ".filter(|transaction_hash|" in error
+        and ".filter(|entrypoint_hash|" in error
         for error in errors
     ), errors
 
@@ -2634,14 +2636,14 @@ def test_inflight_layout_contract_rejects_unbounded_full_state_application(
     (
         (
             "IndexedReservationReplayState::transition_release_batch",
-            ".push(self.validate_live_secondary_indexes("
-            "key.signed_transaction_hash, *key)?)",
+            "removals.push(self.validate_live_secondary_indexes("
+            "key.entrypoint_hash, *key)?)",
             "if apply {",
         ),
         (
             "IndexedReservationReplayState::transition_commit",
             "Some(self.validate_live_secondary_indexes("
-            "key.signed_transaction_hash, existing)?)",
+            "key.entrypoint_hash, existing)?)",
             "if !apply {",
         ),
         (
@@ -2674,9 +2676,9 @@ def test_inflight_layout_contract_rejects_removal_before_full_preflight(
     ("old", "new", "expected_token"),
     (
         (
-            "expected_key.signed_transaction_hash != hash",
+            "expected_key.entrypoint_hash != hash",
             "false",
-            "expected_key.signed_transaction_hash != hash",
+            "expected_key.entrypoint_hash != hash",
         ),
         (
             "let record = self\n"
@@ -2758,7 +2760,7 @@ def test_inflight_layout_contract_rejects_legacy_unchecked_removal(
     replace_once(
         path,
         "self.remove_preflighted_live(record);",
-        "self.remove_live_unchecked(record.key.signed_transaction_hash);",
+        "self.remove_live_unchecked(record.key.entrypoint_hash);",
     )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(

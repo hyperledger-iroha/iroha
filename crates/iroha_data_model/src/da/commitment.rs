@@ -27,6 +27,7 @@ pub enum DaProofScheme {
 /// Policy snapshot describing the proof scheme expected for a lane.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct DaProofPolicy {
     /// Numeric lane identifier.
     pub lane_id: LaneId,
@@ -40,6 +41,7 @@ pub struct DaProofPolicy {
 /// Versioned bundle of proof policies for all configured lanes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct DaProofPolicyBundle {
     /// Bundle layout version.
     pub version: u16,
@@ -87,8 +89,8 @@ pub struct DaProofSchemeParseError(pub String);
 impl FromStr for DaProofScheme {
     type Err = DaProofSchemeParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "merkle_sha256" | "merkle-sha256" | "merkle" => Ok(Self::MerkleSha256),
+        match s {
+            "merkle_sha256" => Ok(Self::MerkleSha256),
             other => Err(DaProofSchemeParseError(other.to_string())),
         }
     }
@@ -96,6 +98,7 @@ impl FromStr for DaProofScheme {
 /// Canonical DA commitment persisted in Nexus blocks.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct DaCommitmentRecord {
     /// Lane the blob belongs to.
     pub lane_id: LaneId,
@@ -112,6 +115,7 @@ pub struct DaCommitmentRecord {
     /// Merkle root over chunk digests for the blob.
     pub chunk_root: Hash,
     /// Optional digest covering PDP/PoTR scheduling metadata.
+    #[norito(required)]
     pub proof_digest: Option<Hash>,
     /// Retention summary applied to this blob.
     pub retention_class: RetentionClass,
@@ -155,6 +159,7 @@ impl DaCommitmentRecord {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct DaCommitmentBundle {
     /// Bundle layout version.
     pub version: u16,
@@ -373,6 +378,73 @@ mod tests {
         let decoded = DaCommitmentRecord::decode_all(&mut bytes.as_slice()).expect("decode");
         assert_eq!(record, decoded);
     }
+
+    #[test]
+    #[cfg(feature = "json")]
+    fn consensus_da_json_requires_exact_current_fields() {
+        let record = sample_record();
+        let mut missing = norito::json::to_value(&record).expect("serialize DA commitment record");
+        missing
+            .as_object_mut()
+            .expect("DA commitment JSON object")
+            .remove("proof_digest");
+        assert!(
+            norito::json::from_value::<DaCommitmentRecord>(missing).is_err(),
+            "the first-release DA commitment must require its nullable proof-digest slot"
+        );
+
+        let mut unknown = norito::json::to_value(&record).expect("serialize DA commitment record");
+        unknown
+            .as_object_mut()
+            .expect("DA commitment JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<DaCommitmentRecord>(unknown).is_err(),
+            "the first-release DA commitment must reject unknown fields"
+        );
+
+        let policy = DaProofPolicy {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            alias: "default".to_owned(),
+            proof_scheme: DaProofScheme::MerkleSha256,
+        };
+        let mut unknown_policy =
+            norito::json::to_value(&policy).expect("serialize DA proof policy");
+        unknown_policy
+            .as_object_mut()
+            .expect("DA proof policy JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<DaProofPolicy>(unknown_policy).is_err(),
+            "the first-release DA proof policy must reject unknown fields"
+        );
+
+        let policy_bundle = DaProofPolicyBundle::new(vec![policy]);
+        let mut unknown_policy_bundle =
+            norito::json::to_value(&policy_bundle).expect("serialize DA proof-policy bundle");
+        unknown_policy_bundle
+            .as_object_mut()
+            .expect("DA proof-policy bundle JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<DaProofPolicyBundle>(unknown_policy_bundle).is_err(),
+            "the first-release DA proof-policy bundle must reject unknown fields"
+        );
+
+        let commitment_bundle = DaCommitmentBundle::new(vec![record]);
+        let mut unknown_commitment_bundle =
+            norito::json::to_value(&commitment_bundle).expect("serialize DA commitment bundle");
+        unknown_commitment_bundle
+            .as_object_mut()
+            .expect("DA commitment bundle JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<DaCommitmentBundle>(unknown_commitment_bundle).is_err(),
+            "the first-release DA commitment bundle must reject unknown fields"
+        );
+    }
+
     #[test]
     fn bundle_round_trip() {
         let bundle = DaCommitmentBundle::new(vec![sample_record()]);
@@ -485,11 +557,17 @@ mod tests {
         assert!(DaCommitmentBundle::default().merkle_commitment().is_none());
     }
     #[test]
-    fn proof_scheme_from_str_accepts_merkle_alias() {
+    fn proof_scheme_from_str_accepts_only_canonical_merkle_label() {
         assert_eq!(
             DaProofScheme::from_str("merkle_sha256").expect("parse"),
             DaProofScheme::MerkleSha256
         );
+        for retired_alias in ["Merkle_Sha256", "merkle-sha256", "merkle"] {
+            assert!(
+                DaProofScheme::from_str(retired_alias).is_err(),
+                "non-canonical proof scheme `{retired_alias}` must fail closed"
+            );
+        }
     }
     #[test]
     fn proof_scheme_from_str_rejects_unimplemented_kzg() {

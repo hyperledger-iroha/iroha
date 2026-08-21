@@ -75,11 +75,6 @@ fn app_with_indexed_sccp_message_for_test(
             vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
         )
         .expect("test block entrypoint hash should match payload");
-    let legacy_post_state_root = block
-        .header()
-        .result_merkle_root()
-        .map(|hash| iroha_crypto::Hash::prehashed(*hash.as_ref()))
-        .expect("SCCP fixture result root");
     let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(&block);
     assert_eq!(messages.len(), 1);
     let message = &messages[0];
@@ -208,19 +203,10 @@ fn app_with_indexed_sccp_message_for_test(
     artifact
         .verify()
         .expect("SCCP finality fixture is cryptographically valid");
-    // Seed the retired QC model as an adversarial control. Proof routes
-    // must still require the exact durable v2 artifact below; a valid
-    // legacy QC in world state is not an alternative finality source.
-    let (legacy_qc, legacy_validator_pop) = sample_commit_qc(
-        app.state.network_id_ref(),
-        block_hash,
-        legacy_post_state_root,
-        HEIGHT,
-        HEIGHT.saturating_add(1),
-        0,
-    );
+    let block_header = block.header();
     let stored_block_hash = store_block(&app, block);
     assert_eq!(stored_block_hash, artifact.block_hash);
+    record_committed_block_hash_for_test(&app, block_header, stored_block_hash);
     if persist_finality {
         let receipt = app
             .kura
@@ -233,18 +219,6 @@ fn app_with_indexed_sccp_message_for_test(
         assert_eq!(receipt.certificate(), artifact.commit_qc.as_ref());
         assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));
     }
-    let mut app = app;
-    let app_mut = Arc::get_mut(&mut app).expect("unique app state for SCCP fixture");
-    let state = Arc::get_mut(&mut app_mut.state).expect("unique core state for SCCP fixture");
-    state.world.register_validator_pop_for_testing(
-        legacy_qc.validator_set[0].public_key().clone(),
-        legacy_validator_pop,
-    );
-    state.insert_commit_qc_for_testing(block_hash, legacy_qc);
-    assert!(
-        state.world_view().commit_qcs().get(&block_hash).is_some(),
-        "SCCP adversarial fixture retains a valid legacy QC"
-    );
     (app, message_id, artifact)
 }
 #[tokio::test]

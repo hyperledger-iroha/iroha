@@ -48,6 +48,7 @@ import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.NetworkId;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
@@ -136,6 +137,7 @@ public final class HttpClientTransportTests {
     vpnQuoteRequestSignsCanonicalBodyAndParsesOpenLeaseInstruction();
     ed25519KeyRoutesRejectSmallOrderIdentityPoint();
     feeQuoteRequestSignsExactUnsignedPayloadAndPreservesPayer();
+    feePaymentJsonRequiresExplicitNullableGasLimit();
     feeQuoteRejectsLegacyFlatTransactionIdentityKeys();
     feeQuoteRejectsPayerRevisionAndGasSubstitution();
     feeSponsorProgramRequestSignsExactSelectorAndParsesLifecycle();
@@ -2336,6 +2338,22 @@ public final class HttpClientTransportTests {
     assert executor.lastRequest() == request : "payer mismatch must fail before dispatch";
   }
 
+  private static void feePaymentJsonRequiresExplicitNullableGasLimit() {
+    final Object missingGas =
+        JsonParser.parse("{\"payer\":\"authority\",\"value\":{\"charge_limits\":[]}}");
+    expectIllegalArgument(
+        () -> FeePaymentJson.parse(missingGas, "fee payment"),
+        "fee payment JSON must require gas_limit even when it is null");
+
+    final Object explicitNull =
+        JsonParser.parse(
+            "{\"payer\":\"authority\",\"value\":{\"charge_limits\":[],\"gas_limit\":null}}");
+    final FeePaymentIntent parsed = FeePaymentJson.parse(explicitNull, "fee payment");
+    assert parsed instanceof FeePaymentIntent.Authority
+        : "explicitly null fee gas must preserve the authority payer";
+    assert parsed.gasLimit() == null : "explicitly null fee gas must remain absent";
+  }
+
   private static void feeQuoteRejectsLegacyFlatTransactionIdentityKeys() throws Exception {
     final CapturingExecutor executor = new CapturingExecutor();
     final HttpClientTransport transport =
@@ -2986,6 +3004,16 @@ public final class HttpClientTransportTests {
             null),
         request,
         "VK draft must reject another authority");
+    expectVerifierDraftReject(
+        verifyingKeyTransactionPayload(
+            request,
+            VerifyingKeyDraftBinding.Operation.REGISTER,
+            VERIFYING_KEY_NETWORK_ID,
+            (String) request.get("authority"),
+            null,
+            TransactionAdmissionIntent.ORDINARY),
+        request,
+        "VK draft must reject ordinary admission intent");
 
     final Map<String, Object> changedRecord = new LinkedHashMap<>(request);
     changedRecord.put("curve", "pasta");
@@ -4639,6 +4667,22 @@ public final class HttpClientTransportTests {
       final NetworkId networkId,
       final String authority,
       final List<InstructionBox> instructions) {
+    return verifyingKeyTransactionPayload(
+        request,
+        operation,
+        networkId,
+        authority,
+        instructions,
+        TransactionAdmissionIntent.QUEUE_PLAN_SYNCED);
+  }
+
+  private static byte[] verifyingKeyTransactionPayload(
+      final Map<String, Object> request,
+      final VerifyingKeyDraftBinding.Operation operation,
+      final NetworkId networkId,
+      final String authority,
+      final List<InstructionBox> instructions,
+      final TransactionAdmissionIntent admissionIntent) {
     final Integer discriminant =
         org.hyperledger.iroha.android.address.AccountAddress.detectI105Discriminant(authority);
     if (discriminant == null) {
@@ -4657,6 +4701,7 @@ public final class HttpClientTransportTests {
             .setTimeToLiveMs(5_000L)
             .setNonce(1L)
             .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), null))
+            .setAdmissionIntent(admissionIntent)
             .build();
     try {
       return new NoritoJavaCodecAdapter(discriminant).encodeTransaction(payload);
@@ -6273,6 +6318,7 @@ public final class HttpClientTransportTests {
             .setInstructionBytes(new byte[] {fillValue, (byte) (fillValue + 1)})
             .setTimeToLiveMs(5_000L)
             .setNonce(fillValue & 0xFF)
+            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
             .setMetadata(Map.of("note", "txn-" + fillValue))
             .build();
     final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);

@@ -86,9 +86,7 @@ impl Kura {
         let verified = self
             .recover_lane_block_execution_input_source(
                 &recovered.proposal,
-                recovered.autonomous_network_id,
-                recovered.autonomous_epoch,
-                recovered.autonomous_payload_hash,
+                &recovered.source,
                 false,
             )
             .map_err(|availability| {
@@ -104,12 +102,8 @@ impl Kura {
             ));
         }
         let artifact = LaneBlockExecutionInputArtifact::new(verified);
-        let execution_input_authorization = match (
-            artifact.autonomous_network_id,
-            artifact.autonomous_epoch,
-            artifact.autonomous_payload_hash,
-        ) {
-            (Some(network_id), Some(epoch), Some(payload_hash)) => {
+        let execution_input_authorization = match artifact.source.autonomous_binding() {
+            Some((network_id, epoch, payload_hash)) => {
                 let descriptor = &artifact.proposal.descriptor;
                 let autonomous = self
                     .read_autonomous_lane_block_artifact_with_recovery_policy(
@@ -141,13 +135,7 @@ impl Kura {
                     })?,
                 )
             }
-            (None, None, None) => None,
-            _ => {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "lane execution input has a partial autonomous context",
-                ));
-            }
+            None => None,
         };
         self.write_lane_block_execution_input_artifact(
             &artifact,
@@ -169,12 +157,8 @@ impl Kura {
             Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
         })?;
         let autonomous_input = matches!(
-            (
-                artifact.autonomous_network_id,
-                artifact.autonomous_epoch,
-                artifact.autonomous_payload_hash,
-            ),
-            (Some(_), Some(_), Some(_))
+            &artifact.source,
+            LaneBlockExecutionSourceV1::AutonomousLane { .. }
         );
         match (autonomous_input, execution_input_authorization.as_ref()) {
             (true, Some(authorization)) if authorization.matches_input(artifact) => {}
@@ -342,7 +326,6 @@ impl Kura {
             &payload,
             "lane block execution input",
             None,
-            SidecarIndexOrigin::FirstWrite,
             &publication.namespace,
         );
         if !wrote {
@@ -429,7 +412,7 @@ impl Kura {
         let data_metadata = self.regular_sidecar_metadata(data_path, parent)?;
         let index_metadata = self.regular_sidecar_metadata(index_path, parent)?;
         let layout = match (data_metadata, index_metadata) {
-            (None, None) => SidecarIndexLayout::legacy(0),
+            (None, None) => None,
             (Some(_), Some(index_metadata)) => {
                 let mut index = Self::open_direct_sidecar_file_in_namespace(
                     index_path,
@@ -451,7 +434,7 @@ impl Kura {
                         "lane block execution input index has trailing or partial bytes",
                     ));
                 }
-                layout
+                Some(layout)
             }
             _ => {
                 return Err(Self::invalid_lane_artifact_error(
@@ -461,7 +444,9 @@ impl Kura {
             }
         };
         let append_intent_max = u64::try_from(BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES)?;
-        let transient_bytes = if layout.is_based() && lane_block_height < layout.base_height {
+        let transient_bytes = if let Some(layout) = layout
+            && lane_block_height < layout.base_height
+        {
             let prepend = layout
                 .base_height
                 .checked_sub(lane_block_height)
@@ -485,13 +470,7 @@ impl Kura {
             })?;
             let projected_index_len = projected_entries
                 .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
-                .and_then(|bytes| {
-                    bytes.checked_add(if lane_block_height > 1 {
-                        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
-                    } else {
-                        0
-                    })
-                })
+                .and_then(|bytes| bytes.checked_add(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64))
                 .ok_or_else(|| {
                     Self::invalid_lane_artifact_error(
                         index_path.to_path_buf(),

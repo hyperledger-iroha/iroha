@@ -1,10 +1,9 @@
 //! Crate with macros that facilitate writing a custom executor
 // darling-generated code triggers this lint
 #![allow(clippy::needless_continue)]
+iroha_derive::define_emitter_ext!();
 use manyhow::{Emitter, emit, manyhow};
 use proc_macro2::TokenStream;
-mod emitter_ext;
-use crate::emitter_ext::EmitterExt;
 mod default;
 mod entrypoint;
 /// Annotate the user-defined function that starts the execution of a executor.

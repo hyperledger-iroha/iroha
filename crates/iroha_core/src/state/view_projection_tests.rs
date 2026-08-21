@@ -167,13 +167,19 @@ async fn get_blocks_from_height() {
         &state
             .view()
             .all_blocks(nonzero!(8_usize))
-            .map(|block| block.header().height().get())
+            .map(|block| {
+                block
+                    .expect("canonical test history must be available")
+                    .header()
+                    .height()
+                    .get()
+            })
             .collect::<Vec<_>>(),
         &[8, 9, 10]
     );
 }
 #[tokio::test]
-async fn all_blocks_skips_missing_kura_entries() {
+async fn canonical_history_stops_at_missing_kura_entry() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura.clone(), query_handle);
@@ -188,12 +194,55 @@ async fn all_blocks_skips_missing_kura_entries() {
             kura.store_block(block).expect("store block");
         }
     }
-    let heights: Vec<_> = state
-        .view()
-        .all_blocks(nonzero!(1_usize))
-        .map(|block| block.header().height().get())
-        .collect();
-    assert_eq!(heights, vec![1, 2]);
+    let view = state.view();
+    let mut blocks = view.all_blocks(nonzero!(1_usize));
+    assert_eq!(blocks.next().unwrap().unwrap().header().height().get(), 1);
+    assert_eq!(blocks.next().unwrap().unwrap().header().height().get(), 2);
+    assert!(matches!(
+        blocks.next().expect("missing slot must be explicit"),
+        Err(CanonicalHistoryError::BodyUnavailable { height: 3, .. })
+    ));
+    assert!(blocks.next().is_none(), "cursor must stop after a gap");
+}
+#[tokio::test]
+async fn canonical_history_reports_authenticated_hash_only_body() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let state = State::new(World::default(), kura.clone(), query_handle);
+    let block = new_dummy_block_with_payload(|header| {
+        header.set_height(nonzero!(1_u64));
+    });
+    let mut state_block = state.block(block.as_ref().header());
+    let _events = state_block.apply(&block, Vec::new());
+    state_block.commit().unwrap();
+    kura.store_block(block).expect("store canonical test block");
+    kura.force_hash_only_block_for_testing(nonzero!(1_usize))
+        .expect("convert canonical test block to hash-only form");
+    let view = state.view();
+    assert!(matches!(
+        view.canonical_block_by_height(nonzero!(1_usize)),
+        Err(CanonicalHistoryError::HashOnlyBodyUnavailable { height: 1, .. })
+    ));
+}
+#[test]
+fn canonical_block_authentication_rejects_header_height_mismatch() {
+    let block = new_dummy_block_with_payload(|header| {
+        header.set_height(nonzero!(2_u64));
+    });
+    let block = Arc::<SignedBlock>::new(block.as_ref().clone());
+    let error = canonical_history::authenticate_canonical_block(
+        nonzero!(1_usize),
+        block.hash(),
+        Some(Arc::clone(&block)),
+    )
+    .expect_err("slot and header height must agree");
+    assert_eq!(
+        error,
+        CanonicalHistoryError::BlockHeightMismatch {
+            height: 1,
+            actual_height: 2,
+        }
+    );
 }
 #[test]
 fn role_account_range() {

@@ -57,11 +57,13 @@ pub(crate) struct ProductionRecoveredWalStorageError {
 enum ProductionRecoveredWalStorageErrorKind {
     #[error("repaired lifecycle ledger changed before unified open")]
     StaleLedger,
-    #[error("durable Ready-Fetch recovery failed after WAL repair: {0}")]
-    Fetch(#[source] super::ledger::DurableCertifiedFetchRecoveryError),
+    #[error("durable body-pipeline recovery failed after WAL repair: {0}")]
+    BodyPipeline(#[source] super::ledger::DurableCertifiedBodyPipelineRecoveryError),
+    #[error("durable body-pipeline adapter replay failed: {0}")]
+    BodyPipelineReplay(&'static str),
     #[error("unified lifecycle storage census is inconsistent: {0}")]
     Recovery(#[source] super::open::LifecycleRecoveryAssemblyError),
-    #[error("recovered Sign and Ready-Fetch registry carriers conflict")]
+    #[error("recovered Sign and body-pipeline registry carriers conflict")]
     Registry,
     #[error("exact recovered lifecycle open failed: {0}")]
     Open(&'static str),
@@ -76,14 +78,15 @@ impl ProductionRecoveredWalStorageError {
             ProductionRecoveredWalStorageErrorKind::StaleLedger => {
                 "repaired lifecycle ledger changed before unified open"
             }
-            ProductionRecoveredWalStorageErrorKind::Fetch(_) => {
-                "durable Ready-Fetch recovery failed after WAL repair"
+            ProductionRecoveredWalStorageErrorKind::BodyPipeline(_) => {
+                "durable body-pipeline recovery failed after WAL repair"
             }
+            ProductionRecoveredWalStorageErrorKind::BodyPipelineReplay(reason) => reason,
             ProductionRecoveredWalStorageErrorKind::Recovery(_) => {
                 "unified lifecycle storage census is inconsistent"
             }
             ProductionRecoveredWalStorageErrorKind::Registry => {
-                "recovered Sign and Ready-Fetch registry carriers conflict"
+                "recovered Sign and body-pipeline registry carriers conflict"
             }
             ProductionRecoveredWalStorageErrorKind::Open(reason) => reason,
         }
@@ -163,6 +166,7 @@ impl<'registry> InstalledRecoveredWalSignStorage<'registry> {
     #[allow(clippy::result_large_err)]
     pub(crate) fn open_production_lifecycle(
         self,
+        adapter_startup: ProductionLifecycleAdapterStartupV1,
         verified: &VerifiedHeightContext,
         config: &SumeragiV2Config,
         reply_route_source_capacity: usize,
@@ -190,17 +194,24 @@ impl<'registry> InstalledRecoveredWalSignStorage<'registry> {
                 ProductionRecoveredWalStorageErrorKind::Registry,
             )
         })?;
-        let fetches = repaired
-            .authenticate_durable_certified_fetch_startup(verified, body_store)
+        let body_pipeline = repaired
+            .authenticate_durable_certified_body_pipeline_startup(verified, body_store)
             .map_err(|error| {
                 ProductionRecoveredWalStorageError::new(
-                    ProductionRecoveredWalStorageErrorKind::Fetch(error),
+                    ProductionRecoveredWalStorageErrorKind::BodyPipeline(error),
+                )
+            })?;
+        let (body_pipeline, adapter_startup) = body_pipeline
+            .replay_adapter_startup(adapter_startup)
+            .map_err(|reason| {
+                ProductionRecoveredWalStorageError::new(
+                    ProductionRecoveredWalStorageErrorKind::BodyPipelineReplay(reason),
                 )
             })?;
         let recovery = if let Some((broadcast, next_sign, pair)) =
             installed.phase_broadcast_and_next_vote_projection()
         {
-            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_durable_fetch_startup(
+            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_body_pipeline_startup(
                 repaired,
                 serve_payloads,
                 body_store,
@@ -208,32 +219,32 @@ impl<'registry> InstalledRecoveredWalSignStorage<'registry> {
                 pair,
                 broadcast,
                 next_sign,
-                fetches,
+                body_pipeline,
             )
         } else if let Some(broadcast) = installed.phase_broadcast_projection() {
-            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_phase_broadcast_and_durable_fetch_startup(
+            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_phase_broadcast_and_body_pipeline_startup(
                 repaired,
                 serve_payloads,
                 body_store,
                 &projection,
                 broadcast,
-                fetches,
+                body_pipeline,
             )
         } else {
-            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_wal_sign_and_durable_fetch_startup(
+            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_wal_sign_and_body_pipeline_startup(
                 repaired,
                 serve_payloads,
                 body_store,
                 &projection,
-                fetches,
+                body_pipeline,
             )
         };
-        let (recovery, fetches) = recovery.map_err(|error| {
+        let (recovery, body_pipeline) = recovery.map_err(|error| {
             ProductionRecoveredWalStorageError::new(
                 ProductionRecoveredWalStorageErrorKind::Recovery(error),
             )
         })?;
-        fetches
+        body_pipeline
             .install_alongside_recovered_wal_authority(&mut *installed.registry)
             .map_err(|_fetches| {
                 ProductionRecoveredWalStorageError::new(
@@ -257,6 +268,7 @@ impl<'registry> InstalledRecoveredWalSignStorage<'registry> {
             })
             .map(|opened| ProductionOpenedRecoveredWalSignLifecycleCut {
                 opened,
+                adapter_startup,
                 verified: verified.clone(),
                 body_store_identity,
                 payload_store_identity,
@@ -2638,6 +2650,7 @@ pub(crate) struct OpenedRecoveredWalSignLifecycleCut<'registry> {
 #[must_use = "the production recovered open must enter its exact lifecycle owner"]
 pub(crate) struct ProductionOpenedRecoveredWalSignLifecycleCut<'registry> {
     opened: OpenedRecoveredWalSignLifecycleCut<'registry>,
+    adapter_startup: ProductionLifecycleAdapterStartupV1,
     verified: VerifiedHeightContext,
     body_store_identity: crate::sumeragi::v2_body_store::V2BodyStoreInstanceIdentity,
     payload_store_identity:
@@ -2997,7 +3010,7 @@ impl InstalledRecoveredWalSignRegistryCut<'_> {
             == 1
             && self
                 .registry
-                .exactly_covers_recovered_ready_fetches_with_extra(
+                .exactly_covers_recovered_ready_body_pipeline_with_extra(
                     prepared.coordinator(),
                     if pair_is_exact {
                         let (next_sign, _) = self
@@ -3221,7 +3234,7 @@ impl InstalledRecoveredWalControlSignRegistryCut<'_> {
             == 1
             && self
                 .registry
-                .exactly_covers_recovered_ready_fetches_with_extra(
+                .exactly_covers_recovered_ready_body_pipeline_with_extra(
                     prepared.coordinator(),
                     if pair_is_exact {
                         let (next_sign, _) = self
@@ -3299,16 +3312,16 @@ impl InstalledRecoveredWalControlSignRegistryCut<'_> {
                     },
                 )
     }
-    /// Install the complete durable Fetch census beside this sole WAL authority.
-    pub(super) fn install_fetches(
+    /// Install the complete ordinary body census beside this sole WAL authority.
+    pub(super) fn install_body_pipeline(
         &mut self,
-        fetches: PreparedDurableCertifiedFetchStartupV1,
+        body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
     ) -> Result<(), RecoveredWalControlSignLifecycleOpenError> {
-        fetches
+        body_pipeline
             .install_alongside_recovered_wal_authority(&mut *self.registry)
-            .map_err(|_fetches| {
+            .map_err(|_body_pipeline| {
                 RecoveredWalControlSignLifecycleOpenError::new(
-                    "recovered control Sign and Fetch carriers conflict",
+                    "recovered control Sign and body-pipeline carriers conflict",
                 )
             })
     }
@@ -3443,7 +3456,7 @@ impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
         (fetch_is_exact ^ store_is_exact)
             && self
                 .registry
-                .exactly_covers_recovered_ready_fetches_with_extra(
+                .exactly_covers_recovered_ready_body_pipeline_with_extra(
                     prepared.coordinator(),
                     if store_is_exact {
                         RecoveredWalRegistrySlotV1::DecisionStore(self.address)
@@ -3480,16 +3493,16 @@ impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
                     },
                 )
     }
-    /// Install the complete body-backed Fetch census beside the WAL Fetch.
-    pub(super) fn install_fetches(
+    /// Install the complete ordinary body census beside the WAL Fetch.
+    pub(super) fn install_body_pipeline(
         &mut self,
-        fetches: PreparedDurableCertifiedFetchStartupV1,
+        body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
     ) -> Result<(), RecoveredWalDecisionFetchLifecycleOpenError> {
-        fetches
+        body_pipeline
             .install_alongside_recovered_wal_authority(&mut *self.registry)
-            .map_err(|_fetches| {
+            .map_err(|_body_pipeline| {
                 RecoveredWalDecisionFetchLifecycleOpenError::new(
-                    "recovered Decision Fetch and body-backed Fetch carriers conflict",
+                    "recovered Decision Fetch and ordinary body carriers conflict",
                 )
             })
     }
@@ -3571,7 +3584,7 @@ impl InstalledRecoveredDecisionApplyRegistryCut<'_> {
             apply.matches_current_ready_record(self.address, self.digest, prepared.coordinator())
         }) && self
             .registry
-            .exactly_covers_recovered_ready_fetches_with_extra(
+            .exactly_covers_recovered_ready_body_pipeline_with_extra(
                 prepared.coordinator(),
                 RecoveredWalRegistrySlotV1::DecisionApply(self.address),
             )
@@ -3588,16 +3601,16 @@ impl InstalledRecoveredDecisionApplyRegistryCut<'_> {
                     RecoveredWalRegistrySlotV1::DecisionApply(self.address),
                 )
     }
-    /// Install every unrelated durable Ready-Fetch beside the sole Apply carrier.
-    pub(super) fn install_fetches(
+    /// Install every unrelated ordinary durable body row beside the sole Apply carrier.
+    pub(super) fn install_body_pipeline(
         &mut self,
-        fetches: PreparedDurableCertifiedFetchStartupV1,
+        body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
     ) -> Result<(), RecoveredDecisionApplyLifecycleOpenError> {
-        fetches
+        body_pipeline
             .install_alongside_recovered_wal_authority(&mut *self.registry)
-            .map_err(|_fetches| {
+            .map_err(|_body_pipeline| {
                 RecoveredDecisionApplyLifecycleOpenError::new(
-                    "recovered Decision Apply and Ready-Fetch carriers conflict",
+                    "recovered Decision Apply and body-pipeline carriers conflict",
                 )
             })
     }
@@ -3904,9 +3917,16 @@ impl ProductionOpenedRecoveredWalSignLifecycleCut<'_> {
     /// Consume the exclusive registry borrow into a no-lifetime owner-open seal.
     pub(crate) fn into_production_owner_open(
         self,
-    ) -> Result<RecoveredWalProductionOwnerOpenV1, Self> {
+    ) -> Result<
+        (
+            ProductionLifecycleAdapterStartupV1,
+            RecoveredWalProductionOwnerOpenV1,
+        ),
+        Self,
+    > {
         let Self {
             opened,
+            adapter_startup,
             verified,
             body_store_identity,
             payload_store_identity,
@@ -3914,6 +3934,7 @@ impl ProductionOpenedRecoveredWalSignLifecycleCut<'_> {
         let Some(projection) = opened.installed.authenticated_projection() else {
             return Err(Self {
                 opened,
+                adapter_startup,
                 verified,
                 body_store_identity,
                 payload_store_identity,
@@ -3928,6 +3949,7 @@ impl ProductionOpenedRecoveredWalSignLifecycleCut<'_> {
         {
             return Err(Self {
                 opened,
+                adapter_startup,
                 verified,
                 body_store_identity,
                 payload_store_identity,
@@ -3940,14 +3962,17 @@ impl ProductionOpenedRecoveredWalSignLifecycleCut<'_> {
         } = opened;
         let registry_identity = installed.registry.instance_identity();
         drop(installed);
-        Ok(RecoveredWalProductionOwnerOpenV1 {
-            coordinator,
-            verified,
-            serve_payloads: recovery.into_serve_payloads(),
-            registry_identity,
-            body_store_identity,
-            payload_store_identity,
-        })
+        Ok((
+            adapter_startup,
+            RecoveredWalProductionOwnerOpenV1 {
+                coordinator,
+                verified,
+                serve_payloads: recovery.into_serve_payloads(),
+                registry_identity,
+                body_store_identity,
+                payload_store_identity,
+            },
+        ))
     }
 }
 #[cfg(test)]
@@ -3955,12 +3980,14 @@ impl<'registry> ProductionOpenedRecoveredWalSignLifecycleCut<'registry> {
     /// Seal a focused opened-cut fixture with the exact stores it used.
     pub(crate) fn from_opened_for_test(
         opened: OpenedRecoveredWalSignLifecycleCut<'registry>,
+        adapter_startup: ProductionLifecycleAdapterStartupV1,
         verified: VerifiedHeightContext,
         body_store: &V2BodyStore,
         payload_store: &CertifiedServePayloadStoreV1,
     ) -> Self {
         Self {
             opened,
+            adapter_startup,
             verified,
             body_store_identity: body_store.instance_identity(),
             payload_store_identity: payload_store.instance_identity(),
@@ -4139,6 +4166,7 @@ impl ConcreteLifecycleWorkRegistry {
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
         key: RecoveredDecisionFetchDispatchKeyV1,
+        wait_source: super::WaitSource,
         body: crate::sumeragi::v2_body_store::RecoveredDecisionFetchStoreBodyAuthorityV1,
     ) -> Result<
         super::RecoveredDecisionFetchStoreAdapterAuthorityV1,
@@ -4163,6 +4191,8 @@ impl ConcreteLifecycleWorkRegistry {
         if work.digest != digest
             || !work.validates_at(address)
             || fetch.dispatch_key != Some(key)
+            || fetch.wait_source != Some(wait_source)
+            || !matches!(wait_source, super::WaitSource::External(_))
             || !key.matches(coordinator.active_context, address, digest)
             || !fetch.matches_claimed_record(address, digest, coordinator, lease)
         {
@@ -4180,6 +4210,7 @@ impl ConcreteLifecycleWorkRegistry {
         lease: &TurnLease,
         verified: &VerifiedHeightContext,
         key: RecoveredDecisionFetchDispatchKeyV1,
+        wait_source: super::WaitSource,
         adapter: crate::sumeragi::v2::PreparedRecoveredDecisionFetchStoreAdapterV1<'adapter>,
     ) -> Result<
         PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter>,
@@ -4202,6 +4233,8 @@ impl ConcreteLifecycleWorkRegistry {
             return Err(RecoveredDecisionFetchStorePreparationErrorV1::InvalidFetchCarrier);
         };
         if fetch.dispatch_key != Some(key)
+            || fetch.wait_source != Some(wait_source)
+            || !matches!(wait_source, super::WaitSource::External(_))
             || !key.matches(coordinator.active_context, fetch_address, digest)
             || !fetch.matches_claimed_record(fetch_address, digest, coordinator, lease)
         {

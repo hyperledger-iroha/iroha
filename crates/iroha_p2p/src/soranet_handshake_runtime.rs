@@ -1,0 +1,139 @@
+//! Validated runtime construction for SoraNet handshake configuration.
+
+use std::{
+    sync::{Arc, Mutex},
+    time::SystemTime,
+};
+
+use iroha_config::parameters::actual::{
+    SoranetHandshake as ActualSoranetHandshake, SoranetPow as ActualSoranetPow,
+};
+use iroha_crypto::soranet::{
+    pow::{Parameters as PowParameters, TicketRevocationStore, TicketRevocationStoreLimits},
+    puzzle,
+};
+use soranet_pq::MlDsaSuite;
+
+use crate::{Error, peer::SoranetHandshakeConfig, puzzle_work_admission::process_wide_admission};
+
+pub(crate) fn runtime_from_handshake(
+    handshake: ActualSoranetHandshake,
+) -> Result<Arc<SoranetHandshakeConfig>, Error> {
+    let ActualSoranetHandshake {
+        descriptor_commit,
+        client_capabilities,
+        relay_capabilities,
+        trust_gossip,
+        kem_id,
+        sig_id,
+        resume_hash,
+        pow,
+    } = handshake;
+    let ActualSoranetPow {
+        required,
+        difficulty,
+        max_future_skew,
+        min_ticket_ttl,
+        ticket_ttl,
+        outbound_mint_capacity,
+        inbound_verify_capacity,
+        revocation_store_capacity,
+        revocation_max_ttl,
+        revocation_store_path,
+        puzzle,
+        signed_ticket_public_key,
+    } = pow;
+    for (name, capacity) in [
+        ("outbound_mint_capacity", outbound_mint_capacity),
+        ("inbound_verify_capacity", inbound_verify_capacity),
+    ] {
+        if capacity.get() > ActualSoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION {
+            return Err(Error::HandshakeSoranet(format!(
+                "invalid soranet puzzle work configuration: {name} {} exceeds the per-direction maximum {}",
+                capacity,
+                ActualSoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION
+            )));
+        }
+    }
+    let puzzle_work_admission =
+        process_wide_admission(outbound_mint_capacity, inbound_verify_capacity)
+            .map_err(Error::HandshakeSoranet)?;
+    let pow_params =
+        PowParameters::try_new(difficulty, max_future_skew, min_ticket_ttl).map_err(|err| {
+            Error::HandshakeSoranet(format!("invalid soranet PoW configuration: {err}"))
+        })?;
+    let puzzle_params = puzzle
+        .map(|cfg| {
+            puzzle::Parameters::try_new(
+                cfg.memory_kib,
+                cfg.time_cost,
+                cfg.lanes,
+                difficulty,
+                max_future_skew,
+                min_ticket_ttl,
+            )
+            .map_err(|err| {
+                Error::HandshakeSoranet(format!("invalid soranet puzzle configuration: {err}"))
+            })
+        })
+        .transpose()?;
+    if puzzle_params.is_some() && ticket_ttl <= min_ticket_ttl {
+        return Err(Error::HandshakeSoranet(format!(
+            "invalid soranet puzzle ticket timing: ticket_ttl {ticket_ttl:?} must exceed min_ticket_ttl {min_ticket_ttl:?}"
+        )));
+    }
+    let signed_ticket_public_key = signed_ticket_public_key
+        .map(|key| {
+            let expected = MlDsaSuite::MlDsa44.public_key_len();
+            if key.len() != expected {
+                return Err(Error::HandshakeSoranet(format!(
+                    "invalid soranet signed_ticket_public_key_hex: expected {expected} bytes (ML-DSA-44), got {}",
+                    key.len()
+                )));
+            }
+            Ok(key)
+        })
+        .transpose()?;
+    let revocation_limits =
+        TicketRevocationStoreLimits::new(revocation_store_capacity, revocation_max_ttl).map_err(
+            |err| {
+                Error::HandshakeSoranet(format!("invalid soranet revocation configuration: {err}"))
+            },
+        )?;
+    let revocation_store = if required {
+        TicketRevocationStore::load(
+            revocation_store_path.as_ref(),
+            revocation_limits,
+            SystemTime::now(),
+        )
+        .map_err(|err| {
+            Error::HandshakeSoranet(format!(
+                "failed to load soranet revocation store at {revocation_store_path}: {err}"
+            ))
+        })?
+    } else {
+        // Production configuration fixes `required = true`. Programmatic test
+        // configurations that disable admission use only in-memory replay state.
+        TicketRevocationStore::in_memory(revocation_limits).map_err(|err| {
+            Error::HandshakeSoranet(format!("invalid soranet revocation configuration: {err}"))
+        })?
+    };
+    let config = SoranetHandshakeConfig::new(
+        descriptor_commit.into_value(),
+        client_capabilities.into_value(),
+        relay_capabilities.into_value(),
+        trust_gossip,
+        kem_id,
+        sig_id,
+        resume_hash.map(iroha_config::base::WithOrigin::into_value),
+        required,
+        pow_params,
+        puzzle_params,
+        ticket_ttl,
+        signed_ticket_public_key,
+        Some(Arc::new(Mutex::new(revocation_store))),
+        None,
+    )
+    .with_puzzle_work_admission(puzzle_work_admission);
+    Ok(Arc::new(config))
+}

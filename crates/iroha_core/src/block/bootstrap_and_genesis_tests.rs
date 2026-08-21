@@ -321,18 +321,20 @@ async fn genesis_public_key_is_checked() {
     // Validate genesis block
     // Use correct genesis key and check if transaction is rejected
     let block: SignedBlock = valid_block.into();
-    let mut state_block = state.block(block.header());
     let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
-    let (_, error) = ValidBlock::validate(
+    let mut voting_block = None;
+    let (_, error) = ValidBlock::validate_signed_genesis_keep_voting_block(
         block,
         &topology,
         &genesis_correct_account_id,
         &time_source,
-        &mut state_block,
+        &state,
+        &mut voting_block,
+        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
     )
     .unpack(|_| {})
-    .unwrap_err();
-    state_block.commit().unwrap();
+    .err()
+    .expect("genesis with an unexpected authority must fail validation");
     // The first transaction should be rejected
     assert_eq!(
         error.as_ref(),
@@ -383,14 +385,16 @@ async fn genesis_asset_definition_registration_is_not_domain_gated() {
         None,
     );
     let topology = crate::sumeragi::network_topology::test_topology_with_keys([&genesis_key_pair]);
-    let mut state_block = state.block(block.header());
     let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
-    let _valid = ValidBlock::validate(
+    let mut voting_block = None;
+    let (_valid, state_block) = ValidBlock::validate_signed_genesis_keep_voting_block(
         block,
         &topology,
         &genesis_account_id,
         &time_source,
-        &mut state_block,
+        &state,
+        &mut voting_block,
+        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
     )
     .unpack(|_| {})
     .expect("genesis asset-definition registration should not require domain-owner authorization");
@@ -423,14 +427,16 @@ async fn genesis_domain_registration_bootstraps_domain_name_lease() {
         None,
     );
     let topology = crate::sumeragi::network_topology::test_topology_with_keys([&genesis_key_pair]);
-    let mut state_block = state.block(block.header());
     let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
-    let _valid = ValidBlock::validate(
+    let mut voting_block = None;
+    let (_valid, state_block) = ValidBlock::validate_signed_genesis_keep_voting_block(
         block,
         &topology,
         &genesis_account_id,
         &time_source,
-        &mut state_block,
+        &state,
+        &mut voting_block,
+        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
     )
     .unpack(|_| {})
     .expect("genesis domain registration should bootstrap the SNS lease");

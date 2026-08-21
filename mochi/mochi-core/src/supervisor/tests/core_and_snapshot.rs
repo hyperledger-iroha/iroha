@@ -44,13 +44,13 @@ impl Drop for RestoringEnvVarGuard {
         }
     }
 }
-fn write_version_stub(root: &Path, name: &str, build_line: &str) -> PathBuf {
+fn write_version_stub(root: &Path, name: &str, version: &str) -> PathBuf {
     let script_path = root.join(format!("{name}.sh"));
     let script = format!(
         r#"#!/bin/sh
 case "$1" in
   --version)
-    echo "{name} {build_line}"
+    echo "{name} {version}"
     exit 0
     ;;
   *)
@@ -222,11 +222,11 @@ fn copy_dir_recursive_handles_missing_sources() {
     assert!(iter.next().is_none(), "destination should remain empty");
 }
 #[test]
-fn probe_version_output_parses_and_infers_build_line() {
+fn probe_version_output_parses_first_nonempty_line() {
     let temp = tempfile::tempdir().expect("tempdir");
     let script_path = temp.path().join("custom-bin.sh");
     let script = r#"#!/bin/sh
-echo "custom-bin iroha3 3.2.1"
+echo "custom-bin 3.2.1"
 exit 0
 "#;
     fs::write(&script_path, script).expect("write version script");
@@ -240,31 +240,11 @@ exit 0
     }
     let (raw, version) =
         probe_version_output(&script_path, "custom-bin").expect("version probe succeeds");
-    assert_eq!(version.as_deref(), Some("custom-bin iroha3 3.2.1"));
-    let build_line = infer_build_line("custom-bin", &script_path, raw.as_deref());
-    assert_eq!(build_line, BuildLine::Iroha3);
-}
-#[test]
-fn probe_version_output_honors_iroha2_output() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let script_path = temp.path().join("weird-name.sh");
-    let script = r#"#!/bin/sh
-echo "my-custom iroha2 build"
-exit 0
-"#;
-    fs::write(&script_path, script).expect("write version script");
-    #[cfg(unix)]
-    {
-        let mut perms = fs::metadata(&script_path)
-            .expect("version script metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&script_path, perms).expect("set version script perms");
-    }
-    let (raw, _) =
-        probe_version_output(&script_path, "weird-name").expect("version probe succeeds");
-    let build_line = infer_build_line("weird-name", &script_path, raw.as_deref());
-    assert_eq!(build_line, BuildLine::Iroha2);
+    assert_eq!(version.as_deref(), Some("custom-bin 3.2.1"));
+    assert!(
+        raw.as_deref()
+            .is_some_and(|raw| raw.contains("custom-bin 3.2.1"))
+    );
 }
 #[test]
 fn compatibility_summary_includes_profile_and_fingerprint() {
@@ -400,7 +380,7 @@ esac
             fs::set_permissions(&script_path, perms).expect("set script perms");
         }
         let log_path = root.join("kagami_stub.log");
-        let iroha_stub = write_version_stub(root, "iroha-stub", "iroha3");
+        let iroha_stub = write_version_stub(root, "iroha-stub", "3.0.0");
         let path_guard = EnvVarGuard::set("MOCHI_KAGAMI", script_path.as_os_str());
         let log_guard = EnvVarGuard::set("MOCHI_KAGAMI_LOG", log_path.as_os_str());
         let irohad_guard = EnvVarGuard::set("MOCHI_IROHAD", iroha_stub.as_os_str());
@@ -517,7 +497,7 @@ esac
             perms.set_mode(0o755);
             fs::set_permissions(&script_path, perms).expect("set standalone script permissions");
         }
-        let iroha_stub = write_version_stub(root, "kagami-override-iroha", "iroha3");
+        let iroha_stub = write_version_stub(root, "kagami-override-iroha", "3.0.0");
         let irohad_guard = EnvVarGuard::set("MOCHI_IROHAD", iroha_stub.as_os_str());
         let iroha_cli_guard = EnvVarGuard::set("MOCHI_IROHA_CLI", iroha_stub.as_os_str());
         Self {
@@ -654,12 +634,6 @@ fn binary_paths_auto_builds_when_enabled() {
         .probe_versions()
         .expect("probe versions should succeed");
     assert_eq!(versions.len(), 3);
-    assert!(
-        versions
-            .iter()
-            .all(|info| info.build_line == BuildLine::Iroha3),
-        "auto-built binaries should report iroha3 build-line"
-    );
     let log = fs::read_to_string(&cargo_log).expect("read cargo log");
     assert!(
         log.lines()
@@ -723,7 +697,7 @@ fn binary_paths_resolve_iroha_cli_alias_without_building() {
     fs::create_dir_all(&empty_target_dir).expect("create target dir");
     let path_dir = temp.path().join("bin");
     fs::create_dir_all(&path_dir).expect("create bin dir");
-    let iroha_stub_script = write_version_stub(&path_dir, "iroha", "iroha3");
+    let iroha_stub_script = write_version_stub(&path_dir, "iroha", "3.0.0");
     let iroha_stub = path_dir.join(format!("iroha{}", env::consts::EXE_SUFFIX));
     fs::copy(&iroha_stub_script, &iroha_stub).expect("copy iroha alias stub");
     #[cfg(unix)]
@@ -758,33 +732,6 @@ fn binary_paths_resolve_iroha_cli_alias_without_building() {
     assert_eq!(resolved, iroha_stub.as_path());
     assert_eq!(binaries.iroha_cli_source, BinarySource::PathSearch);
     assert!(!binaries.iroha_cli_build_attempted);
-}
-#[cfg(unix)]
-#[test]
-fn binary_paths_rejects_build_line_mismatch() {
-    let _env = env_lock().lock().expect("env lock");
-    let temp = tempfile::tempdir().expect("tempdir");
-    let iroha2_stub = write_version_stub(temp.path(), "iroha2-stub", "iroha2");
-    let iroha3_stub = write_version_stub(temp.path(), "iroha3-stub", "iroha3");
-    let mut binaries = BinaryPaths::default()
-        .irohad(iroha2_stub)
-        .kagami(iroha3_stub.clone())
-        .iroha_cli(iroha3_stub);
-    let err = binaries
-        .verify_build_line(BuildLine::Iroha3)
-        .expect_err("iroha2 binary should fail build-line verification");
-    match err {
-        SupervisorError::BuildLineMismatch {
-            binary,
-            expected,
-            found,
-        } => {
-            assert_eq!(binary, "iroha3d");
-            assert_eq!(expected, BuildLine::Iroha3);
-            assert_eq!(found, BuildLine::Iroha2);
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
 }
 #[test]
 fn builder_creates_peer_configs() {
@@ -1925,7 +1872,6 @@ fn export_snapshot_preserves_multilane_catalog_and_ports() {
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
     let mut nexus = toml::Table::new();
-    nexus.insert("enabled".into(), toml::Value::Boolean(true));
     let mut lane0 = toml::Table::new();
     lane0.insert("alias".into(), toml::Value::String("core".into()));
     lane0.insert("index".into(), toml::Value::Integer(0));
@@ -2029,10 +1975,7 @@ fn export_snapshot_preserves_multilane_catalog_and_ports() {
             .get("nexus")
             .and_then(toml::Value::as_table)
             .expect("nexus config");
-        assert_eq!(
-            nexus_table.get("enabled").and_then(toml::Value::as_bool),
-            Some(true)
-        );
+        assert!(!nexus_table.contains_key("enabled"));
         assert_eq!(
             nexus_table
                 .get("lane_count")

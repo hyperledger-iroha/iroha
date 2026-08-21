@@ -375,14 +375,14 @@ _OFFLINE_TOOLCHAIN_SDK_PLANS = (
         "--workspace",
     ),
     _planned(
-        "g-unit-production-855",
+        "g-unit-production-864",
         "release-runner",
-        "operation:g-unit-production-855.v1",
+        "operation:g-unit-production-864.v1",
     ),
     _planned(
-        "g-unit-focused-525",
+        "g-unit-focused-530",
         "release-runner",
-        "operation:g-unit-focused-525.v1",
+        "operation:g-unit-focused-530.v1",
     ),
     _planned(
         "offline-workspace-clippy",

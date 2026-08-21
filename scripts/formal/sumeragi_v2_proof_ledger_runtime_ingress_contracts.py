@@ -63,6 +63,8 @@ fn new(limit: usize, context_id: wire::HeightContextId, height: wire::Height) ->
         name: str,
         context: tuple[tuple[str, ...], ...],
         description: str,
+        *,
+        expected_attributes: tuple[str, ...] = (),
     ) -> RustItem | None:
         matches = tuple(
             item for item in rust_items(runner_source, name) if item.brace_context == context
@@ -71,7 +73,14 @@ fn new(limit: usize, context_id: wire::HeightContextId, height: wire::Height) ->
             errors.append(f"{runner_path}: require exactly one {description}; found {len(matches)}")
             return None
         item = matches[0]
-        _require_rust_item_context(runner_path, item, context, description, errors)
+        _require_rust_item_context(
+            runner_path,
+            item,
+            context,
+            description,
+            errors,
+            expected_attributes=expected_attributes,
+        )
         return item
 
     current_turn_structs = rust_struct_items(runner_source, "LifecycleCurrentRunnerTurn")
@@ -132,7 +141,10 @@ fn next_current(&mut self) -> Option<LifecycleCurrentRunnerTurn<'_>> {
         errors,
     )
     turn_item = exact_context_item(
-        "turn", current_context, "borrow-bound outer-ingress turn projection"
+        "turn",
+        current_context,
+        "test-only borrow-bound outer-ingress turn projection",
+        expected_attributes=("#[cfg(test)]",),
     )
     _require_exact_rust_tokens(
         runner_path,
@@ -219,12 +231,14 @@ def _borrow_bound_outer_ingress_order_errors(
     """Require one current-turn borrow and Runtime service before ingress."""
 
     sequences = (
-        "let mut outer_turns = outer_ingress_turns(limit, executor.context().id(), executor.context().height);",
+        "let mut outer_turns = outer_ingress_turns(limit, context_id, height);",
         "while let Some(current_turn) = outer_turns.next_current()",
-        "let turn = current_turn.turn();",
-        "if turn == OuterIngressTurn::Runtime",
+        "match current_turn.target()",
+        "LifecycleRunnerRankTarget::Completion =>",
+        "LifecycleRunnerRankTarget::Runtime =>",
         "advance_executor(receiver, executor, services, 1)?",
-        "try_recv_if_checked_retiring_obsolete_with_barrier_bypass(",
+        "LifecycleRunnerRankTarget::Ingress =>",
+        "activated.drive_ingress_turn(current_turn)",
     )
     tokens = rust_code_tokens("" if drain is None else drain.source)
     positions = tuple(
@@ -238,8 +252,8 @@ def _borrow_bound_outer_ingress_order_errors(
     ):
         return [
             f"{drain_path}: every ordinary outer ingress occurrence must be preceded "
-            "by one borrow-bound Completion/Runtime cursor turn and serialized "
-            "advance_executor turn"
+            "by the borrow-bound Completion/Runtime lifecycle turns and serialized "
+            "advance_executor turn before the single ingress owner"
         ]
     return []
 

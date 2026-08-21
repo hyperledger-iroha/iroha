@@ -6,6 +6,7 @@ import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTag
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
@@ -52,6 +53,9 @@ internal object VerifyingKeyDraftBinding {
         }
         require(payload.networkId == expectedNetworkId && payload.authority == authority) {
             "verifying-key draft transaction payload changed the requested network or authority"
+        }
+        require(payload.admissionIntent == TransactionAdmissionIntent.QUEUE_PLAN_SYNCED) {
+            "verifying-key draft transaction payload admission intent must be QueuePlanSynced"
         }
         val executable = payload.executable as? Executable.Instructions
             ?: throw IllegalArgumentException(

@@ -155,7 +155,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "block header: height={} prev={:?} txs={}",
                 header.height(),
                 header.prev_block_hash(),
-                block.transactions_vec().len()
+                block.external_transactions().len()
             );
             println!("block has results: {}", block.has_results());
             println!("block hash: {:?}", block.hash());
@@ -163,8 +163,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!(
                 "transaction signature lens: {:?}",
                 block
-                    .transactions_vec()
-                    .iter()
+                    .external_transactions()
                     .map(|tx| {
                         let mut buf = Vec::new();
                         norito::core::serialize_to_buffer(tx.signature(), &mut buf)
@@ -173,7 +172,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     })
                     .collect::<Vec<_>>()
             );
-            for (idx, tx) in block.transactions_vec().iter().enumerate() {
+            for (idx, tx) in block.external_transactions().enumerate() {
                 println!("tx[{idx}] authority={}", tx.authority());
                 match tx.instructions() {
                     Executable::Instructions(instrs) => {

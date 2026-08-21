@@ -265,7 +265,7 @@ fn block_history_tamper_rejected_without_mutation() {
     let mut tampered_header = signed_rewind.header();
     tampered_header.set_prev_block_hash(None);
     let mut tampered_builder = ModelBlockBuilder::new(tampered_header);
-    for tx in signed_rewind.transactions_vec().iter().cloned() {
+    for tx in signed_rewind.external_transactions().cloned() {
         tampered_builder.push_transaction(tx);
     }
     let signed_rewind = tampered_builder.build_with_signature(0, peer_key.private_key());

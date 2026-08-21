@@ -568,8 +568,17 @@ def validate_peer_health(
 
     lifecycle = getter(f"{root}/v1/nexus/lifecycle", 2.0)
     lanes = lifecycle.get("lanes")
-    if lifecycle.get("version") != 1 or lifecycle.get("nexus_enabled") is not True:
+    if lifecycle.get("version") != 1:
         fail(f"{peer.label} Nexus lifecycle identity is invalid")
+    if set(lifecycle) != {
+        "version",
+        "lane_count",
+        "lanes",
+        "catalog_hash",
+        "incarnations",
+        "incarnation_root",
+    }:
+        fail(f"{peer.label} Nexus lifecycle layout is not current V1")
     lane_count = lifecycle.get("lane_count")
     if (
         not isinstance(lane_count, int)

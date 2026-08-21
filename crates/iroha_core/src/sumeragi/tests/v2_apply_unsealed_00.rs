@@ -365,7 +365,7 @@ impl ApplyFixture {
     fn new_with_options(
         include_lane_payload: bool,
         include_projection_policies: bool,
-        enable_nexus: bool,
+        include_lane_lifecycle: bool,
         include_native_lane: bool,
     ) -> Self {
         let chain_id: ChainId = "sumeragi-v2-apply-crash-test".into();
@@ -407,7 +407,7 @@ impl ApplyFixture {
             leader_seed: [0x63; 32],
         };
         context.validate().expect("valid fixture context");
-        let kura = if enable_nexus {
+        let kura = if include_lane_lifecycle {
             crate::sumeragi::v2_lane_work::tests::locked_lane_work_test_kura(
                 iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             )
@@ -430,13 +430,6 @@ impl ApplyFixture {
             LiveQueryStore::start_test(),
             chain_id.clone(),
         );
-        if enable_nexus {
-            let mut nexus = state.nexus_snapshot();
-            nexus.enabled = true;
-            state
-                .set_nexus(nexus)
-                .expect("enable Nexus for lane-lifecycle apply fixture");
-        }
         let validator_set_pops = keys
             .iter()
             .map(|key| {
@@ -914,26 +907,6 @@ impl ApplyFixture {
         assert!(
             commit_manifest.binds_authenticated_v2_commit_authority(&artifact),
             "manifest must retain the exact QC roots and complete v2 authority seal"
-        );
-        assert!(
-            state
-                .world_view()
-                .commit_qcs()
-                .get(&self.body.hash())
-                .is_none(),
-            "Sumeragi v2 finality must not be projected into the legacy commit-QC store"
-        );
-        assert!(
-            state
-                .commit_roster_snapshot_for_block(self.context.height, self.body.hash())
-                .is_none(),
-            "Sumeragi v2 finality must not populate the legacy commit-roster journal"
-        );
-        assert!(
-            self.kura
-                .read_roster_metadata(self.context.height)
-                .is_none(),
-            "Sumeragi v2 finality must not populate the legacy roster sidecar"
         );
     }
 }
@@ -1417,7 +1390,6 @@ fn pending_merge_entry(
         activation_root: Hash::new(b"v2 apply decided-sidecar activations"),
         lane_snapshots: Vec::new(),
         lane_drain_certificates: Vec::new(),
-        queue_plan_admissions: Vec::new(),
         execution_batch: None,
         global_state_root: Hash::new(label),
         merge_qc: MergeQuorumCertificate::new(
@@ -2025,7 +1997,7 @@ fn reserve_autonomous_crash_batch(
     fixture: &ApplyFixture,
     queue: &Arc<Queue>,
     producer: &KeyPair,
-) -> (LaneExecutablePayloadV1, Vec<HashOf<SignedTransaction>>) {
+) -> (LaneExecutablePayloadV1, Vec<HashOf<TransactionEntrypoint>>) {
     let transactions = (0_u8..4)
         .map(|index| {
             TransactionBuilder::new(
@@ -2042,7 +2014,7 @@ fn reserve_autonomous_crash_batch(
         .collect::<Vec<_>>();
     let expected_fifo = transactions
         .iter()
-        .map(|transaction| transaction.hash())
+        .map(|transaction| transaction.hash_as_entrypoint())
         .collect::<Vec<_>>();
     let entrypoints = transactions
         .iter()
@@ -2135,7 +2107,7 @@ fn reserve_autonomous_crash_batch(
     assert_eq!(
         reserved
             .iter()
-            .map(|reserved| reserved.key().signed_transaction_hash)
+            .map(|reserved| reserved.key().entrypoint_hash)
             .collect::<Vec<_>>(),
         expected_fifo[..3],
         "fixture must reserve the original FIFO prefix"
@@ -2278,7 +2250,7 @@ fn reserve_canonical_successor_autonomous_batch(
     queue: &Arc<Queue>,
     context: &wire::HeightContext,
     count: usize,
-) -> (LaneExecutablePayloadV1, Vec<HashOf<SignedTransaction>>) {
+) -> (LaneExecutablePayloadV1, Vec<HashOf<TransactionEntrypoint>>) {
     reserve_canonical_successor_autonomous_batch_with_instructions(
         fixture,
         queue,
@@ -2302,7 +2274,7 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
     instructions: impl Fn(usize) -> Vec<InstructionBox>,
     sort_by_signed_transaction_hash: bool,
     native_receipt_builder: Option<ApplyNativeReceiptBuilder>,
-) -> (LaneExecutablePayloadV1, Vec<HashOf<SignedTransaction>>) {
+) -> (LaneExecutablePayloadV1, Vec<HashOf<TransactionEntrypoint>>) {
     assert_eq!(fixture.state.committed_height(), 1);
     assert_eq!(context.height, 2);
     assert!((1..=16).contains(&count));
@@ -2331,12 +2303,12 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
     if sort_by_signed_transaction_hash {
         transactions.sort_by_key(|transaction| transaction.hash());
     }
-    let expected_fifo = transactions
+    let signed_transaction_hashes = transactions
         .iter()
         .map(|transaction| transaction.hash())
         .collect::<Vec<_>>();
     assert_eq!(
-        expected_fifo
+        signed_transaction_hashes
             .iter()
             .copied()
             .collect::<std::collections::BTreeSet<_>>()
@@ -2348,6 +2320,10 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
         .iter()
         .cloned()
         .map(TransactionEntrypoint::External)
+        .collect::<Vec<_>>();
+    let expected_fifo = entrypoints
+        .iter()
+        .map(TransactionEntrypoint::hash)
         .collect::<Vec<_>>();
     let mut planned_routing = Vec::with_capacity(count);
     for transaction in &transactions {
@@ -2446,7 +2422,7 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
     assert_eq!(
         reserved
             .iter()
-            .map(|reservation| reservation.key().signed_transaction_hash)
+            .map(|reservation| reservation.key().entrypoint_hash)
             .collect::<Vec<_>>(),
         expected_fifo,
         "canonical autonomous reservation must preserve FIFO selection order"
@@ -2778,11 +2754,8 @@ fn deferred_canonical_carrier_startup_fixture() -> DeferredCanonicalCarrierStart
         .persist_merge_lane_block_application_receipts(&entry, 2, carrier.hash())
         .expect("persist deferred carrier application receipts");
     commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
-    fixture.state.record_direct_committed_transactions(
-        [
-            first_key.signed_transaction_hash,
-            second_key.signed_transaction_hash,
-        ],
+    fixture.state.record_direct_committed_entrypoints(
+        [first_key.entrypoint_hash, second_key.entrypoint_hash],
         NonZeroUsize::new(2).expect("deferred carrier State height"),
     );
     drop(absent_queue);

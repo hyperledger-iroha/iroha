@@ -220,7 +220,7 @@ The nested tuple layout is exactly the production `AsyncAllVars` projection:
 the duplicated GST scalar, 49 Core components, 46 scheduler/transport
 components, five responsive-node recovery components, three monotone producer-
 journal components, the proof-only fixed-corridor receipt set, and the
-per-node post-Serve producer-episode debt function.  The
+per-node post-Serve ProducerTurn debt function.  The
 duplicated scalar is pinned to Core component
 7; retaining that established semantic shape makes source drift explicit
 rather than silently normalizing the authoritative action tuple.  Immediately
@@ -253,7 +253,7 @@ IndexedProducer(initialContext, component) ==
 IndexedFixedCorridorDeadlines(initialContext) ==
   indexedAsyncState[initialContext][6]
 
-IndexedServeProducerEpisodeDue(initialContext) ==
+IndexedServeProducerTurnDue(initialContext) ==
   indexedAsyncState[initialContext][7]
 
 IndexedAsyncStateAt(initialContext) ==
@@ -394,8 +394,8 @@ IndexedAsync(initialContext) ==
        asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
          IndexedFixedCorridorDeadlines(initialContext),
-       asyncServeProducerEpisodeDue <-
-         IndexedServeProducerEpisodeDue(initialContext)
+       asyncServeProducerTurnReady <-
+         IndexedServeProducerTurnDue(initialContext)
 
 (***************************************************************************
 The context-indexed proof provider uses the identical production state tuple.
@@ -513,8 +513,8 @@ IndexedAsyncSafetyProof(initialContext) ==
        asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
          IndexedFixedCorridorDeadlines(initialContext),
-       asyncServeProducerEpisodeDue <-
-         IndexedServeProducerEpisodeDue(initialContext)
+       asyncServeProducerTurnReady <-
+         IndexedServeProducerTurnDue(initialContext)
 
 THEOREM IndexedAsyncInitEstablishesStrongTypeInvariant ==
   \A initialContext:

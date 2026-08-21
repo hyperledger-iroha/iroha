@@ -44,6 +44,12 @@ fn peer_env_to_value(env: &PeerEnv<'_>) -> norito::json::Value {
         "API_ADDRESS".into(),
         Value::String(env.api_address.to_string()),
     );
+    if let Some(sumeragi_body_bytes) = env.sumeragi_body_bytes {
+        map.insert(
+            "SUMERAGI_QUEUES_BODY_BYTES".into(),
+            Value::String(sumeragi_body_bytes.to_string()),
+        );
+    }
     if !env.trusted_peers.is_empty() {
         let peers: Vec<String> = env
             .trusted_peers
@@ -140,6 +146,7 @@ mod json_value_tests {
             ports,
             &chain,
             &topology,
+            Some(123),
             trusted_pops.clone(),
         );
         let actual = peer_env_to_value(&env);
@@ -171,6 +178,12 @@ mod json_value_tests {
             "API_ADDRESS".into(),
             Value::String(env.api_address.to_string()),
         );
+        if let Some(sumeragi_body_bytes) = env.sumeragi_body_bytes {
+            expected.insert(
+                "SUMERAGI_QUEUES_BODY_BYTES".into(),
+                Value::String(sumeragi_body_bytes.to_string()),
+            );
+        }
         if !env.trusted_peers.is_empty() {
             let peers: Vec<String> = env
                 .trusted_peers
@@ -378,6 +391,7 @@ struct PeerEnv<'a> {
     p2p_public_address: iroha_primitives::addr::SocketAddr,
     p2p_address: iroha_primitives::addr::SocketAddr,
     api_address: iroha_primitives::addr::SocketAddr,
+    sumeragi_body_bytes: Option<usize>,
     trusted_peers: std::collections::BTreeSet<&'a iroha_data_model::peer::Peer>,
     trusted_peers_pop: std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
 }
@@ -388,6 +402,7 @@ impl<'a> PeerEnv<'a> {
         [port_p2p, port_api]: [u16; 2],
         chain: &'a iroha_data_model::ChainId,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
+        sumeragi_body_bytes: Option<usize>,
         trusted_peers_pop: std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
     ) -> Self {
         let p2p_public_address = topology
@@ -405,6 +420,7 @@ impl<'a> PeerEnv<'a> {
             p2p_public_address,
             p2p_address: iroha_primitives::addr::socket_addr!(0.0.0.0:port_p2p),
             api_address: iroha_primitives::addr::socket_addr!(0.0.0.0:port_api),
+            sumeragi_body_bytes,
             trusted_peers: topology
                 .iter()
                 .filter(|&peer| peer.id().public_key() != public_key)
@@ -717,9 +733,8 @@ fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> Strin
             format!(
                 "{materialize}exec env -i PATH=/usr/local/bin:/usr/bin:/bin \
                  HOME=/opt/iroha USER=iroha \
-                 IROHA_BUILD_LINE={} iroha3d{sora} --config /config/peer.toml \
-                 --config-blake3 {config_blake3}",
-                runtime.build_line.as_str()
+                 iroha3d{sora} --config /config/peer.toml \
+                 --config-blake3 {config_blake3}"
             )
         },
     );
@@ -847,6 +862,7 @@ impl<'a> BuildOrPull<'a> {
         chain: &'a iroha_data_model::ChainId,
         network: &'a std::collections::BTreeMap<u16, peer::PeerInfo>,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
+        sumeragi_body_bytes: Option<usize>,
     ) -> Self {
         let trusted_peers_pop = trusted_peers_pop_map(network);
         Self::Pull {
@@ -858,6 +874,7 @@ impl<'a> BuildOrPull<'a> {
                 chain,
                 network,
                 topology,
+                sumeragi_body_bytes,
                 &trusted_peers_pop,
             ),
         }
@@ -870,6 +887,7 @@ impl<'a> BuildOrPull<'a> {
         chain: &'a iroha_data_model::ChainId,
         network: &'a std::collections::BTreeMap<u16, peer::PeerInfo>,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
+        sumeragi_body_bytes: Option<usize>,
     ) -> Self {
         let trusted_peers_pop = trusted_peers_pop_map(network);
         let mut peers = network.iter();
@@ -886,6 +904,7 @@ impl<'a> BuildOrPull<'a> {
                     prepared_runtime.and_then(|configs| configs.get(primary_index)),
                     chain,
                     topology,
+                    sumeragi_body_bytes,
                     &trusted_peers_pop,
                     primary_info,
                 ),
@@ -901,6 +920,7 @@ impl<'a> BuildOrPull<'a> {
                             prepared_runtime.and_then(|configs| configs.get(index)),
                             chain,
                             topology,
+                            sumeragi_body_bytes,
                             &trusted_peers_pop,
                             info,
                         ),
@@ -920,6 +940,7 @@ impl<'a> BuildOrPull<'a> {
         runtime: Option<&'a PreparedRuntimeConfig>,
         chain: &'a iroha_data_model::ChainId,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
+        sumeragi_body_bytes: Option<usize>,
         trusted_peers_pop: &std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
         peer_info: &'a peer::PeerInfo,
     ) -> Irohad<'a, Image> {
@@ -931,6 +952,7 @@ impl<'a> BuildOrPull<'a> {
                 peer_info.ports,
                 chain,
                 topology,
+                sumeragi_body_bytes,
                 trusted_peers_pop.clone(),
             ),
             peer_info.ports,
@@ -951,6 +973,7 @@ impl<'a> BuildOrPull<'a> {
         chain: &'a iroha_data_model::ChainId,
         network: &'a std::collections::BTreeMap<u16, peer::PeerInfo>,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
+        sumeragi_body_bytes: Option<usize>,
         trusted_peers_pop: &std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
     ) -> std::collections::BTreeMap<IrohadRef, Irohad<'a, Image>> {
         network
@@ -965,6 +988,7 @@ impl<'a> BuildOrPull<'a> {
                         prepared_runtime.and_then(|configs| configs.get(index)),
                         chain,
                         topology,
+                        sumeragi_body_bytes,
                         trusted_peers_pop,
                         info,
                     ),
@@ -1020,6 +1044,7 @@ impl<'a> DockerCompose<'a> {
             chain,
             network,
             topology,
+            sumeragi_body_bytes,
             prepared_runtime,
         }: &'a PeerSettings,
         genesis: &'a GenesisArtifactSettings,
@@ -1036,6 +1061,7 @@ impl<'a> DockerCompose<'a> {
                         chain,
                         network,
                         topology,
+                        *sumeragi_body_bytes,
                     )
                 },
                 |build| {
@@ -1047,6 +1073,7 @@ impl<'a> DockerCompose<'a> {
                         chain,
                         network,
                         topology,
+                        *sumeragi_body_bytes,
                     )
                 },
             ),
@@ -1093,7 +1120,6 @@ impl<'a> DockerCompose<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BASE_PORT_API, BASE_PORT_P2P};
     use std::collections::{BTreeMap, HashMap};
     impl<'a> From<PeerEnv<'a>> for iroha_config::base::env::MockEnv {
         fn from(env: PeerEnv<'a>) -> Self {
@@ -1116,59 +1142,76 @@ mod tests {
     }
     #[test]
     fn peer_env_produces_exhaustive_config() {
-        let (key_pair, pop) = peer::generate_bls_key_pair(None, &[])
-            .expect("random BLS key generation should succeed");
-        let transport_key_pair = peer::generate_soranet_transport_key_pair(None, &[])
-            .expect("random SoraNet transport key generation should succeed");
-        assert_eq!(
-            transport_key_pair.0.algorithm(),
-            iroha_crypto::Algorithm::Ed25519
-        );
-        assert_ne!(transport_key_pair.0, key_pair.0);
-        iroha_crypto::KeyPair::new(
-            transport_key_pair.0.clone(),
-            transport_key_pair
-                .1
-                .as_ref()
-                .expect("transport private key")
-                .0
-                .clone(),
-        )
-        .expect("transport key pair must match");
-        let mut trusted_pops = BTreeMap::new();
-        trusted_pops.insert(key_pair.0.clone(), pop);
         let genesis_public_key = peer::generate_key_pair(None, &[])
             .expect("random genesis key generation should succeed")
             .0;
-        let ports = [BASE_PORT_P2P, BASE_PORT_API];
         let chain = peer::chain();
-        let topology = [peer::peer("dummy", BASE_PORT_API, key_pair.0.clone())].into();
-        let env = PeerEnv::new(
-            &key_pair,
-            &transport_key_pair,
-            ports,
-            &chain,
-            &topology,
-            trusted_pops,
-        );
-        let mut value = peer_env_to_value(&env);
-        let Value::Object(ref mut map) = value else {
-            unreachable!("peer environment is an object");
-        };
-        map.insert(
-            "GENESIS_PUBLIC_KEY".into(),
-            Value::String(genesis_public_key.to_string()),
-        );
-        map.insert(
-            "GENESIS_EXPECTED_HASH".into(),
-            Value::String(
-                "0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
-            ),
-        );
-        let mock_env = mock_env_from_value(value);
-        let reader = iroha_config::base::read::ConfigReader::new().with_env(mock_env.clone());
-        let _ = iroha_config::parameters::user::Root::read_and_complete(reader)
-            .expect("config in env should be exhaustive");
-        assert!(mock_env.unvisited().is_empty());
+        for validator_count in [4_u16, 7, 31] {
+            let network = peer::network(
+                validator_count,
+                Some(b"iroha-swarm-canonical-config-admission"),
+            )
+            .expect("derive deterministic validator network");
+            let topology = peer::topology(network.values());
+            let local = network.get(&0).expect("network has a first validator");
+            assert_eq!(
+                local.soranet_transport_key_pair.0.algorithm(),
+                iroha_crypto::Algorithm::Ed25519
+            );
+            assert_ne!(local.soranet_transport_key_pair.0, local.key_pair.0);
+            iroha_crypto::KeyPair::new(
+                local.soranet_transport_key_pair.0.clone(),
+                local
+                    .soranet_transport_key_pair
+                    .1
+                    .as_ref()
+                    .expect("transport private key")
+                    .0
+                    .clone(),
+            )
+            .expect("transport key pair must match");
+            let trusted_pops = network
+                .values()
+                .map(|peer| (peer.key_pair.0.clone(), peer.pop.clone()))
+                .collect::<BTreeMap<_, _>>();
+            let sumeragi_body_bytes = iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
+                usize::from(validator_count),
+                iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
+                    .get(),
+                iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
+            )
+            .expect("legal validator fixture byte geometry is representable");
+            let env = PeerEnv::new(
+                &local.key_pair,
+                &local.soranet_transport_key_pair,
+                local.ports,
+                &chain,
+                &topology,
+                Some(sumeragi_body_bytes),
+                trusted_pops,
+            );
+            let mut value = peer_env_to_value(&env);
+            let Value::Object(ref mut map) = value else {
+                unreachable!("peer environment is an object");
+            };
+            map.insert(
+                "GENESIS_PUBLIC_KEY".into(),
+                Value::String(genesis_public_key.to_string()),
+            );
+            map.insert(
+                "GENESIS_EXPECTED_HASH".into(),
+                Value::String(
+                    "0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
+                ),
+            );
+            let mock_env = mock_env_from_value(value);
+            let reader = iroha_config::base::read::ConfigReader::new().with_env(mock_env.clone());
+            let config = iroha_config::parameters::user::Root::read_and_complete(reader)
+                .expect("config in env should be exhaustive");
+            config
+                .parse()
+                .expect("generated environment must pass canonical config admission");
+            assert!(mock_env.unvisited().is_empty());
+        }
     }
 }

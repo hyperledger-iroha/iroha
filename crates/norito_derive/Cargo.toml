@@ -1,5 +1,6 @@
 [package]
 name = "norito_derive"
+autotests = false
 edition.workspace = true
 version.workspace = true
 authors.workspace = true
@@ -26,5 +27,5 @@ optional = true
 norito = { path = "../norito", default-features = false, features = ["node-codec"] }
 
 [[test]]
-name = "ui"
-required-features = ["trybuild-tests"]
+name = "strict_json"
+path = "tests/strict_json.rs"

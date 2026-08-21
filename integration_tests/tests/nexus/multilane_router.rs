@@ -56,6 +56,10 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
                 settlement: None,
                 storage: LaneStorageProfile::FullReplica,
                 proof_scheme: DaProofScheme::default(),
+                manifest_policy: Default::default(),
+                confidential_compute: None,
+                scheduler: None,
+                settlement_buffer: None,
                 metadata: BTreeMap::default(),
             },
             LaneConfigMetadata {
@@ -70,6 +74,10 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
                 settlement: None,
                 storage: LaneStorageProfile::FullReplica,
                 proof_scheme: DaProofScheme::default(),
+                manifest_policy: Default::default(),
+                confidential_compute: None,
+                scheduler: None,
+                settlement_buffer: None,
                 metadata: BTreeMap::default(),
             },
             LaneConfigMetadata {
@@ -84,6 +92,10 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
                 settlement: None,
                 storage: LaneStorageProfile::FullReplica,
                 proof_scheme: DaProofScheme::default(),
+                manifest_policy: Default::default(),
+                confidential_compute: None,
+                scheduler: None,
+                settlement_buffer: None,
                 metadata: BTreeMap::default(),
             },
         ],
@@ -155,7 +167,6 @@ fn install_state_nexus(
     let kura = Kura::blank_kura_for_testing();
     let state = new_state(kura);
     let mut nexus = iroha_config::parameters::actual::Nexus {
-        enabled: true,
         routing_policy: policy,
         dataspace_catalog,
         lane_config: LaneDerivedConfig::from_catalog(&lane_catalog),
@@ -253,8 +264,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
-        block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-        roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+        lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let (kura, block_count) =
@@ -264,7 +274,6 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
     state.prepare_configured_primary_geometry_anchor(&lane_catalog)?;
     state.restore_kura_lane_segments_before_startup_replay()?;
     state.set_nexus_from_config(iroha_config::parameters::actual::Nexus {
-        enabled: true,
         lane_catalog: lane_catalog.clone(),
         configured_lane_catalog: lane_catalog.clone(),
         lane_config: lane_config.clone(),
@@ -339,14 +348,18 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
             ),
         ))],
     );
-    let decision = router.route(&governance_tx);
+    let decision = router
+        .try_route(&governance_tx)
+        .expect("governance routing should resolve");
     assert_eq!(decision.lane_id, LaneId::new(1));
     assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
 
-    let decision = router.route(&zk_tx);
+    let decision = router.try_route(&zk_tx).expect("zk routing should resolve");
     assert_eq!(decision.lane_id, LaneId::new(2));
     assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
-    let decision = router.route(&default_tx);
+    let decision = router
+        .try_route(&default_tx)
+        .expect("default routing should resolve");
     assert_eq!(decision.lane_id, LaneId::new(0));
     assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
     drop(kura);
@@ -377,7 +390,9 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
             DomainId::try_new("governed", "governance")?,
         )))],
     );
-    let governance = router.route_with_view(&governance_tx, &state.view());
+    let governance = router
+        .try_route_with_view(&governance_tx, &state.view())
+        .expect("governance routing should resolve");
     assert_eq!(governance.lane_id, LaneId::new(1));
     assert_eq!(governance.dataspace_id, DataSpaceId::UNIVERSAL);
     let zk_tx = build_tx(
@@ -395,7 +410,9 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
             ),
         ))],
     );
-    let zk = router.route_with_view(&zk_tx, &state.view());
+    let zk = router
+        .try_route_with_view(&zk_tx, &state.view())
+        .expect("zk routing should resolve");
     assert_eq!(zk.lane_id, LaneId::new(2));
     assert_eq!(zk.dataspace_id, DataSpaceId::UNIVERSAL);
     let mut lanes_seen = std::collections::BTreeSet::new();
@@ -413,7 +430,9 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
                 iroha_data_model::role::Role::new(role_id, authority.clone()),
             ))],
         );
-        let decision = router.route_with_view(&default_tx, &state.view());
+        let decision = router
+            .try_route_with_view(&default_tx, &state.view())
+            .expect("default routing should resolve");
         assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
         assert!(
             matches!(
@@ -462,6 +481,10 @@ fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Res
                 settlement: None,
                 storage: LaneStorageProfile::FullReplica,
                 proof_scheme: DaProofScheme::default(),
+                manifest_policy: Default::default(),
+                confidential_compute: None,
+                scheduler: None,
+                settlement_buffer: None,
                 metadata: BTreeMap::default(),
             },
         },
@@ -508,7 +531,9 @@ fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Res
                     iroha_data_model::role::Role::new(role_id, authority.clone()),
                 ))],
             );
-            let decision = router.route_with_view(&default_tx, &state.view());
+            let decision = router
+                .try_route_with_view(&default_tx, &state.view())
+                .unwrap_or_else(|err| panic!("{}: default route failed: {err}", case.name));
             assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
             lanes_seen.insert(decision.lane_id);
         }
@@ -554,7 +579,9 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() -> R
                 iroha_data_model::role::Role::new(role_id, authority.clone()),
             ))],
         );
-        let decision = router.route_with_view(&default_tx, &state.view());
+        let decision = router
+            .try_route_with_view(&default_tx, &state.view())
+            .expect("disabled-autoscale default routing should resolve");
         assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
         lanes_seen.insert(decision.lane_id);
     }
@@ -566,7 +593,7 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() -> R
     Ok(())
 }
 #[test]
-fn multilane_router_ignores_stale_autoscale_lanes_when_nexus_disabled() -> Result<()> {
+fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() -> Result<()> {
     let (base_lane_catalog, dataspace_catalog, policy) = sample_catalogs();
     let mut lanes = base_lane_catalog.lanes().to_vec();
     lanes.push(autoscale_elastic_lane(LaneId::new(3), 7));
@@ -580,7 +607,7 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_nexus_disabled() -> Resul
     ));
     let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))?;
     seed_committed_height(&mut state, 7);
-    state.nexus.write().enabled = false;
+    state.nexus.write().autoscale.enabled = false;
     let (authority, keypair) = gen_account_in("nexus");
     let network_id = *state.network_id_ref();
     let mut lanes_seen = std::collections::BTreeSet::new();
@@ -598,14 +625,16 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_nexus_disabled() -> Resul
                 iroha_data_model::role::Role::new(role_id, authority.clone()),
             ))],
         );
-        let decision = router.route_with_view(&default_tx, &state.view());
+        let decision = router
+            .try_route_with_view(&default_tx, &state.view())
+            .expect("disabled-autoscale default routing should resolve");
         assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
         lanes_seen.insert(decision.lane_id);
     }
     assert_eq!(
         lanes_seen,
         std::collections::BTreeSet::from([LaneId::new(0)]),
-        "disabled Nexus must keep default-route traffic on the base lane even when stale managed lanes remain in the catalog"
+        "disabled autoscale must keep default-route traffic on the base lane even when stale managed lanes remain in the catalog"
     );
     Ok(())
 }

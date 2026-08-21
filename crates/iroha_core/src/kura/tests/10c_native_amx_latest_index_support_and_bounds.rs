@@ -801,7 +801,7 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
     for artifact_kind in ["manifest", "receipt"] {
         let temp_dir = TempDir::new().expect("temporary Kura directory");
         let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        config.roster_sidecar_retention =
+        config.lane_history_retention =
             NonZeroUsize::new(2).expect("small Native history test bound");
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
@@ -818,7 +818,7 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
             }
             _ => unreachable!(),
         };
-        let hostile_entries = config.roster_sidecar_retention.get().saturating_add(2);
+        let hostile_entries = config.lane_history_retention.get().saturating_add(2);
         for height in 1..=hostile_entries {
             fs::write(
                 artifact_path(u64::try_from(height).expect("hostile height fits u64")),
@@ -838,7 +838,7 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
     }
     let temp_dir = TempDir::new().expect("bounded Native compaction Kura directory");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    config.roster_sidecar_retention =
+    config.lane_history_retention =
         NonZeroUsize::new(2).expect("small Native compaction retention");
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) =
@@ -971,7 +971,7 @@ fn native_amx_latest_index_startup_rejects_oversized_aggregate_data_before_scann
     for artifact_kind in ["manifest", "receipt"] {
         let temp_dir = TempDir::new().expect("temporary Kura directory");
         let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        config.roster_sidecar_retention =
+        config.lane_history_retention =
             NonZeroUsize::new(2).expect("small Native history test bound");
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
@@ -1060,7 +1060,7 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
     ] {
         let temp_dir = TempDir::new().expect("Native prune-journal crash Kura directory");
         let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        config.roster_sidecar_retention =
+        config.lane_history_retention =
             NonZeroUsize::new(2).expect("small Native prune-journal retention");
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) =
@@ -1266,7 +1266,7 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
     }
     let temp_dir = TempDir::new().expect("latest-protected Native prune Kura directory");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    config.roster_sidecar_retention =
+    config.lane_history_retention =
         NonZeroUsize::new(2).expect("latest-protected Native prune retention");
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) =

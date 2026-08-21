@@ -2352,16 +2352,6 @@
               }
             ]
           },
-          "prev_roster_evidence_hash": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "result_merkle_root": {
             "anyOf": [
               {
@@ -2398,7 +2388,6 @@
           "da_proof_policies_hash",
           "da_commitments_hash",
           "da_pin_intents_hash",
-          "prev_roster_evidence_hash",
           "sccp_commitment_root",
           "creation_time_ms",
           "view_change_index",
@@ -5449,11 +5438,15 @@
                   "gas_limit": {
                     "format": "uint64",
                     "minimum": 1,
-                    "type": "integer"
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
-                  "charge_limits"
+                  "charge_limits",
+                  "gas_limit"
                 ],
                 "type": "object"
               }
@@ -5482,7 +5475,10 @@
                   "gas_limit": {
                     "format": "uint64",
                     "minimum": 1,
-                    "type": "integer"
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
                   },
                   "program_id": {
                     "$ref": "#/components/schemas/FeeSponsorProgramId"
@@ -5496,7 +5492,8 @@
                 "required": [
                   "program_id",
                   "program_revision",
-                  "charge_limits"
+                  "charge_limits",
+                  "gas_limit"
                 ],
                 "type": "object"
               }
@@ -12823,10 +12820,13 @@
       },
       "NativeAmxParticipantLaneBlockProposal": {
         "additionalProperties": false,
-        "description": "Exact non-empty control-only participant proposal. Payload recovery hints are forbidden because the global transaction executes only once on the coordinator path.",
+        "description": "Exact non-empty control-only participant proposal. The canonical Norito JSON shape requires payload_block_hint to be present as null because the global transaction executes only once on the coordinator path.",
         "properties": {
           "descriptor": {
             "$ref": "#/components/schemas/NativeAmxParticipantLaneBlockDescriptor"
+          },
+          "payload_block_hint": {
+            "type": "null"
           },
           "proposal_hash": {
             "$ref": "#/components/schemas/Hash"
@@ -12834,7 +12834,8 @@
         },
         "required": [
           "descriptor",
-          "proposal_hash"
+          "proposal_hash",
+          "payload_block_hint"
         ],
         "type": "object"
       },
@@ -13221,10 +13222,6 @@
             "minItems": 1,
             "type": "array"
           },
-          "nexus_enabled": {
-            "description": "Whether Nexus lane routing is enabled on this node.",
-            "type": "boolean"
-          },
           "version": {
             "description": "Lifecycle status layout version.",
             "enum": [
@@ -13236,7 +13233,6 @@
         },
         "required": [
           "version",
-          "nexus_enabled",
           "lane_count",
           "lanes",
           "catalog_hash",
@@ -19495,12 +19491,6 @@
           "aggregate"
         ],
         "type": "object"
-      },
-      "QcList": {
-        "items": {
-          "$ref": "#/components/schemas/Qc"
-        },
-        "type": "array"
       },
       "QcRef": {
         "additionalProperties": false,
@@ -26429,73 +26419,39 @@
         ],
         "type": "object"
       },
-      "StateProofResponse": {
+      "StateFinalityResponse": {
         "additionalProperties": false,
+        "description": "Exact first-release ledger state evidence. Every field is bound to the same State-committed block and cryptographically verified durable Sumeragi-v2 finality artifact.",
         "properties": {
           "block_hash": {
-            "description": "Block hash at the requested height (hex).",
-            "type": "string"
+            "$ref": "#/components/schemas/Hash",
+            "description": "Canonical block-header hash matched to committed State and durable Kura evidence."
           },
-          "commit_qc": {
-            "$ref": "#/components/schemas/Qc"
+          "block_header": {
+            "$ref": "#/components/schemas/BlockHeader",
+            "description": "Canonical block header authenticated by the finality artifact."
+          },
+          "finality_artifact": {
+            "$ref": "#/components/schemas/SumeragiV2FinalityArtifact",
+            "description": "Exact current Sumeragi-v2 finality artifact verified by Kura."
           },
           "height": {
             "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
             "type": "integer"
           },
           "state_root": {
-            "description": "Execution post-state root (hex) attested by the QC.",
-            "type": "string"
+            "$ref": "#/components/schemas/Hash",
+            "description": "Post-state root from finality_artifact.commit_qc.execution_commitment.post_state_root."
           }
         },
         "required": [
           "height",
           "block_hash",
           "state_root",
-          "commit_qc"
-        ],
-        "type": "object"
-      },
-      "StateRootResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "block_hash": {
-            "description": "Block hash at the requested height (hex).",
-            "type": "string"
-          },
-          "commit_qc": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Qc"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Commit QC payload when available."
-          },
-          "height": {
-            "format": "uint64",
-            "type": "integer"
-          },
-          "source": {
-            "description": "Indicates whether the state root came from the commit QC or the block result Merkle root.",
-            "enum": [
-              "commit_qc",
-              "result_merkle_root"
-            ],
-            "type": "string"
-          },
-          "state_root": {
-            "description": "Execution post-state root (hex) derived from the commit QC or result Merkle root.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "height",
-          "block_hash",
-          "state_root",
-          "source"
+          "block_header",
+          "finality_artifact"
         ],
         "type": "object"
       },
@@ -30294,6 +30250,42 @@
         ],
         "type": "object"
       },
+      "TransactionAdmissionIntent": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "intent": {
+                "const": "ordinary"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "intent",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "intent": {
+                "const": "queue_plan_synced"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "intent",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "TransactionDomain": {
         "oneOf": [
           {
@@ -30329,10 +30321,16 @@
       "TransactionPayload": {
         "additionalProperties": false,
         "properties": {
+          "admission_intent": {
+            "$ref": "#/components/schemas/TransactionAdmissionIntent"
+          },
           "attachments": {
             "contentEncoding": "base64",
             "description": "Optional canonical bounded ProofAttachmentList frame encoded as padded base64.",
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "authority": {
             "type": "string"
@@ -30372,7 +30370,9 @@
           "instructions",
           "time_to_live_ms",
           "fee_payment",
-          "metadata"
+          "admission_intent",
+          "metadata",
+          "attachments"
         ],
         "type": "object"
       },
@@ -30380,6 +30380,7 @@
         "additionalProperties": false,
         "properties": {
           "payload": {
+            "additionalProperties": false,
             "properties": {
               "entrypoint_hash": {
                 "type": "string"
@@ -30400,14 +30401,11 @@
               "submitted_at_ms": {
                 "format": "uint64",
                 "type": "integer"
-              },
-              "tx_hash": {
-                "type": "string"
               }
             },
             "required": [
-              "tx_hash",
               "entrypoint_hash",
+              "signed_transaction_hash",
               "submitted_at_ms",
               "submitted_at_height",
               "signer"
@@ -31071,47 +31069,6 @@
           "enacted_at_height"
         ],
         "type": "object"
-      },
-      "ValidatorSetSnapshot": {
-        "additionalProperties": false,
-        "properties": {
-          "block_hash": {
-            "description": "Block hash certified by the validator set (hex).",
-            "type": "string"
-          },
-          "height": {
-            "format": "uint64",
-            "type": "integer"
-          },
-          "validator_set": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "validator_set_hash": {
-            "description": "Stable hash of the validator set.",
-            "type": "string"
-          },
-          "validator_set_hash_version": {
-            "format": "uint16",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "height",
-          "block_hash",
-          "validator_set_hash",
-          "validator_set_hash_version",
-          "validator_set"
-        ],
-        "type": "object"
-      },
-      "ValidatorSetSnapshotList": {
-        "items": {
-          "$ref": "#/components/schemas/ValidatorSetSnapshot"
-        },
-        "type": "array"
       },
       "VersionedSignedQueryJson": {
         "additionalProperties": false,
@@ -46379,7 +46336,7 @@
     },
     "/v1/ledger/state-proof/{height}": {
       "get": {
-        "description": "Returns the execution Quorum Certificate (QC) attesting the post-state root for the specified block height, suitable for light clients.",
+        "description": "Returns the exact State-committed block header, post-state root, and cryptographically verified durable Sumeragi-v2 finality artifact for the requested height. Missing, malformed, forged, or mis-associated v2 evidence fails closed; legacy world-state QCs are never consulted.",
         "operationId": "ledgerStateProof",
         "parameters": [
           {
@@ -46399,14 +46356,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/StateProofResponse"
+                  "$ref": "#/components/schemas/StateFinalityResponse"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
                 }
               }
             },
-            "description": "Successful response"
+            "description": "Authenticated Sumeragi-v2 state finality for the requested height."
           }
         },
-        "summary": "Fetch execution state proof (QC) for a block height.",
+        "summary": "Fetch authenticated Sumeragi-v2 state finality for a block height.",
         "tags": [
           "Ledger"
         ],
@@ -46415,7 +46379,7 @@
     },
     "/v1/ledger/state/{height}": {
       "get": {
-        "description": "Returns the execution post-state root recorded for the specified block height. Supports JSON or Norito content negotiation via the `Accept` header.",
+        "description": "Returns the post-state root only from the exact cryptographically verified durable Sumeragi-v2 finality artifact bound to the State-committed block. The response carries that block header and artifact for independent verification. Missing, malformed, forged, or mis-associated v2 evidence fails closed; block result roots and legacy world-state QCs are never fallbacks.",
         "operationId": "ledgerStateRoot",
         "parameters": [
           {
@@ -46435,14 +46399,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/StateRootResponse"
+                  "$ref": "#/components/schemas/StateFinalityResponse"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
                 }
               }
             },
-            "description": "Successful response"
+            "description": "Authenticated Sumeragi-v2 state root and its exact finality carrier."
           }
         },
-        "summary": "Fetch execution state root for a block height.",
+        "summary": "Fetch an authenticated execution state root for a block height.",
         "tags": [
           "Ledger"
         ],
@@ -69537,114 +69508,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sumeragi/checkpoints": {
-      "get": {
-        "description": "Return checkpoint snapshots.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch checkpoint snapshots.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sumeragi/commit-certificates": {
-      "get": {
-        "description": "Returns the bounded history of commit certificates produced by validators. Supports JSON or Norito content negotiation via the `Accept` header.",
-        "operationId": "sumeragiQcs",
-        "parameters": [
-          {
-            "description": "Optional starting block height (inclusive, newest-first window).",
-            "in": "query",
-            "name": "from",
-            "required": false,
-            "schema": {
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Optional maximum number of records to return (bounded by server cap).",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/QcList"
-                }
-              }
-            },
-            "description": "Commit certificate history (newest first)."
-          },
-          "406": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
-          }
-        },
-        "summary": "List recent commit certificates (newest first).",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sumeragi/commit-qcs/{block_hash}": {
-      "get": {
-        "description": "Fetch commit QC by block hash.",
-        "parameters": [
-          {
-            "description": "Block hash (hex).",
-            "in": "path",
-            "name": "block_hash",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch commit QC.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
     "/v1/sumeragi/consensus-keys": {
       "get": {
         "description": "Return consensus key material snapshot.",
@@ -69862,28 +69725,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sumeragi/phases": {
-      "get": {
-        "description": "Return consensus phase status snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch phase status.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "operator"
-      }
-    },
     "/v1/sumeragi/qc": {
       "get": {
         "description": "Return quorum certificate snapshots.",
@@ -69944,137 +69785,6 @@
           }
         },
         "summary": "Stream Sumeragi status.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sumeragi/telemetry": {
-      "get": {
-        "description": "Return Sumeragi telemetry snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch Sumeragi telemetry.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sumeragi/validator-sets": {
-      "get": {
-        "description": "Returns a bounded history of validator-set snapshots derived from commit certificates with optional `from`/`limit` query parameters and JSON/Norito negotiation via `Accept`.",
-        "operationId": "sumeragiValidatorSets",
-        "parameters": [
-          {
-            "description": "Optional starting block height (inclusive, newest-first window).",
-            "in": "query",
-            "name": "from",
-            "required": false,
-            "schema": {
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Optional maximum number of records to return (bounded by server cap).",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ValidatorSetSnapshotList"
-                }
-              }
-            },
-            "description": "Validator-set history (newest first)."
-          },
-          "406": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
-          }
-        },
-        "summary": "List recent validator-set snapshots (newest first).",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sumeragi/validator-sets/{height}": {
-      "get": {
-        "description": "Returns the validator-set snapshot derived from the commit certificate for the specified block height.",
-        "operationId": "sumeragiValidatorSetByHeight",
-        "parameters": [
-          {
-            "description": "Block height to inspect (1-indexed).",
-            "in": "path",
-            "name": "height",
-            "required": true,
-            "schema": {
-              "format": "uint64",
-              "minimum": 1,
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ValidatorSetSnapshot"
-                }
-              }
-            },
-            "description": "Validator-set snapshot for the requested height."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "No commit certificate recorded for the requested height."
-          },
-          "406": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
-          }
-        },
-        "summary": "Fetch a validator-set snapshot by block height.",
         "tags": [
           "Sumeragi"
         ],
@@ -74128,7 +73838,7 @@
       "name": "DataAvailability"
     },
     {
-      "description": "Consensus diagnostics and checkpoints under `/v1/sumeragi/*`.",
+      "description": "Consensus diagnostics under `/v1/sumeragi/*`.",
       "name": "Sumeragi"
     },
     {

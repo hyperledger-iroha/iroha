@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     kura::Kura,
-    prelude::{AcceptedTransaction, World},
+    prelude::World,
     query::store::LiveQueryStore,
     queue::{
         LaneQueueReservationKeyV2, Queue, RoutingDecision, RoutingPlan,
@@ -31,8 +31,7 @@ use iroha_config::{
             Kura as KuraConfig, LaneConfig as RuntimeLaneConfig, Nexus, Queue as QueueConfig,
         },
         defaults::kura::{
-            BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, FSYNC_INTERVAL,
-            MERGE_LEDGER_CACHE_CAPACITY, ROSTER_SIDECAR_RETENTION,
+            BLOCKS_IN_MEMORY, FSYNC_INTERVAL, LANE_HISTORY_RETENTION, MERGE_LEDGER_CACHE_CAPACITY,
         },
     },
 };
@@ -52,7 +51,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-use std::{borrow::Cow, num::NonZeroU32, sync::Arc};
+use std::{num::NonZeroU32, sync::Arc};
 use tempfile::TempDir;
 fn lifecycle_key_pair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -84,8 +83,7 @@ fn lifecycle_kura_config(dir: &TempDir) -> KuraConfig {
         merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
-        block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
-        roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        lane_history_retention: LANE_HISTORY_RETENTION,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
@@ -228,30 +226,25 @@ fn lifecycle_payload_for_validators_with_count(
     let reservations = entrypoints
         .iter()
         .enumerate()
-        .map(|(index, entrypoint)| {
-            let accepted =
-                AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
-            LaneQueueReservationKeyV2 {
-                version: LaneQueueReservationKeyV2::VERSION,
-                signed_transaction_hash: accepted.hash(),
-                entrypoint_hash: entrypoint.hash(),
-                queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
-                    b"lifecycle-recovery-queue-plan-admission\0",
-                    &u64::try_from(index)
-                        .expect("bounded lifecycle index")
-                        .to_be_bytes(),
-                ]),
-                routing_plan_digest: routing_plan.digest(),
-                coordinator_leg: routing_plan.coordinator_leg(),
-                lane_id: proposal.descriptor.lane_id,
-                dataspace_id: proposal.descriptor.dataspace_id,
-                lane_incarnation,
-                proposal_height: proposal.descriptor.proposal_height,
-                lane_block_height: proposal.descriptor.lane_block_height,
-                lane_block_view: proposal.descriptor.lane_block_view,
-                reservation_owner_hash,
-                proposal_identity_hash,
-            }
+        .map(|(index, entrypoint)| LaneQueueReservationKeyV2 {
+            version: LaneQueueReservationKeyV2::VERSION,
+            entrypoint_hash: entrypoint.hash(),
+            queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
+                b"lifecycle-recovery-queue-plan-admission\0",
+                &u64::try_from(index)
+                    .expect("bounded lifecycle index")
+                    .to_be_bytes(),
+            ]),
+            routing_plan_digest: routing_plan.digest(),
+            coordinator_leg: routing_plan.coordinator_leg(),
+            lane_id: proposal.descriptor.lane_id,
+            dataspace_id: proposal.descriptor.dataspace_id,
+            lane_incarnation,
+            proposal_height: proposal.descriptor.proposal_height,
+            lane_block_height: proposal.descriptor.lane_block_height,
+            lane_block_view: proposal.descriptor.lane_block_view,
+            reservation_owner_hash,
+            proposal_identity_hash,
         })
         .collect::<Vec<_>>();
     let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
@@ -506,7 +499,6 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
     )
     .expect("construct lifecycle State");
     let nexus = Nexus {
-        enabled: true,
         lane_catalog: lifecycle_lane_catalog(),
         ..Nexus::default()
     };
@@ -715,7 +707,6 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
         .validate()
         .expect("interruption context must be structurally valid");
     let nexus = Nexus {
-        enabled: true,
         lane_catalog: lifecycle_lane_catalog(),
         ..Nexus::default()
     };

@@ -346,9 +346,6 @@ def _serviced_candidate_production_source_fidelity_errors(
         "minimum_active_lifecycle_ordinal_excluding": (
             "minimum_active_lifecycle_ordinal_excluding"
         ),
-        "minimum_runnable_lifecycle_ordinal": (
-            "minimum_runnable_lifecycle_ordinal"
-        ),
         "complete_leader_wire_runtime_owner": (
             "complete_leader_wire_runtime_owner"
         ),
@@ -1890,29 +1887,6 @@ Ok(command_minimum)
     require_item_sequence(
         "runtime",
         runtime_items,
-        "minimum_runnable_lifecycle_ordinal",
-        """
-if let Some(evidence) = completion_evidence {
-    if !evidence.validate_exact()
-        || !self
-            .ingress
-            .lifecycle_ordinals
-            .recognizes_minted(evidence.lifecycle_ordinal())
-            .map_err(|_| EnqueueError::FailClosed)?
-    {
-        return Err(EnqueueError::FailClosed);
-    }
-    let lifecycle_ordinal = evidence.lifecycle_ordinal();
-    minimum =
-        Some(minimum.map_or(lifecycle_ordinal, |ordinal| ordinal.min(lifecycle_ordinal)));
-}
-""",
-        "serviced-candidate runnable selection must admit only exact minted "
-        "completion evidence into the least-owner minimum",
-    )
-    require_item_sequence(
-        "runtime",
-        runtime_items,
         "dormant_local_fifo_replacement",
         """
 self.dormant_local_fifo_replacement_inner(command, false)
@@ -2041,7 +2015,7 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
         "launch",
         (
             "prepare_leader_wire_launch(launch_storage.wal_path())",
-            "ProductionV2Services::restore_lifecycle_ordinal_source",
+            "RuntimeLifecycleOrdinalSource::after_high_watermark(0)",
             "leader_wire_launch.restored_producer_ordinal_high_watermark()",
             ".advance_past(high_watermark)",
             "leader_wire_launch.open_gate",

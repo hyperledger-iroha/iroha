@@ -33,8 +33,8 @@ fn new_state(
     query_handle: query::store::LiveQueryStoreHandle,
     chain_id: ChainId,
 ) -> State {
-    let mut state = State::new_with_chain_for_testing(world, kura, query_handle, chain_id);
-    state.nexus.get_mut().enabled = false;
+    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain_id);
+
     let nexus = state.nexus_snapshot();
     let lane_manifests =
         Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance));
@@ -396,7 +396,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         volatility: GasVolatility::Stable,
     }];
     state.set_pipeline(pipeline);
-    state.nexus.get_mut().enabled = true;
+
     // 3) Build a simple native ISI transaction (SetKeyValue<Account>)
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
         alice_id.clone(),
@@ -443,7 +443,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         init,
         2,
     );
-    state_tx.nexus.enabled = false;
+
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     executor
         .execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache)
@@ -537,7 +537,6 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     let mut state = new_state(world, kura, query_handle, chain.clone());
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.sponsor_vault_custody_account_id = custody_id.clone();
     }
     let program_id = default_fee_sponsor_program_id(&sponsor_id);
@@ -559,7 +558,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     let _ = setup_state_block.apply_without_execution(&setup_committed, Vec::new());
     {
         let mut setup_state_tx = setup_state_block.transaction();
-        setup_state_tx.nexus.enabled = true;
+
         provision_fee_sponsor_program(
             &mut setup_state_tx,
             &sponsor_id,
@@ -609,7 +608,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         volatility: GasVolatility::Stable,
     }];
     state.set_pipeline(pipeline);
-    state.nexus.get_mut().enabled = false;
+
     let fee_payment = FeePaymentIntent::sponsor(
         program_id,
         1,
@@ -746,7 +745,6 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
     state.set_pipeline(pipeline);
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();

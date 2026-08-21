@@ -64,7 +64,10 @@ pub struct DaCommitmentRecord {
   protocol version with an explicit wire-layout change. In particular, hashes
   expanded to 48 bytes are not elliptic-curve commitments.
 - `proof_digest` anticipates DA-5 PDP/PoTR integration so the same record
-  enumerates the sampling schedule used to keep blobs live.
+  enumerates the sampling schedule used to keep blobs live. Its nullable slot
+  is nevertheless mandatory on the first-release JSON wire: producers emit an
+  explicit value or `null`, never an omitted field. Commitment records and the
+  header-hashed policy/commitment bundles reject unknown JSON fields.
 
 ### 1.2 Block header extension
 
@@ -127,8 +130,8 @@ until Torii threads real bundles through.
    `SignedBlockWire`; committed bundles advance the receipt cursors (hydrated
    from Kura on restart) and prune stale spool entries to bound disk growth.
 
-Block assembly and `BlockCreated` ingestion re-validate each commitment against
-the lane catalog: V1 admits only Merkle records, requires a non-zero
+Block assembly and canonical `SignedBlockWire` proposal ingestion re-validate
+each commitment against the lane catalog: V1 admits only Merkle records, requires a non-zero
 `chunk_root`, and rejects unknown lanes. Because the data model has no KZG
 variant or field, neither Torii nor a lifecycle transition can construct or
 sign a KZG policy/record; an unknown wire discriminant fails decoding.

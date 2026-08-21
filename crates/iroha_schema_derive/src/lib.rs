@@ -3,12 +3,11 @@
 // darling-generated code triggers these lints
 #![allow(clippy::needless_continue)]
 #![allow(clippy::option_if_let_else)]
-mod emitter_ext;
+iroha_derive::define_emitter_ext!();
 mod rename;
 mod trait_bounds;
 use crate::rename::RenameRule;
 use darling::{FromAttributes, FromDeriveInput, FromField, FromMeta, FromVariant, ast::Style};
-use emitter_ext::EmitterExt;
 use manyhow::{Emitter, Result, ToTokensError, emit, manyhow};
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};

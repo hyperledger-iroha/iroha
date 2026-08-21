@@ -9,15 +9,14 @@ mod generate;
 mod normalize;
 mod npos;
 mod pop;
+mod prepared;
 pub mod profile;
 mod sign;
 pub use sign::{
     bind_and_sign_staged_sumeragi_v2_context, staged_signed_sumeragi_v2_context_hashes,
 };
 mod validate;
-pub use generate::{
-    ConsensusPolicy, build_line_from_env, generate_default, validate_consensus_mode_for_line,
-};
+pub use generate::{ConsensusPolicy, generate_default, validate_consensus_mode};
 pub use npos::{ensure_npos_parameters, has_npos_parameters};
 pub use profile::{
     GenesisProfile, PUBLIC_XOR_ALIAS, ProfileDefaults, TAIRA_XOR_ASSET_DEFINITION_ID,
@@ -49,6 +48,8 @@ pub enum Args {
     Generate(generate::Args),
     /// Validate a genesis JSON file and report invalid identifiers
     Validate(validate::Args),
+    /// Verify one exact bound-manifest/signed-genesis/signer/hash bundle
+    ValidatePrepared(prepared::Args),
     /// Produce a BLS PoP (Proof-of-Possession) for a consensus key (BLS-normal)
     Pop(pop::Args),
     /// Embed one or more PoPs into a genesis JSON manifest (inline `topology` entries carrying `pop_hex`)
@@ -62,6 +63,7 @@ impl<T: Write> RunArgs<T> for Args {
             Args::Sign(args) => args.run(writer),
             Args::Generate(args) => args.run(writer),
             Args::Validate(args) => args.run(writer),
+            Args::ValidatePrepared(args) => args.run(writer),
             Args::Pop(args) => args.run(writer),
             Args::EmbedPop(args) => args.run(writer),
             Args::Normalize(args) => args.run(writer),

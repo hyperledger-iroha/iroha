@@ -62,3 +62,5 @@ mod lane_relay_roundtrip;
 mod mintable_json;
 #[path = "../model_derive_repro.rs"]
 mod model_derive_repro;
+#[path = "../nexus_lifecycle_fixture.rs"]
+mod nexus_lifecycle_fixture;

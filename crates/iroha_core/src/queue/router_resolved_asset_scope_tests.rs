@@ -1,6 +1,48 @@
 // Resolved account and asset-definition scope routing regressions.
 
 #[test]
+fn confidential_policy_permission_uses_exact_asset_definition_dataspace() {
+    let (alice_id, alice_keypair) = gen_account_in("wonderland");
+    let (bob_id, _) = gen_account_in("wonderland");
+    let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        routed_dataspace_fixture("paynet");
+    let asset_definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("cash", "universal").expect("asset definition domain"),
+        "pkr".parse().expect("asset definition name"),
+    );
+    let tx = sample_transaction(
+        &alice_id,
+        alice_keypair.private_key(),
+        vec![InstructionBox::from(Grant::account_permission(
+            CanManageAssetDefinitionConfidentialPolicy {
+                asset_definition: asset_definition.clone(),
+            },
+            bob_id,
+        ))],
+    );
+    let state = state_with_bound_numeric_asset_definition(
+        &asset_definition,
+        "pkr#paynet",
+        "pkr",
+        &alice_id,
+        dataspace_catalog,
+        lane_catalog,
+    );
+    assert_eq!(
+        router
+            .try_route_without_state(&tx)
+            .expect("confidential-policy permission alias lookup should defer to state"),
+        None
+    );
+    assert_eq!(
+        router
+            .try_route_with_view(&tx, &state.view())
+            .expect("exact confidential-policy permission route must resolve"),
+        RoutingDecision::new(lane_id, dataspace_id)
+    );
+}
+
+#[test]
 fn account_metadata_write_with_multiple_scopes_falls_back_to_default_route() {
     let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
     let (target_id, _) = gen_account_in("wonderland");
@@ -266,9 +308,9 @@ fn opaque_asset_definition_metadata_remove_routes_to_resolved_target_dataspace()
         None
     );
     assert_eq!(
-        router
-            .try_route_with_view(&tx, &state.view())
-            .expect("opaque asset-definition metadata remove should route to the resolved dataspace"),
+        router.try_route_with_view(&tx, &state.view()).expect(
+            "opaque asset-definition metadata remove should route to the resolved dataspace"
+        ),
         RoutingDecision::new(lane_id, dataspace_id)
     );
 }

@@ -48,7 +48,7 @@ use super::{
 };
 use crate::{
     EventsSender,
-    block::{BlockValidationError, ValidBlock},
+    block::{BlockValidationError, ValidBlock, VerifiedV2FinalityArtifact},
     kura::{
         AutonomousLaneReservationEvidenceError, AutonomousLaneReservationEvidenceV1,
         AutonomousLaneRetirementQueueSnapshotPhaseV1, AutonomousLaneRetirementSnapshotEvidenceV1,
@@ -87,7 +87,7 @@ use iroha_data_model::{
     events::EventBox,
     merge::MergeLedgerEntry,
     nexus::{DataSpaceId, LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope},
-    transaction::SignedTransaction,
+    transaction::TransactionEntrypoint,
 };
 use iroha_primitives::time::TimeSource;
 use norito::codec::Encode;
@@ -167,11 +167,11 @@ pub(crate) enum V2ReservationLifecycleError {
     },
     /// A replayed Queue commit barrier lacks independently authenticated committed membership.
     #[error(
-        "reservation commit barrier transaction {transaction_hash} is absent from committed State"
+        "reservation commit barrier entrypoint {entrypoint_hash} is absent from committed State"
     )]
     UncommittedCommitBarrier {
-        /// Transaction retained by the commit barrier.
-        transaction_hash: HashOf<SignedTransaction>,
+        /// Entrypoint retained by the commit barrier.
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
     },
     /// A committed reservation resolves to more than one carrier or to a different group carrier.
     #[error(
@@ -183,13 +183,11 @@ pub(crate) enum V2ReservationLifecycleError {
         /// Historical proposal height.
         proposal_height: u64,
     },
-    /// The canonical transaction index required for exact committed recovery is unavailable.
-    #[error(
-        "canonical transaction index is unavailable for committed transaction {transaction_hash}"
-    )]
-    CommittedTransactionIndexUnavailable {
-        /// Committed transaction whose carrier cannot be resolved exactly.
-        transaction_hash: HashOf<SignedTransaction>,
+    /// The canonical entrypoint index required for exact committed recovery is unavailable.
+    #[error("canonical entrypoint index is unavailable for committed entrypoint {entrypoint_hash}")]
+    CommittedEntrypointIndexUnavailable {
+        /// Committed entrypoint whose carrier cannot be resolved exactly.
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
     },
     /// A pending certified merge entry contains a partial, reordered, or split reservation group.
     #[error(
@@ -315,11 +313,11 @@ pub(crate) enum V2ReservationLifecycleError {
         /// Undecided proposal height.
         height: u64,
     },
-    /// A release barrier would return an already committed transaction to FIFO ownership.
-    #[error("release barrier transaction {transaction_hash} is already committed in State")]
-    ReleaseBarrierCommittedTransaction {
-        /// Conflicting transaction.
-        transaction_hash: HashOf<SignedTransaction>,
+    /// A release barrier would return an already committed entrypoint to FIFO ownership.
+    #[error("release barrier entrypoint {entrypoint_hash} is already committed in State")]
+    ReleaseBarrierCommittedEntrypoint {
+        /// Conflicting entrypoint.
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
     },
     /// A durable Queue release barrier is not the exact Kura retirement projection.
     #[error("queue release barrier {retirement_hash} has invalid group membership")]
@@ -328,23 +326,23 @@ pub(crate) enum V2ReservationLifecycleError {
         retirement_hash: Hash,
     },
     /// Committed State retains a reservation without matching merge evidence.
-    #[error("committed transaction {transaction_hash} has no exact durable merge reservation")]
+    #[error("committed entrypoint {entrypoint_hash} has no exact durable merge reservation")]
     MissingCommittedBinding {
-        /// Committed transaction whose reservation cannot be authenticated.
-        transaction_hash: HashOf<SignedTransaction>,
+        /// Committed entrypoint whose reservation cannot be authenticated.
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
     },
     /// Journal ownership differs from the committed merge evidence.
-    #[error("committed transaction {transaction_hash} has a conflicting live reservation")]
+    #[error("committed entrypoint {entrypoint_hash} has a conflicting live reservation")]
     CommittedBindingMismatch {
-        /// Committed transaction with mismatched reservation ownership.
-        transaction_hash: HashOf<SignedTransaction>,
+        /// Committed entrypoint with mismatched reservation ownership.
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
     },
     /// A merge entry names a transaction that State did not commit.
     #[cfg(test)]
-    #[error("merge reservation transaction {transaction_hash} is absent from committed State")]
-    UncommittedMergeTransaction {
-        /// Transaction missing from committed membership.
-        transaction_hash: HashOf<SignedTransaction>,
+    #[error("merge reservation entrypoint {entrypoint_hash} is absent from committed State")]
+    UncommittedMergeEntrypoint {
+        /// Entrypoint missing from committed membership.
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
     },
     /// The canonical carrier lost its exact full merge entry.
     #[error("committed merge carrier lost sidecar {entry_hash}")]
@@ -460,9 +458,9 @@ fn authenticate_committed_canonical_carrier(
         let ordered_keys = group
             .iter()
             .map(|(transaction_hash, key)| {
-                if *transaction_hash != key.signed_transaction_hash
+                if *transaction_hash != key.entrypoint_hash
                     || !seen_transactions.insert(*transaction_hash)
-                    || state.committed_transaction_height(transaction_hash) != Some(carrier_height)
+                    || state.committed_entrypoint_height(transaction_hash) != Some(carrier_height)
                 {
                     return Err(V2ReservationLifecycleError::CommittedCarrierMismatch {
                         lane_id: key.lane_id,
@@ -497,10 +495,10 @@ fn authenticate_committed_canonical_carrier(
         let indexed_heights = group
             .iter()
             .map(|(transaction_hash, _)| {
-                kura.get_block_heights_by_transaction_hash(*transaction_hash)
+                kura.get_block_heights_by_entrypoint_hash(*transaction_hash)
                     .ok_or(
-                        V2ReservationLifecycleError::CommittedTransactionIndexUnavailable {
-                            transaction_hash: *transaction_hash,
+                        V2ReservationLifecycleError::CommittedEntrypointIndexUnavailable {
+                            entrypoint_hash: *transaction_hash,
                         },
                     )
             })
@@ -631,7 +629,7 @@ fn committed_block_merge_entry(
 }
 fn certified_merge_queue_reservation_hashes(
     entry: Option<&MergeLedgerEntry>,
-) -> Result<BTreeSet<HashOf<SignedTransaction>>, MergeLedgerCommitError> {
+) -> Result<BTreeSet<HashOf<TransactionEntrypoint>>, MergeLedgerCommitError> {
     let Some(entry) = entry else {
         return Ok(BTreeSet::new());
     };
@@ -1064,7 +1062,7 @@ pub(crate) fn plan_lane_reservation_ownership(
     let mut unique_recovered = snapshot
         .ordered_records
         .iter()
-        .map(|record| record.key.signed_transaction_hash)
+        .map(|record| record.key.entrypoint_hash)
         .collect::<BTreeSet<_>>();
     // Existing barriers are themselves crash state. Fold each into the same
     // classifier input and authenticate its exact Kura retirement before any
@@ -1081,11 +1079,11 @@ pub(crate) fn plan_lane_reservation_ownership(
             });
         }
         for key in &barrier.ordered_keys {
-            unique_recovered.insert(key.signed_transaction_hash);
-            if state.has_committed_transaction(key.signed_transaction_hash) {
+            unique_recovered.insert(key.entrypoint_hash);
+            if state.has_committed_entrypoint(key.entrypoint_hash) {
                 return Err(
-                    V2ReservationLifecycleError::ReleaseBarrierCommittedTransaction {
-                        transaction_hash: key.signed_transaction_hash,
+                    V2ReservationLifecycleError::ReleaseBarrierCommittedEntrypoint {
+                        entrypoint_hash: key.entrypoint_hash,
                     },
                 );
             }
@@ -1138,19 +1136,19 @@ pub(crate) fn plan_lane_reservation_ownership(
     // below restores the complete ordered membership; digest order is never
     // treated as group order.
     for key in commit_barriers {
-        unique_recovered.insert(key.signed_transaction_hash);
+        unique_recovered.insert(key.entrypoint_hash);
         let identity = reservation_group_identity(key);
         match group_indexes.get(&identity).copied() {
             Some(index) => {
                 let input = &mut inputs[index];
                 if input.release_barrier.is_some()
-                    || input.owned_keys.iter().any(|owned| {
-                        owned.signed_transaction_hash == key.signed_transaction_hash
-                            || *owned == *key
-                    })
+                    || input
+                        .owned_keys
+                        .iter()
+                        .any(|owned| owned.entrypoint_hash == key.entrypoint_hash || *owned == *key)
                 {
                     return Err(V2ReservationLifecycleError::CommittedBindingMismatch {
-                        transaction_hash: key.signed_transaction_hash,
+                        entrypoint_hash: key.entrypoint_hash,
                     });
                 }
                 input.owned_keys.push(*key);
@@ -1182,7 +1180,7 @@ pub(crate) fn plan_lane_reservation_ownership(
         let committed_count = input
             .owned_keys
             .iter()
-            .filter(|key| state.has_committed_transaction(key.signed_transaction_hash))
+            .filter(|key| state.has_committed_entrypoint(key.entrypoint_hash))
             .count();
         if committed_count != 0 && committed_count != input.owned_keys.len() {
             return Err(V2ReservationLifecycleError::PartialCommittedGroup {
@@ -1225,9 +1223,9 @@ pub(crate) fn plan_lane_reservation_ownership(
         }
     }
     for barrier in commit_barriers {
-        if !state.has_committed_transaction(barrier.signed_transaction_hash) {
+        if !state.has_committed_entrypoint(barrier.entrypoint_hash) {
             return Err(V2ReservationLifecycleError::UncommittedCommitBarrier {
-                transaction_hash: barrier.signed_transaction_hash,
+                entrypoint_hash: barrier.entrypoint_hash,
             });
         }
     }
@@ -1248,10 +1246,10 @@ pub(crate) fn plan_lane_reservation_ownership(
         let mut observed_hashes = BTreeSet::new();
         for key in &input.owned_keys {
             if !reservation_key_matches_group(key, &input.group.identity)
-                || !observed_hashes.insert(key.signed_transaction_hash)
+                || !observed_hashes.insert(key.entrypoint_hash)
             {
                 return Err(V2ReservationLifecycleError::CommittedBindingMismatch {
-                    transaction_hash: key.signed_transaction_hash,
+                    entrypoint_hash: key.entrypoint_hash,
                 });
             }
         }
@@ -1259,10 +1257,10 @@ pub(crate) fn plan_lane_reservation_ownership(
             .owned_keys
             .iter()
             .map(|key| {
-                kura.get_block_heights_by_transaction_hash(key.signed_transaction_hash)
+                kura.get_block_heights_by_entrypoint_hash(key.entrypoint_hash)
                     .ok_or(
-                        V2ReservationLifecycleError::CommittedTransactionIndexUnavailable {
-                            transaction_hash: key.signed_transaction_hash,
+                        V2ReservationLifecycleError::CommittedEntrypointIndexUnavailable {
+                            entrypoint_hash: key.entrypoint_hash,
                         },
                     )
             })
@@ -1287,7 +1285,7 @@ pub(crate) fn plan_lane_reservation_ownership(
         let carrier_entry = kura
             .get_merge_entry_by_carrier_height(carrier_height)?
             .ok_or_else(|| V2ReservationLifecycleError::MissingCommittedBinding {
-                transaction_hash: input.owned_keys[0].signed_transaction_hash,
+                entrypoint_hash: input.owned_keys[0].entrypoint_hash,
             })?;
         let carrier_groups =
             crate::state::certified_merge_queue_reservation_groups(&carrier_entry)?;
@@ -1317,8 +1315,8 @@ pub(crate) fn plan_lane_reservation_ownership(
                 let ordered_keys = carrier_group
                     .iter()
                     .map(|(transaction_hash, key)| {
-                        if *transaction_hash != key.signed_transaction_hash
-                            || state.committed_transaction_height(transaction_hash)
+                        if *transaction_hash != key.entrypoint_hash
+                            || state.committed_entrypoint_height(transaction_hash)
                                 != Some(carrier_height)
                         {
                             return Err(V2ReservationLifecycleError::CommittedCarrierMismatch {
@@ -1339,10 +1337,10 @@ pub(crate) fn plan_lane_reservation_ownership(
                 let indexed_heights = carrier_group
                     .iter()
                     .map(|(transaction_hash, _)| {
-                        kura.get_block_heights_by_transaction_hash(*transaction_hash)
+                        kura.get_block_heights_by_entrypoint_hash(*transaction_hash)
                             .ok_or(
-                                V2ReservationLifecycleError::CommittedTransactionIndexUnavailable {
-                                    transaction_hash: *transaction_hash,
+                                V2ReservationLifecycleError::CommittedEntrypointIndexUnavailable {
+                                    entrypoint_hash: *transaction_hash,
                                 },
                             )
                     })
@@ -1385,34 +1383,32 @@ pub(crate) fn plan_lane_reservation_ownership(
             .iter()
             .map(|(_, key)| *key)
             .collect::<Vec<_>>();
-        let full_by_transaction = full_keys
+        let full_by_entrypoint = full_keys
             .iter()
-            .map(|key| (key.signed_transaction_hash, *key))
+            .map(|key| (key.entrypoint_hash, *key))
             .collect::<BTreeMap<_, _>>();
-        if full_by_transaction.len() != full_keys.len() {
+        if full_by_entrypoint.len() != full_keys.len() {
             return Err(V2ReservationLifecycleError::CommittedCarrierMismatch {
                 lane_id: input.group.identity.lane_id,
                 proposal_height: input.group.identity.proposal_height,
             });
         }
         for observed in &input.owned_keys {
-            if full_by_transaction.get(&observed.signed_transaction_hash) != Some(observed) {
+            if full_by_entrypoint.get(&observed.entrypoint_hash) != Some(observed) {
                 return Err(V2ReservationLifecycleError::CommittedBindingMismatch {
-                    transaction_hash: observed.signed_transaction_hash,
+                    entrypoint_hash: observed.entrypoint_hash,
                 });
             }
         }
         for key in &full_keys {
-            if state.committed_transaction_height(&key.signed_transaction_hash)
-                != Some(carrier_height)
-            {
+            if state.committed_entrypoint_height(&key.entrypoint_hash) != Some(carrier_height) {
                 return Err(V2ReservationLifecycleError::CommittedCarrierMismatch {
                     lane_id: input.group.identity.lane_id,
                     proposal_height: input.group.identity.proposal_height,
                 });
             }
             if let Some(existing_identity) =
-                globally_seen_committed.insert(key.signed_transaction_hash, input.group.identity)
+                globally_seen_committed.insert(key.entrypoint_hash, input.group.identity)
                 && existing_identity != input.group.identity
             {
                 return Err(V2ReservationLifecycleError::CommittedCarrierMismatch {
@@ -1429,10 +1425,10 @@ pub(crate) fn plan_lane_reservation_ownership(
             .ordered_keys
             .iter()
             .map(|key| {
-                kura.get_block_heights_by_transaction_hash(key.signed_transaction_hash)
+                kura.get_block_heights_by_entrypoint_hash(key.entrypoint_hash)
                     .ok_or(
-                        V2ReservationLifecycleError::CommittedTransactionIndexUnavailable {
-                            transaction_hash: key.signed_transaction_hash,
+                        V2ReservationLifecycleError::CommittedEntrypointIndexUnavailable {
+                            entrypoint_hash: key.entrypoint_hash,
                         },
                     )
             })
@@ -1483,13 +1479,13 @@ pub(crate) fn plan_lane_reservation_ownership(
     }
     // Pending merge evidence is bounded by Kura's configured sidecar budget.
     // Index it once so a partial or split group is rejected before mutations.
-    let mut pending_by_transaction = BTreeMap::new();
+    let mut pending_by_entrypoint = BTreeMap::new();
     let mut pending_by_entry = BTreeMap::new();
     for (entry_hash, entry) in kura.pending_certified_merge_entries()? {
         let reservations = crate::state::certified_merge_queue_reservations(&entry)?;
         let keys = reservations.iter().map(|(_, key)| *key).collect::<Vec<_>>();
         for (transaction_hash, key) in reservations {
-            if pending_by_transaction
+            if pending_by_entrypoint
                 .insert(transaction_hash, (entry_hash, key))
                 .is_some()
             {
@@ -1546,11 +1542,8 @@ pub(crate) fn plan_lane_reservation_ownership(
             &world,
             input.group.identity.proposal_height,
         );
-        let pending_merge = exact_pending_merge_for_group(
-            &input.group,
-            &pending_by_transaction,
-            &pending_by_entry,
-        )?;
+        let pending_merge =
+            exact_pending_merge_for_group(&input.group, &pending_by_entrypoint, &pending_by_entry)?;
         let group_evidence = evidence
             .next()
             .expect("Kura preserves one evidence result per uncommitted group");
@@ -3779,16 +3772,16 @@ impl V2ApplyService {
         // `ApplyTask` deliberately retains the wire certificate, so this adapter must not rely
         // only on the upstream reducer having verified it. A malformed decision remains a pure
         // rejection, never a crash image whose canonical block/state lacks valid finality.
-        let artifact = wire::finality::V2FinalityArtifact::new(
-            context.clone(),
-            task.subject(),
-            task.certificate().clone(),
-            self.validator_set_pops.clone(),
-        );
-        artifact.validate_for_header(&body.header())?;
-        artifact
-            .verify()
+        let verified_artifact =
+            VerifiedV2FinalityArtifact::verify(wire::finality::V2FinalityArtifact::new(
+                context.clone(),
+                task.subject(),
+                task.certificate().clone(),
+                self.validator_set_pops.clone(),
+            ))
             .map_err(V2ApplyError::FinalityCryptography)?;
+        let artifact = verified_artifact.artifact();
+        artifact.validate_for_header(&body.header())?;
         let ordinary_projection = match task {
             ExactApplyTaskRef::Ordinary(task) => {
                 let prospective_application = prospective_application_refinement_projection(
@@ -3796,7 +3789,7 @@ impl V2ApplyService {
                     task,
                     proposal_block_hash,
                     canonical_proposal_wire_hash,
-                    &artifact,
+                    artifact,
                 )
                 .ok_or_else(|| {
                     V2ApplyError::Validation(
@@ -3890,7 +3883,7 @@ impl V2ApplyService {
                 body,
                 true,
                 task.validated_receipt().execution_commitment(),
-                &artifact,
+                verified_artifact.clone(),
                 checked_carrier_applications,
             )?;
             self.kura
@@ -3939,17 +3932,17 @@ impl V2ApplyService {
         // restart can repair each individual artifact.
         let receipt = self
             .kura
-            .store_v2_finality_artifact(&artifact)
+            .store_v2_finality_artifact(artifact)
             .map_err(|error| {
                 V2ApplyError::committed_recovery_required("v2 finality artifact", &error)
             })?;
-        self.publish_finalized_lane_relays(committed_block.as_ref(), &artifact)?;
+        self.publish_finalized_lane_relays(committed_block.as_ref(), artifact)?;
         // The strict restart-repair path authenticates Native AMX evidence
         // against both finality and the post-WSV Kura metadata join. Publish
         // that join first on every fresh or recovery attempt, then repair or
         // confirm the exact manifests, receipts, and latest indexes while the
         // prune guard keeps their canonical carrier stable.
-        self.persist_post_apply_metadata(context, task.subject(), &artifact)
+        self.persist_post_apply_metadata(context, task.subject(), artifact)
             .map_err(|error| {
                 V2ApplyError::committed_recovery_required("post-apply metadata", &error)
             })?;
@@ -3974,7 +3967,7 @@ impl V2ApplyService {
             })?;
         self.publish_committed_block_merge_entry(committed_block.as_ref())?;
         self.kura
-            .promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
+            .promote_kagemusha_topup_finality_sidecar(artifact, &receipt)
             .map_err(|error| {
                 V2ApplyError::committed_recovery_required(
                     "Kagemusha finality sidecar promotion",
@@ -4008,7 +4001,7 @@ impl V2ApplyService {
                 "autonomous carrier reached terminal Queue reservation stage"
             );
         }
-        let artifact_hash = HashOf::new(&artifact);
+        let artifact_hash = HashOf::new(artifact);
         Ok(ExactApplyExecutionMaterial {
             context: context.clone(),
             commit_qc: task.certificate().clone(),
@@ -4022,7 +4015,7 @@ impl V2ApplyService {
             committed_block_hash,
             executed_block_wire_hash,
             kura_receipt: receipt,
-            artifact,
+            artifact: artifact.clone(),
             artifact_hash,
             state_height_after: self.state.committed_height(),
             ordinary_projection,
@@ -4304,9 +4297,10 @@ impl V2ApplyService {
         body: iroha_data_model::block::SignedBlock,
         store_block: bool,
         expected_execution_commitment: wire::ExecutionCommitment,
-        artifact: &wire::finality::V2FinalityArtifact,
+        verified_artifact: VerifiedV2FinalityArtifact,
         checked_carrier_applications: CheckedCarrierApplications,
     ) -> Result<(), V2ApplyError> {
+        let artifact = verified_artifact.artifact();
         if !body.is_resultless_proposal() {
             return Err(V2ApplyError::ResultBearingProposal);
         }
@@ -4384,7 +4378,10 @@ impl V2ApplyService {
             expected_execution_commitment,
         )?;
         let committed_block = valid_block
-            .commit_with_verified_v2_artifact(artifact, actual_execution_commitment)
+            .commit_with_verified_v2_artifact(
+                verified_artifact.clone(),
+                actual_execution_commitment,
+            )
             .unpack(|event| pipeline_events.push(event))
             .map_err(|(_, error)| V2ApplyError::Commit(error.to_string()))?;
         // Kura owns the first irreversible commit point. This call is also the
@@ -4461,13 +4458,8 @@ impl V2ApplyService {
         // Native participant frontiers in the State overlay. Do not construct
         // that overlay until every canonical manifest leaf has a durable,
         // read-back-authenticated manifest/receipt/latest-index triple.
-        let commit_topology = context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect();
         let state_events = state_block
-            .apply_without_execution_with_verified_v2_finality(&committed_block, commit_topology)
+            .apply_without_execution_with_verified_v2_finality(&committed_block)
             .map_err(|error| {
                 V2ApplyError::committed_recovery_required(
                     "post-finality autonomous carrier metadata authorization",
@@ -4638,9 +4630,9 @@ impl V2ApplyService {
             committed_block
                 .as_ref()
                 .external_entrypoints_cloned()
-                .map(|entrypoint| HashOf::from_untyped_unchecked(Hash::from(entrypoint.hash())))
-                .filter(|transaction_hash| {
-                    !staged_merge_queue_reservation_hashes.contains(transaction_hash)
+                .map(|entrypoint| entrypoint.hash())
+                .filter(|entrypoint_hash| {
+                    !staged_merge_queue_reservation_hashes.contains(entrypoint_hash)
                 }),
             None,
         );

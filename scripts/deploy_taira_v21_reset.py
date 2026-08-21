@@ -74,7 +74,6 @@ PEER_COUNT = taira_constants.PEER_COUNT
 CHAIN_ID = taira_constants.CHAIN_ID
 CHAIN_DISCRIMINANT = taira_constants.CHAIN_DISCRIMINANT
 NETWORK_NAME = taira_constants.NETWORK_NAME
-NETWORK_ID = taira_constants.NETWORK_ID
 PROTOCOL_VERSION = 4
 TAIRA_LANE_COUNT = 7
 UNIVERSAL_DATASPACE_ID = 0
@@ -192,8 +191,12 @@ TORII_PORTS = tuple(29_080 + index for index in range(PEER_COUNT))
 P2P_PORTS = tuple(33_337 + index for index in range(PEER_COUNT))
 TOP_LEVEL_NAMES = {
     "base-config.toml",
+    "genesis.identity.toml",
     "genesis.json",
+    "genesis.pre-sign-rendered.json",
+    "genesis.reviewed-unsigned.json",
     "genesis.signed.nrt",
+    "nevo-reset.review.json",
     "rendered",
     "reset-manifest.json",
     "validator-roster.toml",
@@ -202,6 +205,7 @@ VALIDATOR_NAMES = {"codec", "config.toml", "configs", "manifests", "runtime", "s
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 GENESIS_PUBLIC_KEY_RE = re.compile(r"ed0120[0-9A-F]{64}")
+MAX_GENESIS_IDENTITY_BYTES = 4 * 1024
 RECEIPT_PUBLIC_PAYLOAD_RE = re.compile(r"(?:02|03)[0-9a-f]{64}")
 LIFECYCLE_NODE_ID_RE = re.compile(
     r"taira-node:receipt-signer:secp256k1:sha256:[0-9a-f]{64}"
@@ -327,6 +331,41 @@ def require_genesis_expected_hash(value: object) -> str:
     if int(value[-2:], 16) & 1 == 0:
         fail("genesis expected hash must carry the Iroha marker bit")
     return value
+
+def canonical_genesis_identity(expected_hash: str) -> bytes:
+    """Return the only admitted paired client/validator trust-root encoding."""
+
+    return (
+        f'network_id = "{expected_hash}"\n\n'
+        f'[genesis]\nexpected_hash = "{expected_hash}"\n'
+    ).encode("ascii")
+
+def require_genesis_identity(
+    manifest: dict[str, Any],
+    path: Path,
+    expected_hash: str,
+) -> os.stat_result:
+    """Authenticate the manifest-bound canonical deployment identity."""
+
+    expected_digest = require_sha256(
+        manifest.get("genesis_identity_sha256"),
+        "reset manifest genesis_identity_sha256",
+    )
+    payload, info = read_regular(path, MAX_GENESIS_IDENTITY_BYTES)
+    if hashlib.sha256(payload).hexdigest() != expected_digest:
+        fail(
+            "reset manifest genesis_identity_sha256 does not match "
+            "genesis.identity.toml"
+        )
+    if payload != canonical_genesis_identity(expected_hash):
+        fail("genesis.identity.toml is not the canonical paired deployment identity")
+    return info
+
+def network_id_from_genesis_expected_hash(value: object) -> str:
+    """Derive the canonical NetworkId bound to an authenticated reset genesis."""
+
+    genesis_hash = require_genesis_expected_hash(value)
+    return validator_renderer._format_literal("hash", genesis_hash.upper())
 
 def require_commit(value: object, label: str = "expected source commit") -> str:
     """Require one full nonzero lowercase Git object id."""
@@ -1041,6 +1080,7 @@ class BundlePlan:
     manifest_sha256: str
     manifest_identity: tuple[int, ...]
     signed_genesis_identity: tuple[int, ...]
+    genesis_identity_file_identity: tuple[int, ...]
     receipt_signers: tuple[ReceiptSignerPlan, ...]
     peers: tuple[PeerPlan, ...]
     bundle_bytes: int
@@ -1561,6 +1601,9 @@ def validate_config_projection(
     kagemusha_offline_projection: Optional[dict[str, object]] = None,
 ) -> None:
     """Require exact public-Taira, storage, port, and genesis configuration."""
+    expected_hash_literal = validator_renderer._format_literal(
+        "hash", genesis_expected_hash.upper()
+    )
     if (
         config.get("chain") != CHAIN_ID
         or config.get("chain_discriminant") != CHAIN_DISCRIMINANT
@@ -1611,7 +1654,7 @@ def validate_config_projection(
     if (
         genesis.get("file") != str(bundle / "genesis.signed.nrt")
         or genesis.get("public_key") != genesis_public_key
-        or genesis.get("expected_hash") != genesis_expected_hash
+        or genesis.get("expected_hash") != expected_hash_literal
     ):
         fail(
             "validator config does not bind the reset bundle signed genesis, "
@@ -1691,6 +1734,7 @@ def validate_bundle(
     expected_dpn_validator_release_commit: str,
     minimum_free_bytes: int,
     maximum_fsync_latency_ms: int,
+    headroom_anchor: Optional[Path] = None,
 ) -> BundlePlan:
     """Authenticate a fresh v21 bundle without changing it or running binaries."""
 
@@ -1752,6 +1796,11 @@ def validate_bundle(
         fail("reset manifest lacks one canonical genesis public key")
     genesis_expected_hash = require_genesis_expected_hash(
         manifest.get("genesis_expected_hash")
+    )
+    genesis_identity_info = require_genesis_identity(
+        manifest,
+        bundle / "genesis.identity.toml",
+        genesis_expected_hash,
     )
     _, signed_genesis_info = require_manifest_hash(
         manifest,
@@ -1856,7 +1905,7 @@ def validate_bundle(
         [
             bundle,
             *(peer.storage for peer in peers),
-            INSTALL_ROOT / "runtime",
+            headroom_anchor if headroom_anchor is not None else INSTALL_ROOT / "runtime",
         ],
         minimum_free_bytes,
     )
@@ -1875,6 +1924,7 @@ def validate_bundle(
         manifest_sha256=manifest_sha256,
         manifest_identity=metadata_identity(manifest_info),
         signed_genesis_identity=metadata_identity(signed_genesis_info),
+        genesis_identity_file_identity=metadata_identity(genesis_identity_info),
         receipt_signers=receipt_signers,
         peers=tuple(peers),
         bundle_bytes=bundle_bytes,
@@ -3386,6 +3436,15 @@ def require_mutable_bundle_identities(bundle: BundlePlan, *, phase: str) -> None
         fail(f"signed genesis changed {phase}")
     if metadata_identity(signed_info) != bundle.signed_genesis_identity:
         fail(f"signed genesis identity changed {phase}")
+    identity_payload, identity_info = read_regular(
+        bundle.root / "genesis.identity.toml", MAX_GENESIS_IDENTITY_BYTES
+    )
+    if hashlib.sha256(identity_payload).hexdigest() != bundle.manifest.get(
+        "genesis_identity_sha256"
+    ):
+        fail(f"genesis deployment identity changed {phase}")
+    if metadata_identity(identity_info) != bundle.genesis_identity_file_identity:
+        fail(f"genesis deployment identity inode changed {phase}")
     for peer in bundle.peers:
         require_exact_names(peer.workdir, VALIDATOR_NAMES, f"{peer.slug} runtime root")
         workdir_info = require_private_entry(
@@ -4213,6 +4272,9 @@ def apply_reset(
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
 
+    genesis_block_hash = require_genesis_expected_hash(
+        bundle.manifest.get("genesis_expected_hash")
+    )
     report: dict[str, Any] = {
         "applied": True,
         "absent_old_children": sorted(
@@ -4226,11 +4288,9 @@ def apply_reset(
         "chain_id": CHAIN_ID,
         "config_set_sha256": deployed_config_set_sha256(bundle),
         "deployment_completed_at_unix_ms": deployment_completed_at_unix_ms(),
-        "genesis_block_hash": require_genesis_expected_hash(
-            bundle.manifest.get("genesis_expected_hash")
-        ),
+        "genesis_block_hash": genesis_block_hash,
         "nexus_topology": restarted.nexus_topology,
-        "network_id": NETWORK_ID,
+        "network_id": network_id_from_genesis_expected_hash(genesis_block_hash),
         "network_name": NETWORK_NAME,
         "protocol_version": PROTOCOL_VERSION,
         "signed_genesis_sha256": require_sha256(

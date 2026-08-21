@@ -13,5 +13,3 @@ fn native_amx_signing_guard_capacity_preserves_explicit_runtime_bound() {
         .expect("explicit capacity");
     assert_eq!(capacity.get(), 128);
 }
-
-include!("passive_diagnostic_status_test_support.rs");

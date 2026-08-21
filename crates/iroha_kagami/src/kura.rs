@@ -395,10 +395,8 @@ mod tests {
                 merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
                 fsync_mode: FsyncMode::Batched,
                 fsync_interval: FSYNC_INTERVAL,
-                block_sync_roster_retention:
-                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-                roster_sidecar_retention:
-                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                lane_history_retention:
+                    iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
                 replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             },
             &LaneConfig::default(),

@@ -173,7 +173,7 @@ v2_apply_test!(
             expected_fifo,
             expected_reservation_keys
                 .iter()
-                .map(|key| key.signed_transaction_hash)
+                .map(|key| key.entrypoint_hash)
                 .collect::<Vec<_>>(),
             "reservation keys must retain the original FIFO transaction order"
         );
@@ -521,11 +521,11 @@ v2_apply_test!(
         };
         assert_eq!(
             lane_work.accept_lane_message(
-                crate::sumeragi::InboundBlockMessage::new(
+                crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
                     crate::sumeragi::message::BlockMessage::LaneBlockCertificate(Box::new(
                         certificate,
                     )),
-                    Some(PeerId::new(validator_keys[0].public_key().clone())),
+                    PeerId::new(validator_keys[0].public_key().clone()),
                 ),
                 0,
             ),
@@ -552,8 +552,12 @@ v2_apply_test!(
         assert_eq!(source.input.reservation_keys, expected_reservation_keys);
         assert_eq!(source.input.routing_plans, expected_routing_plans);
         assert_eq!(
-            source.input.autonomous_payload_hash,
-            Some(install.payload.payload_hash)
+            source.input.source.autonomous_binding(),
+            Some((
+                install.payload.network_id,
+                install.payload.epoch,
+                install.payload.payload_hash,
+            ))
         );
         assert_eq!(
             source.source_bundle,
@@ -598,7 +602,7 @@ v2_apply_test!(
                 .as_ref()
                 .expect("historical Native source retains every receipt");
             let mut source_id = [0_u8; Hash::LENGTH];
-            source_id.copy_from_slice(reservation.signed_transaction_hash.as_ref());
+            source_id.copy_from_slice(reservation.entrypoint_hash.as_ref());
             let expected_v2_context = crate::block::expected_native_amx_v2_context_from_receipt(
                 receipt,
                 install.payload.epoch,
@@ -924,7 +928,7 @@ v2_apply_test!(
         assert!(
             expected_fifo
                 .iter()
-                .all(|hash| !fixture.state.has_committed_transaction(*hash))
+                .all(|hash| !fixture.state.has_committed_entrypoint(*hash))
         );
         assert_eq!(
             fixture
@@ -1041,7 +1045,7 @@ v2_apply_test!(
             vec![Arc::new(entry.clone())]
         );
         for transaction_hash in &expected_fifo {
-            assert!(fixture.state.has_committed_transaction(*transaction_hash));
+            assert!(fixture.state.has_committed_entrypoint(*transaction_hash));
         }
         assert_eq!(
             autonomous_balance(),
@@ -1053,7 +1057,7 @@ v2_apply_test!(
         assert!(queue.lane_reservation_commit_barriers().is_empty());
         assert!(queue.lane_reservation_release_barriers().is_empty());
         for key in &expected_reservation_keys {
-            assert!(!queue.has_durable_plan_claim_for_test(key.signed_transaction_hash));
+            assert!(!queue.has_durable_plan_claim_for_test(key.entrypoint_hash));
         }
         assert!(
             queue.lane_reservation_group_is_finalized_for_diagnostics(&expected_reservation_keys)
@@ -1326,7 +1330,7 @@ v2_apply_test!(
         assert!(
             expected_fifo
                 .iter()
-                .all(|hash| fixture.state.has_committed_transaction(*hash))
+                .all(|hash| fixture.state.has_committed_entrypoint(*hash))
         );
         let replanning = plan_lane_application_evidence_repair(
             &startup_context,
@@ -1362,7 +1366,7 @@ v2_apply_test!(
                 .is_empty()
         );
         for key in &expected_reservation_keys {
-            assert!(!terminal_queue.has_durable_plan_claim_for_test(key.signed_transaction_hash));
+            assert!(!terminal_queue.has_durable_plan_claim_for_test(key.entrypoint_hash));
         }
         assert!(
             terminal_queue

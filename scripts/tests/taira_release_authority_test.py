@@ -38,7 +38,7 @@ def _exercise_structural_checks_behind_native_authority_barrier(
     monkeypatch.setattr(
         authority.taira_authority_client,
         "preflight",
-        lambda role: {"role": role, "status": "ready"},
+        lambda role, **_kwargs: {"role": role, "status": "ready"},
     )
     monkeypatch.setattr(
         authority.taira_authority_client,
@@ -69,7 +69,7 @@ def test_native_client_preflight_precedes_subject_and_authorization(
     monkeypatch.setattr(
         authority.taira_authority_client,
         "preflight",
-        lambda role: calls.append(("preflight", role)),
+        lambda role, **_kwargs: calls.append(("preflight", role)),
     )
     monkeypatch.setattr(
         authority,

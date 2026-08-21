@@ -337,7 +337,7 @@ def test_finalizer_rejects_non_exact_public_privacy_input_inventory(
     else:
         (public_inputs / "unexpected").write_bytes(b"unexpected\n")
 
-    with pytest.raises(finalizer.FinalizationError, match="exactly four"):
+    with pytest.raises(finalizer.FinalizationError, match="exactly five"):
         finalizer.finalize(args)
 
 

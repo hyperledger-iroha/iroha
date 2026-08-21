@@ -37,12 +37,12 @@ before it applies; this is governed chain state, not local `[sumeragi]` config.
 
    ```bash
    iroha --output-format text ops sumeragi status
-   iroha --output-format text ops sumeragi telemetry
+   iroha --output-format text ops sumeragi vrf-epoch --epoch <epoch>
    ```
 
    The status output records authoritative leader/view and durable consensus
-   state. Collector/RBC-named fields in the legacy aggregate telemetry endpoint
-   are compatibility diagnostics and may remain zero on revision 4.
+   state. The epoch command reads the committed VRF record for the selected
+   epoch; use `/metrics` separately for node-local observations.
 3. Capture the epoch number you intend to audit:
 
    ```bash

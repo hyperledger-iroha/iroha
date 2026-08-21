@@ -17,6 +17,7 @@ fn sample_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
         verifier_version: "v1".to_string(),
         target_dsids: vec![dsid.as_u64()],
         effect_binding: None,
+        remote_spend_intent_commitments: vec![[0x11; 32], [0x22; 32]],
     }
 }
 #[test]
@@ -37,4 +38,11 @@ fn axt_proof_envelope_roundtrip() {
     assert_eq!(decoded, envelope);
     assert_eq!(decoded.dsid, dsid);
     assert_eq!(decoded.manifest_root, [0xAB; 32]);
+    assert_eq!(
+        decoded
+            .fastpq_binding
+            .expect("roundtripped FASTPQ binding")
+            .remote_spend_intent_commitments,
+        vec![[0x11; 32], [0x22; 32]]
+    );
 }

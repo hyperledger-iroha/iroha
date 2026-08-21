@@ -3,19 +3,17 @@ use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
     NetworkId,
     block::BlockHeader,
-    da::commitment::DaProofScheme,
     merge::{
         LaneDrainCertificateV1, MERGE_LEDGER_ENTRY_VERSION_V2, MergeExecutionBatch,
         MergeLaneBinding, MergeLaneExecution, MergeLaneSnapshot, MergeLedgerEntry,
         MergeQuorumCertificate,
     },
-    nexus::{DataSpaceId, LaneConfig, LaneId, LaneStorageProfile, LaneVisibility, ShardId},
+    nexus::{LaneCatalog, LaneConfig},
     peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 use iroha_zkp_halo2::poseidon;
 use norito::codec::{Decode, Encode};
-use std::collections::BTreeMap;
 /// Domain separator applied to the merge-hint reduction payloads.
 const MERGE_REDUCE_DOMAIN_TAG: &[u8] = b"iroha:merge:reduce:v1\0";
 /// Domain separator applied to merge-committee signature payloads.
@@ -24,8 +22,8 @@ const MERGE_QC_DOMAIN_TAG: &[u8] = b"iroha:merge:qc:v2\0";
 const MERGE_ACTIVATION_ROOT_DOMAIN_TAG: &[u8] = b"iroha:merge:lane-activations:v1\0";
 /// Domain separator for individual lane configuration commitments.
 const MERGE_LANE_CONFIG_DOMAIN_TAG: &[u8] = b"iroha:merge:lane-config:v2\0";
-/// Layout version for the consensus-relevant lane configuration projection.
-const MERGE_LANE_CONFIG_PROJECTION_VERSION: u16 = 1;
+/// Domain separator for a complete consensus-relevant lane catalog commitment.
+const MERGE_LANE_CONSENSUS_CATALOG_DOMAIN_TAG: &[u8] = b"iroha:merge:lane-consensus-catalog:v1\0";
 /// Domain separator for one lane execution transcript.
 const MERGE_LANE_EXECUTION_DOMAIN_TAG: &[u8] = b"iroha:merge:lane-execution:v1\0";
 /// Domain separator for the ordered execution root.
@@ -65,8 +63,6 @@ pub struct MergeLedgerCandidate {
     pub execution_batch: Option<MergeExecutionBatch>,
     /// Lane-committee drain certificates globally ordered by this candidate.
     pub lane_drain_certificates: Vec<LaneDrainCertificateV1>,
-    /// Exact canonical queue-plan admission certificate bytes in source order.
-    pub queue_plan_admissions: Vec<Vec<u8>>,
     /// Deterministic reduction of `merge_hint_roots` across all lanes.
     pub global_state_root: Hash,
 }
@@ -124,7 +120,6 @@ impl MergeLedgerCandidate {
             lane_snapshots: self.lane_snapshots,
             execution_batch: self.execution_batch,
             lane_drain_certificates: self.lane_drain_certificates,
-            queue_plan_admissions: self.queue_plan_admissions,
             global_state_root: self.global_state_root,
             merge_qc,
         }
@@ -145,7 +140,6 @@ impl From<&MergeLedgerEntry> for MergeLedgerCandidate {
             lane_snapshots: entry.lane_snapshots.clone(),
             execution_batch: entry.execution_batch.clone(),
             lane_drain_certificates: entry.lane_drain_certificates.clone(),
-            queue_plan_admissions: entry.queue_plan_admissions.clone(),
             global_state_root: entry.global_state_root,
         }
     }
@@ -193,7 +187,6 @@ struct MergeLedgerSignPayload {
     lane_snapshots: Vec<MergeLaneSnapshot>,
     execution_batch: Option<MergeExecutionBatch>,
     lane_drain_certificates: Vec<LaneDrainCertificateV1>,
-    queue_plan_admissions: Vec<Vec<u8>>,
     global_state_root: Hash,
 }
 /// Compute the deterministic message digest for merge-committee signatures.
@@ -220,7 +213,6 @@ pub fn merge_qc_message_digest(
         lane_snapshots: candidate.lane_snapshots.clone(),
         execution_batch: candidate.execution_batch.clone(),
         lane_drain_certificates: candidate.lane_drain_certificates.clone(),
-        queue_plan_admissions: candidate.queue_plan_admissions.clone(),
         global_state_root: candidate.global_state_root,
     };
     let payload_bytes = payload.encode();
@@ -235,61 +227,23 @@ pub fn merge_activation_root(active_lanes: &[MergeLaneBinding]) -> Hash {
     let encoded = active_lanes.to_vec().encode();
     Hash::new_from_chunks(&[MERGE_ACTIVATION_ROOT_DOMAIN_TAG, encoded.as_slice()])
 }
-#[derive(Encode)]
-struct MergeLaneConfigConsensusProjection {
-    version: u16,
-    id: LaneId,
-    shard_id: ShardId,
-    dataspace_id: DataSpaceId,
-    visibility: LaneVisibility,
-    lane_type: Option<String>,
-    governance: Option<String>,
-    settlement: Option<String>,
-    storage: LaneStorageProfile,
-    proof_scheme: DaProofScheme,
-    metadata: BTreeMap<String, String>,
-}
-impl MergeLaneConfigConsensusProjection {
-    fn from_lane(lane: &LaneConfig) -> Self {
-        // Keep this destructuring exhaustive so adding a field to `LaneConfig`
-        // requires an explicit decision about whether consensus must bind it.
-        let LaneConfig {
-            id,
-            shard_id: _,
-            dataspace_id,
-            alias: _,
-            description: _,
-            visibility,
-            lane_type,
-            governance,
-            settlement,
-            storage,
-            proof_scheme,
-            metadata,
-        } = lane;
-        Self {
-            version: MERGE_LANE_CONFIG_PROJECTION_VERSION,
-            id: *id,
-            shard_id: lane.effective_shard_id(),
-            dataspace_id: *dataspace_id,
-            visibility: *visibility,
-            lane_type: lane_type.clone(),
-            governance: governance.clone(),
-            settlement: settlement.clone(),
-            storage: *storage,
-            proof_scheme: *proof_scheme,
-            metadata: metadata.clone(),
-        }
-    }
-}
 /// Compute the canonical consensus configuration hash embedded in an active merge binding.
 ///
-/// Human-facing aliases and descriptions remain committed by the exact catalog
-/// hash, but do not alter the lane consensus projection.
+/// Human-facing aliases, descriptions, and arbitrary instrumentation metadata remain committed by
+/// the exact lifecycle catalog hash, but do not alter this functional projection.
 #[must_use]
 pub fn merge_lane_config_hash(lane: &LaneConfig) -> Hash {
-    let encoded = MergeLaneConfigConsensusProjection::from_lane(lane).encode();
+    let encoded = lane.consensus_projection().encode();
     Hash::new_from_chunks(&[MERGE_LANE_CONFIG_DOMAIN_TAG, encoded.as_slice()])
+}
+/// Compute the canonical functional configuration hash of a complete lane catalog.
+///
+/// This shares the exact projection used by [`merge_lane_config_hash`] and binds the sparse
+/// namespace bound as well as the canonically ordered active lanes.
+#[must_use]
+pub fn merge_lane_consensus_catalog_hash(catalog: &LaneCatalog) -> Hash {
+    let encoded = catalog.consensus_projection().encode();
+    Hash::new_from_chunks(&[MERGE_LANE_CONSENSUS_CATALOG_DOMAIN_TAG, encoded.as_slice()])
 }
 /// Compute the canonical digest of one lane execution transcript.
 #[must_use]
@@ -519,8 +473,34 @@ pub fn reduce_merge_hint_roots(roots: &[Hash]) -> Hash {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::nexus::{LaneCatalog, LaneLifecycleParameterV1};
-    use std::num::NonZeroU32;
+    use iroha_data_model::{
+        da::{
+            commitment::DaProofScheme,
+            confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
+        },
+        nexus::{
+            DaManifestPolicy, DataSpaceId, LaneId, LaneLifecycleParameterV1, LaneSchedulerPolicy,
+            LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility, ShardId,
+        },
+    };
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        num::{NonZeroU32, NonZeroU64},
+    };
+    fn settlement_buffer_policy() -> LaneSettlementBufferPolicy {
+        let keypair =
+            iroha_crypto::KeyPair::try_from_seed(vec![0xA5; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("settlement account key");
+        LaneSettlementBufferPolicy::new(
+            iroha_data_model::account::AccountId::new(keypair.public_key().clone()),
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                iroha_data_model::domain::DomainId::try_new("settlement", "universal")
+                    .expect("settlement domain"),
+                "xor".parse().expect("asset name"),
+            ),
+            "500".parse().expect("positive XOR capacity"),
+        )
+    }
     fn exact_catalog_hash(lane: LaneConfig) -> Hash {
         let catalog = LaneCatalog::new(NonZeroU32::new(1).expect("one is non-zero"), vec![lane])
             .expect("single default-id lane must form a valid catalog");
@@ -536,27 +516,49 @@ mod tests {
         renamed.alias = "renamed-primary".to_owned();
         let mut redescribed = base.clone();
         redescribed.description = Some("Updated operator-facing description".to_owned());
+        let mut reannotated = base.clone();
+        reannotated
+            .metadata
+            .insert("operator.policy".to_owned(), "strict".to_owned());
         let consensus_hash = merge_lane_config_hash(&base);
         assert_eq!(merge_lane_config_hash(&renamed), consensus_hash);
         assert_eq!(merge_lane_config_hash(&redescribed), consensus_hash);
+        assert_eq!(merge_lane_config_hash(&reannotated), consensus_hash);
+        let consensus_catalog_hash = merge_lane_consensus_catalog_hash(
+            &LaneCatalog::new(NonZeroU32::MIN, vec![base.clone()]).expect("base catalog"),
+        );
+        for lane in [&renamed, &redescribed, &reannotated] {
+            let catalog = LaneCatalog::new(NonZeroU32::MIN, vec![lane.clone()])
+                .expect("display-only variant catalog");
+            assert_eq!(
+                merge_lane_consensus_catalog_hash(&catalog),
+                consensus_catalog_hash
+            );
+        }
         let exact_hash = exact_catalog_hash(base);
         assert_ne!(exact_catalog_hash(renamed), exact_hash);
         assert_ne!(exact_catalog_hash(redescribed), exact_hash);
+        assert_ne!(exact_catalog_hash(reannotated), exact_hash);
     }
     #[test]
-    fn merge_lane_config_hash_commits_every_functional_field_and_all_metadata() {
+    fn merge_lane_config_hash_commits_every_typed_policy_field() {
         let mut base = LaneConfig {
             lane_type: Some("retail".to_owned()),
             governance: Some("boi".to_owned()),
             settlement: Some("gross".to_owned()),
+            storage: LaneStorageProfile::SplitReplica,
+            scheduler: Some(LaneSchedulerPolicy::new(
+                Some(NonZeroU64::new(100).expect("positive capacity")),
+                None,
+            )),
             ..LaneConfig::default()
         };
-        base.metadata
-            .insert("consensus.max_txs".to_owned(), "100".to_owned());
         base.metadata
             .insert("operator.policy".to_owned(), "strict".to_owned());
         let mut changed_id = base.clone();
         changed_id.id = LaneId::new(1);
+        let mut changed_shard = base.clone();
+        changed_shard.shard_id = Some(ShardId::new(7));
         let mut changed_dataspace = base.clone();
         changed_dataspace.dataspace_id = DataSpaceId::new(7);
         let mut changed_visibility = base.clone();
@@ -568,26 +570,36 @@ mod tests {
         let mut changed_settlement = base.clone();
         changed_settlement.settlement = Some("net".to_owned());
         let mut changed_storage = base.clone();
-        changed_storage.storage = LaneStorageProfile::SplitReplica;
-        let mut changed_metadata_value = base.clone();
-        changed_metadata_value
-            .metadata
-            .insert("consensus.max_txs".to_owned(), "101".to_owned());
-        let mut changed_metadata_entries = base.clone();
-        changed_metadata_entries
-            .metadata
-            .insert("consensus.timeout_ms".to_owned(), "500".to_owned());
+        changed_storage.storage = LaneStorageProfile::CommitmentOnly;
+        let mut changed_manifest_policy = base.clone();
+        changed_manifest_policy.manifest_policy = DaManifestPolicy::Audit;
+        let mut changed_confidential_compute = base.clone();
+        changed_confidential_compute.confidential_compute = Some(ConfidentialComputePolicy::new(
+            ConfidentialComputeMechanism::SecretSharing,
+            NonZeroU32::new(7).expect("key version is positive"),
+            BTreeSet::from(["auditor".to_owned()]),
+        ));
+        let mut changed_scheduler = base.clone();
+        changed_scheduler.scheduler = Some(LaneSchedulerPolicy::new(
+            Some(NonZeroU64::new(101).expect("positive capacity")),
+            None,
+        ));
+        let mut changed_settlement_buffer = base.clone();
+        changed_settlement_buffer.settlement_buffer = Some(settlement_buffer_policy());
         let baseline_hash = merge_lane_config_hash(&base);
         for (field, changed) in [
             ("id", changed_id),
+            ("shard_id", changed_shard),
             ("dataspace_id", changed_dataspace),
             ("visibility", changed_visibility),
             ("lane_type", changed_lane_type),
             ("governance", changed_governance),
             ("settlement", changed_settlement),
             ("storage", changed_storage),
-            ("metadata value", changed_metadata_value),
-            ("metadata entries", changed_metadata_entries),
+            ("manifest_policy", changed_manifest_policy),
+            ("confidential_compute", changed_confidential_compute),
+            ("scheduler", changed_scheduler),
+            ("settlement_buffer", changed_settlement_buffer),
         ] {
             assert_ne!(
                 merge_lane_config_hash(&changed),
@@ -610,15 +622,24 @@ mod tests {
             settlement: Some("gross".to_owned()),
             storage: LaneStorageProfile::SplitReplica,
             proof_scheme: DaProofScheme::MerkleSha256,
+            manifest_policy: DaManifestPolicy::Audit,
+            confidential_compute: Some(ConfidentialComputePolicy::new(
+                ConfidentialComputeMechanism::SecretSharing,
+                NonZeroU32::new(7).expect("key version is positive"),
+                BTreeSet::from(["auditor".to_owned()]),
+            )),
+            scheduler: Some(LaneSchedulerPolicy::new(
+                Some(NonZeroU64::new(100).expect("positive capacity")),
+                None,
+            )),
+            settlement_buffer: Some(settlement_buffer_policy()),
             metadata: BTreeMap::new(),
         };
-        lane.metadata
-            .insert("consensus.max_txs".to_owned(), "100".to_owned());
         lane.metadata
             .insert("operator.policy".to_owned(), "strict".to_owned());
         assert_eq!(
             merge_lane_config_hash(&lane).to_string(),
-            "3cfede3ff6488a005392fe462b04975fdc81214ab52ae2bd90203c5271130027"
+            "24e4eae584318ad03184f31d855660d0514bba520ba27e474f1cdfbcdbea75f5"
         );
     }
     #[test]
@@ -734,7 +755,6 @@ mod tests {
             }],
             execution_batch: None,
             lane_drain_certificates: Vec::new(),
-            queue_plan_admissions: Vec::new(),
             global_state_root: Hash::new(b"global"),
         };
         let canonical_candidate_bytes = candidate.canonical_bytes();
@@ -781,21 +801,6 @@ mod tests {
             digest_a,
             merge_qc_message_digest(&network_id, &other_version, 1, validator_set_hash),
             "the entry layout version must be bound into the merge QC signature payload"
-        );
-        let mut with_queue_plan_admission = candidate.clone();
-        with_queue_plan_admission.queue_plan_admissions = vec![
-            norito::to_bytes(&Hash::new(b"queue-plan-admission"))
-                .expect("opaque admission fixture encodes"),
-        ];
-        assert_ne!(
-            digest_a,
-            merge_qc_message_digest(
-                &network_id,
-                &with_queue_plan_admission,
-                1,
-                validator_set_hash,
-            ),
-            "exact queue-plan admission bytes must be bound into the merge QC signature payload"
         );
         let drain_keypair = KeyPair::try_from_seed(
             b"merge-digest-drain-validator".to_vec(),

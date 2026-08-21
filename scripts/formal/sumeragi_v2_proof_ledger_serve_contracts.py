@@ -994,24 +994,6 @@ SERVE_LIFECYCLE_FORBIDDEN_OPERATOR_TOKENS.update(
     }
 )
 
-_SERVE_LIFECYCLE_REGRESSION_TEST_SHA256 = {
-    "certified_serve_receiver_close_rolls_back_pending_capacity_replacement": (
-        "84b842c16236650617b87549fed2bb9e5749c37c10e1420c5106d9f43e27dae2"
-    ),
-    "certified_serve_receiver_close_rolls_back_materialized_unclaimed_replacement": (
-        "b25a9bde54862c23946d9a0565fd35f62eb94ef8f0eb31bee1487470fb164e95"
-    ),
-    "certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement": (
-        "20ebeffbe165ee149930b7acff321bf44b64e4fe07f03ba4dad541304f429ec6"
-    ),
-    "certified_serve_terminal_replay_source_retains_retired_route_and_reconnects": (
-        "500a95efa15a2105f4ed42cf80160fc7d1ba18173ecbcad7baf394a48db4894c"
-    ),
-    "certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fifo": (
-        "90c1c4bbb4c2cfea2f277d0864825da1eada534e2d18b383e800fb73dacc4c26"
-    ),
-}
-
 _WORKER_TEST_INCLUDE_SOURCE_SHA256 = {
     "v2_worker_reply_route_cases.rs": (
         "c742bc186239447a039bc823aa2efd3bd654291811f7508538bb0194aa660217"
@@ -1020,19 +1002,10 @@ _WORKER_TEST_INCLUDE_SOURCE_SHA256 = {
         "fdbcc73d2d6dbe68e0ffa683f9a6413043e58a7b5013df9c8f080ca4185b26e5"
     ),
     "v2_worker_recovered_lifecycle_output_cases.rs": (
-        "101004202bb87e98d9372d80563277db29df21889f6df957fc3a131b7f8d3bc4"
+        "15ba2beabaec09f4b91fe0c3356c5ef7c6684abfa38fe0c2d9cca1d63fe48ff5"
     ),
     "v2_worker_nonzero_view_restart.rs": (
         "b4e023c528ce068df688c6470a27a25ba14df45fb7553f053f8877cdda253fa9"
-    ),
-    "v2_worker_serve_unsealed_cases.rs": (
-        "aaeeebba50f95dff140bda57b82be1c2379dc2e7c5330639e9cb0a02fe77b842"
-    ),
-    "v2_worker_serve_decision_restart_cases.rs": (
-        "4756497a5ce66a906a0b1e8195afe6e6978c55f88acb1ea7ca0ae0bbce131de6"
-    ),
-    "v2_worker_certified_serve_budget_cases.rs": (
-        "0bad66535d74184e0576248ed79fd63754bc38f82c765126459bdcf5489a61ff"
     ),
 }
 
@@ -1041,153 +1014,8 @@ _WORKER_TEST_INCLUDE_TEST_COUNT = {
     "v2_worker_backpressure_cases.rs": 21,
     "v2_worker_recovered_lifecycle_output_cases.rs": 8,
     "v2_worker_nonzero_view_restart.rs": 1,
-    "v2_worker_serve_unsealed_cases.rs": 23,
-    "v2_worker_serve_decision_restart_cases.rs": 11,
-    "v2_worker_certified_serve_budget_cases.rs": 13,
 }
 
-_SERVE_TERMINAL_DISCHARGE_WORKER_ITEM_SHA256 = {
-    "fully_authenticate_persisted_certified_serve_request": (
-        "850bbd84bdbb6b00ad7f6a60189cb24ab78f2f859c1b853658c3877fe51d27de"
-    ),
-    "validate_persisted_certified_serve_terminal_outcomes": (
-        "cc4cd229b6caf35425f3a055cd02f254e95df35fe88ce71eb2da7b1c28d8326d"
-    ),
-    "discharge_restored_certified_serve_lifecycles": (
-        "2e10d5070cd6f0e3cc969b87992de444001f069e88d28abde647fa1dc07277b0"
-    ),
-    "V2IoCommandQueue::begin_decision_serve_reconciliation": (
-        "f85805fd7fd696c83ea81898515f35d88d71089f1b242dd1a4ab417fedd2cb25"
-    ),
-    "V2IoCommandQueue::finish_decision_serve_reconciliation": (
-        "2e4664fd343921017ff75884e330517123f4c4ad64dbdff4a6cc54e7d99f7360"
-    ),
-    "V2IoCommandQueue::convert_exact_terminal_retry_after_decision": (
-        "82d7a24819444b6aa420cfc3508f8273135139ba2aa1bfce92132d6efbd343af"
-    ),
-    "V2IoCommandQueue::serve_lifecycle_has_live_ingress_carrier": (
-        "34cd86f08eb05fcf22f93e7eb43f9cfba420c93367ca9a7fa3f584bd5458465d"
-    ),
-    "V2IoCommandQueue::stage_selected_serve_rejection": (
-        "b738358338981eab7438837115ca15d2612b20707a4f3c02059e0ff054314c74"
-    ),
-    "V2IoCommandQueue::publish_serve_ingress_physical_drain": (
-        "381d1fcf02175284df667ab50340f90e78bcd861d8b0d25026c2e9e679721cc3"
-    ),
-    "V2IoCommandQueue::serve_completion_delivery_ownership": (
-        "27517081197cd425d8a5b3cc3e8db5e792d321b4f6f7d92049af39b356395b8a"
-    ),
-    "V2IoCommandQueue::complete_serve_response": (
-        "621e0544277fbbe138465d2646f1aedbc58018775f993c323e3447ab928342ca"
-    ),
-    "V2IoCommandQueue::acknowledge_serve_completion": (
-        "5b5410c3e68627f94b6957775d7529be346d41b7d49eeaf2430b151173a1a7ff"
-    ),
-}
-
-_SERVE_TERMINAL_DISCHARGE_EFFECT_ITEM_SHA256 = {
-    "step": "c56df5c78384e0685390837f6442bf17f81f37134a840445cb2522326a226bcb",
-    "step_pending_tip_recovery": (
-        "2fea51da5e34af31e90c8a42ed6915cb8d6e64dc18a7df89ef0a0545b81b6f94"
-    ),
-    "finish_decision_serve_reconciliation": (
-        "695fd230a5bfef0530212cf253e6a76d1c79a5757c3a026c819f5736b79a2578"
-    ),
-}
-
-_SERVE_TERMINAL_DISCHARGE_REGRESSION_TEST_SHA256 = {
-    "prepared_serve_carrier_is_atomically_superseded_by_decision": (
-        "8915e9df570a9a5d8791b66a3b4634160f1df99e1114d60d8384a6533d6b60a5"
-    ),
-    "established_serve_owner_survives_decision_retry_carrier_retirement": (
-        "31776b14c91b64a1c74417fe91ea97166345a9a668f31650c22f6fcf4ec2ddf9"
-    ),
-    "decision_serve_fence_rejects_conflicting_durable_subject_without_ordinals": (
-        "abfbd4a484c097d3c84a43b2f5ec24af8dbe5477fb4c92bc16cb95ae3c75be39"
-    ),
-    "decision_serve_fence_rolls_back_failed_batch_and_converts_before_ordinals": (
-        "6db5f05dc8c7c5debfe59ecc93d02ea14a852ac872087549a27a80ae3a8357e2"
-    ),
-    "active_serve_completion_after_decision_publishes_negative_without_response": (
-        "e8a1beab84ba965b77f8385f68d900cdd9a9d38ec5fb78684e341209aebcbfbe"
-    ),
-    "completion_pending_serve_is_suppressed_after_decision_before_delivery": (
-        "02cd6eaadf285e2b5ecf9c2a9c3d11d0edfcddeeee216b18fc1f8ee3e6d89b51"
-    ),
-    "production_restart_retires_raw_terminal_replay_waiter_without_resigning": (
-        "3664e45df8ce2fe473ef65a371dd21534ae07bdb820ce21d6ee2066de4ca9cea"
-    ),
-    "production_restart_atomically_supersedes_raw_terminal_replay_waiter": (
-        "a5ae8d5c0062a1a491ed4bc495f0f73fa26f000d351781d926ee7e484e749ca9"
-    ),
-    "production_restart_rejects_negative_tombstone_with_physical_retry_waiter": (
-        "c5b33aca9ad3e32b39775911563ab0a671843781243b52f2bd77931d821d9963"
-    ),
-    "same_height_foreign_context_is_rejected_before_every_serve_ordinal": (
-        "123afc268113523defc80c061549452b0f96d3dd09a9e20fda801397517637a8"
-    ),
-}
-
-_SERVE_TERMINAL_DISCHARGE_EFFECT_REGRESSION_TEST_SHA256 = {
-    "decision_serve_fence_rejects_durable_decision_loss_without_reopening": (
-        "c7608c60005b34990c8cb09781649d44a15dca4ed647269073ff068ffc8bd150"
-    ),
-}
-_SERVE_INGRESS_ORDINAL_STRUCT_SHA256 = {
-    "FairV2IngressState": (
-        "87125ed4256f628874244f9a3d8e02e1d35be4f127e7b2c78ecd0d82366a6e35"
-    ),
-    "FairV2IngressEntry": (
-        "c618e0fa2240c6622bc0c45988da2a03fafac5d26e377c6b2e46562e8d44e3be"
-    ),
-}
-_SERVE_INGRESS_ORDINAL_REGRESSION_TEST_SHA256 = {
-    "fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve": (
-        "acd2342fdaa5b68d360a911507b5d69f9c1a976f4a98388854a3f867afba118a"
-    ),
-    "fair_v2_ingress_certified_request_cutoff_blocks_later_churn": (
-        "9cd23ee174208b9c763933acbc05848c5975e144ee5afad11e864f80196fed07"
-    ),
-    "fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes": (
-        "9800b454c24f5e09f459a2bd3f2c56d38b789bf4006bf5fe54114b0f26e06ebd"
-    ),
-    "restored_productive_retry_stays_behind_an_earlier_certified_request_carrier": (
-        "8c174be5aff5c9561585c610b8a43f0f977cf77825a82e15c660ee700a9419d4"
-    ),
-    "restored_productive_retry_ordinal_exhaustion_keeps_the_owner_dormant": (
-        "e2850b0677b5219e0960641d23b79a679c1fcc84faaaa7c83db0cfe79a3e6e3b"
-    ),
-}
-_SERVE_INGRESS_GATE_IMPL_ITEM_SHA256 = {
-    "require_certified_serve_gate": (
-        "96b2844effe8a496a06b247860b8790227f1e0c31a4468bff52eeb0631cbe10b"
-    ),
-    "bind_certified_serve_gate": (
-        "b6043f8898779ce68f584813ca53882ba232c0f2cad915c9c643f00b3ad1faca"
-    ),
-    "unbind_certified_serve_gate": (
-        "16c1655f5a4fc1e1cfd65133e09a9dc336eed6cceb7470bd3bc83993d52ee034"
-    ),
-}
-_SERVE_INGRESS_GATE_REGRESSION_TEST_SHA256 = {
-    "fair_v2_ingress_required_serve_gate_precedes_open": (
-        "cde9f2ffe81621458a818cb3ec61f64809ff5f59b5ba2df06e74bb0ca3cae376"
-    ),
-}
-_SERVE_INGRESS_GATE_WORKER_REGRESSION_TEST_SHA256 = {
-    "fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers": (
-        "18af9d5d33613df8489c684650e8fde266299eed705ed67818d7cdd5d99d9f1c"
-    ),
-    "fair_ingress_gate_overflow_closes_without_partial_admission": (
-        "0262b1a40eca9b8916f51a1af1e05c443ed160398b4bf993fd99996bbdc6fe2b"
-    ),
-    "fair_ingress_rollover_retires_ticket_before_old_service_teardown": (
-        "0c27de66d91cd2c0744cf962e673de7e54881838e12f4d920cbfeabeccbcf875"
-    ),
-    "selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle": (
-        "956cda57dac79761f171293376a988eae0c1b2c8ad79dd0f5228f7a978d46f75"
-    ),
-}
 _SERVICED_CANDIDATE_STORE_STRUCT_SHA256 = {
     "ServicedCandidateKey": (
         "7ac3f413238c7b14472d7353286b7f4cd8a066be9a454ab8f398911024f1997e"
@@ -1518,7 +1346,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "fabc9cf096cec0f7c03ea8a13ebbdb00c9f6556feec6544fa2f4b719662b62f8"
     ),
     "open_with_aggregator_and_publication_with_capacity": (
-        "288424fb05c59c35ab662e7ef17e5a09b3c69e9e63071cafd73baa960e42a59f"
+        "d1eee2c7fcb9bd94d50e519f434b78d50d9887cc38bf77c1980e877822704571"
     ),
     "dormant_producer_lifecycle": (
         "3103fd04b61950b06212a9e50f4ae43b4b8ad35949566680afb8f721c133155e"
@@ -1578,7 +1406,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "b0f80b64612e436979c51bef1a607147f2fcc3c4c5b127a3738a4ca3410cc40f"
     ),
     "drive_effects": (
-        "7493eed9736bb149f208b8990ba5f1b69d1b9aa6645dc8c2ded7c91a87a20255"
+        "5adf00903e0a88fb10917c9e614352be22f3ec1feb7ec94767a5a5f4dc243a08"
     ),
 }
 _SERVICED_CANDIDATE_V4_RUNTIME_STRUCT_SHA256 = {
@@ -1615,7 +1443,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "a9dcc40ab11d2af33c91c5449a24bd524289d8a00e89ea2cdfafe99b27ed2a86"
     ),
     "with_driver_and_lifecycle_ordinals": (
-        "8b70e4c1d229b5d2fefd9eaa7f6a11a5ec6d07a0afff4dd275dc4cc7f4e972d1"
+        "42cf34f73d1e1293dd466cc4fea05b3195c7536df5b74e62fff30f50b8758511"
     ),
     "freeze_due_clock_owners": (
         "86b2abb4734419e69faafa8bd5fd0473626fb2441b94469a81a448e5f661c76e"
@@ -1626,16 +1454,13 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     "minimum_active_lifecycle_ordinal_excluding": (
         "61dfb5c5bed49fe8191be06bd09a2e929f70da89b1ff829add86f8966fd90f01"
     ),
-    "minimum_runnable_lifecycle_ordinal": (
-        "18d848ad2bd2263010994b2649313c9e3d9d1db9b2117a9c772120478bb65fd3"
-    ),
     "complete_leader_wire_runtime_owner": (
         "e17e62beccb6e2e219f3aac01c126456531ffb0448930b83026d9cf02da6695c"
     ),
     "observe_effects": (
         "23d97acae28bbe7990bc3316cb6f38f38c412511f4613657a842e12f9a5517a7"
     ),
-    "step": "bafd283fd50fe929e000481a8314f98cd0ad3aef30c8e8677a93b0784045136c",
+    "step": "aaa41e0366ae660537780528c97e763e8f292e9a80234c21d4cc37a390eea414",
     "finish_dispatched_step": (
         "79b15a8142c81629b078a64822c4bba3a7cc930d1da75eb816c7f64609021285"
     ),
@@ -1656,7 +1481,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256 = {
-    "launch": "ffd9aeeeaf6d37a912db48b17f9696346725ecff7002a4d7684d0bfe40bf457a",
+    "launch": "1a34076aed7b1758af2efd56af77b5b66cb1606d41db0e04836470497abbb626",
     "into_serialized_runtime": "1afc003a9b27312c1d9b4868eb6dc1c42d6bd4f838b3ebe383131627c40972bd",
 }
 _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256 = {
@@ -1796,7 +1621,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256 = {
         "fe0bed714176dd7a285e7dcdd448f9468c60b13aee7dcac8a8c67affc2a3c333"
     ),
     "restart_dormant_local_fifo_reservation_survives_full_class_churn": (
-        "4173b41c9622f676b9c9d412a267cb0b3b2aca91ed9725e2a5c450485d7442d9"
+        "22e6b7d6b7620598c67f3e942898d695e717bca1625f3af3572dcce450d43093"
     ),
     "restart_dormant_completion_batch_atomically_replaces_latent_slots": (
         "3eddbb9168d425d56925da39fff899a8615ebd43c63afd04fd94071849d06fbc"
@@ -1810,18 +1635,11 @@ _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256 = {
     "restored_producer_preflight_cannot_change_completion_service_class": (
         "bd1273f883c17b13d555ed690c5cfaec2b62ab159c20e2be49def98a3058e7e2"
     ),
-    "restored_serve_high_watermark_precedes_startup_runtime_owner": (
-        "73e82a3200d1ad1bc6f7a678f3632e3d885a9ae8d0367fb9aa907feb10584aa0"
-    ),
     "busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation": (
         "738c238a671607d0a0033f16839bd648eaeb3eefebae3348016414858d2869bd"
     ),
 }
-_SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256 = {
-    "invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity": (
-        "c1f6883beb0cebb4f2fded85abd8a8b88d1387a880c27b5cff9db93fcb123dda"
-    ),
-}
+_SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256 = {}
 _CORE_RUNTIME_TRANSPORT_TOKEN_SEQUENCES = {
     "outer_ingress_cursor": """
 self.next_turn = match turn {
@@ -2002,7 +1820,7 @@ _TIMEOUT_VOTE_SEMANTIC_CAPACITY_ITEM_SHA256 = {
         "329002c5d70440e4b06c7d6b7953abefffad11e097f8a6f2be43df02a07d5701"
     ),
     "admit_authenticated_payload": (
-        "b4c6e1a0d4c6f726e59c20494d6c189813b2f9b5d34fe73811219e539968ecb6"
+        "dff3664ce598bb0123c85ddf22a760eed5a2c0f9e8cb98665ab60664cfebde07"
     ),
     "prune_ingress_records": (
         "380a67be7fc040a1424c45ebbdd08fac6087450df43acb1521fa756df5ca1db8"

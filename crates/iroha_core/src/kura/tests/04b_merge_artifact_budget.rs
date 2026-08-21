@@ -18,7 +18,7 @@ fn merge_carrier_budget_reserves_receipt_frontier_without_double_counting_termin
         &entry,
         batch,
         execution,
-        Kura::merge_lane_block_artifact(execution),
+        Kura::merge_lane_block_execution_source(execution),
         carrier.header().height().get(),
         carrier.hash(),
     );

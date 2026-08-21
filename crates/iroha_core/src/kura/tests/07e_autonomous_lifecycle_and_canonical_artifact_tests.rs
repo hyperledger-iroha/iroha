@@ -905,7 +905,6 @@ fn latest_lane_block_artifact_scan_counts_sparse_and_malformed_slots_exactly() {
         "lane block artifact",
         FsyncMode::Batched,
         None,
-        SidecarIndexOrigin::FirstWrite,
     ));
     assert_eq!(
         kura.latest_lane_block_artifact(lane_id),
@@ -920,7 +919,6 @@ fn latest_lane_block_artifact_scan_counts_sparse_and_malformed_slots_exactly() {
         "lane block artifact",
         FsyncMode::Batched,
         None,
-        SidecarIndexOrigin::FirstWrite,
     ));
     assert!(
         kura.latest_lane_block_artifact(lane_id).is_none(),
@@ -1059,7 +1057,6 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
         "lane block artifact",
         FsyncMode::Batched,
         None,
-        SidecarIndexOrigin::FirstWrite,
     ));
     assert!(
         kura.read_lane_block_artifact(lane_id, lane_block_height)
@@ -1069,8 +1066,9 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
     assert_eq!(
         kura.recover_lane_block_payload(&second_proposal)
             .expect("repair malformed active ownership from canonical block")
-            .artifact,
-        second_artifact,
+            .source
+            .global_artifact(),
+        Some(&second_artifact),
     );
     let retired_payload = first_artifact
         .encode_framed()
@@ -1083,7 +1081,6 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
         "lane block artifact",
         FsyncMode::Batched,
         None,
-        SidecarIndexOrigin::FirstWrite,
     ));
     assert!(
         kura.read_lane_block_artifact(lane_id, lane_block_height)
@@ -1093,7 +1090,7 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
     let repaired = kura
         .recover_lane_block_payload(&second_proposal)
         .expect("repair recreated ownership from its canonical block");
-    assert_eq!(repaired.artifact, second_artifact);
+    assert_eq!(repaired.source.global_artifact(), Some(&second_artifact));
     assert_eq!(
         kura.read_lane_block_artifact(lane_id, lane_block_height),
         Some(second_artifact.clone()),
@@ -1120,7 +1117,6 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
             "lane block artifact",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ));
     }
     assert!(
@@ -1153,7 +1149,6 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
         "lane block artifact",
         FsyncMode::Batched,
         None,
-        SidecarIndexOrigin::FirstWrite,
     ));
     assert!(
         reopened
@@ -1164,7 +1159,7 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
     let repaired = reopened
         .recover_lane_block_payload(&second_proposal)
         .expect("rehydrate the recreated slot from its canonical block after restart");
-    assert_eq!(repaired.artifact, second_artifact);
+    assert_eq!(repaired.source.global_artifact(), Some(&second_artifact));
     assert_eq!(
         reopened.read_lane_block_artifact(lane_id, lane_block_height),
         Some(second_artifact.clone())
@@ -1288,7 +1283,14 @@ fn lane_block_payload_availability_recovers_entrypoints_from_canonical_block() {
         .recover_lane_block_payload(&proposal)
         .expect("recover executable lane payload");
     assert_eq!(recovered.proposal, proposal);
-    assert_eq!(recovered.artifact.ownership, ownership);
+    assert_eq!(
+        recovered
+            .source
+            .global_artifact()
+            .expect("globally recovered source")
+            .ownership,
+        ownership
+    );
     assert_eq!(recovered.entrypoints, vec![expected_entrypoint]);
 }
 #[test]
@@ -1345,7 +1347,14 @@ fn lane_block_payload_availability_rebuilds_missing_artifact_sidecar_from_canoni
         .recover_lane_block_payload(&proposal)
         .expect("recover executable lane payload after sidecar rebuild");
     assert_eq!(recovered.proposal, proposal);
-    assert_eq!(recovered.artifact.ownership, ownership);
+    assert_eq!(
+        recovered
+            .source
+            .global_artifact()
+            .expect("globally recovered source")
+            .ownership,
+        ownership
+    );
     assert_eq!(recovered.entrypoints, vec![expected_entrypoint]);
     assert_eq!(
         kura.read_lane_block_artifact(lane_id, lane_block_height)

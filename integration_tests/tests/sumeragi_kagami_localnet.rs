@@ -200,8 +200,6 @@ fn generate_localnet(out_dir: &Path, base_api_port: u16, base_p2p_port: u16) -> 
     let mut command = Command::new(kagami_bin);
     command
         .arg("localnet")
-        .arg("--build-line")
-        .arg("iroha3")
         .arg("--peers")
         .arg(peers)
         .arg("--seed")

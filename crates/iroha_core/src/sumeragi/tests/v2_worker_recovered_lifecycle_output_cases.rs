@@ -366,8 +366,8 @@ fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction(
         RecoveredLifecycleSignClassV1::PhaseVote,
     );
     let key = task.dispatch_key();
-    let admission = Arc::new(V2IoAdmission::new(2, 2).expect("bounded Sign admission"));
-    let (command_tx, command_rx) = v2_io_command_channel(2, 1, 1, 1, Arc::clone(&admission));
+    let admission = Arc::new(V2IoAdmission::new(3, 3).expect("bounded Sign admission"));
+    let (command_tx, command_rx) = v2_io_command_channel(3, 1, 1, 1, Arc::clone(&admission));
     let output_guard = ConsensusOutputGuard::isolated();
     let operation = output_guard
         .begin_fail_stop_operation()
@@ -425,7 +425,14 @@ fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction(
             .map(|tracked| tracked.state),
         Some(V2IoWorkState::CompletionPending)
     );
-    let (completion_tx, completion_rx) = mpsc::sync_channel(2);
+    let (completion_tx, completion_rx) = mpsc::sync_channel(3);
+    send_tracked_completion_with_lifecycle_ordinal(
+        &completion_tx,
+        admission.as_ref(),
+        V2IoCompletion::AuxiliaryNoop,
+        Some(key.lifecycle_ordinal() - 1),
+    )
+    .expect("publish ordinary completion ahead of recovered Sign");
     send_tracked_completion_with_lifecycle_ordinal(
         &completion_tx,
         admission.as_ref(),
@@ -450,6 +457,31 @@ fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction(
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         admission: Arc::clone(&admission),
     });
+    assert!(matches!(
+        service
+            .take_next_lifecycle_completion()
+            .expect("ordinary head is one lifecycle pass-through"),
+        LifecycleCompletionTakeV1::PassThrough
+    ));
+    let mut executor = V2EffectExecutor::with_runtime(
+        SaturatedCompletionRuntime::new(0, 8),
+        BTreeMap::new(),
+        service.context.clone(),
+        service.local_peer.clone(),
+        service.local_validator,
+        EffectQueueConfig::default(),
+    )
+    .expect("construct ordinary completion executor");
+    assert_eq!(
+        service
+            .drain_one_ordinary_completion_after_lifecycle_pass_through(&mut executor)
+            .expect("drain only the classified ordinary head"),
+        1
+    );
+    assert!(
+        !output_guard.restart_required(),
+        "bounded ordinary drain cannot cross into the recovered Sign"
+    );
     let generic = service.take_io_completion(true);
     assert!(generic.completion.is_none() && generic.retained_runtime);
     let retained = service
@@ -714,8 +746,8 @@ fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extracti
             ownership_position,
         )
         .expect("acknowledge the ordinary predecessor only");
-    let RecoveredLifecycleCompletionTakeV1::DecisionFetch(retained) = service
-        .take_next_recovered_lifecycle_completion()
+    let LifecycleCompletionTakeV1::DecisionFetch(retained) = service
+        .take_next_lifecycle_completion()
         .expect("classify the parked recovered Fetch completion")
     else {
         panic!("the unified completion classifier must retain the recovered Fetch owner");

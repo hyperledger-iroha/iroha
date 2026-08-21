@@ -28,8 +28,8 @@ RELEASE_MANIFEST_SIGNING_HELPER = (
     REPO_ROOT / "scripts" / "release_manifest_signing.py"
 )
 RELEASE_DOCUMENT_FAMILIES = (
-    REPO_ROOT / "specs" / "release_dual_track_automation_plan.md",
-    REPO_ROOT / "specs" / "release_dual_track_runbook.md",
+    REPO_ROOT / "specs" / "release_automation_plan.md",
+    REPO_ROOT / "specs" / "release_runbook.md",
     REPO_ROOT / "specs" / "release_artifact_selection.md",
     REPO_ROOT / "specs" / "sora_nexus_operator_onboarding.md",
 )
@@ -83,11 +83,15 @@ def _fake_tool(directory: Path, name: str) -> None:
 
 
 @pytest.mark.parametrize("script", RELEASE_SCRIPTS, ids=lambda path: path.stem)
-@pytest.mark.parametrize("profile", ("iroha4", "../escaped-release"))
-def test_release_script_rejects_invalid_profile_before_tools_or_outputs(
+@pytest.mark.parametrize(
+    ("retired_option", "retired_value"),
+    (("--profile", "iroha3"), ("--config", "nexus")),
+)
+def test_release_script_rejects_removed_product_selectors_before_tools_or_outputs(
     tmp_path: Path,
     script: Path,
-    profile: str,
+    retired_option: str,
+    retired_value: str,
 ) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -108,10 +112,8 @@ def test_release_script_rejects_invalid_profile_before_tools_or_outputs(
         [
             "bash",
             str(script),
-            "--profile",
-            profile,
-            "--config",
-            "single",
+            retired_option,
+            retired_value,
             "--artifacts-dir",
             str(artifacts_dir),
         ],
@@ -123,10 +125,7 @@ def test_release_script_rejects_invalid_profile_before_tools_or_outputs(
     )
 
     assert result.returncode == 1
-    assert (
-        f"Unsupported profile value: {profile} (expected iroha2 or iroha3)"
-        in result.stderr
-    )
+    assert f"Unknown argument: {retired_option}" in result.stderr
     assert not tool_calls.exists()
     assert not artifacts_dir.exists()
 
@@ -144,7 +143,7 @@ def test_release_manifest_values_are_passed_as_data(tmp_path: Path, script: Path
         arguments = [
             str(REPO_ROOT / "scripts"),
             str(manifest_path),
-            "iroha2",
+            "iroha3",
             "single",
             "1.2.3",
             "a" * 40,
@@ -165,7 +164,7 @@ def test_release_manifest_values_are_passed_as_data(tmp_path: Path, script: Path
         arguments = [
             str(REPO_ROOT / "scripts"),
             str(manifest_path),
-            "iroha2",
+            "iroha3",
             "single",
             "1.2.3",
             "a" * 40,
@@ -210,7 +209,7 @@ def test_release_manifest_values_are_passed_as_data(tmp_path: Path, script: Path
     assert result.returncode == 0, result.stderr
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["features"] == unusual
-    assert manifest["profile"] == "iroha2"
+    assert manifest["profile"] == "iroha3"
     artifact = manifest["artifacts"][0]
     expected_artifact_fields = (
         {"file", "sha256", "size"}
@@ -230,7 +229,7 @@ def test_bundle_profile_values_are_toml_escaped(tmp_path: Path) -> None:
     arguments = [
         str(REPO_ROOT / "scripts"),
         str(profile_path),
-        "iroha2",
+        "iroha3",
         unusual,
         "1.2.3",
         "a" * 40,
@@ -298,10 +297,6 @@ def test_release_builders_reject_retired_signing_options_before_outputs(
         [
             "bash",
             str(script),
-            "--profile",
-            "iroha2",
-            "--config",
-            "single",
             "--artifacts-dir",
             str(artifacts_dir),
             retired_option,
@@ -501,7 +496,7 @@ def test_release_and_evidence_dockerfiles_have_no_mutable_base_defaults() -> Non
             assert re.search(mutable_ref, source) is None
 
 
-def test_legacy_image_workflows_pass_validated_digest_base_refs() -> None:
+def test_image_workflows_pass_validated_digest_base_refs() -> None:
     custom = (
         REPO_ROOT / ".github" / "workflows" / "publish_custom.yml"
     ).read_text(encoding="utf-8")
@@ -540,7 +535,6 @@ def test_legacy_image_workflows_pass_validated_digest_base_refs() -> None:
         REPO_ROOT / ".github" / "workflows" / "ci_image.yml"
     ).read_text(encoding="utf-8")
     assert "Validate digest-pinned CI base image" in ci_image
-    assert "github.event.inputs.IROHA2_CI_DOCKERFILE" not in ci_image
     assert "file: Dockerfile.build" in ci_image
     assert (
         '"IROHA_CI_BUILDER_IMAGE=${{ env.IROHA_CI_BUILDER_IMAGE }}"'
@@ -557,7 +551,6 @@ def test_release_build_workflow_containers_use_validated_digest_refs() -> None:
         source = (
             REPO_ROOT / ".github" / "workflows" / name
         ).read_text(encoding="utf-8")
-        assert "image: hyperledger/iroha2-ci:" not in source
         assert "image: ${{ vars.IROHA_CI_IMAGE }}" in source
         assert "IROHA_CI_IMAGE: ${{ vars.IROHA_CI_IMAGE }}" in source
         assert '--builder "$IROHA_CI_IMAGE"' in source
@@ -579,8 +572,26 @@ def test_release_build_workflow_containers_use_validated_digest_refs() -> None:
         "runs-on: [self-hosted, macOS, ARM64, taira-publish-authority]",
     ):
         assert runner in taira
-    assert "runs-on: [self-hosted, Linux, ARM64, iroha2]" not in taira
     assert "runs-on: [self-hosted, macOS, ARM64, taira-release]" not in taira
+
+
+def test_image_publish_workflows_emit_only_iroha3_product_artifacts() -> None:
+    workflows = (
+        "publish.yml",
+        "publish_custom.yml",
+        "publish_dev.yml",
+    )
+    for name in workflows:
+        source = (
+            REPO_ROOT / ".github" / "workflows" / name
+        ).read_text(encoding="utf-8")
+        assert "docker.soramitsu.co.jp/iroha2/" not in source
+        assert "IROHA2_" not in source
+    release = (
+        REPO_ROOT / ".github" / "workflows" / "publish.yml"
+    ).read_text(encoding="utf-8")
+    assert '- "v3*"' in release
+    assert '- "v2*"' not in release
 
 
 def test_fastpq_repro_builder_rejects_mutable_or_missing_base_refs(
@@ -916,13 +927,9 @@ def test_release_pipeline_dry_run_uses_closed_oci_image_contract(
             "--trusted-buildx-builder-inspect-sha256",
             "f" * 64,
             "--image-prebuilt-bin-dir",
-            "iroha2:linux/amd64=/reviewed/iroha2-amd64-bin",
+            "linux/amd64=/reviewed/iroha3-amd64-bin",
             "--image-prebuilt-bin-dir",
-            "iroha2:linux/arm64=/reviewed/iroha2-arm64-bin",
-            "--image-prebuilt-bin-dir",
-            "iroha3:linux/amd64=/reviewed/iroha3-amd64-bin",
-            "--image-prebuilt-bin-dir",
-            "iroha3:linux/arm64=/reviewed/iroha3-arm64-bin",
+            "linux/arm64=/reviewed/iroha3-arm64-bin",
             "--skip-privacy-dp",
             "--skip-nexus-lane-smoke",
             "--skip-nexus-cross-dataspace-proof",
@@ -991,14 +998,13 @@ def test_release_pipeline_dry_run_uses_complete_bundle_target_matrix(
         "--skip-cbdc-rollout-check",
         "--dry-run",
     ]
-    for profile in ("iroha2", "iroha3"):
-        for target in targets:
-            command.extend(
-                [
-                    "--bundle-prebuilt-bin-dir",
-                    f"{profile}:{target}=/reviewed/{profile}/{target}",
-                ]
-            )
+    for target in targets:
+        command.extend(
+            [
+                "--bundle-prebuilt-bin-dir",
+                f"{target}=/reviewed/iroha3/{target}",
+            ]
+        )
     result = subprocess.run(
         command,
         cwd=REPO_ROOT,
@@ -1007,15 +1013,15 @@ def test_release_pipeline_dry_run_uses_complete_bundle_target_matrix(
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.count("--prebuilt-bin-dir") == 10
+    assert result.stdout.count("--prebuilt-bin-dir") == 5
     for target in targets:
         assert target in result.stdout
     for name in (
-        "dual_profile_matrix-linux-x86_64.json",
-        "dual_profile_matrix-linux-aarch64.json",
-        "dual_profile_matrix-mac-x86_64.json",
-        "dual_profile_matrix-mac-aarch64.json",
-        "dual_profile_matrix-win-x86_64.json",
+        "release_bundle_inventory-linux-x86_64.json",
+        "release_bundle_inventory-linux-aarch64.json",
+        "release_bundle_inventory-mac-x86_64.json",
+        "release_bundle_inventory-mac-aarch64.json",
+        "release_bundle_inventory-win-x86_64.json",
     ):
         assert name in result.stdout
     assert not output_dir.exists()
@@ -1192,7 +1198,7 @@ def test_release_signing_docs_reject_stale_rsa_and_private_key_claims() -> None:
 
 def test_release_signing_docs_bind_fingerprint_key_and_signature() -> None:
     expected_markers = {
-        "release_dual_track_automation_plan.md": (
+        "release_automation_plan.md": (
             "--external-signer",
             "--signing-public-key",
             "--trusted-signing-fingerprint",
@@ -1208,7 +1214,7 @@ def test_release_signing_docs_bind_fingerprint_key_and_signature() -> None:
             "software-key-qualified",
             "OIDC/cosign",
         ),
-        "release_dual_track_runbook.md": (
+        "release_runbook.md": (
             "--external-signer",
             "--signing-public-key",
             "--trusted-signing-fingerprint",
@@ -1306,6 +1312,16 @@ def test_release_artifact_selection_documents_current_matrix_names() -> None:
         "<profile>-<version>-<os>-image.tar",
     ):
         assert stale not in source, f"{canonical}: stale {stale!r}"
+
+
+def test_release_bundle_gates_require_canonical_nexus_metadata() -> None:
+    for relative in (
+        "ci/release_bundle_smoke.sh",
+        "ci/release_bundle_inventory.sh",
+    ):
+        source = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        assert '"iroha3"' in source
+        assert '"nexus"' in source
 
 
 def test_sorafs_release_gate_runs_generic_release_signing_guard() -> None:

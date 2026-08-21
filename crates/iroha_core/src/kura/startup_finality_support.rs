@@ -1,33 +1,32 @@
-/// Legacy hard limit for one version-two canonical block-retention record.
+/// Hard limit for the retained record's fixed fields and SCCP archive.
 ///
 /// The 512-message first-release cap and 4 KiB canonical payload cap require a
 /// little over 2 MiB at their joint maximum. Four MiB leaves deterministic
 /// framing/context headroom while preventing hostile on-disk data from turning
 /// startup or proof serving into an unbounded allocation.
-const MAX_RETAINED_BLOCK_RECORD_V2_BYTES: usize = 4 * 1024 * 1024;
-/// Hard limit for the compact merge reference added by retained-record version three.
+const MAX_RETAINED_BLOCK_BASE_ENVELOPE_BYTES: usize = 4 * 1024 * 1024;
+/// Hard limit for the compact merge reference in the current retained record.
 ///
 /// Consensus accepts at most a 4 MiB merge QC. The remaining 256 KiB bounds
 /// reference metadata and Norito framing without coupling Kura to an
 /// implementation-specific encoded-size estimate.
 const MAX_RETAINED_MERGE_REFERENCE_BYTES: usize = 4 * 1024 * 1024 + 256 * 1024;
-/// Norito envelope headroom when the version-three optional field is present.
+/// Norito envelope headroom when the optional merge reference is present.
 ///
 /// The two component maxima are complete independent encodings; this separate
 /// allowance covers the option tag, field framing, and any packed-struct
 /// envelope delta instead of assuming those bytes disappear into either
 /// component's budget.
-const MAX_RETAINED_BLOCK_RECORD_V3_FRAMING_BYTES: usize = 256 * 1024;
+const MAX_RETAINED_BLOCK_RECORD_FRAMING_BYTES: usize = 256 * 1024;
 /// Hard limit for one immutable version-three canonical block-retention record.
 ///
-/// This is the sum of the complete legacy SCCP/archive envelope and the new
-/// independently bounded merge-reference witness. Keeping the joint maximum
-/// explicit prevents a valid near-maximum archive and merge QC from making
-/// finality persistence or pre-eviction retention fail.
-const MAX_RETAINED_BLOCK_RECORD_BYTES: usize = MAX_RETAINED_BLOCK_RECORD_V2_BYTES
+/// This is the sum of the complete current base envelope and the independently
+/// bounded merge-reference witness. Keeping the joint maximum explicit prevents
+/// a valid near-maximum archive and merge QC from making finality persistence or
+/// pre-eviction retention fail.
+const MAX_RETAINED_BLOCK_RECORD_BYTES: usize = MAX_RETAINED_BLOCK_BASE_ENVELOPE_BYTES
     + MAX_RETAINED_MERGE_REFERENCE_BYTES
-    + MAX_RETAINED_BLOCK_RECORD_V3_FRAMING_BYTES;
-const RETAINED_BLOCK_RECORD_VERSION_V2: u16 = 2;
+    + MAX_RETAINED_BLOCK_RECORD_FRAMING_BYTES;
 const RETAINED_BLOCK_RECORD_VERSION: u16 = 3;
 /// Hard limit for the consensus artifact embedded in one Kura finality record.
 ///
@@ -287,14 +286,20 @@ struct V2StartupFinalityVerificationInventory {
     hash_only_heights: BTreeSet<u64>,
     entries: BTreeMap<u64, VerifiedV2StartupFinalityEntry>,
     replay_sidecars: Vec<V2StartupReplaySidecarsAtHeight>,
+    /// Authenticated artifact exactly at the durable block tip, retained only
+    /// for replay authorization at that height.
     durable_tip_artifact: Option<V2FinalityArtifact>,
+    /// Highest authenticated durable finality artifact, retained independently
+    /// because finality may legitimately trail the durable block tip.
+    highest_verified_finality_artifact: Option<V2FinalityArtifact>,
 }
 /// Kura-minted identity binding carried from replay planning into active-height
 /// recovery.
 ///
-/// The binding never retains historical block bodies or full historical
-/// finality artifacts. It carries fixed-size projections for history and the
-/// sole durable-tip artifact needed for exact lane-completion validation. Its
+/// The binding never retains historical block bodies. It carries fixed-size
+/// finality projections, the sole durable-tip artifact exposed for exact
+/// lane-completion validation, and at most one highest verified artifact kept
+/// internally for status hydration when finality trails the block tip. Its
 /// fields are private so callers cannot construct a replay authorization
 /// without Kura's complete startup audit.
 #[derive(Debug, Clone)]

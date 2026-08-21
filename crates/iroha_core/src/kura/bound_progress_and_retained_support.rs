@@ -269,10 +269,15 @@ impl BoundProgressAppendIntentV1 {
     }
     fn validate_against_old_layout(
         &self,
-        old_layout: SidecarIndexLayout,
+        old_layout: Option<SidecarIndexLayout>,
     ) -> std::result::Result<(), &'static str> {
-        if old_layout.aligned_len != self.old_index_len {
-            return Err("bound progress append intent names the wrong old index layout");
+        match old_layout {
+            Some(layout) if layout.aligned_len == self.old_index_len => {}
+            Some(_) => {
+                return Err("bound progress append intent names the wrong old index layout");
+            }
+            None if self.old_index_len == 0 && !self.pair_was_present => {}
+            None => return Err("bound progress append intent has no old index layout"),
         }
         let payload_len = self
             .payload_len()
@@ -295,6 +300,8 @@ impl BoundProgressAppendIntentV1 {
             return Err("bound progress append intent target entry is inconsistent");
         }
         if self.index_write_offset != self.old_index_len {
+            let old_layout =
+                old_layout.ok_or("bound progress append replacement has no old index layout")?;
             if old_layout.entry_position(self.height) != Some(self.index_write_offset) {
                 return Err("bound progress append replacement names the wrong height");
             }
@@ -306,7 +313,7 @@ impl BoundProgressAppendIntentV1 {
             .checked_sub(PIPELINE_INDEX_ENTRY_SIZE)
             .ok_or("bound progress append suffix is truncated")?;
         let prefix = &self.new_index_bytes[..prefix_len];
-        if self.old_index_len != 0 {
+        if let Some(old_layout) = old_layout {
             let expected_height = old_layout
                 .next_height()
                 .ok_or("bound progress append old index height overflows")?;
@@ -325,68 +332,14 @@ impl BoundProgressAppendIntentV1 {
             }
             return Ok(());
         }
-        if self.new_index_bytes.len() % PIPELINE_INDEX_ENTRY_SIZE != 0 {
+        if self.new_index_bytes.len()
+            != INDEXED_SIDECAR_BASE_HEADER_SIZE + PIPELINE_INDEX_ENTRY_SIZE
+        {
             return Err("bound progress initial index window is misaligned");
         }
-        let first = self
-            .new_index_bytes
-            .get(..PIPELINE_INDEX_ENTRY_SIZE)
-            .ok_or("bound progress initial index window is truncated")?;
-        let first = SidecarIndexEntry::from_bytes(
-            first
-                .try_into()
-                .map_err(|_| "bound progress initial index marker has the wrong size")?,
-        );
-        let marker_field_present = first.offset == u64::MAX || first.len == u64::MAX;
-        let (base_height, entries_prefix) = if marker_field_present {
-            if first.offset != u64::MAX
-                || first.len != u64::MAX
-                || self.new_index_bytes.len()
-                    < INDEXED_SIDECAR_BASE_HEADER_SIZE + PIPELINE_INDEX_ENTRY_SIZE
-            {
-                return Err("bound progress initial based index header is malformed");
-            }
-            let metadata = SidecarIndexEntry::from_bytes(
-                self.new_index_bytes[PIPELINE_INDEX_ENTRY_SIZE..INDEXED_SIDECAR_BASE_HEADER_SIZE]
-                    .try_into()
-                    .map_err(|_| "bound progress initial based metadata has the wrong size")?,
-            );
-            if metadata.offset <= SidecarIndexLayout::LEGACY_BASE_HEIGHT
-                || metadata.len != metadata.offset ^ INDEXED_SIDECAR_BASE_CHECK_MASK
-            {
-                return Err("bound progress initial based index metadata is invalid");
-            }
-            (
-                metadata.offset,
-                &self.new_index_bytes[INDEXED_SIDECAR_BASE_HEADER_SIZE..prefix_len],
-            )
-        } else {
-            (SidecarIndexLayout::LEGACY_BASE_HEIGHT, prefix)
-        };
-        if entries_prefix.iter().any(|byte| *byte != 0) {
-            return Err("bound progress initial index gap is not canonical");
-        }
-        let entries_offset = if marker_field_present {
-            INDEXED_SIDECAR_BASE_HEADER_SIZE
-        } else {
-            0
-        };
-        let entry_count = self
-            .new_index_bytes
-            .len()
-            .checked_sub(entries_offset)
-            .and_then(|bytes| bytes.checked_div(PIPELINE_INDEX_ENTRY_SIZE))
-            .and_then(|count| u64::try_from(count).ok())
-            .ok_or("bound progress initial index entry count overflows")?;
-        if marker_field_present {
-            if base_height != self.height || entry_count != 1 {
-                return Err("bound progress initial based index is not canonical");
-            }
-        } else if entry_count.saturating_sub(1) > MAX_INDEXED_SIDECAR_GAP_ENTRIES {
-            return Err("bound progress initial legacy index gap exceeds its hard limit");
-        }
-        if base_height.checked_add(entry_count.saturating_sub(1)) != Some(self.height) {
-            return Err("bound progress initial index target height is inconsistent");
+        let expected_header = SidecarIndexLayout::base_header(self.height);
+        if self.index_write_offset != 0 || prefix != expected_header.as_slice() {
+            return Err("bound progress initial V1 index header is not canonical");
         }
         Ok(())
     }
@@ -415,54 +368,6 @@ struct KuraRetainedSccpMessage {
     context: iroha_data_model::bridge::SccpOutboundMessageContextV1,
     /// Exact canonical SCCP V1 payload bytes.
     payload_bytes: Vec<u8>,
-}
-/// Legacy retained-record layout written before wire-length and merge-reference binding.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-#[norito(deny_unknown_fields)]
-struct KuraRetainedBlockRecordV2 {
-    /// Kura-local envelope version.
-    format_version: u16,
-    /// Exact canonical height also encoded in the file name and header.
-    height: u64,
-    /// Canonical hash stored in Kura's durable hash journal.
-    block_hash: HashOf<BlockHeader>,
-    /// Exact canonical header needed by later finality association.
-    block_header: BlockHeader,
-    /// Hash of the canonical resultless proposal wire authenticated by the subject.
-    proposal_wire_hash: Hash,
-    /// Hash of the complete result-bearing canonical `SignedBlock::encode_wire()` bytes.
-    executed_block_wire_hash: Hash,
-    /// Successful outbound SCCP messages in exact commitment-index order.
-    sccp_archive: Vec<KuraRetainedSccpMessage>,
-}
-impl KuraRetainedBlockRecordV2 {
-    fn into_current(self) -> KuraRetainedBlockRecord {
-        KuraRetainedBlockRecord {
-            format_version: self.format_version,
-            height: self.height,
-            block_hash: self.block_hash,
-            block_header: self.block_header,
-            proposal_wire_hash: self.proposal_wire_hash,
-            executed_block_wire_len: 0,
-            executed_block_wire_hash: self.executed_block_wire_hash,
-            merge_reference: None,
-            sccp_archive: self.sccp_archive,
-        }
-    }
-    fn from_current(record: &KuraRetainedBlockRecord) -> Option<Self> {
-        (record.format_version == RETAINED_BLOCK_RECORD_VERSION_V2
-            && record.executed_block_wire_len == 0
-            && record.merge_reference.is_none())
-        .then(|| Self {
-            format_version: record.format_version,
-            height: record.height,
-            block_hash: record.block_hash,
-            block_header: record.block_header,
-            proposal_wire_hash: record.proposal_wire_hash,
-            executed_block_wire_hash: record.executed_block_wire_hash,
-            sccp_archive: record.sccp_archive.clone(),
-        })
-    }
 }
 /// Immutable Kura-local block evidence retained before body eviction or finality publication.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
@@ -515,25 +420,10 @@ impl KuraRetainedBlockRecord {
         }
     }
     fn canonical_storage_bytes(&self) -> Vec<u8> {
-        KuraRetainedBlockRecordV2::from_current(self)
-            .map_or_else(|| self.encode(), |legacy| legacy.encode())
+        self.encode()
     }
     fn canonical_storage_encoded_len(&self) -> usize {
-        KuraRetainedBlockRecordV2::from_current(self)
-            .map_or_else(|| self.encoded_len(), |legacy| legacy.encoded_len())
-    }
-    fn is_legacy_upgrade_of(&self, legacy: &Self) -> bool {
-        self.format_version == RETAINED_BLOCK_RECORD_VERSION
-            && legacy.format_version == RETAINED_BLOCK_RECORD_VERSION_V2
-            && legacy.executed_block_wire_len == 0
-            && legacy.merge_reference.is_none()
-            && self.executed_block_wire_len != 0
-            && self.height == legacy.height
-            && self.block_hash == legacy.block_hash
-            && self.block_header == legacy.block_header
-            && self.proposal_wire_hash == legacy.proposal_wire_hash
-            && self.executed_block_wire_hash == legacy.executed_block_wire_hash
-            && self.sccp_archive == legacy.sccp_archive
+        self.encoded_len()
     }
 }
 /// Fixed-size inventory entry for one nonempty retained SCCP archive.

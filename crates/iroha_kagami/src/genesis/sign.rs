@@ -1,7 +1,4 @@
-use super::{
-    ConsensusPolicy, build_line_from_env, ensure_npos_parameters, generate::ConsensusModeArg,
-    require_v2_wire_protocol_only, validate_consensus_mode_for_line,
-};
+use super::{ensure_npos_parameters, generate::ConsensusModeArg, require_v2_wire_protocol_only};
 use crate::{
     Outcome, RunArgs,
     genesis::{PUBLIC_XOR_ALIAS, public_xor_profile_for_chain_id},
@@ -121,6 +118,11 @@ const DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME: &str = "xor";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT: u64 = 10_000;
 const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
 const MAX_DEPLOYMENT_IDENTITY_BYTES: u64 = 4 * 1024;
+struct StagedGenesisExecution {
+    nexus_amx_context_hash: Hash,
+    execution_policy_hash: Hash,
+    executed_block: SignedBlock,
+}
 fn deployment_identity_path(expected_hash_path: &Path) -> PathBuf {
     expected_hash_path.with_extension("identity.toml")
 }
@@ -483,13 +485,45 @@ fn append_npos_bootstrap(
     }
     Ok(builder)
 }
-fn load_peer_config(config_path: &Path) -> Result<actual::Root, color_eyre::eyre::Error> {
-    let mut source = TomlSource::from_file(config_path).map_err(|err| {
+pub(super) fn load_peer_config(
+    config_path: &Path,
+) -> Result<actual::Root, color_eyre::eyre::Error> {
+    let source = TomlSource::from_file(config_path).map_err(|err| {
         eyre!(
             "failed to read peer config at {}: {err}",
             config_path.display()
         )
     })?;
+    load_peer_config_source(config_path, source)
+}
+
+/// Parse a peer config from the exact bytes already hashed by an admission caller.
+pub(super) fn load_peer_config_bytes(
+    config_path: &Path,
+    config_bytes: &[u8],
+) -> Result<actual::Root, color_eyre::eyre::Error> {
+    let source_text = std::str::from_utf8(config_bytes).map_err(|error| {
+        eyre!(
+            "peer config at {} is not UTF-8: {error}",
+            config_path.display()
+        )
+    })?;
+    let table = source_text.parse::<toml::Table>().map_err(|error| {
+        eyre!(
+            "failed to parse peer config TOML at {}: {error}",
+            config_path.display()
+        )
+    })?;
+    load_peer_config_source(
+        config_path,
+        TomlSource::new(config_path.to_path_buf(), table),
+    )
+}
+
+fn load_peer_config_source(
+    config_path: &Path,
+    mut source: TomlSource,
+) -> Result<actual::Root, color_eyre::eyre::Error> {
     // Checked-in signing profiles are deliberately not runnable before their exact signed block
     // exists. The signing path needs the remaining consensus-policy projection to construct that
     // block, so replace only the explicit non-hash sentinel in this in-memory copy. The normal
@@ -514,7 +548,7 @@ fn load_peer_config(config_path: &Path) -> Result<actual::Root, color_eyre::eyre
         )
     })
 }
-fn ensure_peer_config_matches_manifest(
+pub(super) fn ensure_peer_config_matches_manifest(
     config: &actual::Root,
     manifest: &RawGenesisTransaction,
 ) -> Result<(), color_eyre::eyre::Error> {
@@ -583,21 +617,32 @@ pub fn bind_and_sign_staged_sumeragi_v2_context(
     let bound_manifest = genesis
         .with_sumeragi_v2_context_parameters(parameters)
         .with_consensus_meta();
-    let block = build_signed_genesis(
+    let proposal = build_signed_genesis(
         bound_manifest.clone(),
         genesis_key_pair,
         da_proof_policies,
         confidential_policy_hash,
         creation_time_ms,
     )?;
-    verify_final_signed_sumeragi_v2_context(
+    let mut executed_block = verify_final_signed_sumeragi_v2_context(
         &bound_manifest,
         config,
-        &block.0,
+        &proposal.0,
         nexus_amx_context_hash,
         execution_policy_hash,
     )?;
-    Ok((bound_manifest, block))
+    let signature = BlockSignature::new(
+        0,
+        iroha_crypto::SignatureOf::try_from_hash(
+            genesis_key_pair.private_key(),
+            executed_block.hash(),
+        )
+        .wrap_err("sign fully executed genesis block")?,
+    );
+    executed_block
+        .replace_signatures([signature].into_iter().collect())
+        .wrap_err("replace provisional genesis signature after execution")?;
+    Ok((bound_manifest, GenesisBlock(executed_block)))
 }
 fn verify_final_signed_sumeragi_v2_context(
     bound_manifest: &RawGenesisTransaction,
@@ -605,20 +650,21 @@ fn verify_final_signed_sumeragi_v2_context(
     signed: &SignedBlock,
     signed_nexus_amx_context_hash: Hash,
     signed_execution_policy_hash: Hash,
-) -> Result<(), color_eyre::eyre::Error> {
-    let (final_nexus_amx_context_hash, final_execution_policy_hash) =
-        restage_signed_sumeragi_v2_context_hashes(bound_manifest, config, signed)?;
-    if final_nexus_amx_context_hash != signed_nexus_amx_context_hash {
+) -> Result<SignedBlock, color_eyre::eyre::Error> {
+    let staged = restage_signed_sumeragi_v2_context_hashes(bound_manifest, config, signed)?;
+    if staged.nexus_amx_context_hash != signed_nexus_amx_context_hash {
         return Err(eyre!(
-            "final-NetworkId genesis restaging changed the signed Nexus/AMX context: signed {signed_nexus_amx_context_hash}, restaged {final_nexus_amx_context_hash}"
+            "final-NetworkId genesis restaging changed the signed Nexus/AMX context: signed {signed_nexus_amx_context_hash}, restaged {}",
+            staged.nexus_amx_context_hash,
         ));
     }
-    if final_execution_policy_hash != signed_execution_policy_hash {
+    if staged.execution_policy_hash != signed_execution_policy_hash {
         return Err(eyre!(
-            "final-NetworkId genesis restaging changed the signed execution policy: signed {signed_execution_policy_hash}, restaged {final_execution_policy_hash}"
+            "final-NetworkId genesis restaging changed the signed execution policy: signed {signed_execution_policy_hash}, restaged {}",
+            staged.execution_policy_hash,
         ));
     }
-    Ok(())
+    Ok(staged.executed_block)
 }
 /// Stage a raw genesis transaction and return its exact Nexus/AMX consensus and execution-policy
 /// commitments without committing state or touching persistent node storage.
@@ -660,13 +706,14 @@ pub fn staged_signed_sumeragi_v2_context_hashes(
     signed: &SignedBlock,
     config: &actual::Root,
 ) -> Result<(iroha_crypto::Hash, iroha_crypto::Hash), color_eyre::eyre::Error> {
-    restage_signed_sumeragi_v2_context_hashes(genesis, Some(config), signed)
+    let staged = restage_signed_sumeragi_v2_context_hashes(genesis, Some(config), signed)?;
+    Ok((staged.nexus_amx_context_hash, staged.execution_policy_hash))
 }
 fn restage_signed_sumeragi_v2_context_hashes(
     genesis: &RawGenesisTransaction,
     config: Option<&actual::Root>,
     signed: &SignedBlock,
-) -> Result<(iroha_crypto::Hash, iroha_crypto::Hash), color_eyre::eyre::Error> {
+) -> Result<StagedGenesisExecution, color_eyre::eyre::Error> {
     let provisional = GenesisBlock(signed.clone());
     std::thread::scope(|scope| {
         std::thread::Builder::new()
@@ -702,17 +749,18 @@ fn staged_sumeragi_v2_context_hashes_on_bounded_stack(
         confidential_policy_hash,
         creation_time_ms,
     )?;
-    staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
+    let staged = staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
         genesis,
         config,
         provisional,
-    )
+    )?;
+    Ok((staged.nexus_amx_context_hash, staged.execution_policy_hash))
 }
 fn staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
     genesis: &RawGenesisTransaction,
     config: Option<&actual::Root>,
     provisional: GenesisBlock,
-) -> Result<(iroha_crypto::Hash, iroha_crypto::Hash), color_eyre::eyre::Error> {
+) -> Result<StagedGenesisExecution, color_eyre::eyre::Error> {
     let _chain_discriminant = staged_genesis_chain_discriminant(genesis);
     // Never inherit iroha_core's repository-wide test identity here. Signing stages the
     // unbound provisional block, while prepared-bundle admission stages the final signed block.
@@ -777,7 +825,7 @@ fn staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
     }
     let topology = Topology::new(voters);
     let mut voting_block: Option<VotingBlock> = None;
-    let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let (valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
         provisional.0,
         &topology,
         &authority,
@@ -809,7 +857,11 @@ fn staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
     let execution_policy_hash = iroha_core::sumeragi::staged_genesis_execution_policy_hash(&staged)
         .map_err(|error| eyre!("derive staged genesis execution policy: {error}"))?;
     drop(staged);
-    Ok((nexus_amx_context_hash, execution_policy_hash))
+    Ok(StagedGenesisExecution {
+        nexus_amx_context_hash,
+        execution_policy_hash,
+        executed_block: valid.into(),
+    })
 }
 fn staged_genesis_chain_discriminant(genesis: &RawGenesisTransaction) -> ChainDiscriminantGuard {
     ChainDiscriminantGuard::enter(genesis.chain_discriminant())
@@ -957,11 +1009,7 @@ fn install_staged_nexus_policies(
         _ => None,
     };
     state.install_lane_compliance_engine(lane_compliance);
-    let lane_manifests = if nexus.enabled {
-        staged_lane_manifest_registry(genesis, &nexus)?
-    } else {
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance)
-    };
+    let lane_manifests = staged_lane_manifest_registry(genesis, &nexus)?;
     state.install_lane_manifests(&Arc::new(lane_manifests));
     Ok(())
 }
@@ -1016,7 +1064,6 @@ impl<T: Write> RunArgs<T> for Args {
                 }
             }
         }
-        let build_line = build_line_from_env();
         let consensus_mode_override = self.consensus_mode.map(SumeragiConsensusMode::from);
         let mut genesis = RawGenesisTransaction::from_path(&self.genesis_file)?;
         // Keep every same-thread rebuild, config parse, and bound-manifest
@@ -1033,9 +1080,6 @@ impl<T: Write> RunArgs<T> for Args {
         let manifest_consensus_mode = genesis.consensus_mode();
         require_v2_wire_protocol_only(&genesis)?;
         let consensus_mode = consensus_mode_override.unwrap_or(manifest_consensus_mode);
-        if build_line.is_iroha3() {
-            validate_consensus_mode_for_line(build_line, consensus_mode, ConsensusPolicy::Any)?;
-        }
         if self.topology.is_some() {
             genesis = genesis.clear_topology();
         }
@@ -1873,6 +1917,38 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             creation_time_ms,
         )
         .expect("bind and sign staged genesis context");
+        assert!(
+            signed.0.has_results(),
+            "the published signed genesis must carry validated execution results"
+        );
+        assert_eq!(
+            signed.0.results().count(),
+            signed.0.entrypoint_hashes().count(),
+            "every executed genesis entrypoint must have one result"
+        );
+        assert!(
+            signed.0.results().all(|result| result.as_ref().is_ok()),
+            "every published genesis result must be successful"
+        );
+        let minimum_committed_fragments =
+            u64::try_from(signed.0.results().count()).expect("genesis result count fits u64");
+        let actual_committed_fragments = signed
+            .0
+            .committed_fragment_count()
+            .expect("published genesis must advertise its committed fragment count");
+        assert!(
+            actual_committed_fragments >= minimum_committed_fragments,
+            "the published fragment count must cover every successful result row and may include deterministic internal fragments"
+        );
+        let final_signature = signed
+            .0
+            .signatures()
+            .next()
+            .expect("published genesis signature");
+        final_signature
+            .signature()
+            .verify_hash(genesis_key_pair.public_key(), signed.0.hash())
+            .expect("published genesis must be signed after result materialization");
         assert_ne!(
             provisional.0.hash(),
             signed.0.hash(),
@@ -2301,12 +2377,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "public_key".to_owned(),
                 toml::Value::String(genesis_key_pair.public_key().to_string()),
             );
-        let nexus = config_table
-            .get_mut("nexus")
-            .and_then(toml::Value::as_table_mut)
-            .expect("peer config nexus table");
-        nexus.insert("enabled".to_owned(), toml::Value::Boolean(false));
-        nexus.insert("lane_count".to_owned(), toml::Value::Integer(1));
         config_table
             .entry("pipeline")
             .or_insert_with(|| toml::Value::Table(toml::Table::new()))
@@ -2320,12 +2390,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let config_path = temp.path().join("peer0.toml");
         fs::write(
             &config_path,
-            toml::to_string_pretty(&config_table).expect("render disabled-Nexus peer config"),
+            toml::to_string_pretty(&config_table).expect("render peer config"),
         )
-        .expect("write disabled-Nexus peer config");
-        let parsed_config =
-            load_peer_config(&config_path).expect("load disabled-Nexus peer config");
-        assert!(!parsed_config.nexus.enabled);
+        .expect("write peer config");
+        let parsed_config = load_peer_config(&config_path).expect("load peer config");
         let args = Args {
             genesis_file,
             out_file: None,
@@ -2870,7 +2938,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let temp = tempfile::tempdir().expect("create localnet output dir");
         let seed = "localnet-resign-confidential-policy".to_owned();
         let options = crate::localnet::LocalnetOptions {
-            build_line: iroha_version::BuildLine::Iroha3,
             sora_profile: Some(crate::localnet::SoraProfile::Nexus),
             perf_profile: None,
             peers: std::num::NonZeroU16::new(4).expect("non-zero peer count"),
@@ -3590,7 +3657,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_eq!(aliases, vec!["core", "governance", "zk"]);
     }
     #[test]
-    fn sign_accepts_permissioned_on_iroha3() {
+    fn sign_accepts_permissioned_consensus() {
         let args = Args {
             genesis_file: minimal_genesis_file(),
             out_file: None,
@@ -3609,7 +3676,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer)
-            .expect("permissioned genesis should be allowed on Iroha3");
+            .expect("permissioned genesis should be allowed");
     }
     #[test]
     fn staged_manifest_registry_reenters_genesis_discriminant() {
@@ -3647,7 +3714,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .modules
             .insert("parliament".to_owned(), actual::GovernanceModule::default());
         let nexus = actual::Nexus {
-            enabled: true,
             lane_catalog: lane_catalog.clone(),
             configured_lane_catalog: lane_catalog,
             governance,

@@ -222,6 +222,7 @@ from .dataspaces import (
     write_dataspace_plan as _write_dataspace_plan,
 )
 from .event_filter import DataEventFilter, ensure_event_filter
+from .nexus_app import _strict_nexus_lane_config as _strict_nexus_lane_config_impl
 from .numeric_v1 import NumericV1Codec
 from .query import (
     AggregateSpec,
@@ -645,13 +646,9 @@ def _normalize_zk_verifying_key_transaction_draft(
         "transaction_payload_b64",
         "signing_message_b64",
     }
-    unsupported_fields = sorted(
-        str(key) for key in record if key not in allowed_fields
-    )
+    unsupported_fields = sorted(str(key) for key in record if key not in allowed_fields)
     if unsupported_fields:
-        raise ValueError(
-            f"{context} contains unsupported fields: {', '.join(unsupported_fields)}"
-    )
+        raise ValueError(f"{context} contains unsupported fields: {', '.join(unsupported_fields)}")
     if record.get("submitted") is not False:
         raise ValueError(f"{context}.submitted must be false")
     transaction_payload_b64, transaction_payload = (
@@ -822,9 +819,7 @@ def _decode_zk_verifying_key_draft_base64(
     if not decoded or base64.b64encode(decoded).decode("ascii") != value:
         raise ValueError(f"{context} must be canonical padded base64")
     if max_bytes is not None and len(decoded) > max_bytes:
-        raise ValueError(
-            f"{context} exceeds the {max_bytes}-byte {limit_label} limit"
-        )
+        raise ValueError(f"{context} exceeds the {max_bytes}-byte {limit_label} limit")
     if exact_bytes is not None and len(decoded) != exact_bytes:
         raise ValueError(f"{context} must decode to exactly {exact_bytes} bytes")
     return value, decoded
@@ -2849,9 +2844,7 @@ def _reject_governance_private_key_fields(
                     f"{path} does not accept private-key fields ({', '.join(fields)}); "
                     "sign the returned transaction draft locally"
                 )
-            pending.extend(
-                (nested, f"{path}.{key}") for key, nested in candidate.items()
-            )
+            pending.extend((nested, f"{path}.{key}") for key, nested in candidate.items())
         elif isinstance(candidate, (list, tuple)):
             identity = id(candidate)
             if identity in visited:
@@ -3147,9 +3140,7 @@ def _normalize_governance_parliament_ballot_payload(
     if record.get("body") not in _GOVERNANCE_PARLIAMENT_BODIES:
         raise ValueError(f"{context}.body must name a canonical Parliament body")
     if record.get("decision") not in _GOVERNANCE_PARLIAMENT_DECISIONS:
-        raise ValueError(
-            f"{context}.decision must be approve, reject, or abstain"
-        )
+        raise ValueError(f"{context}.decision must be approve, reject, or abstain")
     return record
 
 
@@ -8243,107 +8234,6 @@ class TriggerCompletionList:
 
 
 @dataclass(frozen=True)
-class SumeragiAvailabilityCollector:
-    """Collector vote ingestion snapshot exposed via `/v1/sumeragi/telemetry`."""
-
-    collector_idx: int
-    peer_id: str
-    votes_ingested: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiAvailabilityCollector":
-        if not isinstance(payload, Mapping):
-            raise TypeError("availability collector entry must be an object")
-        try:
-            collector_idx = int(payload["collector_idx"])
-            votes_ingested = int(payload["votes_ingested"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise TypeError("availability collector entry must expose numeric counters") from exc
-        peer_id = payload.get("peer_id")
-        if not isinstance(peer_id, str):
-            raise TypeError("availability collector entry missing string `peer_id` field")
-        return cls(
-            collector_idx=collector_idx,
-            peer_id=peer_id,
-            votes_ingested=votes_ingested,
-        )
-
-
-@dataclass(frozen=True)
-class SumeragiAvailabilitySnapshot:
-    """Aggregated availability vote ingestion statistics."""
-
-    total_votes_ingested: int
-    collectors: List[SumeragiAvailabilityCollector]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiAvailabilitySnapshot":
-        if not isinstance(payload, Mapping):
-            raise TypeError("availability snapshot must be an object")
-        try:
-            total_votes_ingested = int(payload["total_votes_ingested"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise TypeError("availability snapshot missing numeric `total_votes_ingested`") from exc
-        raw_collectors = payload.get("collectors", [])
-        if raw_collectors is None:
-            collectors_payload: List[Any] = []
-        elif isinstance(raw_collectors, list):
-            collectors_payload = raw_collectors
-        else:
-            raise TypeError("availability snapshot `collectors` must be a list when present")
-        collectors = [
-            SumeragiAvailabilityCollector.from_payload(entry) for entry in collectors_payload
-        ]
-        return cls(total_votes_ingested=total_votes_ingested, collectors=collectors)
-
-
-@dataclass(frozen=True)
-class SumeragiQcLatencyEntry:
-    """Latency moving average for a consensus stage."""
-
-    kind: str
-    last_ms: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiQcLatencyEntry":
-        if not isinstance(payload, Mapping):
-            raise TypeError("QC latency entry must be an object")
-        kind = payload.get("kind")
-        if not isinstance(kind, str):
-            raise TypeError("QC latency entry missing string `kind` field")
-        try:
-            last_ms = int(payload["last_ms"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise TypeError("QC latency entry missing numeric `last_ms` field") from exc
-        return cls(kind=kind, last_ms=last_ms)
-
-
-@dataclass(frozen=True)
-class SumeragiRbcBacklog:
-    """Backpressure snapshot for RBC chunk ingestion."""
-
-    pending_sessions: int
-    total_missing_chunks: int
-    max_missing_chunks: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiRbcBacklog":
-        if not isinstance(payload, Mapping):
-            raise TypeError("RBC backlog snapshot must be an object")
-        try:
-            pending_sessions = int(payload.get("pending_sessions", 0))
-            total_missing_chunks = int(payload.get("total_missing_chunks", 0))
-            max_missing_chunks = int(payload.get("max_missing_chunks", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("RBC backlog counters must be numeric") from exc
-        return cls(
-            pending_sessions=pending_sessions,
-            total_missing_chunks=total_missing_chunks,
-            max_missing_chunks=max_missing_chunks,
-        )
-
-
-@dataclass(frozen=True)
 class SumeragiRbcEviction:
     """Evicted RBC payload metadata retained for status telemetry consumers."""
 
@@ -8416,167 +8306,6 @@ class SumeragiRbcStoreStatus:
 
 
 @dataclass(frozen=True)
-class SumeragiVrfLateReveal:
-    """Late reveal entry surfaced in the telemetry VRF summary."""
-
-    signer: str
-    noted_at_height: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiVrfLateReveal":
-        if not isinstance(payload, Mapping):
-            raise TypeError("VRF late reveal entry must be an object")
-        signer = payload.get("signer")
-        if not isinstance(signer, str):
-            raise TypeError("VRF late reveal entry missing string `signer` field")
-        try:
-            noted_at_height = int(payload["noted_at_height"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise TypeError("VRF late reveal entry missing numeric `noted_at_height`") from exc
-        return cls(signer=signer, noted_at_height=noted_at_height)
-
-
-@dataclass(frozen=True)
-class SumeragiVrfSummary:
-    """VRF epoch snapshot embedded in `/v1/sumeragi/telemetry`."""
-
-    found: bool
-    epoch: int
-    finalized: bool
-    seed_hex: Optional[str]
-    epoch_length: int
-    commit_deadline_offset: int
-    reveal_deadline_offset: int
-    roster_len: int
-    updated_at_height: int
-    participants_total: int
-    commitments_total: int
-    reveals_total: int
-    late_reveals_total: int
-    committed_no_reveal: List[int]
-    no_participation: List[int]
-    late_reveals: List[SumeragiVrfLateReveal]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiVrfSummary":
-        if not isinstance(payload, Mapping):
-            raise TypeError("VRF summary must be an object")
-        found = payload.get("found")
-        if not isinstance(found, bool):
-            raise TypeError("VRF summary missing bool `found` field")
-        try:
-            epoch = int(payload.get("epoch", 0))
-            epoch_length = int(payload.get("epoch_length", 0))
-            commit_deadline_offset = int(payload.get("commit_deadline_offset", 0))
-            reveal_deadline_offset = int(payload.get("reveal_deadline_offset", 0))
-            roster_len = int(payload.get("roster_len", 0))
-            updated_at_height = int(payload.get("updated_at_height", 0))
-            participants_total = int(payload.get("participants_total", 0))
-            commitments_total = int(payload.get("commitments_total", 0))
-            reveals_total = int(payload.get("reveals_total", 0))
-            late_reveals_total = int(payload.get("late_reveals_total", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("VRF summary numeric fields must contain integers") from exc
-        finalized = payload.get("finalized")
-        if not isinstance(finalized, bool):
-            raise TypeError("VRF summary missing bool `finalized` field")
-        seed_value = payload.get("seed_hex")
-        if seed_value is not None and seed_value is not False and not isinstance(seed_value, str):
-            raise TypeError("VRF summary `seed_hex` must be a string when provided")
-        seed_hex: Optional[str]
-        if isinstance(seed_value, str):
-            seed_hex = seed_value
-        else:
-            seed_hex = None
-        committed_payload = payload.get("committed_no_reveal", [])
-        no_participation_payload = payload.get("no_participation", [])
-        if committed_payload is None:
-            committed_raw: List[Any] = []
-        elif isinstance(committed_payload, list):
-            committed_raw = committed_payload
-        else:
-            raise TypeError("VRF summary `committed_no_reveal` must be a list when present")
-        if no_participation_payload is None:
-            no_participation_raw: List[Any] = []
-        elif isinstance(no_participation_payload, list):
-            no_participation_raw = no_participation_payload
-        else:
-            raise TypeError("VRF summary `no_participation` must be a list when present")
-        try:
-            committed_no_reveal = [int(item) for item in committed_raw]
-            no_participation = [int(item) for item in no_participation_raw]
-        except (TypeError, ValueError) as exc:
-            raise TypeError("VRF summary participant arrays must be numeric") from exc
-        late_reveals_payload = payload.get("late_reveals", [])
-        if late_reveals_payload is None:
-            late_reveals_raw: List[Any] = []
-        elif isinstance(late_reveals_payload, list):
-            late_reveals_raw = late_reveals_payload
-        else:
-            raise TypeError("VRF summary `late_reveals` must be a list when present")
-        late_reveals = [SumeragiVrfLateReveal.from_payload(entry) for entry in late_reveals_raw]
-        return cls(
-            found=found,
-            epoch=epoch,
-            finalized=finalized,
-            seed_hex=seed_hex,
-            epoch_length=epoch_length,
-            commit_deadline_offset=commit_deadline_offset,
-            reveal_deadline_offset=reveal_deadline_offset,
-            roster_len=roster_len,
-            updated_at_height=updated_at_height,
-            participants_total=participants_total,
-            commitments_total=commitments_total,
-            reveals_total=reveals_total,
-            late_reveals_total=late_reveals_total,
-            committed_no_reveal=committed_no_reveal,
-            no_participation=no_participation,
-            late_reveals=late_reveals,
-        )
-
-
-@dataclass(frozen=True)
-class SumeragiTelemetrySnapshot:
-    """Typed payload for `/v1/sumeragi/telemetry`."""
-
-    availability: SumeragiAvailabilitySnapshot
-    qc_latency_ms: List[SumeragiQcLatencyEntry]
-    rbc_backlog: SumeragiRbcBacklog
-    vrf: SumeragiVrfSummary
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiTelemetrySnapshot":
-        if not isinstance(payload, Mapping):
-            raise TypeError("telemetry payload must be an object")
-        availability_payload = payload.get("availability")
-        if not isinstance(availability_payload, Mapping):
-            raise TypeError("telemetry payload missing object `availability` field")
-        rbc_payload = payload.get("rbc_backlog")
-        if not isinstance(rbc_payload, Mapping):
-            raise TypeError("telemetry payload missing object `rbc_backlog` field")
-        qc_payload = payload.get("qc_latency_ms", [])
-        if qc_payload is None:
-            qc_entries_raw: List[Any] = []
-        elif isinstance(qc_payload, list):
-            qc_entries_raw = qc_payload
-        else:
-            raise TypeError("telemetry payload `qc_latency_ms` must be a list when present")
-        vrf_payload = payload.get("vrf")
-        if not isinstance(vrf_payload, Mapping):
-            raise TypeError("telemetry payload missing object `vrf` field")
-        availability = SumeragiAvailabilitySnapshot.from_payload(availability_payload)
-        qc_entries = [SumeragiQcLatencyEntry.from_payload(entry) for entry in qc_entries_raw]
-        rbc_backlog = SumeragiRbcBacklog.from_payload(rbc_payload)
-        vrf = SumeragiVrfSummary.from_payload(vrf_payload)
-        return cls(
-            availability=availability,
-            qc_latency_ms=qc_entries,
-            rbc_backlog=rbc_backlog,
-            vrf=vrf,
-        )
-
-
-@dataclass(frozen=True)
 class SumeragiEvidenceRecord:
     """Evidence record returned by `/v1/sumeragi/evidence`."""
 
@@ -8642,140 +8371,6 @@ class SumeragiEvidenceListPage:
             raise TypeError("sumeragi evidence `total` must be numeric") from exc
         items = [SumeragiEvidenceRecord.from_payload(entry) for entry in items_payload]
         return cls(items=items, total=total)
-
-
-@dataclass(frozen=True)
-class SumeragiQcSummary:
-    """Quorum certificate tuple {height, view, subject_block_hash}."""
-
-    height: int
-    view: int
-    subject_block_hash: Optional[str]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiQcSummary":
-        if not isinstance(payload, Mapping):
-            raise TypeError("QC summary must be an object")
-        try:
-            height = int(payload.get("height", 0))
-            view = int(payload.get("view", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("QC summary `height` and `view` must be numeric") from exc
-        hash_value = payload.get("subject_block_hash")
-        if hash_value is None:
-            subject_hash: Optional[str] = None
-        elif isinstance(hash_value, str):
-            subject_hash = hash_value
-        else:
-            raise TypeError("QC summary `subject_block_hash` must be a string when present")
-        return cls(height=height, view=view, subject_block_hash=subject_hash)
-
-
-@dataclass(frozen=True)
-class SumeragiCommitQc:
-    """Commit QC record returned by `/v1/sumeragi/commit-qcs/{block_hash}`."""
-
-    phase: str
-    parent_state_root: str
-    post_state_root: str
-    height: int
-    view: int
-    epoch: int
-    mode_tag: str
-    validator_set_hash: str
-    validator_set_hash_version: int
-    validator_set: List[str]
-    signers_bitmap: str
-    bls_aggregate_signature: str
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiCommitQc":
-        if not isinstance(payload, Mapping):
-            raise TypeError("commit_qc payload must be an object")
-        phase = payload.get("phase")
-        mode_tag = payload.get("mode_tag")
-        if not isinstance(phase, str):
-            raise TypeError("commit_qc `phase` must be a string")
-        if not isinstance(mode_tag, str):
-            raise TypeError("commit_qc `mode_tag` must be a string")
-        try:
-            height = int(payload.get("height", 0))
-            view = int(payload.get("view", 0))
-            epoch = int(payload.get("epoch", 0))
-            validator_set_hash_version = int(payload.get("validator_set_hash_version", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("commit_qc numeric fields must be numeric") from exc
-        parent_state_root = _normalize_hex_string(
-            payload.get("parent_state_root"),
-            "commit_qc.parent_state_root",
-            expected_length=64,
-        )
-        post_state_root = _normalize_hex_string(
-            payload.get("post_state_root"),
-            "commit_qc.post_state_root",
-            expected_length=64,
-        )
-        validator_set_hash = _normalize_hex_string(
-            payload.get("validator_set_hash"),
-            "commit_qc.validator_set_hash",
-            expected_length=64,
-        )
-        validator_set_value = payload.get("validator_set")
-        if not isinstance(validator_set_value, list):
-            raise TypeError("commit_qc `validator_set` must be a list")
-        validator_set: List[str] = []
-        for index, entry in enumerate(validator_set_value):
-            if not isinstance(entry, str):
-                raise TypeError(f"commit_qc validator_set entry {index} must be a string")
-            validator_set.append(entry)
-        signers_bitmap = _normalize_hex_string(
-            payload.get("signers_bitmap"),
-            "commit_qc.signers_bitmap",
-        )
-        bls_aggregate_signature = _normalize_hex_string(
-            payload.get("bls_aggregate_signature"),
-            "commit_qc.bls_aggregate_signature",
-        )
-        return cls(
-            phase=phase,
-            parent_state_root=parent_state_root,
-            post_state_root=post_state_root,
-            height=height,
-            view=view,
-            epoch=epoch,
-            mode_tag=mode_tag,
-            validator_set_hash=validator_set_hash,
-            validator_set_hash_version=validator_set_hash_version,
-            validator_set=validator_set,
-            signers_bitmap=signers_bitmap,
-            bls_aggregate_signature=bls_aggregate_signature,
-        )
-
-
-@dataclass(frozen=True)
-class SumeragiCommitQcRecord:
-    """Commit QC response wrapper returned by `/v1/sumeragi/commit-qcs/{block_hash}`."""
-
-    subject_block_hash: str
-    commit_qc: Optional[SumeragiCommitQc]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiCommitQcRecord":
-        if not isinstance(payload, Mapping):
-            raise TypeError("commit_qc response must be an object")
-        subject_block_hash = _normalize_hex_string(
-            payload.get("subject_block_hash"),
-            "commit_qc.subject_block_hash",
-            expected_length=64,
-        )
-        commit_qc_payload = payload.get("commit_qc")
-        if commit_qc_payload is None:
-            commit_qc = None
-        elif isinstance(commit_qc_payload, Mapping):
-            commit_qc = SumeragiCommitQc.from_payload(commit_qc_payload)
-        else:
-            raise TypeError("commit_qc response `commit_qc` must be an object or null")
-        return cls(subject_block_hash=subject_block_hash, commit_qc=commit_qc)
 
 
 @dataclass(frozen=True)
@@ -8941,6 +8536,9 @@ def _strict_hash_literal(payload: Mapping[str, Any], field_name: str, context: s
     if int(body[-2:], 16) & 1 == 0:
         raise ValueError(f"{context} `{field_name}` has an invalid Iroha hash marker bit")
     return value
+
+def _strict_nexus_lane_config(value: Any, context: str) -> Dict[str, Any]:
+    return _strict_nexus_lane_config_impl(value, context, _strict_exact_fields, _strict_uint, _strict_nonempty_string)
 
 
 def _strict_byte_vector(value: Any, length: int, context: str) -> Tuple[int, ...]:
@@ -9203,10 +8801,11 @@ class SumeragiNativeAmxParticipantLaneBlockDescriptor:
 
 @dataclass(frozen=True)
 class SumeragiNativeAmxParticipantLaneBlockProposal:
-    """Exact participant proposal, with recovery payload hints forbidden."""
+    """Exact participant proposal whose required recovery-hint field is null."""
 
     descriptor: SumeragiNativeAmxParticipantLaneBlockDescriptor
     proposal_hash: str
+    payload_block_hint: None
 
     @classmethod
     def from_payload(
@@ -9215,7 +8814,13 @@ class SumeragiNativeAmxParticipantLaneBlockProposal:
         context = "native AMX participant lane-block proposal"
         if not isinstance(payload, Mapping):
             raise TypeError(f"{context} must be an object")
-        _strict_exact_fields(payload, {"descriptor", "proposal_hash"}, context)
+        _strict_exact_fields(
+            payload,
+            {"descriptor", "proposal_hash", "payload_block_hint"},
+            context,
+        )
+        if payload["payload_block_hint"] is not None:
+            raise ValueError(f"{context} `payload_block_hint` must be null")
         descriptor = _required_field(payload, "descriptor", context)
         if not isinstance(descriptor, Mapping):
             raise TypeError(f"{context} `descriptor` must be an object")
@@ -9223,7 +8828,11 @@ class SumeragiNativeAmxParticipantLaneBlockProposal:
         proposal_hash = _strict_hash_literal(payload, "proposal_hash", context)
         if proposal_hash != compute_native_amx_proposal_hash(asdict(parsed_descriptor)):
             raise ValueError(f"{context} proposal hash does not match its canonical preimage")
-        return cls(descriptor=parsed_descriptor, proposal_hash=proposal_hash)
+        return cls(
+            descriptor=parsed_descriptor,
+            proposal_hash=proposal_hash,
+            payload_block_hint=None,
+        )
 
 
 @dataclass(frozen=True)
@@ -10630,87 +10239,6 @@ class SumeragiPacemakerSnapshot:
 
 
 @dataclass(frozen=True)
-class SumeragiPhasesEmaSnapshot:
-    """Exponential moving average latency per phase."""
-
-    propose_ms: int
-    collect_da_ms: int
-    collect_prevote_ms: int
-    collect_precommit_ms: int
-    collect_aggregator_ms: int
-    commit_ms: int
-    pipeline_total_ms: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiPhasesEmaSnapshot":
-        if not isinstance(payload, Mapping):
-            raise TypeError("phases EMA payload must be an object")
-        try:
-            return cls(
-                propose_ms=int(payload.get("propose_ms", 0)),
-                collect_da_ms=int(payload.get("collect_da_ms", 0)),
-                collect_prevote_ms=int(payload.get("collect_prevote_ms", 0)),
-                collect_precommit_ms=int(payload.get("collect_precommit_ms", 0)),
-                collect_aggregator_ms=int(payload.get("collect_aggregator_ms", 0)),
-                commit_ms=int(payload.get("commit_ms", 0)),
-                pipeline_total_ms=int(payload.get("pipeline_total_ms", 0)),
-            )
-        except (TypeError, ValueError) as exc:
-            raise TypeError("phases EMA metrics must be numeric") from exc
-
-
-@dataclass(frozen=True)
-class SumeragiPhasesSnapshot:
-    """Per-phase latency summary from `/v1/sumeragi/phases`."""
-
-    propose_ms: int
-    collect_da_ms: int
-    collect_prevote_ms: int
-    collect_precommit_ms: int
-    collect_aggregator_ms: int
-    commit_ms: int
-    pipeline_total_ms: int
-    collect_aggregator_gossip_total: int
-    block_created_dropped_by_lock_total: int
-    block_created_hint_mismatch_total: int
-    block_created_proposal_mismatch_total: int
-    ema_ms: SumeragiPhasesEmaSnapshot
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiPhasesSnapshot":
-        if not isinstance(payload, Mapping):
-            raise TypeError("phases payload must be an object")
-        ema_payload = payload.get("ema_ms")
-        if not isinstance(ema_payload, Mapping):
-            raise TypeError("phases payload missing object `ema_ms` field")
-        try:
-            return cls(
-                propose_ms=int(payload.get("propose_ms", 0)),
-                collect_da_ms=int(payload.get("collect_da_ms", 0)),
-                collect_prevote_ms=int(payload.get("collect_prevote_ms", 0)),
-                collect_precommit_ms=int(payload.get("collect_precommit_ms", 0)),
-                collect_aggregator_ms=int(payload.get("collect_aggregator_ms", 0)),
-                commit_ms=int(payload.get("commit_ms", 0)),
-                pipeline_total_ms=int(payload.get("pipeline_total_ms", 0)),
-                collect_aggregator_gossip_total=int(
-                    payload.get("collect_aggregator_gossip_total", 0)
-                ),
-                block_created_dropped_by_lock_total=int(
-                    payload.get("block_created_dropped_by_lock_total", 0)
-                ),
-                block_created_hint_mismatch_total=int(
-                    payload.get("block_created_hint_mismatch_total", 0)
-                ),
-                block_created_proposal_mismatch_total=int(
-                    payload.get("block_created_proposal_mismatch_total", 0)
-                ),
-                ema_ms=SumeragiPhasesEmaSnapshot.from_payload(ema_payload),
-            )
-        except (TypeError, ValueError) as exc:
-            raise TypeError("phases metrics must be numeric") from exc
-
-
-@dataclass(frozen=True)
 class SumeragiLeaderSnapshot:
     """Leader index snapshot from `/v1/sumeragi/leader`."""
 
@@ -10732,23 +10260,41 @@ class SumeragiLeaderSnapshot:
 
 
 @dataclass(frozen=True)
-class SumeragiQcSnapshot:
-    """Highest/Locked QC snapshot from `/v1/sumeragi/qc`."""
+class SumeragiV2QcResponse:
+    """Authoritative PrepareQC references returned by `/v1/sumeragi/qc`."""
 
-    highest_qc: SumeragiQcSummary
-    locked_qc: SumeragiQcSummary
+    highest_prepare_qc: Optional[SumeragiV2QuorumCertificateRef]
+    locked_prepare_qc: Optional[SumeragiV2QuorumCertificateRef]
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiQcSnapshot":
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiV2QcResponse":
         if not isinstance(payload, Mapping):
             raise TypeError("qc payload must be an object")
-        highest_payload = payload.get("highest_qc")
-        locked_payload = payload.get("locked_qc")
-        if not isinstance(highest_payload, Mapping) or not isinstance(locked_payload, Mapping):
-            raise TypeError("qc payload must contain object `highest_qc` and `locked_qc` fields")
+        _sumeragi_v2_exact_fields(
+            payload,
+            ("highest_prepare_qc", "locked_prepare_qc"),
+            "sumeragi qc",
+        )
+        required_fields = {"highest_prepare_qc", "locked_prepare_qc"}
+        missing_fields = required_fields - set(payload)
+        if missing_fields:
+            raise TypeError(f"sumeragi qc.{sorted(missing_fields)[0]} is required")
+
+        def prepare_qc(field: str) -> Optional[SumeragiV2QuorumCertificateRef]:
+            value = payload.get(field)
+            if value is None:
+                return None
+            certificate = SumeragiV2QuorumCertificateRef.from_payload(
+                value,
+                f"sumeragi qc.{field}",
+            )
+            if certificate.phase is not SumeragiV2GlobalPhase.PREPARE:
+                raise ValueError(f"sumeragi qc.{field} must reference a PrepareQC")
+            return certificate
+
         return cls(
-            highest_qc=SumeragiQcSummary.from_payload(highest_payload),
-            locked_qc=SumeragiQcSummary.from_payload(locked_payload),
+            highest_prepare_qc=prepare_qc("highest_prepare_qc"),
+            locked_prepare_qc=prepare_qc("locked_prepare_qc"),
         )
 
 
@@ -12257,9 +11803,7 @@ def _normalize_contract_call_metadata(
         ):
             raise ValueError(f"{context} key {raw_key!r} is reserved")
         try:
-            normalized[raw_key] = json.loads(
-                json.dumps(raw_value, allow_nan=False)
-            )
+            normalized[raw_key] = json.loads(json.dumps(raw_value, allow_nan=False))
         except (TypeError, ValueError) as error:
             raise TypeError(f"{context}[{raw_key!r}] must be strict JSON") from error
     return normalized
@@ -12484,7 +12028,6 @@ __all__ = [
     "SubscriptionActionResult",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
-    "SumeragiQcSummary",
     "SumeragiRbcEviction",
     "SumeragiRbcStoreStatus",
     "SumeragiPrfStatus",
@@ -12516,10 +12059,8 @@ __all__ = [
     "SumeragiNativeAmxReceipt",
     "SumeragiParamsSnapshot",
     "SumeragiPacemakerSnapshot",
-    "SumeragiPhasesEmaSnapshot",
-    "SumeragiPhasesSnapshot",
     "SumeragiLeaderSnapshot",
-    "SumeragiQcSnapshot",
+    "SumeragiV2QcResponse",
     "SumeragiEvidenceCount",
     "TriggerRecord",
     "TriggerListPage",
@@ -15697,72 +15238,76 @@ class ToriiClient(
         if not isinstance(payload, Mapping):
             raise TypeError("Nexus lane lifecycle status must be a JSON object")
         status = dict(payload)
-        if status.get("version") != 1:
+        status_context = "Nexus lane lifecycle status"
+        _strict_exact_fields(
+            status,
+            (
+                "version",
+                "lane_count",
+                "lanes",
+                "catalog_hash",
+                "incarnations",
+                "incarnation_root",
+            ),
+            status_context,
+        )
+        if _strict_uint(status, "version", 8, status_context) != 1:
             raise ValueError("Nexus lane lifecycle status version must be 1")
-        if not isinstance(status.get("nexus_enabled"), bool):
-            raise TypeError("Nexus lane lifecycle status `nexus_enabled` must be boolean")
-        lane_count = status.get("lane_count")
-        if (
-            isinstance(lane_count, bool)
-            or not isinstance(lane_count, int)
-            or lane_count <= 0
-            or lane_count > 0xFFFFFFFF
-        ):
+        lane_count = _strict_uint(status, "lane_count", 32, status_context)
+        if lane_count == 0:
             raise ValueError("Nexus lane lifecycle status `lane_count` must be in 1..=4294967295")
-        lanes = status.get("lanes")
+        lanes = status["lanes"]
         if not isinstance(lanes, list) or not lanes:
             raise TypeError("Nexus lane lifecycle status `lanes` must be a non-empty list")
         if len(lanes) > 1024:
             raise ValueError("Nexus lane lifecycle status contains more than 1024 lanes")
-        if any(not isinstance(lane, Mapping) for lane in lanes):
-            raise TypeError("Nexus lane lifecycle status lanes must be JSON objects")
         lane_ids: list[int] = []
+        lane_aliases: set[str] = set()
+        normalized_lanes: List[Dict[str, Any]] = []
         for index, lane in enumerate(lanes):
-            lane_id = lane.get("id")
-            if (
-                isinstance(lane_id, bool)
-                or not isinstance(lane_id, int)
-                or lane_id < 0
-                or lane_id >= lane_count
-            ):
+            lane_context = f"Nexus lane lifecycle status lanes[{index}]"
+            normalized_lane = _strict_nexus_lane_config(lane, lane_context)
+            lane_id = normalized_lane["id"]
+            if lane_id >= lane_count:
                 raise ValueError(f"Nexus lane lifecycle status lanes[{index}].id is invalid")
+            alias = normalized_lane["alias"]
+            if alias in lane_aliases:
+                raise ValueError(
+                    f"Nexus lane lifecycle status lanes[{index}].alias duplicates `{alias}`"
+                )
             lane_ids.append(lane_id)
+            lane_aliases.add(alias)
+            normalized_lanes.append(normalized_lane)
         if lane_ids != sorted(set(lane_ids)):
             raise ValueError("Nexus lane lifecycle status lane ids must be unique and sorted")
-        catalog_hash = status.get("catalog_hash")
-        if not isinstance(catalog_hash, str) or not catalog_hash.strip():
-            raise ValueError("Nexus lane lifecycle status `catalog_hash` must be non-empty")
-        incarnation_entries = status.get("incarnations")
+        status["lanes"] = normalized_lanes
+        _strict_hash_literal(status, "catalog_hash", status_context)
+        incarnation_entries = status["incarnations"]
         if not isinstance(incarnation_entries, list):
             raise TypeError("Nexus lane lifecycle status `incarnations` must be a list")
         incarnation_ids: list[int] = []
         incarnation_values: set[str] = set()
+        normalized_incarnations: List[Dict[str, Any]] = []
         for index, entry in enumerate(incarnation_entries):
             if not isinstance(entry, Mapping):
                 raise TypeError(
                     f"Nexus lane lifecycle status incarnations[{index}] must be an object"
                 )
-            lane_id = entry.get("lane_id")
-            if isinstance(lane_id, bool) or not isinstance(lane_id, int):
-                raise ValueError(
-                    f"Nexus lane lifecycle status incarnations[{index}].lane_id is invalid"
-                )
-            incarnation = entry.get("incarnation")
-            if not isinstance(incarnation, str) or not incarnation.strip():
-                raise ValueError(
-                    f"Nexus lane lifecycle status incarnations[{index}].incarnation is invalid"
-                )
+            incarnation_context = f"Nexus lane lifecycle status incarnations[{index}]"
+            _strict_exact_fields(entry, ("lane_id", "incarnation"), incarnation_context)
+            lane_id = _strict_uint(entry, "lane_id", 32, incarnation_context)
+            incarnation = _strict_hash_literal(entry, "incarnation", incarnation_context)
             if incarnation in incarnation_values:
                 raise ValueError("Nexus lane lifecycle status incarnations must be unique")
             incarnation_ids.append(lane_id)
             incarnation_values.add(incarnation)
+            normalized_incarnations.append(dict(entry))
         if incarnation_ids != lane_ids:
             raise ValueError(
                 "Nexus lane lifecycle status incarnation lane ids must exactly match the catalog"
             )
-        incarnation_root = status.get("incarnation_root")
-        if not isinstance(incarnation_root, str) or not incarnation_root.strip():
-            raise ValueError("Nexus lane lifecycle status `incarnation_root` must be non-empty")
+        status["incarnations"] = normalized_incarnations
+        _strict_hash_literal(status, "incarnation_root", status_context)
         return status
 
     def nexus_lane_lifecycle(
@@ -15816,23 +15361,12 @@ class ToriiClient(
         addition_ids: set[int] = set()
         addition_aliases: set[str] = set()
         for index, addition in enumerate(additions):
-            if not isinstance(addition, Mapping):
-                raise TypeError(f"additions[{index}] must be a mapping")
-            normalized = dict(addition)
-            lane_id = normalized.get("id")
-            if (
-                isinstance(lane_id, bool)
-                or not isinstance(lane_id, int)
-                or lane_id < 0
-                or lane_id > 0xFFFFFFFF
-            ):
-                raise ValueError(f"additions[{index}].id must be a u32 integer")
+            normalized = _strict_nexus_lane_config(addition, f"additions[{index}]")
+            lane_id = normalized["id"]
             if lane_id in addition_ids:
                 raise ValueError(f"additions[{index}].id duplicates lane {lane_id}")
             addition_ids.add(lane_id)
-            alias = normalized.get("alias")
-            if not isinstance(alias, str) or not alias.strip():
-                raise ValueError(f"additions[{index}].alias must be a non-empty string")
+            alias = normalized["alias"]
             if alias in addition_aliases:
                 raise ValueError(f"additions[{index}].alias duplicates `{alias}`")
             addition_aliases.add(alias)
@@ -15867,8 +15401,6 @@ class ToriiClient(
             raise ValueError("lane lifecycle plan must add or retire at least one lane")
 
         status = self.nexus_lane_lifecycle_status(timeout=timeout)
-        if not status["nexus_enabled"]:
-            raise RuntimeError("Nexus lane lifecycle is disabled on the serving node")
         plan = _json_safe_value({"additions": normalized_additions, "retire": normalized_retire})
         instruction = _require_crypto().Instruction.nexus_lane_lifecycle(
             json.dumps(_json_safe_value(status), sort_keys=True, separators=(",", ":")),
@@ -20653,21 +20185,6 @@ class ToriiClient(
         self._expect_status(response, (200,))
         return self._maybe_json(response)
 
-    def get_sumeragi_telemetry(self) -> Optional[Any]:
-        """Fetch operator-authenticated consensus telemetry."""
-
-        return self._sumeragi_operator_json(
-            "/v1/sumeragi/telemetry",
-            context="sumeragi telemetry",
-        )
-
-    def get_sumeragi_telemetry_typed(self) -> SumeragiTelemetrySnapshot:
-        """Return `/v1/sumeragi/telemetry` as a structured snapshot."""
-        payload = self.get_sumeragi_telemetry()
-        if not isinstance(payload, Mapping):
-            raise TypeError("telemetry response must be a JSON object")
-        return SumeragiTelemetrySnapshot.from_payload(payload)
-
     def get_sumeragi_status(self) -> Optional[Any]:
         """Fetch the raw authoritative v2 consensus status JSON."""
         return self._sumeragi_operator_json(
@@ -20715,37 +20232,20 @@ class ToriiClient(
         return SumeragiPacemakerSnapshot.from_payload(payload)
 
     def get_sumeragi_qc(self) -> Optional[Any]:
-        """Fetch the operator-authenticated HighestQC/LockedQC snapshot."""
+        """Fetch the operator-authenticated v2 PrepareQC references."""
 
         return self._sumeragi_operator_json(
             "/v1/sumeragi/qc",
             context="sumeragi quorum certificates",
         )
 
-    def get_sumeragi_qc_typed(self) -> SumeragiQcSnapshot:
+    def get_sumeragi_qc_typed(self) -> SumeragiV2QcResponse:
         """Typed wrapper for :meth:`get_sumeragi_qc`."""
 
         payload = self.get_sumeragi_qc()
         if not isinstance(payload, Mapping):
             raise TypeError("qc response must be a JSON object")
-        return SumeragiQcSnapshot.from_payload(payload)
-
-    def get_sumeragi_commit_qc(self, block_hash_hex: str) -> Optional[Any]:
-        """Fetch commit QC details for a block hash (`GET /v1/sumeragi/commit-qcs/{block_hash}`)."""
-
-        normalized = _normalize_hash_hex(block_hash_hex, "block_hash_hex")
-        return self._sumeragi_operator_json(
-            f"/v1/sumeragi/commit-qcs/{normalized}",
-            context="sumeragi commit quorum certificate",
-        )
-
-    def get_sumeragi_commit_qc_typed(self, block_hash_hex: str) -> SumeragiCommitQcRecord:
-        """Typed wrapper for :meth:`get_sumeragi_commit_qc`."""
-
-        payload = self.get_sumeragi_commit_qc(block_hash_hex)
-        if not isinstance(payload, Mapping):
-            raise TypeError("commit_qc response must be a JSON object")
-        return SumeragiCommitQcRecord.from_payload(payload)
+        return SumeragiV2QcResponse.from_payload(payload)
 
     def get_sumeragi_leader(self) -> Optional[Any]:
         """Fetch the operator-authenticated leader index snapshot."""
@@ -20818,19 +20318,6 @@ class ToriiClient(
         if not isinstance(payload, Mapping):
             raise RuntimeError("sumeragi evidence endpoint returned non-object payload")
         return SumeragiEvidenceListPage.from_payload(payload)
-
-    def get_sumeragi_phases(self) -> Optional[Any]:
-        """Fetch consensus phase durations (`GET /v1/sumeragi/phases`)."""
-
-        return self.request_json("GET", "/v1/sumeragi/phases", expected_status=(200,))
-
-    def get_sumeragi_phases_typed(self) -> SumeragiPhasesSnapshot:
-        """Typed wrapper for :meth:`get_sumeragi_phases`."""
-
-        payload = self.request_json("GET", "/v1/sumeragi/phases", expected_status=(200,))
-        if not isinstance(payload, Mapping):
-            raise TypeError("phases response must be a JSON object")
-        return SumeragiPhasesSnapshot.from_payload(payload)
 
     def get_sumeragi_params(self) -> Optional[Any]:
         """Fetch operator-authenticated on-chain Sumeragi parameters."""

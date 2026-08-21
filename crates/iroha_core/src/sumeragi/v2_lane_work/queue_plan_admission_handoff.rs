@@ -7,7 +7,7 @@ impl V2LaneWorkAdapter {
         self.context.network_id = network_id;
     }
 
-    fn reconcile_pending_queue_plan_admissions(
+    pub(crate) fn reconcile_pending_queue_plan_admissions(
         &mut self,
         active_view: wire::View,
     ) -> Result<Vec<Vec<u8>>, V2LaneWorkError> {
@@ -48,10 +48,20 @@ impl V2LaneWorkAdapter {
                     ))
                 })?;
             match disposition {
-                PendingQueuePlanAdmissionDisposition::Exact => self
-                    .kura
-                    .remove_pending_queue_plan_admission_certificate(certificate_hash)
-                    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?,
+                PendingQueuePlanAdmissionDisposition::Exact => {
+                    // Retain the quorum certificate while the marker is canonical but the body
+                    // is not. It remains the authenticated handoff for peers lagging behind the
+                    // marker and is retired only with canonical transaction membership.
+                    if self
+                        .state
+                        .queue_plan_admission_certificate_transaction_applied(&certificate_bytes)
+                        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
+                    {
+                        self.kura
+                            .remove_pending_queue_plan_admission_certificate(certificate_hash)
+                            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+                    }
+                }
                 PendingQueuePlanAdmissionDisposition::DefinitiveConflict
                 | PendingQueuePlanAdmissionDisposition::Stale => {
                     let queue = self.lane_drain_queue.as_ref().ok_or_else(|| {
@@ -72,7 +82,11 @@ impl V2LaneWorkAdapter {
                         .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
                 }
                 PendingQueuePlanAdmissionDisposition::EligibleAbsent if local_is_leader => {
-                    admissions.push(certificate_bytes);
+                    admissions.push((
+                        admission.registry_key,
+                        admission.registry_value,
+                        certificate_bytes,
+                    ));
                 }
                 PendingQueuePlanAdmissionDisposition::EligibleAbsent => {
                     let effect = V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
@@ -94,7 +108,35 @@ impl V2LaneWorkAdapter {
         if !local_is_leader && count != 0 && completed {
             self.queue_plan_admission_handoff_cursor = (start + 1) % count;
         }
-        Ok(admissions)
+        admissions.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.cmp(&right.2))
+        });
+        let mut selected = Vec::new();
+        let mut selected_bytes = 0usize;
+        let mut previous_registry_key = None;
+        for (registry_key, _, certificate) in admissions {
+            if previous_registry_key.as_ref() == Some(&registry_key) {
+                continue;
+            }
+            let Some(next_bytes) = selected_bytes.checked_add(certificate.len()) else {
+                break;
+            };
+            if selected.len() == iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK
+                || next_bytes > iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSIONS_BYTES
+            {
+                break;
+            }
+            selected_bytes = next_bytes;
+            previous_registry_key = Some(registry_key.clone());
+            selected.push((registry_key, certificate));
+        }
+        Ok(selected
+            .into_iter()
+            .map(|(_, certificate)| certificate)
+            .collect())
     }
 
     fn accept_queue_plan_admission_certificate(
@@ -140,7 +182,6 @@ impl V2LaneWorkAdapter {
         self.kura
             .persist_pending_queue_plan_admission_certificate(certificate.as_slice())
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
-        self.refresh_merge_candidates(active_view)?;
         Ok(V2LaneIngressOutcome::Inserted)
     }
 }

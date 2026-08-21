@@ -3,7 +3,38 @@ struct MergeReceiptCompactionFixture {
     lane_entry: LaneConfigEntry,
     kura: Arc<Kura>,
     descriptor: LaneBlockDescriptorV1,
+    lane_artifact: LaneBlockArtifact,
     frontier: LaneMergeApplicationFrontierV1,
+}
+fn merge_receipt_compaction_lane_artifact(
+    descriptor: &LaneBlockDescriptorV1,
+    proposal_block_hash: HashOf<BlockHeader>,
+    proposal_view: u64,
+) -> LaneBlockArtifact {
+    LaneBlockArtifact::new(
+        proposal_block_hash,
+        SumeragiLanePayloadOwnership {
+            proposal_height: descriptor.proposal_height,
+            proposal_view,
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            lane_block_height: descriptor.lane_block_height,
+            lane_block_view: descriptor.lane_block_view,
+            subject_hash: descriptor.subject_hash,
+            qc_mode_tag: descriptor.qc_mode_tag.clone(),
+            accepted_candidate_indices: descriptor.accepted_candidate_indices.clone(),
+            accepted_transaction_hashes: descriptor.accepted_transaction_hashes.clone(),
+            previous_lane_block_height: descriptor.previous_lane_block_height,
+            previous_lane_block_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
+            lane_block_descriptor_hash: Some(descriptor.descriptor_hash),
+            lane_block_descriptor_validator_set: descriptor.validator_set.clone(),
+            lane_block_descriptor_validator_count: descriptor.validator_count,
+            lane_block_descriptor_min_quorum: descriptor.min_quorum,
+            payload_ownership_hash: descriptor.payload_ownership_hash,
+            rbc_instance_hash: descriptor.rbc_instance_hash,
+        },
+    )
 }
 fn merge_receipt_compaction_fixture() -> MergeReceiptCompactionFixture {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -54,6 +85,11 @@ fn merge_receipt_compaction_fixture() -> MergeReceiptCompactionFixture {
     );
     let carrier_height = carrier.header().height().get();
     let carrier_hash = carrier.hash();
+    let lane_artifact = merge_receipt_compaction_lane_artifact(
+        &descriptor,
+        carrier_hash,
+        carrier.header().view_change_index(),
+    );
     kura.store_block(parent)
         .expect("store merge carrier parent");
     kura.store_block_with_merge_entry(Arc::clone(&carrier), &merge_entry)
@@ -90,6 +126,7 @@ fn merge_receipt_compaction_fixture() -> MergeReceiptCompactionFixture {
         lane_entry,
         kura,
         descriptor,
+        lane_artifact,
         frontier,
     }
 }
@@ -119,15 +156,8 @@ fn ensure_merge_receipt_lane_artifact_pair(
     match (data_path.is_file(), index_path.is_file()) {
         (true, true) => {}
         (false, false) => {
-            let receipt = fixture
-                .kura
-                .read_lane_block_application_receipt(
-                    fixture.descriptor.lane_id,
-                    fixture.descriptor.lane_block_height,
-                )
-                .expect("merge receipt fixture has its application receipt");
-            let payload = receipt
-                .artifact
+            let payload = fixture
+                .lane_artifact
                 .encode_framed()
                 .expect("encode merge receipt lane artifact");
             assert!(
@@ -139,7 +169,6 @@ fn ensure_merge_receipt_lane_artifact_pair(
                     LaneBlockArtifact::FORMAT_LABEL,
                     FsyncMode::Always,
                     None,
-                    SidecarIndexOrigin::FirstWrite,
                 ),
                 "install merge receipt lane artifact history",
             );

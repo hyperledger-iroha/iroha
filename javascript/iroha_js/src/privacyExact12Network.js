@@ -14,6 +14,7 @@ export const PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1 = Object.freeze(
   "time_to_live_ms",
   "nonce",
   "fee_payment",
+  "admission_intent",
   "metadata",
   "attachments",
 ]);

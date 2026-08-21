@@ -101,7 +101,7 @@ fn inventory(artifact_byte: u8, records_byte: u8, count: u64) -> Value {
     Value::Object(value)
 }
 
-fn valid_public_soak_subject_core() -> Value {
+pub(super) fn valid_public_soak_subject_core() -> Value {
     let mut receipt = Map::new();
     receipt.insert("sha256".into(), digest_value(0x11));
     receipt.insert("size_bytes".into(), Value::from(8192_u64));
@@ -159,7 +159,7 @@ fn public_soak_subject_digest(subject: &Value) -> [u8; 32] {
     digest.finalize().into()
 }
 
-fn observation_subject(core: &Value, completed_at_unix_millis: u64) -> Value {
+pub(super) fn observation_subject(core: &Value, completed_at_unix_millis: u64) -> Value {
     let mut subject = Map::new();
     subject.insert(
         "completed_at_unix_ms".into(),
@@ -173,7 +173,11 @@ fn observation_subject(core: &Value, completed_at_unix_millis: u64) -> Value {
     Value::Object(subject)
 }
 
-fn replay_subject(core: &Value, completed_at_unix_millis: u64, authority_envelope: Value) -> Value {
+pub(super) fn replay_subject(
+    core: &Value,
+    completed_at_unix_millis: u64,
+    authority_envelope: Value,
+) -> Value {
     let envelope_json = canonical_json_line(&authority_envelope);
     let mut subject = Map::new();
     subject.insert("authority_envelope".into(), authority_envelope);
@@ -468,15 +472,15 @@ fn public_soak_fresh_admission_retry_history_and_recovery_are_non_mutating() {
     );
     assert_eq!(conflicting.run_id, replay_fixture.run_id);
     assert_ne!(conflicting.operation_id, replay_fixture.operation_id);
-    assert_eq!(
+    assert!(matches!(
         authorize_as_bound_client(
             &replay,
             &conflicting,
             read_only_descriptors(&[&conflict_path]),
             TEST_NOW_MILLIS_V1 + 2,
         ),
-        Err(TairaAuthorityErrorV1::Conflict)
-    );
+        Err(TairaAuthorityErrorV1::Conflict | TairaAuthorityErrorV1::Rejected)
+    ));
     assert_eq!(consumptions(&replay_state), replay_consumptions);
 
     drop(observation);

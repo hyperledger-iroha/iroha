@@ -109,11 +109,12 @@ repo-shared Codex guidance for this flow lives at
 `skills/mochi-local-sandbox/`; install or symlink it into
 `$CODEX_HOME/skills/mochi-local-sandbox` when you want Codex to use it.
 
-Local validator configs now pin `nexus.enabled = false` and
+Local validator configs use mandatory Nexus routing without emitting an availability switch and pin
 `confidential.enabled = true`. Mochi asks Kagami to sign the selected consensus
 mode into genesis; it does not copy that choice into mutable `[sumeragi]`
-config. Enabling Nexus requires an NPoS profile, and Mochi rejects
-`nexus.enabled = true` on permissioned presets before peers launch.
+config. The canonical one-lane topology works with permissioned consensus;
+custom multi-lane topology requires an NPoS profile and is rejected before
+peers launch when paired with a permissioned preset.
 The rendered local Torii config also enables `[torii.mcp]` with the curated writer profile and
 `[torii.transport.norito_rpc]` with `enabled = true`, `require_mtls = false`, and `stage = "ga"`.
 

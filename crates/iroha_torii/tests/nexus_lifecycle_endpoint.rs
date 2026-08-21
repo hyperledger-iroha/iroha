@@ -18,7 +18,7 @@ use iroha_core::{
 };
 use iroha_data_model::nexus::{LaneId, LaneLifecycleStatusV1};
 use iroha_torii_shared::uri::NEXUS_LANE_LIFECYCLE;
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 #[path = "fixtures.rs"]
 mod fixtures;
 struct NexusHarness {
@@ -31,7 +31,6 @@ fn build_app() -> NexusHarness {
 }
 fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.nexus.enabled = true;
     if let Some(api_token) = api_token {
         cfg.torii.require_api_token = true;
         cfg.torii.api_tokens = vec![api_token.to_owned()];
@@ -111,9 +110,33 @@ async fn lifecycle_get_returns_valid_exact_json_status() {
             .and_then(|v| v.to_str().ok()),
         Some("application/json")
     );
+    let body = response_bytes(response).await;
+    let json = std::str::from_utf8(&body).expect("status JSON is UTF-8");
+    let value: norito::json::Value =
+        norito::json::from_slice(&body).expect("decode lifecycle status JSON value");
+    let fields = value
+        .as_object()
+        .expect("lifecycle status is a JSON object")
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let expected_fields = [
+        "catalog_hash",
+        "incarnation_root",
+        "incarnations",
+        "lane_count",
+        "lanes",
+        "version",
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    assert_eq!(
+        fields, expected_fields,
+        "endpoint must emit the exact current lifecycle status layout"
+    );
+    assert!(!json.contains("nexus_enabled"));
     let status: LaneLifecycleStatusV1 =
-        norito::json::from_slice(&response_bytes(response).await).expect("decode status JSON");
-    assert!(status.nexus_enabled);
+        norito::json::from_slice(&body).expect("decode status JSON");
     assert_eq!(
         status.validate().expect("validate status"),
         harness.state.nexus_snapshot().lane_catalog

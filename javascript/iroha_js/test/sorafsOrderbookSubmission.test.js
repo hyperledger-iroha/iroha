@@ -11,7 +11,6 @@ import { NetworkId } from "../src/networkId.js";
 const BASE_URL = "https://torii.example";
 const SIGNER = "ed0120ABCDEF";
 const IDENTITY = Object.freeze({
-  txHash: "aa".repeat(32),
   entrypointHash: "aa".repeat(32),
   signedTransactionHash: "aa".repeat(32),
 });
@@ -31,7 +30,6 @@ function receiptJson() {
   const hash = `hash:${body}#${crc.toString(16).toUpperCase().padStart(4, "0")}`;
   return JSON.stringify({
     payload: {
-      tx_hash: hash,
       entrypoint_hash: hash,
       signed_transaction_hash: hash,
       submitted_at_ms: 1,
@@ -44,7 +42,13 @@ function receiptJson() {
 
 function nativeBinding(overrides = {}) {
   return {
-    inspectSorafsOrderbookSubmissionV1(route, network, discriminant, signer, body) {
+    inspectSorafsOrderbookSubmissionForDiscriminantV1(
+      route,
+      network,
+      discriminant,
+      signer,
+      body,
+    ) {
       assert.ok(["order", "cancel", "receipt"].includes(route));
       assert.equal(Buffer.from(network).byteLength, 32);
       assert.equal(discriminant, 369);
@@ -54,14 +58,13 @@ function nativeBinding(overrides = {}) {
     },
     verifySorafsOrderbookSubmissionReceiptV1(
       body,
-      txHash,
       entrypointHash,
       signedTransactionHash,
       signer,
     ) {
       assert.ok(Buffer.from(body).byteLength > 0);
       assert.deepEqual(
-        { txHash, entrypointHash, signedTransactionHash },
+        { entrypointHash, signedTransactionHash },
         IDENTITY,
       );
       assert.equal(signer, SIGNER);
@@ -77,7 +80,6 @@ function acceptedResponse(headers = {}, body = Uint8Array.of(9)) {
     headers: {
       "content-type": "application/x-norito",
       "content-length": String(body.byteLength),
-      "x-iroha-transaction-hash": IDENTITY.txHash,
       "x-iroha-entrypoint-hash": IDENTITY.entrypointHash,
       "x-iroha-signed-transaction-hash": IDENTITY.signedTransactionHash,
       ...headers,
@@ -139,9 +141,9 @@ test("orderbook submit snapshots bytes and sends one exact authenticated Norito 
 
 test("orderbook submit binds snapshotted native callables to their native receiver", async () => {
   const native = nativeBinding();
-  const inspect = native.inspectSorafsOrderbookSubmissionV1;
+  const inspect = native.inspectSorafsOrderbookSubmissionForDiscriminantV1;
   const verify = native.verifySorafsOrderbookSubmissionReceiptV1;
-  native.inspectSorafsOrderbookSubmissionV1 = function (...args) {
+  native.inspectSorafsOrderbookSubmissionForDiscriminantV1 = function (...args) {
     assert.equal(this, native);
     return Reflect.apply(inspect, this, args);
   };
@@ -348,7 +350,7 @@ test("orderbook submit fails before HTTP without its signer and strict native ve
     client(fetchImpl, {}).submitSorafsOrderbookOrder(Buffer.of(1), {
       expectedReceiptSigner: SIGNER,
     }),
-    /missing inspectSorafsOrderbookSubmissionV1/u,
+    /missing inspectSorafsOrderbookSubmissionForDiscriminantV1/u,
   );
   assert.equal(fetches, 0);
 });
@@ -361,7 +363,7 @@ test("orderbook submit marks every failure after dispatch as non-resubmittable a
     ["media", async () => acceptedResponse({ "content-type": "application/json" })],
     ["identity", async () => acceptedResponse({ "x-iroha-entrypoint-hash": badHash })],
     ["coalesced", async () => acceptedResponse({
-      "x-iroha-transaction-hash": `${IDENTITY.txHash}, ${IDENTITY.txHash}`,
+      "x-iroha-entrypoint-hash": `${IDENTITY.entrypointHash}, ${IDENTITY.entrypointHash}`,
     })],
     ["oversize", async () => acceptedResponse({ "content-length": "1048577" })],
     ["length mismatch", async () => acceptedResponse({ "content-length": "2" })],

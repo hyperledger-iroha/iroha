@@ -27,6 +27,55 @@ fn completion_owner_snapshot(
         })
         .collect()
 }
+
+#[test]
+fn receiver_teardown_rejects_queued_or_active_lifecycle_serve() {
+    for state in [V2IoWorkState::Queued, V2IoWorkState::Active] {
+        let (sender, receiver, _admission) = test_io_command_channel(1);
+        receiver.queue.lock().lifecycle_serves.insert(
+            7,
+            V2IoTrackedLifecycleServeV1 {
+                request_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"lifecycle Serve teardown residue",
+                )),
+                state,
+            },
+        );
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            receiver.queue.close_receiver();
+        }));
+        assert!(
+            result.is_err(),
+            "receiver teardown must reject {state:?} lifecycle Serve ownership"
+        );
+        drop(receiver);
+        drop(sender);
+    }
+}
+
+#[test]
+fn receiver_teardown_preserves_completion_pending_lifecycle_serve() {
+    let (sender, receiver, _admission) = test_io_command_channel(1);
+    receiver.queue.lock().lifecycle_serves.insert(
+        7,
+        V2IoTrackedLifecycleServeV1 {
+            request_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"completion-pending lifecycle Serve teardown",
+            )),
+            state: V2IoWorkState::CompletionPending,
+        },
+    );
+
+    receiver.queue.close_receiver();
+    assert_eq!(
+        receiver.queue.lock().lifecycle_serves[&7].state,
+        V2IoWorkState::CompletionPending
+    );
+    drop(receiver);
+    drop(sender);
+}
+
 #[test]
 fn recovered_decision_apply_completion_drop_is_fail_stop() {
     let output_guard = ConsensusOutputGuard::isolated();
@@ -244,9 +293,18 @@ fn recovered_decision_apply_completion_accounting_is_stable_by_exact_key() {
     let admission = V2IoAdmission::new(2, 2).expect("construct bounded I/O admission");
     let key = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 1);
     let same_ordinal_foreign = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 2);
-    admission.retain_completion(Instant::now(), false, None, None, None, None);
-    admission.retain_completion(Instant::now(), true, Some(7), Some(key), None, None);
-    admission.retain_completion(Instant::now(), false, Some(8), None, None, None);
+    admission.retain_completion(Instant::now(), false, None, None, None, None, None, None);
+    admission.retain_completion(
+        Instant::now(),
+        true,
+        Some(7),
+        Some(key),
+        None,
+        None,
+        None,
+        None,
+    );
+    admission.retain_completion(Instant::now(), false, Some(8), None, None, None, None, None);
     assert!(admission.recovered_decision_apply_completion_is_exact(key));
     assert!(
         !admission.recovered_decision_apply_completion_is_exact(same_ordinal_foreign),
@@ -272,13 +330,24 @@ fn recovered_decision_apply_retry_requeues_exact_key_and_preserves_foreign_compl
         v2_io_command_channel(admission.capacity(), 1, 1, 1, Arc::clone(&admission));
     let key = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 1);
     let same_ordinal_foreign = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 2);
-    admission.retain_completion(Instant::now(), false, None, None, None, None);
-    admission.retain_completion(Instant::now(), true, Some(7), Some(key), None, None);
+    admission.retain_completion(Instant::now(), false, None, None, None, None, None, None);
+    admission.retain_completion(
+        Instant::now(),
+        true,
+        Some(7),
+        Some(key),
+        None,
+        None,
+        None,
+        None,
+    );
     admission.retain_completion(
         Instant::now(),
         true,
         Some(7),
         Some(same_ordinal_foreign),
+        None,
+        None,
         None,
         None,
     );
@@ -317,67 +386,23 @@ fn recovered_decision_apply_retry_requeues_exact_key_and_preserves_foreign_compl
     assert_eq!(unrelated_after, unrelated_before);
 }
 #[test]
-fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrier() {
-    {
-        let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded retry admission"));
-        let (command_tx, _command_rx) = v2_io_command_channel(1, 1, 1, 1, Arc::clone(&admission));
-        command_tx
-            .try_send(V2IoCommand::Shutdown)
-            .expect("fill the sole physical queue position");
-        let key = RecoveredDecisionApplyDispatchKeyV1::for_test(11, 3);
-        admission.retain_completion(Instant::now(), true, Some(11), Some(key), None, None);
-        command_tx.queue.lock().recovered_decision_applies.insert(
-            key,
-            V2IoTrackedRecoveredDecisionApplyV1 {
-                state: V2IoWorkState::CompletionPending,
-            },
-        );
-        let completion_before = completion_owner_snapshot(&admission, None);
-        assert!(matches!(
-            command_tx
-                .queue
-                .retry_recovered_decision_apply(RecoveredDecisionApplyRetryTaskFixtureV1(key)),
-            Err(RecoveredDecisionApplyRetryQueueErrorV1::Unavailable(
-                RecoveredDecisionApplyRetryTaskFixtureV1(returned)
-            )) if returned == key
-        ));
-        let state = command_tx.queue.lock();
-        assert_eq!(
-            state
-                .recovered_decision_applies
-                .get(&key)
-                .map(|work| work.state),
-            Some(V2IoWorkState::CompletionPending)
-        );
-        assert_eq!(state.commands.len(), 1);
-        assert!(matches!(
-            state.commands.front(),
-            Some(V2IoCommand::Shutdown)
-        ));
-        drop(state);
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
-        assert_eq!(
-            completion_owner_snapshot(&admission, None),
-            completion_before
-        );
-    }
-    let (service, keys) = fixture_with_block_payload();
-    let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-    let request = authenticated_serve_request(
-        &service.context,
-        &keys[1],
-        proposal.round,
-        proposal.subject,
-        wire::GlobalPhase::Prepare,
+fn recovered_decision_apply_retry_unavailable_preserves_pending_owner() {
+    let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded retry admission"));
+    let (command_tx, _command_rx) = v2_io_command_channel(1, 1, 1, 1, Arc::clone(&admission));
+    command_tx
+        .try_send(V2IoCommand::Shutdown)
+        .expect("fill the sole physical queue position");
+    let key = RecoveredDecisionApplyDispatchKeyV1::for_test(11, 3);
+    admission.retain_completion(
+        Instant::now(),
+        true,
+        Some(11),
+        Some(key),
+        None,
+        None,
+        None,
+        None,
     );
-    let requester = request.request().requester.clone();
-    let (command_tx, _command_rx, admission) = test_io_command_channel(2);
-    let barrier = command_tx
-        .prepare_serve(CertifiedServeOwnerKey::Roster(requester), request)
-        .expect("reserve an unclaimed Serve placeholder")
-        .lifecycle_id;
-    let key = RecoveredDecisionApplyDispatchKeyV1::for_test(13, 4);
-    admission.retain_completion(Instant::now(), true, Some(13), Some(key), None, None);
     command_tx.queue.lock().recovered_decision_applies.insert(
         key,
         V2IoTrackedRecoveredDecisionApplyV1 {
@@ -401,16 +426,10 @@ fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrie
             .map(|work| work.state),
         Some(V2IoWorkState::CompletionPending)
     );
-    assert_eq!(state.serve_barrier, Some(barrier));
-    assert_eq!(
-        state.serves.get(&barrier).map(|serve| serve.state),
-        Some(V2IoServeState::Reserved)
-    );
-    assert!(!state.pending_serve_requests.contains_key(&barrier));
     assert_eq!(state.commands.len(), 1);
     assert!(matches!(
         state.commands.front(),
-        Some(V2IoCommand::Serve { lifecycle_id, .. }) if *lifecycle_id == barrier
+        Some(V2IoCommand::Shutdown)
     ));
     drop(state);
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
@@ -423,7 +442,9 @@ fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrie
 #[must_use = "the exact test I/O fixture must remain alive with its service"]
 pub(in crate::sumeragi) struct LifecyclePlannerIoFixture {
     command_rx: V2IoCommandReceiver,
-    _body_store: V2BodyStore,
+    completion_tx: mpsc::SyncSender<V2IoCompletion>,
+    admission: Arc<V2IoAdmission>,
+    body_store: V2BodyStore,
 }
 impl LifecyclePlannerIoFixture {
     /// Count exact queued certified-Fetch persistence commands.
@@ -471,6 +492,34 @@ impl LifecyclePlannerIoFixture {
                 }
             }
         }
+    }
+    /// Execute one exact certified-Fetch persistence command through the same
+    /// ownership transitions as the production worker and publish its guarded
+    /// completion into the service's sole physical completion FIFO.
+    pub(in crate::sumeragi) fn execute_one_certified_fetch(
+        &mut self,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) {
+        let command = self
+            .command_rx
+            .try_recv()
+            .expect("one certified-Fetch persistence command remains queued");
+        let V2IoCommand::PersistCertifiedFetchBody(task) = command else {
+            panic!("expected the exact certified-Fetch persistence command")
+        };
+        let work_id = task.work_id();
+        let completion = task
+            .persist(&mut self.body_store)
+            .unwrap_or_else(|(error, _)| panic!("persist certified-Fetch body: {error}"));
+        self.command_rx.complete_work(work_id);
+        try_send_tracked_completion(
+            &self.completion_tx,
+            &self.admission,
+            V2IoCompletion::CertifiedFetchBodyPersisted(
+                GuardedCertifiedFetchBodyPersistenceCompletion::new(completion, output_guard),
+            ),
+        )
+        .expect("publish one guarded certified-Fetch completion");
     }
     /// Replace only the manual service's output guard for identity tests.
     pub(in crate::sumeragi) fn install_output_guard_for_test(
@@ -556,7 +605,7 @@ pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_validator_for_test(
         class_capacity,
         Arc::clone(&admission),
     );
-    let (_completion_tx, completion_rx) = mpsc::sync_channel(admission.capacity());
+    let (completion_tx, completion_rx) = mpsc::sync_channel(admission.capacity());
     services.context = context.clone();
     services.local_peer = local_peer;
     services.local_validator = Some(local_validator);
@@ -568,11 +617,13 @@ pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_validator_for_test(
         completion_rx,
         join: None,
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-        admission,
+        admission: Arc::clone(&admission),
     });
     LifecyclePlannerIoFixture {
         command_rx,
-        _body_store: body_store,
+        completion_tx,
+        admission,
+        body_store,
     }
 }
 /// Install the exact private signer matching the test service's local peer.

@@ -1,62 +1,76 @@
 {
   "version": 1,
-  "nexus_enabled": true,
   "lane_count": 3,
   "lanes": [
     {
       "id": 0,
+      "shard_id": null,
       "dataspace_id": 0,
       "alias": "core",
       "description": "Core settlement lane",
-      "visibility": "Public",
+      "visibility": "public",
       "lane_type": "default_public",
       "governance": "core-governance",
       "settlement": "xor",
-      "storage": "FullReplica",
-      "proof_scheme": { "type": "MerkleSha256", "value": null },
+      "storage": "full_replica",
+      "proof_scheme": "merkle_sha256",
+      "manifest_policy": "strict",
+      "confidential_compute": null,
+      "scheduler": null,
+      "settlement_buffer": null,
       "metadata": {}
     },
     {
       "id": 1,
+      "shard_id": null,
       "dataspace_id": 1,
       "alias": "payments",
       "description": "Payments lane",
-      "visibility": "Public",
+      "visibility": "public",
       "lane_type": "default_public",
       "governance": "payments-governance",
       "settlement": "xor",
-      "storage": "FullReplica",
-      "proof_scheme": { "type": "MerkleSha256", "value": null },
+      "storage": "full_replica",
+      "proof_scheme": "merkle_sha256",
+      "manifest_policy": "strict",
+      "confidential_compute": null,
+      "scheduler": null,
+      "settlement_buffer": null,
       "metadata": {}
     },
     {
       "id": 2,
+      "shard_id": null,
       "dataspace_id": 2,
       "alias": "zk",
       "description": "Zero-knowledge workload lane",
-      "visibility": "Restricted",
+      "visibility": "restricted",
       "lane_type": "zk_private",
       "governance": "zk-governance",
       "settlement": "xor",
-      "storage": "CommitmentOnly",
-      "proof_scheme": { "type": "MerkleSha256", "value": null },
+      "storage": "commitment_only",
+      "proof_scheme": "merkle_sha256",
+      "manifest_policy": "strict",
+      "confidential_compute": null,
+      "scheduler": null,
+      "settlement_buffer": null,
       "metadata": {}
     }
   ],
-  "catalog_hash": "hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "catalog_hash": "hash:59121A39E8EADD78D47F29F8E0DC978971ADA23E08D595D5AE24933768B5EAF1#7396",
   "incarnations": [
     {
       "lane_id": 0,
-      "incarnation": "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+      "incarnation": "hash:B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3B3#F840"
     },
     {
       "lane_id": 1,
-      "incarnation": "hash:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+      "incarnation": "hash:C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3#064B"
     },
     {
       "lane_id": 2,
-      "incarnation": "hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+      "incarnation": "hash:D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5D5#A393"
     }
   ],
-  "incarnation_root": "hash:EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"
+  "incarnation_root": "hash:C2EC402EDAC329D36F7BF97859AE1CFA335439EF0B73354DAB8162CF139CE14D#ED0D"
 }

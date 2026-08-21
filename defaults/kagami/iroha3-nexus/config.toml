@@ -31,7 +31,6 @@ identity_public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBE
 identity_private_key_file = "/run/secrets/iroha/iroha3-nexus-peer-0-streaming-private-key"
 
 [nexus]
-enabled = true
 lane_count = 3
 
 [[nexus.lane_catalog]]

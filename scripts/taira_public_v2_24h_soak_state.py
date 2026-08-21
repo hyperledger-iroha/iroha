@@ -324,6 +324,7 @@ class LeaseBinding:
     candidate_handoff_sha256: str
     publication_handoff_sha256: str
     deploy_handoff_sha256: str
+    network_id: str
     genesis_block_hash: str
     deploy_end_height: int
     deploy_end_block_hash: str
@@ -355,7 +356,7 @@ class LeaseBinding:
             "deployment": {
                 "network_name": taira_constants.NETWORK_NAME,
                 "chain_id": taira_constants.CHAIN_ID,
-                "network_id": taira_constants.NETWORK_ID,
+                "network_id": self.network_id,
                 "protocol_version": 4,
                 "genesis_block_hash": {
                     "algorithm": "blake2b-32",
@@ -499,18 +500,21 @@ def _validate_binding(value: object) -> dict[str, object]:
     protocol_version = _integer(
         deployment["protocol_version"], "deployment protocol version", minimum=1
     )
-    if (
-        deployment["network_name"] != taira_constants.NETWORK_NAME
-        or deployment["chain_id"] != taira_constants.CHAIN_ID
-        or deployment["network_id"] != taira_constants.NETWORK_ID
-        or protocol_version != 4
-    ):
-        _fail("lease deployment is not the exact public Taira revision-4 network")
-    _iroha_hash(
+    genesis = _iroha_hash(
         deployment["genesis_block_hash"],
         "genesis block hash",
         "HashOf<BlockHeader>",
     )
+    expected_network_id = taira_constants.network_id_from_genesis_hash(
+        str(genesis["value"])
+    )
+    if (
+        deployment["network_name"] != taira_constants.NETWORK_NAME
+        or deployment["chain_id"] != taira_constants.CHAIN_ID
+        or deployment["network_id"] != expected_network_id
+        or protocol_version != 4
+    ):
+        _fail("lease deployment is not the exact public Taira revision-4 network")
     _iroha_hash(
         deployment["deploy_end_block_hash"],
         "deploy end block hash",

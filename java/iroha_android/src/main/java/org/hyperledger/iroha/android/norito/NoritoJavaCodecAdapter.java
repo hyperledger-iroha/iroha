@@ -1,7 +1,8 @@
 package org.hyperledger.iroha.android.norito;
 
-import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.client.MultisigProposeRequest;
+import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoHeader;
@@ -77,6 +78,22 @@ public final class NoritoJavaCodecAdapter implements NoritoCodecAdapter {
       throws NoritoException {
     try {
       TransactionPayloadAdapter.validateCanonicalPayloadBytes(encoded);
+    } catch (final Exception ex) {
+      throw new NoritoException("Invalid canonical Norito transaction payload", ex);
+    }
+  }
+
+  /** Rejects non-canonical payloads and payloads with a different admission intent. */
+  public static void validateCanonicalTransactionPayload(
+      final byte[] encoded, final TransactionAdmissionIntent expectedAdmissionIntent)
+      throws NoritoException {
+    try {
+      final TransactionPayload payload =
+          TransactionPayloadAdapter.validateCanonicalPayloadBytes(encoded);
+      if (payload.admissionIntent() != expectedAdmissionIntent) {
+        throw new IllegalArgumentException(
+            "transaction payload admission intent must be " + expectedAdmissionIntent);
+      }
     } catch (final Exception ex) {
       throw new NoritoException("Invalid canonical Norito transaction payload", ex);
     }

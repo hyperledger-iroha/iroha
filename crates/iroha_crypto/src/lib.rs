@@ -34,6 +34,9 @@ mod protocol_key;
 /// RAM-LFE commitment and evaluation interfaces.
 pub mod ram_lfe;
 pub(crate) mod rng;
+/// Deterministic dual-`rand_core` RNG used by protocols that must replay an
+/// exact prover-randomness schedule from secret seed material.
+pub use rng::rng_from_seed_slice;
 mod secrecy;
 mod signature;
 #[cfg(not(feature = "ffi_import"))]

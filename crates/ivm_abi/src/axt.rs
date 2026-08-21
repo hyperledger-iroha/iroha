@@ -11,17 +11,20 @@ use crate::{
 use iroha_crypto::{Hash, Signature};
 use iroha_data_model::nexus::{
     AssetHandle as ModelAssetHandle, AxtBinding, AxtDescriptor as ModelAxtDescriptor,
-    AxtHandleFragment, AxtHandleIssuerContextV1, AxtPolicyEntry as ModelAxtPolicyEntry,
-    AxtPolicySnapshot as ModelAxtPolicySnapshot,
+    AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey,
+    AxtPolicyEntry as ModelAxtPolicyEntry, AxtPolicySnapshot as ModelAxtPolicySnapshot,
     AxtPolicySnapshotValidationError as ModelAxtPolicySnapshotValidationError,
     AxtProofEnvelope as ModelAxtProofEnvelope, AxtTouchSpec as ModelAxtTouchSpec, DataSpaceId,
     GroupBinding as ModelGroupBinding, HandleBudget as ModelHandleBudget,
     HandleSubject as ModelHandleSubject, LaneId, ProofBlob as ModelProofBlob,
     RemoteSpendIntent as ModelRemoteSpendIntent, SpendOp as ModelSpendOp,
     TouchManifest as ModelTouchManifest, compute_descriptor_binding,
-    validate_descriptor as validate_model_descriptor,
+    compute_remote_spend_intent_commitment_v1, validate_descriptor as validate_model_descriptor,
 };
-use iroha_data_model::prelude::Quantity;
+use iroha_data_model::{
+    asset::AssetBalanceScope,
+    prelude::{AccountId, AssetDefinitionId, Quantity},
+};
 use norito::codec::{Decode, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -37,6 +40,97 @@ pub struct ResolvedHandleAmount {
     pub amount: Quantity,
     /// Optional amount commitment retained in block fragments.
     pub amount_commitment: Option<[u8; 32]>,
+}
+/// Dynamic AXT handle-use facts extracted from one canonically decoded and
+/// cryptographically verified proof envelope.
+///
+/// Constructing this value does not itself verify the FASTPQ proof. Callers
+/// must only build it after successful proof verification. The compact facts
+/// let repeated handles enforce amount and intent membership without decoding
+/// or scanning the full proof payload again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AxtProofUseFacts {
+    dsid: DataSpaceId,
+    committed_amount: Option<u128>,
+    supplied_amount_commitment: Option<[u8; 32]>,
+    fixed_amount_commitment: Option<[u8; 32]>,
+    variable_amount_commitment_payload: Option<Vec<u8>>,
+    remote_spend_intent_commitments: Vec<[u8; 32]>,
+}
+impl AxtProofUseFacts {
+    /// Extract reusable handle-use facts from an already verified canonical envelope.
+    ///
+    /// This consumes the decoded envelope so its potentially large remote-intent
+    /// commitment vector can be retained without cloning it.
+    #[must_use]
+    pub fn from_verified_envelope(envelope: AxtProofEnvelope) -> Self {
+        Self::from_canonical_envelope(envelope)
+    }
+    fn from_canonical_envelope(mut envelope: AxtProofEnvelope) -> Self {
+        let dsid = envelope.dsid;
+        let committed_amount = envelope.committed_amount;
+        let supplied_amount_commitment = envelope.amount_commitment;
+        let normalized_payload =
+            (committed_amount.is_some() || supplied_amount_commitment.is_some()).then(|| {
+                envelope.amount_commitment = None;
+                encode_canonical_norito(&envelope)
+                    .expect("a decoded canonical AXT proof envelope always re-encodes")
+            });
+        let fixed_amount_commitment = committed_amount.map(|amount| {
+            derive_amount_commitment_from_normalized_payload(
+                dsid,
+                &proof_scalar_to_quantity(amount),
+                normalized_payload.as_deref(),
+            )
+        });
+        let variable_amount_commitment_payload =
+            if committed_amount.is_none() && supplied_amount_commitment.is_some() {
+                normalized_payload
+            } else {
+                None
+            };
+        let remote_spend_intent_commitments = envelope
+            .fastpq_binding
+            .take()
+            .map_or_else(Vec::new, |binding| binding.remote_spend_intent_commitments);
+        Self {
+            dsid,
+            committed_amount,
+            supplied_amount_commitment,
+            fixed_amount_commitment,
+            variable_amount_commitment_payload,
+            remote_spend_intent_commitments,
+        }
+    }
+
+    /// Return the proof-bound, canonically ordered remote-spend commitments.
+    #[must_use]
+    pub fn remote_spend_intent_commitments(&self) -> &[[u8; 32]] {
+        &self.remote_spend_intent_commitments
+    }
+
+    /// Require exact one-time consumption of every proof-bound remote-spend claim.
+    ///
+    /// The input may arrive in handle execution order. It is sorted without
+    /// deduplication, so duplicate handle consumption and unconsumed proof
+    /// claims both fail the exact comparison.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::PermissionDenied`] unless the consumed commitment
+    /// multiset exactly equals the proof's canonical commitment set.
+    pub fn validate_remote_spend_consumption(
+        &self,
+        consumed_commitments: &[[u8; 32]],
+    ) -> Result<(), VMError> {
+        let mut consumed = consumed_commitments.to_vec();
+        consumed.sort_unstable();
+        if consumed == self.remote_spend_intent_commitments {
+            Ok(())
+        } else {
+            Err(VMError::PermissionDenied)
+        }
+    }
 }
 /// Errors returned by [`resolve_handle_amount`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,7 +201,17 @@ pub fn derive_amount_commitment(
             },
         )
     });
-    let proof_payload = normalized_proof_payload.as_deref();
+    derive_amount_commitment_from_normalized_payload(
+        dsid,
+        amount,
+        normalized_proof_payload.as_deref(),
+    )
+}
+fn derive_amount_commitment_from_normalized_payload(
+    dsid: DataSpaceId,
+    amount: &Quantity,
+    proof_payload: Option<&[u8]>,
+) -> [u8; 32] {
     let amount_text = amount.to_string();
     let amount_len =
         u16::try_from(amount_text.len()).expect("bounded Quantity text length always fits in u16");
@@ -157,13 +261,42 @@ pub fn resolve_handle_amount_components(
     intent_amount: Option<&Quantity>,
     proof_payload: Option<&[u8]>,
 ) -> Result<ResolvedHandleAmount, HandleAmountResolutionError> {
-    let envelope = proof_payload
-        .map(|payload| {
-            decode_canonical_norito::<AxtProofEnvelope>(payload)
-                .map_err(|_| HandleAmountResolutionError::InvalidProofEnvelope)
-        })
-        .transpose()?;
-    let committed_amount = envelope.as_ref().and_then(|env| env.committed_amount);
+    let Some(proof_payload) = proof_payload else {
+        let amount = intent_amount
+            .cloned()
+            .ok_or(HandleAmountResolutionError::MissingAmount)?;
+        if amount.is_zero() {
+            return Err(HandleAmountResolutionError::ZeroAmount);
+        }
+        return Ok(ResolvedHandleAmount {
+            amount,
+            amount_commitment: None,
+        });
+    };
+    let envelope = decode_canonical_norito::<AxtProofEnvelope>(proof_payload)
+        .map_err(|_| HandleAmountResolutionError::InvalidProofEnvelope)?;
+    let facts = AxtProofUseFacts::from_canonical_envelope(envelope);
+    resolve_handle_amount_components_from_proof_facts(asset_dsid, intent_amount, &facts)
+}
+/// Resolve an effective handle amount from cached, verified proof facts.
+///
+/// Unlike [`resolve_handle_amount_components`], this path performs no proof
+/// decoding or full-payload scan and is suitable for repeated use of one proof.
+///
+/// # Errors
+///
+/// Returns [`HandleAmountResolutionError`] when the dataspace or amount does
+/// not match the verified proof facts, or when the amount is absent, zero, or
+/// not exactly representable by the V1 proof scalar.
+pub fn resolve_handle_amount_components_from_proof_facts(
+    asset_dsid: DataSpaceId,
+    intent_amount: Option<&Quantity>,
+    facts: &AxtProofUseFacts,
+) -> Result<ResolvedHandleAmount, HandleAmountResolutionError> {
+    if facts.dsid != asset_dsid {
+        return Err(HandleAmountResolutionError::InvalidProofEnvelope);
+    }
+    let committed_amount = facts.committed_amount;
     let amount = match (intent_amount, &committed_amount) {
         (Some(intent_amount), Some(committed_amount)) => {
             if quantity_to_proof_scalar(intent_amount)? != *committed_amount {
@@ -178,13 +311,18 @@ pub fn resolve_handle_amount_components(
     if amount.is_zero() {
         return Err(HandleAmountResolutionError::ZeroAmount);
     }
-    let supplied_commitment = envelope
-        .as_ref()
-        .and_then(|proof_envelope| proof_envelope.amount_commitment);
+    let supplied_commitment = facts.supplied_amount_commitment;
     let commitment_required =
         intent_amount.is_none() || committed_amount.is_some() || supplied_commitment.is_some();
-    let amount_commitment =
-        commitment_required.then(|| derive_amount_commitment(asset_dsid, &amount, proof_payload));
+    let amount_commitment = commitment_required.then(|| {
+        facts.fixed_amount_commitment.unwrap_or_else(|| {
+            derive_amount_commitment_from_normalized_payload(
+                asset_dsid,
+                &amount,
+                facts.variable_amount_commitment_payload.as_deref(),
+            )
+        })
+    });
     if supplied_commitment.is_some() && supplied_commitment != amount_commitment {
         return Err(HandleAmountResolutionError::CommitmentMismatch);
     }
@@ -550,14 +688,16 @@ impl AssetHandle {
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] for malformed fixed-width fields and
-/// [`VMError::PermissionDenied`] for unusable zero/empty capability values.
+/// Returns [`VMError::NoritoInvalid`] for malformed fixed-width fields or a
+/// non-canonical account identifier and [`VMError::PermissionDenied`] for
+/// unusable zero/empty capability values.
 pub fn validate_asset_handle(handle: &AssetHandle) -> Result<(), VMError> {
     if handle.axt_binding.len() != 32
         || handle.manifest_view_root.len() != 32
         || handle.group_binding.composability_group_id.is_empty()
         || !canonical_nonempty_strings(&handle.scope)
-        || handle.subject.account.trim() != handle.subject.account
+        || (!handle.subject.account.is_empty()
+            && canonical_account_id(&handle.subject.account).is_none())
     {
         return Err(VMError::NoritoInvalid);
     }
@@ -619,7 +759,7 @@ pub fn validate_model_asset_handle(handle: &ModelAssetHandle) -> Result<(), VMEr
 /// Capability subject metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct HandleSubject {
-    /// Account identifier of the spender (string form for now).
+    /// Canonical I105 account identifier of the spender.
     pub account: String,
     /// Optional originating dataspace for cross-DS handles.
     pub origin_dsid: Option<DataSpaceId>,
@@ -663,11 +803,13 @@ pub struct RemoteSpendIntent {
 /// Simplified representation of spend operations.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct SpendOp {
+    /// Exact asset definition authorized by the handle and proof statement.
+    pub asset_definition_id: AssetDefinitionId,
     /// Operation kind (e.g., "transfer").
     pub kind: String,
-    /// Origin account id (string form).
+    /// Origin account id in canonical I105 form.
     pub from: String,
-    /// Destination account id (string form).
+    /// Destination account id in canonical I105 form.
     pub to: String,
     /// Cleartext amount, or `None` when the proof carries a hidden amount.
     pub amount: Option<Quantity>,
@@ -679,8 +821,11 @@ pub struct SpendOp {
 /// Returns [`VMError::NoritoInvalid`] for empty or non-canonical operation and account strings, and
 /// [`VMError::PermissionDenied`] for an explicit zero amount.
 pub fn validate_remote_spend_intent(intent: &RemoteSpendIntent) -> Result<(), VMError> {
-    for value in [&intent.op.kind, &intent.op.from, &intent.op.to] {
-        if value.is_empty() || value.trim() != value {
+    if intent.op.kind != "transfer" {
+        return Err(VMError::NoritoInvalid);
+    }
+    for account in [&intent.op.from, &intent.op.to] {
+        if canonical_account_id(account).is_none() {
             return Err(VMError::NoritoInvalid);
         }
     }
@@ -688,6 +833,34 @@ pub fn validate_remote_spend_intent(intent: &RemoteSpendIntent) -> Result<(), VM
         return Err(VMError::PermissionDenied);
     }
     Ok(())
+}
+
+fn canonical_account_id(value: &str) -> Option<AccountId> {
+    let parsed = AccountId::parse_encoded(value).ok()?;
+    (parsed.canonical() == value).then(|| parsed.into_account_id())
+}
+
+/// Require a registered asset policy's balance scope to match the intent dataspace.
+///
+/// Globally scoped assets belong to the universal dataspace. A
+/// dataspace-restricted definition selects the exact signed intent/proof
+/// dataspace bucket. Callers must first establish that the asset definition is
+/// registered in committed state and derive `resolved_scope` from its balance
+/// policy; the opaque asset-definition identifier carries no routing meaning.
+///
+/// # Errors
+///
+/// Returns [`VMError::PermissionDenied`] when the policy-derived scope does not
+/// match `asset_dsid`.
+pub fn validate_remote_spend_asset_scope(
+    asset_dsid: DataSpaceId,
+    resolved_scope: AssetBalanceScope,
+) -> Result<(), VMError> {
+    let matches = match resolved_scope {
+        AssetBalanceScope::Global => asset_dsid == DataSpaceId::UNIVERSAL,
+        AssetBalanceScope::Dataspace(dataspace) => asset_dsid == dataspace,
+    };
+    matches.then_some(()).ok_or(VMError::PermissionDenied)
 }
 /// Validate a persisted data-model intent with the pointer-runtime invariants.
 ///
@@ -698,6 +871,7 @@ pub fn validate_model_remote_spend_intent(intent: &ModelRemoteSpendIntent) -> Re
     validate_remote_spend_intent(&RemoteSpendIntent {
         asset_dsid: intent.asset_dsid,
         op: SpendOp {
+            asset_definition_id: intent.op.asset_definition_id.clone(),
             kind: intent.op.kind.clone(),
             from: intent.op.from.clone(),
             to: intent.op.to.clone(),
@@ -705,15 +879,152 @@ pub fn validate_model_remote_spend_intent(intent: &ModelRemoteSpendIntent) -> Re
         },
     })
 }
+/// Require a proof-bound commitment to the exact runtime remote-spend statement.
+///
+/// This is a semantic membership check only. The caller must first verify the
+/// FASTPQ proof cryptographically. Keeping the check separate ensures it still
+/// runs for every handle when a verified proof is reused from a per-dataspace
+/// cache or proof fragment.
+///
+/// # Errors
+///
+/// Returns [`VMError::NoritoInvalid`] when the proof is not a canonical AXT
+/// envelope, and [`VMError::PermissionDenied`] when it lacks the exact
+/// handle identity/asset/operation/account/amount commitment.
+pub fn validate_remote_spend_intent_commitment(
+    handle: &AssetHandle,
+    intent: &RemoteSpendIntent,
+    effective_amount: &Quantity,
+    proof: &ProofBlob,
+) -> Result<(), VMError> {
+    validate_remote_spend_intent_commitment_components(
+        expected_remote_spend_intent_commitment_v1(handle, intent, effective_amount)?,
+        &proof.payload,
+    )
+}
+/// Require a proof-bound commitment for a persisted data-model remote spend.
+///
+/// The caller must first verify the FASTPQ proof cryptographically.
+///
+/// # Errors
+///
+/// Returns the same error classification as
+/// [`validate_remote_spend_intent_commitment`].
+pub fn validate_model_remote_spend_intent_commitment(
+    handle: &ModelAssetHandle,
+    intent: &ModelRemoteSpendIntent,
+    effective_amount: &Quantity,
+    proof: &ModelProofBlob,
+) -> Result<(), VMError> {
+    validate_remote_spend_intent_commitment_components(
+        expected_model_remote_spend_intent_commitment_v1(handle, intent, effective_amount),
+        &proof.payload,
+    )
+}
+/// Require an exact persisted remote-spend commitment from cached, verified proof facts.
+///
+/// This performs the same semantic membership check as
+/// [`validate_model_remote_spend_intent_commitment`] without decoding or
+/// scanning the proof payload again.
+///
+/// # Errors
+///
+/// Returns [`VMError::PermissionDenied`] when the proof facts do not contain
+/// the exact handle identity/asset/operation/account/amount commitment.
+pub fn validate_model_remote_spend_intent_commitment_from_proof_facts(
+    handle: &ModelAssetHandle,
+    intent: &ModelRemoteSpendIntent,
+    effective_amount: &Quantity,
+    facts: &AxtProofUseFacts,
+) -> Result<(), VMError> {
+    if facts.dsid != intent.asset_dsid {
+        return Err(VMError::PermissionDenied);
+    }
+    validate_remote_spend_intent_commitment_components_from_commitments(
+        expected_model_remote_spend_intent_commitment_v1(handle, intent, effective_amount),
+        &facts.remote_spend_intent_commitments,
+    )
+}
+
+/// Derive the commitment expected for one concrete pointer-ABI handle use.
+///
+/// # Errors
+///
+/// Returns [`VMError::NoritoInvalid`] if the handle descriptor binding is not
+/// exactly 32 bytes.
+pub fn expected_remote_spend_intent_commitment_v1(
+    handle: &AssetHandle,
+    intent: &RemoteSpendIntent,
+    effective_amount: &Quantity,
+) -> Result<[u8; 32], VMError> {
+    let binding = handle.binding_array().ok_or(VMError::NoritoInvalid)?;
+    let replay_key = AxtHandleReplayKey::from_parts(
+        intent.asset_dsid,
+        binding,
+        handle.handle_era,
+        handle.sub_nonce,
+        handle.target_lane,
+    );
+    Ok(compute_remote_spend_intent_commitment_v1(
+        replay_key,
+        &intent.op.asset_definition_id,
+        &intent.op.kind,
+        &intent.op.from,
+        &intent.op.to,
+        effective_amount,
+    ))
+}
+
+/// Derive the commitment expected for one concrete persisted handle use.
+#[must_use]
+pub fn expected_model_remote_spend_intent_commitment_v1(
+    handle: &ModelAssetHandle,
+    intent: &ModelRemoteSpendIntent,
+    effective_amount: &Quantity,
+) -> [u8; 32] {
+    compute_remote_spend_intent_commitment_v1(
+        AxtHandleReplayKey::from_handle(intent.asset_dsid, handle),
+        &intent.op.asset_definition_id,
+        &intent.op.kind,
+        &intent.op.from,
+        &intent.op.to,
+        effective_amount,
+    )
+}
+fn validate_remote_spend_intent_commitment_components(
+    expected: [u8; 32],
+    proof_payload: &[u8],
+) -> Result<(), VMError> {
+    let envelope = decode_canonical_norito::<ModelAxtProofEnvelope>(proof_payload)
+        .map_err(|_| VMError::NoritoInvalid)?;
+    let binding = envelope
+        .fastpq_binding
+        .as_ref()
+        .ok_or(VMError::PermissionDenied)?;
+    validate_remote_spend_intent_commitment_components_from_commitments(
+        expected,
+        &binding.remote_spend_intent_commitments,
+    )
+}
+fn validate_remote_spend_intent_commitment_components_from_commitments(
+    expected: [u8; 32],
+    remote_spend_intent_commitments: &[[u8; 32]],
+) -> Result<(), VMError> {
+    remote_spend_intent_commitments
+        .binary_search(&expected)
+        .map(|_| ())
+        .map_err(|_| VMError::PermissionDenied)
+}
 /// Wrapper around proof artifacts provided by dataspace verifiers.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct ProofBlob {
     /// Raw proof bytes.
     pub payload: Vec<u8>,
-    /// Optional expiry slot advertised by the prover.
+    /// Outer mirror of the proof-bound optional expiry slot.
     ///
-    /// When present this slot is compared against the current AXT policy slot so
-    /// hosts can reject stale proofs deterministically.
+    /// `None` is an authenticated no-expiry sentinel. Proof-aware hosts must
+    /// exact-compare this value with the proof metadata before applying the
+    /// current AXT policy slot's freshness check.
     #[norito(default)]
     pub expiry_slot: Option<u64>,
 }
@@ -808,6 +1119,12 @@ fn fastpq_binding_shape_is_concrete(binding: &iroha_data_model::nexus::AxtFastpq
             .into_iter()
             .all(|value| value.as_deref().is_none_or(binding_string_is_present))
         })
+        && binding.remote_spend_intent_commitments.len()
+            <= iroha_data_model::nexus::MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1
+        && binding
+            .remote_spend_intent_commitments
+            .windows(2)
+            .all(|pair| pair[0] < pair[1])
 }
 fn binding_string_is_present(value: &str) -> bool {
     !value.is_empty() && value.trim() == value
@@ -960,7 +1277,8 @@ impl HostAxtState {
         }
         // Ensure replay protection per handle/sub-nonce combination before budget checks.
         if self.handles.iter().any(|prev| {
-            prev.handle.handle_era == usage.handle.handle_era
+            prev.intent.asset_dsid == usage.intent.asset_dsid
+                && prev.handle.handle_era == usage.handle.handle_era
                 && prev
                     .handle
                     .binding_array()
@@ -1023,11 +1341,12 @@ impl HostAxtState {
                 return Err(VMError::PermissionDenied);
             }
         }
-        let mut seen_nonces: BTreeSet<([u8; 32], u64, LaneId, u64)> = BTreeSet::new();
+        let mut seen_nonces: BTreeSet<(DataSpaceId, [u8; 32], u64, LaneId, u64)> = BTreeSet::new();
         let mut accumulators: Vec<HandleAccumulator> = Vec::new();
         for usage in &self.handles {
             let binding = usage.handle.binding_array().ok_or(VMError::NoritoInvalid)?;
             let key = (
+                usage.intent.asset_dsid,
                 binding,
                 usage.handle.handle_era,
                 usage.handle.target_lane,
@@ -1051,7 +1370,8 @@ impl HostAxtState {
             if usage.proof.is_none() && !self.proofs.contains_key(&usage.intent.asset_dsid) {
                 return Err(VMError::PermissionDenied);
             }
-            let budget_key = HandleBudgetKey::try_from(&usage.handle)?;
+            let budget_key =
+                HandleBudgetKey::try_from_handle(usage.intent.asset_dsid, &usage.handle)?;
             let accumulator = match accumulators.iter().position(|acc| acc.key == budget_key) {
                 Some(existing) => &mut accumulators[existing],
                 None => {
@@ -1147,6 +1467,7 @@ impl TryFrom<&HandleUsage> for AxtHandleFragment {
         let intent = ModelRemoteSpendIntent {
             asset_dsid: usage.intent.asset_dsid,
             op: ModelSpendOp {
+                asset_definition_id: usage.intent.op.asset_definition_id.clone(),
                 kind: usage.intent.op.kind.clone(),
                 from: usage.intent.op.from.clone(),
                 to: usage.intent.op.to.clone(),
@@ -1180,6 +1501,7 @@ impl TryFrom<&HandleUsage> for AxtHandleFragment {
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct HandleBudgetKey {
+    asset_dsid: DataSpaceId,
     binding: [u8; 32],
     handle_era: u64,
     target_lane: u32,
@@ -1193,12 +1515,12 @@ struct HandleBudgetKey {
     budget_per_use: Option<Quantity>,
     max_clock_skew_ms: Option<u32>,
 }
-impl TryFrom<&AssetHandle> for HandleBudgetKey {
-    type Error = VMError;
-    fn try_from(handle: &AssetHandle) -> Result<Self, Self::Error> {
+impl HandleBudgetKey {
+    fn try_from_handle(asset_dsid: DataSpaceId, handle: &AssetHandle) -> Result<Self, VMError> {
         let manifest_root = manifest_root_array(handle)?;
         let binding = handle.binding_array().ok_or(VMError::NoritoInvalid)?;
         Ok(Self {
+            asset_dsid,
             binding,
             handle_era: handle.handle_era,
             target_lane: handle.target_lane.as_u32(),
@@ -1225,6 +1547,7 @@ fn manifest_root_array(handle: &AssetHandle) -> Result<[u8; 32], VMError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::domain::DomainId;
     const ACCOUNT_FROM_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     const ACCOUNT_TO_LITERAL: &str = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
     fn quantity(value: u128) -> Quantity {
@@ -1232,6 +1555,12 @@ mod tests {
             .to_string()
             .parse()
             .expect("test amount is a canonical quantity")
+    }
+    fn test_asset_definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("axt", "universal").expect("test asset domain"),
+            "rose".parse().expect("test asset name"),
+        )
     }
     #[test]
     fn expiry_slot_with_skew_respects_caps() {
@@ -1449,6 +1778,33 @@ mod tests {
         );
     }
     #[test]
+    fn asset_handle_subject_requires_canonical_account_id() {
+        let dsid = DataSpaceId::new(7);
+        let valid = sample_handle(dsid, [0x11; 32], 10, Some(5));
+        assert_eq!(validate_asset_handle(&valid), Ok(()));
+
+        let mut malformed = ACCOUNT_FROM_LITERAL.to_owned();
+        malformed.pop();
+        let invalid_accounts = [
+            ("alias", "spender@payments".to_owned()),
+            ("malformed", malformed),
+            (
+                "noncanonical",
+                ACCOUNT_FROM_LITERAL.replacen("sora", "ｓｏｒａ", 1),
+            ),
+            ("whitespace", format!(" {ACCOUNT_FROM_LITERAL}")),
+        ];
+        for (case, account) in invalid_accounts {
+            let mut invalid = valid.clone();
+            invalid.subject.account = account;
+            assert_eq!(
+                validate_asset_handle(&invalid),
+                Err(VMError::NoritoInvalid),
+                "{case} subject account must fail"
+            );
+        }
+    }
+    #[test]
     fn standalone_proof_blob_validation_rejects_empty_and_zero_expiry() {
         let valid = ProofBlob {
             payload: vec![1],
@@ -1474,6 +1830,7 @@ mod tests {
         RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
+                asset_definition_id: test_asset_definition_id(),
                 kind: "transfer".into(),
                 from: ACCOUNT_FROM_LITERAL.into(),
                 to: ACCOUNT_TO_LITERAL.into(),
@@ -1509,6 +1866,72 @@ mod tests {
             validate_remote_spend_intent(&sample_intent(dsid, Some(0))),
             Err(VMError::PermissionDenied)
         );
+        for kind in ["mint", "Transfer", " transfer", "transfer "] {
+            let mut invalid = valid.clone();
+            invalid.op.kind = kind.to_owned();
+            assert_eq!(
+                validate_remote_spend_intent(&invalid),
+                Err(VMError::NoritoInvalid),
+                "non-transfer operation {kind:?} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_spend_asset_scope_requires_exact_authoritative_dataspace() {
+        let dsid = DataSpaceId::new(7);
+        assert_eq!(
+            validate_remote_spend_asset_scope(dsid, AssetBalanceScope::Dataspace(dsid)),
+            Ok(())
+        );
+        assert_eq!(
+            validate_remote_spend_asset_scope(DataSpaceId::UNIVERSAL, AssetBalanceScope::Global,),
+            Ok(())
+        );
+        assert_eq!(
+            validate_remote_spend_asset_scope(
+                dsid,
+                AssetBalanceScope::Dataspace(DataSpaceId::new(8)),
+            ),
+            Err(VMError::PermissionDenied)
+        );
+        assert_eq!(
+            validate_remote_spend_asset_scope(dsid, AssetBalanceScope::Global),
+            Err(VMError::PermissionDenied)
+        );
+    }
+    #[test]
+    fn remote_spend_intent_from_and_to_require_canonical_account_ids() {
+        let dsid = DataSpaceId::new(7);
+        let valid = sample_intent(dsid, Some(1));
+        assert_eq!(validate_remote_spend_intent(&valid), Ok(()));
+
+        let mut malformed = ACCOUNT_FROM_LITERAL.to_owned();
+        malformed.pop();
+        let invalid_accounts = [
+            ("alias", "spender@payments".to_owned()),
+            ("malformed", malformed),
+            (
+                "noncanonical",
+                ACCOUNT_FROM_LITERAL.replacen("sora", "ｓｏｒａ", 1),
+            ),
+            ("whitespace", format!("{ACCOUNT_FROM_LITERAL} ")),
+        ];
+        for field in ["from", "to"] {
+            for (case, account) in &invalid_accounts {
+                let mut invalid = valid.clone();
+                match field {
+                    "from" => invalid.op.from.clone_from(account),
+                    "to" => invalid.op.to.clone_from(account),
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    validate_remote_spend_intent(&invalid),
+                    Err(VMError::NoritoInvalid),
+                    "{case} {field} account must fail"
+                );
+            }
+        }
     }
     fn sample_fastpq_binding(dsid: DataSpaceId) -> iroha_data_model::nexus::AxtFastpqBinding {
         iroha_data_model::nexus::AxtFastpqBinding {
@@ -1527,6 +1950,7 @@ mod tests {
             verifier_version: "v1".to_string(),
             target_dsids: vec![dsid.as_u64()],
             effect_binding: None,
+            remote_spend_intent_commitments: Vec::new(),
         }
     }
     fn proof_with_amount(
@@ -1561,6 +1985,236 @@ mod tests {
         envelope.amount_commitment = Some(commitment);
         proof.payload = norito::to_bytes(&envelope).expect("encode committed test proof envelope");
         proof
+    }
+    fn proof_for_remote_spends(
+        intents: &[(&AssetHandle, &RemoteSpendIntent, Quantity)],
+    ) -> ProofBlob {
+        let dsid = intents
+            .first()
+            .expect("remote-spend proof fixture is non-empty")
+            .1
+            .asset_dsid;
+        let mut binding = sample_fastpq_binding(dsid);
+        binding.remote_spend_intent_commitments = intents
+            .iter()
+            .map(|(handle, intent, amount)| {
+                expected_remote_spend_intent_commitment_v1(handle, intent, amount)
+                    .expect("fixture handle binding")
+            })
+            .collect();
+        binding.remote_spend_intent_commitments.sort_unstable();
+        binding.remote_spend_intent_commitments.dedup();
+        ProofBlob {
+            payload: norito::to_bytes(&AxtProofEnvelope {
+                dsid,
+                manifest_root: [0xAB; 32],
+                da_commitment: None,
+                proof: vec![0x01, 0x02],
+                fastpq_binding: Some(binding),
+                committed_amount: None,
+                amount_commitment: None,
+            })
+            .expect("encode remote-spend proof envelope"),
+            expiry_slot: Some(10),
+        }
+    }
+    #[test]
+    fn remote_spend_intent_commitment_rejects_substitution_and_supports_proof_reuse() {
+        let dsid = DataSpaceId::new(93);
+        let descriptor_binding = [0x93; 32];
+        let clear = sample_intent(dsid, Some(5));
+        let mut hidden = sample_intent(dsid, None);
+        hidden.op.to = ACCOUNT_FROM_LITERAL.to_owned();
+        let clear_amount = quantity(5);
+        let hidden_amount = quantity(7);
+        let clear_handle = sample_handle(dsid, descriptor_binding, 10, Some(10));
+        let mut hidden_handle = clear_handle.clone();
+        hidden_handle.sub_nonce += 1;
+        let proof = proof_for_remote_spends(&[
+            (&clear_handle, &clear, clear_amount.clone()),
+            (&hidden_handle, &hidden, hidden_amount.clone()),
+        ]);
+        assert_eq!(
+            validate_remote_spend_intent_commitment(&clear_handle, &clear, &clear_amount, &proof,),
+            Ok(())
+        );
+        assert_eq!(
+            validate_remote_spend_intent_commitment(
+                &hidden_handle,
+                &hidden,
+                &hidden_amount,
+                &proof,
+            ),
+            Ok(())
+        );
+        let envelope = decode_canonical_norito::<AxtProofEnvelope>(&proof.payload)
+            .expect("decode reusable proof once");
+        let facts = AxtProofUseFacts::from_verified_envelope(envelope);
+        let model_clear = ModelRemoteSpendIntent {
+            asset_dsid: clear.asset_dsid,
+            op: ModelSpendOp {
+                asset_definition_id: clear.op.asset_definition_id.clone(),
+                kind: clear.op.kind.clone(),
+                from: clear.op.from.clone(),
+                to: clear.op.to.clone(),
+                amount: clear.op.amount.clone(),
+            },
+        };
+        let model_handle = AxtHandleFragment::try_from(&HandleUsage {
+            handle: clear_handle.clone(),
+            intent: clear.clone(),
+            proof: None,
+            amount: clear_amount.clone(),
+            amount_commitment: None,
+        })
+        .expect("convert fixture handle")
+        .handle;
+        assert_eq!(
+            validate_model_remote_spend_intent_commitment_from_proof_facts(
+                &model_handle,
+                &model_clear,
+                &clear_amount,
+                &facts,
+            ),
+            Ok(())
+        );
+        let mut substituted_model = model_clear.clone();
+        substituted_model.op.to = ACCOUNT_FROM_LITERAL.to_owned();
+        assert_eq!(
+            validate_model_remote_spend_intent_commitment_from_proof_facts(
+                &model_handle,
+                &substituted_model,
+                &clear_amount,
+                &facts,
+            ),
+            Err(VMError::PermissionDenied)
+        );
+        for field in ["kind", "from", "to"] {
+            let mut substituted = clear.clone();
+            match field {
+                "kind" => substituted.op.kind = "mint".to_owned(),
+                "from" => substituted.op.from = ACCOUNT_TO_LITERAL.to_owned(),
+                "to" => substituted.op.to = ACCOUNT_FROM_LITERAL.to_owned(),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                validate_remote_spend_intent_commitment(
+                    &clear_handle,
+                    &substituted,
+                    &clear_amount,
+                    &proof,
+                ),
+                Err(VMError::PermissionDenied),
+                "substituted {field} must not reuse the proof"
+            );
+        }
+        let mut substituted_dsid = clear.clone();
+        substituted_dsid.asset_dsid = DataSpaceId::new(94);
+        assert_eq!(
+            validate_remote_spend_intent_commitment(
+                &clear_handle,
+                &substituted_dsid,
+                &clear_amount,
+                &proof,
+            ),
+            Err(VMError::PermissionDenied),
+            "substituted asset dataspace must not reuse the proof"
+        );
+        assert_eq!(
+            validate_remote_spend_intent_commitment(&clear_handle, &clear, &quantity(6), &proof,),
+            Err(VMError::PermissionDenied)
+        );
+        let mut substituted_asset = clear.clone();
+        substituted_asset.op.asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("axt", "universal").expect("test asset domain"),
+            "iris".parse().expect("test asset name"),
+        );
+        assert_eq!(
+            validate_remote_spend_intent_commitment(
+                &clear_handle,
+                &substituted_asset,
+                &clear_amount,
+                &proof,
+            ),
+            Err(VMError::PermissionDenied),
+            "substituted asset definition must not reuse the proof"
+        );
+        let mut substituted_handle = clear_handle.clone();
+        substituted_handle.axt_binding = vec![0x94; 32];
+        assert_eq!(
+            validate_remote_spend_intent_commitment(
+                &substituted_handle,
+                &clear,
+                &clear_amount,
+                &proof,
+            ),
+            Err(VMError::PermissionDenied)
+        );
+        let mut second_handle = clear_handle.clone();
+        second_handle.sub_nonce += 1;
+        assert_eq!(
+            validate_remote_spend_intent_commitment(&second_handle, &clear, &clear_amount, &proof,),
+            Err(VMError::PermissionDenied),
+            "a proof for one handle must not authorize a new handle identity"
+        );
+
+        let clear_commitment =
+            expected_remote_spend_intent_commitment_v1(&clear_handle, &clear, &clear_amount)
+                .expect("fixture commitment");
+        let hidden_commitment =
+            expected_remote_spend_intent_commitment_v1(&hidden_handle, &hidden, &hidden_amount)
+                .expect("fixture commitment");
+        assert_eq!(
+            facts.validate_remote_spend_consumption(&[hidden_commitment, clear_commitment]),
+            Ok(())
+        );
+        assert_eq!(
+            facts.validate_remote_spend_consumption(&[clear_commitment, clear_commitment]),
+            Err(VMError::PermissionDenied),
+            "one proof claim cannot be consumed twice"
+        );
+        assert_eq!(
+            facts.validate_remote_spend_consumption(&[clear_commitment]),
+            Err(VMError::PermissionDenied),
+            "an unconsumed proof claim must fail closed"
+        );
+
+        // An empty intent set remains valid metadata for generic VERIFY_DS
+        // proof flows, but it must never authorize USE_ASSET_HANDLE.
+        let empty_proof = proof_with_amount(dsid, None, None);
+        let mut empty_envelope =
+            norito::decode_from_bytes::<AxtProofEnvelope>(&empty_proof.payload)
+                .expect("decode empty remote-spend binding proof");
+        preflight_fastpq_v1_proof_envelope_for_manifest(
+            &empty_envelope,
+            dsid,
+            empty_envelope.manifest_root,
+        )
+        .expect("generic FastPQ proof accepts an empty remote-spend binding");
+        assert_eq!(
+            validate_remote_spend_intent_commitment(
+                &clear_handle,
+                &clear,
+                &clear_amount,
+                &empty_proof,
+            ),
+            Err(VMError::PermissionDenied)
+        );
+
+        empty_envelope.fastpq_binding = None;
+        let unbound_proof = ProofBlob {
+            payload: norito::to_bytes(&empty_envelope).expect("encode unbound proof envelope"),
+            expiry_slot: empty_proof.expiry_slot,
+        };
+        assert_eq!(
+            validate_remote_spend_intent_commitment(
+                &clear_handle,
+                &clear,
+                &clear_amount,
+                &unbound_proof,
+            ),
+            Err(VMError::PermissionDenied)
+        );
     }
     #[test]
     fn preflight_fastpq_v1_proof_envelope_rejects_mislabeled_binding() {
@@ -1806,6 +2460,65 @@ mod tests {
         )
         .expect("component resolution");
         assert_eq!(components, host);
+    }
+    #[test]
+    fn cached_proof_facts_match_payload_amount_resolution() {
+        let dsid = DataSpaceId::new(96);
+        let intent = sample_intent(dsid, None);
+        let proof = proof_with_derived_amount_commitment(dsid, 31);
+        let expected = resolve_handle_amount(&intent, Some(&proof)).expect("payload resolution");
+        let envelope = decode_canonical_norito::<AxtProofEnvelope>(&proof.payload)
+            .expect("decode canonical proof once");
+        let facts = AxtProofUseFacts::from_verified_envelope(envelope);
+        assert_eq!(
+            resolve_handle_amount_components_from_proof_facts(
+                dsid,
+                intent.op.amount.as_ref(),
+                &facts,
+            ),
+            Ok(expected)
+        );
+        assert_eq!(
+            resolve_handle_amount_components_from_proof_facts(
+                DataSpaceId::new(97),
+                intent.op.amount.as_ref(),
+                &facts,
+            ),
+            Err(HandleAmountResolutionError::InvalidProofEnvelope)
+        );
+        assert_eq!(
+            resolve_handle_amount_components_from_proof_facts(dsid, Some(&quantity(32)), &facts,),
+            Err(HandleAmountResolutionError::Mismatch)
+        );
+    }
+    #[test]
+    fn cached_proof_facts_preserve_cleartext_supplied_commitment() {
+        let dsid = DataSpaceId::new(97);
+        let amount = quantity(23);
+        let intent = sample_intent(dsid, Some(23));
+        let mut proof = proof_with_amount(dsid, None, None);
+        let commitment = derive_amount_commitment(dsid, &amount, Some(&proof.payload));
+        let mut envelope = decode_canonical_norito::<AxtProofEnvelope>(&proof.payload)
+            .expect("decode proof for commitment");
+        envelope.amount_commitment = Some(commitment);
+        proof.payload = encode_canonical_norito(&envelope).expect("encode committed proof");
+
+        let expected = resolve_handle_amount(&intent, Some(&proof)).expect("payload resolution");
+        let envelope = decode_canonical_norito::<AxtProofEnvelope>(&proof.payload)
+            .expect("decode canonical proof once");
+        let facts = AxtProofUseFacts::from_verified_envelope(envelope);
+        assert_eq!(
+            resolve_handle_amount_components_from_proof_facts(
+                dsid,
+                intent.op.amount.as_ref(),
+                &facts,
+            ),
+            Ok(expected)
+        );
+        assert_eq!(
+            resolve_handle_amount_components_from_proof_facts(dsid, Some(&quantity(24)), &facts,),
+            Err(HandleAmountResolutionError::CommitmentMismatch)
+        );
     }
     #[test]
     fn resolve_handle_amount_rejects_intent_proof_mismatch() {
@@ -2158,7 +2871,7 @@ mod tests {
         assert!(matches!(state.validate_commit(), Ok(())));
     }
     #[test]
-    fn record_handle_allows_same_sub_nonce_across_lanes() {
+    fn record_handle_allows_same_sub_nonce_across_dataspaces_on_same_lane() {
         let ds_a = DataSpaceId::new(8);
         let ds_b = DataSpaceId::new(9);
         let descriptor = AxtDescriptor {
@@ -2184,10 +2897,11 @@ mod tests {
         state
             .record_touch(ds_b, sample_touch_manifest())
             .expect("touch recorded");
-        let mut handle_a = sample_handle(ds_a, binding, 50, None);
+        let mut handle_a = sample_handle(ds_a, binding, 10, None);
         handle_a.target_lane = LaneId::new(1);
-        let mut handle_b = sample_handle(ds_b, binding, 50, None);
-        handle_b.target_lane = LaneId::new(2);
+        let mut handle_b = sample_handle(ds_b, binding, 10, None);
+        handle_b.subject.origin_dsid = handle_a.subject.origin_dsid;
+        handle_b.target_lane = handle_a.target_lane;
         handle_b.sub_nonce = handle_a.sub_nonce;
         let proof = Some(ProofBlob {
             payload: vec![1],
@@ -2210,7 +2924,7 @@ mod tests {
                 amount: quantity(10),
                 amount_commitment: None,
             })
-            .expect("second usage accepted for different lane");
+            .expect("second usage accepted for different dataspace");
         assert!(matches!(state.validate_commit(), Ok(())));
     }
     #[test]

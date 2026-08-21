@@ -610,6 +610,19 @@ def test_grouped_native_amx_v2_fixture_matches_current_openapi() -> None:
     for openapi_path in OPENAPI_PATHS:
         openapi = json.loads(openapi_path.read_text(encoding="utf-8"))
         components = openapi["components"]["schemas"]
+        assert "/v1/sumeragi/checkpoints" not in openapi["paths"]
+        assert "ValidatorSetCheckpoint" not in components
+        assert "ValidatorSetCheckpointList" not in components
+        proposal_schema = components["NativeAmxParticipantLaneBlockProposal"]
+        assert proposal_schema["additionalProperties"] is False
+        assert set(proposal_schema["required"]) == {
+            "descriptor",
+            "proposal_hash",
+            "payload_block_hint",
+        }
+        assert proposal_schema["properties"]["payload_block_hint"] == {
+            "type": "null"
+        }
         _validate_schema(
             diagnostics,
             components["SumeragiDiagnosticsResponse"],

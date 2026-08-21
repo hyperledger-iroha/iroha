@@ -36,8 +36,19 @@ KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/file_error_support.rs"),
 )
 REVIEWED_RUST_INCLUDE_MANIFESTS = {
-    Path('crates/iroha_core/src/commit_roster_journal.rs'): (
-        Path('commit_roster_journal/tests.rs'),
+    Path('crates/iroha_core/src/block.rs'): (
+        Path('block/autonomous_merge_carrier_content_tests.rs'),
+        Path('block/exact_quorum_cardinality_tests.rs'),
+        Path('block/autonomous_anchor_network_tests.rs'),
+        Path('block/canonical_genesis_validation_tests.rs'),
+        Path('block/scheduler_variant_tests.rs'),
+        Path('block/native_amx_exact_quorum_cardinality_tests.rs'),
+        Path('block/native_amx_and_dag_tests.rs'),
+        Path('block/sequential_rejected_pipeline_trigger_tests.rs'),
+        Path('block/tx_order_validation_revalidation_test.rs'),
+        Path('block/rejected_live_batch_fee_tests.rs'),
+        Path('block/fee_admission_tests.rs'),
+        Path('block/bootstrap_and_genesis_tests.rs'),
     ),
     Path('crates/iroha_config/src/parameters/actual.rs'): (
         Path('actual/torii_tx_history.rs'),
@@ -45,8 +56,13 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('actual/torii_mcp_profile.rs'),
         Path('actual/tests.rs'),
     ),
+    Path('crates/iroha_config/src/parameters/actual/tests.rs'): (
+        Path('sora_profile_discovery_disabled_test.rs'),
+        Path('sora_profile_runtime_tests.rs'),
+    ),
     Path('crates/iroha_config/src/parameters/user.rs'): (
         Path('user/kura.rs'),
+        Path('user_soranet_handshake_tests.rs'),
         Path('user/torii_peer_geo.rs'),
         Path('user/torii_soranet_privacy_ingest.rs'),
         Path('user/torii_tx_history.rs'),
@@ -168,9 +184,11 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('queue/nexus_reconfigure_manifest_reload_tests.rs'),
         Path('queue/plan_journal_startup_atomicity_tests.rs'),
         Path('queue/global_guard_claim_conflict_tests.rs'),
+        Path('queue/transaction_guard_return_tests.rs'),
         Path('queue/queue_metadata_and_admission_tests.rs'),
         Path('queue/instruction_and_state_routing_tests.rs'),
         Path('queue/routing_batch_admission_tests.rs'),
+        Path('queue/config_factory_test_support.rs'),
         Path('queue/teu_limit_and_backlog_tests.rs'),
         Path('queue/routing_projection_resilience_tests.rs'),
         Path('queue/capacity_and_concurrency_tests.rs'),
@@ -208,8 +226,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/sumeragi/evidence.rs'): (
         Path('evidence/missing_signer_pop_test.rs'),
-        Path('evidence/signature_missing_test.rs'),
-        Path('evidence/roundtrip_matrix_test.rs'),
     ),
     Path('crates/iroha_p2p/src/network.rs'): (
         Path('network/handle_update_tests.rs'),
@@ -226,6 +242,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('main/runtime_deps.rs'),
         Path('sumeragi_lane_relay_item.rs'),
         Path('main/online_peers_provider.rs'),
+        Path('main/resolved_genesis_trust_anchor_wrong_hash_test.rs'),
         Path('main_tests/governance_dag_publisher_binding_signer.rs'),
         Path('main/governance_dag_launcher_tests.rs'),
         Path('main/runtime_budget_and_config_tests.rs'),
@@ -277,7 +294,11 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs'): (
         Path('tests/v2_lifecycle_projection_cases.rs'),
     ),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs'): (
+        Path('tests/v2_lifecycle_scheduler_certified_serve_cases.rs'),
+    ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs'): (
+        Path('v2_lifecycle_replay_authority_live_wal.rs'),
         Path('v2_lifecycle_replay_authority_certified_serve.rs'),
         Path('v2_lifecycle_replay_authority_certified_body.rs'),
         Path('v2_lifecycle_replay_authority_payload_projection.rs'),
@@ -288,15 +309,21 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lifecycle_work_registry_validate_recovery_registry_impl.rs'),
         Path('v2_lifecycle_work_registry_validate_recovery_parent.rs'),
     ),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs'): (
+        Path('v2_lifecycle_work_registry_validate_recovery_execution_impl.rs'),
+    ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs'): (
+        Path('v2_lifecycle_work_registry_pre_admission.rs'),
         Path('v2_lifecycle_work_registry_recovered_wal.rs'),
         Path('v2_lifecycle_work_registry_validate_recovery.rs'),
         Path('v2_lifecycle_work_registry_validate_execution.rs'),
+        Path('v2_lifecycle_work_registry_validate_sidecar.rs'),
         Path('tests/v2_lifecycle_work_registry_00.rs'),
         Path('tests/v2_lifecycle_work_registry_01.rs'),
         Path('tests/v2_lifecycle_work_registry_02.rs'),
         Path('tests/v2_lifecycle_work_registry_validate_dispatch_cases.rs'),
         Path('tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs'),
+        Path('tests/v2_lifecycle_work_registry_validate_sidecar_cases.rs'),
         Path('tests/v2_lifecycle_work_registry_durable_store_and_validate_cases.rs'),
         Path('tests/v2_lifecycle_work_registry_exact_registry_cases.rs'),
         Path('tests/v2_lifecycle_work_registry_recovery_surface_cases.rs'),
@@ -321,27 +348,36 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_runtime_unsealed_02_owner_retirement_and_fairness.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_worker.rs'): (
-        Path('v2_worker/exact_output_rollover_claim.rs'),
-        Path('v2_worker/queue_plan_admission_handoff.rs'),
-        Path('v2_worker/exact_output_pending_state.rs'),
-        Path('v2_worker/autonomous_lane_output_reconstruction.rs'),
-        Path('v2_worker/kura_replica_advert_refresh.rs'),
-        Path('v2_worker/current_lane_output_rollover_claim.rs'),
-        Path('v2_worker/effect_services_impl.rs'),
+        Path('v2_worker_completion.rs'),
+        Path('v2_worker_io_execution.rs'),
+        Path('v2_worker_exact_output.rs'),
+        Path('v2_worker_services.rs'),
+        Path('v2_worker_services_impl.rs'),
         Path('tests/v2_worker_main_00.rs'),
         Path('tests/v2_worker_main_01.rs'),
         Path('tests/v2_worker_lifecycle_capacity_cases.rs'),
-        Path('tests/v2_worker_equivocation_and_selected_serve_fixture.rs'),
+        Path('tests/v2_worker_equivocation_fixture.rs'),
         Path('v2_worker/applied_height_handoff_tests.rs'),
         Path('v2_worker/queue_plan_admission_handoff_tests.rs'),
         Path('v2_worker/upstream_reply_route_test.rs'),
         Path('tests/v2_worker_main_02.rs'),
-        Path('tests/v2_worker_main_03.rs'),
         Path('tests/v2_worker_main_04.rs'),
         Path('tests/v2_worker_main_05.rs'),
     ),
+    Path('crates/iroha_core/src/sumeragi/v2_worker_io_execution.rs'): (
+        Path('v2_worker/exact_output_rollover_claim.rs'),
+        Path('v2_worker/queue_plan_admission_handoff.rs'),
+        Path('v2_worker/exact_output_pending_state.rs'),
+    ),
+    Path('crates/iroha_core/src/sumeragi/v2_worker_exact_output.rs'): (
+        Path('v2_worker/autonomous_lane_output_reconstruction.rs'),
+        Path('v2_worker/kura_replica_advert_refresh.rs'),
+    ),
+    Path('crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs'): (
+        Path('v2_worker/current_lane_output_rollover_claim.rs'),
+        Path('v2_worker/effect_services_impl.rs'),
+    ),
     Path('crates/iroha_core/src/sumeragi/v2_runner.rs'): (
-        Path('v2_runner/height_ingress_bindings.rs'),
         Path('v2_runner/lifecycle_terminal_recovery.rs'),
         Path('v2_runner/decided_lane_recovery.rs'),
         Path('v2_runner/outer_ingress_cursor.rs'),
@@ -394,7 +430,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_effects_main_03.rs'),
         Path('tests/v2_effects_main_04.rs'),
         Path('tests/v2_effects_main_05.rs'),
-        Path('tests/v2_effects_lifecycle_predecessor.rs'),
         Path('tests/v2_effects_03_locked_body_and_sidecar.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lane_work.rs'): (
@@ -402,6 +437,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lane_work/queue_plan_admission_handoff.rs'),
         Path('v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs'),
         Path('v2_lane_work/typed_finality_handoff_tests.rs'),
+        Path('v2_lane_work/terminal_retirement_journal_failure_test.rs'),
         Path('tests/v2_lane_work_native_signing_guard.rs'),
         Path('v2_lane_work/native_amx_route_and_receipt_tests.rs'),
         Path('tests/v2_lane_work_observer_role.rs'),
@@ -432,6 +468,12 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_adapter_04b_lifecycle_startup.rs'),
         Path('v2_adapter_05_direct_lifecycle.rs'),
     ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs'): (
+        Path('v2_adapter_04_wal_recovery_decision_classifier_cases.rs'),
+    ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs'): (
+        Path('v2_adapter_04b_lifecycle_startup_tail.rs'),
+    ),
     Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_main_04.rs'): (
         Path('v2_adapter_01_replay_and_registry.rs'),
         Path('v2_adapter_02_view_and_lock_progress.rs'),
@@ -443,11 +485,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_worker_recovered_lifecycle_output_cases.rs'),
         Path('v2_worker_nonzero_view_restart.rs'),
     ),
-    Path('crates/iroha_core/src/sumeragi/tests/v2_worker_main_04.rs'): (
-        Path('v2_worker_serve_unsealed_cases.rs'),
-        Path('v2_worker_serve_decision_restart_cases.rs'),
-        Path('v2_worker_certified_serve_budget_cases.rs'),
-    ),
     Path('crates/iroha_core/src/sumeragi/tests/v2_effects_main_05.rs'): (
         Path('v2_effects_kura_tip_replay.rs'),
         Path('v2_effects_01_view_churn_and_runtime_steps.rs'),
@@ -456,6 +493,9 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
 }
 
 REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
+    Path("crates/iroha_config/src/parameters/actual.rs"): (
+        Path("crates/iroha_config/src/parameters/actual/tests.rs"),
+    ),
     Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"): (
         Path("crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs"),
     ),
@@ -474,30 +514,38 @@ REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
             "v2_lifecycle_work_registry_validate_recovery.rs"
         ),
     ),
+    Path(
+        "crates/iroha_core/src/sumeragi/"
+        "v2_lifecycle_work_registry_validate_recovery.rs"
+    ): (
+        Path(
+            "crates/iroha_core/src/sumeragi/"
+            "v2_lifecycle_work_registry_validate_recovery_registry_impl.rs"
+        ),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_worker.rs"): (
+        Path("crates/iroha_core/src/sumeragi/v2_worker_io_execution.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_worker_exact_output.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs"),
+    ),
 }
-REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS = tuple(
-    companion for companions in REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS.values() for companion in companions
-)
+REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS = tuple(companion for companions in REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS.values() for companion in companions)
 REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     parent
     for parent in REVIEWED_RUST_INCLUDE_MANIFESTS
     if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
-assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 50
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 6
-assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 6
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 44
-assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(
-    REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
-)
+assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 57
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 11
+assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 11
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 46
+assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)
 assert (
     set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS)
     | set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)
     == set(REVIEWED_RUST_INCLUDE_MANIFESTS)
 )
-assert set(REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS).issubset(
-    REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS
-)
+assert set(REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS).issubset(REVIEWED_RUST_INCLUDE_MANIFESTS)
 
 
 def copy_merge_runtime_config_fixture(tmp_path: Path) -> Path:
@@ -685,9 +733,7 @@ def test_revision4_model_contract_is_registered() -> None:
     )
     assert "SumeragiV2Revision4Liveness.cfg" in module.REQUIRED_TLC_CONFIGS
     assert not module._revision4_model_contract_errors(module.FORMAL_DIR)
-    assert not module._revision4_adversarial_safety_contract_errors(
-        module.FORMAL_DIR
-    )
+    assert not module._revision4_adversarial_safety_contract_errors(module.FORMAL_DIR)
 
 
 def copy_revision4_adversarial_contract(tmp_path: Path, module) -> Path:
@@ -1189,9 +1235,7 @@ def test_normal_delivery_class_is_frozen_at_admission(
         for error in errors
     )
 
-    frozen_identity = (
-        "       consumerContext, consumerView, consumerGeneration, item,\n"
-    )
+    frozen_identity = ("       consumerContext, consumerView, consumerGeneration, item,\n")
     assert frozen_identity in source
     vocabulary.write_text(
         source.replace(
@@ -1324,9 +1368,7 @@ def test_deadlock_contract_rejects_scheduler_only_enablement(
     vocabulary = formal_dir / "SumeragiV2LivenessProofs.tla"
     source = vocabulary.read_text(encoding="utf-8")
     property_offset = source.index("DeadlockFreedomProperty(specification) ==")
-    enabled_offset = source.index(
-        "PostGstProductiveActionEnabled", property_offset
-    )
+    enabled_offset = source.index("PostGstProductiveActionEnabled", property_offset)
     vocabulary.write_text(
         source[:enabled_offset]
         + source[enabled_offset:].replace(
@@ -1377,9 +1419,7 @@ def test_async_source_fidelity_pins_dual_progress_ingress_geometry(
     formal_dir = tmp_path / "formal"
     formal_dir.mkdir()
     (formal_dir / "proof_coverage.json").write_text("{}\n", encoding="utf-8")
-    source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text(
-        encoding="utf-8"
-    )
+    source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text(encoding="utf-8")
     path = formal_dir / "SumeragiV2AsyncNetwork.tla"
     path.write_text(
         source.replace(
@@ -1417,9 +1457,7 @@ def test_async_source_fidelity_pins_dual_progress_ingress_geometry(
         for error in errors
     )
     assert any("IngressProgressKinds must equal only" in error for error in errors)
-    assert any(
-        "IngressProtectedSlotCountFor must equal only" in error for error in errors
-    )
+    assert any("IngressProtectedSlotCountFor must equal only" in error for error in errors)
     assert any(
         "AsyncTransportCompletionOwnerGateAllows must equal only" in error
         for error in errors
@@ -1434,9 +1472,7 @@ def test_async_source_fidelity_pins_untrusted_transport_completion_exclusion(
     formal_dir = tmp_path / "formal"
     formal_dir.mkdir()
     (formal_dir / "proof_coverage.json").write_text("{}\n", encoding="utf-8")
-    source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text(
-        encoding="utf-8"
-    )
+    source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text(encoding="utf-8")
     path = formal_dir / "SumeragiV2AsyncNetwork.tla"
     path.write_text(
         source.replace(
@@ -1504,9 +1540,7 @@ def test_async_source_fidelity_pins_timeout_signer_partition_without_displacemen
     formal_dir = tmp_path / "formal"
     formal_dir.mkdir()
     (formal_dir / "proof_coverage.json").write_text("{}\n", encoding="utf-8")
-    source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text(
-        encoding="utf-8"
-    )
+    source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text(encoding="utf-8")
     path = formal_dir / "SumeragiV2AsyncNetwork.tla"
     path.write_text(
         source.replace(
@@ -1562,9 +1596,7 @@ def test_async_source_fidelity_pins_current_timeout_lifecycle_stage_classifier(
     formal_dir = tmp_path / "formal"
     formal_dir.mkdir()
     (formal_dir / "proof_coverage.json").write_text("{}\n", encoding="utf-8")
-    source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text(
-        encoding="utf-8"
-    )
+    source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text(encoding="utf-8")
     assert old in source
     (formal_dir / "SumeragiV2AsyncNetwork.tla").write_text(
         source.replace(old, new, 1),
@@ -1585,9 +1617,7 @@ def test_async_source_fidelity_pins_live_serve_occurrence_identity(
     formal_dir = tmp_path / "formal"
     formal_dir.mkdir()
     (formal_dir / "proof_coverage.json").write_text("{}\n", encoding="utf-8")
-    source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text(
-        encoding="utf-8"
-    )
+    source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text(encoding="utf-8")
     path = formal_dir / "SumeragiV2AsyncNetwork.tla"
     path.write_text(
         source.replace(
@@ -1618,9 +1648,7 @@ def reviewed_rust_item_provider(
     parent = repo_root / relative
     candidates = (parent,) + tuple(
         parent.parent / component
-        for component in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(
-            relative.as_posix(), ()
-        )
+        for component in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(relative.as_posix(), ())
     )
     providers = tuple(
         path for path in candidates
@@ -1655,9 +1683,7 @@ def test_async_source_fidelity_pins_timeout_vote_semantic_capacity_bypass(
     module = load_checker()
     copy_timeout_vote_window_fixture(tmp_path, module)
 
-    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(
-        tmp_path
-    )
+    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(tmp_path)
 
     assert errors == []
 
@@ -1716,9 +1742,7 @@ def test_timeout_vote_semantic_capacity_rejects_real_source_mutations(
 
     module = load_checker()
     copy_timeout_vote_window_fixture(tmp_path, module)
-    rust_path = reviewed_rust_item_provider(
-        module, tmp_path, Path("crates/iroha_core/src/sumeragi/v2.rs"), item_name
-    )
+    rust_path = reviewed_rust_item_provider(module, tmp_path, Path("crates/iroha_core/src/sumeragi/v2.rs"), item_name)
     mutate_rust_item_source_in_context(
         module,
         rust_path,
@@ -1728,9 +1752,7 @@ def test_timeout_vote_semantic_capacity_rejects_real_source_mutations(
         new,
     )
 
-    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(
-        tmp_path
-    )
+    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(tmp_path)
 
     assert any(expected_error in error for error in errors), errors
 
@@ -1754,9 +1776,7 @@ def test_timeout_vote_semantic_capacity_rejects_two_roster_sets(
         "roster_len.saturating_mul(2)",
     )
 
-    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(
-        tmp_path
-    )
+    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(tmp_path)
 
     assert any(
         "three roster-bounded protected sets" in error for error in errors
@@ -1791,9 +1811,7 @@ def test_timeout_vote_view_window_rejects_predicate_mutations(
     types_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/types.rs"
     mutate_source_once(types_path, old, new)
 
-    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(
-        tmp_path
-    )
+    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(tmp_path)
 
     assert any(expected_error in error for error in errors), errors
 
@@ -1845,9 +1863,7 @@ def test_timeout_vote_view_window_rejects_reducer_mutations(
         new,
     )
 
-    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(
-        tmp_path
-    )
+    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(tmp_path)
 
     assert any(expected_error in error for error in errors), errors
 
@@ -1877,9 +1893,7 @@ def test_timeout_vote_view_window_regressions_cannot_be_deleted(
         f"fn removed_{test_name}(",
     )
 
-    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(
-        tmp_path
-    )
+    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(tmp_path)
 
     assert any(
         f"named {test_name}; found 0" in error for error in errors
@@ -1903,9 +1917,7 @@ def test_timeout_vote_semantic_capacity_regressions_cannot_be_deleted(
 
     module = load_checker()
     copy_timeout_vote_window_fixture(tmp_path, module)
-    rust_path = reviewed_rust_item_provider(
-        module, tmp_path, Path("crates/iroha_core/src/sumeragi/v2.rs"), test_name
-    )
+    rust_path = reviewed_rust_item_provider(module, tmp_path, Path("crates/iroha_core/src/sumeragi/v2.rs"), test_name)
     mutate_rust_item_source(
         module,
         rust_path,
@@ -1914,9 +1926,7 @@ def test_timeout_vote_semantic_capacity_regressions_cannot_be_deleted(
         f"fn removed_{test_name}(",
     )
 
-    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(
-        tmp_path
-    )
+    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(tmp_path)
 
     assert any(
         f"named {test_name}; found 0" in error for error in errors
@@ -1980,13 +1990,9 @@ def test_externalized_timeout_capacity_semantics_survive_digest_refresh(
     item = module.rust_items(
         rust_path.read_text(encoding="utf-8"), test_name
     )[0]
-    getattr(module, digest_map_name)[test_name] = module._rust_item_token_sha256(
-        item
-    )
+    getattr(module, digest_map_name)[test_name] = module._rust_item_token_sha256(item)
 
-    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(
-        tmp_path
-    )
+    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(tmp_path)
 
     assert any(expected_error in error for error in errors), errors
 
@@ -2014,29 +2020,23 @@ def test_recovered_lifecycle_proposal_owner_semantics_survive_digest_refresh(
         tmp_path
         / "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_02.rs"
     )
-    test_name = (
-        "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner"
-    )
+    test_name = "recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade"
     mutate_rust_item_source(
         module,
         replay_path,
         test_name,
-        'let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);',
-        "let foreign_lock = directive(Some(subject), None);",
+        "recovered.exactly_matches_directive(upgraded_lock),",
+        "!recovered.exactly_matches_directive(upgraded_lock),",
     )
     item = module.rust_items(
         replay_path.read_text(encoding="utf-8"), test_name
     )[0]
-    module._LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256[test_name] = (
-        module._rust_item_token_sha256(item)
-    )
+    module._LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256[test_name] = (module._rust_item_token_sha256(item))
 
-    errors = module._locked_body_reproposal_source_fidelity_errors(
-        formal_dir, tmp_path
-    )
+    errors = module._locked_body_reproposal_source_fidelity_errors(formal_dir, tmp_path)
 
     assert any(
-        "the recovered-attempt regression must prove exact, affine runner binding and reject foreign locks, rounds, and decisions"
+        "the recovered-attempt regression must prove affine same-view suppression across a lock upgrade while rejecting foreign rounds and decisions"
         in error
         for error in errors
     ), errors
@@ -2061,9 +2061,7 @@ def test_frontier_preflight_semantics_survive_item_digest_refresh(
     item = module.rust_items(
         effects_path.read_text(encoding="utf-8"), item_name
     )[0]
-    module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256[item_name] = (
-        module._rust_item_token_sha256(item)
-    )
+    module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256[item_name] = (module._rust_item_token_sha256(item))
 
     errors = module._effect_capacity_production_source_fidelity_errors(tmp_path)
 
@@ -2096,9 +2094,7 @@ MERGE_RUNTIME_PROJECTED_FIELDS = (
 
 def test_merge_runtime_config_v6_inventory_is_static_and_current() -> None:
     module = load_checker()
-    checker_source = "\n".join(
-        path.read_text(encoding="utf-8") for path in checker_source_paths()
-    )
+    checker_source = "\n".join(path.read_text(encoding="utf-8") for path in checker_source_paths())
 
     assert tuple(
         Path("crates/iroha_core/src") / relative
@@ -2110,9 +2106,7 @@ def test_merge_runtime_config_v6_inventory_is_static_and_current() -> None:
     ) == MERGE_RUNTIME_PROJECTED_FIELDS
     assert len(module.MERGE_RUNTIME_CONFIG_FIELDS) == 16
     assert (
-        checker_source.count(
-            '"pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 6;"'
-        )
+        checker_source.count('"pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 6;"')
         == 2
     )
     assert (
@@ -2150,9 +2144,7 @@ def test_reviewed_rust_include_manifest_rejects_ignored_untracked_component(
     component.write_text("// ignored include component\n", encoding="utf-8")
     (repo_root / ".gitignore").write_text("test_*\n", encoding="utf-8")
     module.subprocess.run(["git", "init", "-q"], cwd=repo_root, check=True)
-    module.subprocess.run(
-        ["git", "add", ".gitignore", "parent.rs"], cwd=repo_root, check=True
-    )
+    module.subprocess.run(["git", "add", ".gitignore", "parent.rs"], cwd=repo_root, check=True)
     monkeypatch.setattr(
         module,
         "_REVIEWED_RUST_INCLUDE_MANIFESTS",
@@ -2219,9 +2211,7 @@ def test_each_reviewed_rust_include_manifest_fails_closed(
         for error in errors
     ), errors
 
-    substitute = first_component.with_name(
-        f"{first_component.stem}_symlink_substitute.rs"
-    )
+    substitute = first_component.with_name(f"{first_component.stem}_symlink_substitute.rs")
     substitute.write_text(canonical_component, encoding="utf-8")
     first_component.symlink_to(substitute.name)
     errors = []
@@ -2279,9 +2269,7 @@ def test_each_reviewed_rust_include_manifest_fails_closed(
         REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS.get(parent_relative, ())
     ):
         try:
-            test_each_reviewed_rust_include_manifest_fails_closed(
-                tmp_path / f"companion-{index:02d}", companion
-            )
+            test_each_reviewed_rust_include_manifest_fails_closed(tmp_path / f"companion-{index:02d}", companion)
         except Exception as error:
             raise AssertionError(
                 "reviewed Rust include-manifest companion failed: "
@@ -2297,17 +2285,13 @@ def test_kura_production_inventory_rejects_missing_and_symlinked_components(
 ) -> None:
     module = load_checker()
     repo_root = copy_merge_runtime_config_fixture(tmp_path)
-    _path, _source, _components, errors = module._kura_production_source_inventory(
-        repo_root
-    )
+    _path, _source, _components, errors = module._kura_production_source_inventory(repo_root)
     assert errors == []
 
     component = repo_root / component_relative
     canonical = component.read_text(encoding="utf-8")
     component.unlink()
-    _path, _source, _components, errors = module._kura_production_source_inventory(
-        repo_root
-    )
+    _path, _source, _components, errors = module._kura_production_source_inventory(repo_root)
     assert any(
         str(component) in error and "regular non-symlink file" in error
         for error in errors
@@ -2316,9 +2300,7 @@ def test_kura_production_inventory_rejects_missing_and_symlinked_components(
     substitute = component.with_name(f"{component.stem}_substitute.rs")
     substitute.write_text(canonical, encoding="utf-8")
     component.symlink_to(substitute.name)
-    _path, _source, _components, errors = module._kura_production_source_inventory(
-        repo_root
-    )
+    _path, _source, _components, errors = module._kura_production_source_inventory(repo_root)
     assert any(
         str(component) in error and "regular non-symlink file" in error
         for error in errors
@@ -2332,9 +2314,7 @@ def test_kura_production_inventory_rejects_substituted_and_extra_includes(
     repo_root = copy_merge_runtime_config_fixture(tmp_path)
     kura_path = repo_root / "crates/iroha_core/src/kura.rs"
     canonical = kura_path.read_text(encoding="utf-8")
-    _path, _source, _components, errors = module._kura_production_source_inventory(
-        repo_root
-    )
+    _path, _source, _components, errors = module._kura_production_source_inventory(repo_root)
     assert errors == []
     expected = 'include!("kura/startup_finality_support.rs");'
     substituted = 'include!("kura/substituted_finality_support.rs");'
@@ -2345,9 +2325,7 @@ def test_kura_production_inventory_rejects_substituted_and_extra_includes(
     )
     extra = kura_path.parent / "kura/substituted_finality_support.rs"
     extra.write_text("// substituted production component\n", encoding="utf-8")
-    _path, _source, _components, errors = module._kura_production_source_inventory(
-        repo_root
-    )
+    _path, _source, _components, errors = module._kura_production_source_inventory(repo_root)
     assert any(
         "direct production include inventory must equal" in error for error in errors
     ), errors
@@ -2363,9 +2341,7 @@ def test_kura_production_inventory_rejects_substituted_and_extra_includes(
         "// extra production component\n",
         encoding="utf-8",
     )
-    _path, _source, _components, errors = module._kura_production_source_inventory(
-        repo_root
-    )
+    _path, _source, _components, errors = module._kura_production_source_inventory(repo_root)
     assert any(
         "direct production include inventory must equal" in error for error in errors
     ), errors
@@ -2374,9 +2350,7 @@ def test_kura_production_inventory_rejects_substituted_and_extra_includes(
         canonical.replace(marker, "#[cfg(test)]\nmod tests {}", 1),
         encoding="utf-8",
     )
-    _path, _source, _components, errors = module._kura_production_source_inventory(
-        repo_root
-    )
+    _path, _source, _components, errors = module._kura_production_source_inventory(repo_root)
     assert any("terminal cfg(test) module boundary" in error for error in errors), errors
 
 
@@ -2469,9 +2443,7 @@ def test_merge_runtime_config_v6_rejects_each_projection_field_substitution(
     actual_path = repo_root / "crates/iroha_config/src/parameters/actual.rs"
     source = actual_path.read_text(encoding="utf-8")
     projection_start = source.index("limits: SumeragiV2Limits {")
-    projection_end = source.index(
-        "native_amx_signing_guard_record_capacity,", projection_start
-    )
+    projection_end = source.index("native_amx_signing_guard_record_capacity,", projection_start)
     needle = f"                {field},"
     position = source.index(needle, projection_start, projection_end)
     replacement = f"                {field}: 0,"
@@ -2734,9 +2706,7 @@ def test_transport_geometry_source_fidelity_rejects_short_p2p_frame_math(
     expected_error: str,
 ) -> None:
     module = load_checker()
-    formal_dir = copy_async_source_fidelity_fixture(
-        tmp_path, module, "SumeragiV2AsyncNetwork.tla"
-    )
+    formal_dir = copy_async_source_fidelity_fixture(tmp_path, module, "SumeragiV2AsyncNetwork.tla")
     repo_root = formal_dir.parents[2]
     assert module._transport_geometry_production_source_fidelity_errors(repo_root) == []
 
@@ -2804,9 +2774,7 @@ def test_transport_geometry_source_fidelity_rejects_runtime_frame_mutants(
     expected_error: str,
 ) -> None:
     module = load_checker()
-    formal_dir = copy_async_source_fidelity_fixture(
-        tmp_path, module, "SumeragiV2AsyncNetwork.tla"
-    )
+    formal_dir = copy_async_source_fidelity_fixture(tmp_path, module, "SumeragiV2AsyncNetwork.tla")
     repo_root = formal_dir.parents[2]
     peer_path = repo_root / "crates" / "iroha_p2p" / "src" / "peer.rs"
     mutate_rust_item_source(module, peer_path, item_name, old, new)
@@ -2840,9 +2808,7 @@ def test_transport_geometry_source_fidelity_rejects_source_owner_mutants(
     expected_error: str,
 ) -> None:
     module = load_checker()
-    formal_dir = copy_async_source_fidelity_fixture(
-        tmp_path, module, "SumeragiV2AsyncNetwork.tla"
-    )
+    formal_dir = copy_async_source_fidelity_fixture(tmp_path, module, "SumeragiV2AsyncNetwork.tla")
     repo_root = formal_dir.parents[2]
     peer_path = repo_root / "crates" / "iroha_p2p" / "src" / "peer.rs"
     mutate_rust_item_source(module, peer_path, item_name, old, new)
@@ -2906,9 +2872,7 @@ def test_transport_geometry_source_fidelity_rejects_local_actor_split_mutants(
     expected_error: str,
 ) -> None:
     module = load_checker()
-    formal_dir = copy_async_source_fidelity_fixture(
-        tmp_path, module, "SumeragiV2AsyncNetwork.tla"
-    )
+    formal_dir = copy_async_source_fidelity_fixture(tmp_path, module, "SumeragiV2AsyncNetwork.tla")
     repo_root = formal_dir.parents[2]
     assert module._transport_geometry_production_source_fidelity_errors(repo_root) == []
 
@@ -2923,9 +2887,7 @@ def test_transport_geometry_rejects_ordinal_equivalent_weak_authority_mutant(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
-    formal_dir = copy_async_source_fidelity_fixture(
-        tmp_path, module, "SumeragiV2AsyncNetwork.tla"
-    )
+    formal_dir = copy_async_source_fidelity_fixture(tmp_path, module, "SumeragiV2AsyncNetwork.tla")
     repo_root = formal_dir.parents[2]
     network_path = repo_root / "crates" / "iroha_p2p" / "src" / "network.rs"
     mutate_rust_item_source_in_context(
@@ -3017,9 +2979,7 @@ def _synthetic_production_trace_certificate(module) -> dict[str, object]:
             "multilane_dependency_completion": True,
             "multilane_ledger_dependencies": [
                 {"id": obligation_id, "status": status}
-                for obligation_id, status in (
-                    module.PRODUCTION_TRACE_EXTRACTION_LEDGER_DEPENDENCIES
-                )
+                for obligation_id, status in (module.PRODUCTION_TRACE_EXTRACTION_LEDGER_DEPENDENCIES)
             ],
             "global_machine_checked_completion": False,
         },
@@ -3043,9 +3003,7 @@ def test_production_trace_certificate_links_exact_tlaps_ledger_bytes(
     ledger = {
         "obligations": [
             {"id": obligation_id, "status": status}
-            for obligation_id, status in (
-                module.PRODUCTION_TRACE_EXTRACTION_LEDGER_DEPENDENCIES
-            )
+            for obligation_id, status in (module.PRODUCTION_TRACE_EXTRACTION_LEDGER_DEPENDENCIES)
         ],
         "machine_checked_completion": False,
     }
@@ -3081,9 +3039,7 @@ def test_production_trace_certificate_links_exact_tlaps_ledger_bytes(
         "operational_correspondence": {},
         "source_bindings": [],
     }
-    monkeypatch.setattr(
-        module, "_production_trace_extraction_action_partition_errors", lambda: []
-    )
+    monkeypatch.setattr(module, "_production_trace_extraction_action_partition_errors", lambda: [])
     monkeypatch.setattr(
         module,
         "_production_trace_extraction_source_snapshot",
@@ -3104,12 +3060,8 @@ def test_production_trace_certificate_links_exact_tlaps_ledger_bytes(
         artifacts=artifacts,
     )
 
-    assert certificate["proof_linkage"]["ledger_document_sha256"] == (
-        canonical_ledger_sha256
-    )
-    assert certificate["proof_linkage"]["cross_tool_ledger_sha256"] == (
-        exact_ledger_sha256
-    )
+    assert certificate["proof_linkage"]["ledger_document_sha256"] == (canonical_ledger_sha256)
+    assert certificate["proof_linkage"]["cross_tool_ledger_sha256"] == (exact_ledger_sha256)
     substituted = copy.deepcopy(cross_tool_evidence)
     substituted["ledger_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="does not link the exact proof ledger"):
@@ -3136,9 +3088,7 @@ def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
     assert tuple(
         mapping["model_action"] for mapping in operational["action_mappings"]
     ) == module.PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS
-    assert {mapping["discriminant"] for mapping in operational["action_mappings"]} == set(
-        range(1, 28)
-    )
+    assert {mapping["discriminant"] for mapping in operational["action_mappings"]} == set(range(1, 28))
     assert all(
         mapping["shared_kernel_occurrences"] == 1
         for mapping in operational["action_mappings"]
@@ -3159,9 +3109,7 @@ def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
         "verus_witness_theorem",
     ):
         assert operational[field] is not None, field
-    assert operational["digest_proof_boundary"] == (
-        "canonical-recomputation-plus-trusted-cryptography-contract"
-    )
+    assert operational["digest_proof_boundary"] == ("canonical-recomputation-plus-trusted-cryptography-contract")
     bindings = {
         binding["id"]: binding for binding in snapshot["source_bindings"]
     }
@@ -3208,9 +3156,7 @@ def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
         for binding in bindings.values()
     }
     assert len(shared_identities) == 1
-    assert next(iter(shared_identities))[1] == (
-        "canonical_lane_queue_reservation_group_identity_projection"
-    )
+    assert next(iter(shared_identities))[1] == ("canonical_lane_queue_reservation_group_identity_projection")
 
 
 def test_production_trace_certificate_extracts_every_required_action() -> None:
@@ -3223,9 +3169,7 @@ def test_production_trace_certificate_extracts_every_required_action() -> None:
     }
     assert bound == set(module.PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS)
     mappings = module.PRODUCTION_TRACE_EXTRACTION_ACTION_WITNESS_MAPPINGS
-    assert tuple(mapping[0] for mapping in mappings) == (
-        module.PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS
-    )
+    assert tuple(mapping[0] for mapping in mappings) == (module.PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS)
     assert len({mapping[0] for mapping in mappings}) == 27
     assert len({mapping[1] for mapping in mappings}) == 27
     assert {mapping[2] for mapping in mappings} == set(range(1, 28))
@@ -3658,9 +3602,7 @@ def test_production_trace_certificate_rejects_reintroduced_open_action_debt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = load_checker()
-    monkeypatch.setattr(
-        module, "PRODUCTION_TRACE_EXTRACTION_OPEN_MODEL_ACTIONS", ("Crash",)
-    )
+    monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_OPEN_MODEL_ACTIONS", ("Crash",))
 
     with pytest.raises(ValueError, match="do not partition the exact model-action"):
         module.build_production_trace_extraction_evidence(
@@ -4000,9 +3942,7 @@ def test_production_trace_certificate_rejects_disconnected_ready_signature_sink(
         copy.deepcopy(binding)
         for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
     ]
-    binding = next(
-        candidate for candidate in bindings if candidate["id"] == "ready_signature"
-    )
+    binding = next(candidate for candidate in bindings if candidate["id"] == "ready_signature")
     sink = binding["commit_sink"]
     source_path = ROOT_DIR / sink["path"]
     source = source_path.read_text(encoding="utf-8")
@@ -4245,13 +4185,9 @@ def test_production_trace_certificate_rejects_apply_carrier_after_state_commit(
         "        if tx_validate_accepted && !replay_prevalidation {\n"
         "            match state_commit_authorization.take()"
     )
-    authorization_end = source.index(
-        "        let autoscale_storage_hold", authorization_start
-    )
+    authorization_end = source.index("        let autoscale_storage_hold", authorization_start)
     authorization_block = source[authorization_start:authorization_end]
-    without_authorization = (
-        source[:authorization_start] + source[authorization_end:]
-    )
+    without_authorization = (source[:authorization_start] + source[authorization_end:])
     transaction_commit = "            let tx_commit_result = transactions.commit();"
     insertion = without_authorization.index(transaction_commit) + len(transaction_commit)
     mutated = (
@@ -4303,9 +4239,7 @@ def test_production_trace_certificate_rejects_disconnected_ready_qc_edges(
         copy.deepcopy(binding)
         for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
     ]
-    binding = next(
-        candidate for candidate in bindings if candidate["id"] == "ready_qc_persistence"
-    )
+    binding = next(candidate for candidate in bindings if candidate["id"] == "ready_qc_persistence")
     endpoint = binding[edge]
     source_path = ROOT_DIR / endpoint["path"]
     source = source_path.read_text(encoding="utf-8")
@@ -4353,9 +4287,7 @@ def test_production_trace_certificate_rejects_disconnected_execution_input_edges
         copy.deepcopy(binding)
         for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
     ]
-    binding = next(
-        candidate for candidate in bindings if candidate["id"] == "execution_input_persistence"
-    )
+    binding = next(candidate for candidate in bindings if candidate["id"] == "execution_input_persistence")
     endpoint = binding[edge]
     source_path = ROOT_DIR / endpoint["path"]
     source = source_path.read_text(encoding="utf-8")
@@ -4403,9 +4335,7 @@ def test_production_trace_certificate_rejects_disconnected_lane_commit_edges(
         copy.deepcopy(binding)
         for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
     ]
-    binding = next(
-        candidate for candidate in bindings if candidate["id"] == "lane_commit_persistence"
-    )
+    binding = next(candidate for candidate in bindings if candidate["id"] == "lane_commit_persistence")
     endpoint = binding[edge]
     source_path = ROOT_DIR / endpoint["path"]
     source = source_path.read_text(encoding="utf-8")
@@ -4553,9 +4483,7 @@ def test_production_trace_certificate_rejects_disconnected_kura_activation_edges
         copy.deepcopy(binding)
         for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
     ]
-    binding = next(
-        candidate for candidate in bindings if candidate["id"] == "producer_kura_activation"
-    )
+    binding = next(candidate for candidate in bindings if candidate["id"] == "producer_kura_activation")
     endpoint = binding[edge]
     source_path = ROOT_DIR / endpoint["path"]
     source = source_path.read_text(encoding="utf-8")
@@ -4583,9 +4511,7 @@ def test_production_trace_certificate_writer_emits_one_canonical_encoding(
     module.write_production_trace_extraction_evidence(path, certificate)
 
     assert module.load_production_trace_extraction_evidence(path) == certificate
-    assert path.read_bytes() == module._production_trace_canonical_json_bytes(
-        certificate
-    )
+    assert path.read_bytes() == module._production_trace_canonical_json_bytes(certificate)
 
 
 def test_production_trace_certificate_rejects_duplicate_json_keys(
@@ -4619,9 +4545,7 @@ def test_production_trace_certificate_rejects_oversize_and_symlink_inputs(
 ) -> None:
     module = load_checker()
     oversized = tmp_path / "oversized.json"
-    oversized.write_bytes(
-        b"{" + b" " * module.PRODUCTION_TRACE_EXTRACTION_EVIDENCE_MAX_BYTES + b"}\n"
-    )
+    oversized.write_bytes(b"{" + b" " * module.PRODUCTION_TRACE_EXTRACTION_EVIDENCE_MAX_BYTES + b"}\n")
     target = tmp_path / "target.json"
     target.write_text("{}\n", encoding="utf-8")
     alias = tmp_path / "alias.json"
@@ -4655,9 +4579,7 @@ def test_production_trace_certificate_rejects_hardlink_inputs_and_output(
     with pytest.raises(ValueError, match="exactly one hard link"):
         module._production_trace_artifact_entry("proof_ledger", input_alias)
     with pytest.raises(ValueError, match="exactly one hard link"):
-        module.write_production_trace_extraction_evidence(
-            output_alias, certificate
-        )
+        module.write_production_trace_extraction_evidence(output_alias, certificate)
     assert output_alias.samefile(original)
 
 
@@ -4669,9 +4591,7 @@ def test_production_trace_certificate_rejects_symlinked_parent_components(
     real_parent = tmp_path / "real"
     real_parent.mkdir()
     real_certificate = real_parent / "certificate.json"
-    real_certificate.write_bytes(
-        module._production_trace_canonical_json_bytes(certificate)
-    )
+    real_certificate.write_bytes(module._production_trace_canonical_json_bytes(certificate))
     linked_parent = tmp_path / "linked-parent"
     try:
         linked_parent.symlink_to(real_parent, target_is_directory=True)
@@ -4679,13 +4599,9 @@ def test_production_trace_certificate_rejects_symlinked_parent_components(
         pytest.skip(f"symlinks unavailable: {error}")
 
     with pytest.raises(ValueError, match="parent path contains a symlink component"):
-        module.load_production_trace_extraction_evidence(
-            linked_parent / real_certificate.name
-        )
+        module.load_production_trace_extraction_evidence(linked_parent / real_certificate.name)
     with pytest.raises(ValueError, match="parent path contains a symlink component"):
-        module.write_production_trace_extraction_evidence(
-            linked_parent / "output.json", certificate
-        )
+        module.write_production_trace_extraction_evidence(linked_parent / "output.json", certificate)
 
 
 def test_production_trace_certificate_rejects_every_top_level_field_drift(
@@ -4875,124 +4791,16 @@ def test_serve_scheduler_ordinal_release_contract_rejects_current_weakening(
     new: str,
 ) -> None:
     module = load_checker()
-    repo_root, formal_dir = copy_serve_scheduler_ordinal_mutation_fixture(
-        tmp_path, module
-    )
+    repo_root, formal_dir = copy_serve_scheduler_ordinal_mutation_fixture(tmp_path, module)
     path = formal_dir / "SumeragiV2AsyncNetwork.tla"
     source = path.read_text(encoding="utf-8")
     mutate = mutate_tla_operator if kind == "operator" else mutate_tla_theorem
     path.write_text(mutate(source, symbol, old, new), encoding="utf-8")
-    module.SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256[path.name] = (
-        hashlib.sha256(path.read_bytes()).hexdigest()
-    )
+    module.SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256[path.name] = (hashlib.sha256(path.read_bytes()).hexdigest())
 
-    errors = module._serve_scheduler_ordinal_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
+    errors = module._serve_scheduler_ordinal_mutation_source_fidelity_errors(formal_dir, repo_root)
 
     prefix = "theorem " if kind == "theorem" else ""
     assert any(
         f"{prefix}{symbol} must equal only" in error for error in errors
-    ), errors
-
-
-def _assert_commit_import_release_or_stale_artifact(
-    tmp_path: Path, artifact_name: str
-) -> None:
-    module = load_checker()
-    repo_root, formal_dir = copy_commit_import_provenance_mutation_fixture(
-        tmp_path, module
-    )
-    path = repo_root / artifact_name if "/" in artifact_name else formal_dir / artifact_name
-    release_mutations = {
-        "SumeragiV2AsyncNetwork.tla": (
-            "DirectCommitQcCandidateHasExactImportLineage",
-            "    /\\ item.envelope.qc.context = context\n",
-            "    /\\ TRUE\n",
-        ),
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
-            "IndexedChainSpecClosesHistoricalCertificateLocalImportCandidateEntry",
-            "  IndexedChainSpec\n"
-            "    => IndexedHistoricalCertificateLocalImportCandidateEntryProperty\n",
-            "  IndexedChainSpec\n    => TRUE\n",
-        ),
-    }
-    release_mutation = release_mutations.get(artifact_name)
-    if release_mutation is None:
-        path.write_text(
-            path.read_text(encoding="utf-8") + "\n\\* stale import provenance\n",
-            encoding="utf-8",
-        )
-    else:
-        symbol, old, new = release_mutation
-        source = path.read_text(encoding="utf-8")
-        path.write_text(
-            mutate_tla_theorem(source, symbol, old, new), encoding="utf-8"
-        )
-        module.COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256[path.name] = (
-            hashlib.sha256(path.read_bytes()).hexdigest()
-        )
-
-    errors = module._commit_import_provenance_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
-    if release_mutation is None:
-        assert any(
-            str(path) in error
-            and (
-                "must match exact reviewed SHA-256" in error
-                or "must match frozen SHA-256" in error
-            )
-            for error in errors
-        ), errors
-    else:
-        assert any(
-            f"Commit-import release theorem {symbol} must state only" in error
-            for error in errors
-        ), errors
-
-
-@pytest.mark.parametrize(
-    ("replacement", "expected_counts"),
-    (
-        ("let linked_before = match removed_statat(", "(0, 0, 0)"),
-        (
-            """if false {
-                let linked_before = match rustix::fs::statat(
-                    &self.directory.directory,
-                    &self.entry_name,
-                    rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-                ) {
-                    Ok(stat) => stat,
-                    Err(_) => unreachable!(),
-                };
-                let _ = linked_before;
-            }
-            let linked_before = match rustix::fs::statat(""",
-            "(0, 0, 2)",
-        ),
-    ),
-)
-def test_serviced_candidate_read_discriminator_fails_closed_without_crashing(
-    tmp_path: Path,
-    replacement: str,
-    expected_counts: str,
-) -> None:
-    """Missing or duplicate bounded-read ownership returns a diagnostic."""
-
-    module = load_checker()
-    copy_serviced_candidate_production_fixture(tmp_path)
-    assert module._serviced_candidate_production_source_fidelity_errors(tmp_path) == []
-    safety_path = tmp_path / "crates/iroha_core/src/sumeragi/safety_wal.rs"
-    mutate_source_once(
-        safety_path,
-        "let linked_before = match rustix::fs::statat(",
-        replacement,
-    )
-
-    errors = module._serviced_candidate_production_source_fidelity_errors(tmp_path)
-    assert any(
-        "require exactly one parsed bounded adjacent read" in error
-        and f"discriminator_counts={expected_counts}" in error
-        for error in errors
     ), errors

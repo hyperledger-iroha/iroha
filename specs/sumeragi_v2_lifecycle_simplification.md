@@ -331,8 +331,9 @@ service parts. The ingress planner rejects unless the running owner and service
 retain matching store and output-guard seals; a cursor snapshot alone cannot
 authorize production planning. The activated owner now enters one consuming
 finalization chain. It proves executor and recovered-work quiescence before
-clearing readiness, closing the exact ingress, and jointly detaching the
-Certified-Serve and leader-wire gates. It then consumes the executor's Kura
+clearing readiness, closing the exact ingress, and detaching durable leader-wire
+ownership. Certified-Serve remains coordinator-owned through that same closed
+ingress. It then consumes the executor's Kura
 receipt/artifact and closes the serialized adapter under fail-stop ownership.
 The resulting type state keeps its safety WAL, services, lifecycle stores, and
 finality evidence joined while the existing lane/service rollover seals the
@@ -345,7 +346,7 @@ coordinator instance, and its final token consumes the concrete registry
 before a cleanup-ready state can permit normal finalized-height worker
 teardown. Operator shutdown is a separate consuming boundary for unpublished
 or active lifecycle owners: it closes runner readiness and the exact queue,
-releases prepared local-Proposal state, jointly detaches both ingress gates,
+releases prepared local-Proposal state, detaches leader-wire ingress ownership,
 then permits normal worker stop without minting finality or retiring durable
 rows needed by cold replay. The CompleteTip wrapper consumes retired H and H+1
 together on that unpublished path. Canonical-body startup recovery borrows the
@@ -689,9 +690,9 @@ owner retaining the verified context, coordinator, registry, payload store, and
 body store. Every failure is startup-fatal and exposes no authority or retry
 parts. Unsupported live classes still fail closed. The serialized lifecycle
 runner owns this startup transaction and the corresponding completion
-settlement; the count-only compatibility drain remains fail-closed if reached.
-This is first-release V1 only: there is no legacy decoder, fallback,
-compatibility branch, or dual scheduler path.
+settlement; there is no count-only lifecycle drain or alternate completion
+scheduler. This is first-release V1 only: there is no migration decoder,
+fallback, or dual scheduler path.
 Selector debt zero remains valid only when the complete typed verdict census
 proves that no pre-cut occurrence owns priority.
 
@@ -785,10 +786,11 @@ successor, require the same `OwnerId` with a newly allocated record ordinal,
 install the Store concrete work, and publish one lifecycle-ledger replacement.
 Only after every coordinator, registry, body, service, request, response-claim,
 and queue preflight is exact may the already-previewed adapter state be moved
-into place. A post-dequeue mismatch is process fail-stop, never retry. This
-direct path remains unreachable until restart can reconstruct the exact ready
-body and replay or inject the matching `BodyAvailable` before exposing a live
-Store row; process fail-stop cannot substitute for that power-loss contract.
+into place. A post-publication mismatch is process fail-stop, never retry. Cold
+open authenticates the terminal Fetch and live Store rows against the exact
+body frame, replays `BodyAvailable` into the adapter, and requires the emitted
+Store effect to equal the ledger child before exposing it. The direct path is
+therefore live without weakening the power-loss contract.
 
 The next direct seam advances that durable Store row to `ValidateBody` without
 reviving a parallel completion scheduler. Its sealed pending binding projects
@@ -800,7 +802,7 @@ nested `DurableBodyReceipt` against the frozen context and registered manifest,
 then previews `BodyStored` on cloned reducer and wire-registry state. Applied is
 valid only for one exact `ValidateBody`; Busy and every inactive result retain
 the adapter borrow, and commit remains an infallible state installation inside
-the future Store registry transaction.
+the Store registry transaction.
 
 The concrete registry mirrors that boundary with two closed, move-only body
 carriers. `DurableStoreBody` and `DurableValidateBody` each retain their exact
@@ -811,21 +813,21 @@ receipt's catalog hash instead of treating the receipt as both sides of the
 comparison. Typed borrow-bound preflights re-project each carrier under the
 verified height context and require the claimed lifecycle key, causal owner,
 stage, reconstruction source, and complete consumed one-slot Effect geometry.
-Generic registry borrow/take operations reject both closed forms, and the
-current tokens expose no constructor, installation, removal, commit, or parts
-extraction. The sealed Fetch-to-Store and Store-to-Validate successors project
-their mandatory replay authority and body-frame payload only while retaining
-the exact parent registry borrow. Coordinator staging consumes each token into
-a dual-borrow, drop-inert prepared cut; it still cannot publish until the
-adapter, coordinator, registry, ledger, and recovery cuts can commit together.
+Generic registry borrow/take operations reject both closed forms. The sealed
+Fetch-to-Store and Store-to-Validate successors project their mandatory replay
+authority and body-frame payload only while retaining the exact parent
+registry borrow. Coordinator staging consumes each token into a dual-borrow,
+drop-inert prepared cut. LedgerV1 is fsynced before the infallible registry,
+coordinator, and adapter commit tail installs the child.
 
 Because the Store input already names a synchronised body-store frame, restart
-must reload those exact bytes from the durable catalog rather than depend on
-the volatile `ready_bodies` cache. Publishing the Store-to-Validate ledger replacement is
-safe only when recovery can replay `BodyAvailable` and then `BodyStored` for
-that exact manifest before exposing the reconstructed Validate row. Durable
-bytes alone do not prove that either reducer transition was replayed, and
-process fail-stop does not replace this power-loss ordering contract.
+reloads those exact bytes from the durable catalog rather than depending on
+the volatile `ready_bodies` cache. Cold open authenticates a terminal
+Fetch-to-terminal-Store-to-live-Validate chain, replays `BodyAvailable` and
+then `BodyStored` in global ordinal order, and requires both emitted effects to
+equal their ledger children before exposing Validate. Durable bytes alone do
+not prove that either reducer transition was replayed, so any mismatch fails
+startup closed.
 
 Successful deterministic validation has a wider closed reducer result than the
 earlier body stages. Its private, borrow-bound preview registers the
@@ -1874,10 +1876,10 @@ authenticated cut, adapter startup,
 coordinator projection, and complete concrete registry; it exposes none of
 those parts. Cut validation rescans the bounded canonical directory before the
 join, so a later valid payload written by another store owner is rejected even
-when the original in-memory index is unchanged. The sealed launch also joins
-its leader-wire and service-owned Certified-Serve gates under one
-closed-ingress RAII owner, so teardown cannot detach either durable carrier
-family independently. This bound owner is not itself status-publication
+when the original in-memory index is unchanged. The sealed launch joins
+leader-wire ownership under one closed-ingress RAII owner; Certified-Serve
+enters only through the co-owned lifecycle coordinator, registry, and worker
+transaction. This bound owner is not itself status-publication
 authority. Its consuming launch retains retired H beside launched H+1, and the
 dedicated activation consumes both only while the runner-owned permit opens the
 exact ingress and publishes through the CompleteTip bridge. The lifecycle

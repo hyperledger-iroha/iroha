@@ -67,7 +67,8 @@ Preparation example for one guardian approval:
   "fee_payment": {
     "payer": "authority",
     "value": {
-      "charge_limits": []
+      "charge_limits": [],
+      "gas_limit": null
     }
   }
 }

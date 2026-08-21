@@ -1,9 +1,8 @@
 //! Izanami-backed chaos helpers for the Mochi desktop shell.
 use crate::{Supervisor, ToriiClient};
 use color_eyre::{Result as EyreResult, eyre::eyre};
-use iroha_data_model::{block::SignedBlock, domain::DomainId, isi::InstructionBox};
+use iroha_data_model::{domain::DomainId, isi::InstructionBox};
 use iroha_genesis::GenesisBlock;
-use iroha_test_samples::ALICE_KEYPAIR;
 use izanami::faults::{
     CpuStressConfig, DiskSaturationConfig, FaultClient, FaultConfig, FaultPeer, FaultScenarioKind,
     NetworkLatencyConfig, NetworkPartitionConfig, apply_fault_scenario,
@@ -423,12 +422,20 @@ where
     }
     emit(format!("Applying {}.", scenario_label(scenario)));
     let config_layers = Arc::new(Vec::<Table>::new());
-    let genesis = Arc::new(GenesisBlock(SignedBlock::genesis(
-        Vec::new(),
-        ALICE_KEYPAIR.private_key(),
-        None,
-        None,
-    )));
+    let genesis_path = peer
+        .supervisor
+        .lock()
+        .map_err(|_| ChaosError::Message("supervisor mutex poisoned".to_owned()))?
+        .genesis_block_file()
+        .to_path_buf();
+    let genesis = Arc::new(GenesisBlock(
+        iroha_genesis::read_signed_genesis(&genesis_path).map_err(|error| {
+            ChaosError::Message(format!(
+                "read supervised genesis `{}` failed: {error}",
+                genesis_path.display()
+            ))
+        })?,
+    ));
     let base_domain = DomainId::try_new("wonderland", "universal").expect("static domain id");
     let deadline = Instant::now() + duration.max(Duration::from_secs(1));
     handle

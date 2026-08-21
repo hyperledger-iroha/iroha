@@ -131,6 +131,7 @@ mod tests {
             "/v1/sumeragi/rbc/sessions",
             "/v1/sumeragi/rbc/sample",
             "/v1/sumeragi/collectors",
+            "/v1/sumeragi/telemetry",
         ] {
             assert!(
                 CATALOGED_ROUTES.iter().all(|route| route.path() != retired),
@@ -1078,21 +1079,24 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(validate_catalog(&routes), Ok(()));
         for unsupported_path in [
+            "/v1/sumeragi/phases",
+            "/v1/sumeragi/telemetry",
             "/v1/sumeragi/new_view/json",
             "/v1/sumeragi/new_view/sse",
             "/v1/sumeragi/bls_keys",
             "/v1/sumeragi/commit_qc/{hash}",
+            "/v1/sumeragi/commit-certificates",
+            "/v1/sumeragi/commit-qcs/{block_hash}",
+            "/v1/sumeragi/checkpoints",
+            "/v1/sumeragi/validator-sets",
+            "/v1/sumeragi/validator-sets/{height}",
         ] {
             assert!(
                 routes.iter().all(|route| route.path() != unsupported_path),
                 "unsupported route must not enter the first-release catalog: {unsupported_path}"
             );
         }
-        for canonical_path in [
-            "/v1/sumeragi/bls-keys",
-            "/v1/sumeragi/commit-qcs/{block_hash}",
-            "/v1/sumeragi/diagnostics",
-        ] {
+        for canonical_path in ["/v1/sumeragi/bls-keys", "/v1/sumeragi/diagnostics"] {
             assert!(
                 routes.iter().any(|route| route.path() == canonical_path),
                 "missing canonical first-release route: {canonical_path}"
@@ -1110,15 +1114,9 @@ mod tests {
             sumeragi::LEADER,
             sumeragi::BLS_KEYS,
             sumeragi::QC,
-            sumeragi::CHECKPOINTS,
-            sumeragi::COMMIT_CERTIFICATES,
-            sumeragi::VALIDATOR_SETS,
-            sumeragi::VALIDATOR_SET_BY_HEIGHT,
             sumeragi::CONSENSUS_KEYS,
             sumeragi::KEY_LIFECYCLE,
-            sumeragi::TELEMETRY,
             sumeragi::PARAMETERS,
-            sumeragi::COMMIT_QC,
             sumeragi::EVIDENCE_COUNT,
             sumeragi::EVIDENCE_LIST,
             sumeragi::VRF_PENALTIES,

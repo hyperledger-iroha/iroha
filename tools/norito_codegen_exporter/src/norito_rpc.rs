@@ -21,7 +21,8 @@ use iroha_data_model::{
     sns::{NameControllerV1, NameRecordV1, NameSelectorV1, NameStatus, SuffixPolicyV1},
     transaction::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, SignedTransaction,
-        TransactionBuilder, executable::ContractInvocation, signed::TransactionPayload,
+        TransactionAdmissionIntent, TransactionBuilder, executable::ContractInvocation,
+        signed::TransactionPayload,
     },
 };
 use iroha_primitives::json::Json;
@@ -714,6 +715,7 @@ struct RawPayload {
     ttl_ms: u64,
     nonce: Option<u32>,
     fee_payment: FeePaymentIntent,
+    admission_intent: TransactionAdmissionIntent,
     metadata: Vec<(Name, Json)>,
 }
 #[derive(Clone)]
@@ -898,7 +900,8 @@ impl RawPayload {
         let network_id = parse_network_id(&self.network_id)?;
         let authority = parse_account_id(&self.authority)
             .with_context(|| format!("invalid authority id '{}'", self.authority))?;
-        let mut builder = TransactionBuilder::new(network_id, authority, self.fee_payment.clone());
+        let mut builder = TransactionBuilder::new(network_id, authority, self.fee_payment.clone())
+            .with_admission_intent(self.admission_intent);
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
         builder.set_ttl(Duration::from_millis(self.ttl_ms));
         if let Some(nonce) = self.nonce {
@@ -1060,6 +1063,7 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
             "time_to_live_ms",
             "nonce",
             "fee_payment",
+            "admission_intent",
             "metadata",
         ],
         "payload",
@@ -1083,6 +1087,13 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
     fee_payment
         .validate()
         .map_err(|err| eyre!(err.to_string()))?;
+    let admission_intent = obj
+        .get("admission_intent")
+        .ok_or_else(|| eyre!("missing admission_intent"))
+        .and_then(|value| {
+            json::from_value::<TransactionAdmissionIntent>(value.clone())
+                .map_err(|err| eyre!(err.to_string()))
+        })?;
     if executable.requires_transaction_gas_limit() && fee_payment.gas_limit().is_none() {
         bail!(
             "IVM and contract-call fixture executables require an explicit fee_payment gas_limit"
@@ -1100,6 +1111,7 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
         ttl_ms,
         nonce,
         fee_payment,
+        admission_intent,
         metadata,
     })
 }
@@ -3619,6 +3631,7 @@ mod tests {
                 ttl_ms: 60_000,
                 nonce: Some(1),
                 fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+                admission_intent: TransactionAdmissionIntent::Ordinary,
                 metadata: Vec::new(),
             },
             payload_json: Value::Null,
@@ -3648,6 +3661,7 @@ mod tests {
             ttl_ms: 1,
             nonce: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+            admission_intent: TransactionAdmissionIntent::Ordinary,
             metadata: Vec::new(),
         };
         let error = payload
@@ -3788,6 +3802,20 @@ mod tests {
                 .to_string()
                 .contains("missing required field 'metadata'")
         );
+        let mut missing_admission_intent = entry
+            .get("payload")
+            .and_then(Value::as_object)
+            .expect("nested payload object")
+            .clone();
+        missing_admission_intent.remove("admission_intent");
+        let Err(error) = parse_payload(&Value::Object(missing_admission_intent)) else {
+            panic!("admission_intent must be explicit");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("missing required field 'admission_intent'")
+        );
     }
     #[test]
     fn executable_and_instruction_objects_are_closed_and_unambiguous() {
@@ -3890,12 +3918,11 @@ mod tests {
             .expect("authority fee payment")
             .remove("gas_limit");
         let Err(error) = parse_payload(&payload) else {
-            panic!("gasless direct contract calls must fail closed");
+            panic!("direct contract calls without the required gas field must fail closed");
         };
         assert!(
-            error
-                .to_string()
-                .contains("require an explicit fee_payment gas_limit")
+            error.to_string().contains("gas_limit"),
+            "unexpected missing-gas error: {error}"
         );
     }
     #[test]
@@ -3916,12 +3943,10 @@ mod tests {
                 .expect("authority fee payment")
                 .remove("gas_limit");
             let Err(error) = parse_payload(&payload) else {
-                panic!("gasless runtime fixture {name:?} must be rejected");
+                panic!("runtime fixture {name:?} without gas_limit must be rejected");
             };
             assert!(
-                error
-                    .to_string()
-                    .contains("require an explicit fee_payment gas_limit"),
+                error.to_string().contains("gas_limit"),
                 "unexpected gas-bound error for {name:?}: {error}"
             );
         }

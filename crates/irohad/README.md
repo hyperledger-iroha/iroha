@@ -48,10 +48,10 @@ WebAuthn, authenticated transport, immutable-query, publication, and sealed
 checkpoint adapters:
 
 ```rust
-use irohad::{BuildLine, IrohaRuntimeProviderRegistryV1};
+use irohad::IrohaRuntimeProviderRegistryV1;
 
 fn run(registry: &dyn IrohaRuntimeProviderRegistryV1) -> irohad::ReportResult<(), irohad::MainError> {
-    irohad::run_with_runtime_provider_registry(BuildLine::Iroha3, registry)
+    irohad::run_with_runtime_provider_registry(registry)
 }
 ```
 

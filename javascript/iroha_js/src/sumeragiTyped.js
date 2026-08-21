@@ -697,9 +697,12 @@ function parseSumeragiNativeAmxQc(value, context) {
 function parseSumeragiNativeAmxParticipantProposal(value, context) {
   const proposal = assertExactSumeragiRecord(
     value,
-    ["descriptor", "proposal_hash"],
+    ["descriptor", "proposal_hash", "payload_block_hint"],
     context,
   );
+  if (proposal.payload_block_hint !== null) {
+    throw new TypeError(`${context}.payload_block_hint must be null`);
+  }
   const descriptorContext = `${context}.descriptor`;
   const descriptor = ensureRecord(proposal.descriptor, descriptorContext);
   const requiredFields = [
@@ -917,6 +920,7 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
   return Object.freeze({
     descriptor: Object.freeze(normalizedDescriptor),
     proposal_hash: proposalHash,
+    payload_block_hint: null,
   });
 }
 
@@ -3285,7 +3289,11 @@ function parseSumeragiExecutionCommitment(value, context) {
 }
 
 function parseSumeragiQcReference(value, context) {
-  const record = ensureRecord(value, context);
+  const record = assertExactSumeragiRecord(
+    value,
+    ["round", "proposal_round", "phase", "subject", "execution_commitment"],
+    context,
+  );
   const round = parseSumeragiRound(record.round, `${context}.round`);
   const proposalRound = parseSumeragiRound(
     record.proposal_round,
@@ -3307,6 +3315,41 @@ function parseSumeragiQcReference(value, context) {
       record.execution_commitment,
       `${context}.execution_commitment`,
     ),
+  });
+}
+
+export function parseSumeragiV2QcResponse(payload) {
+  const context = "sumeragi qc response";
+  const record = ensureRecord(payload, context);
+  const allowedFields = new Set(["highest_prepare_qc", "locked_prepare_qc"]);
+  const unknownField = Object.keys(record).find((field) => !allowedFields.has(field));
+  if (unknownField !== undefined) {
+    throw new TypeError(`${context} contains unknown field ${unknownField}`);
+  }
+  const missingField = [...allowedFields].find(
+    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+  );
+  if (missingField !== undefined) {
+    throw new TypeError(`${context}.${missingField} is required`);
+  }
+
+  const prepareQc = (field) => {
+    if (record[field] == null) {
+      return null;
+    }
+    const certificate = parseSumeragiQcReference(
+      record[field],
+      `${context}.${field}`,
+    );
+    if (certificate.phase.phase !== "prepare") {
+      throw new TypeError(`${context}.${field} must reference a PrepareQC`);
+    }
+    return certificate;
+  };
+
+  return Object.freeze({
+    highest_prepare_qc: prepareQc("highest_prepare_qc"),
+    locked_prepare_qc: prepareQc("locked_prepare_qc"),
   });
 }
 

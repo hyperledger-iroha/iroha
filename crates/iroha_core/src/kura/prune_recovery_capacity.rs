@@ -1,7 +1,7 @@
 // Canonical prune recovery stages that consume the capacity admission sealed in
-// `KuraPruneIntentV2`.
+// `KuraPruneIntentV3`.
 impl Kura {
-    fn truncate_pipeline_sidecars_for_prune(&self, intent: &KuraPruneIntentV2) -> Result<()> {
+    fn truncate_pipeline_sidecars_for_prune(&self, intent: &KuraPruneIntentV3) -> Result<()> {
         let target_height = intent.target_height;
         let remaining = self.reconcile_and_project_prune_sidecar_rewrites_locked(target_height)?;
         if !intent.sidecar_rewrite.authorizes(remaining) {
@@ -10,45 +10,15 @@ impl Kura {
                     .to_owned(),
             ));
         }
-        let remaining_roster = self
-            .roster_log
-            .read()
-            .project_truncate_to_height(target_height)
-            .map_err(|error| {
-                Error::PruneIntentConflict(format!(
-                    "failed to re-project commit-roster prune capacity: {error}"
-                ))
-            })?;
-        if !intent.capacity.roster.authorizes(remaining_roster) {
-            return Err(Error::PruneIntentConflict(
-                "remaining commit-roster state exceeds its authenticated prune projection"
-                    .to_owned(),
-            ));
-        }
-        self.validate_recovered_prune_capacity(intent, remaining_roster, remaining)?;
+        self.validate_recovered_prune_capacity(intent, remaining)?;
         let directory = self.active_blocks_dir.lock().join(PIPELINE_DIR_NAME);
-        for (data_file, index_file, kind, expected) in [
-            (
-                PIPELINE_SIDECARS_DATA_FILE,
-                PIPELINE_SIDECARS_INDEX_FILE,
-                "pipeline recovery sidecar",
-                remaining.pipeline,
-            ),
-            (
-                ROSTER_SIDECARS_DATA_FILE,
-                ROSTER_SIDECARS_INDEX_FILE,
-                "roster metadata sidecar",
-                remaining.roster,
-            ),
-        ] {
-            self.truncate_indexed_sidecar_to_height(
-                &directory.join(data_file),
-                &directory.join(index_file),
-                target_height,
-                kind,
-                expected,
-            )?;
-        }
+        self.truncate_indexed_sidecar_to_height(
+            &directory.join(PIPELINE_SIDECARS_DATA_FILE),
+            &directory.join(PIPELINE_SIDECARS_INDEX_FILE),
+            target_height,
+            "pipeline recovery sidecar",
+            remaining.pipeline,
+        )?;
         if directory.exists() {
             for entry in
                 std::fs::read_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?
@@ -93,27 +63,14 @@ impl Kura {
         require_compact: bool,
     ) -> Result<()> {
         let directory = self.active_blocks_dir.lock().join(PIPELINE_DIR_NAME);
-        for (data_file, index_file, kind) in [
-            (
-                PIPELINE_SIDECARS_DATA_FILE,
-                PIPELINE_SIDECARS_INDEX_FILE,
-                "pipeline recovery sidecar",
-            ),
-            (
-                ROSTER_SIDECARS_DATA_FILE,
-                ROSTER_SIDECARS_INDEX_FILE,
-                "roster metadata sidecar",
-            ),
-        ] {
-            Self::validate_indexed_sidecar_pair(
-                &directory.join(data_file),
-                &directory.join(index_file),
-                max_height,
-                kind,
-                require_compact,
-                true,
-            )?;
-        }
+        Self::validate_indexed_sidecar_pair(
+            &directory.join(PIPELINE_SIDECARS_DATA_FILE),
+            &directory.join(PIPELINE_SIDECARS_INDEX_FILE),
+            max_height,
+            "pipeline recovery sidecar",
+            require_compact,
+            true,
+        )?;
         if directory.exists() {
             for entry in
                 std::fs::read_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?
@@ -137,51 +94,10 @@ impl Kura {
         }
         Ok(())
     }
-    fn truncate_roster_for_prune(
-        &self,
-        intent: &KuraPruneIntentV2,
-        remaining_sidecar: KuraPruneSidecarRewriteProjectionV2,
-    ) -> Result<()> {
-        let height = intent.target_height;
-        let before = self.roster_journal_tracked_bytes()?;
-        {
-            // Keep the shared in-memory fence unchanged until the replacement
-            // generation is durable. A post-intent failure is fail-stop, but
-            // readers must still not observe a journal state never published.
-            let mut roster_log = self.roster_log.write();
-            let remaining_roster =
-                roster_log
-                    .project_truncate_to_height(height)
-                    .map_err(|err| {
-                        Error::PruneIntentConflict(format!(
-                            "failed to project commit-roster journal at height {height}: {err}"
-                        ))
-                    })?;
-            if !intent.capacity.roster.authorizes(remaining_roster) {
-                return Err(Error::PruneIntentConflict(
-                    "remaining commit-roster state exceeds its authenticated prune projection"
-                        .to_owned(),
-                ));
-            }
-            self.validate_recovered_prune_capacity(intent, remaining_roster, remaining_sidecar)?;
-            let mut candidate = roster_log.clone();
-            candidate
-                .truncate_to_height_with_projection(height, intent.capacity.roster)
-                .map_err(|err| {
-                    Error::PruneIntentConflict(format!(
-                        "failed to truncate commit-roster journal to height {height}: {err}"
-                    ))
-                })?;
-            *roster_log = candidate;
-        }
-        let after = self.roster_journal_tracked_bytes()?;
-        self.update_disk_usage_delta(before, after);
-        Ok(())
-    }
     fn preflight_recovered_prune_capacity_before_mutation(
         &self,
-        intent: &KuraPruneIntentV2,
-    ) -> Result<KuraPruneSidecarRewriteProjectionV2> {
+        intent: &KuraPruneIntentV3,
+    ) -> Result<KuraPruneSidecarRewriteProjectionV3> {
         // Normalize at most one non-growing sequential temp stage, authenticate
         // the exact remaining projection, and reject insufficient configured
         // physical capacity before any new retained-pair allocation or other
@@ -194,25 +110,11 @@ impl Kura {
                 "startup sidecar rewrite exceeds its authenticated prune projection".to_owned(),
             ));
         }
-        let remaining_roster = self
-            .roster_log
-            .read()
-            .project_truncate_to_height(intent.target_height)
-            .map_err(|error| {
-                Error::PruneIntentConflict(format!(
-                    "failed to recover commit-roster prune projection: {error}"
-                ))
-            })?;
-        if !intent.capacity.roster.authorizes(remaining_roster) {
-            return Err(Error::PruneIntentConflict(
-                "startup commit-roster state exceeds its authenticated prune projection".to_owned(),
-            ));
-        }
-        self.validate_recovered_prune_capacity(intent, remaining_roster, remaining)?;
+        self.validate_recovered_prune_capacity(intent, remaining)?;
         Ok(remaining)
     }
-    fn complete_recovered_prune_intent(&self, intent: &KuraPruneIntentV2) -> Result<()> {
-        let remaining_sidecar = self.preflight_recovered_prune_capacity_before_mutation(intent)?;
+    fn complete_recovered_prune_intent(&self, intent: &KuraPruneIntentV3) -> Result<()> {
+        self.preflight_recovered_prune_capacity_before_mutation(intent)?;
         // Merge reconciliation runs before this method and uses the durable
         // block height to remove future carriers and their merge-log suffix.
         let blocks_dir = self.active_blocks_dir.lock().clone();
@@ -220,7 +122,6 @@ impl Kura {
             &blocks_dir,
             intent.target_height.saturating_add(1),
         )?;
-        self.truncate_roster_for_prune(intent, remaining_sidecar)?;
         {
             let _guard = self.sidecar_lock.lock();
             let wsv_dir = self.wsv_checkpoint_dir();

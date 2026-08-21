@@ -1237,33 +1237,6 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 source_item_seals=(
                     CrossToolSourceItemSeal(
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
-                        item="step",
-                        item_token_sha256="bafd283fd50fe929e000481a8314f98cd0ad3aef30c8e8677a93b0784045136c",
-                        brace_context=((
-                            "impl", "<", "D", ":", "RuntimeDriver", ">",
-                            "SerializedV2Runtime", "<", "D", ">",
-                        ),),
-                        required_expressions=(
-                            """
-                            if self
-                                .exact_serve_target_ordinal
-                                .is_some_and(|target| owner.lifecycle_ordinal() < target)
-                            {
-                                self.exact_serve_predecessor_retry_attempted = true;
-                            }
-                            """,
-                            """
-                            if self
-                                .retained_response_predecessor_target_ordinal
-                                .is_some_and(|target| owner.lifecycle_ordinal() < target)
-                            {
-                                self.retained_response_predecessor_retry_attempted = true;
-                            }
-                            """,
-                        ),
-                    ),
-                    CrossToolSourceItemSeal(
-                        source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="step_recovery",
                         item_token_sha256=(
                             "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
@@ -3176,7 +3149,7 @@ _CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE = (
     "crates/iroha_core/src/sumeragi/v2_core/refinement/first_release_witness.rs"
 )
 _CHECKED_PRODUCTION_TOKEN_CLOSURE_SHA256 = (
-    "03681c3a3df1ab231d64ba64e62d7aea1e125b9bff3133ec81d4d3bce11f1f1e"
+    "acdc63763495b64aceacd92c8f1fe80ef9cb7e8194a8f5fb967f1a02d55b2bca"
 )
 _CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256 = (
     "c79d22d356c0f53aceb7b771cb14660ea68ab6da856d46e186506bb5e570a9aa"

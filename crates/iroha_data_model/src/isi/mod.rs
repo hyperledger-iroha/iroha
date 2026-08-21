@@ -177,313 +177,81 @@ impl Ord for InstructionBox {
 // (e.g., `Executable: From<Vec<InstructionBox>>`). Special handling in the
 // blanket `Instruction` impl ensures `as_any` exposes the inner type.
 impl crate::seal::Instruction for InstructionBox {}
+
+macro_rules! impl_direct_instruction_box {
+    ($($instruction:ty),+ $(,)?) => {
+        $(
+            impl From<$instruction> for InstructionBox {
+                fn from(instruction: $instruction) -> Self {
+                    InstructionBox(Box::new(instruction))
+                }
+            }
+        )+
+    };
+}
 // Allow direct boxing of standalone instructions that are not part of a grouped enum.
-impl From<crate::isi::zk::VerifyProof> for InstructionBox {
-    fn from(i: crate::isi::zk::VerifyProof) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::PruneProofs> for InstructionBox {
-    fn from(i: crate::isi::zk::PruneProofs) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RegisterPrivacyProtocolActivationV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RegisterPrivacyProtocolActivationV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::PublishPrivacyRootV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::PublishPrivacyRootV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::BootstrapPrivacyOrchardPoolV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::BootstrapPrivacyOrchardPoolV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::BootstrapPrivacyProofManagedPoolV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::BootstrapPrivacyProofManagedPoolV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::BootstrapPrivacyPgcAccountsV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::BootstrapPrivacyPgcAccountsV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::BootstrapPrivacyZkAmsRegistryV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::BootstrapPrivacyZkAmsRegistryV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RegisterPrivacyZkAcePolicyV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RegisterPrivacyZkAcePolicyV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RotatePrivacyZkAcePolicyV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RotatePrivacyZkAcePolicyV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RevokePrivacyZkAcePolicyV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RevokePrivacyZkAcePolicyV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RotatePrivacyBootleLanternIssuerPolicyV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RotatePrivacyBootleLanternIssuerPolicyV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RevokePrivacyBootleLanternIssuerPolicyV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RevokePrivacyBootleLanternIssuerPolicyV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RegisterPrivacyVegaIssuerV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RegisterPrivacyVegaIssuerV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RotatePrivacyVegaIssuerV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RotatePrivacyVegaIssuerV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RevokePrivacyVegaIssuerV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RevokePrivacyVegaIssuerV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RotatePrivacyZkX509TrustAnchorV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RotatePrivacyZkX509TrustAnchorV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RevokePrivacyZkX509TrustAnchorV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RevokePrivacyZkX509TrustAnchorV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RegisterPrivacyZkX509CertificatePolicyV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RegisterPrivacyZkX509CertificatePolicyV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RotatePrivacyZkX509CertificatePolicyV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RotatePrivacyZkX509CertificatePolicyV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RegisterPrivacyZkX509CrlV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RegisterPrivacyZkX509CrlV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RotatePrivacyZkX509CrlV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RotatePrivacyZkX509CrlV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::RevokePrivacyZkX509CrlV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::RevokePrivacyZkX509CrlV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::privacy::SubmitPrivacyProofV1> for InstructionBox {
-    fn from(i: crate::isi::privacy::SubmitPrivacyProofV1) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::bridge::SubmitBridgeProof> for InstructionBox {
-    fn from(i: crate::isi::bridge::SubmitBridgeProof) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::bridge::RecordBridgeReceipt> for InstructionBox {
-    fn from(i: crate::isi::bridge::RecordBridgeReceipt) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::bridge::RecordSccpMessage> for InstructionBox {
-    fn from(i: crate::isi::bridge::RecordSccpMessage) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::bridge::ApplySccpRouteGovernance> for InstructionBox {
-    fn from(i: crate::isi::bridge::ApplySccpRouteGovernance) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::bridge::FundSccpRouteEscrow> for InstructionBox {
-    fn from(i: crate::isi::bridge::FundSccpRouteEscrow) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::bridge::RefundSccpRouteEscrow> for InstructionBox {
-    fn from(i: crate::isi::bridge::RefundSccpRouteEscrow) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::asset_alias::SetAssetDefinitionAlias> for InstructionBox {
-    fn from(i: crate::isi::asset_alias::SetAssetDefinitionAlias) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::asset_transfer_control::SetAssetTransferAvailability> for InstructionBox {
-    fn from(i: crate::isi::asset_transfer_control::SetAssetTransferAvailability) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::asset_transfer_control::SetAssetTransferBlacklist> for InstructionBox {
-    fn from(i: crate::isi::asset_transfer_control::SetAssetTransferBlacklist) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::asset_transfer_control::SetAssetTransferControl> for InstructionBox {
-    fn from(i: crate::isi::asset_transfer_control::SetAssetTransferControl) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::asset_transfer_control::SetAssetHoldingLimit> for InstructionBox {
-    fn from(i: crate::isi::asset_transfer_control::SetAssetHoldingLimit) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::zk::VerifyProof);
+impl_direct_instruction_box!(crate::isi::zk::PruneProofs);
+impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyProtocolActivationV1);
+impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1);
+impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1);
+impl_direct_instruction_box!(crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1);
+impl_direct_instruction_box!(crate::isi::privacy::PublishPrivacyRootV1);
+impl_direct_instruction_box!(crate::isi::privacy::BootstrapPrivacyOrchardPoolV1);
+impl_direct_instruction_box!(crate::isi::privacy::BootstrapPrivacyProofManagedPoolV1);
+impl_direct_instruction_box!(crate::isi::privacy::BootstrapPrivacyPgcAccountsV1);
+impl_direct_instruction_box!(crate::isi::privacy::BootstrapPrivacyZkAmsRegistryV1);
+impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyZkAcePolicyV1);
+impl_direct_instruction_box!(crate::isi::privacy::RotatePrivacyZkAcePolicyV1);
+impl_direct_instruction_box!(crate::isi::privacy::RevokePrivacyZkAcePolicyV1);
+impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1);
+impl_direct_instruction_box!(crate::isi::privacy::RotatePrivacyBootleLanternIssuerPolicyV1);
+impl_direct_instruction_box!(crate::isi::privacy::RevokePrivacyBootleLanternIssuerPolicyV1);
+impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyVegaIssuerV1);
+impl_direct_instruction_box!(crate::isi::privacy::RotatePrivacyVegaIssuerV1);
+impl_direct_instruction_box!(crate::isi::privacy::RevokePrivacyVegaIssuerV1);
+impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1);
+impl_direct_instruction_box!(crate::isi::privacy::RotatePrivacyZkX509TrustAnchorV1);
+impl_direct_instruction_box!(crate::isi::privacy::RevokePrivacyZkX509TrustAnchorV1);
+impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyZkX509CertificatePolicyV1);
+impl_direct_instruction_box!(crate::isi::privacy::RotatePrivacyZkX509CertificatePolicyV1);
+impl_direct_instruction_box!(crate::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1);
+impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyZkX509CrlV1);
+impl_direct_instruction_box!(crate::isi::privacy::RotatePrivacyZkX509CrlV1);
+impl_direct_instruction_box!(crate::isi::privacy::RevokePrivacyZkX509CrlV1);
+impl_direct_instruction_box!(crate::isi::privacy::SubmitPrivacyProofV1);
+impl_direct_instruction_box!(crate::isi::bridge::SubmitBridgeProof);
+impl_direct_instruction_box!(crate::isi::bridge::RecordBridgeReceipt);
+impl_direct_instruction_box!(crate::isi::bridge::RecordSccpMessage);
+impl_direct_instruction_box!(crate::isi::bridge::ApplySccpRouteGovernance);
+impl_direct_instruction_box!(crate::isi::bridge::FundSccpRouteEscrow);
+impl_direct_instruction_box!(crate::isi::bridge::RefundSccpRouteEscrow);
+impl_direct_instruction_box!(crate::isi::asset_alias::SetAssetDefinitionAlias);
+impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferAvailability);
+impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferBlacklist);
+impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferControl);
+impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetHoldingLimit);
 // Allow direct boxing of ZK asset and voting instructions
-impl From<crate::isi::zk::RegisterZkAsset> for InstructionBox {
-    fn from(i: crate::isi::zk::RegisterZkAsset) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::ScheduleConfidentialPolicyTransition> for InstructionBox {
-    fn from(i: crate::isi::zk::ScheduleConfidentialPolicyTransition) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::CancelConfidentialPolicyTransition> for InstructionBox {
-    fn from(i: crate::isi::zk::CancelConfidentialPolicyTransition) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::CreateElection> for InstructionBox {
-    fn from(i: crate::isi::zk::CreateElection) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::SubmitBallot> for InstructionBox {
-    fn from(i: crate::isi::zk::SubmitBallot) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::FinalizeElection> for InstructionBox {
-    fn from(i: crate::isi::zk::FinalizeElection) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::staking::ActivatePublicLaneValidator> for InstructionBox {
-    fn from(i: crate::isi::staking::ActivatePublicLaneValidator) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::staking::ExitPublicLaneValidator> for InstructionBox {
-    fn from(i: crate::isi::staking::ExitPublicLaneValidator) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::staking::RebindPublicLaneValidatorPeer> for InstructionBox {
-    fn from(i: crate::isi::staking::RebindPublicLaneValidatorPeer) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::kaigi::CreateKaigi> for InstructionBox {
-    fn from(i: crate::isi::kaigi::CreateKaigi) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::kaigi::JoinKaigi> for InstructionBox {
-    fn from(i: crate::isi::kaigi::JoinKaigi) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::kaigi::LeaveKaigi> for InstructionBox {
-    fn from(i: crate::isi::kaigi::LeaveKaigi) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::kaigi::EndKaigi> for InstructionBox {
-    fn from(i: crate::isi::kaigi::EndKaigi) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::kaigi::RecordKaigiUsage> for InstructionBox {
-    fn from(i: crate::isi::kaigi::RecordKaigiUsage) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::kaigi::SetKaigiRelayManifest> for InstructionBox {
-    fn from(i: crate::isi::kaigi::SetKaigiRelayManifest) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::kaigi::RegisterKaigiRelay> for InstructionBox {
-    fn from(i: crate::isi::kaigi::RegisterKaigiRelay) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::kaigi::ReportKaigiRelayHealth> for InstructionBox {
-    fn from(i: crate::isi::kaigi::ReportKaigiRelayHealth) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::nexus::SetLaneRelayEmergencyValidators> for InstructionBox {
-    fn from(i: crate::isi::nexus::SetLaneRelayEmergencyValidators) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::nexus::RegisterVerifiedLaneRelay> for InstructionBox {
-    fn from(i: crate::isi::nexus::RegisterVerifiedLaneRelay) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation> for InstructionBox {
-    fn from(i: crate::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::zk::RegisterZkAsset);
+impl_direct_instruction_box!(crate::isi::zk::ScheduleConfidentialPolicyTransition);
+impl_direct_instruction_box!(crate::isi::zk::CancelConfidentialPolicyTransition);
+impl_direct_instruction_box!(crate::isi::zk::CreateElection);
+impl_direct_instruction_box!(crate::isi::zk::SubmitBallot);
+impl_direct_instruction_box!(crate::isi::zk::FinalizeElection);
+impl_direct_instruction_box!(crate::isi::staking::ActivatePublicLaneValidator);
+impl_direct_instruction_box!(crate::isi::staking::ExitPublicLaneValidator);
+impl_direct_instruction_box!(crate::isi::staking::RebindPublicLaneValidatorPeer);
+impl_direct_instruction_box!(crate::isi::kaigi::CreateKaigi);
+impl_direct_instruction_box!(crate::isi::kaigi::JoinKaigi);
+impl_direct_instruction_box!(crate::isi::kaigi::LeaveKaigi);
+impl_direct_instruction_box!(crate::isi::kaigi::EndKaigi);
+impl_direct_instruction_box!(crate::isi::kaigi::RecordKaigiUsage);
+impl_direct_instruction_box!(crate::isi::kaigi::SetKaigiRelayManifest);
+impl_direct_instruction_box!(crate::isi::kaigi::RegisterKaigiRelay);
+impl_direct_instruction_box!(crate::isi::kaigi::ReportKaigiRelayHealth);
+impl_direct_instruction_box!(crate::isi::nexus::SetLaneRelayEmergencyValidators);
+impl_direct_instruction_box!(crate::isi::nexus::RegisterVerifiedLaneRelay);
+impl_direct_instruction_box!(crate::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation);
 macro_rules! impl_nexus_program_instruction_box {
     ($($ty:ident),+ $(,)?) => {
         $(
@@ -507,623 +275,139 @@ impl_nexus_program_instruction_box!(
     FundFeeSponsorProgram,
     WithdrawFeeSponsorProgram,
 );
-impl From<crate::isi::identifier::RegisterIdentifierPolicy> for InstructionBox {
-    fn from(i: crate::isi::identifier::RegisterIdentifierPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::identifier::ActivateIdentifierPolicy> for InstructionBox {
-    fn from(i: crate::isi::identifier::ActivateIdentifierPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::identifier::ClaimIdentifier> for InstructionBox {
-    fn from(i: crate::isi::identifier::ClaimIdentifier) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::identifier::RevokeIdentifier> for InstructionBox {
-    fn from(i: crate::isi::identifier::RevokeIdentifier) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::DeploySoracloudService> for InstructionBox {
-    fn from(i: crate::isi::soracloud::DeploySoracloudService) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::UpgradeSoracloudService> for InstructionBox {
-    fn from(i: crate::isi::soracloud::UpgradeSoracloudService) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::DeploySoracloudAppInfra> for InstructionBox {
-    fn from(i: crate::isi::soracloud::DeploySoracloudAppInfra) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::UpgradeSoracloudAppInfra> for InstructionBox {
-    fn from(i: crate::isi::soracloud::UpgradeSoracloudAppInfra) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RollbackSoracloudService> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RollbackSoracloudService) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::SetSoracloudServiceConfig> for InstructionBox {
-    fn from(i: crate::isi::soracloud::SetSoracloudServiceConfig) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::DeleteSoracloudServiceConfig> for InstructionBox {
-    fn from(i: crate::isi::soracloud::DeleteSoracloudServiceConfig) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::SetSoracloudServiceSecret> for InstructionBox {
-    fn from(i: crate::isi::soracloud::SetSoracloudServiceSecret) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::DeleteSoracloudServiceSecret> for InstructionBox {
-    fn from(i: crate::isi::soracloud::DeleteSoracloudServiceSecret) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::MutateSoracloudState> for InstructionBox {
-    fn from(i: crate::isi::soracloud::MutateSoracloudState) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RegisterSoracloudFhePolicy> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RegisterSoracloudFhePolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RotateSoracloudFhePolicy> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RotateSoracloudFhePolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RevokeSoracloudFhePolicy> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RevokeSoracloudFhePolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RunSoracloudFheJob> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RunSoracloudFheJob) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RecordSoracloudDecryptionRequest> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RecordSoracloudDecryptionRequest) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::JoinSoracloudHfSharedLease> for InstructionBox {
-    fn from(i: crate::isi::soracloud::JoinSoracloudHfSharedLease) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::LeaveSoracloudHfSharedLease> for InstructionBox {
-    fn from(i: crate::isi::soracloud::LeaveSoracloudHfSharedLease) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RenewSoracloudHfSharedLease> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RenewSoracloudHfSharedLease) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::AdvertiseSoracloudModelHost> for InstructionBox {
-    fn from(i: crate::isi::soracloud::AdvertiseSoracloudModelHost) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::HeartbeatSoracloudModelHost> for InstructionBox {
-    fn from(i: crate::isi::soracloud::HeartbeatSoracloudModelHost) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::WithdrawSoracloudModelHost> for InstructionBox {
-    fn from(i: crate::isi::soracloud::WithdrawSoracloudModelHost) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::ReconcileSoracloudModelHosts> for InstructionBox {
-    fn from(i: crate::isi::soracloud::ReconcileSoracloudModelHosts) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::AdvertiseSoracloudInrouHost> for InstructionBox {
-    fn from(i: crate::isi::soracloud::AdvertiseSoracloudInrouHost) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::WithdrawSoracloudInrouHost> for InstructionBox {
-    fn from(i: crate::isi::soracloud::WithdrawSoracloudInrouHost) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::ReconcileSoracloudInrouPlacements> for InstructionBox {
-    fn from(i: crate::isi::soracloud::ReconcileSoracloudInrouPlacements) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::ReportSoracloudModelHostViolation> for InstructionBox {
-    fn from(i: crate::isi::soracloud::ReportSoracloudModelHostViolation) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::DeploySoracloudAgentApartment> for InstructionBox {
-    fn from(i: crate::isi::soracloud::DeploySoracloudAgentApartment) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RenewSoracloudAgentLease> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RenewSoracloudAgentLease) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RestartSoracloudAgentApartment> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RestartSoracloudAgentApartment) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RevokeSoracloudAgentPolicy> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RevokeSoracloudAgentPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RequestSoracloudAgentWalletSpend> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RequestSoracloudAgentWalletSpend) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::ApproveSoracloudAgentWalletSpend> for InstructionBox {
-    fn from(i: crate::isi::soracloud::ApproveSoracloudAgentWalletSpend) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::EnqueueSoracloudAgentMessage> for InstructionBox {
-    fn from(i: crate::isi::soracloud::EnqueueSoracloudAgentMessage) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::AcknowledgeSoracloudAgentMessage> for InstructionBox {
-    fn from(i: crate::isi::soracloud::AcknowledgeSoracloudAgentMessage) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::AllowSoracloudAgentAutonomyArtifact> for InstructionBox {
-    fn from(i: crate::isi::soracloud::AllowSoracloudAgentAutonomyArtifact) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RunSoracloudAgentAutonomy> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RunSoracloudAgentAutonomy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RecordSoracloudAgentAutonomyExecution> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RecordSoracloudAgentAutonomyExecution) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::StartSoracloudTrainingJob> for InstructionBox {
-    fn from(i: crate::isi::soracloud::StartSoracloudTrainingJob) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::CheckpointSoracloudTrainingJob> for InstructionBox {
-    fn from(i: crate::isi::soracloud::CheckpointSoracloudTrainingJob) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RetrySoracloudTrainingJob> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RetrySoracloudTrainingJob) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RegisterSoracloudModelArtifact> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RegisterSoracloudModelArtifact) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RegisterSoracloudModelWeight> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RegisterSoracloudModelWeight) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::PromoteSoracloudModelWeight> for InstructionBox {
-    fn from(i: crate::isi::soracloud::PromoteSoracloudModelWeight) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RollbackSoracloudModelWeight> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RollbackSoracloudModelWeight) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RegisterSoracloudUploadedModelBundle> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RegisterSoracloudUploadedModelBundle) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::FinalizeSoracloudUploadedModelBundle> for InstructionBox {
-    fn from(i: crate::isi::soracloud::FinalizeSoracloudUploadedModelBundle) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::AdvanceSoracloudRollout> for InstructionBox {
-    fn from(i: crate::isi::soracloud::AdvanceSoracloudRollout) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::SetSoracloudRuntimeState> for InstructionBox {
-    fn from(i: crate::isi::soracloud::SetSoracloudRuntimeState) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::SetSoracloudInrouReplicaRuntimeState> for InstructionBox {
-    fn from(i: crate::isi::soracloud::SetSoracloudInrouReplicaRuntimeState) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState> for InstructionBox {
-    fn from(i: crate::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::ReportSoracloudServiceLeaseUsage> for InstructionBox {
-    fn from(i: crate::isi::soracloud::ReportSoracloudServiceLeaseUsage) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RecordSoracloudMailboxMessage> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RecordSoracloudMailboxMessage) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RecordSoracloudRuntimeReceipt> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RecordSoracloudRuntimeReceipt) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt>
-    for InstructionBox
-{
-    fn from(i: crate::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::identifier::RegisterIdentifierPolicy);
+impl_direct_instruction_box!(crate::isi::identifier::ActivateIdentifierPolicy);
+impl_direct_instruction_box!(crate::isi::identifier::ClaimIdentifier);
+impl_direct_instruction_box!(crate::isi::identifier::RevokeIdentifier);
+impl_direct_instruction_box!(crate::isi::soracloud::DeploySoracloudService);
+impl_direct_instruction_box!(crate::isi::soracloud::UpgradeSoracloudService);
+impl_direct_instruction_box!(crate::isi::soracloud::DeploySoracloudAppInfra);
+impl_direct_instruction_box!(crate::isi::soracloud::UpgradeSoracloudAppInfra);
+impl_direct_instruction_box!(crate::isi::soracloud::RollbackSoracloudService);
+impl_direct_instruction_box!(crate::isi::soracloud::SetSoracloudServiceConfig);
+impl_direct_instruction_box!(crate::isi::soracloud::DeleteSoracloudServiceConfig);
+impl_direct_instruction_box!(crate::isi::soracloud::SetSoracloudServiceSecret);
+impl_direct_instruction_box!(crate::isi::soracloud::DeleteSoracloudServiceSecret);
+impl_direct_instruction_box!(crate::isi::soracloud::MutateSoracloudState);
+impl_direct_instruction_box!(crate::isi::soracloud::RegisterSoracloudFhePolicy);
+impl_direct_instruction_box!(crate::isi::soracloud::RotateSoracloudFhePolicy);
+impl_direct_instruction_box!(crate::isi::soracloud::RevokeSoracloudFhePolicy);
+impl_direct_instruction_box!(crate::isi::soracloud::RunSoracloudFheJob);
+impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudDecryptionRequest);
+impl_direct_instruction_box!(crate::isi::soracloud::JoinSoracloudHfSharedLease);
+impl_direct_instruction_box!(crate::isi::soracloud::LeaveSoracloudHfSharedLease);
+impl_direct_instruction_box!(crate::isi::soracloud::RenewSoracloudHfSharedLease);
+impl_direct_instruction_box!(crate::isi::soracloud::AdvertiseSoracloudModelHost);
+impl_direct_instruction_box!(crate::isi::soracloud::HeartbeatSoracloudModelHost);
+impl_direct_instruction_box!(crate::isi::soracloud::WithdrawSoracloudModelHost);
+impl_direct_instruction_box!(crate::isi::soracloud::ReconcileSoracloudModelHosts);
+impl_direct_instruction_box!(crate::isi::soracloud::AdvertiseSoracloudInrouHost);
+impl_direct_instruction_box!(crate::isi::soracloud::WithdrawSoracloudInrouHost);
+impl_direct_instruction_box!(crate::isi::soracloud::ReconcileSoracloudInrouPlacements);
+impl_direct_instruction_box!(crate::isi::soracloud::ReportSoracloudModelHostViolation);
+impl_direct_instruction_box!(crate::isi::soracloud::DeploySoracloudAgentApartment);
+impl_direct_instruction_box!(crate::isi::soracloud::RenewSoracloudAgentLease);
+impl_direct_instruction_box!(crate::isi::soracloud::RestartSoracloudAgentApartment);
+impl_direct_instruction_box!(crate::isi::soracloud::RevokeSoracloudAgentPolicy);
+impl_direct_instruction_box!(crate::isi::soracloud::RequestSoracloudAgentWalletSpend);
+impl_direct_instruction_box!(crate::isi::soracloud::ApproveSoracloudAgentWalletSpend);
+impl_direct_instruction_box!(crate::isi::soracloud::EnqueueSoracloudAgentMessage);
+impl_direct_instruction_box!(crate::isi::soracloud::AcknowledgeSoracloudAgentMessage);
+impl_direct_instruction_box!(crate::isi::soracloud::AllowSoracloudAgentAutonomyArtifact);
+impl_direct_instruction_box!(crate::isi::soracloud::RunSoracloudAgentAutonomy);
+impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudAgentAutonomyExecution);
+impl_direct_instruction_box!(crate::isi::soracloud::StartSoracloudTrainingJob);
+impl_direct_instruction_box!(crate::isi::soracloud::CheckpointSoracloudTrainingJob);
+impl_direct_instruction_box!(crate::isi::soracloud::RetrySoracloudTrainingJob);
+impl_direct_instruction_box!(crate::isi::soracloud::RegisterSoracloudModelArtifact);
+impl_direct_instruction_box!(crate::isi::soracloud::RegisterSoracloudModelWeight);
+impl_direct_instruction_box!(crate::isi::soracloud::PromoteSoracloudModelWeight);
+impl_direct_instruction_box!(crate::isi::soracloud::RollbackSoracloudModelWeight);
+impl_direct_instruction_box!(crate::isi::soracloud::RegisterSoracloudUploadedModelBundle);
+impl_direct_instruction_box!(crate::isi::soracloud::FinalizeSoracloudUploadedModelBundle);
+impl_direct_instruction_box!(crate::isi::soracloud::AdvanceSoracloudRollout);
+impl_direct_instruction_box!(crate::isi::soracloud::SetSoracloudRuntimeState);
+impl_direct_instruction_box!(crate::isi::soracloud::SetSoracloudInrouReplicaRuntimeState);
+impl_direct_instruction_box!(crate::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState);
+impl_direct_instruction_box!(crate::isi::soracloud::ReportSoracloudServiceLeaseUsage);
+impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudMailboxMessage);
+impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudRuntimeReceipt);
+impl_direct_instruction_box!(
+    crate::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt
+);
 // Allow direct boxing of runtime upgrade instructions
-impl From<crate::isi::runtime_upgrade::ProposeRuntimeUpgrade> for InstructionBox {
-    fn from(i: crate::isi::runtime_upgrade::ProposeRuntimeUpgrade) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::runtime_upgrade::ActivateRuntimeUpgrade> for InstructionBox {
-    fn from(i: crate::isi::runtime_upgrade::ActivateRuntimeUpgrade) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::runtime_upgrade::CancelRuntimeUpgrade> for InstructionBox {
-    fn from(i: crate::isi::runtime_upgrade::CancelRuntimeUpgrade) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::runtime_upgrade::ProposeRuntimeUpgrade);
+impl_direct_instruction_box!(crate::isi::runtime_upgrade::ActivateRuntimeUpgrade);
+impl_direct_instruction_box!(crate::isi::runtime_upgrade::CancelRuntimeUpgrade);
 // Allow direct boxing of verifying-keys registry instructions
-impl From<crate::isi::verifying_keys::RegisterVerifyingKey> for InstructionBox {
-    fn from(i: crate::isi::verifying_keys::RegisterVerifyingKey) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::verifying_keys::UpdateVerifyingKey> for InstructionBox {
-    fn from(i: crate::isi::verifying_keys::UpdateVerifyingKey) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::verifying_keys::RegisterVerifyingKey);
+impl_direct_instruction_box!(crate::isi::verifying_keys::UpdateVerifyingKey);
 // Allow direct boxing of consensus key lifecycle instructions.
-impl From<crate::isi::consensus_keys::RegisterConsensusKey> for InstructionBox {
-    fn from(i: crate::isi::consensus_keys::RegisterConsensusKey) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::consensus_keys::RotateConsensusKey> for InstructionBox {
-    fn from(i: crate::isi::consensus_keys::RotateConsensusKey) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::consensus_keys::DisableConsensusKey> for InstructionBox {
-    fn from(i: crate::isi::consensus_keys::DisableConsensusKey) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::consensus_keys::RegisterConsensusKey);
+impl_direct_instruction_box!(crate::isi::consensus_keys::RotateConsensusKey);
+impl_direct_instruction_box!(crate::isi::consensus_keys::DisableConsensusKey);
 // Domain endorsement management instructions.
-impl From<crate::isi::endorsement::RegisterDomainCommittee> for InstructionBox {
-    fn from(i: crate::isi::endorsement::RegisterDomainCommittee) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::endorsement::SetDomainEndorsementPolicy> for InstructionBox {
-    fn from(i: crate::isi::endorsement::SetDomainEndorsementPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::endorsement::SubmitDomainEndorsement> for InstructionBox {
-    fn from(i: crate::isi::endorsement::SubmitDomainEndorsement) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::endorsement::RegisterDomainCommittee);
+impl_direct_instruction_box!(crate::isi::endorsement::SetDomainEndorsementPolicy);
+impl_direct_instruction_box!(crate::isi::endorsement::SubmitDomainEndorsement);
 // Allow direct boxing of social incentive instructions.
-impl From<crate::isi::social::ClaimTwitterFollowReward> for InstructionBox {
-    fn from(i: crate::isi::social::ClaimTwitterFollowReward) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::social::SendToTwitter> for InstructionBox {
-    fn from(i: crate::isi::social::SendToTwitter) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::social::CancelTwitterEscrow> for InstructionBox {
-    fn from(i: crate::isi::social::CancelTwitterEscrow) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::social::ClaimTwitterFollowReward);
+impl_direct_instruction_box!(crate::isi::social::SendToTwitter);
+impl_direct_instruction_box!(crate::isi::social::CancelTwitterEscrow);
 // Allow direct boxing of native asset escrow instructions.
-impl From<crate::isi::escrow::OpenAssetEscrow> for InstructionBox {
-    fn from(i: crate::isi::escrow::OpenAssetEscrow) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::AcceptAssetEscrow> for InstructionBox {
-    fn from(i: crate::isi::escrow::AcceptAssetEscrow) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::MarkEscrowPaymentSent> for InstructionBox {
-    fn from(i: crate::isi::escrow::MarkEscrowPaymentSent) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::ReleaseAssetEscrow> for InstructionBox {
-    fn from(i: crate::isi::escrow::ReleaseAssetEscrow) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::CancelAssetEscrow> for InstructionBox {
-    fn from(i: crate::isi::escrow::CancelAssetEscrow) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::OpenEscrowDispute> for InstructionBox {
-    fn from(i: crate::isi::escrow::OpenEscrowDispute) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::ResolveEscrowDispute> for InstructionBox {
-    fn from(i: crate::isi::escrow::ResolveEscrowDispute) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::OpenAssetLock> for InstructionBox {
-    fn from(i: crate::isi::escrow::OpenAssetLock) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::OpenConditionalEscrow> for InstructionBox {
-    fn from(i: crate::isi::escrow::OpenConditionalEscrow) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::AttestEscrowCondition> for InstructionBox {
-    fn from(i: crate::isi::escrow::AttestEscrowCondition) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::ExpireConditionalEscrow> for InstructionBox {
-    fn from(i: crate::isi::escrow::ExpireConditionalEscrow) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::DrawdownAssetLock> for InstructionBox {
-    fn from(i: crate::isi::escrow::DrawdownAssetLock) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::CancelAssetLock> for InstructionBox {
-    fn from(i: crate::isi::escrow::CancelAssetLock) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::ExpireAssetLock> for InstructionBox {
-    fn from(i: crate::isi::escrow::ExpireAssetLock) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::escrow::OpenAssetEscrow);
+impl_direct_instruction_box!(crate::isi::escrow::AcceptAssetEscrow);
+impl_direct_instruction_box!(crate::isi::escrow::MarkEscrowPaymentSent);
+impl_direct_instruction_box!(crate::isi::escrow::ReleaseAssetEscrow);
+impl_direct_instruction_box!(crate::isi::escrow::CancelAssetEscrow);
+impl_direct_instruction_box!(crate::isi::escrow::OpenEscrowDispute);
+impl_direct_instruction_box!(crate::isi::escrow::ResolveEscrowDispute);
+impl_direct_instruction_box!(crate::isi::escrow::OpenAssetLock);
+impl_direct_instruction_box!(crate::isi::escrow::OpenConditionalEscrow);
+impl_direct_instruction_box!(crate::isi::escrow::AttestEscrowCondition);
+impl_direct_instruction_box!(crate::isi::escrow::ExpireConditionalEscrow);
+impl_direct_instruction_box!(crate::isi::escrow::DrawdownAssetLock);
+impl_direct_instruction_box!(crate::isi::escrow::CancelAssetLock);
+impl_direct_instruction_box!(crate::isi::escrow::ExpireAssetLock);
 // Allow direct boxing of SoraNet VPN lease escrow instructions.
-impl From<crate::isi::vpn::OpenVpnLeaseEscrow> for InstructionBox {
-    fn from(i: crate::isi::vpn::OpenVpnLeaseEscrow) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::vpn::SettleVpnLease> for InstructionBox {
-    fn from(i: crate::isi::vpn::SettleVpnLease) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::vpn::RefundExpiredVpnLease> for InstructionBox {
-    fn from(i: crate::isi::vpn::RefundExpiredVpnLease) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::vpn::OpenVpnLeaseEscrow);
+impl_direct_instruction_box!(crate::isi::vpn::SettleVpnLease);
+impl_direct_instruction_box!(crate::isi::vpn::RefundExpiredVpnLease);
 // Allow direct boxing of SoraFS capacity marketplace instructions.
-impl From<crate::isi::sorafs::RegisterCapacityDeclaration> for InstructionBox {
-    fn from(i: crate::isi::sorafs::RegisterCapacityDeclaration) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::RecordCapacityTelemetry> for InstructionBox {
-    fn from(i: crate::isi::sorafs::RecordCapacityTelemetry) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::RegisterCapacityDispute> for InstructionBox {
-    fn from(i: crate::isi::sorafs::RegisterCapacityDispute) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::ResolveSorafsCapacityDispute> for InstructionBox {
-    fn from(i: crate::isi::sorafs::ResolveSorafsCapacityDispute) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::sorafs::RegisterCapacityDeclaration);
+impl_direct_instruction_box!(crate::isi::sorafs::RecordCapacityTelemetry);
+impl_direct_instruction_box!(crate::isi::sorafs::RegisterCapacityDispute);
+impl_direct_instruction_box!(crate::isi::sorafs::ResolveSorafsCapacityDispute);
 // Allow direct boxing of SoraFS pin registry instructions
-impl From<crate::isi::sorafs::RegisterPinManifest> for InstructionBox {
-    fn from(i: crate::isi::sorafs::RegisterPinManifest) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::ApprovePinManifest> for InstructionBox {
-    fn from(i: crate::isi::sorafs::ApprovePinManifest) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::RetirePinManifest> for InstructionBox {
-    fn from(i: crate::isi::sorafs::RetirePinManifest) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::sorafs::RegisterPinManifest);
+impl_direct_instruction_box!(crate::isi::sorafs::ApprovePinManifest);
+impl_direct_instruction_box!(crate::isi::sorafs::RetirePinManifest);
 // Allow direct boxing of content lane instructions.
-impl From<crate::isi::content::PublishContentBundle> for InstructionBox {
-    fn from(i: crate::isi::content::PublishContentBundle) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::content::RetireContentBundle> for InstructionBox {
-    fn from(i: crate::isi::content::RetireContentBundle) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::prelude::BindManifestAlias> for InstructionBox {
-    fn from(i: crate::prelude::BindManifestAlias) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::prelude::IssueReplicationOrder> for InstructionBox {
-    fn from(i: crate::prelude::IssueReplicationOrder) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::prelude::CompleteReplicationOrder> for InstructionBox {
-    fn from(i: crate::prelude::CompleteReplicationOrder) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::prelude::ReviseReplicationOrderAssignments> for InstructionBox {
-    fn from(i: crate::prelude::ReviseReplicationOrderAssignments) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::prelude::ExpireReplicationOrder> for InstructionBox {
-    fn from(i: crate::prelude::ExpireReplicationOrder) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::prelude::SetProviderIngestCompletionAuthority> for InstructionBox {
-    fn from(i: crate::prelude::SetProviderIngestCompletionAuthority) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::prelude::RevokeProviderIngestCompletionAuthority> for InstructionBox {
-    fn from(i: crate::prelude::RevokeProviderIngestCompletionAuthority) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::prelude::SetPricingSchedule> for InstructionBox {
-    fn from(i: crate::prelude::SetPricingSchedule) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::prelude::UpsertProviderCredit> for InstructionBox {
-    fn from(i: crate::prelude::UpsertProviderCredit) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::SetSorafsOrderbookPolicy> for InstructionBox {
-    fn from(i: crate::isi::sorafs::SetSorafsOrderbookPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::SubmitSorafsOrderbookOrder> for InstructionBox {
-    fn from(i: crate::isi::sorafs::SubmitSorafsOrderbookOrder) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::CancelSorafsOrderbookOrder> for InstructionBox {
-    fn from(i: crate::isi::sorafs::CancelSorafsOrderbookOrder) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::MatchSorafsOrderbook> for InstructionBox {
-    fn from(i: crate::isi::sorafs::MatchSorafsOrderbook) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::MaintainSorafsOrderbook> for InstructionBox {
-    fn from(i: crate::isi::sorafs::MaintainSorafsOrderbook) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::RecordSorafsOrderbookSettlementReceipt> for InstructionBox {
-    fn from(i: crate::isi::sorafs::RecordSorafsOrderbookSettlementReceipt) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::SubmitSorafsRepairTask> for InstructionBox {
-    fn from(i: crate::isi::sorafs::SubmitSorafsRepairTask) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::ApplySorafsRepairTaskAction> for InstructionBox {
-    fn from(i: crate::isi::sorafs::ApplySorafsRepairTaskAction) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::SubmitSorafsRepairAppeal> for InstructionBox {
-    fn from(i: crate::isi::sorafs::SubmitSorafsRepairAppeal) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::SetSorafsProofOutcomeSignerPolicy> for InstructionBox {
-    fn from(i: crate::isi::sorafs::SetSorafsProofOutcomeSignerPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::SubmitSorafsProofOutcome> for InstructionBox {
-    fn from(i: crate::isi::sorafs::SubmitSorafsProofOutcome) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::SetSorafsReputationJournalAuthorityPolicy> for InstructionBox {
-    fn from(i: crate::isi::sorafs::SetSorafsReputationJournalAuthorityPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::AppendSorafsPorReputationJournalEntry> for InstructionBox {
-    fn from(i: crate::isi::sorafs::AppendSorafsPorReputationJournalEntry) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry> for InstructionBox {
-    fn from(i: crate::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::content::PublishContentBundle);
+impl_direct_instruction_box!(crate::isi::content::RetireContentBundle);
+impl_direct_instruction_box!(crate::prelude::BindManifestAlias);
+impl_direct_instruction_box!(crate::prelude::IssueReplicationOrder);
+impl_direct_instruction_box!(crate::prelude::CompleteReplicationOrder);
+impl_direct_instruction_box!(crate::prelude::ReviseReplicationOrderAssignments);
+impl_direct_instruction_box!(crate::prelude::ExpireReplicationOrder);
+impl_direct_instruction_box!(crate::prelude::SetProviderIngestCompletionAuthority);
+impl_direct_instruction_box!(crate::prelude::RevokeProviderIngestCompletionAuthority);
+impl_direct_instruction_box!(crate::prelude::SetPricingSchedule);
+impl_direct_instruction_box!(crate::prelude::UpsertProviderCredit);
+impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsOrderbookPolicy);
+impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsOrderbookOrder);
+impl_direct_instruction_box!(crate::isi::sorafs::CancelSorafsOrderbookOrder);
+impl_direct_instruction_box!(crate::isi::sorafs::MatchSorafsOrderbook);
+impl_direct_instruction_box!(crate::isi::sorafs::MaintainSorafsOrderbook);
+impl_direct_instruction_box!(crate::isi::sorafs::RecordSorafsOrderbookSettlementReceipt);
+impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsRepairTask);
+impl_direct_instruction_box!(crate::isi::sorafs::ApplySorafsRepairTaskAction);
+impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsRepairAppeal);
+impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsProofOutcomeSignerPolicy);
+impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsProofOutcome);
+impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsReputationJournalAuthorityPolicy);
+impl_direct_instruction_box!(crate::isi::sorafs::AppendSorafsPorReputationJournalEntry);
+impl_direct_instruction_box!(crate::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry);
 macro_rules! impl_sorafs_reserve_instruction_box {
     ($($instruction:ty),+ $(,)?) => {
         $(
@@ -1147,166 +431,38 @@ impl_sorafs_reserve_instruction_box!(
     crate::isi::sorafs::SubmitSorafsReserveAppeal,
     crate::isi::sorafs::DecideSorafsReserveAppeal,
 );
-impl From<crate::isi::sorafs::SetSorafsPopIssuerPolicy> for InstructionBox {
-    fn from(i: crate::isi::sorafs::SetSorafsPopIssuerPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::CommitSorafsPopCredentialBatch> for InstructionBox {
-    fn from(i: crate::isi::sorafs::CommitSorafsPopCredentialBatch) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::PublishSorafsPopRevocationList> for InstructionBox {
-    fn from(i: crate::isi::sorafs::PublishSorafsPopRevocationList) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::SetSorafsModerationPolicy> for InstructionBox {
-    fn from(i: crate::isi::sorafs::SetSorafsModerationPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::SubmitSorafsModerationAppeal> for InstructionBox {
-    fn from(i: crate::isi::sorafs::SubmitSorafsModerationAppeal) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::RegisterSorafsModerationJurorEligibility> for InstructionBox {
-    fn from(i: crate::isi::sorafs::RegisterSorafsModerationJurorEligibility) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::FinalizeSorafsModerationSortition> for InstructionBox {
-    fn from(i: crate::isi::sorafs::FinalizeSorafsModerationSortition) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::AcceptSorafsModerationJurorAssignment> for InstructionBox {
-    fn from(i: crate::isi::sorafs::AcceptSorafsModerationJurorAssignment) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::ActivateSorafsModerationCase> for InstructionBox {
-    fn from(i: crate::isi::sorafs::ActivateSorafsModerationCase) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::SubmitSorafsModerationCommit> for InstructionBox {
-    fn from(i: crate::isi::sorafs::SubmitSorafsModerationCommit) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::RaiseSorafsModerationChallenge> for InstructionBox {
-    fn from(i: crate::isi::sorafs::RaiseSorafsModerationChallenge) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::ResolveSorafsModerationChallenge> for InstructionBox {
-    fn from(i: crate::isi::sorafs::ResolveSorafsModerationChallenge) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::SubmitSorafsModerationReveal> for InstructionBox {
-    fn from(i: crate::isi::sorafs::SubmitSorafsModerationReveal) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sorafs::FinalizeSorafsModerationCase> for InstructionBox {
-    fn from(i: crate::isi::sorafs::FinalizeSorafsModerationCase) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::space_directory::PublishSpaceDirectoryManifest> for InstructionBox {
-    fn from(i: crate::isi::space_directory::PublishSpaceDirectoryManifest) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::space_directory::RevokeSpaceDirectoryManifest> for InstructionBox {
-    fn from(i: crate::isi::space_directory::RevokeSpaceDirectoryManifest) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::space_directory::ExpireSpaceDirectoryManifest> for InstructionBox {
-    fn from(i: crate::isi::space_directory::ExpireSpaceDirectoryManifest) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::alias_setup::EnsureAlias> for InstructionBox {
-    fn from(i: crate::isi::alias_setup::EnsureAlias) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::alias_setup::RenewAliasLease> for InstructionBox {
-    fn from(i: crate::isi::alias_setup::RenewAliasLease) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::alias_setup::ConfigureAliasAutoRenew> for InstructionBox {
-    fn from(i: crate::isi::alias_setup::ConfigureAliasAutoRenew) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::alias_setup::RebindAccountAlias> for InstructionBox {
-    fn from(i: crate::isi::alias_setup::RebindAccountAlias) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias> for InstructionBox {
-    fn from(i: crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::account_alias_lease::AcquireAccountAliasLease> for InstructionBox {
-    fn from(i: crate::isi::account_alias_lease::AcquireAccountAliasLease) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::domain_link::SetAccountAliasBinding> for InstructionBox {
-    fn from(i: crate::isi::domain_link::SetAccountAliasBinding) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::account_recovery::ReplaceAccountController> for InstructionBox {
-    fn from(i: crate::isi::account_recovery::ReplaceAccountController) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::account_recovery::SetAccountRecoveryPolicy> for InstructionBox {
-    fn from(i: crate::isi::account_recovery::SetAccountRecoveryPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::account_recovery::ClearAccountRecoveryPolicy> for InstructionBox {
-    fn from(i: crate::isi::account_recovery::ClearAccountRecoveryPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::account_recovery::ProposeAccountRecovery> for InstructionBox {
-    fn from(i: crate::isi::account_recovery::ProposeAccountRecovery) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::account_recovery::ApproveAccountRecovery> for InstructionBox {
-    fn from(i: crate::isi::account_recovery::ApproveAccountRecovery) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::account_recovery::CancelAccountRecovery> for InstructionBox {
-    fn from(i: crate::isi::account_recovery::CancelAccountRecovery) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::account_recovery::FinalizeAccountRecovery> for InstructionBox {
-    fn from(i: crate::isi::account_recovery::FinalizeAccountRecovery) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::contract_alias::SetContractAlias> for InstructionBox {
-    fn from(i: crate::isi::contract_alias::SetContractAlias) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsPopIssuerPolicy);
+impl_direct_instruction_box!(crate::isi::sorafs::CommitSorafsPopCredentialBatch);
+impl_direct_instruction_box!(crate::isi::sorafs::PublishSorafsPopRevocationList);
+impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsModerationPolicy);
+impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsModerationAppeal);
+impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsModerationJurorEligibility);
+impl_direct_instruction_box!(crate::isi::sorafs::FinalizeSorafsModerationSortition);
+impl_direct_instruction_box!(crate::isi::sorafs::AcceptSorafsModerationJurorAssignment);
+impl_direct_instruction_box!(crate::isi::sorafs::ActivateSorafsModerationCase);
+impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsModerationCommit);
+impl_direct_instruction_box!(crate::isi::sorafs::RaiseSorafsModerationChallenge);
+impl_direct_instruction_box!(crate::isi::sorafs::ResolveSorafsModerationChallenge);
+impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsModerationReveal);
+impl_direct_instruction_box!(crate::isi::sorafs::FinalizeSorafsModerationCase);
+impl_direct_instruction_box!(crate::isi::space_directory::PublishSpaceDirectoryManifest);
+impl_direct_instruction_box!(crate::isi::space_directory::RevokeSpaceDirectoryManifest);
+impl_direct_instruction_box!(crate::isi::space_directory::ExpireSpaceDirectoryManifest);
+impl_direct_instruction_box!(crate::isi::alias_setup::EnsureAlias);
+impl_direct_instruction_box!(crate::isi::alias_setup::RenewAliasLease);
+impl_direct_instruction_box!(crate::isi::alias_setup::ConfigureAliasAutoRenew);
+impl_direct_instruction_box!(crate::isi::alias_setup::RebindAccountAlias);
+impl_direct_instruction_box!(crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias);
+impl_direct_instruction_box!(crate::isi::account_alias_lease::AcquireAccountAliasLease);
+impl_direct_instruction_box!(crate::isi::domain_link::SetAccountAliasBinding);
+impl_direct_instruction_box!(crate::isi::account_recovery::ReplaceAccountController);
+impl_direct_instruction_box!(crate::isi::account_recovery::SetAccountRecoveryPolicy);
+impl_direct_instruction_box!(crate::isi::account_recovery::ClearAccountRecoveryPolicy);
+impl_direct_instruction_box!(crate::isi::account_recovery::ProposeAccountRecovery);
+impl_direct_instruction_box!(crate::isi::account_recovery::ApproveAccountRecovery);
+impl_direct_instruction_box!(crate::isi::account_recovery::CancelAccountRecovery);
+impl_direct_instruction_box!(crate::isi::account_recovery::FinalizeAccountRecovery);
+impl_direct_instruction_box!(crate::isi::contract_alias::SetContractAlias);
 // Allow direct boxing of first-release Musubi registry instructions.
 macro_rules! impl_musubi_instruction_box {
     ($($instruction:ident),+ $(,)?) => {
@@ -1340,307 +496,83 @@ impl_musubi_instruction_box!(
     SetMusubiRegistryPolicyV1,
     AssertMusubiReleaseDigestV1,
 );
-impl From<crate::isi::offline::TopUpKagemushaRecursiveV4> for InstructionBox {
-    fn from(i: crate::isi::offline::TopUpKagemushaRecursiveV4) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::offline::RedeemKagemushaRecursiveV4> for InstructionBox {
-    fn from(i: crate::isi::offline::RedeemKagemushaRecursiveV4) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::offline::ActivateKagemushaRecursiveReleaseV4> for InstructionBox {
-    fn from(i: crate::isi::offline::ActivateKagemushaRecursiveReleaseV4) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::offline::RegisterOfflineDeviceAttestation> for InstructionBox {
-    fn from(i: crate::isi::offline::RegisterOfflineDeviceAttestation) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::offline::SetOfflineDeviceAttestationPolicy> for InstructionBox {
-    fn from(i: crate::isi::offline::SetOfflineDeviceAttestationPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::offline::TopUpKagemushaRecursiveV4);
+impl_direct_instruction_box!(crate::isi::offline::RedeemKagemushaRecursiveV4);
+impl_direct_instruction_box!(crate::isi::offline::ActivateKagemushaRecursiveReleaseV4);
+impl_direct_instruction_box!(crate::isi::offline::RegisterOfflineDeviceAttestation);
+impl_direct_instruction_box!(crate::isi::offline::SetOfflineDeviceAttestationPolicy);
 // Allow direct boxing of oracle feed instructions.
-impl From<crate::isi::oracle::RegisterOracleFeed> for InstructionBox {
-    fn from(i: crate::isi::oracle::RegisterOracleFeed) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::oracle::SubmitOracleObservation> for InstructionBox {
-    fn from(i: crate::isi::oracle::SubmitOracleObservation) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::oracle::AggregateOracleFeed> for InstructionBox {
-    fn from(i: crate::isi::oracle::AggregateOracleFeed) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::oracle::OpenOracleDispute> for InstructionBox {
-    fn from(i: crate::isi::oracle::OpenOracleDispute) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::oracle::ResolveOracleDispute> for InstructionBox {
-    fn from(i: crate::isi::oracle::ResolveOracleDispute) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::oracle::ProposeOracleChange> for InstructionBox {
-    fn from(i: crate::isi::oracle::ProposeOracleChange) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::oracle::VoteOracleChangeStage> for InstructionBox {
-    fn from(i: crate::isi::oracle::VoteOracleChangeStage) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::oracle::RollbackOracleChange> for InstructionBox {
-    fn from(i: crate::isi::oracle::RollbackOracleChange) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::oracle::SubmitDefiOracleAttestation> for InstructionBox {
-    fn from(i: crate::isi::oracle::SubmitDefiOracleAttestation) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::oracle::RecordTwitterBinding> for InstructionBox {
-    fn from(i: crate::isi::oracle::RecordTwitterBinding) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::oracle::RevokeTwitterBinding> for InstructionBox {
-    fn from(i: crate::isi::oracle::RevokeTwitterBinding) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::oracle::RegisterOracleFeed);
+impl_direct_instruction_box!(crate::isi::oracle::SubmitOracleObservation);
+impl_direct_instruction_box!(crate::isi::oracle::AggregateOracleFeed);
+impl_direct_instruction_box!(crate::isi::oracle::OpenOracleDispute);
+impl_direct_instruction_box!(crate::isi::oracle::ResolveOracleDispute);
+impl_direct_instruction_box!(crate::isi::oracle::ProposeOracleChange);
+impl_direct_instruction_box!(crate::isi::oracle::VoteOracleChangeStage);
+impl_direct_instruction_box!(crate::isi::oracle::RollbackOracleChange);
+impl_direct_instruction_box!(crate::isi::oracle::SubmitDefiOracleAttestation);
+impl_direct_instruction_box!(crate::isi::oracle::RecordTwitterBinding);
+impl_direct_instruction_box!(crate::isi::oracle::RevokeTwitterBinding);
 // Allow direct boxing of SoraDNS resolver-directory instructions.
-impl From<crate::isi::soradns::SubmitDirectoryDraft> for InstructionBox {
-    fn from(i: crate::isi::soradns::SubmitDirectoryDraft) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soradns::PublishDirectory> for InstructionBox {
-    fn from(i: crate::isi::soradns::PublishDirectory) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soradns::RevokeResolver> for InstructionBox {
-    fn from(i: crate::isi::soradns::RevokeResolver) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soradns::UnrevokeResolver> for InstructionBox {
-    fn from(i: crate::isi::soradns::UnrevokeResolver) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soradns::AddReleaseSigner> for InstructionBox {
-    fn from(i: crate::isi::soradns::AddReleaseSigner) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soradns::RemoveReleaseSigner> for InstructionBox {
-    fn from(i: crate::isi::soradns::RemoveReleaseSigner) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::soradns::SetDirectoryRotationPolicy> for InstructionBox {
-    fn from(i: crate::isi::soradns::SetDirectoryRotationPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::soradns::SubmitDirectoryDraft);
+impl_direct_instruction_box!(crate::isi::soradns::PublishDirectory);
+impl_direct_instruction_box!(crate::isi::soradns::RevokeResolver);
+impl_direct_instruction_box!(crate::isi::soradns::UnrevokeResolver);
+impl_direct_instruction_box!(crate::isi::soradns::AddReleaseSigner);
+impl_direct_instruction_box!(crate::isi::soradns::RemoveReleaseSigner);
+impl_direct_instruction_box!(crate::isi::soradns::SetDirectoryRotationPolicy);
 // Allow direct boxing of public lane staking instructions.
-impl From<crate::isi::staking::RegisterPublicLaneValidator> for InstructionBox {
-    fn from(i: crate::isi::staking::RegisterPublicLaneValidator) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::staking::BondPublicLaneStake> for InstructionBox {
-    fn from(i: crate::isi::staking::BondPublicLaneStake) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::staking::SchedulePublicLaneUnbond> for InstructionBox {
-    fn from(i: crate::isi::staking::SchedulePublicLaneUnbond) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::staking::FinalizePublicLaneUnbond> for InstructionBox {
-    fn from(i: crate::isi::staking::FinalizePublicLaneUnbond) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::staking::SlashPublicLaneValidator> for InstructionBox {
-    fn from(i: crate::isi::staking::SlashPublicLaneValidator) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::staking::CancelConsensusEvidencePenalty> for InstructionBox {
-    fn from(i: crate::isi::staking::CancelConsensusEvidencePenalty) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::staking::RecordPublicLaneRewards> for InstructionBox {
-    fn from(i: crate::isi::staking::RecordPublicLaneRewards) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::staking::ClaimPublicLaneRewards> for InstructionBox {
-    fn from(i: crate::isi::staking::ClaimPublicLaneRewards) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::staking::RegisterPublicLaneValidator);
+impl_direct_instruction_box!(crate::isi::staking::BondPublicLaneStake);
+impl_direct_instruction_box!(crate::isi::staking::SchedulePublicLaneUnbond);
+impl_direct_instruction_box!(crate::isi::staking::FinalizePublicLaneUnbond);
+impl_direct_instruction_box!(crate::isi::staking::SlashPublicLaneValidator);
+impl_direct_instruction_box!(crate::isi::staking::CancelConsensusEvidencePenalty);
+impl_direct_instruction_box!(crate::isi::staking::RecordPublicLaneRewards);
+impl_direct_instruction_box!(crate::isi::staking::ClaimPublicLaneRewards);
 // Allow direct boxing of confidential parameter registry instructions
-impl From<crate::isi::confidential::PublishPedersenParams> for InstructionBox {
-    fn from(i: crate::isi::confidential::PublishPedersenParams) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::confidential::SetPedersenParamsLifecycle> for InstructionBox {
-    fn from(i: crate::isi::confidential::SetPedersenParamsLifecycle) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::confidential::PublishPoseidonParams> for InstructionBox {
-    fn from(i: crate::isi::confidential::PublishPoseidonParams) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::confidential::SetPoseidonParamsLifecycle> for InstructionBox {
-    fn from(i: crate::isi::confidential::SetPoseidonParamsLifecycle) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::confidential::PublishPedersenParams);
+impl_direct_instruction_box!(crate::isi::confidential::SetPedersenParamsLifecycle);
+impl_direct_instruction_box!(crate::isi::confidential::PublishPoseidonParams);
+impl_direct_instruction_box!(crate::isi::confidential::SetPoseidonParamsLifecycle);
 // Allow direct boxing of governance instructions
 #[cfg(feature = "governance")]
-impl From<crate::isi::governance::ProposeDeployContract> for InstructionBox {
-    fn from(i: crate::isi::governance::ProposeDeployContract) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::governance::ProposeDeployContract);
 #[cfg(feature = "governance")]
-impl From<crate::isi::governance::ProposeRuntimeUpgradeProposal> for InstructionBox {
-    fn from(i: crate::isi::governance::ProposeRuntimeUpgradeProposal) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::governance::ProposeRuntimeUpgradeProposal);
 #[cfg(feature = "governance")]
-impl From<crate::isi::governance::ProposeSccpRouteGovernance> for InstructionBox {
-    fn from(i: crate::isi::governance::ProposeSccpRouteGovernance) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::governance::ProposeSccpRouteGovernance);
 #[cfg(feature = "governance")]
-impl From<crate::isi::governance::ProposeSorafsProviderGovernance> for InstructionBox {
-    fn from(i: crate::isi::governance::ProposeSorafsProviderGovernance) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::governance::ProposeSorafsProviderGovernance);
 #[cfg(feature = "governance")]
-impl From<crate::isi::governance::ProposeValidationFeePolicy> for InstructionBox {
-    fn from(i: crate::isi::governance::ProposeValidationFeePolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::governance::ProposeValidationFeePolicy);
 #[cfg(feature = "governance")]
-impl From<crate::isi::governance::ProposeValidationFeePayoutLifecycle> for InstructionBox {
-    fn from(i: crate::isi::governance::ProposeValidationFeePayoutLifecycle) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::governance::ProposeValidationFeePayoutLifecycle);
 #[cfg(feature = "governance")]
-impl From<crate::isi::governance::CastZkBallot> for InstructionBox {
-    fn from(i: crate::isi::governance::CastZkBallot) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::governance::CastZkBallot);
 #[cfg(feature = "governance")]
-impl From<crate::isi::governance::CastPlainBallot> for InstructionBox {
-    fn from(i: crate::isi::governance::CastPlainBallot) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::governance::CastPlainBallot);
 #[cfg(feature = "governance")]
-impl From<crate::isi::governance::SlashGovernanceLock> for InstructionBox {
-    fn from(i: crate::isi::governance::SlashGovernanceLock) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::governance::SlashGovernanceLock);
 #[cfg(feature = "governance")]
-impl From<crate::isi::governance::RestituteGovernanceLock> for InstructionBox {
-    fn from(i: crate::isi::governance::RestituteGovernanceLock) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::governance::RestituteGovernanceLock);
 // Allow direct boxing of asset metadata helpers
-impl From<crate::isi::transparent::SetAssetKeyValue> for InstructionBox {
-    fn from(i: crate::isi::transparent::SetAssetKeyValue) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::transparent::RemoveAssetKeyValue> for InstructionBox {
-    fn from(i: crate::isi::transparent::RemoveAssetKeyValue) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::transparent::AddSignatory> for InstructionBox {
-    fn from(i: crate::isi::transparent::AddSignatory) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::transparent::RemoveSignatory> for InstructionBox {
-    fn from(i: crate::isi::transparent::RemoveSignatory) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::transparent::SetAccountQuorum> for InstructionBox {
-    fn from(i: crate::isi::transparent::SetAccountQuorum) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::transparent::SetAssetKeyValue);
+impl_direct_instruction_box!(crate::isi::transparent::RemoveAssetKeyValue);
+impl_direct_instruction_box!(crate::isi::transparent::AddSignatory);
+impl_direct_instruction_box!(crate::isi::transparent::RemoveSignatory);
+impl_direct_instruction_box!(crate::isi::transparent::SetAccountQuorum);
 #[cfg(feature = "governance")]
-impl From<crate::isi::governance::EnactReferendum> for InstructionBox {
-    fn from(i: crate::isi::governance::EnactReferendum) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::governance::EnactReferendum);
 #[cfg(feature = "governance")]
-impl From<crate::isi::governance::EnactSccpRouteGovernance> for InstructionBox {
-    fn from(i: crate::isi::governance::EnactSccpRouteGovernance) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::governance::EnactSccpRouteGovernance);
 #[cfg(feature = "governance")]
-impl From<crate::isi::governance::FinalizeReferendum> for InstructionBox {
-    fn from(i: crate::isi::governance::FinalizeReferendum) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::governance::FinalizeReferendum);
 #[cfg(feature = "governance")]
-impl From<crate::isi::governance::ApproveGovernanceProposal> for InstructionBox {
-    fn from(i: crate::isi::governance::ApproveGovernanceProposal) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::governance::ApproveGovernanceProposal);
 #[cfg(feature = "governance")]
-impl From<crate::isi::governance::CastParliamentBallot> for InstructionBox {
-    fn from(i: crate::isi::governance::CastParliamentBallot) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::ministry::SubmitAgendaProposal> for InstructionBox {
-    fn from(i: crate::isi::ministry::SubmitAgendaProposal) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_direct_instruction_box!(crate::isi::governance::CastParliamentBallot);
+impl_direct_instruction_box!(crate::isi::ministry::SubmitAgendaProposal);
 /// Object-safe cloning support for [`Instruction`] trait objects.
 pub trait InstructionDynClone {
     /// Clone the underlying instruction into a boxed trait object.

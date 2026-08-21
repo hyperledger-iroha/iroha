@@ -19,6 +19,7 @@ use norito::{
 /// Pin intent emitted by the DA ingest pipeline to seed the `SoraFS` registry.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct DaPinIntent {
     /// Lane associated with the blob.
     pub lane_id: LaneId,
@@ -31,11 +32,11 @@ pub struct DaPinIntent {
     /// Canonical manifest digest (BLAKE3 over encoded `DaManifestV1`).
     pub manifest_hash: ManifestDigest,
     /// Optional alias to register in the `SoraFS` registry.
-    #[norito(default)]
+    #[norito(required)]
     pub alias: Option<String>,
     /// Consensus-verifiable account authorization and quota charge identity.
     ///
-    /// This is a required V1 wire field. Legacy owner-only pin intents do not
+    /// This is a required V1 wire field. Pre-release owner-only pin intents do not
     /// decode and there is no unsigned sidecar representation.
     pub authorization: DaIngestAuthorizationV1,
 }
@@ -64,6 +65,7 @@ impl DaPinIntent {
 /// Bundle of pin intents embedded into a block payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct DaPinIntentBundle {
     /// Bundle layout version.
     pub version: u16,
@@ -260,6 +262,51 @@ mod tests {
         });
         authorization
     }
+
+    #[test]
+    #[cfg(feature = "json")]
+    fn pin_intent_json_requires_explicit_alias_and_rejects_unknown_fields() {
+        let intent = DaPinIntent::new(
+            LaneId::new(1),
+            1,
+            1,
+            StorageTicketId::new([1; 32]),
+            ManifestDigest::new([2; 32]),
+            test_authorization(LaneId::new(1), 1, 1),
+        );
+        let mut missing = norito::json::to_value(&intent).expect("serialize DA pin intent");
+        missing
+            .as_object_mut()
+            .expect("DA pin intent JSON object")
+            .remove("alias");
+        assert!(
+            norito::json::from_value::<DaPinIntent>(missing).is_err(),
+            "the first-release pin intent must require its nullable alias slot"
+        );
+
+        let mut unknown = norito::json::to_value(&intent).expect("serialize DA pin intent");
+        unknown
+            .as_object_mut()
+            .expect("DA pin intent JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<DaPinIntent>(unknown).is_err(),
+            "the first-release pin intent must reject unknown fields"
+        );
+
+        let bundle = DaPinIntentBundle::new(vec![intent]);
+        let mut unknown_bundle =
+            norito::json::to_value(&bundle).expect("serialize DA pin-intent bundle");
+        unknown_bundle
+            .as_object_mut()
+            .expect("DA pin-intent bundle JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<DaPinIntentBundle>(unknown_bundle).is_err(),
+            "the first-release pin-intent bundle must reject unknown fields"
+        );
+    }
+
     #[test]
     fn bundle_sorts_intents_deterministically() {
         let mut first = DaPinIntent::new(

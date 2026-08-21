@@ -49,6 +49,170 @@ fn decision_retirement_releases_queued_leader_wire_runtime_owner() {
     assert!(matches!(runtime.step(now), Ok(RuntimeStep::Idle)));
     assert!(!runtime.fail_closed);
 }
+
+#[test]
+fn future_view_proposal_remains_owned_until_matching_tc_enters_view() {
+    let directory = TempDir::new().expect("temporary future-view runtime directory");
+    let (expected_context, _) = authenticated_runtime_context();
+    let local_validator = expected_context.leader(1);
+    let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        RuntimeQueueConfig::new(8, 1, 1),
+        Some(local_validator),
+    );
+    let timeout_certificate = signed_runtime_timeout_certificate(&context, &keys);
+    let proposal_round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 1,
+    };
+    let body = b"future view proposal body";
+    let proposal_subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"future-view-proposal-block")),
+        payload_hash: Hash::new(body),
+    };
+    let proposal_manifest = encode_payload(&context, proposal_round, proposal_subject, body)
+        .expect("encode future-view runtime proposal")
+        .manifest()
+        .clone();
+    let proposer = context.leader(proposal_round.view);
+    assert_eq!(proposer, local_validator);
+    let mut proposal = wire::Proposal {
+        round: proposal_round,
+        proposer,
+        subject: proposal_subject,
+        manifest: proposal_manifest,
+        justification: wire::ProposalJustification::Timeout(wire::TimeoutJustification {
+            timeout_certificate: timeout_certificate.clone(),
+            highest_prepare_qc: None,
+        }),
+        signature: Vec::new(),
+    };
+    proposal.signature = Signature::new(
+        keys[usize::try_from(proposer).expect("small proposer index")].private_key(),
+        &proposal.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let proposal_message =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal));
+    let semantic_origin = context.roster[usize::try_from(proposer).expect("small proposer index")]
+        .validator
+        .clone();
+    let (_ingress_directory, ingress, mut ownerships) = preowned_leader_wire_ownerships(
+        &context,
+        &[(proposal_message.clone(), semantic_origin.clone())],
+        runtime.ingress.lifecycle_ordinals.clone(),
+    );
+    let proposal_ownership = ownerships
+        .pop()
+        .expect("future-view proposal owns one fair-ingress carrier");
+    let proposal_receipt = proposal_ownership
+        .leader_wire_runtime_receipt()
+        .expect("future-view proposal owns one runtime receipt")
+        .clone();
+    runtime
+        .enqueue_network_with_ingress_ownership(proposal_message.clone(), proposal_ownership)
+        .expect("enqueue authenticated future-view proposal");
+    let now = Instant::now();
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm future-view runtime");
+
+    assert!(matches!(
+        runtime.step(now),
+        Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+    ));
+    let retained = runtime
+        .take_last_scheduler_ownership()
+        .expect("future-view retry retains scheduler ownership");
+    assert_eq!(
+        retained.selected,
+        RuntimeSelectedOwnerKind::FifoRetryRetained
+    );
+    assert_eq!(retained.validate_exact(), Ok(()));
+    assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+    assert_eq!(runtime.queued_commands(), 1);
+    assert!(runtime.pending_leader_wire_terminals.is_empty());
+    assert_eq!(
+        runtime
+            .leader_wire_runtime_receipts
+            .get(&proposal_receipt.owner().admission_ordinal()),
+        Some(&proposal_receipt)
+    );
+
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
+        ))
+        .expect("enqueue the matching timeout certificate");
+    let entered = runtime
+        .try_step_pacemaker_escape(now)
+        .expect("matching TC remains a valid pacemaker escape")
+        .expect("matching TC bypasses the retained normal proposal");
+    let RuntimeStep::Advanced(enter_view_effects) = entered else {
+        panic!("matching TC unexpectedly idled")
+    };
+    assert!(enter_view_effects.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::EnterView { tag, .. } if tag.view() == proposal_round.view
+    )));
+    let tc_scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("matching TC retains scheduler ownership");
+    assert_eq!(
+        tc_scheduler.selected,
+        RuntimeSelectedOwnerKind::PacemakerProgress
+    );
+    assert_eq!(tc_scheduler.validate_exact(), Ok(()));
+    runtime
+        .take_effect_ownership(enter_view_effects.len())
+        .expect("consume matching TC effect ownership");
+    assert_eq!(runtime.round_tag().view(), proposal_round.view);
+    assert_eq!(runtime.queued_commands(), 1);
+
+    let retried = runtime
+        .step(now)
+        .expect("retry the exact proposal after entering its view");
+    let RuntimeStep::Advanced(proposal_effects) = retried else {
+        panic!("matching-view proposal unexpectedly idled")
+    };
+    assert!(matches!(
+        proposal_effects.as_slice(),
+        [AdapterEffect::FetchBody {
+            tag,
+            manifest: Some(manifest),
+            ..
+        }] if tag.view() == proposal_round.view && manifest.round == proposal_round
+    ));
+    let proposal_scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("matching-view proposal retains scheduler ownership");
+    assert_eq!(proposal_scheduler.selected, RuntimeSelectedOwnerKind::Fifo);
+    assert_eq!(proposal_scheduler.validate_exact(), Ok(()));
+    runtime
+        .take_effect_ownership(proposal_effects.len())
+        .expect("consume matching-view proposal effect ownership");
+    assert_eq!(runtime.queued_commands(), 0);
+    let terminals = runtime.take_leader_wire_runtime_terminals();
+    let [LeaderWireRuntimeTerminal::Volatile(retired)] = terminals.as_slice() else {
+        panic!("matching-view proposal must emit one volatile runtime terminal")
+    };
+    assert_eq!(retired, &proposal_receipt);
+    ingress
+        .mark_leader_wire_volatile_terminal(retired)
+        .expect("publish the consumed proposal's volatile terminal");
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(proposal_message),
+            semantic_origin,
+        )),
+        Ok(super::super::FairV2IngressPushDisposition::Coalesced)
+    ));
+    assert!(!runtime.fail_closed);
+}
+
 #[test]
 fn lock_retirement_releases_busy_deferred_leader_wire_runtime_owner() {
     let directory = TempDir::new().expect("temporary leader-wire lock directory");

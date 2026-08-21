@@ -518,10 +518,11 @@ struct QueryIngressMemoryEnvelope {
 ///
 /// A dedicated single-slot bridge lane holds this complete reservation before polling the body. The
 /// high-water phases cover the signed raw frame plus the decoded request, and then the moved
-/// decoded envelope, one shared outbound frame, and two derived-codec scratch representations.
-/// Candidate attempts share those representations instead of cloning the request per candidate. One
-/// fixed 64 KiB retryable diagnostic may remain while the next sequential authority is attempted;
-/// larger retry bodies are dropped before proceeding.
+/// decoded envelope, one shared outbound frame, one strict local-dispatch copy, and two
+/// derived-codec scratch representations. Remote candidate attempts share the outbound frame;
+/// QueuePlanSynced may additionally retain exactly one owned local copy while collecting the
+/// remote attestation required for f+1. One fixed 64 KiB retryable diagnostic may remain while the
+/// next sequential authority is attempted; larger retry bodies are dropped before proceeding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ToriiProxyHttpIngressEnvelope {
     working_set_bytes: usize,
@@ -538,10 +539,10 @@ impl ToriiProxyHttpIngressEnvelope {
             return None;
         }
         // The middleware owns the raw body only through decoding. After that,
-        // the request is moved (never deep-cloned) through dispatch and one
-        // bounded shared frame is reused by every transport attempt. Two
-        // derived-codec scratch representations can overlap that frame.
-        let variable_bytes = max_content_bytes.checked_mul(4)?;
+        // one bounded shared frame is reused by every remote transport attempt.
+        // Strict QueuePlan aggregation may also own one local deep copy while
+        // two derived-codec scratch representations overlap the shared frame.
+        let variable_bytes = max_content_bytes.checked_mul(5)?;
         let working_set_bytes = fixed_overhead.checked_add(variable_bytes)?;
         let envelope = Self {
             working_set_bytes,
@@ -559,6 +560,7 @@ impl ToriiProxyHttpIngressEnvelope {
         let decode_peak = self.body_bytes.checked_add(self.decode_allocated_bytes);
         let forwarding_peak = checked_sum([
             self.forwarded_request_bytes,
+            self.forwarding_transient_bytes,
             self.forwarding_transient_bytes,
             self.forwarding_transient_bytes,
             self.forwarding_transient_bytes,

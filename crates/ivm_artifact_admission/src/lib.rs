@@ -901,7 +901,7 @@ mod tests {
         let valid_handle = AssetHandle {
             scope: vec!["transfer".to_owned()],
             subject: HandleSubject {
-                account: "subject".to_owned(),
+                account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
                 origin_dsid: Some(DataSpaceId::new(7)),
             },
             budget: HandleBudget {

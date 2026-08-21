@@ -105,7 +105,7 @@ Norito fixtures for the descriptor/handle/policy snapshot live at `crates/iroha_
 
 ### SDK sample: remote spend without token egress
 
-1. Build an AXT descriptor listing the dataspace that owns the asset plus any read/write touches required locally; keep the descriptor deterministic so the binding hash stays stable.
+1. Build an AXT descriptor listing the dataspace bucket that the remote spend uses plus any read/write touches required locally; keep the descriptor deterministic so the binding hash stays stable.
 2. Call `AXT_TOUCH` for the remote dataspace with the manifest view you expect; optionally attach a proof via `AXT_VERIFY_DS_PROOF` if the host requires it.
 3. Request or refresh the asset handle and invoke `AXT_USE_ASSET_HANDLE` with a `RemoteSpendIntent` that spends inside the remote dataspace (no bridge leg). Budget enforcement uses the handle’s `remaining`, `per_use`, `sub_nonce`, `handle_era`, and `expiry_slot` against the snapshot described above.
 4. Commit via `AXT_COMMIT`; if the host returns `PermissionDenied`, use the reject label to decide whether to fetch a fresh handle (expiry/sub_nonce/era) or fix the manifest/lane binding.
@@ -138,16 +138,16 @@ Norito fixtures for the descriptor/handle/policy snapshot live at `crates/iroha_
 
 | Source | What to capture | Command / Path | Evidence expectations |
 |--------|-----------------|----------------|-----------------------|
-| Prometheus (`iroha_telemetry`) | Slot and AMX SLOs: `iroha_slot_duration_ms`, `iroha_amx_prepare_ms`, `iroha_amx_commit_ms`, `iroha_da_quorum_ratio`, `iroha_amx_abort_total{stage}` | Scrape `https://$TORII/telemetry/metrics` or export from the dashboards described in `telemetry.md`. | Attach histogram snapshots and alert history to the run bundle so auditors can see p95/p99 values and alert states. |
-| Torii Sumeragi telemetry | Aggregated collector activity, missing-chunk totals, bounded pre-session queues, and DA availability counters (`sumeragi_da_gate_block_total{reason="missing_local_data"}`, `sumeragi_rbc_da_reschedule_total`). | `GET /v1/sumeragi/telemetry`; capture `availability.collectors`, `rbc_backlog`, and `rbc_pending`. | Store timestamped JSON with the incident bundle. The payload is aggregate evidence and does not identify individual RBC sessions or publish a collector plan. |
+| Prometheus (`iroha_telemetry`) | Slot and AMX SLOs: `iroha_slot_duration_ms`, `iroha_amx_prepare_ms`, `iroha_amx_commit_ms`, `iroha_da_quorum_ratio`, `iroha_amx_abort_total{stage}` | Scrape `https://$TORII/metrics` or export from the dashboards described in `telemetry.md`. | Attach histogram snapshots and alert history to the run bundle so auditors can see p95/p99 values and alert states. |
+| Sumeragi status and transport metrics | Authenticated revision-4 reducer state plus node-local DA/transport counters such as `sumeragi_da_gate_block_total{reason="missing_local_data"}` and `sumeragi_rbc_da_reschedule_total`. | Capture `GET /v1/sumeragi/status` with an operator signature and scrape `/metrics`. | Store the signed height context, durable commit, queue state, and timestamped metrics with the incident bundle. Node-local metrics are operational observations, not consensus evidence. |
 | AXT proof cache | `iroha_axt_proof_cache_events_total{event}` and `iroha_axt_proof_cache_state{dsid,status,manifest_root_hex,verified_slot}` | Scrape the Torii metrics endpoint and inspect `GET /v1/debug/axt/cache` when the telemetry/developer gate is enabled. | Capture the policy snapshot version, cache state, and last rejection without retaining proof payloads. |
 
 ### Troubleshooting playbook
 
 | Symptom | Inspect first | Recommended remediation |
 |---------|---------------|--------------------------|
-| `iroha_slot_duration_ms` p95 creeps above 1 000 ms | Prometheus export from `/telemetry/metrics` plus `GET /v1/sumeragi/telemetry`; compare `rbc_backlog` and `rbc_pending` with the preceding accepted run. | Lower AMX batch sizes or adjust the configured collector topology, then repeat the acceptance workload and capture the new telemetry evidence. |
-| Missing availability spike | Aggregated `rbc_backlog` and `rbc_pending` fields, `availability.collectors`, status-store evictions, consensus logs, and attester health dashboards. | Repair the unhealthy attester or collector path and attach updated aggregate telemetry once the backlog clears. |
+| `iroha_slot_duration_ms` p95 creeps above 1 000 ms | Prometheus export from `/metrics`, authenticated Sumeragi status, consensus logs, and the preceding accepted run. | Lower AMX batch sizes or correct the diagnosed transport/capacity bottleneck, then repeat the acceptance workload and capture fresh status and metrics. |
+| Missing availability spike | DA gate/reschedule and ingress/drop metrics, authenticated Sumeragi status, consensus logs, and attester health dashboards. | Repair the unhealthy validator or transport path and attach updated status and metrics once availability recovers. |
 | Frequent `PVO_MISSING_OR_EXPIRED` in receipts | AXT proof-cache state, policy snapshot version, and the issuer’s proof/handle generation logs. | Regenerate the expired proof or handle and ensure the client refreshes it before `expiry_slot`. |
 | Repeated `AMX_LOCK_CONFLICT` or `AMX_TIMEOUT` | `iroha_amx_lock_conflicts_total`, `iroha_amx_prepare_ms`, and the affected transaction manifests. | Re-run the Norito static analyzer, correct the read/write selectors (or split the batch), and publish the updated manifest fixtures so the conflict counter returns to baseline. |
 | `SETTLEMENT_ROUTER_UNAVAILABLE` alerts | Settlement router logs (`../docs/settlement-router.md`), treasury buffer dashboards, and the affected receipts. | Top up XOR buffers or flip the lane to XOR-only mode, document the treasury action, and rerun the slot acceptance test to prove settlement resumed. |
@@ -168,14 +168,63 @@ The canonical data-model types live in
 | Type / field | Contract |
 |--------------|----------|
 | `ProofBlob.payload` | Canonical Norito bytes for an `AxtProofEnvelope`; empty payloads are rejected. |
-| `ProofBlob.expiry_slot` | Optional, non-zero proof expiry enforced against the current policy slot. |
+| `ProofBlob.expiry_slot` | Outer mirror of the proof-bound expiry. `None` is the authenticated no-expiry value; verifiers require an exact match before applying freshness policy. |
 | `AxtProofEnvelope.dsid` | Dataspace whose policy validates the proof. |
-| `AxtProofEnvelope.manifest_root` | Non-zero root that must equal the active Space Directory policy root. |
-| `AxtProofEnvelope.da_commitment` | Optional DA commitment bound into the envelope. |
+| `AxtProofEnvelope.manifest_root` | Non-zero outer mirror of the exact 32-byte `axt_fastpq_manifest_root_v1` proof metadata and, where required by admission, the active Space Directory policy root. |
+| `AxtProofEnvelope.da_commitment` | Outer mirror of the proof-bound optional DA commitment. `axt_fastpq_da_commitment_v1` is always present as 33 bytes: `0 || 32*0` for `None`, or `1 || digest` for `Some(digest)`. |
 | `AxtProofEnvelope.proof` | Non-empty backend proof bytes. |
 | `AxtProofEnvelope.fastpq_binding` | Required FastPQ V1 source, claim, witness, policy, effect, verifier, and target-dataspace binding. |
+| `AxtFastpqBinding.remote_spend_intent_commitments` | Canonical strictly ordered, duplicate-free set of at most 65,536 V1 commitments. Each commitment covers the exact authenticated handle replay key (dataspace, descriptor binding, era, sub-nonce, and target lane), exact `AssetDefinitionId`, `transfer` operation, canonical `from`/`to` accounts, and effective `Quantity`. Generic proofs may leave the set empty; every proof consumed by `USE_ASSET_HANDLE` must contain and consume exactly one matching claim. |
 | `committed_amount` | Optional non-zero scalar that must exactly match the canonical 16-byte little-endian `u128` in `axt_fastpq_committed_amount_v1` metadata inserted before the FastPQ batch seal and proof are generated. Missing or mismatched proof-bound metadata is rejected. |
 | `amount_commitment` | Optional deterministic hidden-amount copy checked against the spend intent; recomputing it cannot replace or alter the proof-bound `committed_amount`. |
+
+The proof metadata also always contains `axt_fastpq_expiry_slot_v1` as an
+eight-byte little-endian `u64`, where zero means authenticated `None` and any
+non-zero value means `Some(slot)`. The manifest and DA keys are required even
+when DA is absent. Their exact canonical values, the optional committed amount,
+and the expiry are inserted before the batch seal and proof are generated.
+FastPQ commits the complete canonical metadata map with raw Blake2b-256 and
+exposes the digest as eight exact little-endian `u32` trace limbs; every limb is
+constrained by the AIR.
+
+The V1 Norito JSON layouts are closed and exact. Every nullable proof, handle,
+effect, spend, and rejection-context field is present as either its value or an
+explicit `null`; collections are present even when empty. Omitted fields,
+unknown fields, and shortened pre-release binary layouts are malformed rather
+than requests to synthesize defaults.
+
+This is a first-release proof-format hard cut. Proofs and snapshots generated
+without the required metadata, or with the retired single-field metadata
+projection, are invalid and must be regenerated rather than relabelled.
+`SpendOp.asset_definition_id` and the claim's full `AxtHandleReplayKey` are
+required wire fields; pre-change handles, claims, proofs, and JSON fixtures do
+not decode as V1 and must be regenerated together.
+
+One cryptographically verified proof may be reused for multiple handles in the
+same dataspace only when its binding contains one distinct handle-bound claim
+for every use. The canonical `axt_fastpq_remote_spend_claims_v1` metadata
+carries the commitment preimages, and the verifier requires those preimages to
+reconstruct the complete binding set exactly. It then matches their typed
+`(AssetDefinitionId, AccountId, AccountId, Quantity)` facts one-for-one with
+the proof's concrete `TransferDeltaTranscript` deltas. The effect binding,
+every claim, and every delta must name the same exact source asset definition.
+The `authorization` and `compliance` claim-type labels select an opaque-effect
+profile only; they do not prove authority and cannot carry remote-spend claims.
+
+Hosts and block admission derive each expected commitment from the actual
+authenticated handle and require exact per-proof set consumption. Duplicate
+use of one claim, a proof claim with no corresponding handle, or replay under a
+different era, sub-nonce, lane, dataspace, or descriptor fails closed. An empty
+set remains valid for standalone `VERIFY_DS_PROOF` but cannot authorize a
+handle. The asset definition must also exist in committed world state. A
+dataspace-restricted definition selects the exact signed intent/proof dataspace
+bucket; its owning domain is not balance-scope authority. A global definition
+is valid only when that signed dataspace is universal.
+For a transfer proof, `binding.source_dsid == intent.asset_dsid` is the balance
+partition for both the `from` and `to` rows of every matched transcript delta.
+No definition-home or account-alias routing is inferred. V1 transfer trace keys
+omit an explicit scope component because the public `source_dsid` supplies that
+single proof-wide partition.
 
 Issuers construct an unsigned `AssetHandleDraft`; signing consumes that draft
 and returns an admission-ready `AssetHandle` with a mandatory signature. The
@@ -189,10 +238,16 @@ committed state and the executing IVM before any FASTPQ work.
 
 1. Build and validate an `AxtDescriptor`, then derive its canonical Poseidon
    binding.
-2. Produce an `AxtProofEnvelope` for each required dataspace with the active
-   manifest root and a concrete FastPQ V1 binding.
-3. Canonically encode the envelope into `ProofBlob.payload` and set a non-zero
-   expiry when the prover needs bounded validity.
+2. Derive the authoritative manifest root, optional DA commitment, optional
+   committed amount, and optional expiry before proving. Insert their canonical
+   FastPQ metadata encodings before sealing the batch. If the proof will
+   authorize handles, construct one transfer claim from each exact signed
+   handle use, attach its canonical preimage and concrete transfer transcript,
+   then sort the resulting commitments before the same seal.
+3. Prove the sealed batch, then package it with the checked bound-batch builder.
+   The builder extracts or exact-compares the outer manifest, DA, amount, and
+   expiry mirrors; callers cannot attach different values after proof
+   generation.
 4. Attach the proof and any `AssetHandle` to the AXT envelope. The host verifies
    policy, manifest, lane, descriptor, amount, budget, and freshness bindings
    before commit.
@@ -205,7 +260,7 @@ committed state and the executing IVM before any FASTPQ work.
 - Bundle deterministic allowance proofs in the same UAID manifest update when cross-DS transfers touch regulated DSes.
 - Retrying strategy: missing availability evidence → no action (the tx stays in mempool); `AMX_TIMEOUT` or `PVO_MISSING_OR_EXPIRED` → rebuild artefacts and back off exponentially.
 - Tests should include both cache hits and cold starts (forcing the host to verify the proof with the same `max_k`) to guard against determinism regressions.
-- Proof blobs (`ProofBlob`) MUST encode an `AxtProofEnvelope { dsid, manifest_root, da_commitment?, proof }`; hosts bind proofs to the Space Directory manifest root and cache pass/fail results per dataspace/slot with `iroha_axt_proof_cache_events_total{event="hit|miss|expired|reject|cleared"}`. Expired or manifest-mismatched artefacts are rejected before commit and subsequent retries in the same slot short-circuit on the cached `reject`.
+- Proof blobs (`ProofBlob`) MUST encode the complete V1 `AxtProofEnvelope { dsid, manifest_root, da_commitment, proof, fastpq_binding, committed_amount, amount_commitment }`; every nullable slot is encoded explicitly. Hosts bind proofs to the Space Directory manifest root and cache pass/fail results per dataspace/slot with `iroha_axt_proof_cache_events_total{event="hit|miss|expired|reject|cleared"}`. Expired or manifest-mismatched artefacts are rejected before commit and subsequent retries in the same slot short-circuit on the cached `reject`.
 - Proof cache reuse is slot-scoped: verified proofs stay hot across envelopes within the same slot and are evicted automatically when the slot advances so retries remain deterministic.
 
 ### Static read/write analyzer
@@ -225,12 +280,16 @@ AXT handle verification now defaults to the Space Directory snapshot when the ho
 - lane binding: handle `target_lane` must match the Space Directory entry;
 - manifest binding: non-zero `manifest_root` values must match the handle’s `manifest_view_root`;
 - expiry: `current_slot` greater than the handle’s `expiry_slot` is rejected;
-- counters: `handle_era` must equal the active manifest era and `sub_nonce` must equal the next committed counter; stale and caller-selected future values are rejected, and advancement uses checked arithmetic;
+- counters: `handle_era` must equal the active manifest era and `sub_nonce` must equal the next committed counter; stale and caller-selected future values are rejected, advancement uses checked arithmetic, and CoreHost includes both the active envelope and earlier completed envelopes in the same transaction when deriving the next counter;
+- replay scope: the canonical replay key is `(asset_dsid, descriptor_binding, handle_era, sub_nonce, target_lane)`, where `asset_dsid` comes from the authenticated issuer/policy context. Distinct dataspaces therefore retain independent per-dataspace counters even when they share a lane and identical counter values; optional `origin_dsid` is not replay authority;
+- account identity: `HandleSubject.account` and `RemoteSpendIntent.op.{from,to}` must carry exact canonical I105 account identifiers; aliases, padded text, and alternate encodings are rejected before policy evaluation;
 - issuer authentication: the signature must bind every V1 policy/network field and verify with the single-key account resolved from the active manifest's committed UAID and dataspace binding;
 - membership: handles for dataspaces absent from the snapshot are denied.
 
-Failures map to `PermissionDenied`, and the CoreHost policy snapshot tests in `crates/ivm/tests/core_host_policy.rs` cover allow/deny cases for each field.
-Block validation authenticates unique handles before FASTPQ verification, groups them by their exact V1 issuer/network/policy scope, and reconstructs the committed pre-state counter with checked subtraction from the advertised post-state. It then requires exact ordered counter progression and exact equality with the advertised post-state, with a consensus ceiling of 65,536 authenticated handles per block. It also requires non-empty proofs per dataspace with `expiry_slot` covering the policy slot (with the configured skew allowance) and not expiring before the handle, enforces descriptor binding plus touch manifests for declared specs (and rejects out-of-prefix entries), checks handle intent invariants, and aggregates handle budgets per dataspace.
+Failures map to `PermissionDenied`. IVM policy tests cover field-level allow/deny
+cases, while CoreHost regressions cover active and completed-envelope counter
+progression.
+Block validation authenticates unique handles before FASTPQ verification, scopes replay and budget aggregation by the authenticated asset dataspace, groups handles by their exact V1 issuer/network/policy scope, and reconstructs each committed per-dataspace pre-state counter with checked subtraction from the advertised post-state. It then requires exact ordered counter progression and exact equality with the advertised post-state, with a consensus ceiling of 65,536 authenticated handles per block. It also requires non-empty proofs per dataspace with `expiry_slot` covering the policy slot (with the configured skew allowance) and not expiring before the handle, enforces descriptor binding plus touch manifests for declared specs (and rejects out-of-prefix entries), checks handle intent invariants, and aggregates handle budgets per dataspace.
 
 ## Error Catalog
 

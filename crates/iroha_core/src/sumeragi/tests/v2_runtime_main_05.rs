@@ -422,7 +422,7 @@ fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
     assert_eq!(retirement_runtime.queued_commands(), 0);
 }
 #[test]
-fn queued_body_terminal_adopts_only_authority_upgrades_and_rejects_same_authority_owners() {
+fn queued_body_terminal_adopts_authority_upgrades_and_coalesces_same_authority_owners() {
     let directory = TempDir::new().expect("temporary body-terminal visibility directory");
     let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
         &directory,
@@ -580,15 +580,36 @@ fn queued_body_terminal_adopts_only_authority_upgrades_and_rejects_same_authorit
     assert_ne!(
         certified_validate_ownership.owner(),
         validate_ownership[0].owner(),
-        "the negative retry must carry a distinct lifecycle owner"
+        "the exact retry must carry a distinct lifecycle owner"
     );
     assert!(
         runtime
             .body_pipeline_candidate_has_terminal(&validate_effect, &certified_validate_ownership,)
-            .is_err(),
-        "same-authority terminal retry must reject a foreign owner"
+            .expect("same-authority retry observes the queued incumbent terminal"),
+        "same-authority terminal retry must coalesce under the incumbent owner"
     );
-    assert!(runtime.fail_closed);
+    assert_eq!(runtime.queued_commands(), 1);
+    assert!(!runtime.fail_closed);
+    let RuntimeStep::Advanced(terminal_effects) = runtime
+        .step(now)
+        .expect("dispatch the retained validation terminal")
+    else {
+        panic!("retained validation terminal unexpectedly idled")
+    };
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("retained validation terminal publishes scheduler ownership");
+    let terminal_ownership = runtime
+        .take_effect_ownership(terminal_effects.len())
+        .expect("take exact retained terminal successor ownership");
+    assert_eq!(terminal_ownership.len(), 1);
+    assert_eq!(
+        terminal_ownership[0].owner(),
+        validate_ownership[0].owner(),
+        "same-authority terminal retry must retain the physical incumbent owner"
+    );
+    assert_eq!(runtime.queued_commands(), 0);
+    assert!(!runtime.fail_closed);
 }
 #[test]
 fn queued_store_terminal_query_refines_prepare_to_commit_under_incumbent() {

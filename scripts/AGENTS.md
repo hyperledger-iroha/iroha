@@ -15,7 +15,7 @@ These guidelines apply to the `scripts/` directory.
 
 ## Development workflow
 - Keep scripts idempotent and portable across macOS/Linux. Prefer POSIX shell or Python 3.11+; for long workflows use Python so we can add tests.
-- For faster local Rust iteration, prefer `scripts/cargo_fast.sh -- <cargo args...>`; it auto-enables `sccache` and a supported fast linker when available, supports `--sccache-dir` for persistent local cache placement, and includes opt-in throughput modes `--zero-debug` (`CARGO_PROFILE_{DEV,TEST}_DEBUG=0`) and `--no-incremental` (`CARGO_INCREMENTAL=0`, useful for sccache-heavy runs).
+- For faster local Rust iteration, prefer `scripts/cargo_fast.sh -- <cargo args...>`; it auto-enables `sccache` without restarting a shared daemon and otherwise leaves the cache location and system linker unchanged. Reuse the workspace target by default, or use a stable `--target-slot <name>` for each concurrent build lane instead of creating one-off target directories. Cargo's native jobserver is the default; `--jobs <N>` is an explicit override and one job is intended only for constrained or evidence lanes. Use `--incremental` for repeated focused test builds in the same warm target, `--no-incremental` for sccache-heavy builds, and `--stable-local-metadata` only for non-release local loops where a fixed `VERGEN_GIT_SHA` is acceptable. Alternative linkers remain available through explicit `--linker auto` or `--linker <name>` selection.
 - Every script must document:
   - Purpose and prerequisites at the top of the file.
   - Required environment variables or paths (e.g., `BIN_IROHAD` overrides in `test_env.py`).

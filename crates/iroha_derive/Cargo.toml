@@ -1,5 +1,6 @@
 [package]
 name = "iroha_derive"
+autotests = false
 
 edition.workspace = true
 version.workspace = true
@@ -38,9 +39,10 @@ impls = { workspace = true }
 expect-test = { workspace = true }
 
 [[test]]
-name = "ui"
-required-features = ["trybuild-tests"]
+name = "container_enum_from_variant"
+path = "tests/container_enum_from_variant.rs"
 
 [[test]]
-name = "config_base_ui"
+name = "ui"
+path = "tests/ui.rs"
 required-features = ["trybuild-tests"]

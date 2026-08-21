@@ -427,7 +427,6 @@ mod tests {
                 da_proof_policies_hash: None,
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
-                prev_roster_evidence_hash: None,
                 npos_effects_hash: None,
                 execution_context_hash: None,
                 sccp_commitment_root: None,
@@ -483,7 +482,6 @@ mod tests {
             }],
             execution_batch: None,
             lane_drain_certificates: Vec::new(),
-            queue_plan_admissions: Vec::new(),
             global_state_root: Hash::new(b"global"),
             merge_qc: MergeQuorumCertificate::new(
                 7,

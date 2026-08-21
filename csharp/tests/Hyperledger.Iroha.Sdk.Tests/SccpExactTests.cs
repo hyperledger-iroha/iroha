@@ -2627,6 +2627,7 @@ public sealed partial class SccpExactTests
             CompactField(ttl),
             CompactField(nonce),
             CompactField(encodedFeePayment),
+            CompactField(UInt32(1)),
             CompactField(metadata),
             CompactField([0]));
     }

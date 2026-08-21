@@ -16,7 +16,6 @@ from scripts import (
 
 
 TARGETS = {
-    "iroha2": "sorafs://releases/iroha2/v1.0.0",
     "iroha3": "sorafs://releases/iroha3/v1.0.0",
 }
 
@@ -30,7 +29,6 @@ def _write_release(
     files: dict[str, tuple[str, bytes]] | None = None,
 ) -> tuple[Path, Path, dict[str, str]]:
     inventory = files or {
-        "iroha2-linux.tar.zst": ("iroha2", b"i2-bytes"),
         "iroha3-linux.tar.zst": ("iroha3", b"i3-bytes"),
     }
     artifacts = tmp_path / "artifacts"
@@ -186,23 +184,22 @@ def _validate(
 
 def test_parse_target_map_is_canonical_and_duplicate_closed() -> None:
     assert publish_plan.parse_target_map(["sorafs://releases"]) == {
-        "iroha2": "sorafs://releases",
         "iroha3": "sorafs://releases",
         "shared": "sorafs://releases",
     }
     assert publish_plan.parse_target_map(
         [
-            "iroha2=sorafs://releases/i2",
             "iroha3=https://gateway.example/releases/i3",
+            "shared=sorafs://releases/shared",
         ]
     ) == {
-        "iroha2": "sorafs://releases/i2",
         "iroha3": "https://gateway.example/releases/i3",
+        "shared": "sorafs://releases/shared",
     }
     for values in (
         [],
-        ["iroha2="],
-        ["iroha2=sorafs://one", "iroha2=sorafs://two"],
+        ["iroha3="],
+        ["iroha3=sorafs://one", "iroha3=sorafs://two"],
         ["unknown=sorafs://one"],
         ["http://gateway.example/releases"],
         ["sorafs://releases/../escape"],
@@ -293,9 +290,9 @@ def test_plan_rejects_linked_or_special_artifacts(
 ) -> None:
     artifacts, manifest, targets = _write_release(
         tmp_path,
-        {"iroha2-linux.tar.zst": ("iroha2", b"bytes")},
+        {"iroha3-linux.tar.zst": ("iroha3", b"bytes")},
     )
-    artifact = artifacts / "iroha2-linux.tar.zst"
+    artifact = artifacts / "iroha3-linux.tar.zst"
     if kind == "symlink":
         artifact.unlink()
         target = tmp_path / "outside"
@@ -322,7 +319,7 @@ def test_plan_rejects_missing_extra_or_tampered_checksum_inventory(
 ) -> None:
     artifacts, manifest, targets = _write_release(
         tmp_path,
-        {"iroha2-linux.tar.zst": ("iroha2", b"bytes")},
+        {"iroha3-linux.tar.zst": ("iroha3", b"bytes")},
     )
     (artifacts / "stale.tar.zst").write_bytes(b"stale")
     with pytest.raises(publish_plan.PublishPlanError, match="closed publish"):
@@ -334,7 +331,7 @@ def test_plan_rejects_missing_extra_or_tampered_checksum_inventory(
         )
     (artifacts / "stale.tar.zst").unlink()
     (artifacts / "SHA256SUMS").write_text(
-        f"{'0' * 64}  iroha2-linux.tar.zst\n",
+        f"{'0' * 64}  iroha3-linux.tar.zst\n",
         encoding="ascii",
     )
     with pytest.raises(publish_plan.PublishPlanError, match="SHA256 mismatch"):
@@ -400,7 +397,7 @@ def test_replay_requires_independent_roots_targets_and_manifest(
             development_allow_unsigned_manifest=True,
         )
     wrong_targets = dict(targets)
-    wrong_targets["iroha2"] = "sorafs://other/i2"
+    wrong_targets["iroha3"] = "sorafs://other/i2"
     with pytest.raises(publish_plan.PublishPlanError, match="independently"):
         _validate(
             plan_path,
@@ -525,7 +522,7 @@ def test_write_plan_files_refuses_existing_or_linked_outputs(
 def test_plan_rejects_control_character_paths_and_targets(tmp_path: Path) -> None:
     artifacts, manifest, targets = _write_release(tmp_path)
     bad_targets = dict(targets)
-    bad_targets["iroha2"] = "sorafs://releases/i2\nprintf-pwned"
+    bad_targets["iroha3"] = "sorafs://releases/i2\nprintf-pwned"
     with pytest.raises(publish_plan.PublishPlanError):
         publish_plan.build_publish_plan(
             manifest,
@@ -547,7 +544,7 @@ def test_plan_rejects_control_character_paths_and_targets(tmp_path: Path) -> Non
 def test_probe_command_does_not_shell_expand_destination(tmp_path: Path) -> None:
     artifacts, manifest, targets = _write_release(
         tmp_path,
-        {"iroha2-linux.tar.zst": ("iroha2", b"bytes")},
+        {"iroha3-linux.tar.zst": ("iroha3", b"bytes")},
     )
     plan = publish_plan.build_publish_plan(
         manifest,
@@ -605,7 +602,7 @@ def test_previous_plan_diff_requires_canonical_plan(tmp_path: Path) -> None:
         previous_plan_path=previous_path,
         development_allow_unsigned_manifest=True,
     )
-    assert report["diff"]["changed"] == ["iroha2-linux.tar.zst"]
+    assert report["diff"]["changed"] == ["iroha3-linux.tar.zst"]
 
 
 def test_signed_replay_requires_independent_trust_tuple(tmp_path: Path) -> None:

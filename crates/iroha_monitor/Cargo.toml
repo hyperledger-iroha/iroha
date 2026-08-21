@@ -1,5 +1,6 @@
 [package]
 name = "iroha_monitor"
+autotests = false
 edition.workspace = true
 version.workspace = true
 authors.workspace = true
@@ -22,3 +23,7 @@ unicode-width = "0.2"
 [features]
 default = []
 linux-builtin-synth = []
+
+[[test]]
+name = "smoke"
+path = "tests/smoke.rs"

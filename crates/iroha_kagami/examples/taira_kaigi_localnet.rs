@@ -1,12 +1,11 @@
-//! Build and sign a Taira localnet genesis overlay that seeds Kaigi relay metadata.
+//! Build an unsigned Taira localnet genesis manifest overlay that seeds Kaigi relay metadata.
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use clap::{ArgGroup, Parser};
+use clap::Parser;
 use color_eyre::{
     Result,
     eyre::{WrapErr, ensure},
 };
-use iroha_config::{base::toml::TomlSource, parameters::actual};
-use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey};
+use iroha_crypto::PublicKey;
 use iroha_data_model::{
     account::{Account, AccountId, ParsedAccountId, address::ChainDiscriminantGuard},
     asset::{AssetDefinitionId, AssetId},
@@ -24,38 +23,17 @@ use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias},
     nexus::CanPublishSpaceDirectoryManifest,
 };
-use iroha_genesis::RawGenesisTransaction;
+use iroha_genesis::{RawGenesisTransaction, validate_genesis_manifest_json};
 use iroha_primitives::{json::Json, numeric::Quantity};
-use std::{fs, io::Read as _, path::PathBuf, str::FromStr};
-use zeroize::Zeroizing;
-const LOCALNET_GENESIS_SEED_SUFFIX: &[u8] = b"genesis";
+use std::{fs, path::PathBuf, str::FromStr};
 #[derive(Parser, Debug)]
-#[command(group(
-    ArgGroup::new("genesis_signer")
-        .required(true)
-        .args(["seed", "genesis_private_key_file"])
-))]
 struct Args {
     /// Base genesis JSON manifest to overlay.
     #[arg(long)]
     genesis: PathBuf,
-    /// Optional peer config used to embed DA proof policies that match the runtime lane config.
+    /// Output path for the unsigned overlaid genesis JSON manifest.
     #[arg(long)]
-    config: Option<PathBuf>,
-    /// Output path for the signed genesis `.nrt`.
-    #[arg(long)]
-    out_file: PathBuf,
-    /// Base seed passed to `kagami localnet --seed`; the helper derives the genesis key from
-    /// `<seed> + "genesis"` to match Kagami localnet output.
-    #[arg(long, conflicts_with = "genesis_private_key_file")]
-    seed: Option<String>,
-    /// Owner-held mode-0600 file containing one canonical genesis private-key record.
-    #[arg(long, conflicts_with = "seed")]
-    genesis_private_key_file: Option<PathBuf>,
-    /// Expected genesis public key from the peer config. The helper aborts if the derived signer
-    /// does not match, which prevents writing an unusable signed genesis.
-    #[arg(long)]
-    expected_genesis_public_key: Option<String>,
+    out_manifest: PathBuf,
     /// Public key of the account that will appear as the relay-health reporter.
     #[arg(long)]
     host_public_key: String,
@@ -66,7 +44,7 @@ struct Args {
     #[arg(long, default_value = "nexus")]
     relay_domain: String,
     /// Domain recorded in the seeded feedback's Kaigi call id.
-    #[arg(long, default_value = "wonderland")]
+    #[arg(long, default_value = "fixture")]
     call_domain: String,
     /// Call name recorded in the seeded feedback's Kaigi call id.
     #[arg(long, default_value = "taira-relay-bootstrap")]
@@ -334,149 +312,6 @@ fn append_bootstrap_authority_overlay(
     }
     builder.build_raw()
 }
-fn derive_localnet_genesis_key_pair(base_seed: Option<&str>) -> Result<KeyPair> {
-    let seed = base_seed.ok_or_else(|| {
-        color_eyre::eyre::eyre!(
-            "genesis signing requires --seed or --genesis-private-key-file; no built-in signer exists"
-        )
-    })?;
-    KeyPair::try_from_seed(
-        seed.bytes()
-            .chain(LOCALNET_GENESIS_SEED_SUFFIX.iter().copied())
-            .collect::<Vec<_>>(),
-        Algorithm::default(),
-    )
-    .wrap_err("failed to derive localnet genesis key pair from seed")
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
-))]
-fn load_genesis_private_key_file(path: &std::path::Path) -> Result<KeyPair> {
-    use rustix::fs::{Mode, OFlags, open};
-    use std::{fs::File, os::unix::fs::MetadataExt as _};
-    let fd = open(
-        path,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(std::io::Error::from)
-    .wrap_err_with(|| format!("open genesis private-key file {}", path.display()))?;
-    let file = File::from(fd);
-    let metadata = file
-        .metadata()
-        .wrap_err_with(|| format!("inspect genesis private-key file {}", path.display()))?;
-    ensure!(
-        metadata.is_file()
-            && metadata.uid() == rustix::process::geteuid().as_raw()
-            && metadata.mode() & 0o777 == 0o600
-            && metadata.nlink() == 1,
-        "genesis private-key file must be an owner-held, non-symlinked, single-link mode-0600 regular file"
-    );
-    ensure!(
-        metadata.len() <= 4096,
-        "genesis private-key file exceeds the 4096-byte safety limit"
-    );
-    let capacity =
-        usize::try_from(metadata.len()).expect("the 4096-byte file bound always fits usize");
-    let mut raw = Zeroizing::new(Vec::with_capacity(capacity));
-    file.take(4097)
-        .read_to_end(&mut raw)
-        .wrap_err("read genesis private-key file")?;
-    ensure!(
-        raw.len() <= 4096,
-        "genesis private-key file grew beyond the 4096-byte safety limit while reading"
-    );
-    let text =
-        std::str::from_utf8(raw.as_slice()).wrap_err("genesis private-key file is not UTF-8")?;
-    let canonical = text.strip_suffix('\n').ok_or_else(|| {
-        color_eyre::eyre::eyre!(
-            "genesis private-key file must contain one canonical key and a final newline"
-        )
-    })?;
-    ensure!(
-        !canonical.is_empty()
-            && !canonical.chars().any(char::is_whitespace)
-            && format!("{canonical}\n").as_bytes() == raw.as_slice(),
-        "genesis private-key file is not one canonical key record"
-    );
-    let exposed = ExposedPrivateKey::from_str(canonical)
-        .wrap_err("decode canonical genesis private-key file")?;
-    ensure!(
-        exposed.to_string() == canonical && exposed.0.algorithm() == Algorithm::default(),
-        "genesis private-key file encoding or algorithm is not canonical"
-    );
-    KeyPair::from_private_key(exposed.0).wrap_err("derive genesis key pair from private-key file")
-}
-#[cfg(any(
-    not(unix),
-    target_os = "espidf",
-    target_os = "horizon",
-    target_os = "redox"
-))]
-fn load_genesis_private_key_file(_path: &std::path::Path) -> Result<KeyPair> {
-    color_eyre::eyre::bail!(
-        "owner-only genesis private-key files require a supported Unix platform"
-    )
-}
-fn load_genesis_key_pair(args: &Args) -> Result<KeyPair> {
-    match (&args.genesis_private_key_file, &args.seed) {
-        (Some(path), None) => load_genesis_private_key_file(path),
-        (None, seed) => derive_localnet_genesis_key_pair(seed.as_deref()),
-        (Some(_), Some(_)) => unreachable!("clap enforces conflicts"),
-    }
-}
-fn load_peer_config(config_path: &std::path::Path) -> Result<actual::Root> {
-    let source = TomlSource::from_file(config_path).map_err(|err| {
-        color_eyre::eyre::eyre!(
-            "failed to read peer config at {}: {err}",
-            config_path.display()
-        )
-    })?;
-    actual::Root::from_toml_source(source).map_err(|err| {
-        color_eyre::eyre::eyre!(
-            "failed to parse peer config at {}: {err}",
-            config_path.display()
-        )
-    })
-}
-fn resolve_da_proof_policies(
-    config_path: Option<&std::path::Path>,
-) -> Result<Option<iroha_data_model::da::commitment::DaProofPolicyBundle>> {
-    let Some(config_path) = config_path else {
-        return Ok(None);
-    };
-    let config = load_peer_config(config_path)?;
-    Ok(Some(iroha_core::da::proof_policy_bundle(
-        &config.nexus.lane_config,
-    )))
-}
-fn resolve_confidential_policy_hash(config_path: Option<&std::path::Path>) -> Result<[u8; 32]> {
-    let Some(config_path) = config_path else {
-        return Ok(iroha_core::state::default_genesis_confidential_policy_hash());
-    };
-    let config = load_peer_config(config_path)?;
-    Ok(iroha_core::state::compute_genesis_confidential_policy_hash(
-        &config.zk,
-    ))
-}
-fn ensure_expected_genesis_public_key(
-    key_pair: &KeyPair,
-    expected_public_key: Option<&str>,
-) -> Result<()> {
-    let Some(expected_public_key) = expected_public_key else {
-        return Ok(());
-    };
-    let expected = PublicKey::from_str(expected_public_key)
-        .wrap_err("failed to parse expected genesis public key")?;
-    ensure!(
-        *key_pair.public_key() == expected,
-        "derived genesis public key {} does not match expected {}; pass the same `--seed` used for `kagami localnet --seed`, or pass `--genesis-private-key-file` explicitly",
-        key_pair.public_key(),
-        expected
-    );
-    Ok(())
-}
 fn run(args: &Args) -> Result<()> {
     ensure!(
         !args.relay_specs.is_empty(),
@@ -514,30 +349,20 @@ fn run(args: &Args) -> Result<()> {
     } else {
         manifest
     };
-    let genesis_key_pair = load_genesis_key_pair(args)?;
-    ensure_expected_genesis_public_key(
-        &genesis_key_pair,
-        args.expected_genesis_public_key.as_deref(),
-    )?;
-    let da_proof_policies = resolve_da_proof_policies(args.config.as_deref())?;
-    let confidential_policy_hash = resolve_confidential_policy_hash(args.config.as_deref())?;
-    let signed = manifest
-        .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
-            &genesis_key_pair,
-            da_proof_policies,
-            Some(confidential_policy_hash),
-        )
-        .wrap_err("failed to sign Kaigi overlay genesis")?;
-    let framed = signed
-        .0
-        .encode_wire()
-        .wrap_err("failed to frame signed genesis as Norito wire bytes")?;
-    fs::write(&args.out_file, framed).wrap_err("failed to write signed genesis output")?;
+    let encoded = norito::json::to_vec_pretty(&manifest)
+        .wrap_err("failed to encode overlaid genesis manifest")?;
+    validate_genesis_manifest_json(&encoded)
+        .wrap_err("overlaid genesis manifest exceeds fixed resource bounds")?;
+    fs::write(&args.out_manifest, encoded)
+        .wrap_err("failed to write unsigned genesis manifest output")?;
     println!(
-        "Wrote signed Taira Kaigi overlay with {} relays to {} using genesis public key {}",
+        "Wrote unsigned Taira Kaigi manifest overlay with {} relays to {}",
         relay_specs.len(),
-        args.out_file.display(),
-        genesis_key_pair.public_key()
+        args.out_manifest.display(),
+    );
+    println!(
+        "Materialize and sign it with `kagami genesis sign {} --config <peer.toml> --private-key-file <genesis.private_key> --out-file <genesis.signed.nrt> --bound-manifest-out <genesis.bound.json>`.",
+        args.out_manifest.display(),
     );
     Ok(())
 }
@@ -564,6 +389,47 @@ mod tests {
         );
     }
     #[test]
+    fn cli_accepts_only_unsigned_manifest_output() {
+        let host = "ea0130B4A704CBEADF686CAECDAF705102C9902CFED8B71016906F6D724D0BB7F04DE540F29585B7FB8B46962FB70D0AD97249";
+        let relay = "ea0130B99B89AD5D2F51D17AB69D32BC3A44C2CC5FF65E28590022B972148AD4DF00712FEC4EFF5BC6B3AEF33ABCF18F5CAD5B:K4NiAXqV5L1V3aD+/9NItPlFhEtm3qD4Q4K/1M8jewQ=:3";
+        let parsed = Args::try_parse_from([
+            "taira_kaigi_localnet",
+            "--genesis",
+            "base.json",
+            "--out-manifest",
+            "overlay.json",
+            "--host-public-key",
+            host,
+            "--relay-spec",
+            relay,
+        ])
+        .expect("manifest-only CLI parses without signing inputs");
+        assert_eq!(parsed.out_manifest, PathBuf::from("overlay.json"));
+        for removed_flag in [
+            "--seed",
+            "--genesis-private-key-file",
+            "--expected-genesis-public-key",
+            "--config",
+            "--out-file",
+        ] {
+            let error = Args::try_parse_from([
+                "taira_kaigi_localnet",
+                "--genesis",
+                "base.json",
+                "--out-manifest",
+                "overlay.json",
+                "--host-public-key",
+                host,
+                "--relay-spec",
+                relay,
+                removed_flag,
+                "retired-value",
+            ])
+            .expect_err("manifest producer must reject retired signing and publication inputs");
+            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+        }
+    }
+    #[test]
     fn relay_metadata_keys_use_the_same_canonical_account_digest() {
         let public_key = PublicKey::from_str(
             "ea0130B4A704CBEADF686CAECDAF705102C9902CFED8B71016906F6D724D0BB7F04DE540F29585B7FB8B46962FB70D0AD97249",
@@ -579,13 +445,6 @@ mod tests {
         assert_eq!(digest.len(), 64);
         assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
         assert_eq!(feedback, format!("kaigi_relay_feedback__{digest}"));
-    }
-    #[test]
-    fn confidential_policy_hash_defaults_to_runtime_default_without_config() {
-        assert_eq!(
-            resolve_confidential_policy_hash(None).expect("resolve default policy hash"),
-            iroha_core::state::default_genesis_confidential_policy_hash(),
-        );
     }
     #[test]
     fn manifest_chain_discriminant_scopes_overlay_account_literals() {
@@ -623,7 +482,7 @@ mod tests {
         let _chain_discriminant = ChainDiscriminantGuard::enter(manifest.chain_discriminant());
         let relay_domain = DomainId::try_new("nexus", "universal").expect("relay domain");
         let call_id = KaigiId::new(
-            DomainId::try_new("wonderland", "universal").expect("call domain"),
+            DomainId::try_new("fixture", "universal").expect("call domain"),
             Name::from_str("taira-relay-bootstrap").expect("call name"),
         );
         let host = AccountId::new(
@@ -854,55 +713,6 @@ mod tests {
         assert_eq!(
             top_up_count, 1,
             "overlay should top up the old low seed mint to the requested amount"
-        );
-    }
-    #[test]
-    fn localnet_seed_derives_checked_genesis_key_contract_as_kagami_localnet() {
-        let derived =
-            derive_localnet_genesis_key_pair(Some("Iroha")).expect("seeded localnet genesis key");
-        let expected = KeyPair::try_from_seed(b"Irohagenesis".to_vec(), Algorithm::default())
-            .expect("expected checked seeded key");
-        assert_eq!(derived.public_key(), expected.public_key());
-    }
-    #[cfg(all(
-        unix,
-        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
-    ))]
-    #[test]
-    fn genesis_private_key_file_requires_owner_only_canonical_custody() {
-        use std::{
-            fs::{self, OpenOptions},
-            io::Write as _,
-            os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
-        };
-        let sandbox = tempfile::tempdir().expect("create signer custody sandbox");
-        let path = sandbox.path().join("genesis.private_key");
-        let expected = KeyPair::try_from_seed([23_u8; 32].to_vec(), Algorithm::default())
-            .expect("derive signer");
-        let exposed = ExposedPrivateKey(expected.private_key().clone());
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)
-            .expect("create owner-only signer file");
-        writeln!(file, "{exposed}").expect("write canonical signer record");
-        drop(file);
-        let loaded = load_genesis_private_key_file(&path).expect("load owner-only signer file");
-        assert_eq!(loaded.public_key(), expected.public_key());
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
-            .expect("weaken fixture permissions");
-        let error = load_genesis_private_key_file(&path)
-            .expect_err("group/world-readable signer file must fail closed");
-        assert!(error.to_string().contains("mode-0600"));
-    }
-    #[test]
-    fn missing_seed_has_no_builtin_genesis_signer() {
-        let error = derive_localnet_genesis_key_pair(None)
-            .expect_err("missing genesis custody must fail closed");
-        assert_eq!(
-            error.to_string(),
-            "genesis signing requires --seed or --genesis-private-key-file; no built-in signer exists"
         );
     }
 }

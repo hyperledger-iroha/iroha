@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: build_release_image.sh --profile <iroha2|iroha3> --config <single|nexus> [options]
+Usage: build_release_image.sh [options]
 
 Required release controls:
   --source-commit <hex>              Reviewed full source commit.
@@ -35,7 +35,7 @@ EOF
 }
 
 log() {
-  printf '[dual-build-image] %s\n' "$*" >&2
+  printf '[release-build-image] %s\n' "$*" >&2
 }
 
 require_value() {
@@ -74,8 +74,8 @@ require_digest_reference() {
   fi
 }
 
-profile=""
-config=""
+profile="iroha3"
+config="nexus"
 features=""
 binaries=""
 prebuilt_bin_dir=""
@@ -97,16 +97,6 @@ manifest_out=""
 
 while (($#)); do
   case "$1" in
-    --profile)
-      require_value "$1" "${2-}"
-      profile="$2"
-      shift 2
-      ;;
-    --config)
-      require_value "$1" "${2-}"
-      config="$2"
-      shift 2
-      ;;
     --features)
       require_value "$1" "${2-}"
       features="$2"
@@ -208,25 +198,6 @@ while (($#)); do
       ;;
   esac
 done
-
-if [[ -z "$profile" || -z "$config" ]]; then
-  usage >&2
-  exit 1
-fi
-case "$profile" in
-  iroha2|iroha3) ;;
-  *)
-    printf 'Unsupported profile value: %s (expected iroha2 or iroha3)\n' "$profile" >&2
-    exit 1
-    ;;
-esac
-case "$config" in
-  single|nexus) ;;
-  *)
-    printf 'Unsupported config value: %s\n' "$config" >&2
-    exit 1
-    ;;
-esac
 
 for value in \
   "$config" "$features" "$binaries" "$source_commit" "$source_date_epoch" \

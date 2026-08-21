@@ -644,6 +644,11 @@ fn run_open_verify_envelope_drift(family: FheProofFamily, id: &str) {
 
     let mut wrong_circuit = sample.clone();
     let mut wrong_circuit_envelope = envelope.clone();
+    assert_ne!(profile.wrong_circuit_id, profile.circuit_id, "{id}");
+    assert!(
+        profile.wrong_circuit_id.len() <= family.bounds().max_circuit_id_bytes,
+        "{id}: circuit-id drift fixture must remain structurally admissible"
+    );
     wrong_circuit_envelope.circuit_id = profile.wrong_circuit_id.to_string();
     wrong_circuit.replace_envelope(&wrong_circuit_envelope);
     assert_fhe_rejected(

@@ -9,7 +9,7 @@ fn fair_v2_ingress_ownership_projection_ignores_route_liveness_until_maintenance
     ingress.close();
     ingress
         .configure_roster([source.clone()])
-        .expect("validator and anonymous lanes fit");
+        .expect("validator lane fits");
     ingress.open().expect("open configured roster");
     let inbound = |route: NetworkReplyRoute| {
         InboundBlockMessage::try_from_transport_with_reply_route(

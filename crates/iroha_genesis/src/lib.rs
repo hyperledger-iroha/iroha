@@ -397,14 +397,15 @@ fn validate_signed_manifest_binding(
     }
     Ok(())
 }
-/// Genesis block, represented as a thin wrapper around the signed block emitted by the builder.
+/// Genesis block, represented as a thin wrapper around a signed block.
 ///
-/// If an executor upgrade is specified (see [`RawGenesisTransaction::executor`]), the first
-/// transaction must contain a single [`Upgrade`] instruction to set the executor. Otherwise, the
-/// executor upgrade is omitted and the first transaction may be parameters or other instructions.
-/// Subsequent transactions can contain parameter settings, instructions, topology change, and IVM
-/// triggers. Callers can access the wrapped [`SignedBlock`] via tuple struct syntax
-/// (`GenesisBlock.0`).
+/// If an executor upgrade is specified (see [`RawGenesisTransaction::executor`]), the first transaction
+/// must contain a single [`Upgrade`] instruction; otherwise it may contain parameters or other instructions.
+/// Subsequent transactions can contain parameter settings, instructions, topology change, and IVM triggers.
+/// Callers can access the wrapped [`SignedBlock`] via tuple struct syntax (`GenesisBlock.0`).
+///
+/// Raw manifest builders produce a canonical resultless proposal. A deployment signer such as `kagami genesis sign`
+/// must execute it under the selected runtime configuration and publish the resulting result-bearing block.
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct GenesisBlock(pub SignedBlock);
@@ -800,6 +801,7 @@ pub mod genesis_instructions_json {
             ActivatePublicLaneValidator, CustomInstruction, Grant, GrantBox, InstructionBox, Mint,
             MintBox, Register, RegisterPublicLaneValidator, SetAssetDefinitionAlias, SetParameter,
             Transfer, TransferBox,
+            alias_setup::EnsureAlias,
             governance::RegisterCitizen,
             nexus::{
                 ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
@@ -906,6 +908,7 @@ pub mod genesis_instructions_json {
                             "SetAssetDefinitionAlias" => {
                                 try_decode_set_asset_definition_alias(inner.clone())?
                             }
+                            "EnsureAlias" => try_decode_ensure_alias(inner.clone())?,
                             "Custom" => try_decode_custom(inner.clone())?,
                             "RegisterCitizen" => try_decode_register_citizen(inner.clone())?,
                             "RegisterPublicLaneValidator" => {
@@ -1221,6 +1224,17 @@ pub mod genesis_instructions_json {
             None => SetAssetDefinitionAlias::clear(asset_definition_id),
         };
         Ok(Some(InstructionBox::from(instruction)))
+    }
+    fn try_decode_ensure_alias(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
+        let fields = object_fields(inner, "EnsureAlias")?;
+        ensure_only_keys(&fields, &["intent", "acquisition", "quote_guard"])?;
+        for required in ["intent", "acquisition", "quote_guard"] {
+            if !fields.contains_key(required) {
+                return Err(json::Error::missing_field(required));
+            }
+        }
+        let ensure: EnsureAlias = norito::json::value::from_value(Value::Object(fields))?;
+        Ok(Some(InstructionBox::from(ensure)))
     }
     fn try_decode_custom(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
         let mut fields = match inner {
@@ -1682,6 +1696,12 @@ pub mod genesis_instructions_json {
             outer.insert("SetAssetDefinitionAlias".to_string(), Value::Object(fields));
             return Some(Value::Object(outer));
         }
+        if let Some(ensure) = instruction.as_any().downcast_ref::<EnsureAlias>() {
+            let fields = norito::json::value::to_value(ensure).ok()?;
+            let mut outer = Map::new();
+            outer.insert("EnsureAlias".to_string(), fields);
+            return Some(Value::Object(outer));
+        }
         if let Some(custom) = instruction.as_any().downcast_ref::<CustomInstruction>() {
             let payload = norito::json::parse_value(custom.payload().get()).ok()?;
             let mut inner = Map::new();
@@ -1895,10 +1915,15 @@ pub mod genesis_instructions_json {
         use super::*;
         #[allow(unused_imports)]
         use iroha_data_model::{
+            alias_setup::{
+                AliasDataSpaceIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1,
+                ResolvedDataSpaceV1,
+            },
             asset::AssetDefinitionAlias,
             domain::Domain,
             isi::{
                 GrantBox, Log, MintBox, RegisterBox, SetParameter, TransferBox,
+                alias_setup::EnsureAlias,
                 governance::RegisterCitizen,
                 nexus::{
                     ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
@@ -1928,6 +1953,7 @@ pub mod genesis_instructions_json {
         };
         use iroha_primitives::json::Json;
         use iroha_test_samples::ALICE_ID;
+        use norito::json::Map;
         use std::{collections::BTreeSet, num::NonZeroU64, path::PathBuf};
         #[test]
         fn instructions_to_value_keeps_structure() {
@@ -2035,6 +2061,68 @@ pub mod genesis_instructions_json {
                     .downcast_ref::<ActivateFeeSponsorProgramRevision>()
                     .is_some()
             );
+        }
+        #[test]
+        fn ensure_alias_uses_strict_structured_genesis_json() {
+            let payment_asset = AssetDefinitionId::derive_from_components(
+                DomainId::try_new("assets", "universal").expect("asset domain"),
+                "xor".parse().expect("asset name"),
+            );
+            let ensure = EnsureAlias::new(
+                AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+                    dataspace: ResolvedDataSpaceV1::new(
+                        "dpn".parse().expect("dataspace alias"),
+                        DataSpaceId::new(10),
+                    ),
+                    owner: ALICE_ID.clone(),
+                }),
+                AliasLeaseAcquisitionV1::new(1, None),
+                AliasQuoteGuardV1 {
+                    expected_policy_version: 2,
+                    expected_payment_asset: payment_asset,
+                    max_amount: Quantity::from(1_u64),
+                    valid_until_ms: u64::MAX,
+                },
+            );
+            let instruction = InstructionBox::from(ensure.clone());
+            let encoded = instructions_to_value(std::slice::from_ref(&instruction));
+            let encoded_ensure = encoded
+                .as_array()
+                .and_then(|array| array.first())
+                .and_then(|value| value.get("EnsureAlias"))
+                .cloned()
+                .expect("structured EnsureAlias object");
+            let decoded = from_value(&encoded).expect("decode structured EnsureAlias");
+            assert_eq!(
+                decoded[0].as_any().downcast_ref::<EnsureAlias>(),
+                Some(&ensure)
+            );
+
+            let Value::Object(mut extra_fields) = encoded_ensure.clone() else {
+                panic!("EnsureAlias fields must be an object");
+            };
+            extra_fields.insert("unexpected".to_owned(), Value::Null);
+            let mut extra_outer = Map::new();
+            extra_outer.insert("EnsureAlias".to_owned(), Value::Object(extra_fields));
+            let error = from_value(&Value::Array(vec![Value::Object(extra_outer)]))
+                .expect_err("unknown EnsureAlias fields must be rejected");
+            assert!(error.to_string().contains("unexpected"), "{error}");
+
+            let Value::Object(mut unknown_kind_fields) = encoded_ensure else {
+                panic!("EnsureAlias fields must be an object");
+            };
+            let Value::Object(mut intent) = unknown_kind_fields
+                .remove("intent")
+                .expect("EnsureAlias intent")
+            else {
+                panic!("EnsureAlias intent must be an object");
+            };
+            intent.insert("kind".to_owned(), Value::String("unknown".to_owned()));
+            unknown_kind_fields.insert("intent".to_owned(), Value::Object(intent));
+            let mut unknown_kind_outer = Map::new();
+            unknown_kind_outer.insert("EnsureAlias".to_owned(), Value::Object(unknown_kind_fields));
+            from_value(&Value::Array(vec![Value::Object(unknown_kind_outer)]))
+                .expect_err("unknown EnsureAlias intent kinds must be rejected");
         }
         #[test]
         fn register_citizen_uses_structured_genesis_json() {
@@ -3431,7 +3519,7 @@ impl RawGenesisTransaction {
             sumeragi_v2: self.sumeragi_v2,
         }
     }
-    /// Build and sign genesis block.
+    /// Build and sign a resultless genesis proposal.
     ///
     /// # Errors
     ///
@@ -3440,7 +3528,7 @@ impl RawGenesisTransaction {
     pub fn build_and_sign(self, genesis_key_pair: &KeyPair) -> Result<GenesisBlock> {
         self.build_and_sign_with_da_proof_policies(genesis_key_pair, None)
     }
-    /// Build and sign genesis block with an explicit confidential policy hash.
+    /// Build and sign a resultless genesis proposal with an explicit confidential policy hash.
     ///
     /// This does not derive the hash from the manifest. Callers that know the
     /// runtime confidential policy must compute it before signing, so the signed genesis
@@ -3460,7 +3548,7 @@ impl RawGenesisTransaction {
             confidential_policy_hash,
         )
     }
-    /// Build and sign genesis block, overriding the embedded DA proof policies.
+    /// Build and sign a resultless genesis proposal, overriding the embedded DA proof policies.
     ///
     /// # Errors
     ///
@@ -3476,7 +3564,7 @@ impl RawGenesisTransaction {
             None,
         )
     }
-    /// Build and sign genesis block, overriding DA proof policies and the confidential policy hash.
+    /// Build and sign a resultless genesis proposal, overriding DA proof policies and the confidential policy hash.
     ///
     /// # Errors
     ///
@@ -3500,8 +3588,7 @@ impl RawGenesisTransaction {
             genesis_creation_base_ms,
         )
     }
-    /// Build and sign genesis with explicit DA/confidential policy commitments
-    /// and a deterministic transaction creation-time base.
+    /// Build and sign a resultless genesis proposal with explicit DA/confidential policy commitments and a deterministic transaction creation-time base.
     ///
     /// Transaction `i` receives `creation_time_base_ms + i`; the genesis block
     /// timestamp remains one millisecond after the final transaction.
@@ -3565,13 +3652,14 @@ impl RawGenesisTransaction {
             Some(RULES_VERSION),
             Some(confidential_policy_hash.unwrap_or(DEFAULT_GENESIS_CONFIDENTIAL_POLICY_HASH)),
         );
-        let block = SignedBlock::genesis_with_da_proof_policies(
+        let block = SignedBlock::try_genesis_with_da_proof_policies(
             transactions,
             genesis_key_pair.private_key(),
             Some(confidential_digest),
             None,
             da_proof_policies,
-        );
+        )
+        .wrap_err("failed to sign genesis block")?;
         Ok(GenesisBlock(block))
     }
     /// Parse [`RawGenesisTransaction`] to the list of source instructions of the genesis transactions
@@ -4078,7 +4166,7 @@ impl GenesisBuilder {
         self.transactions.push(GenesisTxBuilder::default());
         self
     }
-    /// Finish building, sign, and produce a [`GenesisBlock`].
+    /// Finish building, sign, and produce a resultless [`GenesisBlock`] proposal.
     ///
     /// # Errors
     ///
@@ -4088,7 +4176,7 @@ impl GenesisBuilder {
         self.build_raw()
             .build_and_sign_with_da_proof_policies(genesis_key_pair, da_proof_policies)
     }
-    /// Finish building, sign, and produce a [`GenesisBlock`] with a confidential policy hash.
+    /// Finish building, sign, and produce a resultless [`GenesisBlock`] proposal with a confidential policy hash.
     ///
     /// # Errors
     ///
@@ -4714,81 +4802,75 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn shipped_taira_genesis_binds_sorafs_appeal_xor_at_scale_nine() -> Result<()> {
+    fn soranexus_taira_genesis_binds_sorafs_appeal_xor_at_scale_nine() -> Result<()> {
         const SORA_XOR_ID: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
-        const SORA_XOR_ALIAS: &str = "xor#sora";
+        const SORA_XOR_ALIAS: &str = "xor#sora.universal";
         const SORA_XOR_SCALE: u64 = 9;
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for manifest_path in [
-            repo_root.join("defaults/kagami/iroha3-taira/genesis.json"),
-            repo_root.join("configs/soranexus/taira/genesis.json"),
-        ] {
-            let raw = std::fs::read_to_string(&manifest_path)?;
-            let value = norito::json::parse_value(&raw)?;
-            let transactions = value
-                .get("transactions")
-                .and_then(norito::json::Value::as_array)
-                .ok_or_else(|| eyre!("{} missing transactions array", manifest_path.display()))?;
-            let mut sora_xor_registered = false;
-            let mut sora_xor_scale = None;
-            let mut sora_xor_binding = None;
-            for instruction in transactions
-                .iter()
-                .filter_map(|tx| tx.get("instructions"))
-                .filter_map(norito::json::Value::as_array)
-                .flatten()
+        let manifest_path = repo_root.join("configs/soranexus/taira/genesis.json");
+        let raw = std::fs::read_to_string(&manifest_path)?;
+        let value = norito::json::parse_value(&raw)?;
+        let transactions = value
+            .get("transactions")
+            .and_then(norito::json::Value::as_array)
+            .ok_or_else(|| eyre!("{} missing transactions array", manifest_path.display()))?;
+        let mut sora_xor_registered = false;
+        let mut sora_xor_scale = None;
+        let mut sora_xor_binding = None;
+        for instruction in transactions
+            .iter()
+            .filter_map(|tx| tx.get("instructions"))
+            .filter_map(norito::json::Value::as_array)
+            .flatten()
+        {
+            if let Some(asset_definition) = instruction
+                .get("Register")
+                .and_then(|register| register.get("AssetDefinition"))
+                && asset_definition
+                    .get("id")
+                    .and_then(norito::json::Value::as_str)
+                    == Some(SORA_XOR_ID)
             {
-                if let Some(asset_definition) = instruction
-                    .get("Register")
-                    .and_then(|register| register.get("AssetDefinition"))
-                    && asset_definition
-                        .get("id")
-                        .and_then(norito::json::Value::as_str)
-                        == Some(SORA_XOR_ID)
-                {
-                    if sora_xor_registered {
-                        return Err(eyre!(
-                            "{} registers governed Sora XOR `{SORA_XOR_ID}` more than once",
-                            manifest_path.display()
-                        ));
-                    }
-                    sora_xor_registered = true;
-                    sora_xor_scale = asset_definition
-                        .get("spec")
-                        .and_then(|spec| spec.get("scale"))
-                        .and_then(norito::json::Value::as_u64);
-                }
-                let Some(binding) = instruction.get("SetAssetDefinitionAlias") else {
-                    continue;
-                };
-                if binding.get("alias").and_then(norito::json::Value::as_str)
-                    != Some(SORA_XOR_ALIAS)
-                {
-                    continue;
-                }
-                if sora_xor_binding.is_some() {
+                if sora_xor_registered {
                     return Err(eyre!(
-                        "{} binds governed Sora XOR alias `{SORA_XOR_ALIAS}` more than once",
+                        "{} registers governed Sora XOR `{SORA_XOR_ID}` more than once",
                         manifest_path.display()
                     ));
                 }
-                sora_xor_binding = binding
-                    .get("asset_definition_id")
-                    .and_then(norito::json::Value::as_str);
+                sora_xor_registered = true;
+                sora_xor_scale = asset_definition
+                    .get("spec")
+                    .and_then(|spec| spec.get("scale"))
+                    .and_then(norito::json::Value::as_u64);
             }
-            assert_eq!(
-                sora_xor_binding,
-                Some(SORA_XOR_ID),
-                "{} must bind governed appeal asset `{SORA_XOR_ALIAS}` to `{SORA_XOR_ID}`",
-                manifest_path.display()
-            );
-            assert_eq!(
-                sora_xor_scale,
-                Some(SORA_XOR_SCALE),
-                "{} must register governed appeal asset `{SORA_XOR_ID}` at fixed scale {SORA_XOR_SCALE}; reseed pre-release state instead of mutating a live chain",
-                manifest_path.display()
-            );
+            let Some(binding) = instruction.get("SetAssetDefinitionAlias") else {
+                continue;
+            };
+            if binding.get("alias").and_then(norito::json::Value::as_str) != Some(SORA_XOR_ALIAS) {
+                continue;
+            }
+            if sora_xor_binding.is_some() {
+                return Err(eyre!(
+                    "{} binds governed Sora XOR alias `{SORA_XOR_ALIAS}` more than once",
+                    manifest_path.display()
+                ));
+            }
+            sora_xor_binding = binding
+                .get("asset_definition_id")
+                .and_then(norito::json::Value::as_str);
         }
+        assert_eq!(
+            sora_xor_binding,
+            Some(SORA_XOR_ID),
+            "{} must bind governed appeal asset `{SORA_XOR_ALIAS}` to `{SORA_XOR_ID}`",
+            manifest_path.display()
+        );
+        assert_eq!(
+            sora_xor_scale,
+            Some(SORA_XOR_SCALE),
+            "{} must register governed appeal asset `{SORA_XOR_ID}` at fixed scale {SORA_XOR_SCALE}; reseed pre-release state instead of mutating a live chain",
+            manifest_path.display()
+        );
         Ok(())
     }
     #[test]

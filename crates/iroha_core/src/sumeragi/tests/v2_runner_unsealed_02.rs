@@ -387,7 +387,7 @@ fn exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift() {
     ));
 }
 #[test]
-fn recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner() {
+fn recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade() {
     let (context, _) = context();
     let tag = EventTag::new(context.height, 3, Generation::new(9));
     let round = wire::ConsensusRound {
@@ -438,8 +438,11 @@ fn recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner(
     let exact_lock = directive(Some(subject), None);
     assert!(recovered.exactly_matches_directive(exact_lock));
 
-    let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);
-    assert!(!recovered.exactly_matches_directive(foreign_lock));
+    let upgraded_lock = directive(Some(proposal_subject(b"upgraded replay lock")), None);
+    assert!(
+        recovered.exactly_matches_directive(upgraded_lock),
+        "a same-view lock upgrade cannot reopen that view's one proposal slot"
+    );
     let mismatched_round = super::super::v2::RecoveredLifecycleLocalProposalAttemptV1::for_test(
         tag,
         wire::ConsensusRound { view: 2, ..round },
@@ -576,7 +579,10 @@ fn finalized_rollover_closes_ingress_before_successor_replay() {
     close_ingress_for_rollover(&ready, &ingress);
     assert!(!ready.load(Ordering::Acquire));
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            valid_ingress_probe(),
+            authenticated_peer_for_test(),
+        )),
         Err(FairV2IngressPushError::Closed(_))
     ));
 }
@@ -781,7 +787,10 @@ fn successor_activation_is_published_only_after_ingress_is_open() {
     assert!(!ready.load(Ordering::Acquire));
     assert!(
         matches!(
-            ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                valid_ingress_probe(),
+                authenticated_peer_for_test(),
+            )),
             Err(FairV2IngressPushError::Closed(_))
         ),
         "closed ingress must precede activation publication"
@@ -817,7 +826,10 @@ fn successor_activation_is_published_only_after_ingress_is_open() {
     .expect("open ingress and publish one activation");
     assert!(ready.load(Ordering::Acquire));
     ingress
-        .try_push(InboundBlockMessage::new(valid_ingress_probe(), None))
+        .try_push(InboundBlockMessage::from_authenticated_peer(
+            valid_ingress_probe(),
+            authenticated_peer_for_test(),
+        ))
         .expect("activation publication follows open ingress");
     let active = super::super::status::v2_status().expect("active successor status");
     assert_eq!(active.height, successor.height);
@@ -863,7 +875,10 @@ fn successor_activation_is_published_only_after_ingress_is_open() {
     assert!(!rejected_ready.load(Ordering::Acquire));
     assert!(
         matches!(
-            rejected_ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
+            rejected_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                valid_ingress_probe(),
+                authenticated_peer_for_test(),
+            )),
             Err(FairV2IngressPushError::Closed(_))
         ),
         "foreign-context rejection must close ingress again"
@@ -919,7 +934,10 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
     );
     assert!(
         matches!(
-            ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                valid_ingress_probe(),
+                authenticated_peer_for_test(),
+            )),
             Err(FairV2IngressPushError::Closed(_))
         ),
         "unretired CompleteTip recovery must leave ingress closed"
@@ -1214,7 +1232,10 @@ fn successor_startup_failure_stays_running_and_fails_closed_without_activation()
     assert!(output_guard.restart_required());
     assert!(!ready.load(Ordering::Acquire));
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            valid_ingress_probe(),
+            authenticated_peer_for_test(),
+        )),
         Err(FairV2IngressPushError::Closed(_))
     ));
     let stalled = super::super::status::v2_status().expect("stalled predecessor status");
@@ -1271,14 +1292,14 @@ fn ingress_capacity_error_preserves_message_and_byte_units() {
             required: 10,
         }
     ));
-    let byte_error = FairV2Ingress::new(10, 2 * 1024, 1024, 0, 0)
+    let byte_error = FairV2Ingress::new(10, 2 * 1024 - 1, 1024, 0, 0)
         .configure_roster(validators)
-        .expect_err("two validators and untrusted traffic require three byte partitions");
+        .expect_err("two validators require two exact byte partitions");
     assert!(matches!(
         ingress_capacity_error(byte_error),
         V2RunnerError::IngressByteCapacity {
-            configured: 2048,
-            required: 3072,
+            configured: 2047,
+            required: 2048,
         }
     ));
 }
@@ -1303,7 +1324,10 @@ fn ingress_guard_fails_closed_during_unwind() {
     assert!(unwind.is_err());
     assert!(!ready.load(Ordering::Acquire));
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            valid_ingress_probe(),
+            authenticated_peer_for_test(),
+        )),
         Err(FairV2IngressPushError::Closed(_))
     ));
 }

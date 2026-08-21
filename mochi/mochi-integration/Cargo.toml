@@ -1,6 +1,7 @@
 [package]
 name = "mochi-integration"
 autobins = false
+autotests = false
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -38,3 +39,7 @@ toml = { workspace = true }
 iroha_config.workspace = true
 iroha_core = { workspace = true, default-features = false }
 iroha_genesis.workspace = true
+
+[[test]]
+name = "readiness_smoke"
+path = "tests/readiness_smoke.rs"

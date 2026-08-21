@@ -2,7 +2,6 @@
 # Execute the source-bound Sumeragi v2 PR or production-release corridor.
 set -euo pipefail
 umask 077
-
 profile="${1:---pr}"
 if [[ $# -gt 1 ]] || [[ "$profile" != "--pr" && "$profile" != "--release" ]]; then
   echo "usage: $0 [--pr|--release]" >&2
@@ -1606,7 +1605,7 @@ PY
     else
       release_invocation_retained=1
       echo "aggregate release receipt: ${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
-      echo "Sumeragi v2 production release gates passed, including exact 527/527 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
+      echo "Sumeragi v2 production release gates passed, including exact 522/522 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
     fi
   fi
   exit "$sealed_status"
@@ -1617,7 +1616,6 @@ release_gate_boundary "release-inventory:before" || exit $?
 bash ci/check_sumeragi_v2_multilane_release_inventory.sh
 release_gate_boundary "release-inventory:after-natural-completion" || exit $?
 source "${repo_root}/scripts/sumeragi_v2_prebuilt_bundle.sh"
-
 
 if [[ "$profile" == "--release" ]]; then
   export CARGO_TARGET_DIR="$IROHA_RELEASE_WORKSPACE_TARGET"
@@ -1798,7 +1796,6 @@ if [[ "$profile" == "--release" ]]; then
   chmod 0400 "$build_efficiency_provenance_log"
   verify_release_identity "after build-efficiency provenance guard"
 fi
-
 # Reject an oversized or newly unbudgeted production source before the first
 # build command. The log and both identity checkpoints are sealed-manifest-bound.
 if [[ "$profile" == "--release" ]]; then
@@ -1821,7 +1818,6 @@ if [[ "$profile" == "--release" ]]; then
   chmod 0400 "$source_budget_log"
   verify_release_identity "after source-file budget guard"
 fi
-
 # Build every real-localnet executable before any Cargo test process starts.
 # Test processes are then permanently skip-build/reentrant-disabled, avoiding a
 # Cargo-under-Cargo lock cycle while retaining a source/lock/binary attestation.
@@ -1856,7 +1852,6 @@ if [[ "$profile" == "--release" ]]; then
     >"$corridor_summary"
 fi
 readonly corridor_enabled
-
 
 # Inventory and execute the production adapter/runtime ownership boundary before
 # the slower network and formal corridors. The pure reducer harness cannot
@@ -1966,7 +1961,7 @@ required_production_liveness_tests=(
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_completion_owner_is_source_isolated_and_queue_scoped
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_coalesces_semantic_request_and_attaches_independent_routes
   sumeragi::authoritative_runtime_gate_tests::alternate_reply_route_attaches_before_authenticated_source_lane_cap
-  sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_required_serve_gate_precedes_open
+  sumeragi::v2_lifecycle_coordinator::ingress_position::tests::turn_cut_dequeues_exact_winner_once_and_preserves_ready_rotation
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_churn
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes
@@ -2129,7 +2124,7 @@ required_production_liveness_tests=(
   sumeragi::v2::tests::exact_local_completion_after_decision_reports_body_validated_progress
   sumeragi::v2::tests::busy_local_completion_during_decision_wal_reaches_apply_once
   sumeragi::v2::tests::enter_view_conversion_uses_effect_carried_lock_not_reducer_lock
-  sumeragi::v2::tests::saturated_normal_lane_retains_exact_local_proposal_completion
+  sumeragi::v2::tests::saturated_normal_lane_suppresses_exact_serviced_local_proposal_retry
   sumeragi::v2::tests::unsafe_proposal_admission_preserves_duplicate_and_equivocation_semantics
   sumeragi::v2::tests::admission_keeps_only_the_exact_locked_commit_vote_beyond_one_rotation
   sumeragi::v2::tests::deferred_service_cursor_cycles_nonempty_classes
@@ -2186,7 +2181,7 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::tc_body_rebind_preserves_the_exact_fetch_until_reconstruction_completes
   sumeragi::v2_effects::tests::tc_body_rebind_preserves_certified_request_ownership_through_signed_response
   sumeragi::v2_effects::tests::tc_body_rebind_uses_the_effective_local_lock_when_the_tc_omits_or_lowers_it
-  sumeragi::v2_effects::tests::enter_view_rejects_a_tc_high_without_an_effective_protected_body
+  sumeragi::v2_effects::tests::enter_view_rejects_a_tc_high_without_an_effective_protected_lock
   sumeragi::v2_effects::tests::tc_body_rebind_retags_a_queued_body_available_completion
   sumeragi::v2_effects::tests::tc_body_rebind_retires_a_superseded_completion_and_releases_capacity
   sumeragi::v2_effects::tests::serialized_runtime_rebinds_busy_deferred_body_completion_before_service
@@ -2217,7 +2212,7 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::production_commit_certificate_response_conflict_keeps_discovery_outstanding_and_runtime_open
   sumeragi::v2_effects::tests::proposal_a_distinct_prepare_qc_b_and_timeout_sign_progress_at_capacity_two
   sumeragi::v2_effects::tests::passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime
-  sumeragi::v2_effects::tests::late_passive_fetch_completion_opens_one_serve_predecessor_admission_and_steps
+  sumeragi::v2_lifecycle_coordinator::launch::tests::recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_and_commit
   sumeragi::v2_effects::tests::fetch_retransmissions_reuse_one_work_slot_and_one_signed_request
   sumeragi::v2_effects::tests::apply_retransmissions_reuse_one_work_slot
   sumeragi::v2_effects::tests::full_capacity_certified_fetch_retains_its_exact_owner_until_capacity_releases
@@ -2241,7 +2236,6 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks
   sumeragi::v2_effects::tests::recovery_runtime_step_rejects_invalid_scheduler_ownership_before_callbacks
   sumeragi::v2_effects::tests::owned_payload_chunk_rejects_source_swap_before_service_and_keeps_unknown_work_nonfatal
-  sumeragi::v2_effects::tests::certified_body_response_carrier_swap_fails_closed_before_fetch_mutation
   sumeragi::v2_effects::tests::failed_view_cleanup_keeps_stale_fetch_and_requires_restart
   sumeragi::v2_effects::tests::view_cleanup_rejects_inconsistent_protected_request_before_lock_mutation
   sumeragi::v2_effects::tests::view_cleanup_second_cancellation_failure_commits_no_fetch_retirement
@@ -2370,9 +2364,9 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::later_same_semantic_fair_retry_retains_runtime_lifecycle_root
   sumeragi::v2_runtime::tests::network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals
   sumeragi::v2_runtime::tests::older_frozen_aggregate_carrier_rebases_queued_runtime_minimum
-  sumeragi::v2_runtime::tests::ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it
-  sumeragi::v2_runtime::tests::restored_serve_high_watermark_precedes_startup_runtime_owner
-  sumeragi::v2_runtime::tests::full_runtime_churn_cannot_cross_an_exact_serve_ordinal
+  sumeragi::v2_lifecycle_coordinator::scheduler_inputs::certified_serve_scheduler_tests::certified_serve_scheduler_cannot_overtake_its_ready_predecessor
+  sumeragi::v2_lifecycle_coordinator::tests::restart_seeds_high_water_and_rollover_preserves_it
+  sumeragi::v2_lifecycle_coordinator::tests::producer_handoff_blocks_later_work_without_making_serve_a_global_barrier
   sumeragi::v2_runtime::tests::preassigned_batch_lifecycles_require_shared_mint_and_exact_root
   sumeragi::v2_runtime::tests::restart_dormant_completion_batch_atomically_replaces_latent_slots
   sumeragi::v2_runtime::tests::restart_dormant_local_fifo_reservation_survives_full_class_churn
@@ -2401,7 +2395,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::runner_dispatch_rejects_certified_sidecar_chunk_without_reply_route
   sumeragi::v2_runner::tests::runner_dispatch_rejects_durable_response_without_reply_routes
   sumeragi::v2_runner::tests::exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift
-  sumeragi::v2_runner::tests::recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner
+  sumeragi::v2_runner::tests::recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade
   sumeragi::v2_runner::tests::first_same_subject_lock_preserves_pending_local_proposal_events
   sumeragi::v2_runner::tests::higher_same_subject_lock_retires_prior_origin_work
   sumeragi::v2_runner::tests::first_same_subject_lock_from_prior_view_retires_unlocked_work
@@ -2424,7 +2418,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation
   sumeragi::v2_runner::tests::terminal_sweep_source_partitions_whole_units_before_any_mutation
   sumeragi::v2_runner::tests::local_producer_queue_custody_is_preflighted_before_cursor_mutation
-  sumeragi::v2_runner::tests::dormant_live_serve_debt_latches_restart_instead_of_waiting_for_requester
+  sumeragi::v2_runner::tests::drain_decided_lane_recovery_ingress_retains_current_serve_for_lifecycle
   sumeragi::v2_worker::tests::fetch_consumer_rebind_preserves_live_or_queued_reconstruction_owner
   sumeragi::v2_worker::tests::entered_view_accepts_same_view_higher_generation_supersession
   sumeragi::v2_worker::tests::invalid_fetch_consumer_rebind_fails_closed_without_consuming_owner
@@ -2447,55 +2441,58 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::auxiliary_completion_drain_is_batch_bounded
   sumeragi::v2_worker::tests::actor_backpressure_retains_exact_final_lane_commit_qc_post
   sumeragi::v2_worker::tests::actor_backpressure_retains_complete_merge_share_fanout
-  sumeragi::v2_worker::tests::exact_serve_predecessor_admission_services_older_local_without_admitting_later_io
-  sumeragi::v2_worker::tests::repeated_exact_serve_admissions_close_all_older_sources_before_later_io
-  sumeragi::v2_worker::tests::dropping_exact_serve_predecessor_admission_closes_transient_aperture
-  sumeragi::v2_worker::tests::exact_serve_predecessor_admission_is_transient_and_barrier_bound
-  sumeragi::v2_worker::tests::exact_serve_admission_waits_out_full_control_prefix_before_older_causal_work
-  sumeragi::v2_worker::tests::fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers
-  sumeragi::v2_worker::tests::drained_exact_retransmission_gets_fresh_scheduler_ordinal
-  sumeragi::v2_worker::tests::fair_ingress_gate_overflow_closes_without_partial_admission
-  sumeragi::v2_worker::tests::fair_ingress_classifies_current_historical_future_and_unauthenticated_requests
-  sumeragi::v2_worker::tests::fair_ingress_rollover_retires_ticket_before_old_service_teardown
-  sumeragi::v2_worker::tests::selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle
-  sumeragi::v2_worker::tests::checked_serve_dequeue_rejects_mutated_fair_lifecycle_ordinal
-  sumeragi::v2_worker::tests::dormant_exact_head_fail_stops_after_saturated_fair_prefix_without_repair
-  sumeragi::v2_worker::tests::dormant_serve_waiters_fail_stop_without_requester_ordinal_repair
-  sumeragi::v2_worker::tests::durable_raw_admission_restart_locally_seals_before_later_producers
-  sumeragi::v2_worker::tests::durable_raw_higher_view_drop_restarts_into_local_successor_completion
-  sumeragi::v2_worker::tests::durable_raw_waiter_rejects_mutated_logical_lineage
-  sumeragi::v2_worker::tests::durable_serve_state_v5_rejects_v4_header_and_payload_layouts
-  sumeragi::v2_worker::tests::invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity
-  sumeragi::v2_worker::tests::raw_admission_persistence_failure_rolls_back_logical_lineage
-  sumeragi::v2_worker::tests::fair_ingress_producer_episode_wins_or_yields_without_partial_exact_admission
-  sumeragi::v2_worker::tests::fair_ingress_full_prefix_materializes_exact_serve_before_later_churn
-  sumeragi::v2_worker::tests::fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack
-  sumeragi::v2_worker::tests::fair_ingress_terminal_retry_replays_without_lifecycle_resurrection
-  sumeragi::v2_worker::tests::fair_ingress_higher_view_waits_out_active_family_before_admission
-  sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_locally_completes_without_retry
-  sumeragi::v2_worker::tests::durable_coalesced_retransmission_restart_locally_completes_without_retry
-  sumeragi::v2_worker::tests::restored_serve_waiter_advances_shared_runtime_source
-  sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_into_local_completion
-  sumeragi::v2_worker::tests::durable_serve_seal_before_completion_post_restores_terminal_replay
-  sumeragi::v2_worker::tests::durable_serve_seal_survives_post_before_physical_ack
-  sumeragi::v2_worker::tests::durable_serve_corruption_fails_closed_without_highwater_reset
-  sumeragi::v2_worker::tests::durable_serve_frame_bound_covers_max_layout_manifest_hashes
-  sumeragi::v2_worker::tests::durable_higher_view_abort_republishes_displaced_terminal_before_restart
-  sumeragi::v2_worker::tests::durable_higher_view_admission_crash_locally_completes_successor_union
-  sumeragi::v2_worker::tests::durable_serve_restore_rejects_capacity_owner_swap_across_replacement
-  sumeragi::v2_worker::tests::durable_serve_state_is_pruned_only_with_successor_rollover_root
-  sumeragi::v2_worker::tests::certified_serve_future_slot_blocks_control_and_consensus_replenishment
-  sumeragi::v2_worker::tests::certified_serve_cross_relay_retry_replays_one_terminal_tombstone
-  sumeragi::v2_worker::tests::certified_serve_terminal_rejects_mismatched_response_hash_without_releasing_owner
-  sumeragi::v2_worker::tests::certified_serve_observer_owner_contains_prepare_and_commit_subfamilies
-  sumeragi::v2_worker::tests::certified_serve_higher_view_abort_restores_terminal_high_watermark
-  sumeragi::v2_worker::tests::certified_serve_receiver_close_aborts_reserved_replacement_without_orphan
-  sumeragi::v2_worker::tests::certified_serve_delayed_lower_view_cross_relay_cannot_resurrect
-  sumeragi::v2_worker::tests::certified_serve_receiver_close_rolls_back_pending_capacity_replacement
-  sumeragi::v2_worker::tests::certified_serve_receiver_close_rolls_back_materialized_unclaimed_replacement
-  sumeragi::v2_worker::tests::certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement
-  sumeragi::v2_worker::tests::certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fifo
-  sumeragi::v2_worker::tests::certified_serve_terminal_replay_source_retains_retired_route_and_reconnects
+  sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_a_later_valid_payload_from_a_second_store_owner
+  sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_store_directory_symlink_replacement
+  sumeragi::v2_certified_serve_payload_store::tests::capacity_is_checked_before_a_second_file_is_published
+  sumeragi::v2_certified_serve_payload_store::tests::completed_payload_requires_exact_certified_responder_authority
+  sumeragi::v2_certified_serve_payload_store::tests::completed_payload_requires_exact_durable_body_receipt_and_bytes
+  sumeragi::v2_certified_serve_payload_store::tests::negative_terminal_is_idempotent_and_cannot_be_replaced
+  sumeragi::v2_certified_serve_payload_store::tests::only_the_call_that_created_pending_owns_preledger_abort_authority
+  sumeragi::v2_certified_serve_payload_store::tests::pending_receipt_requires_verified_qc_and_local_retention_authority
+  sumeragi::v2_certified_serve_payload_store::tests::recovery_cut_reauthenticates_request_qc_and_typed_negative
+  sumeragi::v2_certified_serve_payload_store::tests::recovery_cut_reconstructs_and_authenticates_completed_response
+  sumeragi::v2_certified_serve_payload_store::tests::reopen_discards_regular_interrupted_file_but_rejects_corruption
+  sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_all_row_retirement_consumes_pending_serve_terminal_update
+  sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_survives_completed_serve_body_cleanup_with_live_work
+  sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::completed_certified_serve_replay_requires_exact_worker_readback
+  sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::completed_certified_serve_tombstone_replays_without_a_serve_carrier
+  sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::fresh_certified_serve_postledger_failure_retains_tail_and_requires_restart
+  sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::fresh_certified_serve_postrename_sync_failure_requires_restart
+  sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::fresh_certified_serve_publishes_exact_ledger_beside_fetch_and_broadcast
+  sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::fresh_certified_serve_rejects_foreign_target_and_rolls_back_capacity_wait
+  sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::negative_and_cancelled_certified_serve_tombstones_stutter_exactly
+  sumeragi::v2_lifecycle_coordinator::ledger::tests::frame_roundtrip_is_canonical_and_preserves_high_water
+  sumeragi::v2_lifecycle_coordinator::ledger::tests::one_signed_serve_request_cannot_own_two_lifecycle_pairs
+  sumeragi::v2_lifecycle_coordinator::ledger::tests::orphan_serve_or_producer_records_are_rejected
+  sumeragi::v2_lifecycle_coordinator::projection::tests::cancelled_certified_serve_tombstone_replays_with_its_terminal_producer_pair
+  sumeragi::v2_lifecycle_coordinator::projection::tests::certified_serve_completion_settles_from_the_post_fsync_response_receipt
+  sumeragi::v2_lifecycle_coordinator::projection::tests::certified_serve_negative_settlement_requires_the_exact_post_fsync_receipt
+  sumeragi::v2_lifecycle_coordinator::projection::tests::certified_serve_rejects_a_receipt_for_another_signed_request
+  sumeragi::v2_lifecycle_coordinator::projection::tests::certified_serve_terminal_family_mismatch_fails_without_state_mutation
+  sumeragi::v2_lifecycle_coordinator::projection::tests::pending_certified_serve_admits_one_ready_serve_and_adjacent_dormant_producer
+  sumeragi::v2_lifecycle_coordinator::replay_authority::tests::certified_serve_pending_replay_pair_binds_exact_fsync_origin_and_records
+  sumeragi::v2_lifecycle_coordinator::replay_authority::tests::recovered_serve_states_reconstruct_one_common_source_per_replay_pair
+  sumeragi::v2_lifecycle_coordinator::ingress_position::tests::post_cut_append_preserves_geometry_but_pre_cut_mutation_fails_cas
+  sumeragi::v2_lifecycle_coordinator::ingress_position::tests::prepared_commit_preserves_unrelated_post_cut_append
+  sumeragi::v2_lifecycle_coordinator::ingress_position::tests::locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit
+  sumeragi::v2_lifecycle_coordinator::ingress_position::tests::locked_publication_fence_serializes_unrelated_append_and_preserves_it
+  sumeragi::v2_lifecycle_coordinator::ingress_position::tests::dropping_locked_publication_fence_releases_producer_without_dequeue
+  sumeragi::v2_lifecycle_coordinator::launch::turn_driver::ordinary_ingress_token_tests::armed_token_closes_output_before_releasing_dequeued_carrier_and_serve_result
+  sumeragi::v2_lifecycle_coordinator::open::recovery_tests::complete_tip_serve_reconciliation_binds_the_exact_source_frame
+  sumeragi::v2_lifecycle_coordinator::open::recovery_tests::complete_tip_serve_reconciliation_rejects_missing_final_cut_coverage
+  sumeragi::v2_lifecycle_coordinator::scheduler_inputs::certified_serve_scheduler_tests::certified_serve_claim_rolls_back_when_its_exact_carrier_drifted
+  sumeragi::v2_lifecycle_coordinator::scheduler_inputs::certified_serve_scheduler_tests::certified_serve_scheduler_creates_exactly_one_live_claim
+  sumeragi::v2_lifecycle_coordinator::tests::capacity_fence_freezes_the_complete_serve_companion
+  sumeragi::v2_lifecycle_coordinator::tests::durable_rollover_rejects_live_serve_without_payload_cancellation_receipt
+  sumeragi::v2_lifecycle_coordinator::tests::recovery_requires_a_bijective_atomic_serve_producer_pair
+  sumeragi::v2_lifecycle_coordinator::tests::restart_derives_ready_producer_debt_from_terminal_serve
+  sumeragi::v2_lifecycle_coordinator::tests::serve_and_producer_share_one_reconstruction_source
+  sumeragi::v2_lifecycle_coordinator::tests::serve_and_producer_terminalization_fail_closed_without_the_atomic_debt
+  sumeragi::v2_lifecycle_coordinator::tests::serve_retirement_activates_reserved_producer_before_later_admission
+  sumeragi::v2_worker::tests::receiver_teardown_preserves_completion_pending_lifecycle_serve
+  sumeragi::v2_worker::tests::receiver_teardown_rejects_queued_or_active_lifecycle_serve
+  sumeragi::v2::tests::production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies
+  sumeragi::v2_runner::lifecycle_height_driver::tests::completed_certified_serve_yields_before_the_next_outer_turn
   sumeragi::v2_worker::tests::exact_output_coalescing_preserves_distinct_fair_ingress_admissions
   sumeragi::v2_worker::tests::same_tenure_updates_and_reconnect_preserve_current_item
   sumeragi::v2_worker::tests::delayed_old_tenure_delivery_cannot_replace_newer_worker_reply_route
@@ -2530,13 +2527,15 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::exact_output_retry_rejects_a_different_message_identity
   sumeragi::v2_worker::tests::full_exact_output_corridor_does_not_disguise_non_progress_routes_as_backpressure
   sumeragi::v2_worker::tests::applied_height_handoff_retires_all_sidecar_flush_states_without_blocking_successor
-  sumeragi::v2_worker::tests::applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only
+  sumeragi::v2_worker::tests::applied_height_handoff_retires_only_exact_same_finality_nonwinning_autonomous_outputs_atomically
   sumeragi::v2_worker::tests::applied_height_handoff_counts_and_clears_parked_reply_cursor_atomically
   sumeragi::v2_worker::tests::applied_height_handoff_rejects_output_without_reconstruction
   sumeragi::v2_worker::tests::applied_height_handoff_rejects_unbound_lane_output_atomically
   sumeragi::v2_worker::tests::applied_height_handoff_rejects_wrong_height_global_output
   sumeragi::v2_worker::tests::applied_height_handoff_accepts_historical_kura_global_responses_atomically
   sumeragi::v2_worker::tests::applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate
+  sumeragi::v2_worker::tests::applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output
+  sumeragi::v2_worker::tests::applied_height_handoff_accepts_record_backed_autonomous_historical_lane_certificate
   sumeragi::v2_worker::tests::adaptive_reply_timeout_grows_closed_preserves_and_flushed_resets_attempt
   sumeragi::v2_worker::tests::certified_sidecar_close_cancels_only_the_exact_stream_epoch
   sumeragi::v2_worker::tests::certified_sidecar_transfer_identity_binds_stream_epoch
@@ -2724,7 +2723,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=860
+readonly expected_production_liveness_test_count=864
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -2746,7 +2745,7 @@ production_data_model_ignored_unit_list="$(
 # This source-bound corridor intentionally exercises `iroha_p2p`'s production
 # default feature set (`default = []`). Feature-gated QUIC first-packet geometry
 # tests remain useful transport regressions, but are not claimed by this
-# forty-module pre-network inventory.
+# forty-three-module pre-network inventory.
 production_p2p_unit_list="$(run_cargo test --locked --offline -p iroha_p2p --lib -- --list)"
 production_p2p_ignored_unit_list="$(
   run_cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored
@@ -2815,7 +2814,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 860-test liveness inventory above. The later
+# not belong to the canonical 864-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -2827,8 +2826,11 @@ required_multilane_core_focus_tests=(
   sumeragi::v2_runtime::tests::deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences
   sumeragi::v2_runtime::tests::post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target
   sumeragi::v2_runtime::tests::pre_dequeue_probe_validates_unfrozen_leader_wire_identity
+  sumeragi::v2_lifecycle_coordinator::ingress_position::tests::locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit
+  sumeragi::v2_lifecycle_coordinator::ingress_position::tests::locked_publication_fence_serializes_unrelated_append_and_preserves_it
+  sumeragi::v2_lifecycle_coordinator::ingress_position::tests::dropping_locked_publication_fence_releases_producer_without_dequeue
   native_amx::tests::signing_guard_durably_binds_full_source_session_and_participant_incarnation
-  native_amx::tests::signing_guard_is_restart_safe_idempotent_and_rejects_body_equivocation
+  native_amx::tests::signing_guard_durable_commit_rejects_conflicting_later_prepares_across_restart
   kura::tests::native_amx_manifest_artifact_rejects_leaf_or_proof_tampering
   kura::tests::native_amx_latest_index_rebuilds_idempotently_after_receipt_append_crash
   kura::tests::native_amx_retention_window_advances_base_and_bounds_index
@@ -2933,21 +2935,21 @@ required_multilane_core_focus_tests=(
   state::tests::queue_plan_pending_resolution_decrements_only_exact_bound_route_counts
   state::tests::queue_plan_pending_resolution_corrupt_route_counts_fail_without_partial_mutation
   state::tests::queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomically
-  state::tests::queue_plan_only_carriers_require_exact_committed_active_lane_bindings
+  state::tests::pending_queue_plan_admission_uses_single_lane_authority_when_nexus_is_disabled
   state::tests::queue_plan_registry_presence_is_bounded_and_malformed_markers_fail_closed
-  state::tests::queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set
-  state::tests::same_carrier_queue_plan_certificate_cannot_authorize_autonomous_execution
+  state::tests::queue_plan_native_staging_is_an_exact_idempotent_compare_and_set
+  sumeragi::v2_worker::tests::applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output
   smartcontracts::ivm::host::tests::state_syscalls_cannot_forge_delete_or_disclose_queue_plan_admission_marker
   sumeragi::v2_lane_work::tests::repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible
   sumeragi::v2_runner::tests::deferred_autonomous_work_timeout_arms_only_a_non_empty_retry
   torii_proxy::tests::torii_transaction_admission_wire_indexes_are_stable
-  torii_proxy::tests::queue_plan_synced_request_identity_is_semantic_and_source_bound
+  torii_proxy::tests::queue_plan_synced_request_identity_is_semantic_and_exact_network_bound
   torii_proxy::tests::queue_plan_certificate_rejects_noncanonical_semantic_request_identity
   torii_proxy::tests::obsolete_transaction_admission_tags_fail_closed
   torii_proxy::tests::native_admission_binds_participants_but_uses_only_coordinator_quorum
-  torii_proxy::tests::torii_proxy_v5_envelope_roundtrips_exact_request
-  torii_proxy::tests::historical_v2_submit_and_network_carrier_cannot_be_accepted_as_v5
-  torii_proxy::tests::legacy_v2_submit_bool_wire_cannot_be_accepted_as_v5
+  torii_proxy::tests::torii_proxy_v6_envelope_roundtrips_exact_deadline_bound_request
+  torii_proxy::tests::historical_v2_submit_and_network_carrier_cannot_be_accepted_as_v6
+  torii_proxy::tests::legacy_v2_submit_bool_wire_cannot_be_accepted_as_v6
   torii_proxy::tests::torii_routing_plan_hint_enforces_native_amx_participant_limit
   torii_proxy::tests::torii_routing_plan_hint_rejects_duplicate_participants_without_deduplication
   torii_proxy::tests::torii_routing_plan_hint_rejects_out_of_order_participants_without_sorting
@@ -2960,8 +2962,6 @@ required_multilane_core_focus_tests=(
   kura::tests::bounded_pending_merge_hash_scan_filters_orders_and_reports_overflow
   kura::tests::complete_merge_retry_ignores_unrelated_pending_sidecar_capacity
   kura::tests::bounded_pending_merge_selection_skips_committed_prefix_without_underfill
-  kura::tests::canonical_prune_capacity_includes_large_commit_roster_generation
-  kura::tests::startup_prune_capacity_reuses_large_roster_admission_exactly
   kura::tests::active_prune_recovery_never_allocates_missing_retained_merge_carrier
   kura::tests::historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rejection
   kura::tests::historical_recovery_partial_batch_restart_completes_remaining_records
@@ -3003,12 +3003,6 @@ required_multilane_core_focus_tests=(
   kura::tests::deterministic_commit_marker_temp_recovers_or_rolls_back_exactly
   kura::tests::commit_marker_rejects_oversized_deterministic_temp
   kura::tests::commit_marker_rejects_symlinked_deterministic_temp
-  commit_roster_journal::tests::durable_pointer_temp_recovers_forward_after_restart
-  commit_roster_journal::tests::durable_generation_temp_without_pointer_rolls_back_after_restart
-  commit_roster_journal::tests::partial_deterministic_temps_roll_back_to_stable_pointer
-  commit_roster_journal::tests::load_rejects_oversized_and_unexpected_publication_artifacts
-  commit_roster_journal::tests::load_rejects_symlinked_deterministic_publication_temp
-  commit_roster_journal::tests::prune_projection_accounts_large_generation_and_pointer_peak_exactly
   kura::tests::kura_start_rejects_unbound_local_peer_identity
   kura::tests::eviction_requires_distinct_matching_replica_adverts
   kura::tests::deterministic_commit_qc_keepers_use_f_plus_one_and_pin_a_local_keeper
@@ -3129,7 +3123,7 @@ required_multilane_core_focus_tests=(
   queue::tests::reservation_group_commit_preflights_later_identity_before_any_prefix_mutation
   queue::tests::reservation_group_commit_stages_complete_commit_prefix_before_tombstones
   state::tests::historical_native_amx_recovery_and_diagnostics_share_the_frozen_source_boundary
-  state::tests::pending_native_diagnostic_entry_rejects_forged_merge_qc_and_lane_bindings
+  sumeragi::v2_worker::tests::applied_height_handoff_accepts_record_backed_autonomous_historical_lane_certificate
   sumeragi::v2_lane_work::tests::native_amx_context_guard_rejects_replayed_round_epoch_and_future_view
   sumeragi::v2_lane_work::tests::native_signing_boundary_rechecks_state_after_durable_record_before_signature
   sumeragi::v2_lane_work::tests::native_signing_boundary_rechecks_view_routes_predecessors_and_authority
@@ -3327,7 +3321,7 @@ required_multilane_torii_focus_tests=(
   tests_runtime_handlers::incoming_torii_proxy_rejects_malformed_v4_hop_chain_before_dispatch
   tests_runtime_handlers::queue_plan_synced_certificate_binds_exact_durable_journal_claim
   tests_runtime_handlers::completed_torii_proxy_requests_are_fifo_bounded_and_ttl_pruned
-  tests_runtime_handlers::queue_plan_synced_registry_timeout_never_returns_accepted
+  tests_runtime_handlers::queue_plan_quorum_is_accepted_before_registry_application
   tests_runtime_handlers::incoming_queue_plan_synced_exact_retry_survives_height_and_roster_advance
   tests_runtime_handlers::incoming_queue_plan_synced_historical_context_without_owned_claim_fails_closed
   operator_signatures::tests::torii_proxy_signatures_accept_unlisted_peer_keys_without_operator_privileges
@@ -3364,7 +3358,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=527
+readonly expected_multilane_focus_test_count=522
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -3491,10 +3485,9 @@ for required_test in "${required_multilane_integration_lib_focus_tests[@]}"; do
   fi
 done
 
-
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 527-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 522-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -3602,12 +3595,11 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 528 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 527 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 523 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 522 focused tests" >&2
     exit 1
   fi
 fi
-
 # These are the real-network four-peer acceptance gates. Keep their exact
 # harness/name inventory source-bound and non-ignored even though ordinary
 # developer runs may opt out inside the test body.
@@ -3654,7 +3646,6 @@ for required_test_spec in \
     exit 1
   fi
 done
-
 # The source-binding checker derives this same ordered corpus from the formal
 # ledger. Keep an independent fixed release count and terminal contract marker
 # so the runner and ledger cannot silently agree to drop a mutation together.
@@ -3674,7 +3665,6 @@ if ! grep -Fqx -- \
   echo "multilane mutation runner lacks the exact 106-mutation completion contract" >&2
   exit 1
 fi
-
 readonly expected_typed_rollover_formal_mutation_count=45
 observed_typed_rollover_formal_mutation_count="$(
   grep -Ec '^  "[a-z0-9-]+\|typed_rollover_handoff_[a-z0-9_]+_bug[.]cfg\|(12|13)\|\$\{(INVARIANT|TEMPORAL)_MARKER\}"$|^run_case repeated-handoff-after-restart-restore \\$' \
@@ -3691,7 +3681,6 @@ if ! grep -Fqx -- \
   echo "typed rollover mutation runner lacks the exact 45-mutation completion contract" >&2
   exit 1
 fi
-
 production_liveness_modules=(
   kura::tests
   kura::lane_geometry::tests
@@ -3707,6 +3696,7 @@ production_liveness_modules=(
   sumeragi::serviced_candidate_store::tests
   sumeragi::v2::tests
   sumeragi::v2_body_store::tests
+  sumeragi::v2_certified_serve_payload_store::tests
   sumeragi::v2_block_sync::tests
   sumeragi::v2_apply::tests
   sumeragi::v2_effects::tests
@@ -3715,7 +3705,9 @@ production_liveness_modules=(
   sumeragi::v2_transport::tests
   sumeragi::v2_recovery::tests
   sumeragi::v2_lifecycle_recovery::tests
+  sumeragi::v2_lifecycle_coordinator
   sumeragi::v2_runner::tests
+  sumeragi::v2_runner::lifecycle_height_driver::tests
   sumeragi::v2_worker::tests
   sumeragi::status::v2_liveness_watchdog_tests
   zk::kagemusha_finality::tests
@@ -3749,6 +3741,7 @@ production_liveness_leg_ids=(
   production-v2-leader-wire-lifecycle-store
   production-v2-adapter
   production-v2-body-store
+  production-v2-certified-serve-payload-store
   production-v2-block-sync
   production-v2-apply
   production-v2-effects
@@ -3757,7 +3750,9 @@ production_liveness_leg_ids=(
   production-v2-transport
   production-v2-recovery
   production-v2-lifecycle-recovery
+  production-v2-lifecycle-coordinator
   production-v2-runner
+  production-v2-lifecycle-height-driver
   production-v2-worker
   production-v2-watchdog
   production-kagemusha-finality
@@ -4035,9 +4030,9 @@ if [[ "$profile" == "--release" ]]; then
     7
     63
     61
-    4
-    6
     5
+    7
+    6
   )
   for native_amx_grouped_parity_index in \
     "${!native_amx_grouped_parity_surfaces[@]}"; do
@@ -4517,10 +4512,10 @@ publish_corridor_completion() {
     echo "source-bound localnet binary bundle changed before corridor completion" >&2
     return 1
   fi
-  # 40 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
+  # 43 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
   # command + 6 Taira + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped
-  # SDK + 6 diagnostics + 11 pytest legs = 88.
-  readonly expected_corridor_leg_count=88
+  # SDK + 6 diagnostics + 11 pytest legs = 91.
+  readonly expected_corridor_leg_count=91
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1

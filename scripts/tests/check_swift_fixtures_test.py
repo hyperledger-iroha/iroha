@@ -71,7 +71,10 @@ def payload_body(name: str, *, shared: bool) -> dict:
         "authority": f"authority-{name}",
         "creation_time_ms": 1,
         "executable": {"Instructions": [instruction]},
-        "fee_payment": {"payer": "authority", "value": {"charge_limits": []}},
+        "fee_payment": {
+            "payer": "authority",
+            "value": {"charge_limits": [], "gas_limit": None},
+        },
         "metadata": {},
         "network_id": MODULE.CANONICAL_DEV_NETWORK_ID,
         "nonce": 1,
@@ -491,6 +494,17 @@ def test_swift_charge_limits_is_exact_empty_array(
     dump(target, path.name, payloads)
 
     with pytest.raises(ValueError, match="charge_limits"):
+        MODULE.compare(source, target)
+
+
+def test_swift_fee_payment_requires_explicit_nullable_gas_limit(tmp_path: Path) -> None:
+    source, target, _, _ = populate_valid_corpus(tmp_path)
+    path = target / "swift_parity_payloads.json"
+    payloads = json.loads(path.read_text())
+    payloads[0]["payload"]["fee_payment"]["value"].pop("gas_limit")
+    dump(target, path.name, payloads)
+
+    with pytest.raises(ValueError, match="gas_limit"):
         MODULE.compare(source, target)
 
 

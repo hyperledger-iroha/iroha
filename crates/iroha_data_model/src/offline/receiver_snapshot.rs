@@ -9,21 +9,26 @@ use norito::codec::{Decode, Encode};
 /// Current active-receiver snapshot format.
 pub const KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_VERSION_V1: u16 = 1;
 /// Maximum active or ambiguous receiver tuples committed by one block.
-pub const KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_MAX_LEAVES_V1: usize = 65_536;
+pub const KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_MAX_LEAVES_V1: usize = 512;
 /// Maximum unexpired native device registrations retained across all accounts.
 ///
-/// Bounding records by the receiver-snapshot leaf ceiling also bounds the work needed to derive
-/// the snapshot when every registration maps to a distinct receiver tuple.
+/// This matches the receiver-snapshot leaf ceiling, bounding both the snapshot tree and the
+/// consensus work needed to inspect active native device registrations on every block. Core uses
+/// a separate bounded allowance for cooling replay tombstones.
 pub const KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1: usize =
     KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_MAX_LEAVES_V1;
 /// Maximum unexpired native device registrations retained for one account.
-pub const KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1: usize = 256;
+pub const KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1: usize = 64;
 const _: () = assert!(
     KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1
         <= KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1
 );
+const _: () = assert!(
+    KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1
+        <= KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_MAX_LEAVES_V1
+);
 /// Maximum depth of the canonical balanced receiver tree.
-pub const KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_MAX_SIBLINGS_V1: usize = 16;
+pub const KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_MAX_SIBLINGS_V1: usize = 9;
 /// Exact depth of the execution-witness sparse tree.
 pub const KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_SIBLINGS_V1: usize = 256;
 /// Fixed synthetic execution-witness key committed by every current block.
@@ -539,7 +544,7 @@ mod tests {
             device_id: device.to_owned(),
             asset_definition_id: AssetDefinitionId::derive_from_components(
                 crate::domain::DomainId::try_new("wonderland", "universal").expect("asset domain"),
-                "sbd".parse().expect("asset name"),
+                "ds".parse().expect("asset name"),
             ),
         }
     }

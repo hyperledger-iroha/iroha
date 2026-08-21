@@ -1,7 +1,7 @@
 //! A crate containing various derive macros for `iroha_data_model`
 // darling-generated code triggers this lint
 #![allow(clippy::needless_continue)]
-mod emitter_ext;
+iroha_derive::define_emitter_ext!();
 mod enum_ref;
 mod event_set;
 mod has_origin;
@@ -11,7 +11,6 @@ mod registrable_builder;
 mod utils;
 use crate::utils::darling_error;
 use darling::{FromMeta, ast::NestedMeta};
-use emitter_ext::EmitterExt;
 use manyhow::{Emitter, Result, emit, manyhow};
 use proc_macro2::TokenStream;
 use quote::quote;

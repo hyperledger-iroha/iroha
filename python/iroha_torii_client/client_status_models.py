@@ -72,6 +72,14 @@ class SumeragiV2QcReference:
 
 
 @dataclass(frozen=True)
+class SumeragiV2QcResponse:
+    """Authoritative PrepareQC references returned by ``GET /v1/sumeragi/qc``."""
+
+    highest_prepare_qc: Optional[SumeragiV2QcReference]
+    locked_prepare_qc: Optional[SumeragiV2QcReference]
+
+
+@dataclass(frozen=True)
 class SumeragiV2TimeoutReference:
     """Stable reference to the latest installed timeout certificate."""
 
@@ -401,23 +409,6 @@ class KaigiRelayHealthSnapshot:
 
 
 @dataclass(frozen=True)
-class SumeragiQcEntry:
-    """`HighestQC`/`LockedQC` entry returned by ``GET /v1/sumeragi/qc``."""
-
-    height: int
-    view: int
-    subject_block_hash: Optional[str]
-
-
-@dataclass(frozen=True)
-class SumeragiQcSnapshot:
-    """QC snapshot returned by ``GET /v1/sumeragi/qc``."""
-
-    highest_qc: SumeragiQcEntry
-    locked_qc: SumeragiQcEntry
-
-
-@dataclass(frozen=True)
 class SumeragiPacemakerSnapshot:
     """Pacemaker metrics returned by ``GET /v1/sumeragi/pacemaker``."""
 
@@ -431,37 +422,6 @@ class SumeragiPacemakerSnapshot:
     round_elapsed_ms: int
     view_timeout_target_ms: int
     view_timeout_remaining_ms: int
-
-
-@dataclass(frozen=True)
-class SumeragiPhasesEma:
-    """Smoothed latency metrics returned alongside ``/v1/sumeragi/phases``."""
-
-    propose_ms: int
-    collect_da_ms: int
-    collect_prevote_ms: int
-    collect_precommit_ms: int
-    collect_aggregator_ms: int
-    commit_ms: int
-    pipeline_total_ms: int
-
-
-@dataclass(frozen=True)
-class SumeragiPhasesSnapshot:
-    """Latest latency counters returned by ``GET /v1/sumeragi/phases``."""
-
-    propose_ms: int
-    collect_da_ms: int
-    collect_prevote_ms: int
-    collect_precommit_ms: int
-    collect_aggregator_ms: int
-    commit_ms: int
-    pipeline_total_ms: int
-    collect_aggregator_gossip_total: int
-    block_created_dropped_by_lock_total: int
-    block_created_hint_mismatch_total: int
-    block_created_proposal_mismatch_total: int
-    ema_ms: SumeragiPhasesEma
 
 
 @dataclass(frozen=True)

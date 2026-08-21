@@ -1,31 +1,14 @@
 #[test]
 fn lane_block_application_receipt_persists_canonical_results_and_reloads() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let mut block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    )
-    .as_ref()
-    .clone();
-    attach_ok_results_to_block(&mut block);
+    let (
+        (temp_dir, config, lane_config),
+        (lane_id, lane_entry, lane_block_height),
+        (block, ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::committed().into_parts();
     let block_hash = block.hash();
     let block_height = block.header().height().get();
     let expected_result = block.results().next().expect("dummy block result").clone();
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(Arc::new(block))
         .expect("store block with lane artifact and results");
     kura.persist_lane_block_application_receipt(&proposal)
@@ -37,7 +20,14 @@ fn lane_block_application_receipt_persists_canonical_results_and_reloads() {
         .expect("lane application receipt");
     assert_eq!(receipt.format_label(), "lane.application_receipt");
     assert_eq!(receipt.proposal, proposal);
-    assert_eq!(receipt.artifact.ownership, ownership);
+    assert_eq!(
+        receipt
+            .source
+            .global_artifact()
+            .expect("canonical receipt source")
+            .ownership,
+        ownership
+    );
     assert_eq!(receipt.application_block_height, block_height);
     assert_eq!(receipt.application_block_hash, block_hash);
     assert_eq!(
@@ -55,7 +45,7 @@ fn lane_block_application_receipt_persists_canonical_results_and_reloads() {
     );
     assert!(kura.lane_block_application_receipt_available(&proposal));
     let (data_path, index_path) =
-        Kura::lane_block_application_receipt_paths_for_entry(lane_entry, temp_dir.path());
+        Kura::lane_block_application_receipt_paths_for_entry(&lane_entry, temp_dir.path());
     assert!(
         data_path.is_file(),
         "lane application receipt data file missing"
@@ -74,29 +64,12 @@ fn lane_block_application_receipt_persists_canonical_results_and_reloads() {
 }
 #[test]
 fn terminal_receipt_pair_revalidation_fails_closed_on_missing_corrupt_and_mismatched_bytes() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let mut block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    )
-    .as_ref()
-    .clone();
-    attach_ok_results_to_block(&mut block);
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (temp_dir, _config, _lane_config),
+        (lane_id, lane_entry, lane_block_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::committed().into_parts();
     kura.store_block(Arc::new(block))
         .expect("store block with lane artifact and results");
     kura.persist_lane_block_application_receipt(&proposal)
@@ -105,7 +78,7 @@ fn terminal_receipt_pair_revalidation_fails_closed_on_missing_corrupt_and_mismat
         .read_lane_block_application_receipt(lane_id, lane_block_height)
         .expect("read exact application receipt");
     let (data_path, index_path) =
-        Kura::lane_block_application_receipt_paths_for_entry(lane_entry, temp_dir.path());
+        Kura::lane_block_application_receipt_paths_for_entry(&lane_entry, temp_dir.path());
     let original_data = fs::read(&data_path).expect("read receipt data bytes");
     let original_index = fs::read(&index_path).expect("read receipt index bytes");
     assert!(original_data.len() > 1);
@@ -160,9 +133,7 @@ fn terminal_receipt_pair_revalidation_fails_closed_on_missing_corrupt_and_mismat
 }
 #[test]
 fn receipt_repair_preflight_does_not_request_an_already_present_unowned_body() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let mut block = dummy_block_with_lane_payload_ownership(lane_id, lane_entry.dataspace_id, 1)
@@ -194,8 +165,7 @@ fn receipt_repair_preflight_does_not_request_an_already_present_unowned_body() {
 }
 fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {
     for (label, failure) in strict_progress_sidecar_failure_modes() {
-        let temp_dir = TempDir::new().expect("create temp dir");
-        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
         assert_eq!(
             config.fsync_mode,
             FsyncMode::Batched,
@@ -295,24 +265,12 @@ fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {
 }
 #[test]
 fn current_application_receipt_fails_closed_after_lane_recreation() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let mut block = dummy_block_with_lane_payload_ownership(lane_id, lane_entry.dataspace_id, 1)
-        .as_ref()
-        .clone();
-    attach_ok_results_to_block(&mut block);
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (_temp_dir, config, lane_config),
+        (lane_id, lane_entry, _lane_block_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::committed().into_parts();
     kura.store_block(Arc::new(block))
         .expect("store canonical receipt anchor");
     let recovered = kura
@@ -344,7 +302,7 @@ fn current_application_receipt_fails_closed_after_lane_recreation() {
         LaneBlockApplicationReceiptArtifactFormat::Current,
     );
     kura.install_lane_incarnation_marker_for_test(
-        lane_entry,
+        &lane_entry,
         Hash::new(b"recreated-current-receipt-incarnation"),
         0,
     )
@@ -396,8 +354,7 @@ fn current_application_receipt_fails_closed_after_lane_recreation() {
 #[test]
 fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_closed_after_lane_recreation()
  {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
     let lane_entry = lane_config.primary();
     let (mut kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
@@ -558,33 +515,16 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
 }
 #[test]
 fn lane_block_sidecars_remain_valid_for_hash_only_snapshot_anchor() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let mut block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    )
-    .as_ref()
-    .clone();
-    attach_ok_results_to_block(&mut block);
+    let (
+        (_temp_dir, config, lane_config),
+        (lane_id, _lane_entry, lane_block_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::committed().into_parts();
     let block_height = block.header().height().get();
     let block_height_usize =
         NonZeroUsize::new(usize::try_from(block_height).expect("dummy block height fits usize"))
             .expect("dummy block height is non-zero");
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(Arc::new(block))
         .expect("store block with lane artifact and results");
     let recovered = kura
@@ -622,26 +562,12 @@ fn lane_block_sidecars_remain_valid_for_hash_only_snapshot_anchor() {
 }
 #[test]
 fn lane_block_application_receipt_waits_for_committed_results() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    );
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (_temp_dir, _config, _lane_config),
+        (lane_id, _lane_entry, lane_block_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::uncommitted().into_parts();
     kura.store_block(block)
         .expect("store block with lane artifact but no results");
     assert!(
@@ -663,26 +589,12 @@ fn lane_block_application_receipt_waits_for_committed_results() {
 }
 #[test]
 fn lane_block_direct_application_receipt_persists_clean_preflight_results() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    );
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (_temp_dir, config, lane_config),
+        (lane_id, _lane_entry, lane_block_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::uncommitted().into_parts();
     kura.store_block(block)
         .expect("store block with lane artifact but no canonical results");
     assert!(
@@ -737,26 +649,12 @@ fn lane_block_direct_application_receipt_persists_clean_preflight_results() {
 }
 #[test]
 fn lane_block_direct_application_receipt_rejects_rejected_preflight() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    );
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (_temp_dir, _config, _lane_config),
+        (lane_id, _lane_entry, lane_block_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::uncommitted().into_parts();
     kura.store_block(block)
         .expect("store block with lane artifact");
     let recovered = kura
@@ -795,29 +693,12 @@ fn lane_block_direct_application_receipt_rejects_rejected_preflight() {
 }
 #[test]
 fn lane_block_application_receipt_read_rejects_tampered_sidecar() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let mut block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    )
-    .as_ref()
-    .clone();
-    attach_ok_results_to_block(&mut block);
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (temp_dir, _config, _lane_config),
+        (lane_id, lane_entry, lane_block_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::committed().into_parts();
     kura.store_block(Arc::new(block))
         .expect("store block with lane artifact and results");
     kura.persist_lane_block_application_receipt(&proposal)
@@ -830,7 +711,7 @@ fn lane_block_application_receipt_read_rejects_tampered_sidecar() {
         .encode_framed()
         .expect("encode tampered lane application receipt");
     let (data_path, index_path) =
-        Kura::lane_block_application_receipt_paths_for_entry(lane_entry, temp_dir.path());
+        Kura::lane_block_application_receipt_paths_for_entry(&lane_entry, temp_dir.path());
     assert!(
         Kura::append_indexed_sidecar(
             &data_path,
@@ -840,7 +721,6 @@ fn lane_block_application_receipt_read_rejects_tampered_sidecar() {
             "lane block application receipt",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
         "tampered sidecar should overwrite the indexed application receipt entry"
     );
@@ -852,9 +732,9 @@ fn lane_block_application_receipt_read_rejects_tampered_sidecar() {
     assert!(!kura.lane_block_application_receipt_available(&proposal));
 }
 #[test]
-fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence() {
+fn lane_block_application_receipt_reader_rejects_pre_release_omitted_merge_evidence() {
     #[derive(Encode)]
-    struct LegacyLaneBlockApplicationReceiptArtifact {
+    struct PreReleaseLaneBlockApplicationReceiptArtifact {
         format: LaneBlockApplicationReceiptArtifactFormat,
         proposal: LaneBlockProposalV1,
         artifact: LaneBlockArtifact,
@@ -865,29 +745,12 @@ fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence()
         result_hashes: Vec<Hash>,
         results: Vec<TransactionResult>,
     }
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let mut block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    )
-    .as_ref()
-    .clone();
-    attach_ok_results_to_block(&mut block);
-    let proposal = lane_block_proposal_from_ownership(
-        block
-            .execution_context()
-            .expect("execution context")
-            .lane_payload_ownerships
-            .first()
-            .expect("lane ownership"),
-    );
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (temp_dir, _config, _lane_config),
+        (lane_id, lane_entry, lane_block_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::committed().into_parts();
     kura.store_block(Arc::new(block))
         .expect("store block with lane artifact and results");
     kura.persist_lane_block_application_receipt(&proposal)
@@ -895,10 +758,14 @@ fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence()
     let current = kura
         .read_lane_block_application_receipt(lane_id, lane_block_height)
         .expect("current lane application receipt");
-    let legacy = LegacyLaneBlockApplicationReceiptArtifact {
+    let pre_release = PreReleaseLaneBlockApplicationReceiptArtifact {
         format: current.format,
         proposal: current.proposal,
-        artifact: current.artifact,
+        artifact: current
+            .source
+            .global_artifact()
+            .expect("canonical receipt source")
+            .clone(),
         application_block_height: current.application_block_height,
         application_block_hash: current.application_block_hash,
         entrypoint_indices: current.entrypoint_indices,
@@ -906,9 +773,9 @@ fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence()
         result_hashes: current.result_hashes,
         results: current.results,
     };
-    let payload = norito::to_bytes(&legacy).expect("encode legacy application receipt");
+    let payload = norito::to_bytes(&pre_release).expect("encode pre-release application receipt");
     let (data_path, index_path) =
-        Kura::lane_block_application_receipt_paths_for_entry(lane_entry, temp_dir.path());
+        Kura::lane_block_application_receipt_paths_for_entry(&lane_entry, temp_dir.path());
     assert!(
         Kura::append_indexed_sidecar(
             &data_path,
@@ -918,9 +785,8 @@ fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence()
             "lane block application receipt",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
-        "legacy application receipt should replace the indexed test entry"
+        "pre-release application receipt should replace the indexed test entry"
     );
     assert_eq!(
         kura.read_lane_block_application_receipt_from_paths_locked(
@@ -935,10 +801,14 @@ fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence()
     );
 }
 #[test]
-fn autonomous_execution_input_requires_complete_exact_source_binding() {
+fn autonomous_execution_input_uses_one_exact_typed_source_binding() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(LaneId::new(1), DataSpaceId::new(2), 1, &signer);
+    assert!(
+        payload.origin_proposal.payload_block_hint.is_none(),
+        "fixture must exercise hint-free autonomous execution"
+    );
     let input = Kura::autonomous_lane_block_execution_input_candidate(&payload, network_id, epoch)
         .expect("autonomous input fixture");
     assert_eq!(
@@ -946,29 +816,20 @@ fn autonomous_execution_input_requires_complete_exact_source_binding() {
         Ok(()),
         "a complete reservation-bound autonomous input must be accepted"
     );
-    for (label, candidate) in [
-        ("chain", {
-            let mut candidate = input.clone();
-            candidate.autonomous_network_id = None;
-            candidate
-        }),
-        ("epoch", {
-            let mut candidate = input.clone();
-            candidate.autonomous_epoch = None;
-            candidate
-        }),
-        ("payload", {
-            let mut candidate = input.clone();
-            candidate.autonomous_payload_hash = None;
-            candidate
-        }),
-    ] {
-        assert_eq!(
-            Kura::validate_lane_block_execution_input_artifact(&candidate),
-            Err("execution input autonomous source binding is incomplete"),
-            "missing {label} binding must fail closed"
-        );
-    }
+    assert_eq!(
+        input.source.autonomous_binding(),
+        Some((network_id, epoch, payload.payload_hash))
+    );
+    assert!(input.source.global_artifact().is_none());
+    let encoded = input
+        .encode_framed()
+        .expect("encode autonomous execution input");
+    assert_eq!(
+        norito::decode_canonical::<LaneBlockExecutionInputArtifact>(&encoded)
+            .expect("decode autonomous execution input"),
+        input,
+        "the typed autonomous source must roundtrip canonically"
+    );
     let mut unbound = input.clone();
     unbound.reservation_keys.clear();
     unbound.routing_plans.clear();
@@ -994,9 +855,16 @@ fn global_execution_input_rejects_unbound_autonomous_metadata() {
     let mut input =
         Kura::autonomous_lane_block_execution_input_candidate(&payload, network_id, epoch)
             .expect("autonomous input fixture");
-    input.autonomous_network_id = None;
-    input.autonomous_epoch = None;
-    input.autonomous_payload_hash = None;
+    let unrelated = dummy_block_with_lane_payload_ownership(LaneId::new(1), DataSpaceId::new(2), 1);
+    let unrelated_ownership = unrelated
+        .execution_context()
+        .expect("unrelated execution context")
+        .lane_payload_ownerships[0]
+        .clone();
+    input.source = LaneBlockExecutionSourceV1::global_block(LaneBlockArtifact::new(
+        unrelated.hash(),
+        unrelated_ownership,
+    ));
     for (label, candidate) in [
         ("reservation", {
             let mut candidate = input.clone();
@@ -1023,19 +891,10 @@ fn global_execution_input_rejects_unbound_autonomous_metadata() {
             "{label} metadata must fail closed without an autonomous source binding"
         );
     }
-    input.reservation_keys.clear();
-    input.routing_plans.clear();
-    input.native_amx_receipts.clear();
-    assert_eq!(
-        Kura::validate_lane_block_execution_input_artifact(&input),
-        Ok(())
-    );
 }
 #[test]
 fn lane_block_application_receipt_replaces_stale_rollback_evidence() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let lane_block_height = 1;
@@ -1100,26 +959,12 @@ fn lane_block_application_receipt_replaces_stale_rollback_evidence() {
 }
 #[test]
 fn lane_block_execution_input_rejects_forged_entrypoint_hashes() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    );
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (_temp_dir, _config, _lane_config),
+        (lane_id, _lane_entry, lane_block_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::uncommitted().into_parts();
     kura.store_block(block)
         .expect("store block with lane artifact");
     let recovered = kura
@@ -1139,26 +984,12 @@ fn lane_block_execution_input_rejects_forged_entrypoint_hashes() {
 }
 #[test]
 fn lane_block_execution_input_read_rejects_tampered_sidecar() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    );
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (temp_dir, _config, _lane_config),
+        (lane_id, lane_entry, lane_block_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::uncommitted().into_parts();
     kura.store_block(block)
         .expect("store block with lane artifact");
     let recovered = kura
@@ -1174,7 +1005,7 @@ fn lane_block_execution_input_read_rejects_tampered_sidecar() {
         .encode_framed()
         .expect("encode tampered lane execution input");
     let (data_path, index_path) =
-        Kura::lane_block_execution_input_paths_for_entry(lane_entry, temp_dir.path());
+        Kura::lane_block_execution_input_paths_for_entry(&lane_entry, temp_dir.path());
     assert!(
         Kura::append_indexed_sidecar(
             &data_path,
@@ -1184,7 +1015,6 @@ fn lane_block_execution_input_read_rejects_tampered_sidecar() {
             "lane block execution input",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
         "tampered sidecar should overwrite the indexed execution input entry"
     );
@@ -1206,51 +1036,53 @@ fn lane_block_execution_input_read_rejects_tampered_sidecar() {
     );
 }
 #[test]
-fn lane_block_execution_input_reader_rejects_legacy_omitted_autonomous_binding() {
+fn lane_block_execution_input_reader_rejects_pre_release_correlated_source_layout() {
     #[derive(Encode)]
-    struct LegacyLaneBlockExecutionInputArtifact {
+    struct PreReleaseLaneBlockExecutionInputArtifact {
         format: LaneBlockExecutionInputArtifactFormat,
         proposal: LaneBlockProposalV1,
         artifact: LaneBlockArtifact,
+        autonomous_network_id: Option<iroha_data_model::NetworkId>,
+        autonomous_epoch: Option<u64>,
+        autonomous_payload_hash: Option<Hash>,
         entrypoint_hashes: Vec<Hash>,
         entrypoints: Vec<TransactionEntrypoint>,
+        reservation_keys: Vec<LaneQueueReservationKeyV2>,
+        routing_plans: Vec<RoutingPlan>,
+        native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
     }
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    );
-    let proposal = lane_block_proposal_from_ownership(
-        block
-            .execution_context()
-            .expect("execution context")
-            .lane_payload_ownerships
-            .first()
-            .expect("lane ownership"),
-    );
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (temp_dir, _config, _lane_config),
+        (lane_id, lane_entry, lane_block_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::uncommitted().into_parts();
     kura.store_block(block)
         .expect("store block with lane artifact");
     let recovered = kura
         .recover_lane_block_payload(&proposal)
         .expect("recover executable lane payload");
     let current = LaneBlockExecutionInputArtifact::new(recovered);
-    let legacy = LegacyLaneBlockExecutionInputArtifact {
+    let pre_release = PreReleaseLaneBlockExecutionInputArtifact {
         format: current.format,
-        proposal: current.proposal,
-        artifact: current.artifact,
-        entrypoint_hashes: current.entrypoint_hashes,
-        entrypoints: current.entrypoints,
+        proposal: current.proposal.clone(),
+        artifact: current
+            .source
+            .global_artifact()
+            .expect("canonical input source")
+            .clone(),
+        autonomous_network_id: None,
+        autonomous_epoch: None,
+        autonomous_payload_hash: None,
+        entrypoint_hashes: current.entrypoint_hashes.clone(),
+        entrypoints: current.entrypoints.clone(),
+        reservation_keys: current.reservation_keys.clone(),
+        routing_plans: current.routing_plans.clone(),
+        native_amx_receipts: current.native_amx_receipts.clone(),
     };
-    let payload = norito::to_bytes(&legacy).expect("encode legacy lane execution input");
+    let payload = norito::to_bytes(&pre_release).expect("encode pre-release lane execution input");
     let (data_path, index_path) =
-        Kura::lane_block_execution_input_paths_for_entry(lane_entry, temp_dir.path());
+        Kura::lane_block_execution_input_paths_for_entry(&lane_entry, temp_dir.path());
     assert!(
         Kura::append_indexed_sidecar(
             &data_path,
@@ -1260,9 +1092,8 @@ fn lane_block_execution_input_reader_rejects_legacy_omitted_autonomous_binding()
             "lane block execution input",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
-        "legacy execution input should populate the indexed test entry"
+        "pre-release execution input should populate the indexed test entry"
     );
     assert_eq!(
         kura.read_lane_block_execution_input_from_paths_locked(
@@ -1273,31 +1104,17 @@ fn lane_block_execution_input_reader_rejects_legacy_omitted_autonomous_binding()
             false,
         ),
         None,
-        "a pre-autonomous input omitting bindings, reservations, routing, and receipts must fail closed"
+        "the pre-release artifact plus correlated optional bindings layout must fail closed"
     );
 }
 #[test]
 fn lane_block_execution_input_read_heals_stale_canonical_artifact() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    );
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (temp_dir, _config, _lane_config),
+        (lane_id, lane_entry, lane_block_height),
+        (block, ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::uncommitted().into_parts();
     kura.store_block(block)
         .expect("store block with lane artifact");
     let recovered = kura
@@ -1318,7 +1135,8 @@ fn lane_block_execution_input_read_heals_stale_canonical_artifact() {
     let payload = stale_artifact
         .encode_framed()
         .expect("encode stale lane artifact");
-    let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
+    let (data_path, index_path) =
+        Kura::lane_artifact_paths_for_entry(&lane_entry, temp_dir.path());
     assert!(
         Kura::append_indexed_sidecar(
             &data_path,
@@ -1328,7 +1146,6 @@ fn lane_block_execution_input_read_heals_stale_canonical_artifact() {
             "lane block artifact",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
         "stale lane artifact should overwrite the indexed artifact entry"
     );
@@ -1343,32 +1160,18 @@ fn lane_block_execution_input_read_heals_stale_canonical_artifact() {
     );
     assert_eq!(
         kura.read_lane_block_artifact(lane_id, lane_block_height),
-        Some(recovered.artifact),
+        recovered.source.global_artifact().cloned(),
         "healing must restore the canonical lane artifact"
     );
 }
 #[test]
 fn lane_block_execution_preflight_persists_current_state_results_and_reloads() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    );
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (_temp_dir, config, lane_config),
+        (lane_id, _lane_entry, lane_block_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::uncommitted().into_parts();
     kura.store_block(block)
         .expect("store block with lane artifact");
     let recovered = kura
@@ -1439,26 +1242,12 @@ fn lane_block_execution_preflight_persists_current_state_results_and_reloads() {
 }
 #[test]
 fn lane_block_execution_preflight_rejects_result_count_drift() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    );
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (_temp_dir, _config, _lane_config),
+        (lane_id, _lane_entry, lane_block_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::uncommitted().into_parts();
     kura.store_block(block)
         .expect("store block with lane artifact");
     let recovered = kura
@@ -1491,26 +1280,12 @@ fn lane_block_execution_preflight_rejects_result_count_drift() {
 }
 #[test]
 fn lane_block_direct_application_input_requires_predecessor_receipt() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 2;
-    let block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    );
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (_temp_dir, _config, _lane_config),
+        (lane_id, _lane_entry, lane_block_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::uncommitted_at(2).into_parts();
     kura.store_block(block)
         .expect("store block with lane artifact");
     let recovered = kura
@@ -1536,21 +1311,12 @@ fn lane_block_direct_application_input_requires_predecessor_receipt() {
 }
 #[test]
 fn first_lane_block_requires_the_canonical_zero_predecessor() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let block = dummy_block_with_lane_payload_ownership(lane_id, lane_entry.dataspace_id, 1);
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (_temp_dir, _config, _lane_config),
+        (_lane_id, _lane_entry, _lane_block_height),
+        (_block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::uncommitted().into_parts();
     assert!(
         kura.lane_block_predecessor_application_receipt_available(&proposal),
         "lane-local height one must use the canonical zero/None predecessor"
@@ -1567,29 +1333,15 @@ fn first_lane_block_requires_the_canonical_zero_predecessor() {
 }
 #[test]
 fn lane_block_predecessor_receipt_rejects_missing_non_genesis_descriptor() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 12;
-    let block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    );
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let mut proposal = lane_block_proposal_from_ownership(&ownership);
+    let (
+        (_temp_dir, _config, _lane_config),
+        (_lane_id, _lane_entry, _lane_block_height),
+        (_block, _ownership, mut proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::uncommitted_at(12).into_parts();
     proposal.descriptor.previous_lane_block_descriptor_hash = None;
     proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
     proposal.proposal_hash = proposal.computed_proposal_hash();
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     assert!(
         !kura.lane_block_predecessor_application_receipt_available(&proposal),
         "a missing non-genesis predecessor descriptor must never bypass lane continuity"
@@ -1597,9 +1349,7 @@ fn lane_block_predecessor_receipt_rejects_missing_non_genesis_descriptor() {
 }
 #[test]
 fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let dataspace_id = lane_entry.dataspace_id;
@@ -1735,9 +1485,7 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
     );
 }
 fn predecessor_application_receipt_fails_closed_while_durability_barrier_fails() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let dataspace_id = lane_entry.dataspace_id;
@@ -1795,26 +1543,12 @@ fn predecessor_application_receipt_fails_closed_while_durability_barrier_fails()
 }
 #[test]
 fn lane_block_execution_preflight_read_rejects_tampered_sidecar() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    );
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (temp_dir, _config, _lane_config),
+        (lane_id, lane_entry, lane_block_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::uncommitted().into_parts();
     kura.store_block(block)
         .expect("store block with lane artifact");
     let recovered = kura
@@ -1836,7 +1570,7 @@ fn lane_block_execution_preflight_read_rejects_tampered_sidecar() {
         .encode_framed()
         .expect("encode tampered lane execution preflight");
     let (data_path, index_path) =
-        Kura::lane_block_execution_preflight_paths_for_entry(lane_entry, temp_dir.path());
+        Kura::lane_block_execution_preflight_paths_for_entry(&lane_entry, temp_dir.path());
     assert!(
         Kura::append_indexed_sidecar(
             &data_path,
@@ -1846,7 +1580,6 @@ fn lane_block_execution_preflight_read_rejects_tampered_sidecar() {
             "lane block execution preflight",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
         "tampered sidecar should overwrite the indexed preflight entry"
     );
@@ -1862,29 +1595,12 @@ fn lane_block_execution_preflight_read_rejects_tampered_sidecar() {
 }
 #[test]
 fn canonical_lane_block_application_receipt_overrides_conflicting_preflight() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let mut block = dummy_block_with_lane_payload_ownership(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    )
-    .as_ref()
-    .clone();
-    attach_ok_results_to_block(&mut block);
-    let ownership = block
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-    let proposal = lane_block_proposal_from_ownership(&ownership);
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (
+        (_temp_dir, config, lane_config),
+        (lane_id, _lane_entry, lane_block_height),
+        (block, _ownership, proposal),
+        kura,
+    ) = MarkedLaneBlockFixture::committed().into_parts();
     kura.store_block(Arc::new(block))
         .expect("store block with lane artifact and results");
     let recovered = kura
@@ -1931,9 +1647,7 @@ fn canonical_lane_block_application_receipt_overrides_conflicting_preflight() {
 }
 #[test]
 fn lane_block_payload_availability_rejects_entrypoint_hash_drift() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let lane_block_height = 1;
@@ -1976,9 +1690,7 @@ fn lane_block_payload_availability_rejects_entrypoint_hash_drift() {
 }
 #[test]
 fn lane_block_payload_availability_rejects_missing_entrypoint_index() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let lane_block_height = 1;

@@ -34,8 +34,8 @@ DEFAULT_MATRIX = REPO_ROOT / "fixtures/privacy/exact12_v1.tsv"
 MAX_INPUT_BYTES = 8 * 1024 * 1024
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 NETWORK_ID_RE = re.compile(r"hash:([0-9A-F]{64})#([0-9A-F]{4})")
-EXPECTED_MATRIX_FILE_SHA256 = "7336d0221fddc51486ee53d4203f5a92d560d0ec9104a49de25896a8b10673d0"
-EXPECTED_ROLLOUT_PLAN_SHA256 = "63f3d331b25e5b240b3e8ac291b1fa64c6901b52f88b2ea2bb7bdb8af0889aa2"
+EXPECTED_MATRIX_FILE_SHA256 = "f75eeba824067aaf903fd8060c967190e37073dc07e487c81c265018a1c00f38"
+EXPECTED_ROLLOUT_PLAN_SHA256 = "6db9c54ebfa147a57199b02f476929389b0751d59c8387da2e0104d16200ce65"
 EXPECTED_GENESIS_AUTHORITY = (
     "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A"
 )
@@ -149,6 +149,18 @@ EXPECTED_BROKER_POLICY_KEYS = {
 EXPECTED_BROKER_SCHEMA = "iroha.taira.privacy.bootle-lantern-broker-public.v1"
 EXPECTED_CHAIN_ID = taira_constants.CHAIN_ID
 EXPECTED_PROVIDER_HANDLE = "runtime://privacy/bootle-lantern/taira-primary"
+EXPECTED_PUBLIC_ONBOARDING_CREDENTIALS = [
+    {
+        "id": "REPLACE_WITH_TAIRA_BOI_ONBOARDING_CREDENTIAL_ID",
+        "scope": {"dataspace": "is2"},
+        "token_hash": "REPLACE_WITH_TAIRA_BOI_ONBOARDING_TOKEN_HASH",
+    },
+    {
+        "id": "REPLACE_WITH_TAIRA_DPN_ONBOARDING_CREDENTIAL_ID",
+        "scope": {"dataspace": "dpn"},
+        "token_hash": "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH",
+    },
+]
 
 
 class PrivacyBootstrapValidationError(RuntimeError):
@@ -701,11 +713,7 @@ def _validate_config(config: dict[str, Any], plan: dict[str, Any], *, release: b
         or not isinstance(onboarding, dict)
         or onboarding.get("private_key_file")
         != "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY_FILE"
-        or not isinstance(credentials, list)
-        or len(credentials) != 1
-        or not isinstance(credentials[0], dict)
-        or credentials[0].get("token_hash")
-        != "REPLACE_WITH_TAIRA_ONBOARDING_TOKEN_HASH"
+        or credentials != EXPECTED_PUBLIC_ONBOARDING_CREDENTIALS
         or not isinstance(faucet, dict)
         or faucet.get("private_key_file")
         != "REPLACE_WITH_TAIRA_FAUCET_PRIVATE_KEY_FILE"
@@ -823,7 +831,7 @@ def _validate_genesis(genesis: dict[str, Any], plan: dict[str, Any], *, release:
             if isinstance(permission, dict):
                 obj = permission.get("object")
                 if isinstance(obj, dict) and obj.get("name") == "CanEnactGovernance":
-                    if set(obj) != {"name"}:
+                    if set(obj) != {"name", "payload"} or obj.get("payload") is not None:
                         _fail("CanEnactGovernance genesis grant must be unscoped")
                     if permission.get("destination") != authority:
                         _fail("CanEnactGovernance genesis grant targets the wrong authority")

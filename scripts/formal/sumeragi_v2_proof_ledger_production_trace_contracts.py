@@ -3027,7 +3027,7 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
             "store.release_barriers",
             "store.completed_releases",
             "store.missing_payload_hashes",
-            "store.live_by_hash",
+            "store.live_by_entrypoint",
         ),
     },
 )

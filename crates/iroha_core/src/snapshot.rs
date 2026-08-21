@@ -54,8 +54,6 @@ fn serialize_state_snapshot(
 ) {
     let view = state.view();
     let block_hashes: Vec<HashOf<BlockHeader>> = view.block_hashes.iter().copied().collect();
-    let commit_topology = view.commit_topology.to_vec();
-    let prev_commit_topology = view.prev_commit_topology.to_vec();
     let nexus_runtime = SnapshotNexusRuntime::from_nexus_with_autoscale_history(
         &view.nexus,
         &view.lane_incarnations,
@@ -179,18 +177,16 @@ fn serialize_state_snapshot(
     out.push(',');
     json::write_json_string("commit_topology", out);
     out.push(':');
-    json::JsonSerialize::json_serialize(&commit_topology, out);
+    state.commit_topology.json_serialize(out);
     out.push(',');
     json::write_json_string("prev_commit_topology", out);
     out.push(':');
-    json::JsonSerialize::json_serialize(&prev_commit_topology, out);
+    state.prev_commit_topology.json_serialize(out);
     out.push('}');
 }
 fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     let world = state.world();
     let block_hashes: Vec<HashOf<BlockHeader>> = state.block_hashes().iter().copied().collect();
-    let commit_topology = state.commit_topology.to_vec();
-    let prev_commit_topology = state.prev_commit_topology.to_vec();
     let nexus_runtime = SnapshotNexusRuntime::from_nexus_with_autoscale_history(
         &state.nexus,
         &state.lane_incarnations,
@@ -295,11 +291,11 @@ fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     out.push(',');
     json::write_json_string("commit_topology", out);
     out.push(':');
-    json::JsonSerialize::json_serialize(&commit_topology, out);
+    state.commit_topology.json_serialize(out);
     out.push(',');
     json::write_json_string("prev_commit_topology", out);
     out.push(':');
-    json::JsonSerialize::json_serialize(&prev_commit_topology, out);
+    state.prev_commit_topology.json_serialize(out);
     out.push('}');
 }
 // Serialize State as a minimal snapshot wrapper using Norito JSON writer.
@@ -1917,9 +1913,7 @@ fn canonical_wsv_member_is_redacted(path: CanonicalWsvPath, key: &str) -> bool {
             key,
             "sumeragi_v2_bootstrap" | "commit_topology" | "prev_commit_topology"
         ),
-        CanonicalWsvPath::World => {
-            matches!(key, "commit_qcs" | "consensus_evidence" | "vrf_epochs")
-        }
+        CanonicalWsvPath::World => matches!(key, "consensus_evidence" | "vrf_epochs"),
         CanonicalWsvPath::Parameters | CanonicalWsvPath::Sumeragi | CanonicalWsvPath::Other => {
             false
         }
@@ -2171,7 +2165,7 @@ fn reconcile_snapshot_hash_height_with_kura(
             )
         })?;
         let extended = kura
-            .reconcile_exact_audited_snapshot_bootstrap(Some(block_count), payload)
+            .reconcile_exact_audited_snapshot_bootstrap(payload)
             .map_err(TryReadError::Kura)?;
         iroha_logger::warn!(
             snapshot_height,
@@ -4340,8 +4334,9 @@ fn redact_consensus_sidecars_from_state_value(value: &mut json::Value) {
     // that its own anchor commits to.
     state.remove("sumeragi_v2_bootstrap");
     // Commit topologies are consensus scheduling caches. Replay reconstructs
-    // them from Kura blocks and commit-roster journals rather than transaction
-    // execution, so they must not perturb committed ledger checkpoints.
+    // them from Kura blocks and their authenticated v2 finality artifacts
+    // rather than transaction execution, so they must not perturb committed
+    // ledger checkpoints.
     state.remove("commit_topology");
     state.remove("prev_commit_topology");
     let Some(world) = value.get_mut("world") else {
@@ -4354,10 +4349,8 @@ fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
     let Some(world) = world.as_object_mut() else {
         return;
     };
-    // These stores are asynchronously enriched recovery evidence, not WSV
-    // data committed by the block itself. Including them makes historical
-    // checkpoints depend on which peer supplied later, richer certificates.
-    world.remove("commit_qcs");
+    // Consensus evidence is asynchronously enriched recovery data, not WSV data committed by
+    // the block itself. Including it makes historical checkpoints depend on later peer input.
     world.remove("consensus_evidence");
     // VRF epoch snapshots are maintained by consensus message handling outside
     // block application. Kura replay verifies block-applied WSV data only.
@@ -4496,7 +4489,7 @@ pub enum TryReadError {
     },
     /// Snapshot at height `{snapshot_height}` is missing the durable Space Directory manifest section
     MissingSpaceDirectoryManifestSection {
-        /// Height recorded by the legacy snapshot.
+        /// Height recorded by the malformed snapshot.
         snapshot_height: usize,
     },
     /// Failed to reconcile snapshot block hashes with Kura

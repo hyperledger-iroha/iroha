@@ -35,7 +35,7 @@ proposal_queue_scan_multiplier = 4
 
 [sumeragi.queues]
 authenticated_non_validator_sources = 2
-body_bytes = 346030080
+body_bytes = 311427072
 body_source_bytes = 34603008
 
 [network]
@@ -43,7 +43,7 @@ address = "addr:0.0.0.0:1342#762A"
 public_address = "addr:172.28.0.15:1342#8717"
 max_frame_bytes = 23068700
 max_frame_bytes_block_sync = 23068672
-max_frame_bytes_tx_gossip = 11534336
+max_frame_bytes_tx_gossip = 13631488
 
 [torii]
 address = "addr:0.0.0.0:8085#E987"
@@ -67,7 +67,6 @@ max_sites = 1024
 
 
 [nexus]
-enabled = true
 lane_count = 7
 
 [[nexus.lane_catalog]]
@@ -306,4 +305,4 @@ submitters = []
 [genesis]
 public_key = "ed012077D8B70FE83D6E0A0FF1C100FDCD01C6A937DA0B7B1004E7C9545BB64D6639A8"
 file = "genesis.signed.nrt"
-expected_hash = "hash:68E9955B136C5B55CE232B14590629366DD20348282FDFF6FE63D1B69E03FBA7#4EC0"
+expected_hash = "hash:9B5BAC7E92DA4740F3132DBB8528ECB3BC1CE40ED2D7BAD50182A834EA3D7EAB#5F2F"

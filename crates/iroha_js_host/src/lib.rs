@@ -158,7 +158,8 @@ use iroha_data_model::{
         pin_registry::StorageClass,
     },
     transaction::{
-        Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, TransactionPayload,
+        Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, TransactionAdmissionIntent,
+        TransactionPayload,
         executable::{ContractArgumentRecord, ContractInvocation},
         signed::{SignedTransaction, TransactionBuilder},
     },
@@ -7273,10 +7274,10 @@ fn validation_fee_policy_from_json_value(
         "code_hash",
         "entrypoint",
         "treasury_account_id",
-        "sbd_asset_id",
+        "ds_asset_id",
         "xor_asset_id",
         "pool_vault_account_id",
-        "batch_sbd",
+        "batch_ds",
         "min_xor_out",
         "max_xor_out",
         "recipients",
@@ -7336,10 +7337,10 @@ fn validation_fee_payout_binding_from_json_value(
         "code_hash",
         "entrypoint",
         "treasury_account_id",
-        "sbd_asset_id",
+        "ds_asset_id",
         "xor_asset_id",
         "pool_vault_account_id",
-        "batch_sbd",
+        "batch_ds",
         "min_xor_out",
         "max_xor_out",
         "recipients",
@@ -11136,6 +11137,7 @@ fn configure_transaction_builder(
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
 ) -> napi::Result<TransactionBuilder> {
+    builder = builder.with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
     if let Some(ms) = creation_time_ms {
         let millis = js_number_to_u64(ms, "creation_time_ms")?;
         builder.set_creation_time(Duration::from_millis(millis));
@@ -12038,6 +12040,12 @@ pub fn finalize_signed_transaction(
         &expected_network_id,
         "JavaScript external transaction finalizer",
     )?;
+    if builder.payload().admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "JavaScript external transaction finalizer requires QueuePlanSynced admission intent",
+        ));
+    }
     let payload_hash = builder.payload_hash_bytes();
     if let Some(expected) = input.payload_hash_hex {
         let normalized = expected.strip_prefix("0x").unwrap_or(&expected);
@@ -12642,6 +12650,11 @@ pub fn build_precommit_trigger_action(
 }
 #[cfg(test)]
 mod tests {
+    macro_rules! assert_napi_error_contains {
+        ($result:expr, $message:literal, $reason:literal) => {
+            assert!($result.err().expect($message).reason.contains($reason));
+        };
+    }
     fn test_network_id(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             label,
@@ -12727,10 +12740,9 @@ mod tests {
         );
         let canonical_binding =
             axt_compute_binding(Buffer::from(canonical.clone())).expect("canonical descriptor");
-        let error = match axt_compute_binding(Buffer::from(alternate)) {
-            Ok(_) => panic!("alternate Norito layout must be rejected"),
-            Err(error) => error,
-        };
+        let error = axt_compute_binding(Buffer::from(alternate))
+            .err()
+            .expect("alternate Norito layout must be rejected");
         assert_eq!(error.status, napi::Status::InvalidArg);
         assert!(error.reason.contains("canonical Norito V1 layout"));
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
@@ -13304,7 +13316,7 @@ mod tests {
             VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
             ValidationFeePlainElectorateEligibilityRuleV1, ValidationFeePlainElectorateRulesV1,
             ValidationFeeTreasuryPayoutBindingV1, ValidationFeeTreasuryPayoutRecipientV1,
-            initial_validation_fee_amount, validation_fee_payout_batch_sbd,
+            initial_validation_fee_amount, validation_fee_payout_batch_ds,
             validation_fee_payout_max_xor, validation_fee_payout_min_xor,
             validation_fee_payout_recipient_share,
         },
@@ -16465,376 +16477,8 @@ seiyaku Privacy {
             value_to_instruction(json_value.clone()).expect("deserialize governance instruction");
         assert_eq!(reconstructed, instruction);
     }
-    fn validation_fee_account(seed: u8) -> AccountId {
-        let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-            .expect("validation-fee fixture keypair");
-        AccountId::new(keypair.public_key().clone())
-    }
-    fn validation_fee_asset(domain: &str, name: &str) -> AssetDefinitionId {
-        AssetDefinitionId::derive_from_components(
-            DomainId::try_new(domain, "universal").expect("validation-fee fixture domain"),
-            name.parse().expect("validation-fee fixture asset name"),
-        )
-    }
-    fn validation_fee_plain_electorate_rules_fixture() -> ValidationFeePlainElectorateRulesV1 {
-        ValidationFeePlainElectorateRulesV1 {
-            voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
-                .parse()
-                .expect("validation-fee voting asset"),
-            bond_escrow_account: validation_fee_account(8),
-            slash_receiver_account: validation_fee_account(9),
-            ballot_amount: "150".parse().expect("validation-fee ballot amount"),
-            ballot_duration_blocks: 3_600,
-            citizenship_amount: "10000"
-                .parse()
-                .expect("validation-fee citizenship amount"),
-            max_members: 256,
-            conviction_step_blocks: 100,
-            max_conviction: 6,
-            min_turnout: 1,
-            approval_threshold_numerator: 1,
-            approval_threshold_denominator: 2,
-            eligibility_rule:
-                ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
-        }
-    }
-    fn validation_fee_payout_binding_fixture() -> ValidationFeeTreasuryPayoutBindingV1 {
-        let contract_address: ContractAddress =
-            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
-                .parse()
-                .expect("validation-fee payout contract address");
-        ValidationFeeTreasuryPayoutBindingV1 {
-            treasury_account_id: contract_address.subject_id(),
-            contract_address,
-            code_hash: [0x34; 32],
-            entrypoint: "autonomous_validation_fee_tick"
-                .parse()
-                .expect("validation-fee payout entrypoint"),
-            sbd_asset_id: validation_fee_asset("cbsi", "sbd"),
-            xor_asset_id: validation_fee_asset("xor", "xor"),
-            pool_vault_account_id: validation_fee_account(2),
-            batch_sbd: validation_fee_payout_batch_sbd(),
-            min_xor_out: validation_fee_payout_min_xor(),
-            max_xor_out: validation_fee_payout_max_xor(),
-            recipients: (3..=6)
-                .map(|seed| ValidationFeeTreasuryPayoutRecipientV1 {
-                    account_id: validation_fee_account(seed),
-                    share: validation_fee_payout_recipient_share(),
-                })
-                .collect(),
-        }
-    }
-    fn validation_fee_policy_fixture(
-        payout_binding: Option<ValidationFeeTreasuryPayoutBindingV1>,
-    ) -> ValidationFeePolicyV1 {
-        let treasury_account_id = payout_binding.as_ref().map_or_else(
-            || validation_fee_account(1),
-            |binding| binding.treasury_account_id.clone(),
-        );
-        ValidationFeePolicyV1 {
-            schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            network_id: NetworkId::from_genesis_hash(
-                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x13; 32])),
-            ),
-            policy_version: 1,
-            previous_policy_hash: None,
-            ds_asset_id: validation_fee_asset("cbsi", "sbd"),
-            ds_scale: VALIDATION_FEE_DS_SCALE,
-            fee: initial_validation_fee_amount(),
-            treasury_account_id,
-            charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
-            effective_from_height: 121_100,
-            expires_after_height: None,
-            exemption_classes: payout_binding
-                .as_ref()
-                .map(|_| vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_owned()])
-                .unwrap_or_default(),
-            treasury_payout_binding: payout_binding,
-        }
-    }
-    fn assert_validation_fee_policy_instruction_roundtrip(
-        policy: ValidationFeePolicyV1,
-        payout_lifecycle_proposal_id: Option<[u8; 32]>,
-    ) {
-        const WIRE_ID: &str = "iroha_data_model::isi::governance::ProposeValidationFeePolicy";
-        let instruction: InstructionBox = ProposeValidationFeePolicy {
-            policy,
-            payout_lifecycle_proposal_id,
-            plain_electorate_rules: validation_fee_plain_electorate_rules_fixture(),
-            referendum_window: Some(AtWindow {
-                lower: 100,
-                upper: 140,
-            }),
-            mode: Some(VotingMode::Plain),
-        }
-        .into();
-        let original_dyn_bytes = InstructionTrait::dyn_encode(&*instruction);
-        assert_eq!(InstructionTrait::id(&*instruction), WIRE_ID);
-        let framed = iroha_data_model::isi::frame_instruction_payload(
-            WIRE_ID,
-            original_dyn_bytes.as_slice(),
-        )
-        .expect("frame validation-fee instruction");
-        let decoded =
-            decode_instruction_aligned(&framed).expect("decode framed validation-fee instruction");
-        assert_eq!(InstructionTrait::id(&*decoded), WIRE_ID);
-        assert_eq!(
-            InstructionTrait::dyn_encode(&*decoded),
-            original_dyn_bytes,
-            "typed frame decode must preserve exact native instruction bytes"
-        );
-        let json_value =
-            instruction_to_json_value(&decoded).expect("render validation-fee instruction JSON");
-        let json_payload = json::to_json(&json_value).expect("encode validation-fee JSON");
-        let reconstructed =
-            value_to_instruction(json_value).expect("rebuild validation-fee instruction");
-        assert_eq!(InstructionTrait::id(&*reconstructed), WIRE_ID);
-        assert_eq!(
-            InstructionTrait::dyn_encode(&*reconstructed),
-            original_dyn_bytes,
-            "decoded JSON must rebuild the exact native instruction bytes"
-        );
-        let network_id = test_network_id(b"validation-fee-js-test");
-        let draft = build_transaction_payload_from_instructions_json(
-            network_id,
-            validation_fee_account(7),
-            vec![json_payload],
-            authority_fee_payment_json(),
-            None,
-            Some(1_700_000_000_000),
-            Some(60_000),
-            Some(9),
-        )
-        .expect("build validation-fee transaction payload");
-        let payload: TransactionPayload =
-            json::from_json(&draft.payload_json).expect("decode validation-fee draft payload");
-        assert_eq!(
-            payload.domain,
-            iroha_data_model::transaction::TransactionDomain::Network(network_id),
-            "validation-fee draft must bind the exact requested NetworkId"
-        );
-        let Executable::Instructions(batch) = &payload.instructions else {
-            panic!("validation-fee draft must contain an instruction batch")
-        };
-        let rebuilt = batch
-            .iter()
-            .next()
-            .expect("validation-fee draft instruction");
-        assert_eq!(InstructionTrait::id(&**rebuilt), WIRE_ID);
-        assert_eq!(
-            InstructionTrait::dyn_encode(&**rebuilt),
-            original_dyn_bytes,
-            "buildTransactionPayload path must preserve exact native instruction bytes"
-        );
-    }
-    #[test]
-    fn validation_fee_policy_instruction_roundtrips_without_payout() {
-        assert_validation_fee_policy_instruction_roundtrip(
-            validation_fee_policy_fixture(None),
-            None,
-        );
-    }
-    #[test]
-    fn validation_fee_policy_instruction_roundtrips_with_payout_and_even_hashes() {
-        assert_validation_fee_policy_instruction_roundtrip(
-            validation_fee_policy_fixture(Some(validation_fee_payout_binding_fixture())),
-            Some([0x56; 32]),
-        );
-    }
-    #[test]
-    fn validation_fee_policy_instruction_json_rejects_unknown_and_legacy_fields() {
-        let instruction: InstructionBox = ProposeValidationFeePolicy {
-            policy: validation_fee_policy_fixture(None),
-            payout_lifecycle_proposal_id: None,
-            plain_electorate_rules: validation_fee_plain_electorate_rules_fixture(),
-            referendum_window: Some(AtWindow {
-                lower: 100,
-                upper: 140,
-            }),
-            mode: Some(VotingMode::Plain),
-        }
-        .into();
-        let mut value =
-            instruction_to_json_value(&instruction).expect("validation-fee instruction JSON");
-        value
-            .get_mut("ProposeValidationFeePolicy")
-            .and_then(json::Value::as_object_mut)
-            .expect("validation-fee instruction fields")
-            .insert("window".to_owned(), json::Value::Null);
-        let error = value_to_instruction(value).expect_err("legacy window alias must be rejected");
-        assert!(error.reason.contains("must contain exactly"));
-        let mut value =
-            instruction_to_json_value(&instruction).expect("validation-fee instruction JSON");
-        let policy = value
-            .get_mut("ProposeValidationFeePolicy")
-            .and_then(|value| value.get_mut("policy"))
-            .and_then(json::Value::as_object_mut)
-            .expect("validation-fee policy fields");
-        policy.remove("network_id");
-        policy.insert(
-            "chain_id".to_owned(),
-            json::Value::String("legacy".to_owned()),
-        );
-        policy.insert(
-            "genesis_hash".to_owned(),
-            json::Value::String("13".repeat(32)),
-        );
-        let error =
-            value_to_instruction(value).expect_err("legacy dual identity fields must be rejected");
-        assert!(error.reason.contains("must contain exactly"));
-    }
-    #[test]
-    fn validation_fee_policy_proposal_fingerprint_matches_native_kind() {
-        for (policy, payout_lifecycle_proposal_id) in [
-            (validation_fee_policy_fixture(None), None),
-            (
-                validation_fee_policy_fixture(Some(validation_fee_payout_binding_fixture())),
-                Some([0x56; 32]),
-            ),
-        ] {
-            let plain_electorate_rules = validation_fee_plain_electorate_rules_fixture();
-            let expected = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
-                policy: policy.clone(),
-                payout_lifecycle_proposal_id,
-                plain_electorate_rules: plain_electorate_rules.clone(),
-            })
-            .fingerprint();
-            let policy_json = json::to_json(&policy).expect("validation-fee policy JSON");
-            let rules_json =
-                json::to_json(&plain_electorate_rules).expect("plain electorate rules JSON");
-            let actual = validation_fee_policy_proposal_fingerprint_v1(
-                policy_json,
-                payout_lifecycle_proposal_id.map(|id| Uint8Array::from(id.to_vec())),
-                rules_json,
-            )
-            .expect("validation-fee policy fingerprint");
-            assert_eq!(actual.as_ref(), expected);
-        }
-    }
-    #[test]
-    fn validation_fee_payout_lifecycle_proposal_fingerprint_matches_native_kind() {
-        let payout_binding = validation_fee_payout_binding_fixture();
-        let plain_electorate_rules = validation_fee_plain_electorate_rules_fixture();
-        let expected =
-            ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
-                payout_binding: payout_binding.clone(),
-                plain_electorate_rules: plain_electorate_rules.clone(),
-            })
-            .fingerprint();
-        let actual = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
-            json::to_json(&payout_binding).expect("validation-fee payout binding JSON"),
-            json::to_json(&plain_electorate_rules).expect("plain electorate rules JSON"),
-        )
-        .expect("validation-fee payout lifecycle fingerprint");
-        assert_eq!(actual.as_ref(), expected);
-    }
-    #[test]
-    fn validation_fee_proposal_fingerprints_match_wallet_release_vectors() {
-        let plain_electorate_rules = validation_fee_plain_electorate_rules_fixture();
-        let policy = validation_fee_policy_fixture(None);
-        let policy_fingerprint = validation_fee_policy_proposal_fingerprint_v1(
-            json::to_json(&policy).expect("validation-fee policy JSON"),
-            None,
-            json::to_json(&plain_electorate_rules).expect("plain electorate rules JSON"),
-        )
-        .expect("validation-fee policy fingerprint");
-        assert_eq!(
-            hex::encode(policy_fingerprint.as_ref()),
-            "85ecc42a75d3e0da96349b75f0c1ccd1ffb6dff2334486b67edb39f7a86f6a90"
-        );
-        let payout_binding = validation_fee_payout_binding_fixture();
-        let payout_fingerprint = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
-            json::to_json(&payout_binding).expect("validation-fee payout binding JSON"),
-            json::to_json(&plain_electorate_rules).expect("plain electorate rules JSON"),
-        )
-        .expect("validation-fee payout lifecycle fingerprint");
-        assert_eq!(
-            hex::encode(payout_fingerprint.as_ref()),
-            "fa1e71c8bec0601d590038626c2a8d3a4b2350f5dd23f76b0a2dfdbbf9e5a84b"
-        );
-    }
-    #[test]
-    fn validation_fee_policy_proposal_fingerprint_rejects_unknown_policy_fields() {
-        let policy = validation_fee_policy_fixture(None);
-        let mut value = json::to_value(&policy).expect("validation-fee policy JSON");
-        value
-            .as_object_mut()
-            .expect("validation-fee policy fields")
-            .insert(
-                "fee_asset_id".to_owned(),
-                json::Value::String("legacy".to_owned()),
-            );
-        let result = validation_fee_policy_proposal_fingerprint_v1(
-            json::to_json(&value).expect("legacy validation-fee policy JSON"),
-            None,
-            json::to_json(&validation_fee_plain_electorate_rules_fixture())
-                .expect("plain electorate rules JSON"),
-        );
-        let error = match result {
-            Ok(_) => panic!("legacy policy alias must be rejected"),
-            Err(error) => error,
-        };
-        assert!(error.reason.contains("must contain exactly"));
-    }
-    #[test]
-    fn validation_fee_policy_proposal_fingerprint_rejects_wrong_contract_subject() {
-        let mut policy =
-            validation_fee_policy_fixture(Some(validation_fee_payout_binding_fixture()));
-        policy.treasury_account_id = validation_fee_account(9);
-        let result = validation_fee_policy_proposal_fingerprint_v1(
-            json::to_json(&policy).expect("mismatched validation-fee policy JSON"),
-            Some(Uint8Array::from(vec![0x56; 32])),
-            json::to_json(&validation_fee_plain_electorate_rules_fixture())
-                .expect("plain electorate rules JSON"),
-        );
-        let error = match result {
-            Ok(_) => panic!("mismatched payout contract subject must be rejected"),
-            Err(error) => error,
-        };
-        assert!(
-            error
-                .reason
-                .contains("contract subject must equal the policy treasury")
-        );
-    }
-    #[test]
-    fn validation_fee_proposal_fingerprints_reject_non_exact_plain_rules() {
-        let rules = validation_fee_plain_electorate_rules_fixture();
-        let mut value = json::to_value(&rules).expect("plain electorate rules JSON");
-        value
-            .as_object_mut()
-            .expect("plain electorate rules fields")
-            .insert(
-                "voting_mode".to_owned(),
-                json::Value::String("Plain".to_owned()),
-            );
-        let result = validation_fee_policy_proposal_fingerprint_v1(
-            json::to_json(&validation_fee_policy_fixture(None))
-                .expect("validation-fee policy JSON"),
-            None,
-            json::to_json(&value).expect("legacy plain electorate rules JSON"),
-        );
-        let error = match result {
-            Ok(_) => panic!("unknown plain electorate rule fields must fail closed"),
-            Err(error) => error,
-        };
-        assert!(error.reason.contains("must contain exactly"));
-    }
-    #[test]
-    fn validation_fee_payout_lifecycle_fingerprint_rejects_invalid_binding() {
-        let mut payout_binding = validation_fee_payout_binding_fixture();
-        payout_binding.code_hash = [0; 32];
-        let result = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
-            json::to_json(&payout_binding).expect("validation-fee payout binding JSON"),
-            json::to_json(&validation_fee_plain_electorate_rules_fixture())
-                .expect("plain electorate rules JSON"),
-        );
-        let error = match result {
-            Ok(_) => panic!("invalid payout binding must fail closed"),
-            Err(error) => error,
-        };
-        assert!(error.reason.contains("code hash must be non-zero"));
-    }
+    // Validation-fee wire, fingerprint, and rejection cases live in one bounded fragment.
+    include!("validation_fee_tests.rs");
     #[test]
     fn retired_sccp_route_manifest_instructions_are_rejected() {
         for retired in ["UpsertSccpRouteManifest", "RemoveSccpRouteManifest"] {
@@ -17653,38 +17297,39 @@ seiyaku Privacy {
         signed
             .verify_signature()
             .expect("quoted signature verifies");
-        let foreign_error = Result::err(sign_quoted_transaction_payload(
+        let foreign_error = sign_quoted_transaction_payload(
             test_network_id_bytes(b"foreign-quote-flow-network"),
             draft.payload_json.clone(),
             quoted_intent_json,
             Uint8Array::from(secret.clone()),
             Some("ed25519".to_owned()),
-        ))
+        )
+        .err()
         .expect("quoted signer must reject a foreign NetworkId");
         assert!(foreign_error.reason.contains("does not match"));
         let genesis_payload = TransactionBuilder::new_genesis(
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         );
-        let genesis_error = Result::err(sign_quoted_transaction_payload(
+        let genesis_error = sign_quoted_transaction_payload(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             json::to_json(genesis_payload.payload()).expect("genesis payload JSON"),
             authority_fee_payment_json(),
             Uint8Array::from(secret.clone()),
             Some("ed25519".to_owned()),
-        ))
+        )
+        .err()
         .expect("quoted signer must reject the genesis domain");
         assert!(genesis_error.reason.contains("genesis-domain"));
-        let gas_error = match sign_quoted_transaction_payload(
+        let gas_error = sign_quoted_transaction_payload(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             draft.payload_json.clone(),
             authority_fee_payment_json_with_gas(1),
             Uint8Array::from(secret.clone()),
             Some("ed25519".to_owned()),
-        ) {
-            Ok(_) => panic!("quote must not substitute the signed gas bound"),
-            Err(error) => error,
-        };
+        )
+        .err()
+        .expect("quote must not substitute the signed gas bound");
         assert!(gas_error.reason.contains("gas bound"));
         let substituted = FeePaymentIntent::sponsor(
             iroha_data_model::nexus::FeeSponsorProgramId::new(
@@ -17695,16 +17340,15 @@ seiyaku Privacy {
             Vec::new(),
             None,
         );
-        let error = match sign_quoted_transaction_payload(
+        let error = sign_quoted_transaction_payload(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             draft.payload_json,
             json::to_json(&substituted).expect("substituted intent JSON"),
             Uint8Array::from(secret),
             Some("ed25519".to_owned()),
-        ) {
-            Ok(_) => panic!("quote must not substitute the selected payer"),
-            Err(error) => error,
-        };
+        )
+        .err()
+        .expect("quote must not substitute the selected payer");
         assert!(error.reason.contains("changed the selected payer"));
     }
     #[test]
@@ -17745,6 +17389,10 @@ seiyaku Privacy {
         assert_eq!(built.payload_hash.len(), Hash::LENGTH);
         let builder = TransactionBuilder::decode_payload(built.payload_bytes.as_ref())
             .expect("native payload builder must emit canonical bytes");
+        assert_eq!(
+            builder.payload().admission_intent(),
+            TransactionAdmissionIntent::QueuePlanSynced
+        );
         assert_eq!(builder.encode_payload(), built.payload_bytes.as_ref());
         assert_eq!(
             builder.payload_hash_bytes().as_slice(),
@@ -17934,7 +17582,8 @@ seiyaku Privacy {
                 .as_bytes()
                 .to_vec(),
         );
-        let error = Result::err(finalize_signed_transaction(foreign_network))
+        let error = finalize_signed_transaction(foreign_network)
+            .err()
             .expect("external finalizer must reject a foreign NetworkId");
         assert!(error.reason.contains("does not match"));
         let genesis_builder = TransactionBuilder::new_genesis(
@@ -17953,7 +17602,7 @@ seiyaku Privacy {
             public_key: Buffer::from(public_key_bytes.to_vec()),
             authority: Some(authority_i105.clone()),
         });
-        let error = Result::err(result).expect("genesis domain must fail");
+        let error = result.err().expect("genesis domain must fail");
         assert!(error.reason.contains("genesis-domain"));
         assert!(finalize_signed_transaction(valid_input()).is_ok());
     }
@@ -18054,19 +17703,21 @@ seiyaku Privacy {
         )
         .sign(keypair.private_key());
         let (_, secret) = keypair.private_key().to_bytes();
-        let foreign_error = Result::err(sign_transaction(
+        let foreign_error = sign_transaction(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             Uint8Array::from(Encode::encode(&foreign)),
             Uint8Array::from(secret.clone()),
-        ))
+        )
+        .err()
         .expect("JavaScript host must reject a foreign NetworkId");
         assert_eq!(foreign_error.status, napi::Status::InvalidArg);
         assert!(foreign_error.reason.contains("does not match"));
-        let error = Result::err(sign_transaction(
+        let error = sign_transaction(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             Uint8Array::from(Encode::encode(&transaction)),
             Uint8Array::from(secret),
-        ))
+        )
+        .err()
         .expect("JavaScript host must reject the genesis transaction domain");
         assert_eq!(error.status, napi::Status::InvalidArg);
         assert_eq!(
@@ -18441,26 +18092,28 @@ seiyaku Privacy {
             )],
             NonZeroU64::new(1_000),
         );
-        let foreign_error = Result::err(sign_quoted_ivm_proved_transaction_payload(
+        let foreign_error = sign_quoted_ivm_proved_transaction_payload(
             test_network_id_bytes(b"foreign-ivm-proved-network"),
             draft.payload_json.clone(),
             attachment_json.clone(),
             json::to_json(&quoted).expect("quote json"),
             Uint8Array::from(secret_bytes.clone()),
             None,
-        ))
+        )
+        .err()
         .expect("proved-IVM signer must reject a foreign NetworkId");
         assert!(foreign_error.reason.contains("does not match"));
         let mut genesis_payload = draft_payload.clone();
         genesis_payload.domain = iroha_data_model::transaction::TransactionDomain::Genesis;
-        let genesis_error = Result::err(sign_quoted_ivm_proved_transaction_payload(
+        let genesis_error = sign_quoted_ivm_proved_transaction_payload(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             json::to_json(&genesis_payload).expect("genesis proved-IVM payload JSON"),
             attachment_json.clone(),
             json::to_json(&quoted).expect("quote json"),
             Uint8Array::from(secret_bytes.clone()),
             None,
-        ))
+        )
+        .err()
         .expect("proved-IVM signer must reject the genesis domain");
         assert!(genesis_error.reason.contains("genesis-domain"));
         let quoted_result = sign_quoted_ivm_proved_transaction_payload(
@@ -18607,7 +18260,6 @@ seiyaku Privacy {
     fn decode_transaction_receipt_json_roundtrip() {
         let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let payload = TransactionSubmissionReceiptPayload {
-            tx_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
             entrypoint_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
             signed_transaction_hash: None,
             submitted_at_ms: 42,

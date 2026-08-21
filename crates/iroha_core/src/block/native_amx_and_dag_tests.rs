@@ -31,7 +31,6 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     .expect("native AMX test state accepts its explicit network id");
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.lane_catalog = LaneCatalog::new(
             nonzero!(4_u32),
             vec![

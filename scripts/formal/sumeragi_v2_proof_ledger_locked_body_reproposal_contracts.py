@@ -278,6 +278,7 @@ pub(in crate::sumeragi) struct RecoveredLifecycleLocalProposalAttemptV1 {
             == (("impl", "RecoveredLifecycleLocalProposalAttemptV1"),)
         )
         if recovered_attempt_methods != (
+            "from_authenticated_durable_current_round",
             "from_control",
             "exactly_matches_directive",
             "for_test",
@@ -409,6 +410,13 @@ pub(in crate::sumeragi) struct ProductionLifecyclePreparedLocalProposalStateV1 {
                     (),
                     "local_proposal_directive",
                     "durable lock-to-runner directive projection",
+                ),
+                (
+                    "from_authenticated_durable_current_round",
+                    (("impl", "RecoveredLifecycleLocalProposalAttemptV1"),),
+                    (),
+                    "recovered_local_proposal_attempt_from_durable_round",
+                    "durable-current-round opaque local-Proposal attempt mint",
                 ),
                 (
                     "from_control",
@@ -561,11 +569,11 @@ pub(in crate::sumeragi) struct ProductionLifecyclePreparedLocalProposalStateV1 {
             "crates/iroha_core/src/sumeragi/v2_runner_tests.rs",
             (
                 (
-                    "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner",
+                    "recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade",
                     (),
                     ("#[test]",),
-                    "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner",
-                    "opaque recovered-Proposal lock-owner regression",
+                    "recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade",
+                    "opaque recovered-Proposal same-view one-shot regression",
                 ),
                 (
                     "locked_body_recovery_is_independent_of_reproposal_gates",
@@ -739,6 +747,26 @@ Self::proposal_is_safe_for_durable_lock(&self.durable, proposal)
         "live proposal admission must invoke the same safe-value kernel as replay",
     )
     require_sequence(
+        "recovered_local_proposal_attempt_from_durable_round",
+        """
+let tag = adapter.reducer.current_tag();
+let round = reducer::Round::new(tag.height(), tag.view());
+let Some(proposal) = adapter.reducer.durable_state().proposal_intent(round) else {
+    return Ok(None);
+};
+let wire_round = adapter.registry.round_to_wire(proposal.round());
+let subject = adapter.registry.subject(proposal.manifest().subject())?;
+if wire_round.context_id != adapter.wire_context.id()
+    || wire_round.height != tag.height()
+    || wire_round.view != tag.view()
+{
+    return Err(AdapterError::RecoveredStartupEffectMismatch);
+}
+Ok(Some(Self { tag, round: wire_round, subject, }))
+""",
+        "only the replay-authenticated durable current-round ProposalIntent may mint the startup attempt",
+    )
+    require_sequence(
         "recovered_local_proposal_attempt_from_control",
         """
 let AdapterEffect::Sign {
@@ -763,15 +791,12 @@ self.tag == current.tag()
     && self.round.height == self.tag.height()
     && self.round.view == self.tag.view()
     && current.decided_subject().is_none()
-    && current
-        .locked_body()
-        .is_none_or(|(locked_round, locked_subject)| {
-            self.round.context_id == locked_round.context_id
-                && self.round.height == locked_round.height
-                && self.subject == locked_subject
-        })
+    && current.locked_body().is_none_or(|(locked_round, _)| {
+        self.round.context_id == locked_round.context_id
+            && self.round.height == locked_round.height
+    })
 """,
-        "the opaque recovered attempt must bind tag, round, context, height, decision state, and locked subject",
+        "the opaque recovered attempt must bind tag, view, context, height, and decision state while a same-view lock upgrade stays one-shot",
     )
     require_sequence(
         "bind_recovered_local_proposal",
@@ -1317,7 +1342,7 @@ assert_eq!(
         "the lane-duty regression must prove that a terminal decision retires fresh lane work",
     )
     require_sequence(
-        "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner",
+        "recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade",
         """
 let recovered =
     super::super::v2::RecoveredLifecycleLocalProposalAttemptV1::for_test(tag, round, subject);
@@ -1341,8 +1366,11 @@ assert!(setup.already_attempted(unlocked));
 let exact_lock = directive(Some(subject), None);
 assert!(recovered.exactly_matches_directive(exact_lock));
 
-let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);
-assert!(!recovered.exactly_matches_directive(foreign_lock));
+let upgraded_lock = directive(Some(proposal_subject(b"upgraded replay lock")), None);
+assert!(
+    recovered.exactly_matches_directive(upgraded_lock),
+    "a same-view lock upgrade cannot reopen that view's one proposal slot"
+);
 let mismatched_round = super::super::v2::RecoveredLifecycleLocalProposalAttemptV1::for_test(
     tag,
     wire::ConsensusRound { view: 2, ..round },
@@ -1353,7 +1381,7 @@ assert!(!mismatched_round.exactly_matches_directive(unlocked));
 let decided = directive(Some(subject), Some(subject));
 assert!(!recovered.exactly_matches_directive(decided));
 """,
-        "the recovered-attempt regression must prove exact, affine runner binding and reject foreign locks, rounds, and decisions",
+        "the recovered-attempt regression must prove affine same-view suppression across a lock upgrade while rejecting foreign rounds and decisions",
     )
     require_sequence(
         "prepared_local_proposal_state_is_affine_and_context_directive_bound",
@@ -1390,19 +1418,20 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "wal_apply_in_place": "7473b0680ec743e30070bc5dcb5ca9d1c7934199852c861fb5e0e9796e7ab709",
     "local_proposal_directive": "ae8489fea82bd72963f4343745cd838bdc30be67e8f95e0a5e4c1b76a003796e",
     "local_proposal_directive_for_test": "9bb8bae3eeab780523915b4a196526ae4c45cba8f27336c093bbaa5420ae1709",
+    "recovered_local_proposal_attempt_from_durable_round": "c7b029d9129f9dd338b0eac4bb9467b4424961a9dc925e9b77ef1e62fee1af5a",
     "recovered_local_proposal_attempt_from_control": "cd9907f75daf6fe867390c45b8a0809da7815906a879535e35eb7b172cf27a82",
-    "recovered_local_proposal_attempt_exactly_matches_directive": "132ea2423d00070c62e41af44ad2c105891427a7b1ba80132f2b9c04edeff66e",
+    "recovered_local_proposal_attempt_exactly_matches_directive": "2a6d517103a2b2bb466799630170efc0305905af96a06ea582117a539ed9ba7b",
     "recovered_local_proposal_attempt_for_test": "a1e981b01c6ad83028ffc8f4b5bb6575f0c56058716d54a3239d04c6c93d8f02",
     "bind_recovered_local_proposal": "890ae2dc854b552ca4ca5b4e81ce08524379c632dc63edddee296e485e4ee228",
     "from_recovered_lifecycle_attempt": "d9d0aa23a83d8990f4db9abd9f2298b019453c3a4660c9c6c5a9baa69ec45549",
     "initialize_recovered_local_proposal": "8295ba9249430d0f8f6c3ecc65b11b48873adc3b9f3408c313f1425f2a68ff01",
     "prepared_local_proposal_exactly_matches": "666d62c1d4104e6f0e07548434bd2d789514d23531e598032b743ed66e2afc5a",
     "activate_with_prepared_local_proposal": "dbfce16c82f866d3f833f0d04c490851d72ce48fad28e178e16ef059355ddadc",
-    "run_non_pending_lifecycle_loop": "e8f3f96412246ef16424373e71d01d4d80615655e6aaf591ecabba2ed22c6ef5",
-    "run_lifecycle_active_height": "f702cefd43e52a98f0574d8fa162dab5ee234c2421283624d43b7056024e4e4b",
-    "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner": "ad38dabcaf0b4e2464c7aa4ed4d9867949588f617feb74cad713fb78b7cb9510",
+    "run_non_pending_lifecycle_loop": "fe38b2b2ab597569383e9b693deabb75346eee956713ec26e3c5174eca38f767",
+    "run_lifecycle_active_height": "db34e60af369167f11d7b24cdfec25bf428a68b84aac974ba9d2b3a97c15df15",
+    "recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade": "e82974c532219438b4b7af86dbd17c2c3ffeea7631b591b28708c5c3c66da452",
     "prepared_local_proposal_state_is_affine_and_context_directive_bound": "e2e8af92151f3b187cdb8eca6f40bb67a5472060ed6fdc79b5fea0127d02c3b3",
-    "schedule_local_proposal": "187b6563fb36d2108658af92649719c486d1a895748e833eca35372f7318600e",
+    "schedule_local_proposal": "71bdd71f7ae9466bdac666fd8af8e7690d8385d5b854ba29a6415f3a45564a89",
     "locked_body_recovery_plan": "9f3f04e35b943a2bc09756833f08a782c050cccdd6c59aa2997eb1e9f0c1cf7b",
     "local_consensus_duties": "32480f07ba6f9eed6bbdfad70fc53c07e9e6d53c79cf7f0a80ff68ced7621c8e",
     "locked_body_recovery_is_independent_of_reproposal_gates": "e25524bcbcb9fba0308bdec85d063850b46285a00445ce49cedcca399a0ec0ec",
@@ -1411,5 +1440,5 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "submit_exact_body": "bd38de84a86fd4769bf7784324b1ff94c875072d2cab99325897d1390962128e",
     "encode_exact_local_body": "34de57c479e25668c7e77efa06fe00df53d3602157a32fd188984565d6091a22",
     "submit_encoded_body": "78a7d2e2d5cb1e67cfa502ee54e6d5051b1ed0e7b21b24a451742a88e820a39b",
-    "validate_request": "b341fab7be9687fd5db733999adab1a4c78cb7cdddda66e9b6bf9ca6424e6ce3",
+    "validate_request": "72ec6272aa860e4f83012d98cb3d4a5fde13b610e3ce9efbecf7d2a8310bd329",
 }

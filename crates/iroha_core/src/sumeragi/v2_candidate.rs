@@ -19,7 +19,10 @@ use super::{
 };
 use crate::{
     block::BlockBuilder,
-    queue::{GlobalQueueSelectionLease, Queue, RoutingPlan, execution_context_for_routing_plan},
+    queue::{
+        GlobalQueueSelectionLease, Queue, RoutingPlan, execution_context_for_routing_plan,
+        reconcile_execution_routing_plan,
+    },
     state::{State, StateReadOnly, WorldReadOnly, compute_confidential_feature_digest},
     tx::AcceptedTransaction,
 };
@@ -31,16 +34,17 @@ use iroha_data_model::{
         consensus::{NativeAmxReceipt, SumeragiLanePayloadOwnership},
         consensus_v2 as wire,
     },
-    consensus::{NposConsensusEffects, PreviousRosterEvidence},
+    consensus::NposConsensusEffects,
     da::{commitment::DaCommitmentBundle, pin_intent::DaPinIntentBundle},
     events::pipeline::PipelineEventBox,
     merge::{MAX_MERGE_EXECUTION_BATCH_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS, MergeLedgerEntry},
-    transaction::TransactionEntrypoint,
+    transaction::{TransactionAdmissionIntent, TransactionEntrypoint},
 };
 use iroha_primitives::time::TimeSource;
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     num::{NonZeroU64, NonZeroUsize},
+    time::Duration,
 };
 use thiserror::Error;
 /// Hard local bounds applied to one candidate-assembly attempt.
@@ -106,8 +110,6 @@ pub(crate) struct CandidateAttachments {
     pub(crate) da_commitments: Option<DaCommitmentBundle>,
     /// DA pin intents available for this height.
     pub(crate) da_pin_intents: Option<DaPinIntentBundle>,
-    /// Previous-height roster audit evidence, while required by block validity.
-    pub(crate) previous_roster_evidence: Option<PreviousRosterEvidence>,
     /// Deterministic NPoS state effects for this height.
     pub(crate) npos_consensus_effects: Option<NposConsensusEffects>,
     /// SCCP root derived by deterministic execution, when applicable.
@@ -118,6 +120,10 @@ pub(crate) struct CandidateAttachments {
     /// Complete, locally validated sidecar selected for this exact carrier round.
     /// Only its compact certified reference is embedded in the block.
     pub(crate) certified_merge_entry: Option<MergeLedgerEntry>,
+    /// Authenticated QueuePlan admission certificates carried natively by this
+    /// Sumeragi proposal. They are globally ordered by the block QC and never
+    /// pass through the independent merge committee.
+    pub(crate) queue_plan_admissions: Vec<Vec<u8>>,
 }
 /// Read-only description of one canonically ordered proposal candidate.
 #[derive(Clone, Copy, Debug)]
@@ -481,6 +487,31 @@ impl V2CandidateAssembler {
         // of the at-most `max_queue_scan` inspected records.
         let max_attempts = self.limits.max_queue_scan.get().saturating_add(1);
         for _ in 0..max_attempts {
+            let candidate_creation_time =
+                self.prospective_candidate_creation_time(view, request.parent, &selected);
+            let candidate_ledger_time_ms =
+                u64::try_from(candidate_creation_time.as_millis()).unwrap_or(u64::MAX);
+            let unavailable_routes = self.unreconciled_execution_route_indices(
+                request.context,
+                request.state,
+                &selected,
+                candidate_ledger_time_ms,
+            )?;
+            if !unavailable_routes.is_empty() {
+                let unavailable = CandidateWorkUnavailable::new(
+                    unavailable_routes,
+                    "committed routing plan is unavailable at the exact candidate time",
+                );
+                remove_unavailable_candidates(&mut selected, &unavailable, &mut report)?;
+                fill_selection(
+                    &mut selected,
+                    &mut reserve,
+                    selection_max,
+                    exact_payload_limit,
+                    &mut report,
+                );
+                continue;
+            }
             // Restore exact FIFO payload order after any unavailable-work removal
             // and refill. Routing contexts and work receipts are positional and
             // must be prepared against that exact order.
@@ -538,6 +569,7 @@ impl V2CandidateAssembler {
                 &request.attachments,
                 &selected,
                 &prepared_work,
+                candidate_creation_time,
             )?;
             if !candidate_block_has_proposal_work(
                 &block,
@@ -584,7 +616,7 @@ impl V2CandidateAssembler {
             report.selected = selected.len();
             let selected_hashes = selected
                 .iter()
-                .map(|record| record.transaction.hash())
+                .map(|record| record.transaction.hash_as_entrypoint())
                 .collect::<Vec<_>>();
             if !selection_lease.retain_only(&selected_hashes) {
                 return Err(CandidateError::RestartRequired);
@@ -601,6 +633,56 @@ impl V2CandidateAssembler {
             }));
         }
         Err(CandidateError::AssemblyDidNotConverge)
+    }
+    fn unreconciled_execution_route_indices(
+        &self,
+        context: &wire::HeightContext,
+        state: &State,
+        selected: &[CandidateRecord],
+        ledger_time_ms: u64,
+    ) -> Result<BTreeSet<usize>, CandidateError> {
+        if selected.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let mut unavailable = BTreeSet::new();
+        let state_view = state.view();
+        for (index, candidate) in selected.iter().enumerate() {
+            if let Err(error) = reconcile_execution_routing_plan(
+                &candidate.transaction,
+                &candidate.routing_plan,
+                &state_view,
+                ledger_time_ms,
+                context.height,
+            ) {
+                if error.is_deferable() {
+                    unavailable.insert(index);
+                } else {
+                    return Err(CandidateError::RoutingAdmissionEvidence(error.to_string()));
+                }
+            }
+        }
+        Ok(unavailable)
+    }
+    fn prospective_candidate_creation_time(
+        &self,
+        view: wire::View,
+        parent: CandidateParent<'_>,
+        selected: &[CandidateRecord],
+    ) -> Duration {
+        let transactions = selected
+            .iter()
+            .map(|candidate| candidate.transaction.clone())
+            .collect::<Vec<_>>();
+        let pending = BlockBuilder::new_with_time_source(transactions, self.time_source.clone());
+        let builder = match parent {
+            CandidateParent::Block(parent) => pending.chain(view, Some(parent)),
+            CandidateParent::Snapshot(anchor) => pending.chain_with_parent_hash(
+                view,
+                anchor.snapshot_height,
+                anchor.snapshot_block_hash,
+            ),
+        };
+        builder.carrier_context_header().creation_time()
     }
     fn snapshot_routable_candidates(
         &self,
@@ -619,12 +701,52 @@ impl V2CandidateAssembler {
             .as_ref()
             .and_then(|entry| entry.execution_batch.as_ref())
             .is_some();
+        let mut carrier_queue_plan_bindings = BTreeMap::new();
+        for certificate in &attachments.queue_plan_admissions {
+            let admission =
+                crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+                    state.network_id_ref(),
+                    certificate,
+                )
+                .map_err(CandidateError::MergeApplicationContext)?;
+            let binding = admission.certificate.binding;
+            if carrier_queue_plan_bindings
+                .insert(binding.entrypoint_hash.clone(), binding)
+                .is_some()
+            {
+                return Err(CandidateError::MergeApplicationContext(
+                    "Sumeragi carrier repeats a QueuePlan entrypoint".to_owned(),
+                ));
+            }
+        }
         let mut records = Vec::with_capacity(pending.len());
         for (source_ordinal, transaction) in pending.into_iter().enumerate() {
             report.inspected = report.inspected.saturating_add(1);
             if record_ordinary_execution_carrier_exclusion(certified_execution_selected, report) {
                 continue;
             }
+            let entrypoint_hash = transaction.hash_as_entrypoint();
+            let queue_plan_binding = if transaction.entrypoint().admission_intent()
+                == TransactionAdmissionIntent::QueuePlanSynced
+            {
+                match carrier_queue_plan_bindings.get(&entrypoint_hash) {
+                    Some(binding) => Some(binding.clone()),
+                    None => match state
+                        .queue_plan_pending_binding_for_entrypoint(entrypoint_hash.clone())
+                    {
+                        Ok(Some(binding)) => Some(binding),
+                        Ok(None) => {
+                            // A QueuePlan transaction is a FIFO barrier until the same carrier or
+                            // canonical parent state owns its exact admission certificate. Skipping
+                            // it would let later work overtake a signature-bound admission promise.
+                            break;
+                        }
+                        Err(_) => return Err(CandidateError::RestartRequired),
+                    },
+                }
+            } else {
+                None
+            };
             let routing_plan = match queue.route_plan_with_state(&transaction, state) {
                 Ok(plan) => plan,
                 Err(_) => {
@@ -632,6 +754,17 @@ impl V2CandidateAssembler {
                     return Err(CandidateError::RestartRequired);
                 }
             };
+            if let Some(binding) = queue_plan_binding
+                && let Err(reason) = binding.validate_for_request(
+                    state.network_id_ref(),
+                    transaction.entrypoint(),
+                    &routing_plan,
+                )
+            {
+                return Err(CandidateError::MergeApplicationContext(format!(
+                    "QueuePlan candidate differs from its immutable admission binding: {reason}"
+                )));
+            }
             if queue.transaction_selection_durability_faulted() {
                 return Err(CandidateError::RestartRequired);
             }
@@ -642,7 +775,7 @@ impl V2CandidateAssembler {
                 continue;
             }
             records.push(CandidateRecord {
-                entrypoint_hash: transaction.hash_as_entrypoint(),
+                entrypoint_hash,
                 transaction,
                 routing_plan,
                 encoded_len,
@@ -666,12 +799,14 @@ impl V2CandidateAssembler {
         attachments: &CandidateAttachments,
         selected: &[CandidateRecord],
         prepared_work: &PreparedCandidateWork,
+        candidate_creation_time: Duration,
     ) -> Result<(SignedBlock, Vec<u8>, Vec<PipelineEventBox>), CandidateError> {
         let transactions = selected
             .iter()
             .map(|candidate| candidate.transaction.clone())
             .collect::<Vec<_>>();
-        let pending = BlockBuilder::new_with_time_source(transactions, self.time_source.clone());
+        let (_, frozen_time_source) = TimeSource::new_mock(candidate_creation_time);
+        let pending = BlockBuilder::new_with_time_source(transactions, frozen_time_source);
         let mut builder = match parent {
             CandidateParent::Block(parent) => pending.chain(tag.view(), Some(parent)),
             CandidateParent::Snapshot(anchor) => pending.chain_with_parent_hash(
@@ -725,7 +860,6 @@ impl V2CandidateAssembler {
                 context.height,
             )))
             .with_da_pin_intents(attachments.da_pin_intents.clone())
-            .with_previous_roster_evidence(attachments.previous_roster_evidence.clone())
             .with_npos_consensus_effects(attachments.npos_consensus_effects.clone())
             .with_sccp_commitment_root(attachments.sccp_commitment_root);
         let state_view = state.view();
@@ -753,7 +887,8 @@ impl V2CandidateAssembler {
             .collect::<Vec<_>>();
         let mut execution_context = BlockExecutionContextBundle::new(execution_context)
             .with_autonomous_lane_payloads(prepared_work.autonomous_lane_payloads.clone())
-            .with_lane_payload_ownerships(prepared_work.lane_payload_ownerships.clone());
+            .with_lane_payload_ownerships(prepared_work.lane_payload_ownerships.clone())
+            .with_queue_plan_admissions(attachments.queue_plan_admissions.clone());
         if let Some(entry) = attachments.certified_merge_entry.as_ref() {
             execution_context =
                 execution_context.with_merge_entry(CertifiedMergeLedgerReference::new(entry));
@@ -769,6 +904,7 @@ impl V2CandidateAssembler {
         if block.header().height().get() != context.height
             || block.header().view_change_index() != tag.view()
             || block.header().prev_block_hash() != Some(parent.hash())
+            || block.header().creation_time() != candidate_creation_time
         {
             return Err(CandidateError::BuiltHeaderMismatch);
         }
@@ -808,7 +944,6 @@ fn candidate_has_proposal_work(
             .da_pin_intents
             .as_ref()
             .is_some_and(|bundle| !bundle.is_empty())
-        || attachments.previous_roster_evidence.is_some()
         || attachments
             .npos_consensus_effects
             .as_ref()
@@ -816,6 +951,7 @@ fn candidate_has_proposal_work(
         || attachments.sccp_commitment_root.is_some()
         || attachments.certified_merge_carrier_header.is_some()
         || attachments.certified_merge_entry.is_some()
+        || !attachments.queue_plan_admissions.is_empty()
 }
 /// Return whether a canonical resultless v2 body carries deterministic ledger
 /// work. The caller supplies the state-derived clock-progress decision for the
@@ -830,7 +966,9 @@ pub(crate) fn candidate_block_has_proposal_work(
 ) -> bool {
     block.external_entrypoints_cloned().next().is_some()
         || block.execution_context().is_some_and(|context| {
-            !context.autonomous_lane_payloads.is_empty() || context.merge_entry.is_some()
+            !context.autonomous_lane_payloads.is_empty()
+                || context.merge_entry.is_some()
+                || !context.queue_plan_admissions().is_empty()
         })
         || block
             .da_commitments()
@@ -838,7 +976,6 @@ pub(crate) fn candidate_block_has_proposal_work(
         || block
             .da_pin_intents()
             .is_some_and(|bundle| !bundle.is_empty())
-        || block.previous_roster_evidence().is_some()
         || block
             .npos_consensus_effects()
             .is_some_and(|effects| !effects.is_empty())
@@ -908,12 +1045,7 @@ fn validate_request<Work>(request: &CandidateRequest<'_, Work>) -> Result<(), Ca
     if local.validator.public_key() != request.key_pair.public_key() {
         return Err(CandidateError::ConsensusKeyMismatch);
     }
-    let parent_height = validate_candidate_parent(request.context, request.parent, request.state)?;
-    if let Some(evidence) = &request.attachments.previous_roster_evidence
-        && (evidence.height != parent_height || evidence.block_hash != request.parent.hash())
-    {
-        return Err(CandidateError::PreviousRosterEvidenceMismatch);
-    }
+    validate_candidate_parent(request.context, request.parent, request.state)?;
     Ok(())
 }
 fn validate_candidate_parent(
@@ -1304,12 +1436,12 @@ pub(crate) enum CandidateError {
     /// Committed state does not end at the supplied parent.
     #[error("Sumeragi v2 committed state does not match the supplied parent block")]
     ParentStateMismatch,
-    /// Previous-roster audit evidence references another parent.
-    #[error("Sumeragi v2 previous-roster evidence does not match the parent block")]
-    PreviousRosterEvidenceMismatch,
     /// Work provider returned no indices or a blank reason.
     #[error("Sumeragi v2 work provider returned a malformed unavailable-work result")]
     MalformedUnavailableWork,
+    /// Parent WSV contains malformed or conflicting QueuePlan admission evidence.
+    #[error("Sumeragi v2 candidate routing admission evidence is invalid: {0}")]
+    RoutingAdmissionEvidence(String),
     /// Work provider returned an index outside its candidate input.
     #[error("Sumeragi v2 unavailable-work index is outside the candidate batch")]
     UnavailableIndexOutOfRange,
@@ -1465,7 +1597,7 @@ mod tests {
         ChainId,
         account::AccountId,
         block::consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1},
-        consensus::{VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
+        consensus::VALIDATOR_SET_HASH_VERSION_V1,
         nexus::{DataSpaceId, LaneId},
         peer::PeerId,
         transaction::TransactionBuilder,
@@ -1489,6 +1621,22 @@ mod tests {
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
+        .sign(key.private_key());
+        AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
+    fn accepted_with_intent(
+        seed: u8,
+        intent: TransactionAdmissionIntent,
+    ) -> AcceptedTransaction<'static> {
+        let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("deterministic transaction key");
+        let authority = AccountId::new(key.public_key().clone());
+        let tx = TransactionBuilder::new(
+            crate::sumeragi::synthetic_network_id("v2-candidate-test"),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_admission_intent(intent)
         .sign(key.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
@@ -1576,7 +1724,6 @@ mod tests {
         let routing_plan = RoutingPlan::single(RoutingDecision::new(lane_id, dataspace_id));
         let reservation = LaneQueueReservationKeyV2 {
             version: LaneQueueReservationKeyV2::VERSION,
-            signed_transaction_hash: transaction.hash(),
             entrypoint_hash: transaction.hash_as_entrypoint(),
             queue_plan_admission_binding_hash: Hash::new(b"candidate-queue-plan-admission-binding"),
             routing_plan_digest: routing_plan.digest(),
@@ -1686,6 +1833,80 @@ mod tests {
         context.validate().expect("fixture snapshot context");
         (state, context, anchor, key)
     }
+    #[test]
+    fn candidate_route_preflight_defers_only_unreconciled_topology() {
+        let (state, context, anchor, _) = snapshot_parent_fixture();
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(
+            anchor.snapshot_block_creation_time_ms + 1,
+        ));
+        let assembler = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(2), nonzero(64 * 1024), nonzero(2))
+                .expect("fixture candidate limits"),
+            time_source,
+        );
+        let mut changed_topology = record(0x41, "changed-topology", 0);
+        let coordinator = changed_topology.routing_plan.coordinator_route();
+        changed_topology.routing_plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![crate::queue::RouteLeg::new(
+                coordinator,
+                crate::queue::RouteLegRole::Participant,
+            )],
+        );
+        let live = record(0x42, "live-topology", 1);
+        let selected = vec![changed_topology, live];
+        let creation_time = assembler.prospective_candidate_creation_time(
+            0,
+            CandidateParent::Snapshot(&anchor),
+            &selected,
+        );
+        let ledger_time_ms = u64::try_from(creation_time.as_millis()).unwrap_or(u64::MAX);
+        assert_eq!(
+            assembler
+                .unreconciled_execution_route_indices(&context, &state, &selected, ledger_time_ms,)
+                .expect("route preflight"),
+            BTreeSet::from([0]),
+            "a changed Native-AMX topology must defer without hiding later live work"
+        );
+    }
+    #[test]
+    fn candidate_build_uses_the_exact_preflight_creation_time() {
+        let (state, context, anchor, key) = snapshot_parent_fixture();
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(
+            anchor.snapshot_block_creation_time_ms + 1,
+        ));
+        let assembler = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(1), nonzero(64 * 1024), nonzero(1))
+                .expect("fixture candidate limits"),
+            time_source,
+        );
+        let selected = vec![record(0x43, "frozen-candidate-time", 0)];
+        let parent = CandidateParent::Snapshot(&anchor);
+        let view = 0;
+        let creation_time = assembler.prospective_candidate_creation_time(view, parent, &selected);
+        time_handle.advance(Duration::from_secs(5));
+        let tag = EventTag::new(
+            context.height,
+            view,
+            crate::sumeragi::v2_core::Generation::new(0),
+        );
+        let local_validator = context.leader(view);
+        let (block, _, _) = assembler
+            .build_block(
+                &context,
+                tag,
+                local_validator,
+                parent,
+                &state,
+                &key,
+                &CandidateAttachments::default(),
+                &selected,
+                &PreparedCandidateWork::single_route_batch(1),
+                creation_time,
+            )
+            .expect("build with frozen preflight time");
+        assert_eq!(block.header().creation_time(), creation_time);
+    }
     fn assemble_empty_snapshot_candidate(
         attachments: CandidateAttachments,
     ) -> CandidateAssemblyOutcome {
@@ -1734,6 +1955,96 @@ mod tests {
             panic!("an idle height must not manufacture an empty candidate");
         };
         assert_eq!(report, CandidateScanReport::default());
+    }
+    #[test]
+    fn queue_plan_intent_is_a_fifo_barrier_until_parent_state_owns_its_exact_binding() {
+        let (state, _context, anchor, key) = snapshot_parent_fixture();
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(3));
+        let queue = Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        );
+        let queue_plan = accepted_with_intent(0x81, TransactionAdmissionIntent::QueuePlanSynced);
+        let follower = accepted_with_intent(0x82, TransactionAdmissionIntent::Ordinary);
+        let assembler = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(8), nonzero(64 * 1024), nonzero(8))
+                .expect("candidate limits"),
+            time_source,
+        );
+        let mut blocked_report = CandidateScanReport::default();
+        let blocked = assembler
+            .snapshot_routable_candidates(
+                &queue,
+                &state,
+                &CandidateAttachments::default(),
+                vec![queue_plan.clone(), follower.clone()],
+                64 * 1024,
+                &mut blocked_report,
+            )
+            .expect("an absent marker is a normal bounded wait");
+        assert!(blocked.is_empty());
+        assert_eq!(blocked_report.inspected, 1);
+
+        let routing_plan = queue
+            .route_plan_with_state(&queue_plan, &state)
+            .expect("fixture transaction has a routable plan");
+        let validators = vec![PeerId::new(key.public_key().clone())];
+        let context = crate::queue::QueuePlanAdmissionContextV2 {
+            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+            authority_height: 2,
+            proposal_height: 3,
+            predecessor_block_hash: Some(anchor.snapshot_block_hash),
+            routing_plan_digest: routing_plan.digest(),
+            route_incarnations: routing_plan
+                .legs()
+                .into_iter()
+                .map(|leg| crate::queue::QueuePlanRouteIncarnationV2 {
+                    leg,
+                    lane_incarnation: state
+                        .lane_incarnation_at_height(leg.route.lane_id, 3)
+                        .expect("fixture route has an active lane incarnation"),
+                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash: HashOf::new(&validators),
+                    validator_set: validators.clone(),
+                    validator_count: 1,
+                    durability_threshold: 1,
+                })
+                .collect(),
+        };
+        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            state.network_id_ref(),
+            queue_plan.entrypoint(),
+            &routing_plan,
+            context,
+            3,
+        )
+        .expect("construct exact QueuePlan binding");
+        state
+            .install_queue_plan_pending_binding_for_test(&binding)
+            .expect("install exact parent-state binding");
+
+        let mut ready_report = CandidateScanReport::default();
+        let ready = assembler
+            .snapshot_routable_candidates(
+                &queue,
+                &state,
+                &CandidateAttachments::default(),
+                vec![queue_plan.clone(), follower.clone()],
+                64 * 1024,
+                &mut ready_report,
+            )
+            .expect("exact parent-state binding makes the FIFO prefix eligible");
+        assert_eq!(
+            ready
+                .iter()
+                .map(|candidate| candidate.entrypoint_hash)
+                .collect::<Vec<_>>(),
+            vec![
+                queue_plan.hash_as_entrypoint(),
+                follower.hash_as_entrypoint()
+            ]
+        );
+        assert_eq!(ready_report.inspected, 2);
     }
     #[test]
     fn proposal_work_gate_normalizes_empty_control_bundles() {
@@ -1794,6 +2105,14 @@ mod tests {
             ]),
         ));
         assert!(candidate_block_has_proposal_work(&autonomous, false));
+        let mut queue_plan: SignedBlock = ValidBlock::new_dummy(key.private_key()).into();
+        queue_plan.set_execution_context(Some(
+            BlockExecutionContextBundle::default().with_queue_plan_admissions(vec![vec![0xA5]]),
+        ));
+        assert!(
+            candidate_block_has_proposal_work(&queue_plan, false),
+            "a proposal-native QueuePlan certificate is deterministic carrier work"
+        );
     }
     #[test]
     fn proposal_work_gate_accepts_external_and_control_work() {
@@ -1811,35 +2130,11 @@ mod tests {
             ..CandidateAttachments::default()
         };
         assert!(candidate_has_proposal_work(&[], &control, &prepared));
-        let parent_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32]));
-        let validator_key = KeyPair::try_from_seed(vec![40; 32], Algorithm::Ed25519)
-            .expect("deterministic validator key");
-        let roster_evidence = CandidateAttachments {
-            previous_roster_evidence: Some(PreviousRosterEvidence {
-                height: 1,
-                block_hash: parent_hash,
-                validator_checkpoint: ValidatorSetCheckpoint::new(
-                    1,
-                    0,
-                    parent_hash,
-                    Hash::prehashed([0x12; 32]),
-                    Hash::prehashed([0x34; 32]),
-                    vec![PeerId::from(validator_key.public_key().clone())],
-                    vec![1],
-                    Vec::new(),
-                    VALIDATOR_SET_HASH_VERSION_V1,
-                    None,
-                ),
-                stake_snapshot: None,
-            }),
+        let queue_plan = CandidateAttachments {
+            queue_plan_admissions: vec![vec![0xA5]],
             ..CandidateAttachments::default()
         };
-        assert!(candidate_has_proposal_work(
-            &[],
-            &roster_evidence,
-            &prepared
-        ));
+        assert!(candidate_has_proposal_work(&[], &queue_plan, &prepared));
     }
     #[test]
     fn snapshot_candidate_parent_is_exact_and_one_shot() {

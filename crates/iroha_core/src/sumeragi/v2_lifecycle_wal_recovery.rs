@@ -1005,6 +1005,22 @@ impl AuthenticatedRecoveredWalControlProjection {
         self.candidate.key.context() == context.id()
             && self.candidate.key.round().height() == context.height()
     }
+
+    /// Refine a verified historical timeout Broadcast into strict supersession authority.
+    ///
+    /// Equal/future views and foreign contexts return no authority. The current
+    /// WAL projection remains fully sealed and must itself pass every replay,
+    /// locator, pending, candidate, and verified-height check.
+    pub(super) fn supersede_older_timeout_broadcast(
+        &self,
+        verified: &VerifiedHeightContext,
+        timeout: super::replay_authority::AuthenticatedRecoveredTimeoutBroadcastV1,
+    ) -> Option<super::replay_authority::ObsoleteRecoveredTimeoutBroadcastV1> {
+        if !self.is_exact(verified) {
+            return None;
+        }
+        timeout.superseded_by(self.candidate.key)
+    }
     /// Whether a durable row has this projection's exact semantic key.
     pub(super) fn names_record(&self, record: &super::ledger::LifecycleLedgerRecordV1) -> bool {
         record.key() == Some(self.candidate.key)
@@ -2030,6 +2046,51 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&owner)
             && !coordinator.ready_index.contains(&ordinal)
     }
+    fn matches_waiting_record(
+        &self,
+        owner: super::OwnerId,
+        ordinal: u128,
+        slot: super::PhysicalSlotId,
+        digest: super::LifecycleDigest,
+        coordinator: &super::LifecycleCoordinator,
+        wait_source: super::WaitSource,
+    ) -> bool {
+        let Ok((physical, universe, consumed)) = self.candidate.physical_geometry.normalized()
+        else {
+            return false;
+        };
+        let (Some(record), Some(metadata)) = (
+            coordinator.records.get(&ordinal),
+            coordinator.durable_records.get(&ordinal),
+        ) else {
+            return false;
+        };
+        let super::LifecycleState::Waiting(wait) = record.state else {
+            return false;
+        };
+        self.validates_installation(owner, ordinal, slot, digest)
+            && coordinator.fault.is_none()
+            && coordinator.active_context.id() == self.candidate.key.context()
+            && coordinator.active_context.height() == self.candidate.key.round().height()
+            && matches!(wait_source, super::WaitSource::External(_))
+            && wait.source() == wait_source
+            && wait.observed_generation() != u64::MAX
+            && coordinator.observed_generation.get(&wait_source)
+                == Some(&wait.observed_generation())
+            && record.key == self.candidate.key
+            && record.owner == owner
+            && record.ordinal == ordinal
+            && record.work_class == LifecycleWorkClass::Fetch
+            && record.stage == self.candidate.stage
+            && record.physical_slots == physical
+            && record.episode.slot_universe == universe
+            && record.episode.consumed_slots == consumed
+            && physical.get(&slot) == Some(&digest)
+            && metadata.matches_admission(&self.candidate)
+            && coordinator.key_index.get(&self.candidate.key) == Some(&ordinal)
+            && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&owner)
+            && !coordinator.ready_index.contains(&ordinal)
+    }
     /// Consume the projection into its dedicated installed carrier.
     pub(super) fn into_durable_carrier(
         self,
@@ -2307,6 +2368,21 @@ impl DurableRecoveredWalDecisionFetchCarrierV1 {
             self.digest,
             coordinator,
             lease,
+        )
+    }
+    /// Compare the exact externally parked row with this recovered Fetch.
+    pub(super) fn matches_waiting_record(
+        &self,
+        coordinator: &super::LifecycleCoordinator,
+        wait_source: super::WaitSource,
+    ) -> bool {
+        self.projection.matches_waiting_record(
+            self.owner,
+            self.ordinal,
+            self.slot,
+            self.digest,
+            coordinator,
+            wait_source,
         )
     }
     /// Project the complete payload-free Fetch into a sealed request authority.

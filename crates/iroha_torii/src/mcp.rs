@@ -540,7 +540,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_node_query_projection_checkpoint_tool());
     tools.push(iroha_time_now_tool());
     tools.push(iroha_sumeragi_pacemaker_tool());
-    tools.push(iroha_sumeragi_phases_tool());
     tools.push(iroha_da_ingest_tool());
     tools.push(iroha_da_proof_policies_tool());
     tools.push(iroha_da_proof_policy_snapshot_tool());
@@ -980,8 +979,6 @@ fn is_manual_read_tool_name(name: &str) -> bool {
         || name.ends_with(".state_root")
         || name.ends_with(".state_proof")
         || name.ends_with(".block_proof")
-        || name.ends_with(".commit_certificates")
-        || name.ends_with(".validator_sets")
         || name.ends_with(".rbc")
         || name.ends_with(".pacemaker")
         || name.ends_with(".phases")
@@ -1321,12 +1318,6 @@ async fn handle_named_tool_call(
         },
         "iroha.sumeragi.pacemaker" => {
             match dispatch_iroha_sumeragi_pacemaker(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.phases" => {
-            match dispatch_iroha_sumeragi_phases(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -3583,7 +3574,6 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_node_query_projection_checkpoint => "/v1/node/query/projection/checkpoint";
         dispatch_iroha_time_now => "/v1/time/now";
         dispatch_iroha_sumeragi_pacemaker => "/v1/sumeragi/pacemaker";
-        dispatch_iroha_sumeragi_phases => "/v1/sumeragi/phases";
         dispatch_iroha_da_proof_policies => "/v1/da/proof-policies";
         dispatch_iroha_da_proof_policy_snapshot => "/v1/da/proof-policies/snapshot";
         dispatch_iroha_runtime_abi_active => "/v1/runtime/abi/active";
@@ -6233,7 +6223,7 @@ fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<
         .or_else(|| body.get("transaction_hash").and_then(Value::as_str))
         .or_else(|| {
             body.get("payload")
-                .and_then(|payload| payload.get("tx_hash"))
+                .and_then(|payload| payload.get("entrypoint_hash"))
                 .and_then(Value::as_str)
         })
         .filter(|hash| !hash.is_empty())
@@ -6248,9 +6238,9 @@ fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<
         let receipt: iroha_data_model::transaction::TransactionSubmissionReceipt =
             norito::decode_from_bytes(&bytes)
                 .map_err(|err| format!("decode submission receipt: {err}"))?;
-        return Ok(receipt.payload.tx_hash.to_string());
+        return Ok(receipt.payload.entrypoint_hash.to_string());
     }
-    Err("submission response missing transaction hash field (`tx_hash_hex`, `tx_hash`, `transaction_hash`, `payload.tx_hash`, or base64 Norito receipt body)".to_owned())
+    Err("submission response missing transaction hash field (`tx_hash_hex`, `tx_hash`, `transaction_hash`, `payload.entrypoint_hash`, or base64 Norito receipt body)".to_owned())
 }
 fn normalize_submission_receipt_hash(hash: &str) -> Result<String, String> {
     if !hash.starts_with("hash:") {
@@ -7699,12 +7689,12 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
 }
 const MANUAL_STATIC_TOOL_ASSET_VERSION: u64 = 1;
 const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 68;
-const MANUAL_STATIC_TOOL_ASSET_LEN: usize = 94_818;
+const MANUAL_STATIC_TOOL_ASSET_LEN: usize = 94_898;
 const MANUAL_STATIC_TOOL_HISTORICAL_RUST_PREIMAGE_SHA256: &str =
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4";
 const MANUAL_STATIC_TOOL_ASSET_BLAKE3: [u8; 32] = [
-    0xdb, 0x7b, 0xcf, 0xc3, 0x11, 0x26, 0x50, 0x74, 0xc4, 0x3f, 0x67, 0xae, 0x24, 0x68, 0x6d, 0x34,
-    0x5b, 0xe2, 0xa5, 0x4a, 0xe4, 0xb1, 0x11, 0xbe, 0x5c, 0x22, 0xe3, 0x60, 0xe4, 0x63, 0xac, 0x2a,
+    0x3d, 0xb7, 0x99, 0xe4, 0x4e, 0x3a, 0x76, 0x88, 0xd4, 0xef, 0x6e, 0xc4, 0xdb, 0xa1, 0x40, 0x3c,
+    0xeb, 0x08, 0xec, 0x74, 0x8c, 0x56, 0x38, 0xc1, 0x80, 0x90, 0x24, 0x78, 0x6c, 0x41, 0xdf, 0x98,
 ];
 const MANUAL_STATIC_TOOL_ASSET: &[u8] = include_bytes!("mcp/manual_tool_descriptors_v1.json");
 
@@ -8344,13 +8334,6 @@ fn iroha_sumeragi_pacemaker_tool() -> ToolSpec {
         "iroha.sumeragi.pacemaker",
         "Fetch pacemaker status (`/v1/sumeragi/pacemaker`).",
         "/v1/sumeragi/pacemaker",
-    )
-}
-fn iroha_sumeragi_phases_tool() -> ToolSpec {
-    simple_manual_get_tool(
-        "iroha.sumeragi.phases",
-        "Fetch phase status (`/v1/sumeragi/phases`).",
-        "/v1/sumeragi/phases",
     )
 }
 fn iroha_da_ingest_tool() -> ToolSpec {
@@ -9259,7 +9242,6 @@ mod tests {
             iroha_node_query_projection_checkpoint_tool(),
             iroha_time_now_tool(),
             iroha_sumeragi_pacemaker_tool(),
-            iroha_sumeragi_phases_tool(),
             iroha_da_proof_policies_tool(),
             iroha_da_proof_policy_snapshot_tool(),
             iroha_runtime_abi_active_tool(),

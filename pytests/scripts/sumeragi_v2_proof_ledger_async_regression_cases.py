@@ -3,25 +3,25 @@
     (
         (
             "AsyncAllVars",
-            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
-            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerTurnReady>>",
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, asyncFixedCorridorDeadlines, asyncServeProducerTurnReady>>",
             "AsyncAllVars must equal only",
         ),
         (
             "AsyncAllVars",
-            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
-            "<<gst, vars, AsyncRecoveryVars, AsyncSchedulerVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerTurnReady>>",
+            "<<gst, vars, AsyncRecoveryVars, AsyncSchedulerVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerTurnReady>>",
             "AsyncAllVars must equal only",
         ),
         (
             "AsyncAllVars",
-            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerTurnReady>>",
             "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines>>",
             "AsyncAllVars must equal only",
         ),
         (
             "AsyncAllVars",
-            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerTurnReady>>",
             "<<gst, coreState, schedulerState, recoveryPhase, recoveryQueue, producerKnown>>",
             "AsyncAllVars must equal only",
         ),
@@ -341,7 +341,7 @@ def test_async_source_fidelity_requires_configuration_before_capacity_theorems(
             0,
         ),
         ("AsyncProducerProjectionStep", "AsyncCoreOuterFrame", 0),
-        ("AsyncServeProducerEpisodeTransition", "AsyncCoreOuterFrame", 0),
+        ("AsyncServeProducerTurnTransition", "AsyncCoreOuterFrame", 0),
         ("AsyncCoreOuterFrame", "AsyncNonCrashOuterFrame", 0),
         ("AsyncCoreOuterFrame", "AsyncRecoveryOuterFrame", 0),
         ("AsyncNonCrashOuterFrame", "AsyncNonRunnerOuterFrame", 0),
@@ -449,12 +449,12 @@ def test_async_source_fidelity_requires_configuration_before_capacity_theorems(
         ("AsyncProducerTypeInvariant", "AsyncTypeInvariant", 0),
         ("AsyncProducerTypeInvariant", "AsyncStrongTypeInvariant", 0),
         (
-            "AsyncServeProducerEpisodeTypeInvariant",
+            "AsyncServeProducerTurnTypeInvariant",
             "AsyncStrongTypeInvariant",
             0,
         ),
         (
-            "AsyncServeProducerEpisodeOwnershipInvariant",
+            "AsyncServeProducerTurnOwnershipInvariant",
             "AsyncStrongTypeInvariant",
             0,
         ),
@@ -577,8 +577,8 @@ def test_async_source_fidelity_pins_sany_provider_dependency_and_order(
     "conjunct",
     (
         "AsyncProducerTypeInvariant",
-        "AsyncServeProducerEpisodeTypeInvariant",
-        "AsyncServeProducerEpisodeOwnershipInvariant",
+        "AsyncServeProducerTurnTypeInvariant",
+        "AsyncServeProducerTurnOwnershipInvariant",
         "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
     ),
 )
@@ -620,8 +620,8 @@ def test_async_strong_type_invariant_retains_producer_episode_conjuncts(
     ("symbol", "old", "new"),
     (
         (
-            "AsyncInitEstablishesServeProducerEpisodeInvariants",
-            "=> /\\ AsyncServeProducerEpisodeTypeInvariant",
+            "AsyncInitEstablishesServeProducerTurnInvariants",
+            "=> /\\ AsyncServeProducerTurnTypeInvariant",
             "=> /\\ TRUE",
         ),
         (
@@ -630,8 +630,8 @@ def test_async_strong_type_invariant_retains_producer_episode_conjuncts(
             "=> TRUE",
         ),
         (
-            "AsyncNextPreservesServeProducerEpisodeInvariants",
-            "=> /\\ AsyncServeProducerEpisodeTypeInvariant'",
+            "AsyncNextPreservesServeProducerTurnInvariants",
+            "=> /\\ AsyncServeProducerTurnTypeInvariant'",
             "=> /\\ TRUE",
         ),
         (
@@ -668,9 +668,9 @@ def test_strong_type_producer_timeout_bridge_statements_fail_closed(
     (
         (
             "AsyncInitEstablishesStrongTypeInvariant",
-            "AsyncInitEstablishesServeProducerEpisodeInvariants",
+            "AsyncInitEstablishesServeProducerTurnInvariants",
             "TRUE",
-            "must use the exact finite Serve-producer episode init bridge",
+            "must use the exact finite Serve ProducerTurn init bridge",
         ),
         (
             "AsyncInitEstablishesStrongTypeInvariant",
@@ -687,10 +687,10 @@ def test_strong_type_producer_timeout_bridge_statements_fail_closed(
         ),
         (
             "AsyncAllVarsStutterPreservesStrongTypeInvariant",
-            "AsyncServeProducerEpisodeOwnershipInvariant,\n"
+            "AsyncServeProducerTurnOwnershipInvariant,\n"
             "             AsyncServeIngressLifecycleOwnerIdentities",
             "TRUE,\n             AsyncServeIngressLifecycleOwnerIdentities",
-            "must retain the exact Serve-producer episode stutter bridge",
+            "must retain the exact Serve ProducerTurn stutter bridge",
         ),
         (
             "AsyncAllVarsStutterPreservesStrongTypeInvariant",
@@ -702,14 +702,14 @@ def test_strong_type_producer_timeout_bridge_statements_fail_closed(
             "AsyncAllVarsStutterPreservesStrongTypeInvariant",
             "<2>7, <2>8, <2>8p, <2>8t",
             "<2>7, <2>8",
-            "must retain producer-episode and timeout-boundary prime steps "
+            "must retain ProducerTurn and timeout-boundary prime steps "
             "as exact QED dependencies",
         ),
         (
             "AsyncNextPreservesStrongTypeInvariant",
-            "AsyncNextPreservesServeProducerEpisodeInvariants",
+            "AsyncNextPreservesServeProducerTurnInvariants",
             "TRUE",
-            "must retain the exact finite Serve-producer episode prime step",
+            "must retain the exact finite Serve ProducerTurn prime step",
         ),
         (
             "AsyncNextPreservesStrongTypeInvariant",
@@ -721,7 +721,7 @@ def test_strong_type_producer_timeout_bridge_statements_fail_closed(
             "AsyncNextPreservesStrongTypeInvariant",
             "<2>4b, <2>4c, <2>4d, <2>4e, <2>5",
             "<2>4b, <2>4c, <2>5",
-            "candidate-lifecycle, producer-episode, and timeout-boundary "
+            "candidate-lifecycle, ProducerTurn, and timeout-boundary "
             "prime step an exact QED dependency",
         ),
     ),
@@ -755,44 +755,46 @@ def test_strong_type_producer_timeout_bridge_dependencies_fail_closed(
     ("symbol", "old", "new"),
     (
         (
-            "AsyncServeProducerEpisodeTransition",
-            "       IF AsyncServeProducerEpisodeRestartStep(node)\n"
-            "            \\/ AsyncServeProducerEpisodeReceiverCloseStep(node)\n"
+            "AsyncServeProducerTurnTransition",
+            "       IF AsyncServeProducerTurnCompletionStep(node)\n"
+            "       THEN TRUE",
+            "       IF AsyncServeProducerTurnRestartStep(node)\n"
             "       THEN FALSE\n"
-            "       ELSE IF AsyncServeProducerEpisodeFinalRetirementStep(node)\n"
+            "       ELSE IF AsyncServeProducerTurnCompletionStep(node)\n"
             "            THEN TRUE",
-            "       IF AsyncServeProducerEpisodeFinalRetirementStep(node)\n"
-            "       THEN TRUE\n"
-            "       ELSE IF AsyncServeProducerEpisodeRestartStep(node)\n"
-            "            \\/ AsyncServeProducerEpisodeReceiverCloseStep(node)\n"
-            "            THEN FALSE",
         ),
         (
-            "AsyncServeProducerEpisodeTransition",
-            "               ELSE asyncServeProducerEpisodeDue[node]",
-            "               ELSE FALSE",
+            "AsyncServeProducerTurnTransition",
+            "            ELSE asyncServeProducerTurnReady[node]",
+            "            ELSE FALSE",
         ),
         (
-            "AsyncServeProducerEpisodeActiveThisStep",
+            "AsyncServeProducerTurnAttemptThisStep",
             "   \\/ RunHistoricalServer(node)",
             "   \\/ RunHistoricalServer(node)\n"
             "   \\/ (\\E source \\in AsyncIngressSources:\n"
             "         CoalesceHiddenPacket(node, source))",
         ),
         (
-            "AsyncServeProducerEpisodeOwnershipInvariant",
+            "AsyncServeProducerTurnOwnershipInvariant",
             "       /\\ AsyncServeOffQueueReservations(node) = {}",
             "       /\\ TRUE",
         ),
+        (
+            "AsyncServeProducerTurnCompletionStep",
+            "        /\\ AsyncServeReconstructedTerminalOutcome(\n"
+            "             node, job.candidate.item) = AsyncServeResponseOutcome",
+            "        /\\ TRUE",
+        ),
     ),
 )
-def test_serve_producer_episode_transition_mutations_are_rejected(
+def test_serve_producer_turn_transition_mutations_are_rejected(
     tmp_path: Path,
     symbol: str,
     old: str,
     new: str,
 ) -> None:
-    """Restart/close precedence, retry stutter, and ownership stay exact."""
+    """Completion, restart-stable debt, and ownership stay exact."""
 
     module = load_checker()
     formal_dir = copy_async_source_fidelity_fixture(
@@ -811,8 +813,8 @@ def test_serve_producer_episode_transition_mutations_are_rejected(
 
     assert any(
         symbol in error
-        and "must retain the exact one-shot producer-debt ownership, "
-        "classifier, and transition semantics" in error
+        and "must retain the exact one-shot ProducerTurn ownership, "
+        "completion, and transition semantics" in error
         for error in errors
     ), errors
 
@@ -825,11 +827,11 @@ def test_serve_producer_episode_transition_mutations_are_rejected(
         "ExactServeTransportAdmissionCanAdvanceVia",
     ),
 )
-def test_fresh_serve_admission_cannot_bypass_producer_episode_debt(
+def test_fresh_serve_admission_cannot_bypass_producer_turn_readiness(
     tmp_path: Path,
     symbol: str,
 ) -> None:
-    """Every fresh logical/transport admission observes the due boundary."""
+    """Every fresh logical/transport admission observes the Ready boundary."""
 
     module = load_checker()
     formal_dir = copy_async_source_fidelity_fixture(
@@ -843,7 +845,7 @@ def test_fresh_serve_admission_cannot_bypass_producer_episode_debt(
         mutate_tla_operator(
             source,
             symbol,
-            "~asyncServeProducerEpisodeDue[node]",
+            "~asyncServeProducerTurnReady[node]",
             "TRUE",
         ),
         encoding="utf-8",
@@ -868,23 +870,23 @@ def test_fresh_serve_admission_cannot_bypass_producer_episode_debt(
         ),
         (
             "AsyncTypeInvariant",
-            "  /\\ AsyncServeProducerEpisodeTypeInvariant\n",
+            "  /\\ AsyncServeProducerTurnTypeInvariant\n",
             "",
         ),
         (
             "AsyncServiceActivationFrameVars",
-            ", asyncServeProducerEpisodeDue",
+            ", asyncServeProducerTurnReady",
             "",
         ),
     ),
 )
-def test_producer_episode_state_surfaces_cannot_omit_debt(
+def test_producer_turn_state_surfaces_cannot_omit_readiness(
     tmp_path: Path,
     symbol: str,
     old: str,
     new: str,
 ) -> None:
-    """Typing and activation frames retain every producer-debt coordinate."""
+    """Typing and activation frames retain the adjacent ProducerTurn state."""
 
     module = load_checker()
     formal_dir = copy_async_source_fidelity_fixture(
@@ -1690,47 +1692,37 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
     ), errors
     effects_path.write_text(canonical_effects, encoding="utf-8")
 
-    runner_path = reviewed_rust_item_provider(
-        module, tmp_path, Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
-        "drain_v2_ingress",
-    )
-    canonical_runner = runner_path.read_text(encoding="utf-8")
+def test_runtime_step_reconciliation_survives_effect_item_reseal(
+    tmp_path: Path,
+) -> None:
+    """Every runtime turn publishes its current leader-wire cut after the WAL."""
 
-    def mutate_runner_item(name: str, old: str, new: str) -> str:
-        item = module.rust_items(canonical_runner, name)[0]
-        assert item.source.count(old) == 1, (name, old)
-        return canonical_runner.replace(item.source, item.source.replace(old, new, 1), 1)
-
-    runner_path.write_text(
-        mutate_runner_item(
-            "drain_v2_ingress",
-            "mode != V2IngressDrainMode::Ordinary && turn != OuterIngressTurn::Ingress",
-            "false && turn != OuterIngressTurn::Ingress",
-        ),
-        encoding="utf-8",
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path, module, "SumeragiV2AsyncNetwork.tla"
     )
+    effects_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_effects.rs"
+    source = effects_path.read_text(encoding="utf-8")
+    item, = module.rust_items(source, "step")
+    mutated = item.source.replace(
+        "self.finish_runtime_step_reconciliation(services)",
+        "self.publish_status(services)",
+        1,
+    )
+    assert mutated != item.source
+    effects_path.write_text(source.replace(item.source, mutated, 1), encoding="utf-8")
+    mutated_item, = module.rust_items(effects_path.read_text(encoding="utf-8"), "step")
+    module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256["step"] = (
+        module._rust_item_token_sha256(mutated_item)
+    )
+
     errors = module._async_source_fidelity_errors(formal_dir)
+
     assert any(
-        "both non-Ordinary modes must skip Completion and Runtime turns" in error
+        "reconcile the current leader-wire cut after releasing the WAL permit"
+        in error
         for error in errors
     ), errors
-
-    runner_path.write_text(
-        mutate_runner_item(
-            "drain_v2_ingress",
-            "if message.validate_version().is_err() {\n"
-            "                        return false;\n"
-            "                    }",
-            "if false {\n                        return false;\n                    }",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._async_source_fidelity_errors(formal_dir)
-    assert any(
-        "non-Ordinary drain must reject wrong-version ingress" in error
-        for error in errors
-    ), errors
-    runner_path.write_text(canonical_runner, encoding="utf-8")
 
 
 def test_rust_item_scanner_masks_noncode_and_records_fail_closed_context() -> None:
@@ -1872,7 +1864,7 @@ def test_async_candidate_producer_continuation_owner_rejects_target_only_narrowi
         ), errors
 
 
-def test_asyncnetwork_authority_and_order_migrations_fail_closed(
+def test_asyncnetwork_authority_and_order_contract_fails_closed(
     tmp_path: Path,
 ) -> None:
     """Reviewed terminal, Via, barrier, and transition authority is immutable."""
@@ -1925,14 +1917,14 @@ def test_asyncnetwork_authority_and_order_migrations_fail_closed(
             "candidate.item.authenticatedSource",
         ),
         (
-            "AsyncTimeoutRecoveryVoteBarrierException",
-            "source = item.source",
-            "TRUE",
+            "AsyncTimeoutControlDependencyAdvancesLeaderWire",
+            '"PrepareQC", "CommitQC", "TimeoutVote"}',
+            '"PrepareQC", "CommitQC", "TimeoutVote", "CertifiedResponse"}',
         ),
         (
-            "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier",
-            'owner.status = "Ingress"',
-            "TRUE",
+            "AsyncTimeoutControlDependencyAdvancesLeaderWire",
+            "DeliveryView(item) \\in owner.view..(owner.view + 1)",
+            "DeliveryView(item) \\in 0..MaxRank",
         ),
         (
             "AsyncFairIngressCoreStateTransition",
@@ -1952,9 +1944,62 @@ def test_asyncnetwork_authority_and_order_migrations_fail_closed(
             "CanAdmitIngressItem(item)",
         ),
     )
-    assert module._async_network_migration_contract_errors(path, canonical) == []
+    assert module._async_network_reviewed_contract_errors(path, canonical) == []
     for symbol, old, new in mutations:
         mutated = mutate_tla_operator(canonical, symbol, old, new)
-        errors = module._async_network_migration_contract_errors(path, mutated)
+        errors = module._async_network_reviewed_contract_errors(path, mutated)
         assert len(errors) == 1, (symbol, errors)
-        assert f"migration contract {symbol} " in errors[0], errors
+        assert f"contract {symbol} " in errors[0], errors
+
+
+@pytest.mark.parametrize(
+    ("retired_symbol", "definition"),
+    (
+        ("escapePhase", 'escapePhase == "Fresh"'),
+        (
+            "CertifiedEscapeEpisodeIsOneShot",
+            "CertifiedEscapeEpisodeIsOneShot == TRUE",
+        ),
+    ),
+)
+def test_revision4_certified_credit_rejects_response_local_latch(
+    tmp_path: Path,
+    retired_symbol: str,
+    definition: str,
+) -> None:
+    """The generic physical credit cannot regain a response-local phase."""
+
+    module = load_checker()
+    formal_dir = tmp_path / "formal" / "sumeragi_v2"
+    formal_dir.mkdir(parents=True)
+    for name in (
+        "SumeragiV2Revision4CertifiedFenceReservation.tla",
+        "revision4_certified_fence_reservation_fixed.cfg",
+        "revision4_certified_fence_reservation_blocked_bug.cfg",
+        "revision4_certified_fence_reservation_arrival_order_bug.cfg",
+        "README.md",
+        "PROOF.md",
+    ):
+        shutil.copyfile(module.FORMAL_DIR / name, formal_dir / name)
+
+    assert (
+        module._revision4_certified_fence_reservation_contract_errors(
+            formal_dir, module.ROOT_DIR
+        )
+        == []
+    )
+    model_path = formal_dir / "SumeragiV2Revision4CertifiedFenceReservation.tla"
+    source = model_path.read_text(encoding="utf-8")
+    model_path.write_text(
+        source.replace("TypeOK ==", f"{definition}\n\nTypeOK ==", 1),
+        encoding="utf-8",
+    )
+
+    errors = module._revision4_certified_fence_reservation_contract_errors(
+        formal_dir, module.ROOT_DIR
+    )
+
+    assert any(
+        retired_symbol in error and "response-local latch symbol" in error
+        for error in errors
+    ), errors

@@ -4,14 +4,8 @@
 mod fx_routing_review;
 #[path = "../offline_role_authorization.rs"]
 mod offline_role_authorization;
-#[path = "../parallel_apply.rs"]
-mod parallel_apply;
-#[path = "../parallel_apply_knob.rs"]
-mod parallel_apply_knob;
 #[path = "../pin_registry.rs"]
 mod pin_registry;
-#[path = "../pipeline_warning_event.rs"]
-mod pipeline_warning_event;
 #[path = "../quarantine_lane.rs"]
 mod quarantine_lane;
 #[path = "../query_active_abi.rs"]
@@ -24,24 +18,14 @@ mod queue_stress;
 mod runtime_upgrade_admission;
 #[path = "../sccp_route_governance_isi.rs"]
 mod sccp_route_governance_isi;
-#[path = "../scheduler_gpu_key_bucket_parity.rs"]
-mod scheduler_gpu_key_bucket_parity;
-#[path = "../scheduler_ready_queue_heap_parity.rs"]
-mod scheduler_ready_queue_heap_parity;
-#[path = "../scheduler_telemetry.rs"]
-mod scheduler_telemetry;
 #[path = "../settlement_overlay.rs"]
 mod settlement_overlay;
-#[path = "../signature_batch_determinism.rs"]
-mod signature_batch_determinism;
 #[path = "../social_viral_incentives.rs"]
 mod social_viral_incentives;
 #[path = "../sparse_block_bytes.rs"]
 mod sparse_block_bytes;
 #[path = "../sumeragi_doc_sync.rs"]
 mod sumeragi_doc_sync;
-#[path = "../validation_fee_admission.rs"]
-mod validation_fee_admission;
 #[path = "../validation_fee_plain_ballot_gates.rs"]
 mod validation_fee_plain_ballot_gates;
 #[path = "../zk_backend_tags.rs"]

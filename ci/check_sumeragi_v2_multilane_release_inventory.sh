@@ -19,9 +19,13 @@ readonly cargo_cache_cli_component="scripts/copy_sumeragi_v2_release_cargo_cache
 readonly cargo_cache_ack_component="scripts/copy_sumeragi_v2_release_cargo_cache_validation_ack.py"
 readonly grouped_parity_harness="ci/run_native_amx_v2_grouped_sdk_parity.sh"
 readonly sdk_diagnostics_harness="ci/run_sumeragi_v2_sdk_diagnostics.sh"
+readonly sdk_source_closure_resolver="ci/resolve_sumeragi_v2_sdk_source_closure.py"
+readonly sdk_source_closure_manifest="ci/sumeragi_v2_sdk_source_closure.json"
 readonly js_sdk_diagnostics_test="javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js"
 readonly grouped_fixture="fixtures/sumeragi_v2/native_amx_v2_grouped.json"
 readonly closure_ledger="specs/sumeragi_v2_multilane_closure_ledger.md"
+readonly current_roadmap="roadmap.md"
+readonly current_status="status.md"
 readonly release_receipt_writer="scripts/write_sumeragi_v2_release_receipt.py"
 readonly release_receipt_component="scripts/write_sumeragi_v2_release_receipt_formal_artifacts.py"
 readonly release_receipt_corridor_component="scripts/write_sumeragi_v2_release_receipt_corridor_log.py"
@@ -58,7 +62,7 @@ readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
-readonly canonical_production_test_count=860
+readonly canonical_production_test_count=864
 
 for release_support_component in \
   "$release_runner_support" \
@@ -149,6 +153,14 @@ require_exact_digest_occurrences() {
   fi
 }
 
+readonly sdk_closure_digest_documentation_policy="Mutable documentation does not embed SDK suite-source digests: the executable resolver derives them during immutable-candidate freeze/replay, and the release receipt binds the result."
+for sdk_closure_document in "$closure_ledger" "$current_roadmap" "$current_status"; do
+  require_exact_fragment \
+    "$sdk_closure_document" \
+    "$sdk_closure_digest_documentation_policy" \
+    1
+done
+
 require_nonignored_test "$autoscale_file" "$autoscale_test"
 require_nonignored_test "$autoscale_file" "$autoscale_restart_test"
 require_nonignored_test "$autoscale_file" "$autoscale_drain_test"
@@ -220,7 +232,7 @@ require_exact_token \
   "readonly sumeragi_v2_sdk_diagnostics_harness=\"${sdk_diagnostics_harness}\""
 require_exact_token \
   "$release_runner" \
-  "readonly expected_multilane_focus_test_count=527"
+  "readonly expected_multilane_focus_test_count=522"
 require_exact_token \
   "$release_runner" \
   "readonly expected_multilane_formal_mutation_count=106"
@@ -232,7 +244,7 @@ require_exact_token \
   "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
 require_exact_token \
   "$release_runner" \
-  "  readonly expected_corridor_leg_count=88"
+  "  readonly expected_corridor_leg_count=91"
 require_exact_token \
   "$release_runner" \
   "export CARGO_INCREMENTAL=0"
@@ -257,7 +269,7 @@ require_exact_token \
 require_exact_token \
   "$grouped_parity_harness" \
   "readonly expected_negative_control_count=56"
-for grouped_test_count in 7 63 61 4 6 5; do
+for grouped_test_count in 7 63 61 5 7 6; do
   require_exact_token \
     "$grouped_parity_harness" \
     "    observed_test_count=${grouped_test_count}"
@@ -267,7 +279,7 @@ require_exact_token \
   "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 56"
 require_exact_token \
   "$release_receipt_writer" \
-  "_G_UNIT_TEST_COUNT = 527"
+  "_G_UNIT_TEST_COUNT = 522"
 require_exact_token \
   "$release_receipt_writer" \
   "_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"
@@ -302,9 +314,9 @@ for grouped_suite in \
   '    ("openapi", 7),' \
   '    ("python", 63),' \
   '    ("javascript", 61),' \
-  '    ("swift", 4),' \
-  '    ("kotlin", 6),' \
-  '    ("java", 5),'; do
+  '    ("swift", 5),' \
+  '    ("kotlin", 7),' \
+  '    ("java", 6),'; do
   require_exact_token "$release_receipt_writer" "$grouped_suite"
 done
 for sdk_diagnostics_suite in \
@@ -892,13 +904,13 @@ if (
         f"{canonical_production_test_count}"
     )
 production_modules = receipt_assignments.get("_PRODUCTION_MODULES")
-if not isinstance(production_modules, tuple) or len(production_modules) != 40:
-    reject("receipt writer must bind exactly 40 production modules")
+if not isinstance(production_modules, tuple) or len(production_modules) != 43:
+    reject("receipt writer must bind exactly 43 production modules")
 module_counts = {
     module: count for _leg_id, module, count in production_modules
 }
 if (
-    len(module_counts) != 40
+    len(module_counts) != 43
     or sum(module_counts.values()) != canonical_production_test_count
 ):
     reject(
@@ -929,10 +941,10 @@ runner_modules = shell_array("production_liveness_modules")
 runner_leg_ids = shell_array("production_liveness_leg_ids")
 receipt_modules = tuple(module for _leg_id, module, _count in production_modules)
 receipt_leg_ids = tuple(leg_id for leg_id, _module, _count in production_modules)
-if runner_modules != receipt_modules or len(set(runner_modules)) != 40:
-    reject("release runner must bind the exact 40 receipt production modules")
-if runner_leg_ids != receipt_leg_ids or len(set(runner_leg_ids)) != 40:
-    reject("release runner must bind the exact 40 receipt production leg IDs")
+if runner_modules != receipt_modules or len(set(runner_modules)) != 43:
+    reject("release runner must bind the exact 43 receipt production modules")
+if runner_leg_ids != receipt_leg_ids or len(set(runner_leg_ids)) != 43:
+    reject("release runner must bind the exact 43 receipt production leg IDs")
 
 expected_apalache_refinement_results = (
     (
@@ -986,17 +998,20 @@ if (
     )
 expected_changed_module_counts = {
     "kura::tests": 18,
-    "sumeragi::authoritative_runtime_gate_tests": 43,
+    "sumeragi::authoritative_runtime_gate_tests": 42,
     "sumeragi::serviced_candidate_store::tests": 1,
-    "sumeragi::v2_effects::tests": 72,
-    "sumeragi::v2::tests": 47,
-    "sumeragi::v2_runtime::tests": 68,
+    "sumeragi::v2_effects::tests": 70,
+    "sumeragi::v2::tests": 48,
+    "sumeragi::v2_runtime::tests": 65,
+    "sumeragi::v2_certified_serve_payload_store::tests": 11,
+    "sumeragi::v2_lifecycle_coordinator": 42,
+    "sumeragi::v2_runner::lifecycle_height_driver::tests": 1,
     "merge_sidecar::tests": 118,
     "state::tests": 1,
     "sumeragi::v2_lane_work::tests": 63,
     "sumeragi::v2_lifecycle_recovery::tests": 5,
     "sumeragi::v2_runner::tests": 37,
-    "sumeragi::v2_worker::tests": 135,
+    "sumeragi::v2_worker::tests": 90,
     "network::tests": 84,
     "network::inbound_source_memory_bound_tests": 2,
     "network::handle_update_tests": 4,
@@ -1023,8 +1038,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "4082945a72bd97c31bc147f9cd7bbcb7"
-    "7fef8c2f70c59f9e0c6b2892ee459329"
+    "c9972f55a17acbdcfacda42e3ca152d9"
+    "705ec4e0f188a561f0c28990468ffe97"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -1116,9 +1131,9 @@ native_amx_parity_inventory = """\
     7
     63
     61
-    4
-    6
     5
+    7
+    6
   )"""
 if source.count(native_amx_parity_inventory) != 1:
     reject(
@@ -1398,7 +1413,7 @@ if source_sealed_positions != sorted(source_sealed_positions):
     )
 
 expected_focus_counts = {
-    "required_multilane_core_focus_tests": 321,
+    "required_multilane_core_focus_tests": 316,
     "required_multilane_queue_journal_focus_tests": 143,
     "required_multilane_config_lib_focus_tests": 9,
     "required_multilane_config_runtime_focus_tests": 2,
@@ -1442,9 +1457,9 @@ for array_name, expected_count in expected_focus_counts.items():
         )
     all_focus_entries.extend(entries)
 
-if len(all_focus_entries) != 527 or len(set(all_focus_entries)) != 527:
+if len(all_focus_entries) != 522 or len(set(all_focus_entries)) != 522:
     reject(
-        "multilane focus-test arrays must contain 527 globally distinct tests; "
+        "multilane focus-test arrays must contain 522 globally distinct tests; "
         f"found {len(all_focus_entries)} entries and "
         f"{len(set(all_focus_entries))} distinct entries"
     )
@@ -1454,7 +1469,7 @@ g_unit_groups = (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        321,
+        316,
         "--lib",
     ),
     (
@@ -1526,7 +1541,7 @@ for array_name, leg_id, package, expected_count, cargo_target in g_unit_groups:
     if source.count(
         f'    g_unit_expected_test_count "$expected_multilane_focus_test_count" \\'
     ) != 1:
-        reject("G-UNIT expected 527 count is not published exactly once")
+        reject("G-UNIT expected 522 count is not published exactly once")
     if expected_count <= 0:
         reject(f"G-UNIT leg {leg_id} has an invalid expected count")
 
@@ -2634,6 +2649,13 @@ grouped_fixture_sha256="$(bash "$grouped_parity_harness" --fixture-sha256)"
 grouped_suite_source_manifest_sha256="$(
   bash "$grouped_parity_harness" --suite-source-manifest-sha256
 )"
+resolver_grouped_suite_source_manifest_sha256="$(
+  python3 -I -S "$sdk_source_closure_resolver" \
+    --root "$repo_root" \
+    --manifest "$sdk_source_closure_manifest" \
+    --suite native-amx-v2-grouped \
+    --manifest-sha256
+)"
 receipt_suite_source_manifest_sha256="$(
   python3 -I -S - "$repo_root" <<'PY'
 from pathlib import Path
@@ -2652,9 +2674,11 @@ PY
 )"
 if [[ ! "$grouped_fixture_sha256" =~ ^[0-9a-f]{64}$ \
   || ! "$grouped_suite_source_manifest_sha256" =~ ^[0-9a-f]{64}$ \
+  || "$resolver_grouped_suite_source_manifest_sha256" \
+    != "$grouped_suite_source_manifest_sha256" \
   || "$receipt_suite_source_manifest_sha256" \
     != "$grouped_suite_source_manifest_sha256" ]]; then
-  echo "grouped Native AMX V2 fixture/suite source binding is invalid" >&2
+  echo "grouped Native AMX V2 fixture/resolver/receipt source binding is invalid" >&2
   exit 1
 fi
 require_exact_digest_occurrences \
@@ -2662,14 +2686,16 @@ require_exact_digest_occurrences \
   "$grouped_fixture_sha256" \
   2 \
   "grouped Native AMX V2 fixture SHA-256"
-require_exact_digest_occurrences \
-  "$closure_ledger" \
-  "$grouped_suite_source_manifest_sha256" \
-  2 \
-  "grouped Native AMX V2 suite-source manifest SHA-256"
 
 sdk_diagnostics_suite_source_manifest_sha256="$(
   bash "$sdk_diagnostics_harness" --suite-source-manifest-sha256
+)"
+resolver_sdk_diagnostics_suite_source_manifest_sha256="$(
+  python3 -I -S "$sdk_source_closure_resolver" \
+    --root "$repo_root" \
+    --manifest "$sdk_source_closure_manifest" \
+    --suite sumeragi-v2-sdk-diagnostics \
+    --manifest-sha256
 )"
 receipt_sdk_diagnostics_suite_source_manifest_sha256="$(
   python3 -I -S - "$repo_root" <<'PY'
@@ -2688,16 +2714,24 @@ print(
 PY
 )"
 if [[ ! "$sdk_diagnostics_suite_source_manifest_sha256" =~ ^[0-9a-f]{64}$ \
+  || "$resolver_sdk_diagnostics_suite_source_manifest_sha256" \
+    != "$sdk_diagnostics_suite_source_manifest_sha256" \
   || "$receipt_sdk_diagnostics_suite_source_manifest_sha256" \
     != "$sdk_diagnostics_suite_source_manifest_sha256" ]]; then
-  echo "Sumeragi v2 SDK diagnostics suite source binding is invalid" >&2
+  echo "Sumeragi v2 SDK diagnostics resolver/receipt source binding is invalid" >&2
   exit 1
 fi
-require_exact_digest_occurrences \
-  "$closure_ledger" \
-  "$sdk_diagnostics_suite_source_manifest_sha256" \
-  2 \
-  "Sumeragi v2 SDK diagnostics suite-source manifest SHA-256"
+
+for sdk_closure_document in "$closure_ledger" "$current_roadmap"; do
+  for sdk_closure_digest in \
+    "$grouped_suite_source_manifest_sha256" \
+    "$sdk_diagnostics_suite_source_manifest_sha256"; do
+    if grep -Fq -- "$sdk_closure_digest" "$sdk_closure_document"; then
+      echo "${sdk_closure_document} must derive SDK suite-source digests at freeze/replay instead of embedding mutable values" >&2
+      exit 1
+    fi
+  done
+done
 
 if [[ "$(grep -Fxc -- '      --multilane-four-peer-release' "$release_runner" || true)" != 1 ]]; then
   echo "production release runner must invoke the mandatory four-peer launcher exactly once" >&2
@@ -2736,4 +2770,4 @@ if [[ "$(grep -Fxc -- "      export IROHA_MULTILANE_RELEASE_MODE=1" "$launcher" 
   exit 1
 fi
 
-echo "[multilane-release-inventory] 88 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 40 modules, exact 527/527 G-UNIT (321 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 91 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 43 modules, exact 522/522 G-UNIT (316 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"

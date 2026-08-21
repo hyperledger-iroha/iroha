@@ -221,28 +221,35 @@ IEEE-754 bits when decoded again.
 
 ## Transaction Payload Layout
 
-`TransactionPayload` is an eight-field canonical struct. Its fields are encoded
+`TransactionPayload` is the ten-field canonical first-release struct. Its fields are encoded
 in this exact order, with the active per-field length-prefix rules:
 
 ```text
-chain
+domain
 authority
 creation_time_ms
 instructions
 time_to_live_ms
 nonce
 fee_payment
+admission_intent
 metadata
+attachments
 ```
 
-`fee_payment` is required; it is not an optional extension and it precedes
-`metadata` on wire. It contains either an authority payer or one exact sponsor
+`domain` is either the exact deployment `NetworkId` or the genesis-only marker.
+`fee_payment` is required; it is not an optional extension and it precedes the
+required `admission_intent` on wire. It contains either an authority payer or one exact sponsor
 program and immutable revision, followed by canonically ordered charge limits
 and the optional positive executable gas bound. The retired transaction
 metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are not alternate
 encodings of this field and are rejected by transaction construction and
-admission. SDK encoders and fixture exporters must use this eight-field layout;
-the former seven-field payload is not a supported compatibility format.
+admission. `admission_intent` is signature-bound and is exactly `Ordinary` or
+`QueuePlanSynced`; public Torii submission requires `QueuePlanSynced`.
+`attachments` is the ordered optional proof-attachment list and remains part of
+the signed transaction identity. SDK encoders and fixture exporters must emit
+this ten-field V1 layout. Missing fields, unknown intent tags, and unknown JSON
+fields fail closed; there is no metadata-marker or legacy payload fallback.
 `time_to_live_ms` retains its canonical option discriminant so a malformed
 signed payload can be decoded into a typed admission rejection, but
 first-release transactions must encode `Some(positive milliseconds)`. Safe

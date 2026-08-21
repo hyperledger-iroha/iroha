@@ -707,15 +707,15 @@ fn provisional_catalog_open_never_repairs_merge_tail_or_prune_intent() {
         fs::read(&merge_path).expect("read retained partial merge tail"),
         merge_bytes,
     );
-    let intent = seal_prune_intent_fixture(KuraPruneIntentV2 {
-        version: 2,
+    let intent = seal_prune_intent_fixture(KuraPruneIntentV3 {
+        version: 3,
         source_height: 2,
         source_tip_hash: Some(snapshot_tail_hash),
         target_height: 1,
         target_tip_hash: Some(first_hash),
         retained_merge_entries: 0,
         retained_merge_tip_hash: None,
-        sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
+        sidecar_rewrite: KuraPruneSidecarRewriteProjectionV3::none(),
         capacity: unsealed_prune_capacity_fixture(),
     });
     let intent_bytes = norito::to_bytes(&intent).expect("encode provisional prune intent");

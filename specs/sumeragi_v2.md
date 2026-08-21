@@ -7,6 +7,41 @@ versions at one height. The first-release decoder accepts only the canonical rev
 shape; it does not infer a missing proposal origin or fall back to a legacy vote, QC, status, or
 finality layout.
 
+Every nullable field in the authenticated revision-4 layout is an explicit slot. Height contexts,
+block subjects, execution commitments, Native AMX participant leaves, timeout votes and groups,
+certificate references, and proposal justifications encode either the exact value or `null`; JSON
+omission never means `None`. Signed messages and their canonical signature-payload projections
+reject unknown JSON fields, and shortened pre-release binary layouts fail typed decode rather than
+being padded with implicit defaults.
+
+The retained authenticated `QcVote` and `Qc` JSON objects likewise always carry
+their nullable `highest_qc` slot, using `null` for `None`; those objects and
+`QcAggregate` reject unknown keys. Their Norito encoding is unchanged, but a
+shortened layout which omits the slot is not accepted.
+
+The live `BlockMessage` wire enum contains only canonical `V2` messages, the independent lane-local
+message family, and authenticated Kura replica adverts. Its retained numeric gaps are reserved,
+not compatibility slots: every former global-v1 block-message discriminant fails typed decode and
+the pre-allocation ingress classifier. The former `NetworkMessage::SumeragiControlFlow` evidence
+tag likewise fails before ingress. There is no archive decoder on the live network type and no
+fabricated message used to turn a malformed frame into an infallible decode result.
+
+The durable `Evidence` model is likewise current-only: it contains one
+`SumeragiV2EquivocationEvidence` value with the frozen height context,
+roster-ordered BLS proofs of possession, and an exact conflicting signed pair.
+Retired global-v1 kind/payload records (double-vote summaries, invalid-QC or
+invalid-proposal claims, and censorship receipts) fail Norito decode; the node
+does not reconstruct a historical roster or silently upgrade them.
+The typed `SumeragiV2EquivocationEvidence` JSON object is closed and requires
+all three of its fields; its nested current consensus types retain their
+explicit nullable slots. `Evidence` itself remains a binary-only wrapper.
+
+The persisted `EvidenceRecord` wrapper is exact as well: its penalty flags,
+nullable penalty heights, and nullable consensus-admission height are all part
+of the first-release binary layout, and a shortened prefix receives no defaults.
+It is also binary-only; Torii constructs the bounded audit JSON projection
+explicitly instead of exposing a second full-evidence object schema.
+
 The protocol has one executable decision authority, the package-local
 `iroha_core::sumeragi::v2_core::Reducer`. Networking,
 signature verification, block construction, deterministic validation, payload storage, Kura, and
@@ -47,8 +82,10 @@ cryptographically verified before reducer admission.
 Genesis carries this projection as `sumeragi_v2.nexus_amx_context_hash`. The canonical projection
 binds the validated lane and dataspace catalogs, routing, staking, fees, AXT, lane fusion and
 autoscaling, DA policy, deterministic AMX budgets, the ordered active public-lane validator
-records, and each active lane's incarnation plus activation height. Local paths, worker counts,
-caches, and telemetry are deliberately excluded. An unsigned
+records, and the complete retained lane-incarnation lineage. The lineage is keyed canonically by
+lane ID and includes every active or retired lane's generation, incarnation, and activation
+height, because recreation derives the next incarnation from that history. Local paths, worker
+counts, caches, and telemetry are deliberately excluded. An unsigned
 deployment template whose final roster is not known carries the config-only projection. `kagami
 genesis sign` stages the complete genesis transaction, including validator activation, then
 replaces the projection and consensus fingerprint with the exact staged values before it emits a
@@ -269,14 +306,13 @@ traffic a turn.
 The final Sumeragi handoff repeats that source isolation instead of collapsing authenticated
 traffic into one FIFO. Each frozen-roster validator has a bounded ingress lane, authenticated
 non-validator sources receive on-demand lanes capped by
-`sumeragi.queues.authenticated_non_validator_sources = H`, and anonymous traffic retains its own
-persistent lane. Each validator owns an ordinary first-message slot, an ordinary Progress slot,
+`sumeragi.queues.authenticated_non_validator_sources = H`; identityless traffic has no production
+lane or capacity partition. Each validator owns an ordinary first-message slot, an ordinary Progress slot,
 a certified-fence-escape slot, a distinct signer-bounded TimeoutVote slot, and a
 TransportCompletion slot. Each materialized authenticated non-validator lane owns a generic slot,
-a certified-fence-escape slot, and a TransportCompletion slot; the anonymous
-lane owns only the generic and TransportCompletion pair for a non-empty roster. Configuration must therefore provide at least
-`5 * roster_len + 3 * H + 2` slots, or `3 * H + 1` for the no-roster diagnostic geometry, and body
-bytes must isolate `(roster_len + H + 1) * body_source_bytes`. A semantic duplicate carrying an
+a certified-fence-escape slot, and a TransportCompletion slot. Configuration must therefore provide at least
+`5 * roster_len + 3 * H` slots, or `3 * H` for the no-roster diagnostic geometry, and body
+bytes must isolate `(roster_len + H) * body_source_bytes`. A semantic duplicate carrying an
 alternate authenticated reply route attaches to its existing request before the new-lane `H` gate
 is evaluated. Exact-output route capacity remains the independent effective
 `network.max_total_connections` value `R`; root validation resolves any configured lane profile
@@ -417,7 +453,7 @@ the two producer classes when both are ready. A finite simultaneous fsync/signat
 burst remains backpressured in its bounded producer queue; it cannot overflow the reducer FIFO or
 turn valid work into a restart.
 
-The shipped Taira profile sets `role = "validator"`, a 1,000 ms genesis cadence, a 10,000 ms round
+The shipped Taira profile sets `role = "validator"`, a 4,000 ms genesis cadence, a 10,000 ms round
 deadline, bounded 96-transaction/16 MiB bodies, and the finalized NPoS stake-snapshot roster. An
 observer changes only `role = "observer"`; it must not change the shared fingerprint.
 
@@ -464,6 +500,12 @@ round. Prepare requires `proposal_round == round`; Commit requires the same cont
    `proposal_round`, not its later certification view. A node missing the body records
    `PendingApply`, fetches that exact origin from certified signers, validates it, and does not vote
    at the next height until application completes.
+
+Successful exact-artifact verification also installs a private transient capability on the
+committed lifecycle object. Production State application accepts only that capability and derives
+the commit-topology transition from its frozen `HeightContext.roster`; ordinary, signer-only, and
+unchecked commits cannot mint it. Restart recreates the same capability only after Kura has
+cryptographically verified the current V2 artifact and rebound the exact result-bearing block.
 
 A validator prepares a proposal only when it is unlocked or when a duplicate proposal has the
 exact same origin and subject as its lock. A TC-selected PrepareQC may supersede a lower lock, but
@@ -730,7 +772,7 @@ has the exact global Decision. After Decision those phases use only the
 persisted bytes and immutable origin proposal.
 If the scheduled author is unavailable, the runner waits only for the configured bounded interval
 and then permits ordinary carrier execution; it does not let another committee member replace the
-author or reservation claim. The separate globally planned compatibility path carries no autonomous
+author or reservation claim. The separate globally planned carrier path carries no autonomous
 reservation metadata and is reconstructed only from its exact committed entrypoints.
 
 The crash-atomic Kura lane-geometry marker is a universal active-segment boundary, not an
@@ -747,6 +789,15 @@ from the retired incarnation cannot replace or be read through the fresh lane sl
 geometry retirement/archive scanners may read marker-mismatched artifacts, using the authenticated
 historical binding while moving or proving retired storage. Committed-log receipt repair skips those
 historical merge executions instead of repopulating them into the active segment.
+
+Recovered execution evidence carries one canonical typed source. `GlobalBlock` contains the exact
+`LaneBlockArtifact` committed by the readable global body; `AutonomousLane` contains the exact
+network identity, epoch, and executable-payload hash authenticated by the lane-owned payload. The
+same source value is copied into the durable execution input, direct preflight, and application
+receipt. A proposal payload hint remains consensus scheduling evidence only: it is never promoted
+into a global storage anchor for autonomous execution. In particular, a hint-free payload does not
+invent a `HashOf<BlockHeader>` or proposal view zero, and the pre-release artifact-plus-three-option
+execution-input layout is rejected rather than decoded or normalized.
 
 An autonomous Prepare vote carries a second domain-separated READY signature over the exact
 producer-authenticated payload. The resulting PrepareQC embeds the READY aggregate, historical
@@ -805,8 +856,8 @@ Fresh global proposal production is workload-driven. The signed block cadence is
 view-zero proposal time, not an instruction to manufacture a body at every idle height. A leader
 defers before signing or encoding when the bounded queue snapshot, autonomous provider, and
 internal attachments contain no work. Internal work includes enabled, still-reachable time
-triggers which require ledger-clock progress, DA and pin material, previous-roster audit evidence,
-NPoS effects, SCCP commitments, certified merge work, and autonomous lane payloads. A resultless or
+triggers which require ledger-clock progress, DA and pin material, NPoS effects, SCCP commitments,
+certified merge work, and autonomous lane payloads. A resultless or
 wire-empty carrier is therefore admissible only when the shared semantic-work gate proves
 state-derived ledger-clock progress or authenticated external, autonomous, or other internal work;
 genuinely idle bodies are rejected.
@@ -1085,10 +1136,10 @@ signed body is present and retains it with the canonical header and proposal/
 executed-wire hashes. Local body eviction therefore cannot remove bounded
 serving authority. The retained reference is not standalone consensus
 evidence: the recipient still verifies the exact reference and merge QC against
-its own canonical carrier. Kura continues to decode canonical version-2
-retained records. Such a record never invents the field it predates; when its
-exact body is still local, the mandatory pre-eviction persistence path
-atomically upgrades it to version 3 before any body bytes can be discarded.
+its own canonical carrier. Kura accepts only the current version-3 retained
+record. Pre-release version-2 bytes fail closed at direct read and startup;
+operators must discard and rebuild that pre-release storage instead of asking
+the node to synthesize fields that were never authenticated.
 
 Runtime-ingress and Busy-deferred body completions share one exact ownership
 domain. Deferred work retains its full manifest and durable/validated receipt,
@@ -1207,7 +1258,7 @@ transaction-inclusion fairness, or censorship resistance.
 Ten arbitrary-context Core safety wrappers are TLAPS-proved. This includes historical TC-lock
 Commit authorization, the dependent direct-or-installed-authorization timeout wrapper, and the
 narrower grouped-timeout kernel for Commit intents already present at timeout. The canonical
-legacy/revision-3-rooted ledger has its final 44/3/6/1 status vector and
+revision-4 ledger has its final 44/3/6/1 status vector and
 `machine_checked_completion: true`, but that flag is not revision-4 proof evidence. The liveness
 claim remains conditional until fresh strict ledger evidence and the separate mandatory revision-4
 TLC/mutation corridor pass against the same signed source.
@@ -1238,7 +1289,7 @@ four-peer, 13-peer global, soak, scaling, or full-workspace runs have passed.
 
 ## Taira profile
 
-The Sumeragi-v2 Taira chain starts from a new chain ID, targets one-second blocks, and uses a
+The Sumeragi-v2 Taira chain starts from a new chain ID, targets four-second blocks, and uses a
 ten-second round deadline. Cutover requires all four labeled validators to report the same build,
 protocol/config fingerprint, height context, and committed hash across repeated advancing samples.
 The shared public edge is checked only after those direct validator checks and a signed runtime-only

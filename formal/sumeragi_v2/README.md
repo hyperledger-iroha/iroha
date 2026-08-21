@@ -26,7 +26,7 @@ any of these definitions or constructors change.
 
 ## Current proof-ledger status
 
-The checked-in legacy/revision-3-rooted ledger declares 44 `tlaps_proved`, 3
+The checked-in revision-4 ledger declares 44 `tlaps_proved`, 3
 `cross_tool_proved`, 0 `specified_unproved`, 6 `trusted_contract`, and 1
 `out_of_scope`, with `machine_checked_completion: true`. This declaration is
 the byte-exact input to the release proof wave, not proof evidence by itself
@@ -73,19 +73,23 @@ proxy tail, and both sets, and resets fallback before the new view starts.
 
 Every honest Prepare signer must first reconstruct the complete canonical body
 from the mandatory Reed-Solomon-16 layout, check its hashes, durably store it,
-and deterministically validate it. A durable CommitQC plus canonical
-application authorizes successor activation. Retryable finalized-height
-network output, lane sidecars, and cleanup are reconstructed and repaired
-independently; they cannot hold the successor height inactive.
-An unfinished historical lane remains governed by its immutable predecessor
-descriptor, not by the successor global roster. A configured validator removed
-from that roster has no successor global vote, but may continue signing any
-exact frozen lane descriptor which names it. This includes unfinished old
-descriptors and independently pinned current-height Nexus lane descriptors,
-whose committees need not be successor-roster subsets. This adds no safety
-requirement for global-roster overlap; conditional lane-output liveness
-requires each frozen lane committee's honest threshold to remain responsive
-until durable completion.
+and deterministically validate it. A durable CommitQC plus canonical global
+application starts finalization, but does not by itself authorize successor
+activation. The finalized predecessor remains the sole owner while it
+rehydrates late canonical lane bodies, services bounded historical recovery,
+and persists every winning lane certificate and ordinary application receipt
+or autonomous durable record. There is no incomplete-session transfer into the
+successor. Only the complete Kura-backed lane authority may drain and seal
+exact output before successor activation.
+An unfinished lane remains governed by its immutable predecessor descriptor,
+not by the successor global roster. A configured validator removed from that
+roster has no successor global vote, but may continue signing any exact frozen
+lane descriptor which names it. This includes older descriptors and
+independently pinned current-height Nexus lane descriptors, whose committees
+need not be successor-roster subsets. This adds no safety requirement for
+global-roster overlap; conditional lane-output liveness requires each frozen
+lane committee's honest threshold to remain responsive until durable
+completion.
 
 `SumeragiV2Revision4.tla` is the compact revision-4 model.
 `SumeragiV2Revision4.cfg` instantiates the smallest production committee with
@@ -307,7 +311,7 @@ height-context state are not migrated in place.
   `SumeragiV2CertifiedRequestHashAuthorityProofs.tla`,
   `SumeragiV2DurableDecisionRecoveryProofs.tla`, and
   the bounded `SumeragiV2Async*Proofs.tla` shard chain behind the
-  declaration-free `SumeragiV2AsyncLivenessProofs.tla` compatibility façade,
+  declaration-free `SumeragiV2AsyncLivenessProofs.tla` structural façade,
   with
   `SumeragiV2AsyncHistoricalRecoveryLivenessProofs.tla` as its child,
   model the production scheduler and transport abstractions, own the typed
@@ -341,12 +345,11 @@ height-context state are not migrated in place.
   for a typed monotone authority refinement whose phase/commitment identity is
   deliberately distinct. Fair transport ingress for a non-empty roster has
   the exact minimum
-  `5 * |ValidatorIds| + 3 * H + 2` entries, where `H` is the configured maximum
+  `5 * |ValidatorIds| + 3 * H` entries, where `H` is the configured maximum
   number of simultaneously materialized authenticated non-validator source
   lanes. The potential separately reserves five owners per validator, three
-  owners per materialized authenticated non-validator lane, and two anonymous
-  owners. With no roster the diagnostic minimum is `3 * H + 1`, because no
-  roster-origin TransportCompletion can be valid on the anonymous lane. A
+  owners per materialized authenticated non-validator lane, and no identityless
+  ingress partition. With no roster the diagnostic minimum is `3 * H`. A
   semantic duplicate carrying a newly authenticated reply route is merged into
   its existing request before the new-lane `H` gate is evaluated. The
   inductive invariant also records that every individual source lane is at
@@ -457,11 +460,11 @@ height-context state are not migrated in place.
   global-frame, or high-queue owner. The default instantiation uses
   17 MiB global/consensus/block-sync settings, 2 MiB control, a 128 MiB
   high-priority byte queue, `H = 2`, and
-  `4 * 128 + 2 * 2 + 2 = 518` outer-ingress entries.
-  Kagami and the Taira renderer reject rosters above 128 and preserve one
+  `5 * 31 + 3 * 2 = 161` outer-ingress entries.
+  Kagami and the Taira renderer reject rosters above 31 and preserve one
   source partition for every validator, every simultaneously materialized
-  authenticated non-validator lane, and the anonymous lane by scaling body
-  bytes to at least `(N + H + 1) * body_source_bytes`.
+  authenticated non-validator lane by scaling body bytes to at least
+  `(N + H) * body_source_bytes`.
   The production reducer's shared Rust/Verus refinement gate checks the local
   EnterView selection boundary: the persisted TC, pre-install lock,
   post-install durable lock, effect-carried lock, and immediately following
@@ -513,12 +516,12 @@ height-context state are not migrated in place.
   module. It proves action-frame preservation and exit lemmas used by the
   locked-body corridor, but owns no ledger obligation and cannot discharge or
   promote `LockedBodyReproposalProgressObligation`.
-- The theorem-free compatibility shard
+- The theorem-free structural shard
   `SumeragiV2AsyncOutstandingLivenessDebt.tla` and exactly two theorem-bearing
   scratch modules are outside the release-proof surface.
   `SumeragiV2HistoricalLockedBodyRecoveryBridgeScratch.tla` and
   `SumeragiV2ProgressWitnessCrossToolScratch.tla` each recheck one
-  authoritative bridge. These compatibility/scratch modules are structural
+  authoritative bridge. These non-release/scratch modules are structural
   inventory, not release evidence, and none can promote a ledger entry.
 - `proof_coverage.json` is the checked-in theorem/trust-boundary status
   declaration, not independent proof authority. The structural checker binds
@@ -607,7 +610,7 @@ height-context state are not migrated in place.
   wake-up, predecessor drop, successor retry, frozen recipients, and Kura
   revalidation. Fresh isolated Rust 1.93.1 locked/offline slices passed the 18
   exact Kura replica tests and four exact configuration tests; the complete
-  527-test `G-UNIT` run, formal-engine receipts, and network corridors remain
+  522-test `G-UNIT` run, formal-engine receipts, and network corridors remain
   separate release obligations.
   One hundred six `_bug.cfg` controls deliberately weaken one boundary each and
   must produce the named invariant counterexample.
@@ -1036,8 +1039,8 @@ leaves remain source-bound and transitively checked through reviewed top-level
 consumers rather than being promoted into extra ledger rows. Machine-checked
 completion is evaluated over the same 54 obligations and the current ledger
 sets `machine_checked_completion: true`. That checked-in flag closes the
-legacy/revision-3-rooted status inventory, not the separate revision-4 proof
-boundary; release mode still requires fresh source-bound evidence.
+reviewed revision-4 status inventory, not fresh proof evidence by itself;
+release mode still requires source-bound evidence from the frozen candidate.
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` now both have pinned
 source proof bodies and are deductively classified support leaves in the
@@ -1055,17 +1058,20 @@ semantic rank, so servicing one owner cannot hide another. Equal-count
 replacement and count-increasing replenishment remain explicit non-progress
 cases and require a prior finite or coalesced producer argument.
 
-The production queue closes the corresponding final-retirement race with a
-one-shot local handoff. Removing the last owner in a frozen Serve batch arms
-`producer_episode_due` under the same mutex; fresh Serve admission returns
-`Busy` while that bit is due or while `producer_episode_active` owns its bounded
-outer turn. The runner atomically consumes due into active, and the local lease
-clears active on drop before Serve admission reopens. Rejected replenishment
-does not allocate either an actor-global scheduler ordinal or a logical Serve
-lifecycle. Digest-refreshed checker mutations cover both Busy boundaries, the
-ordinal high-water marks, exact timeout-owner ordering, the strict predecessor
-prefix, and the real timeout-certificate/EnterView suffix. This is a source
-refinement boundary, not proof promotion or an additional fairness premise.
+The production lifecycle closes the corresponding final-retirement race
+through one coordinator-owned transaction. A current-height Serve remains in
+fair ingress until the lifecycle selector authenticates its exact carrier, and
+capacity backpressure returns `CapacityPending` without removing that
+occurrence. A successful transaction attests the complete Ready census, claims
+the durable ledger row, reserves the exact worker target, and only then commits
+dequeue. The serialized proposal runner separately claims and settles
+`ProducerTurn`; there is no queue-local Serve gate, barrier, reservation, or
+producer episode. Rejected replenishment does not allocate either an
+actor-global scheduler ordinal or a logical Serve lifecycle. Digest-refreshed
+checker mutations cover the coordinator transaction, ordinal high-water marks,
+exact timeout-owner ordering, the strict predecessor prefix, and the real
+timeout-certificate/EnterView suffix. This is a source refinement boundary,
+not proof promotion or an additional fairness premise.
 
 The exact-Decision producer audit narrows causal replenishment to reachable
 local debt setters; Serve-capacity growth to ordinary or historical request
@@ -1124,8 +1130,8 @@ responsive validator's own durable decision must lead to its own durable
 application. Its source proof composes exact Decision-stage service from the
 five off-scheduler leaves and protected finite-runner closure. Its promoted
 status still requires a fresh strict run over that dependency cone for release.
-The legacy-named `LockedBodyReproposalProgressObligation` rejects vacuous view
-movement. Its first-release statement requires every stable available retained
+The historically named `LockedBodyReproposalProgressObligation` rejects
+vacuous view movement. Its first-release statement requires every stable available retained
 lock eventually to commit in its old round, be re-proposed unchanged under a
 later new same-round origin, or be legitimately decided or superseded by a
 higher certified Prepare lock. That promoted TLA+ target must pass its fresh
@@ -1451,8 +1457,8 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 860 named tests
-across 40 Rust modules. The preceding 298-name inventory was produced from the
+Before network startup, the executable wrapper inventories 864 named tests
+across 43 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
 historical/current applied-height rollover; 2 bind peer-writer flush and
@@ -1572,11 +1578,16 @@ canonical-carrier completion regressions produced that historical 864-test,
 41-module checkpoint. Retiring the duplicate inline network-simulation rows
 brings the historical inventory to the 856-test, 40-module checkpoint. The
 exact retired-attempt accessor, mixed-carrier successor, two-link cold-restart
-hydration, and noncanonical autonomous-output retirement regressions bring the current
-inventory to 860 tests across 40 modules.
+hydration, noncanonical autonomous-output retirement, and the ordinary plus
+record-backed autonomous predecessor-durability regressions, followed by the
+three producer-publication-fence race regressions, bring the current
+inventory to 864 tests across 43 modules.
 Together with the source-sealed command and tooling legs, the pre-network
-corridor contains 88 legs. The
-G-SCALE runner/validator preflight remains part of that sealed corridor.
+corridor contains 91 legs. The
+G-SCALE runner/validator preflight remains part of that sealed corridor. The
+fence rows prove that an exact lifecycle dequeue serializes both same-wire and
+unrelated producers until publication, and that abandoning an unpublished
+dequeue releases the producer without consuming the queued target.
 The first-release sidecar keeps wire protocol version 1 and uses positive
 `NonZeroU64` responder generation, requester epoch, and per-stream semantic
 sequence coordinates. Canonical request identity binds the version, all three
@@ -1648,7 +1659,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329`.
+`c9972f55a17acbdcfacda42e3ca152d9705ec4e0f188a561f0c28990468ffe97`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1679,13 +1690,13 @@ included two exact locked-Commit
 progress-witness regressions and six outer TransportCompletion-corridor
 regressions. The current
 geometry pins five owners per validator, three owners for each of the `H`
-simultaneously materialized authenticated non-validator lanes, and two
-anonymous owners (`5N+3H+2` total), including a roster-origin completion relayed
+simultaneously materialized authenticated non-validator lanes (`5N+3H` total),
+including a roster-origin completion relayed
 through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The four integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 88 legs, including the governance-
+the complete pre-network corridor now spans 91 legs, including the governance-
 unlock audit module, the autonomous lifecycle-recovery module, and separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, and source-sealed
@@ -1693,12 +1704,12 @@ command-success legs. Its finality, offline compact-QC,
 and height-context proposal-origin modules each use a dedicated
 `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
-geometry tests as part of those forty modules or eighty-eight legs. The
+geometry tests as part of those forty-three modules or ninety-one legs. The
 inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
 recovery, post-decision timeout/TC quiescence, and the exact
-`5N+3H+2`/`2N+3` admission boundaries in addition to exact-lock,
+`5N+3H`/`2N+3` admission boundaries in addition to exact-lock,
 completion-ownership, future-acquisition rejection, rebound durable retry, and
 executor-batch boundaries. Those adapter boundaries pin a maximum flattened
 persistence macro-step of four effects within the reducer's eight-effect bound,
@@ -1713,15 +1724,13 @@ matching logical request registration retires its old request owner. The
 certified slot is a single retained credit, not a one-certificate limit:
 additional distinct TCs, CommitQCs, or CommitQC-carrying recovery responses
 consume ordinary Progress capacity while all retained certificates share that
-one credit. While an authenticated
-certified-body response remains retained, its escape episode is explicitly
-`Fresh`, `Charged`, or `Spent`: the Fresh potential admits at most one new
-direct TC, CommitQC, or `CommitCertificateResponse` carrying a CommitQC root;
-Charged and Spent reject every further fresh root, and only claim retirement
-resets the latch.
-The claimed-response rank counts
-the exact frozen direct roots plus the strictly decreasing trusted causal tail,
-so pacemaker priority cannot be replenished indefinitely.
+one credit. There is no response-local phase or resettable certificate latch.
+A selected `CertifiedResponse` remains ordinary FIFO work: a later
+`TimeoutVote` cannot cross it, and timeout control is a dependency only when it
+advances the current Proposal, vote, QC, or TimeoutVote owner. The
+claimed-response rank therefore counts the exact direct roots already inside
+its frozen prefix plus their strictly decreasing trusted causal tail; later
+timeout traffic cannot replenish that prefix.
 Certificate-first and certificate-last arrival orders preserve the same
 ordinary reserves. The
 standalone revision-4 kernel also charges an unpublished `BodyAvailable` token
@@ -1846,8 +1855,8 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 88 pre-network legs and the exact
-860-test inventory, the pinned harness lock and resolved toolchain, the formal
+binds original HEAD/tree/`Cargo.lock`, all 91 pre-network legs and the exact
+864-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer. The protected archived validator first publishes a no-clobber

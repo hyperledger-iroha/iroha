@@ -4,7 +4,7 @@ use super::{
     SignedBlock,
 };
 use crate::{
-    consensus::{NposConsensusEffects, PreviousRosterEvidence},
+    consensus::NposConsensusEffects,
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -24,7 +24,6 @@ use std::{
 #[derive(Debug, Clone)]
 pub struct BlockBuilder {
     header: BlockHeader,
-    transactions: Vec<SignedTransaction>,
     external_entrypoints: Vec<TransactionEntrypoint>,
     time_triggers: Vec<TimeTriggerEntrypoint>,
     results: Vec<TransactionResult>,
@@ -33,7 +32,6 @@ pub struct BlockBuilder {
     da_commitments: Option<DaCommitmentBundle>,
     da_proof_policies: Option<DaProofPolicyBundle>,
     da_pin_intents: Option<DaPinIntentBundle>,
-    previous_roster_evidence: Option<PreviousRosterEvidence>,
     npos_consensus_effects: Option<NposConsensusEffects>,
     execution_context: Option<BlockExecutionContextBundle>,
 }
@@ -43,7 +41,6 @@ impl BlockBuilder {
     pub fn new(header: BlockHeader) -> Self {
         Self {
             header,
-            transactions: Vec::new(),
             external_entrypoints: Vec::new(),
             time_triggers: Vec::new(),
             results: Vec::new(),
@@ -53,7 +50,6 @@ impl BlockBuilder {
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
-            previous_roster_evidence: None,
             npos_consensus_effects: None,
         }
     }
@@ -63,8 +59,7 @@ impl BlockBuilder {
         let h: HashOf<TransactionEntrypoint> = tx.hash_as_entrypoint();
         self.entry_merkle.add(h);
         self.external_entrypoints
-            .push(TransactionEntrypoint::External(tx.clone()));
-        self.transactions.push(tx);
+            .push(TransactionEntrypoint::External(tx));
         idx
     }
     /// Push a sealed transaction commitment and update the entrypoint Merkle tree.
@@ -126,10 +121,6 @@ impl BlockBuilder {
             .take()
             .filter(|bundle| !bundle.is_empty());
     }
-    /// Attach previous-height roster evidence that will be embedded in the resulting block.
-    pub fn set_previous_roster_evidence(&mut self, evidence: Option<PreviousRosterEvidence>) {
-        self.previous_roster_evidence = evidence;
-    }
     /// Attach deterministic `NPoS` effects that will be embedded in the resulting block.
     pub fn set_npos_consensus_effects(&mut self, effects: Option<NposConsensusEffects>) {
         self.npos_consensus_effects = effects.filter(|bundle| !bundle.is_empty());
@@ -151,23 +142,19 @@ impl BlockBuilder {
         let da_commitments = self.da_commitments.clone();
         let da_proof_policies = self.da_proof_policies.clone();
         let da_pin_intents = self.da_pin_intents.clone();
-        let previous_roster_evidence = self.previous_roster_evidence.clone();
         let npos_consensus_effects = self.npos_consensus_effects.clone();
         self.header
             .set_execution_context_hash(self.execution_context.as_ref().map(HashOf::new));
         let payload = BlockPayload {
             header: self.header,
-            transactions: self.transactions,
-            external_entrypoints: self.external_entrypoints.clone(),
+            external_entrypoints: self.external_entrypoints,
             execution_context: self.execution_context.clone(),
             da_commitments,
             da_proof_policies,
             da_pin_intents,
-            previous_roster_evidence,
             npos_consensus_effects,
         };
         let result = BlockResult {
-            external_entrypoints: Vec::new(),
             time_triggers: self.time_triggers,
             merkle: self.entry_merkle,
             result_merkle: self.result_merkle,
@@ -193,7 +180,6 @@ impl BlockBuilder {
         block.set_da_proof_policies(self.da_proof_policies);
         block.set_da_commitments(self.da_commitments);
         block.set_da_pin_intents(self.da_pin_intents);
-        block.set_previous_roster_evidence(self.previous_roster_evidence);
         block.set_npos_consensus_effects(self.npos_consensus_effects);
         block.set_execution_context(self.execution_context);
         block
@@ -225,8 +211,6 @@ impl BlockBuilder {
             .da_pin_intents
             .as_ref()
             .and_then(DaPinIntentBundle::merkle_commitment);
-        self.header
-            .set_prev_roster_evidence_hash(self.previous_roster_evidence.as_ref().map(HashOf::new));
         self.header.set_npos_effects_hash(
             self.npos_consensus_effects
                 .as_ref()
@@ -352,8 +336,8 @@ mod tests {
             manual.header().result_merkle_root()
         );
         assert_eq!(
-            built.payload().transactions.len(),
-            manual.payload().transactions.len()
+            built.external_entrypoint_count(),
+            manual.external_entrypoint_count()
         );
         assert_eq!(
             built.entrypoint_hashes().collect::<Vec<_>>(),

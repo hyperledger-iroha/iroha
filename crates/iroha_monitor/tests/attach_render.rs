@@ -11,6 +11,7 @@ fn monitor_bin() -> Option<PathBuf> {
 }
 #[test]
 fn attach_mode_with_slow_peer_renders_multiple_frames() {
+    let _serial = crate::serial_guard();
     let Some(slow_addr) = spawn_status_metrics_stub(Duration::from_millis(600)) else {
         eprintln!("skipping attach_mode_with_slow_peer_renders_multiple_frames: no slow stub addr");
         return;

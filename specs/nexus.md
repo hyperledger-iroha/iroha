@@ -1,10 +1,8 @@
 #! Iroha 3 – Sora Nexus Ledger: Technical Design Specification
 
-This document proposes the Sora Nexus Ledger architecture for Iroha 3, evolving Iroha 2 toward a single global, logically unified ledger organized around Data Spaces (DS). Data Spaces provide strong privacy domains (“private data spaces”) and open participation (“public data spaces”). The design preserves composability across the global ledger while ensuring strict isolation and confidentiality for private‑DS data, and introduces data‑availability scaling via erasure coding across Kura (block storage) and WSV (World State View).
+This document specifies the Sora Nexus Ledger architecture for Iroha 3: a single global, logically unified ledger organized around Data Spaces (DS). Data Spaces provide strong privacy domains (“private data spaces”) and open participation (“public data spaces”). The design preserves composability across the global ledger while ensuring strict isolation and confidentiality for private‑DS data, and introduces data‑availability scaling via erasure coding across Kura (block storage) and WSV (World State View).
 
-The same repository builds both Iroha 2 (self-hosted networks) and Iroha 3 (SORA Nexus). Execution is powered by
-the shared Iroha Virtual Machine (IVM) and Kotodama toolchain, so contracts and bytecode artifacts remain
-portable across self-hosted deployments and the Nexus global ledger.
+Iroha 3 is one product line spanning canonical one-lane self-hosted deployments and SORA Nexus multi-lane deployments. Execution is powered by the shared Iroha Virtual Machine (IVM) and Kotodama toolchain, so contracts and bytecode artifacts remain portable across both deployment profiles.
 
 Goals
 - One global logical ledger composed from many cooperating validators and Data Spaces.
@@ -210,7 +208,7 @@ Block and Commit Structure
 
 Consensus and Scheduling
 - Nexus Chain Consensus: Single global, pipelined BFT (Sumeragi-class) with a 22-node committee (3f+1 with f=7) targeting 1s blocks and 1s finality. Committee members are epochally selected via VRF/stake from ~200k candidates; rotation maintains decentralization and censorship resistance.
-- Data Space Consensus: Each DS runs its own BFT among its validators to produce per‑slot artifacts (proofs, DA commitments, DS QC). Lane-relay committees are sized at `3f+1` using the dataspace `fault_tolerance` setting and are sampled deterministically per epoch from the dataspace validator pool using the VRF epoch seed bound with `(dataspace_id, lane_id)`. Private DS are permissioned; public DS allow open liveness subject to anti‑Sybil policies. The global nexus committee remains unchanged.
+- Data Space Consensus: Each DS runs its own BFT among its validators to produce per‑slot artifacts (proofs, DA commitments, DS QC). Every lane committee is exactly `3f+1` using the dataspace `fault_tolerance` setting (`f >= 1`), never the complete live validator pool. The exact lane/dataspace route must be active at the authority height, the canonical manifest or stake pool must contain at least `3f+1` distinct live peers, and a consensus-stable epoch seed bound with `(dataspace_id, lane_id)` selects exactly that many before canonical peer ordering. Route mismatch, malformed authority, and undersized pools fail closed. Private DS are permissioned; public DS allow open liveness subject to anti‑Sybil policies. The global nexus committee remains unchanged.
 - Transaction Scheduling: Users submit atomic transactions declaring touched DSIDs and read‑write sets. DS execute in parallel within the slot; the nexus committee includes the transaction in the 1s block if all DS artifacts verify and DA certificates are timely (≤300 ms).
 - Performance Isolation: Each DS has independent mempools and execution. Per‑DS quotas bound how many transactions touching a given DS can be committed per block to avoid head‑of‑line blocking and protect private DS latency.
 
@@ -386,8 +384,8 @@ Configuration and Determinism
   Submit the signed transaction through the normal transaction endpoint instead.
 - **Status discovery:** `GET /v1/nexus/lifecycle` is a read-only, access-policy
   checked endpoint that negotiates JSON or native Norito. Its versioned response
-  contains `nexus_enabled`, the exact canonical `lane_count`/`lanes`, and the
-  domain-separated `catalog_hash`, plus the exact active lane-incarnation entries
+  contains the exact canonical `lane_count`/`lanes` and the domain-separated
+  `catalog_hash`, plus the exact active lane-incarnation entries
   and their `incarnation_root`. Clients validate both commitments before signing,
   so a delayed request cannot replay after a lane is retired and recreated with
   identical metadata. The Rust client exposes `get_lane_lifecycle_status` and
@@ -410,9 +408,9 @@ Configuration and Determinism
   effective catalog and lane storage geometry after restart.
 - **Storage cleanup:** Kura and tiered WSV geometry are reconciled (create/retire/relabel), DA shard cursor mappings are synced/persisted, and retired lanes are pruned from lane relay caches plus DA commitment/confidential-compute/pin-intent stores.
 
-Migration Path (Iroha 2 → Iroha 3)
-1) Introduce data‑space‑qualified IDs and nexus block/global state composition in data model; add feature flags to keep Iroha 2 legacy modes during transition.
-2) Implement Kura/WSV erasure‑coding backends behind feature flags, preserving current backends as defaults during early phases.
+Implementation Path
+1) Introduce data‑space‑qualified IDs and Nexus block/global state composition in the data model.
+2) Implement Kura/WSV erasure‑coding backends as mandatory deterministic protocol components.
 3) Keep ABI v1 surface fixed; implement AMX without new syscalls/pointer types and update tests/docs without changing ABI.
 4) Deliver minimal nexus chain with a single public DS and 1s blocks; then add first private‑DS pilot exporting proofs/commitments only.
 5) Expand to full atomic cross‑DS transactions (AMX) with DS‑local FASTPQ‑ISI proofs and DA attesters; enable ML‑DSA‑87 QCs across DS.

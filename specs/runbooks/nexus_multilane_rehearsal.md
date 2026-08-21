@@ -26,9 +26,8 @@ routing, and rollback drills.
 1. `specs/project_tracker/nexus_config_deltas/2026Q1.md` reflects the
    GOV-2026-03-19 approval (signed manifests + reviewer initials).
 2. `defaults/nexus/config.toml` (sha256
-   `4f57655666bb0c83221cd3b56fd37218822e4c63db07e78a6694db51077f7017`, blake2b
-   `65827a4b0348a7837f181529f602dc3315eba55d6ca968aaafb85b4ef8cfb2f6759283de77590ec5ec42d67f5717b54a299a733b617a50eb2990d1259c848017`, with
-   `nexus.enabled = true` baked in) and `defaults/nexus/genesis.json` match the
+   `afc7cafc0d3d7db5e06d807a0648f03a83da474a5b2260c2137b5793c4b26f7f`, blake2b
+   `bb4d4dac082b0605bee65d70bbc6d096f64bbb539bb778bdc91519b6a8ab15d3465067ef210646f0f69e556216d49a126991ded85fa54a15bd3880ae41427565`) and `defaults/nexus/genesis.json` match the
    approved hashes; `kagami genesis bootstrap --profile nexus` reports the same
    digest recorded in the tracker.
 3. The lane catalog matches the approved three-lane layout; `iroha3d --sora
@@ -37,7 +36,7 @@ routing, and rollback drills.
    `integration_tests/tests/nexus/multilane_pipeline.rs` via
    `.github/workflows/integration_tests_multilane.yml`) and
    `ci/check_nexus_multilane.sh` (router coverage) both pass so the Nexus
-   profile stays multi-lane-ready (`nexus.enabled = true`, Sora catalog hashes
+   profile stays multi-lane-ready (Sora catalog hashes
    intact, lane storage under `blocks/lane_{id:03}_{slug}` and merge logs
    provisioned). Capture the artefact digests in the tracker when the defaults
    bundle changes.
@@ -154,10 +153,10 @@ candidate-specific expectation fail closed.
 The ordered operation inventories are exact:
 
 - `offline-toolchain-sdk` (23; plan SHA-256
-  `4124c633d52744528f04a732149adce9d4e94b83437a6b121bf7087b03c95262`):
+  `aba5987e1a69dba70c8ef47478ecbf748165f13c3131045594473d47a5a9e95f`):
   `offline-rustc-version`,
   `offline-cargo-version`, `offline-workspace-build`,
-  `g-unit-production-855`, `g-unit-focused-525`,
+  `g-unit-production-865`, `g-unit-focused-530`,
   `offline-workspace-clippy`, `offline-workspace-format`,
   `offline-no-legacy-codec`, `sdk-rust-regeneration-first`,
   `sdk-rust-regeneration-second`, `sdk-regeneration-byte-identity`,

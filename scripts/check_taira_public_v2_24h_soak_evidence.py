@@ -1813,6 +1813,12 @@ def _validate_structural_evidence(
                                       "trusted iroha3d digest")
 
     network = _exact(top["network"], NETWORK_FIELDS, "network")
+    network_genesis = _iroha_hash(
+        network["genesis_block_hash"], "network genesis block hash", BLOCK_HASH_TYPE
+    )
+    expected_network_id = taira_constants.network_id_from_genesis_hash(
+        str(network_genesis["value"])
+    )
     _require(_json_exact_equal(
         {field: network[field] for field in NETWORK_FIELDS
          if field != "genesis_block_hash"},
@@ -1820,12 +1826,10 @@ def _validate_structural_evidence(
             "name": taira_constants.NETWORK_NAME,
             "deployment": "public",
             "chain_id": taira_constants.CHAIN_ID,
-            "network_id": taira_constants.NETWORK_ID,
+            "network_id": expected_network_id,
             "protocol_version": PROTOCOL_VERSION,
         }),
              "network identity is not exact public Taira v2")
-    _iroha_hash(network["genesis_block_hash"], "network genesis block hash",
-                BLOCK_HASH_TYPE)
     profile = _exact(top["profile"], PROFILE_FIELDS, "profile")
     _require(_json_exact_equal(profile, {
         "duration_ms": DURATION_MS,

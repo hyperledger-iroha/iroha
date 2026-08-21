@@ -162,6 +162,7 @@ use iroha_data_model::{
     content::ContentAuthMode,
     da::{
         commitment::DaProofScheme,
+        confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
         prelude::DaStripeLayout,
         types::{BlobClass, DaRentPolicyV1, GovernanceTag, RetentionPolicy},
     },
@@ -173,9 +174,10 @@ use iroha_data_model::{
     name::Name,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-        AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
-        FeeSponsorProgramId, LaneCatalog, LaneConfig, LaneId, LaneStorageProfile, LaneVisibility,
-        ShardId, UniversalAccountId,
+        AUTOSCALE_META_MANAGED, DaManifestPolicy, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
+        FeeSponsorProgramId, LaneCatalog, LaneConfig, LaneId, LaneSchedulerPolicy,
+        LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility, ShardId,
+        UniversalAccountId,
     },
     peer::{Peer, PeerId},
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
@@ -858,9 +860,10 @@ pub struct Root {
     )]
     chain_discriminant: WithOrigin<u16>,
     /// BLS Proof-of-Possession entries for validator trusted peers.
-    /// When present, these entries define the BLS trusted-peer subset that
-    /// participates in consensus; trusted peers without PoPs are network-trusted
-    /// observers. Invalid or duplicate PoP entries are rejected.
+    /// These entries define the BLS trusted-peer subset that participates in
+    /// consensus; an empty list defines no validators. Trusted peers without
+    /// PoPs remain network-trusted observers. Invalid, duplicate, or extraneous
+    /// PoP entries are rejected.
     #[config(env = "TRUSTED_PEERS_POP", default)]
     trusted_peers_pop: TrustedPeerPops,
     #[config(nested)]
@@ -1288,6 +1291,14 @@ impl Root {
                     lane_profile.defaults().max_total_connections,
                     NonZeroUsize::get,
                 );
+            let remote_trusted_peer_count = trusted_peers.value().others.len();
+            if remote_trusted_peer_count > reply_source_capacity {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                        "trusted-peer full fanout requires {remote_trusted_peer_count} remote connections, above the effective network connection capacity {reply_source_capacity}"
+                    )),
+                );
+            }
             if sumeragi.queues.authenticated_non_validator_sources.get() > reply_source_capacity {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
@@ -1299,6 +1310,69 @@ impl Root {
             let effect_work_capacity = (sumeragi.queues.commands.get()
                 / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
                 .max(1);
+            let validator_roster_len = trusted_peers.value().validator_roster_len();
+            let authenticated_non_validator_source_capacity =
+                sumeragi.queues.authenticated_non_validator_sources.get();
+            match actual::sumeragi_v2_body_ingress_required_message_capacity(
+                validator_roster_len,
+                authenticated_non_validator_source_capacity,
+            ) {
+                Some(required_bodies) if sumeragi.queues.bodies.get() < required_bodies => {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                            "Sumeragi v2 canonical outer-ingress message capacity {} is below the roster-aware minimum {required_bodies}; configured validator roster is {validator_roster_len}, and authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}",
+                            sumeragi.queues.bodies,
+                        )),
+                    );
+                }
+                None => {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                            "Sumeragi v2 roster-aware canonical outer-ingress message minimum overflowed; configured validator roster is {validator_roster_len}, and authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}",
+                        )),
+                    );
+                }
+                Some(_) => {}
+            }
+            let body_source_bytes = sumeragi.queues.body_source_bytes.get();
+            match actual::sumeragi_v2_body_ingress_required_byte_capacity(
+                validator_roster_len,
+                authenticated_non_validator_source_capacity,
+                body_source_bytes,
+            ) {
+                Some(required_body_bytes)
+                    if sumeragi.queues.body_bytes.get() < required_body_bytes =>
+                {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                            "Sumeragi v2 aggregate canonical outer-ingress wire-byte capacity {} is below the roster-aware minimum {required_body_bytes}; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}, and each source requires {body_source_bytes} bytes",
+                            sumeragi.queues.body_bytes,
+                        )),
+                    );
+                }
+                None => {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                            "Sumeragi v2 roster-aware aggregate canonical outer-ingress wire-byte minimum overflowed; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}, and each source requires {body_source_bytes} bytes",
+                        )),
+                    );
+                }
+                Some(_) => {}
+            }
+            if let Err(error) = actual::sumeragi_v2_lifecycle_capacity_geometry(
+                validator_roster_len,
+                effect_work_capacity,
+                sumeragi.queues.bodies.get(),
+                sumeragi.queues.authenticated_non_validator_sources.get(),
+            ) {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                        "{error}; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {}, and certified-request capacity is {}",
+                        sumeragi.queues.authenticated_non_validator_sources,
+                        sumeragi.queues.bodies,
+                    )),
+                );
+            }
             let geometry = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
                 effect_work_capacity,
                 sumeragi.queues.bodies.get(),
@@ -1310,17 +1384,6 @@ impl Root {
                 )
             });
             if let Err(error) = geometry {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "{error}; configured network reply-source capacity is {reply_source_capacity}"
-                    )),
-                );
-            }
-            if let Err(error) = actual::validate_sumeragi_v2_lifecycle_capacity_geometry(
-                effect_work_capacity,
-                sumeragi.queues.bodies.get(),
-                reply_source_capacity,
-            ) {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
                         "{error}; configured network reply-source capacity is {reply_source_capacity}"
@@ -5708,12 +5771,15 @@ pub struct SumeragiQueues {
     #[config(default = "defaults::sumeragi::QUEUE_BODY_CAPACITY")]
     pub bodies: NonZeroUsize,
     /// Aggregate canonical outer-ingress wire bytes retained across all sources.
-    #[config(default = "defaults::sumeragi::QUEUE_BODY_BYTES")]
+    #[config(
+        env = "SUMERAGI_QUEUES_BODY_BYTES",
+        default = "defaults::sumeragi::QUEUE_BODY_BYTES"
+    )]
     pub body_bytes: NonZeroUsize,
     /// Per-ingress-source canonical outer-ingress wire-byte partition.
     /// Validator partitions isolate ordinary traffic, payload completions, and
-    /// timeout votes; authenticated non-validator and anonymous partitions do
-    /// not spend the timeout reserve. This also reserves the fixed atomic
+    /// timeout votes; authenticated non-validator partitions do not spend the
+    /// timeout reserve. This also reserves the fixed atomic
     /// lane-certificate and executable-source minima.
     #[config(default = "defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES")]
     pub body_source_bytes: NonZeroUsize,
@@ -6007,17 +6073,16 @@ impl Sumeragi {
         let minimum_body_sources = queues
             .authenticated_non_validator_sources
             .get()
-            .checked_add(2);
-        let minimum_body_messages = queues
-            .authenticated_non_validator_sources
-            .get()
-            .checked_mul(3)
-            .and_then(|hubs| hubs.checked_add(7));
+            .checked_add(1);
+        let minimum_body_messages = actual::sumeragi_v2_body_ingress_required_message_capacity(
+            1,
+            queues.authenticated_non_validator_sources.get(),
+        );
         match minimum_body_messages {
             Some(minimum) if queues.bodies.get() < minimum => {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.bodies must reserve five positions for at least one validator, three per authenticated non-validator source, and two anonymous positions (minimum {minimum}, configured {})",
+                        "sumeragi.queues.bodies must reserve five positions for at least one validator and three per authenticated non-validator source (minimum {minimum}, configured {})",
                         queues.bodies,
                     )),
                 );
@@ -6037,7 +6102,7 @@ impl Sumeragi {
             Some(minimum) if queues.body_bytes.get() < minimum => {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.body_bytes must reserve one validator, every configured authenticated non-validator source, and the anonymous source partition (minimum {minimum}, configured {})",
+                        "sumeragi.queues.body_bytes must reserve one validator and every configured authenticated non-validator source (minimum {minimum}, configured {})",
                         queues.body_bytes,
                     )),
                 );
@@ -6258,6 +6323,10 @@ pub struct SoranetHandshakePow {
     min_ticket_ttl_secs: u64,
     #[config(default = "Self::default_ticket_ttl()")]
     ticket_ttl_secs: u64,
+    #[config(default = "Self::default_puzzle_work_capacity()")]
+    outbound_mint_capacity: NonZeroUsize,
+    #[config(default = "Self::default_puzzle_work_capacity()")]
+    inbound_verify_capacity: NonZeroUsize,
     #[config(default = "Self::default_revocation_store_capacity()")]
     revocation_store_capacity: u64,
     #[config(default = "Self::default_revocation_store_ttl()")]
@@ -6281,7 +6350,18 @@ impl SoranetHandshakePow {
         30
     }
     const fn default_ticket_ttl() -> u64 {
-        60
+        Self::default_max_future_skew()
+    }
+    const fn default_puzzle_work_capacity() -> NonZeroUsize {
+        actual::SoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION
+    }
+    fn bound_puzzle_work_capacity(capacity: NonZeroUsize) -> NonZeroUsize {
+        NonZeroUsize::new(
+            capacity
+                .get()
+                .min(actual::SoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION),
+        )
+        .expect("bounded SoraNet puzzle-work capacity is non-zero")
     }
     const fn default_revocation_store_capacity() -> u64 {
         8_192
@@ -6298,6 +6378,8 @@ impl SoranetHandshakePow {
             max_future_skew_secs,
             min_ticket_ttl_secs,
             ticket_ttl_secs,
+            outbound_mint_capacity,
+            inbound_verify_capacity,
             revocation_store_capacity,
             revocation_store_ttl_secs,
             revocation_store_path,
@@ -6326,6 +6408,8 @@ impl SoranetHandshakePow {
             max_future_skew,
             min_ticket_ttl,
             ticket_ttl,
+            outbound_mint_capacity: Self::bound_puzzle_work_capacity(outbound_mint_capacity),
+            inbound_verify_capacity: Self::bound_puzzle_work_capacity(inbound_verify_capacity),
             revocation_store_capacity,
             revocation_max_ttl,
             revocation_store_path: revocation_store_path.to_string_lossy().into_owned().into(),
@@ -6380,37 +6464,7 @@ impl SoranetHandshakePuzzle {
 }
 #[cfg(test)]
 mod soranet_handshake_puzzle_tests {
-    use super::*;
-    #[test]
-    fn parse_bounds_argon2_resource_costs() {
-        let upper = SoranetHandshakePuzzle {
-            memory_kib: u32::MAX,
-            time_cost: u32::MAX,
-            lanes: u32::MAX,
-        }
-        .parse();
-        assert_eq!(
-            upper.memory_kib.get(),
-            iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB
-        );
-        assert_eq!(
-            upper.time_cost.get(),
-            iroha_crypto::soranet::puzzle::MAX_TIME_COST
-        );
-        assert_eq!(upper.lanes.get(), iroha_crypto::soranet::puzzle::MAX_LANES);
-        let lower = SoranetHandshakePuzzle {
-            memory_kib: 0,
-            time_cost: 0,
-            lanes: 0,
-        }
-        .parse();
-        assert_eq!(
-            lower.memory_kib.get(),
-            iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB
-        );
-        assert_eq!(lower.time_cost.get(), 1);
-        assert_eq!(lower.lanes.get(), 1);
-    }
+    include!("user_soranet_handshake_tests.rs");
 }
 /// User-level configuration container for SoraNet privacy telemetry.
 #[derive(Debug, Clone, Copy, ReadConfig)]
@@ -9024,10 +9078,7 @@ impl Crypto {
 /// User-level configuration container for `Nexus`.
 #[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 pub struct Nexus {
-    /// Enable multilane (Nexus/Iroha3) consensus features.
-    #[config(default = "defaults::nexus::ENABLED")]
-    pub enabled: bool,
-    /// Storage budget controls for Nexus-enabled nodes.
+    /// Storage budget controls for Nexus nodes.
     #[config(nested)]
     pub storage: NexusStorage,
     /// Exclusive lane-id bound for the initial catalog.
@@ -9094,37 +9145,48 @@ pub struct Nexus {
     #[config(nested)]
     pub da: Da,
 }
-impl Default for Nexus {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::nexus::ENABLED,
-            storage: NexusStorage::default(),
-            lane_count: defaults::nexus::LANE_COUNT,
-            lane_catalog: Vec::new(),
-            dataspace_catalog: Vec::new(),
-            staking: NexusStaking::default(),
-            fees: NexusFees::default(),
-            relay_worker: NexusRelayWorker::default(),
-            hf_shared_leases: NexusHfSharedLeases::default(),
-            uploaded_models: NexusUploadedModels::default(),
-            endorsement: NexusEndorsement::default(),
-            axt: NexusAxt::default(),
-            lane_relay_emergency: LaneRelayEmergency::default(),
-            routing_policy: RoutingPolicy::default(),
-            registry: LaneRegistryConfig::default(),
-            governance: GovernanceCatalogConfig::default(),
-            compliance: LaneCompliance::default(),
-            fusion: Fusion::default(),
-            autoscale: Autoscale::default(),
-            commit: Commit::default(),
-            da: Da::default(),
+macro_rules! impl_default {
+    ($ty:ident { $($field:ident: $value:expr),* $(,)? }) => {
+        impl Default for $ty {
+            fn default() -> Self {
+                Self { $($field: $value),* }
+            }
         }
-    }
+    };
+    ($ty:ident => $value:expr) => {
+        impl Default for $ty {
+            fn default() -> Self {
+                $value
+            }
+        }
+    };
 }
+impl_default!(Nexus {
+    storage: NexusStorage::default(),
+    lane_count: defaults::nexus::LANE_COUNT,
+    lane_catalog: Vec::new(),
+    dataspace_catalog: Vec::new(),
+    staking: NexusStaking::default(),
+    fees: NexusFees::default(),
+    relay_worker: NexusRelayWorker::default(),
+    hf_shared_leases: NexusHfSharedLeases::default(),
+    uploaded_models: NexusUploadedModels::default(),
+    endorsement: NexusEndorsement::default(),
+    axt: NexusAxt::default(),
+    lane_relay_emergency: LaneRelayEmergency::default(),
+    routing_policy: RoutingPolicy::default(),
+    registry: LaneRegistryConfig::default(),
+    governance: GovernanceCatalogConfig::default(),
+    compliance: LaneCompliance::default(),
+    fusion: Fusion::default(),
+    autoscale: Autoscale::default(),
+    commit: Commit::default(),
+    da: Da::default(),
+});
 /// User-level configuration container for Nexus storage budgets.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct NexusStorage {
-    /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
+    /// Aggregate on-disk storage budget for Nexus nodes (bytes).
     ///
     /// When omitted, `irohad` derives a filesystem-aware budget at runtime without modifying the
     /// operator configuration.
@@ -9139,17 +9201,12 @@ pub struct NexusStorage {
     #[config(nested)]
     pub disk_budget_weights: NexusStorageWeights,
 }
-impl Default for NexusStorage {
-    fn default() -> Self {
-        Self {
-            local_budget_bytes: None,
-            budget_enforce_interval_blocks:
-                defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
-            max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
-            disk_budget_weights: NexusStorageWeights::default(),
-        }
-    }
-}
+impl_default!(NexusStorage {
+    local_budget_bytes: None,
+    budget_enforce_interval_blocks: defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
+    max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
+    disk_budget_weights: NexusStorageWeights::default(),
+});
 impl NexusStorage {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorage> {
         let weights = self.disk_budget_weights.parse(emitter)?;
@@ -9219,17 +9276,13 @@ pub struct NexusStorageWeights {
     #[config(default = "defaults::nexus::storage::SORAVPN_SPOOL_BPS")]
     pub soravpn_spool_bps: u16,
 }
-impl Default for NexusStorageWeights {
-    fn default() -> Self {
-        Self {
-            kura_blocks_bps: defaults::nexus::storage::KURA_BLOCKS_BPS,
-            wsv_snapshots_bps: defaults::nexus::storage::WSV_SNAPSHOTS_BPS,
-            sorafs_bps: defaults::nexus::storage::SORAFS_BPS,
-            soranet_spool_bps: defaults::nexus::storage::SORANET_SPOOL_BPS,
-            soravpn_spool_bps: defaults::nexus::storage::SORAVPN_SPOOL_BPS,
-        }
-    }
-}
+impl_default!(NexusStorageWeights {
+    kura_blocks_bps: defaults::nexus::storage::KURA_BLOCKS_BPS,
+    wsv_snapshots_bps: defaults::nexus::storage::WSV_SNAPSHOTS_BPS,
+    sorafs_bps: defaults::nexus::storage::SORAFS_BPS,
+    soranet_spool_bps: defaults::nexus::storage::SORANET_SPOOL_BPS,
+    soravpn_spool_bps: defaults::nexus::storage::SORAVPN_SPOOL_BPS,
+});
 impl NexusStorageWeights {
     fn total_bps(&self) -> u32 {
         u32::from(self.kura_blocks_bps)
@@ -9284,7 +9337,7 @@ pub struct LaneDescriptor {
     pub dataspace: Option<String>,
     /// Storage profile identifier (`full_replica`, `commitment_only`, `split_replica`).
     pub storage: Option<String>,
-    /// Declarative visibility (e.g., `public`, `private`).
+    /// Declarative visibility (`public` or `restricted`).
     pub visibility: Option<String>,
     /// Optional shard identifier used for DA cursor tracking (defaults to lane id).
     pub shard_id: Option<u32>,
@@ -9292,17 +9345,78 @@ pub struct LaneDescriptor {
     ///
     /// KZG is not part of the V1 data model.
     pub proof_scheme: Option<String>,
+    /// DA manifest availability policy (`strict` or `audit`).
+    pub manifest_policy: Option<DaManifestPolicy>,
+    /// Typed confidential-compute policy, absent for ordinary lanes.
+    pub confidential_compute: Option<ConfidentialComputeDescriptor>,
+    /// Optional positive scheduler overrides.
+    pub scheduler: Option<LaneSchedulerDescriptor>,
+    /// Optional typed settlement reserve configuration.
+    pub settlement_buffer: Option<LaneSettlementBufferDescriptor>,
     /// Lane profile/type identifier.
     pub lane_type: Option<String>,
     /// Governance policy identifier.
     pub governance: Option<String>,
     /// Settlement/fee policy identifier.
     pub settlement: Option<String>,
-    /// Arbitrary metadata key-value pairs for instrumentation.
+    /// Operator metadata key-value pairs for instrumentation.
+    ///
+    /// Reserved autoscale keys remain consensus-relevant. Raw scheduler and settlement buffer
+    /// metadata are rejected in favor of their dedicated typed fields.
     #[config(default)]
     pub metadata: BTreeMap<String, String>,
 }
 const RETIRED_LANE_SHARD_ID_METADATA_KEY: &str = "da_shard_id";
+const RETIRED_LANE_FUNCTIONAL_METADATA_KEYS: [&str; 10] = [
+    "da_manifest_policy",
+    "confidential_compute",
+    "confidential_mechanism",
+    "confidential_key_version",
+    "confidential_access",
+    "scheduler.teu_capacity",
+    "scheduler.starvation_bound_slots",
+    "settlement.buffer_account",
+    "settlement.buffer_asset",
+    "settlement.buffer_capacity",
+];
+fn is_retired_lane_functional_metadata_key(key: &str) -> bool {
+    RETIRED_LANE_FUNCTIONAL_METADATA_KEYS.contains(&key)
+        || key.starts_with("confidential_")
+        || key.starts_with("scheduler.")
+        || key.starts_with("settlement.buffer_")
+}
+/// User-facing confidential-compute lane policy.
+#[derive(Debug, Clone, ReadConfig, Default, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct ConfidentialComputeDescriptor {
+    /// Protection mechanism (`encryption` or `secret_sharing`).
+    pub mechanism: Option<ConfidentialComputeMechanism>,
+    /// Positive key/share rotation version.
+    pub key_version: Option<u32>,
+    /// Canonical audience labels allowed to fetch confidential payloads.
+    #[config(default)]
+    pub allowed_audiences: Vec<String>,
+}
+/// User-facing positive lane scheduler overrides.
+#[derive(Debug, Clone, Copy, ReadConfig, Default, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct LaneSchedulerDescriptor {
+    /// Positive per-block TEU capacity override.
+    pub teu_capacity: Option<u64>,
+    /// Positive starvation bound in slots.
+    pub starvation_bound_slots: Option<u64>,
+}
+/// User-facing typed settlement reserve descriptor.
+#[derive(Debug, Clone, ReadConfig, Default, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct LaneSettlementBufferDescriptor {
+    /// Canonical universal I105 account literal holding the reserve.
+    pub account_id: Option<String>,
+    /// Canonical Base58 asset-definition address.
+    pub asset_definition_id: Option<String>,
+    /// Positive canonical exact XOR quantity.
+    pub capacity: Option<String>,
+}
 /// User-level configuration for one physical execution, storage, and validator boundary.
 #[derive(Debug, Clone, ReadConfig, Default, norito::JsonDeserialize)]
 pub struct DataSpaceDescriptor {
@@ -9331,15 +9445,11 @@ pub struct LaneRegistryConfig {
     #[config(default = "defaults::nexus::registry::POLL_INTERVAL.into()")]
     pub poll_interval_ms: DurationMs,
 }
-impl Default for LaneRegistryConfig {
-    fn default() -> Self {
-        Self {
-            manifest_directory: None,
-            cache_directory: None,
-            poll_interval_ms: defaults::nexus::registry::POLL_INTERVAL.into(),
-        }
-    }
-}
+impl_default!(LaneRegistryConfig {
+    manifest_directory: None,
+    cache_directory: None,
+    poll_interval_ms: defaults::nexus::registry::POLL_INTERVAL.into(),
+});
 /// User-level configuration container for lane compliance policies.
 #[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 pub struct LaneCompliance {
@@ -9352,15 +9462,11 @@ pub struct LaneCompliance {
     /// Directory holding Norito-encoded policy bundles.
     pub policy_dir: Option<PathBuf>,
 }
-impl Default for LaneCompliance {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::nexus::compliance::ENABLED,
-            audit_only: defaults::nexus::compliance::AUDIT_ONLY,
-            policy_dir: None,
-        }
-    }
-}
+impl_default!(LaneCompliance {
+    enabled: defaults::nexus::compliance::ENABLED,
+    audit_only: defaults::nexus::compliance::AUDIT_ONLY,
+    policy_dir: None,
+});
 /// Validator activation policy for a lane (user-level view).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LaneValidatorModeConfig {
@@ -9449,23 +9555,19 @@ pub struct NexusStaking {
     #[config(default = "defaults::nexus::staking::slash_sink_account_id()")]
     pub slash_sink_account_id: String,
 }
-impl Default for NexusStaking {
-    fn default() -> Self {
-        Self {
-            public_validator_mode: LaneValidatorModeConfig::StakeElected,
-            restricted_validator_mode: LaneValidatorModeConfig::AdminManaged,
-            min_validator_stake: defaults::nexus::staking::min_validator_stake(),
-            max_validators: defaults::nexus::staking::MAX_VALIDATORS,
-            unbonding_delay_ms: defaults::nexus::staking::UNBONDING_DELAY.into(),
-            withdraw_grace_ms: defaults::nexus::staking::WITHDRAW_GRACE.into(),
-            max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
-            reward_dust_threshold: defaults::nexus::staking::reward_dust_threshold(),
-            stake_asset_id: defaults::nexus::staking::stake_asset_id(),
-            stake_escrow_account_id: defaults::nexus::staking::stake_escrow_account_id(),
-            slash_sink_account_id: defaults::nexus::staking::slash_sink_account_id(),
-        }
-    }
-}
+impl_default!(NexusStaking {
+    public_validator_mode: LaneValidatorModeConfig::StakeElected,
+    restricted_validator_mode: LaneValidatorModeConfig::AdminManaged,
+    min_validator_stake: defaults::nexus::staking::min_validator_stake(),
+    max_validators: defaults::nexus::staking::MAX_VALIDATORS,
+    unbonding_delay_ms: defaults::nexus::staking::UNBONDING_DELAY.into(),
+    withdraw_grace_ms: defaults::nexus::staking::WITHDRAW_GRACE.into(),
+    max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
+    reward_dust_threshold: defaults::nexus::staking::reward_dust_threshold(),
+    stake_asset_id: defaults::nexus::staking::stake_asset_id(),
+    stake_escrow_account_id: defaults::nexus::staking::stake_escrow_account_id(),
+    slash_sink_account_id: defaults::nexus::staking::slash_sink_account_id(),
+});
 impl NexusStaking {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStaking> {
         let lane_validator_cap =
@@ -9544,7 +9646,8 @@ pub struct NexusFees {
     /// Fee settlement mode: `direct` or `lane_relay_burn`.
     #[config(default = "defaults::nexus::fees::SETTLEMENT_MODE.to_string()")]
     pub settlement_mode: String,
-    /// Authorities allowed to submit fee-free successful SORA v2 XOR claim mint transactions.
+    /// Canonical I105 authorities allowed to submit fee-free successful SORA v2 XOR claim mint
+    /// transactions.
     #[config(default = "Vec::new()")]
     pub successful_claim_fee_exempt_authorities: Vec<String>,
 }
@@ -9571,22 +9674,18 @@ pub struct NexusHfSharedLeases {
     #[config(default = "defaults::nexus::hf_shared_leases::ADVERT_CONTRADICTION_SLASH_BPS")]
     pub advert_contradiction_slash_bps: u16,
 }
-impl Default for NexusHfSharedLeases {
-    fn default() -> Self {
-        Self {
-            drain_grace_ms: DurationMs(std::time::Duration::from_millis(
-                defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS,
-            )),
-            warmup_no_show_slash_bps: defaults::nexus::hf_shared_leases::WARMUP_NO_SHOW_SLASH_BPS,
-            assigned_heartbeat_miss_slash_bps:
-                defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_SLASH_BPS,
-            assigned_heartbeat_miss_strike_threshold:
-                defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_STRIKE_THRESHOLD,
-            advert_contradiction_slash_bps:
-                defaults::nexus::hf_shared_leases::ADVERT_CONTRADICTION_SLASH_BPS,
-        }
-    }
-}
+impl_default!(NexusHfSharedLeases {
+    drain_grace_ms: DurationMs(std::time::Duration::from_millis(
+        defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS,
+    )),
+    warmup_no_show_slash_bps: defaults::nexus::hf_shared_leases::WARMUP_NO_SHOW_SLASH_BPS,
+    assigned_heartbeat_miss_slash_bps:
+        defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_SLASH_BPS,
+    assigned_heartbeat_miss_strike_threshold:
+        defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_STRIKE_THRESHOLD,
+    advert_contradiction_slash_bps:
+        defaults::nexus::hf_shared_leases::ADVERT_CONTRADICTION_SLASH_BPS,
+});
 impl NexusHfSharedLeases {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusHfSharedLeases> {
         for (field, value) in [
@@ -9649,20 +9748,15 @@ pub struct NexusUploadedModels {
     #[config(default = "defaults::nexus::uploaded_models::MAX_SESSION_IMAGE_BUDGET")]
     pub max_session_image_budget: u16,
 }
-impl Default for NexusUploadedModels {
-    fn default() -> Self {
-        Self {
-            chunk_plaintext_bytes: defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES,
-            max_plaintext_bytes_per_model:
-                defaults::nexus::uploaded_models::MAX_PLAINTEXT_BYTES_PER_MODEL,
-            max_chunk_count_per_model: defaults::nexus::uploaded_models::MAX_CHUNK_COUNT_PER_MODEL,
-            max_active_private_sessions_per_apartment:
-                defaults::nexus::uploaded_models::MAX_ACTIVE_PRIVATE_SESSIONS_PER_APARTMENT,
-            max_session_token_budget: defaults::nexus::uploaded_models::MAX_SESSION_TOKEN_BUDGET,
-            max_session_image_budget: defaults::nexus::uploaded_models::MAX_SESSION_IMAGE_BUDGET,
-        }
-    }
-}
+impl_default!(NexusUploadedModels {
+    chunk_plaintext_bytes: defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES,
+    max_plaintext_bytes_per_model: defaults::nexus::uploaded_models::MAX_PLAINTEXT_BYTES_PER_MODEL,
+    max_chunk_count_per_model: defaults::nexus::uploaded_models::MAX_CHUNK_COUNT_PER_MODEL,
+    max_active_private_sessions_per_apartment:
+        defaults::nexus::uploaded_models::MAX_ACTIVE_PRIVATE_SESSIONS_PER_APARTMENT,
+    max_session_token_budget: defaults::nexus::uploaded_models::MAX_SESSION_TOKEN_BUDGET,
+    max_session_image_budget: defaults::nexus::uploaded_models::MAX_SESSION_IMAGE_BUDGET,
+});
 impl NexusUploadedModels {
     #[allow(clippy::unnecessary_wraps)]
     fn parse(self, _emitter: &mut Emitter<ParseError>) -> Option<actual::NexusUploadedModels> {
@@ -9680,52 +9774,66 @@ impl NexusUploadedModels {
 /// User-level configuration container for domain endorsements.
 #[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 pub struct NexusEndorsement {
-    /// Committee member public keys allowed to sign endorsements (string form).
+    /// Committee public keys; parsing canonicalizes ordering and removes duplicates.
     #[config(default = "defaults::nexus::endorsement::committee_keys()")]
     pub committee_keys: Vec<String>,
     /// Quorum required to accept an endorsement (0 disables enforcement).
     #[config(default = "defaults::nexus::endorsement::QUORUM")]
     pub quorum: u16,
 }
-impl Default for NexusEndorsement {
-    fn default() -> Self {
-        Self {
-            committee_keys: defaults::nexus::endorsement::committee_keys(),
-            quorum: defaults::nexus::endorsement::QUORUM,
-        }
-    }
-}
+impl_default!(NexusEndorsement {
+    committee_keys: defaults::nexus::endorsement::committee_keys(),
+    quorum: defaults::nexus::endorsement::QUORUM,
+});
 impl NexusEndorsement {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusEndorsement> {
-        if self.quorum > u16::MAX {
+        let mut committee_keys = BTreeSet::new();
+        let mut valid = true;
+        for (index, raw_key) in self.committee_keys.into_iter().enumerate() {
+            match PublicKey::from_str(raw_key.trim()) {
+                Ok(key) => {
+                    committee_keys.insert(key);
+                }
+                Err(error) => {
+                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                        "nexus.endorsement.committee_keys[{index}] is not a valid public key: {error}"
+                    )));
+                    valid = false;
+                }
+            }
+        }
+        if self.quorum != 0 && usize::from(self.quorum) > committee_keys.len() {
             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.endorsement.quorum exceeds u16 bounds: {}",
-                self.quorum
+                "nexus.endorsement.quorum {} exceeds the {} unique committee members",
+                self.quorum,
+                committee_keys.len()
             )));
+            valid = false;
+        }
+        if !valid {
             return None;
         }
         Some(actual::NexusEndorsement {
-            committee_keys: self.committee_keys,
+            committee_keys,
             quorum: self.quorum,
         })
     }
 }
-impl Default for NexusFees {
-    fn default() -> Self {
-        Self {
-            fee_asset_id: defaults::nexus::fees::fee_asset_id(),
-            fee_sink_account_id: defaults::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string(),
-            base_fee: defaults::nexus::fees::base_fee(),
-            per_byte_fee: defaults::nexus::fees::per_byte_fee(),
-            per_instruction_fee: defaults::nexus::fees::per_instruction_fee(),
-            per_gas_unit_fee: defaults::nexus::fees::per_gas_unit_fee(),
-            sponsor_vault_custody_account_id:
-                defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID.to_owned(),
-            settlement_mode: defaults::nexus::fees::SETTLEMENT_MODE.to_string(),
-            successful_claim_fee_exempt_authorities: Vec::new(),
-        }
-    }
-}
+#[cfg(test)]
+#[path = "user/nexus_endorsement_tests.rs"]
+mod nexus_endorsement_tests;
+impl_default!(NexusFees {
+    fee_asset_id: defaults::nexus::fees::fee_asset_id(),
+    fee_sink_account_id: defaults::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string(),
+    base_fee: defaults::nexus::fees::base_fee(),
+    per_byte_fee: defaults::nexus::fees::per_byte_fee(),
+    per_instruction_fee: defaults::nexus::fees::per_instruction_fee(),
+    per_gas_unit_fee: defaults::nexus::fees::per_gas_unit_fee(),
+    sponsor_vault_custody_account_id: defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID
+        .to_owned(),
+    settlement_mode: defaults::nexus::fees::SETTLEMENT_MODE.to_string(),
+    successful_claim_fee_exempt_authorities: Vec::new(),
+});
 impl NexusFees {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusFees> {
         let fee_asset_id = match validate_nexus_fee_asset_selector_literal(&self.fee_asset_id) {
@@ -9745,9 +9853,9 @@ impl NexusFees {
             );
             return None;
         }
-        let settlement_mode = match self.settlement_mode.trim().to_ascii_lowercase().as_str() {
+        let settlement_mode = match self.settlement_mode.as_str() {
             "direct" => actual::NexusFeeSettlementMode::Direct,
-            "lane_relay_burn" | "lane-relay-burn" => actual::NexusFeeSettlementMode::LaneRelayBurn,
+            "lane_relay_burn" => actual::NexusFeeSettlementMode::LaneRelayBurn,
             other => {
                 emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
                     "invalid nexus.fees.settlement_mode `{other}`: expected `direct` or `lane_relay_burn`"
@@ -9759,6 +9867,33 @@ impl NexusFees {
             self.sponsor_vault_custody_account_id.trim(),
             "invalid nexus.fees.sponsor_vault_custody_account_id",
         );
+        let mut successful_claim_fee_exempt_authorities = BTreeSet::new();
+        let mut valid_authorities = true;
+        for (index, literal) in self
+            .successful_claim_fee_exempt_authorities
+            .into_iter()
+            .enumerate()
+        {
+            match AccountId::parse_encoded(&literal) {
+                Ok(parsed) if parsed.canonical() == literal => {
+                    successful_claim_fee_exempt_authorities.insert(parsed.into_account_id());
+                }
+                Ok(parsed) => {
+                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                        "nexus.fees.successful_claim_fee_exempt_authorities[{index}] must be the exact canonical I105 literal `{}`",
+                        parsed.canonical()
+                    )));
+                    valid_authorities = false;
+                }
+                Err(err) => {
+                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                        "invalid nexus.fees.successful_claim_fee_exempt_authorities[{index}] `{literal}`: {err}"
+                    )));
+                    valid_authorities = false;
+                }
+            }
+        }
+        valid_authorities.then_some(())?;
         Some(actual::NexusFees {
             fee_asset_id,
             fee_sink_account_id: self.fee_sink_account_id,
@@ -9768,12 +9903,7 @@ impl NexusFees {
             per_gas_unit_fee: self.per_gas_unit_fee,
             sponsor_vault_custody_account_id,
             settlement_mode,
-            successful_claim_fee_exempt_authorities: self
-                .successful_claim_fee_exempt_authorities
-                .into_iter()
-                .map(|authority| authority.trim().to_string())
-                .filter(|authority| !authority.is_empty())
-                .collect(),
+            successful_claim_fee_exempt_authorities,
         })
     }
 }
@@ -9795,18 +9925,13 @@ pub struct NexusRelayWorker {
     #[config(default = "defaults::nexus::relay_worker::MAX_RETRY_ATTEMPTS")]
     pub max_retry_attempts: u32,
 }
-impl Default for NexusRelayWorker {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::nexus::relay_worker::ENABLED,
-            authority_account_id: defaults::nexus::relay_worker::AUTHORITY_ACCOUNT_ID
-                .map(str::to_owned),
-            max_pending_relays: defaults::nexus::relay_worker::MAX_PENDING_RELAYS,
-            retry_backoff_ms: defaults::nexus::relay_worker::RETRY_BACKOFF_MS,
-            max_retry_attempts: defaults::nexus::relay_worker::MAX_RETRY_ATTEMPTS,
-        }
-    }
-}
+impl_default!(NexusRelayWorker {
+    enabled: defaults::nexus::relay_worker::ENABLED,
+    authority_account_id: defaults::nexus::relay_worker::AUTHORITY_ACCOUNT_ID.map(str::to_owned),
+    max_pending_relays: defaults::nexus::relay_worker::MAX_PENDING_RELAYS,
+    retry_backoff_ms: defaults::nexus::relay_worker::RETRY_BACKOFF_MS,
+    max_retry_attempts: defaults::nexus::relay_worker::MAX_RETRY_ATTEMPTS,
+});
 impl NexusRelayWorker {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusRelayWorker> {
         let authority_account_id = self.authority_account_id.and_then(|raw| {
@@ -9851,107 +9976,8 @@ impl NexusRelayWorker {
     }
 }
 #[cfg(test)]
-mod nexus_asset_selector_tests {
-    use super::*;
-    fn checked_nexus_contract_ed25519_key_fixture() -> KeyPair {
-        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
-            .expect("generate checked Nexus contract Ed25519 account key fixture")
-    }
-    #[test]
-    fn nexus_contract_fixture_uses_checked_ed25519_key_generation() {
-        let key_pair = checked_nexus_contract_ed25519_key_fixture();
-        let algorithm = key_pair
-            .public_key()
-            .try_algorithm()
-            .expect("Nexus contract fixture account key advertises a valid algorithm");
-        assert_eq!(algorithm, Algorithm::Ed25519);
-    }
-    #[test]
-    fn nexus_staking_parse_accepts_asset_alias_selector() {
-        let cfg = NexusStaking {
-            stake_asset_id: "xor#universal".to_owned(),
-            ..NexusStaking::default()
-        };
-        let mut emitter = Emitter::new();
-        let parsed = cfg
-            .parse(&mut emitter)
-            .expect("staking config should parse");
-        assert_eq!(parsed.stake_asset_id, "xor#universal");
-        assert!(emitter.into_result().is_ok());
-    }
-    #[test]
-    fn nexus_fees_parse_rejects_invalid_asset_selector() {
-        let cfg = NexusFees {
-            fee_asset_id: "invalid selector".to_owned(),
-            ..NexusFees::default()
-        };
-        let mut emitter = Emitter::new();
-        assert!(cfg.parse(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-    #[test]
-    fn nexus_fees_parse_accepts_xor_alias_selector() {
-        let cfg = NexusFees {
-            fee_asset_id: "xor#universal".to_owned(),
-            ..NexusFees::default()
-        };
-        let mut emitter = Emitter::new();
-        let parsed = cfg.parse(&mut emitter).expect("fees config should parse");
-        assert_eq!(parsed.fee_asset_id, "xor#universal");
-        assert!(emitter.into_result().is_ok());
-    }
-    #[test]
-    fn nexus_fees_parse_uses_typed_sponsor_vault_custody_account() {
-        let cfg = NexusFees::default();
-        let mut emitter = Emitter::new();
-        let parsed = cfg.parse(&mut emitter).expect("fees config should parse");
-        assert_eq!(
-            parsed.sponsor_vault_custody_account_id,
-            defaults::nexus::fees::sponsor_vault_custody_account_id()
-        );
-        assert!(emitter.into_result().is_ok());
-    }
-    #[test]
-    fn nexus_fees_parse_rejects_invalid_sponsor_vault_custody_account() {
-        let result = std::panic::catch_unwind(|| {
-            let cfg = NexusFees {
-                sponsor_vault_custody_account_id: "not-an-account".to_owned(),
-                ..NexusFees::default()
-            };
-            let mut emitter = Emitter::new();
-            let _ = cfg.parse(&mut emitter);
-        });
-        assert!(result.is_err());
-    }
-    #[test]
-    fn nexus_fees_parse_rejects_non_xor_asset_selector() {
-        let cfg = NexusFees {
-            fee_asset_id: "pkr#paynet".to_owned(),
-            ..NexusFees::default()
-        };
-        let mut emitter = Emitter::new();
-        assert!(cfg.parse(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-    #[test]
-    fn nexus_fees_use_nominal_non_negative_quantities() {
-        let cfg = NexusFees::default();
-        for value in [
-            &cfg.base_fee,
-            &cfg.per_byte_fee,
-            &cfg.per_instruction_fee,
-            &cfg.per_gas_unit_fee,
-        ] {
-            value
-                .as_numeric()
-                .validate_decimal()
-                .expect("fee quantity is canonical");
-        }
-        assert!(
-            Quantity::try_from_numeric(iroha_primitives::numeric::Numeric::new(-1_i32, 0)).is_err()
-        );
-    }
-}
+#[path = "user/nexus_asset_selector_tests.rs"]
+mod nexus_asset_selector_tests;
 /// User-level configuration container for governance catalog.
 #[derive(Debug, Clone, ReadConfig, Default, norito::JsonDeserialize)]
 pub struct GovernanceCatalogConfig {
@@ -10018,16 +10044,12 @@ pub struct Fusion {
     #[config(default = "defaults::nexus::fusion::MAX_WINDOW_SLOTS")]
     pub max_window_slots: u16,
 }
-impl Default for Fusion {
-    fn default() -> Self {
-        Self {
-            floor_teu: defaults::nexus::fusion::FLOOR_TEU,
-            exit_teu: defaults::nexus::fusion::EXIT_TEU,
-            observation_slots: defaults::nexus::fusion::OBSERVATION_SLOTS,
-            max_window_slots: defaults::nexus::fusion::MAX_WINDOW_SLOTS,
-        }
-    }
-}
+impl_default!(Fusion {
+    floor_teu: defaults::nexus::fusion::FLOOR_TEU,
+    exit_teu: defaults::nexus::fusion::EXIT_TEU,
+    observation_slots: defaults::nexus::fusion::OBSERVATION_SLOTS,
+    max_window_slots: defaults::nexus::fusion::MAX_WINDOW_SLOTS,
+});
 /// User-level configuration container for deterministic lane autoscaling.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct Autoscale {
@@ -10072,24 +10094,20 @@ pub struct Autoscale {
     #[config(default = "defaults::nexus::autoscale::PER_LANE_TARGET_TPS")]
     pub per_lane_target_tps: u32,
 }
-impl Default for Autoscale {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::nexus::autoscale::ENABLED,
-            min_lanes: defaults::nexus::autoscale::MIN_LANES,
-            max_lanes: defaults::nexus::autoscale::MAX_LANES,
-            target_block_ms: defaults::nexus::autoscale::TARGET_BLOCK_MS,
-            scale_out_latency_ratio: defaults::nexus::autoscale::SCALE_OUT_LATENCY_RATIO,
-            scale_in_latency_ratio: defaults::nexus::autoscale::SCALE_IN_LATENCY_RATIO,
-            scale_out_utilization_ratio: defaults::nexus::autoscale::SCALE_OUT_UTILIZATION_RATIO,
-            scale_in_utilization_ratio: defaults::nexus::autoscale::SCALE_IN_UTILIZATION_RATIO,
-            scale_out_window_blocks: defaults::nexus::autoscale::SCALE_OUT_WINDOW_BLOCKS,
-            scale_in_window_blocks: defaults::nexus::autoscale::SCALE_IN_WINDOW_BLOCKS,
-            cooldown_blocks: defaults::nexus::autoscale::COOLDOWN_BLOCKS,
-            per_lane_target_tps: defaults::nexus::autoscale::PER_LANE_TARGET_TPS,
-        }
-    }
-}
+impl_default!(Autoscale {
+    enabled: defaults::nexus::autoscale::ENABLED,
+    min_lanes: defaults::nexus::autoscale::MIN_LANES,
+    max_lanes: defaults::nexus::autoscale::MAX_LANES,
+    target_block_ms: defaults::nexus::autoscale::TARGET_BLOCK_MS,
+    scale_out_latency_ratio: defaults::nexus::autoscale::SCALE_OUT_LATENCY_RATIO,
+    scale_in_latency_ratio: defaults::nexus::autoscale::SCALE_IN_LATENCY_RATIO,
+    scale_out_utilization_ratio: defaults::nexus::autoscale::SCALE_OUT_UTILIZATION_RATIO,
+    scale_in_utilization_ratio: defaults::nexus::autoscale::SCALE_IN_UTILIZATION_RATIO,
+    scale_out_window_blocks: defaults::nexus::autoscale::SCALE_OUT_WINDOW_BLOCKS,
+    scale_in_window_blocks: defaults::nexus::autoscale::SCALE_IN_WINDOW_BLOCKS,
+    cooldown_blocks: defaults::nexus::autoscale::COOLDOWN_BLOCKS,
+    per_lane_target_tps: defaults::nexus::autoscale::PER_LANE_TARGET_TPS,
+});
 /// User-level configuration container for `Commit`.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct Commit {
@@ -10144,26 +10162,20 @@ pub struct Da {
     #[config(nested)]
     pub rotation: DaRotation,
 }
-impl Default for Da {
-    fn default() -> Self {
-        Self {
-            q_in_slot_total: defaults::nexus::da::Q_IN_SLOT_TOTAL,
-            q_in_slot_per_ds_min: defaults::nexus::da::Q_IN_SLOT_PER_DS_MIN,
-            sample_size_base: defaults::nexus::da::SAMPLE_SIZE_BASE,
-            sample_size_max: defaults::nexus::da::SAMPLE_SIZE_MAX,
-            threshold_base: defaults::nexus::da::THRESHOLD_BASE,
-            per_attester_shards: defaults::nexus::da::PER_ATTESTER_SHARDS,
-            ingest_quota_window_blocks: defaults::nexus::da::INGEST_QUOTA_WINDOW_BLOCKS,
-            ingest_quota_max_count_per_account:
-                defaults::nexus::da::INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT,
-            ingest_quota_max_bytes_per_account:
-                defaults::nexus::da::INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT,
-            audit: DaAudit::default(),
-            recovery: DaRecovery::default(),
-            rotation: DaRotation::default(),
-        }
-    }
-}
+impl_default!(Da {
+    q_in_slot_total: defaults::nexus::da::Q_IN_SLOT_TOTAL,
+    q_in_slot_per_ds_min: defaults::nexus::da::Q_IN_SLOT_PER_DS_MIN,
+    sample_size_base: defaults::nexus::da::SAMPLE_SIZE_BASE,
+    sample_size_max: defaults::nexus::da::SAMPLE_SIZE_MAX,
+    threshold_base: defaults::nexus::da::THRESHOLD_BASE,
+    per_attester_shards: defaults::nexus::da::PER_ATTESTER_SHARDS,
+    ingest_quota_window_blocks: defaults::nexus::da::INGEST_QUOTA_WINDOW_BLOCKS,
+    ingest_quota_max_count_per_account: defaults::nexus::da::INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT,
+    ingest_quota_max_bytes_per_account: defaults::nexus::da::INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT,
+    audit: DaAudit::default(),
+    recovery: DaRecovery::default(),
+    rotation: DaRotation::default(),
+});
 /// User-level configuration container for `DaAudit`.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct DaAudit {
@@ -10177,15 +10189,11 @@ pub struct DaAudit {
     #[config(default = "defaults::nexus::da::audit::INTERVAL.into()")]
     pub interval_ms: DurationMs,
 }
-impl Default for DaAudit {
-    fn default() -> Self {
-        Self {
-            sample_size: defaults::nexus::da::audit::SAMPLE_SIZE,
-            window_count: defaults::nexus::da::audit::WINDOW_COUNT,
-            interval_ms: defaults::nexus::da::audit::INTERVAL.into(),
-        }
-    }
-}
+impl_default!(DaAudit {
+    sample_size: defaults::nexus::da::audit::SAMPLE_SIZE,
+    window_count: defaults::nexus::da::audit::WINDOW_COUNT,
+    interval_ms: defaults::nexus::da::audit::INTERVAL.into(),
+});
 /// User-level configuration container for `DaRecovery`.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct DaRecovery {
@@ -10193,13 +10201,9 @@ pub struct DaRecovery {
     #[config(default = "defaults::nexus::da::recovery::REQUEST_TIMEOUT.into()")]
     pub request_timeout_ms: DurationMs,
 }
-impl Default for DaRecovery {
-    fn default() -> Self {
-        Self {
-            request_timeout_ms: defaults::nexus::da::recovery::REQUEST_TIMEOUT.into(),
-        }
-    }
-}
+impl_default!(DaRecovery {
+    request_timeout_ms: defaults::nexus::da::recovery::REQUEST_TIMEOUT.into(),
+});
 /// User-level configuration container for `DaRotation`.
 #[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 pub struct DaRotation {
@@ -10216,16 +10220,12 @@ pub struct DaRotation {
     #[config(default = "defaults::nexus::da::rotation::LATENCY_DECAY")]
     pub latency_decay: f64,
 }
-impl Default for DaRotation {
-    fn default() -> Self {
-        Self {
-            max_hits_per_window: defaults::nexus::da::rotation::MAX_HITS_PER_WINDOW,
-            window_slots: defaults::nexus::da::rotation::WINDOW_SLOTS,
-            seed_tag: defaults::nexus::da::rotation::SEED_TAG.to_string(),
-            latency_decay: defaults::nexus::da::rotation::LATENCY_DECAY,
-        }
-    }
-}
+impl_default!(DaRotation {
+    max_hits_per_window: defaults::nexus::da::rotation::MAX_HITS_PER_WINDOW,
+    window_slots: defaults::nexus::da::rotation::WINDOW_SLOTS,
+    seed_tag: defaults::nexus::da::rotation::SEED_TAG.to_string(),
+    latency_decay: defaults::nexus::da::rotation::LATENCY_DECAY,
+});
 impl Fusion {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Fusion> {
         let Fusion {
@@ -10837,16 +10837,12 @@ pub struct NexusAxt {
     #[config(default = "defaults::nexus::axt::REPLAY_RETENTION_SLOTS")]
     pub replay_retention_slots: u64,
 }
-impl Default for NexusAxt {
-    fn default() -> Self {
-        Self {
-            slot_length_ms: defaults::nexus::axt::SLOT_LENGTH_MS,
-            max_clock_skew_ms: defaults::nexus::axt::CLOCK_SKEW_MS_DEFAULT,
-            proof_cache_ttl_slots: defaults::nexus::axt::PROOF_CACHE_TTL_SLOTS,
-            replay_retention_slots: defaults::nexus::axt::REPLAY_RETENTION_SLOTS,
-        }
-    }
-}
+impl_default!(NexusAxt {
+    slot_length_ms: defaults::nexus::axt::SLOT_LENGTH_MS,
+    max_clock_skew_ms: defaults::nexus::axt::CLOCK_SKEW_MS_DEFAULT,
+    proof_cache_ttl_slots: defaults::nexus::axt::PROOF_CACHE_TTL_SLOTS,
+    replay_retention_slots: defaults::nexus::axt::REPLAY_RETENTION_SLOTS,
+});
 /// Lane-relay emergency override configuration.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct LaneRelayEmergency {
@@ -10863,16 +10859,12 @@ pub struct LaneRelayEmergency {
     #[config(default = "defaults::nexus::lane_relay_emergency::MAX_TTL_BLOCKS")]
     pub max_ttl_blocks: u32,
 }
-impl Default for LaneRelayEmergency {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::nexus::lane_relay_emergency::ENABLED,
-            multisig_threshold: defaults::nexus::lane_relay_emergency::MULTISIG_THRESHOLD,
-            multisig_members: defaults::nexus::lane_relay_emergency::MULTISIG_MEMBERS,
-            max_ttl_blocks: defaults::nexus::lane_relay_emergency::MAX_TTL_BLOCKS,
-        }
-    }
-}
+impl_default!(LaneRelayEmergency {
+    enabled: defaults::nexus::lane_relay_emergency::ENABLED,
+    multisig_threshold: defaults::nexus::lane_relay_emergency::MULTISIG_THRESHOLD,
+    multisig_members: defaults::nexus::lane_relay_emergency::MULTISIG_MEMBERS,
+    max_ttl_blocks: defaults::nexus::lane_relay_emergency::MAX_TTL_BLOCKS,
+});
 impl LaneRelayEmergency {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::LaneRelayEmergency> {
         let mut invalid = false;
@@ -11005,7 +10997,6 @@ impl Nexus {
     /// Convert this user configuration into the runtime representation.
     pub fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Nexus> {
         let Nexus {
-            enabled,
             storage,
             lane_count,
             lane_catalog,
@@ -11046,51 +11037,11 @@ impl Nexus {
         let lane_relay_emergency = lane_relay_emergency.parse(emitter)?;
         let staking = staking.parse(emitter)?;
         let fees = fees.parse(emitter)?;
-        if !dataspace_fee_sponsor_program_ids.is_empty() && !enabled {
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
-                "nexus.dataspace_catalog fee_sponsor_program_id requires nexus.enabled = true",
-            ));
-            return None;
-        }
         let relay_worker = relay_worker.parse(emitter)?;
         let hf_shared_leases = hf_shared_leases.parse(emitter)?;
         let uploaded_models = uploaded_models.parse(emitter)?;
         let endorsement = endorsement_cfg.parse(emitter)?;
         let lane_config = actual::LaneConfig::from_catalog(&lane_catalog);
-        let has_multilane = lane_catalog.lane_count().get() > 1
-            || dataspace_catalog.entries().len() > 1
-            || routing_policy.default_lane != LaneId::SINGLE
-            || routing_policy.default_dataspace != DataSpaceId::UNIVERSAL
-            || !routing_policy.rules.is_empty();
-        if has_multilane && !enabled {
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig).attach(
-                    "multi-lane catalogs or routing policies require `nexus.enabled = true` (set the flag or use `--sora`)",
-                ),
-            );
-            return None;
-        }
-        if autoscale.enabled && !enabled {
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.autoscale.enabled requires nexus.enabled = true"),
-            );
-            return None;
-        }
-        if lane_relay_emergency.enabled && !enabled {
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.lane_relay_emergency.enabled requires nexus.enabled = true"),
-            );
-            return None;
-        }
-        if relay_worker.enabled && !enabled {
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.relay_worker.enabled requires nexus.enabled = true"),
-            );
-            return None;
-        }
         if relay_worker.enabled
             && fees.settlement_mode != actual::NexusFeeSettlementMode::LaneRelayBurn
         {
@@ -11100,19 +11051,7 @@ impl Nexus {
             );
             return None;
         }
-        let has_lane_overrides = !enabled
-            && (lane_catalog != LaneCatalog::default()
-                || dataspace_catalog != DataSpaceCatalog::default()
-                || routing_policy != actual::LaneRoutingPolicy::default());
-        if has_lane_overrides {
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig).attach(
-                    "nexus.enabled=false requires the default single-lane catalog and routing policy; remove Nexus lane/dataspace overrides or set `nexus.enabled = true`",
-                ),
-            );
-            return None;
-        }
-        if enabled && autoscale.enabled {
+        if autoscale.enabled {
             let min_lanes = autoscale.min_lanes.get();
             let max_lanes = autoscale.max_lanes.get();
             let mut reserved_range_error = false;
@@ -11138,7 +11077,6 @@ impl Nexus {
             }
         }
         Some(actual::Nexus {
-            enabled,
             storage,
             staking,
             fees,
@@ -11296,6 +11234,186 @@ impl Nexus {
                         }
                     }
                 }
+                lane_metadata.manifest_policy = descriptor.manifest_policy.unwrap_or_default();
+                if let Some(confidential) = descriptor.confidential_compute {
+                    let Some(mechanism) = confidential.mechanism else {
+                        lane_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                            "lane[{idx}] confidential_compute.mechanism is required"
+                        )));
+                        continue;
+                    };
+                    let Some(key_version) = confidential.key_version.and_then(NonZeroU32::new)
+                    else {
+                        lane_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                            "lane[{idx}] confidential_compute.key_version must be a positive u32"
+                        )));
+                        continue;
+                    };
+                    let mut allowed_audiences = BTreeSet::new();
+                    let mut invalid_audience = false;
+                    for audience in confidential.allowed_audiences {
+                        if audience.is_empty() || audience.trim() != audience {
+                            lane_errors = true;
+                            invalid_audience = true;
+                            emitter.emit(
+                                Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                                    "lane[{idx}] confidential_compute.allowed_audiences entries must be non-empty and must not contain surrounding whitespace"
+                                )),
+                            );
+                            break;
+                        }
+                        allowed_audiences.insert(audience);
+                    }
+                    if invalid_audience {
+                        continue;
+                    }
+                    lane_metadata.confidential_compute = Some(ConfidentialComputePolicy::new(
+                        mechanism,
+                        key_version,
+                        allowed_audiences,
+                    ));
+                }
+                if let Some(scheduler) = descriptor.scheduler {
+                    let teu_capacity = match scheduler.teu_capacity {
+                        Some(value) => match NonZeroU64::new(value) {
+                            Some(value) => Some(value),
+                            None => {
+                                lane_errors = true;
+                                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                    format!(
+                                        "lane[{idx}] scheduler.teu_capacity must be a positive u64"
+                                    ),
+                                ));
+                                continue;
+                            }
+                        },
+                        None => None,
+                    };
+                    let starvation_bound_slots = match scheduler.starvation_bound_slots {
+                        Some(value) => match NonZeroU64::new(value) {
+                            Some(value) => Some(value),
+                            None => {
+                                lane_errors = true;
+                                emitter.emit(
+                                    Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                                        "lane[{idx}] scheduler.starvation_bound_slots must be a positive u64"
+                                    )),
+                                );
+                                continue;
+                            }
+                        },
+                        None => None,
+                    };
+                    if teu_capacity.is_none() && starvation_bound_slots.is_none() {
+                        lane_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                            "lane[{idx}] scheduler must define `teu_capacity`, `starvation_bound_slots`, or both"
+                        )));
+                        continue;
+                    }
+                    lane_metadata.scheduler = Some(LaneSchedulerPolicy::new(
+                        teu_capacity,
+                        starvation_bound_slots,
+                    ));
+                }
+                if let Some(settlement_buffer) = descriptor.settlement_buffer {
+                    let (Some(account_raw), Some(asset_raw), Some(capacity_raw)) = (
+                        settlement_buffer.account_id,
+                        settlement_buffer.asset_definition_id,
+                        settlement_buffer.capacity,
+                    ) else {
+                        lane_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                            "lane[{idx}] settlement_buffer must define `account_id`, `asset_definition_id`, and `capacity` together"
+                        )));
+                        continue;
+                    };
+                    let account_id = match AccountId::parse_encoded(&account_raw) {
+                        Ok(parsed) if parsed.canonical() == account_raw => parsed.into_account_id(),
+                        Ok(parsed) => {
+                            lane_errors = true;
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                format!(
+                                    "lane[{idx}] settlement_buffer.account_id must be the exact canonical I105 literal `{}`",
+                                    parsed.canonical()
+                                ),
+                            ));
+                            continue;
+                        }
+                        Err(error) => {
+                            lane_errors = true;
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                format!(
+                                    "lane[{idx}] settlement_buffer.account_id `{account_raw}` is invalid: {error}"
+                                ),
+                            ));
+                            continue;
+                        }
+                    };
+                    let asset_definition_id = match AssetDefinitionId::parse_address_literal(
+                        &asset_raw,
+                    ) {
+                        Ok(parsed) if parsed.canonical_address() == asset_raw => parsed,
+                        Ok(parsed) => {
+                            lane_errors = true;
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                    format!(
+                                        "lane[{idx}] settlement_buffer.asset_definition_id must be the exact canonical Base58 literal `{}`",
+                                        parsed.canonical_address()
+                                    ),
+                                ));
+                            continue;
+                        }
+                        Err(error) => {
+                            lane_errors = true;
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                    format!(
+                                        "lane[{idx}] settlement_buffer.asset_definition_id `{asset_raw}` is invalid: {error}"
+                                    ),
+                                ));
+                            continue;
+                        }
+                    };
+                    let capacity = match capacity_raw.parse::<XorQuantity>() {
+                        Ok(parsed) if parsed.to_string() == capacity_raw && !parsed.is_zero() => {
+                            parsed
+                        }
+                        Ok(parsed) if parsed.is_zero() => {
+                            lane_errors = true;
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                format!(
+                                    "lane[{idx}] settlement_buffer.capacity must be a positive XOR quantity"
+                                ),
+                            ));
+                            continue;
+                        }
+                        Ok(parsed) => {
+                            lane_errors = true;
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                format!(
+                                    "lane[{idx}] settlement_buffer.capacity must be the exact canonical XOR quantity `{parsed}`"
+                                ),
+                            ));
+                            continue;
+                        }
+                        Err(error) => {
+                            lane_errors = true;
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                format!(
+                                    "lane[{idx}] settlement_buffer.capacity `{capacity_raw}` is invalid: {error}"
+                                ),
+                            ));
+                            continue;
+                        }
+                    };
+                    lane_metadata.settlement_buffer = Some(LaneSettlementBufferPolicy::new(
+                        account_id,
+                        asset_definition_id,
+                        capacity,
+                    ));
+                }
                 lane_metadata.lane_type = Self::normalize_opt(descriptor.lane_type);
                 lane_metadata.governance = Self::normalize_opt(descriptor.governance);
                 lane_metadata.settlement = Self::normalize_opt(descriptor.settlement);
@@ -11315,6 +11433,14 @@ impl Nexus {
                             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
                                 format!(
                                     "lane[{idx}] metadata key `{key}` is reserved; use the typed `shard_id` field"
+                                ),
+                            ));
+                            lane_errors = true;
+                            None
+                        } else if is_retired_lane_functional_metadata_key(key) {
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                format!(
+                                    "lane[{idx}] metadata key `{key}` is retired; use the typed lane policy fields"
                                 ),
                             ));
                             lane_errors = true;
@@ -11762,18 +11888,10 @@ pub struct Telemetry {
 }
 #[derive(Debug, Copy, Clone)]
 struct TelemetryMinRetryPeriod(DurationMs);
-impl Default for TelemetryMinRetryPeriod {
-    fn default() -> Self {
-        Self(DurationMs(defaults::telemetry::MIN_RETRY_PERIOD))
-    }
-}
+impl_default!(TelemetryMinRetryPeriod => Self(DurationMs(defaults::telemetry::MIN_RETRY_PERIOD)));
 #[derive(Debug, Copy, Clone)]
 struct TelemetryMaxRetryDelayExponent(u8);
-impl Default for TelemetryMaxRetryDelayExponent {
-    fn default() -> Self {
-        Self(defaults::telemetry::MAX_RETRY_DELAY_EXPONENT)
-    }
-}
+impl_default!(TelemetryMaxRetryDelayExponent => Self(defaults::telemetry::MAX_RETRY_DELAY_EXPONENT));
 struct FieldState<T> {
     seen: bool,
     value: Option<T>,
@@ -12225,17 +12343,13 @@ pub struct SnapshotResourcePolicy {
     #[config(default = "defaults::snapshot::MAX_TRANSIENT_BYTES")]
     pub max_transient_bytes: NonZeroUsize,
 }
-impl Default for SnapshotResourcePolicy {
-    fn default() -> Self {
-        Self {
-            max_decode_depth: defaults::snapshot::MAX_DECODE_DEPTH,
-            max_decode_items: defaults::snapshot::MAX_DECODE_ITEMS,
-            max_string_bytes: defaults::snapshot::MAX_STRING_BYTES,
-            max_blob_bytes: defaults::snapshot::MAX_BLOB_BYTES,
-            max_transient_bytes: defaults::snapshot::MAX_TRANSIENT_BYTES,
-        }
-    }
-}
+impl_default!(SnapshotResourcePolicy {
+    max_decode_depth: defaults::snapshot::MAX_DECODE_DEPTH,
+    max_decode_items: defaults::snapshot::MAX_DECODE_ITEMS,
+    max_string_bytes: defaults::snapshot::MAX_STRING_BYTES,
+    max_blob_bytes: defaults::snapshot::MAX_BLOB_BYTES,
+    max_transient_bytes: defaults::snapshot::MAX_TRANSIENT_BYTES,
+});
 impl SnapshotResourcePolicy {
     /// Validate resource-budget relationships against the enclosing payload bound.
     ///
@@ -12552,18 +12666,14 @@ pub struct SoracloudRuntimeCacheBudgets {
     #[config(default = "defaults::soracloud_runtime::MODEL_WEIGHT_CACHE_BUDGET_BYTES")]
     pub model_weight_bytes: NonZeroU64,
 }
-impl Default for SoracloudRuntimeCacheBudgets {
-    fn default() -> Self {
-        Self {
-            bundle_bytes: defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES,
-            static_asset_bytes: defaults::soracloud_runtime::STATIC_ASSET_CACHE_BUDGET_BYTES,
-            journal_bytes: defaults::soracloud_runtime::JOURNAL_CACHE_BUDGET_BYTES,
-            checkpoint_bytes: defaults::soracloud_runtime::CHECKPOINT_CACHE_BUDGET_BYTES,
-            model_artifact_bytes: defaults::soracloud_runtime::MODEL_ARTIFACT_CACHE_BUDGET_BYTES,
-            model_weight_bytes: defaults::soracloud_runtime::MODEL_WEIGHT_CACHE_BUDGET_BYTES,
-        }
-    }
-}
+impl_default!(SoracloudRuntimeCacheBudgets {
+    bundle_bytes: defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES,
+    static_asset_bytes: defaults::soracloud_runtime::STATIC_ASSET_CACHE_BUDGET_BYTES,
+    journal_bytes: defaults::soracloud_runtime::JOURNAL_CACHE_BUDGET_BYTES,
+    checkpoint_bytes: defaults::soracloud_runtime::CHECKPOINT_CACHE_BUDGET_BYTES,
+    model_artifact_bytes: defaults::soracloud_runtime::MODEL_ARTIFACT_CACHE_BUDGET_BYTES,
+    model_weight_bytes: defaults::soracloud_runtime::MODEL_WEIGHT_CACHE_BUDGET_BYTES,
+});
 impl SoracloudRuntimeCacheBudgets {
     fn parse(self) -> actual::SoracloudRuntimeCacheBudgets {
         actual::SoracloudRuntimeCacheBudgets {
@@ -12658,31 +12768,25 @@ fn default_soracloud_runtime_inrou_stop_grace_ms() -> DurationMs {
         defaults::soracloud_runtime::INROU_STOP_GRACE_MS,
     ))
 }
-impl Default for SoracloudRuntimeInrou {
-    fn default() -> Self {
-        Self {
-            max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
-            enabled: defaults::soracloud_runtime::INROU_ENABLED,
-            proxy_only: defaults::soracloud_runtime::INROU_PROXY_ONLY,
-            bundle_archive_max_compressed_bytes:
-                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
-            bundle_archive_max_decoded_bytes:
-                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES,
-            bundle_archive_max_entries:
-                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES,
-            bundle_archive_max_file_bytes:
-                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES,
-            bundle_archive_max_total_file_bytes:
-                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES,
-            start_grace_ms: DurationMs(std::time::Duration::from_millis(
-                defaults::soracloud_runtime::INROU_START_GRACE_MS,
-            )),
-            stop_grace_ms: DurationMs(std::time::Duration::from_millis(
-                defaults::soracloud_runtime::INROU_STOP_GRACE_MS,
-            )),
-        }
-    }
-}
+impl_default!(SoracloudRuntimeInrou {
+    max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
+    enabled: defaults::soracloud_runtime::INROU_ENABLED,
+    proxy_only: defaults::soracloud_runtime::INROU_PROXY_ONLY,
+    bundle_archive_max_compressed_bytes:
+        defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
+    bundle_archive_max_decoded_bytes:
+        defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES,
+    bundle_archive_max_entries: defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES,
+    bundle_archive_max_file_bytes: defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES,
+    bundle_archive_max_total_file_bytes:
+        defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES,
+    start_grace_ms: DurationMs(std::time::Duration::from_millis(
+        defaults::soracloud_runtime::INROU_START_GRACE_MS,
+    )),
+    stop_grace_ms: DurationMs(std::time::Duration::from_millis(
+        defaults::soracloud_runtime::INROU_STOP_GRACE_MS,
+    )),
+});
 impl SoracloudRuntimeInrou {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoracloudRuntimeInrou {
         if self.bundle_archive_max_compressed_bytes.get()
@@ -31160,11 +31264,15 @@ mod offline_cfg_tests {
 }
 #[cfg(test)]
 mod duration_clamp_tests {
+    use super::{
+        AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism, DaManifestPolicy, DomainId,
+        Emitter, LaneId, NexusFees, NonZeroU64, RETIRED_LANE_FUNCTIONAL_METADATA_KEYS,
+    };
     use crate::parameters::{
         actual, defaults,
         user::{LaneValidatorModeConfig, SoracloudRuntime, SoracloudRuntimeHuggingFace},
     };
-    use iroha_config_base::{read::ConfigReader, toml::TomlSource, util::Bytes};
+    use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource, util::Bytes};
     use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::AccountId,
@@ -31238,6 +31346,36 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
 "#;
     fn base_table() -> Table {
         toml::from_str(MINIMAL_CONFIG).expect("parse minimal config")
+    }
+    fn four_validator_roster_table() -> Table {
+        let mut table = base_table();
+        let base_public_key = table
+            .get("public_key")
+            .and_then(Value::as_str)
+            .expect("minimal config public key")
+            .to_owned();
+        let mut trusted_peers = vec![Value::String(format!("{base_public_key}@127.0.0.1:1337"))];
+        let trusted_peers_pop = table
+            .get_mut("trusted_peers_pop")
+            .and_then(Value::as_array_mut)
+            .expect("minimal config trusted peer PoP array");
+        for (index, seed) in [0x91, 0x92, 0x93].into_iter().enumerate() {
+            let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic BLS validator fixture");
+            let public_key = key_pair.public_key().to_string();
+            let pop = iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
+                .expect("derive BLS validator PoP");
+            trusted_peers.push(Value::String(format!(
+                "{public_key}@127.0.0.1:{}",
+                1338 + index
+            )));
+            let mut pop_entry = Table::new();
+            pop_entry.insert("public_key".into(), Value::String(public_key));
+            pop_entry.insert("pop_hex".into(), Value::String(hex::encode(pop)));
+            trusted_peers_pop.push(Value::Table(pop_entry));
+        }
+        table.insert("trusted_peers".into(), Value::Array(trusted_peers));
+        table
     }
     fn load_root(table: Table) -> actual::Root {
         actual::Root::from_toml_source(TomlSource::inline(table)).expect("load minimal config")
@@ -31763,7 +31901,6 @@ policy_digest_hex = "{policy_digest_hex}"
     fn nexus_lane_shard_id_has_one_typed_configuration_surface() {
         let mut table = base_table();
         let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
         set_lane_count(nexus, 2);
         let mut sharded = lane_descriptor(1, "sharded");
         {
@@ -31804,6 +31941,204 @@ policy_digest_hex = "{policy_digest_hex}"
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("the internal shard metadata key must not be a configuration alias");
         assert!(format!("{error:?}").contains("use the typed `shard_id` field"));
+    }
+    #[test]
+    fn nexus_lane_functional_metadata_fails_closed() {
+        for retired_key in RETIRED_LANE_FUNCTIONAL_METADATA_KEYS.into_iter().chain([
+            "confidential_future_policy",
+            "scheduler.future_policy",
+            "settlement.buffer_future_policy",
+        ]) {
+            let mut table = base_table();
+            let nexus = nexus_table_mut(&mut table);
+            set_lane_count(nexus, 1);
+            let mut lane = lane_descriptor(0, "primary");
+            let lane = lane.as_table_mut().expect("lane descriptor table");
+            lane.insert(
+                "metadata".into(),
+                Value::Table(Table::from_iter([(
+                    retired_key.into(),
+                    Value::String("retired".into()),
+                )])),
+            );
+            nexus.insert(
+                "lane_catalog".into(),
+                Value::Array(vec![Value::Table(lane.clone())]),
+            );
+            let error = actual::Root::from_toml_source(TomlSource::inline(table))
+                .expect_err("invalid functional lane metadata must fail configuration loading");
+            let report = format!("{error:?}");
+            assert!(
+                report.contains("retired") && report.contains(retired_key),
+                "retired key `{retired_key}` produced an unexpected error: {report}"
+            );
+        }
+    }
+    #[test]
+    fn nexus_lane_typed_functional_policy_loads_from_toml() {
+        let mut table = base_table();
+        let nexus = nexus_table_mut(&mut table);
+        set_lane_count(nexus, 1);
+        let mut lane = lane_descriptor(0, "private");
+        let lane = lane.as_table_mut().expect("lane descriptor table");
+        let settlement_account = AccountId::new(
+            KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::Ed25519)
+                .expect("settlement account key")
+                .public_key()
+                .clone(),
+        );
+        let settlement_asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("settlement", "universal").expect("settlement domain"),
+            "xor".parse().expect("asset name"),
+        );
+        lane.insert("storage".into(), Value::String("split_replica".into()));
+        lane.insert("manifest_policy".into(), Value::String("audit".into()));
+        lane.insert(
+            "confidential_compute".into(),
+            Value::Table(Table::from_iter([
+                ("mechanism".into(), Value::String("secret_sharing".into())),
+                ("key_version".into(), Value::Integer(7)),
+                (
+                    "allowed_audiences".into(),
+                    Value::Array(vec![
+                        Value::String("operator".into()),
+                        Value::String("auditor".into()),
+                        Value::String("operator".into()),
+                    ]),
+                ),
+            ])),
+        );
+        lane.insert(
+            "scheduler".into(),
+            Value::Table(Table::from_iter([
+                ("teu_capacity".into(), Value::Integer(2048)),
+                ("starvation_bound_slots".into(), Value::Integer(6)),
+            ])),
+        );
+        lane.insert(
+            "settlement_buffer".into(),
+            Value::Table(Table::from_iter([
+                (
+                    "account_id".into(),
+                    Value::String(settlement_account.to_string()),
+                ),
+                (
+                    "asset_definition_id".into(),
+                    Value::String(settlement_asset.to_string()),
+                ),
+                ("capacity".into(), Value::String("1500".into())),
+            ])),
+        );
+        nexus.insert(
+            "lane_catalog".into(),
+            Value::Array(vec![Value::Table(lane.clone())]),
+        );
+
+        let actual = load_root(table);
+        let lane = actual
+            .nexus
+            .lane_catalog
+            .lanes()
+            .first()
+            .expect("configured lane");
+        assert_eq!(lane.manifest_policy, DaManifestPolicy::Audit);
+        let policy = lane
+            .confidential_compute
+            .as_ref()
+            .expect("typed confidential policy");
+        assert_eq!(
+            policy.mechanism,
+            ConfidentialComputeMechanism::SecretSharing
+        );
+        assert_eq!(policy.key_version.get(), 7);
+        assert_eq!(
+            policy.allowed_audiences,
+            BTreeSet::from(["auditor".to_owned(), "operator".to_owned()])
+        );
+        let scheduler = lane.scheduler.as_ref().expect("typed scheduler policy");
+        assert_eq!(scheduler.teu_capacity.map(NonZeroU64::get), Some(2048));
+        assert_eq!(
+            scheduler.starvation_bound_slots.map(NonZeroU64::get),
+            Some(6)
+        );
+        let settlement = lane
+            .settlement_buffer
+            .as_ref()
+            .expect("typed settlement buffer policy");
+        assert_eq!(settlement.account_id, settlement_account);
+        assert_eq!(settlement.asset_definition_id, settlement_asset);
+        assert_eq!(settlement.capacity.to_string(), "1500");
+        let derived = actual
+            .nexus
+            .lane_config
+            .entry(LaneId::SINGLE)
+            .expect("derived lane entry");
+        assert_eq!(derived.scheduler.as_ref(), lane.scheduler.as_ref());
+        assert_eq!(
+            derived.settlement_buffer.as_ref(),
+            lane.settlement_buffer.as_ref()
+        );
+    }
+    #[test]
+    fn nexus_lane_scheduler_and_settlement_policy_fail_closed() {
+        for (field, value, expected) in [
+            (
+                "scheduler",
+                Value::Table(Table::from_iter([(
+                    "teu_capacity".into(),
+                    Value::Integer(0),
+                )])),
+                "positive u64",
+            ),
+            (
+                "settlement_buffer",
+                Value::Table(Table::from_iter([(
+                    "capacity".into(),
+                    Value::String("0".into()),
+                )])),
+                "must define",
+            ),
+        ] {
+            let mut table = base_table();
+            let nexus = nexus_table_mut(&mut table);
+            set_lane_count(nexus, 1);
+            let mut lane = lane_descriptor(0, "primary");
+            lane.as_table_mut()
+                .expect("lane descriptor table")
+                .insert(field.into(), value);
+            nexus.insert("lane_catalog".into(), Value::Array(vec![lane]));
+            let error = actual::Root::from_toml_source(TomlSource::inline(table))
+                .expect_err("invalid typed lane policy must fail configuration loading");
+            assert!(
+                format!("{error:?}").contains(expected),
+                "unexpected `{field}` error: {error:?}"
+            );
+        }
+    }
+    #[test]
+    fn nexus_fee_settlement_mode_accepts_only_canonical_labels() {
+        for canonical in ["direct", "lane_relay_burn"] {
+            let mut fees = NexusFees::default();
+            fees.settlement_mode = canonical.to_owned();
+            let mut emitter = Emitter::new();
+            let parsed = fees.parse(&mut emitter);
+            assert!(
+                parsed.is_some(),
+                "canonical settlement mode `{canonical}` must parse"
+            );
+            assert!(emitter.into_result().is_ok());
+        }
+        for alias in ["lane-relay-burn", "Lane_Relay_Burn", " direct", "direct "] {
+            let mut fees = NexusFees::default();
+            fees.settlement_mode = alias.to_owned();
+            let mut emitter = Emitter::new();
+            let parsed = fees.parse(&mut emitter);
+            assert!(
+                parsed.is_none(),
+                "non-canonical settlement mode `{alias}` must fail closed"
+            );
+            assert!(emitter.into_result().is_err());
+        }
     }
     #[test]
     fn lane_validator_mode_json_roundtrips_canonical_values_only() {
@@ -31873,24 +32208,21 @@ policy_digest_hex = "{policy_digest_hex}"
         assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
     }
     #[test]
-    fn nexus_autoscale_parse_rejects_enabled_autoscale_when_nexus_disabled() {
-        let mut table = base_table();
-        let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(false));
-        set_valid_autoscale_defaults(nexus);
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("autoscale cannot be enabled while Nexus is disabled");
-        let report = format!("{error:?}");
-        assert!(
-            report.contains("nexus.autoscale.enabled requires nexus.enabled = true"),
-            "{report}"
-        );
+    fn nexus_enabled_is_rejected_as_an_unknown_parameter() {
+        for enabled in [true, false] {
+            let mut table = base_table();
+            nexus_table_mut(&mut table).insert("enabled".into(), Value::Boolean(enabled));
+            let error = actual::Root::from_toml_source(TomlSource::inline(table))
+                .expect_err("the retired Nexus runtime switch must be unknown");
+            let report = format!("{error:?}");
+            assert!(report.contains("unknown parameter"), "{report}");
+            assert!(report.contains("nexus.enabled"), "{report}");
+        }
     }
     #[test]
     fn nexus_autoscale_parse_rejects_default_lane_inside_elastic_range() {
         let mut table = base_table();
         let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
         set_valid_autoscale_defaults(nexus);
         set_lane_count(nexus, 4);
         nexus.insert(
@@ -31914,7 +32246,6 @@ policy_digest_hex = "{policy_digest_hex}"
     fn nexus_autoscale_parse_rejects_default_lane_above_elastic_range() {
         let mut table = base_table();
         let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
         set_valid_autoscale_defaults(nexus);
         set_lane_count(nexus, 4);
         nexus.insert(
@@ -31937,7 +32268,6 @@ policy_digest_hex = "{policy_digest_hex}"
     fn nexus_autoscale_parse_rejects_manual_lane_inside_elastic_range() {
         let mut table = base_table();
         let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
         set_valid_autoscale_defaults(nexus);
         set_lane_count(nexus, 4);
         nexus.insert(
@@ -31958,133 +32288,62 @@ policy_digest_hex = "{policy_digest_hex}"
             "{report}"
         );
     }
-    #[test]
-    fn nexus_autoscale_parse_rejects_reserved_managed_metadata() {
+    fn assert_reserved_autoscale_metadata_rejected(key: &str, value: &str, error_context: &str) {
         let mut table = base_table();
         let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
         set_valid_autoscale_defaults(nexus);
         set_lane_count(nexus, 4);
-        let mut default_lane = Table::new();
-        default_lane.insert("index".into(), Value::Integer(0));
-        default_lane.insert("alias".into(), Value::String("default".to_owned()));
-        let mut metadata = Table::new();
-        metadata.insert("autoscale.managed".into(), Value::String("true".to_owned()));
-        default_lane.insert("metadata".into(), Value::Table(metadata));
+        let mut default_lane = lane_descriptor(0, "default");
+        default_lane
+            .as_table_mut()
+            .and_then(|lane| lane.get_mut("metadata"))
+            .and_then(Value::as_table_mut)
+            .expect("lane metadata table")
+            .insert(key.into(), Value::String(value.to_owned()));
         nexus.insert(
             "lane_catalog".into(),
-            Value::Array(vec![
-                Value::Table(default_lane),
-                lane_descriptor(3, "governance"),
-            ]),
+            Value::Array(vec![default_lane, lane_descriptor(3, "governance")]),
         );
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("operators must not set reserved autoscale metadata");
+        let error =
+            actual::Root::from_toml_source(TomlSource::inline(table)).expect_err(error_context);
         let report = format!("{error:?}");
         assert!(
-            report.contains(
-                "metadata key `autoscale.managed` is reserved for the consensus autoscaler"
-            ),
+            report.contains(&format!(
+                "metadata key `{key}` is reserved for the consensus autoscaler"
+            )),
             "{report}"
+        );
+    }
+    #[test]
+    fn nexus_autoscale_parse_rejects_reserved_managed_metadata() {
+        assert_reserved_autoscale_metadata_rejected(
+            "autoscale.managed",
+            "true",
+            "operators must not set reserved autoscale metadata",
         );
     }
     #[test]
     fn nexus_autoscale_parse_rejects_reserved_created_height_metadata() {
-        let mut table = base_table();
-        let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
-        set_valid_autoscale_defaults(nexus);
-        set_lane_count(nexus, 4);
-        let mut default_lane = Table::new();
-        default_lane.insert("index".into(), Value::Integer(0));
-        default_lane.insert("alias".into(), Value::String("default".to_owned()));
-        let mut metadata = Table::new();
-        metadata.insert(
-            "autoscale.created_height".into(),
-            Value::String("42".to_owned()),
-        );
-        default_lane.insert("metadata".into(), Value::Table(metadata));
-        nexus.insert(
-            "lane_catalog".into(),
-            Value::Array(vec![
-                Value::Table(default_lane),
-                lane_descriptor(3, "governance"),
-            ]),
-        );
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("operators must not set reserved autoscale marker metadata");
-        let report = format!("{error:?}");
-        assert!(
-            report.contains(
-                "metadata key `autoscale.created_height` is reserved for the consensus autoscaler"
-            ),
-            "{report}"
+        assert_reserved_autoscale_metadata_rejected(
+            "autoscale.created_height",
+            "42",
+            "operators must not set reserved autoscale marker metadata",
         );
     }
     #[test]
     fn nexus_autoscale_parse_rejects_reserved_drain_state_metadata() {
-        let mut table = base_table();
-        let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
-        set_valid_autoscale_defaults(nexus);
-        set_lane_count(nexus, 4);
-        let mut default_lane = Table::new();
-        default_lane.insert("index".into(), Value::Integer(0));
-        default_lane.insert("alias".into(), Value::String("default".to_owned()));
-        let mut metadata = Table::new();
-        metadata.insert(
-            "autoscale.drain_state".into(),
-            Value::String("forged".to_owned()),
-        );
-        default_lane.insert("metadata".into(), Value::Table(metadata));
-        nexus.insert(
-            "lane_catalog".into(),
-            Value::Array(vec![
-                Value::Table(default_lane),
-                lane_descriptor(3, "governance"),
-            ]),
-        );
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("operators must not forge consensus lane drain state");
-        let report = format!("{error:?}");
-        assert!(
-            report.contains(
-                "metadata key `autoscale.drain_state` is reserved for the consensus autoscaler"
-            ),
-            "{report}"
+        assert_reserved_autoscale_metadata_rejected(
+            "autoscale.drain_state",
+            "forged",
+            "operators must not forge consensus lane drain state",
         );
     }
     #[test]
     fn nexus_autoscale_parse_rejects_reserved_committee_metadata() {
-        let mut table = base_table();
-        let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
-        set_valid_autoscale_defaults(nexus);
-        set_lane_count(nexus, 4);
-        let mut default_lane = Table::new();
-        default_lane.insert("index".into(), Value::Integer(0));
-        default_lane.insert("alias".into(), Value::String("default".to_owned()));
-        let mut metadata = Table::new();
-        metadata.insert(
-            "autoscale.committee_v1".into(),
-            Value::String("forged".to_owned()),
-        );
-        default_lane.insert("metadata".into(), Value::Table(metadata));
-        nexus.insert(
-            "lane_catalog".into(),
-            Value::Array(vec![
-                Value::Table(default_lane),
-                lane_descriptor(3, "governance"),
-            ]),
-        );
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("operators must not forge an elastic-lane committee pin");
-        let report = format!("{error:?}");
-        assert!(
-            report.contains(
-                "metadata key `autoscale.committee_v1` is reserved for the consensus autoscaler"
-            ),
-            "{report}"
+        assert_reserved_autoscale_metadata_rejected(
+            "autoscale.committee_v1",
+            "forged",
+            "operators must not forge an elastic-lane committee pin",
         );
     }
     struct OnboardingKeyFile(PathBuf);
@@ -33606,6 +33865,291 @@ publish_delay_seconds = 17
         );
     }
     #[test]
+    fn sumeragi_v2_exact_output_geometry_accepts_network_source_boundary() {
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        network.insert("max_total_connections".into(), Value::Integer(131));
+        let actual = load_root(table);
+        assert_eq!(
+            actual
+                .network
+                .max_total_connections
+                .map(std::num::NonZeroUsize::get),
+            Some(131),
+        );
+    }
+    #[test]
+    fn trusted_peer_full_fanout_must_fit_the_effective_network_capacity() {
+        let set_connection_capacity = |table: &mut Table, capacity: usize| {
+            table
+                .get_mut("network")
+                .and_then(Value::as_table_mut)
+                .expect("network table")
+                .insert(
+                    "max_total_connections".into(),
+                    Value::Integer(i64::try_from(capacity).expect("fixture capacity fits TOML")),
+                );
+        };
+
+        let mut exact = four_validator_roster_table();
+        set_connection_capacity(&mut exact, 3);
+        let admitted = load_root(exact);
+        assert_eq!(admitted.common.trusted_peers.value().others.len(), 3);
+        assert_eq!(
+            admitted
+                .network
+                .max_total_connections
+                .map(std::num::NonZeroUsize::get),
+            Some(3),
+        );
+
+        let mut underbudget = four_validator_roster_table();
+        set_connection_capacity(&mut underbudget, 2);
+        let error = actual::Root::from_toml_source(TomlSource::inline(underbudget))
+            .expect_err("three remote trusted peers cannot fit two protected P2P sources");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(
+                "trusted-peer full fanout requires 3 remote connections, above the effective network connection capacity 2"
+            ),
+            "{report}",
+        );
+    }
+    #[test]
+    fn sumeragi_body_messages_must_cover_the_configured_validator_roster() {
+        let authenticated_non_validator_sources =
+            defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get();
+        let required = actual::sumeragi_v2_body_ingress_required_message_capacity(
+            4,
+            authenticated_non_validator_sources,
+        )
+        .expect("fixture message geometry is representable");
+        assert_eq!(required, 26, "fixture must pin the production geometry");
+
+        let set_bodies_with_exact_fanout = |table: &mut Table, bodies: usize| {
+            table
+                .entry("sumeragi")
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("sumeragi table")
+                .entry("queues")
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("sumeragi queue table")
+                .insert(
+                    "bodies".into(),
+                    Value::Integer(i64::try_from(bodies).expect("fixture capacity fits TOML")),
+                );
+            table
+                .get_mut("network")
+                .and_then(Value::as_table_mut)
+                .expect("network table")
+                .insert("max_total_connections".into(), Value::Integer(3));
+        };
+
+        let mut exact = four_validator_roster_table();
+        set_bodies_with_exact_fanout(&mut exact, required);
+        let admitted = load_root(exact);
+        assert_eq!(admitted.sumeragi.queues.bodies.get(), required);
+
+        let underbudget = required - 1;
+        let mut table = four_validator_roster_table();
+        set_bodies_with_exact_fanout(&mut table, underbudget);
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("one fewer protected message slot cannot serve the four-validator roster");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(&format!(
+                "canonical outer-ingress message capacity {underbudget} is below the roster-aware minimum {required}"
+            )),
+            "{report}",
+        );
+    }
+    #[test]
+    fn sumeragi_body_bytes_must_cover_the_configured_validator_roster() {
+        let table = four_validator_roster_table();
+        let actual = load_root(table.clone());
+        assert_eq!(
+            actual.common.trusted_peers.value().validator_roster_len(),
+            4,
+            "fixture must exercise the four-validator byte requirement"
+        );
+        let authenticated_non_validator_sources =
+            defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get();
+        let body_source_bytes = defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+        let required = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+            4,
+            authenticated_non_validator_sources,
+            body_source_bytes,
+        )
+        .expect("fixture byte geometry is representable");
+        let underbudget = required - body_source_bytes;
+        let mut table = table;
+        table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table")
+            .entry("queues")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi queue table")
+            .insert(
+                "body_bytes".into(),
+                Value::Integer(i64::try_from(underbudget).expect("fixture budget fits TOML")),
+            );
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("six source partitions cannot serve a four-validator roster plus ingress");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(&format!(
+                "aggregate canonical outer-ingress wire-byte capacity {underbudget} is below the roster-aware minimum {required}"
+            )),
+            "{report}",
+        );
+    }
+    #[test]
+    fn sumeragi_body_bytes_env_override_is_consumed_and_roster_validated() {
+        let table = four_validator_roster_table();
+        let authenticated_non_validator_sources =
+            defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get();
+        let body_source_bytes = defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+        let required = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+            4,
+            authenticated_non_validator_sources,
+            body_source_bytes,
+        )
+        .expect("fixture byte geometry is representable");
+        let load_with_env = |body_bytes: usize| {
+            let env = MockEnv::new().set("SUMERAGI_QUEUES_BODY_BYTES", body_bytes.to_string());
+            let env_probe = env.clone();
+            let result = ConfigReader::new()
+                .with_env(env)
+                .with_toml_source(TomlSource::inline(table.clone()))
+                .read_and_complete::<super::Root>()
+                .expect("read user config with Sumeragi body-byte env override")
+                .parse();
+            assert!(
+                env_probe.unvisited().is_empty(),
+                "the generated Compose environment key must be consumed"
+            );
+            result
+        };
+        let actual = load_with_env(required).expect("exact roster-aware env capacity is valid");
+        assert_eq!(actual.sumeragi.queues.body_bytes.get(), required);
+
+        let underbudget = required - body_source_bytes;
+        let error = load_with_env(underbudget)
+            .expect_err("under-budget environment capacity must fail roster-aware admission");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(&format!("roster-aware minimum {required}")),
+            "{report}"
+        );
+    }
+    #[test]
+    fn sumeragi_v2_exact_output_geometry_accepts_equal_capacity_boundary() {
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        network.insert("max_total_connections".into(), Value::Integer(132));
+        let sumeragi = table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table");
+        let queues = sumeragi
+            .entry("queues")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi.queues table");
+        queues.insert("bodies".into(), Value::Integer(132));
+        let actual = load_root(table);
+        let shared_capacity = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
+            (actual.sumeragi.queues.commands.get()
+                / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
+                .max(1),
+            actual.sumeragi.queues.bodies.get(),
+        )
+        .expect("fixture capacity must be representable");
+        let source_capacity = actual
+            .network
+            .max_total_connections
+            .expect("fixture configures the source bound")
+            .get();
+        assert_eq!(
+            shared_capacity,
+            source_capacity * defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT,
+        );
+    }
+    #[test]
+    fn sumeragi_v2_exact_output_geometry_rejects_unreservable_network_sources() {
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        network.insert("max_total_connections".into(), Value::Integer(132));
+        let sumeragi = table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table");
+        let queues = sumeragi
+            .entry("queues")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi.queues table");
+        queues.insert("bodies".into(), Value::Integer(130));
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("one maximum reply-source fanout must fit exact output");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(
+                "Sumeragi v2 outbound shared ownership capacity 394 is below one maximum fanout 396; configured network reply-source capacity is 132"
+            ),
+            "{report}",
+        );
+    }
+    #[test]
+    fn sumeragi_v2_lifecycle_geometry_rejects_unreservable_authenticated_sources() {
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        network.insert("max_total_connections".into(), Value::Integer(120));
+        let sumeragi = table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table");
+        let queues = sumeragi
+            .entry("queues")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi.queues table");
+        queues.insert(
+            "authenticated_non_validator_sources".into(),
+            Value::Integer(101),
+        );
+        queues.insert("bodies".into(), Value::Integer(310));
+        queues.insert("body_bytes".into(), Value::Integer(103 * 33 * 1024 * 1024));
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("height-local lifecycle capacity must fit its physical-slot space");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains("above the canonical height-local maximum 65536")
+                && report.contains("authenticated non-validator source capacity is 101"),
+            "{report}",
+        );
+    }
+    #[test]
     fn sumeragi_authenticated_non_validator_sources_must_fit_network_geometry() {
         let mut table = base_table();
         let network = table
@@ -33646,7 +34190,7 @@ publish_delay_seconds = 17
             "authenticated_non_validator_sources".into(),
             Value::Integer(33),
         );
-        queues.insert("bodies".into(), Value::Integer(72));
+        queues.insert("bodies".into(), Value::Integer(106));
         queues.insert("body_bytes".into(), Value::Integer(35 * 33 * 1024 * 1024));
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("home profile admits at most 32 independent authenticated sources");
@@ -33931,121 +34475,53 @@ publish_delay_seconds = 17
             "a zero component cap means unlimited downstream and must fail parsing"
         );
     }
+    macro_rules! assert_all_eq {
+        ($($actual:expr => $expected:expr),+ $(,)?) => {
+            $(assert_eq!($actual, $expected);)+
+        };
+    }
+    fn table_with_soracloud_runtime(source: &str) -> Table {
+        let runtime = toml::from_str(source).expect("parse SoraCloud runtime fixture");
+        let mut table = base_table();
+        table.insert("soracloud_runtime".into(), Value::Table(runtime));
+        table
+    }
     #[test]
     fn soracloud_runtime_defaults_apply() {
         let actual = load_root(base_table());
-        assert_eq!(
-            actual.soracloud_runtime.production_mode,
-            defaults::soracloud_runtime::PRODUCTION_MODE
-        );
-        assert_eq!(
-            actual.soracloud_runtime.state_dir,
-            defaults::soracloud_runtime::state_dir()
-        );
-        assert_eq!(
-            actual.soracloud_runtime.reconcile_interval,
-            StdDuration::from_millis(defaults::soracloud_runtime::RECONCILE_INTERVAL_MS)
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hydration_concurrency,
-            defaults::soracloud_runtime::HYDRATION_CONCURRENCY
-        );
-        assert_eq!(
-            actual.soracloud_runtime.cache_budgets.bundle_bytes,
-            defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES
-        );
-        assert_eq!(
-            actual.soracloud_runtime.inrou.max_concurrent_vms,
-            defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS
-        );
-        assert_eq!(
-            actual.soracloud_runtime.inrou.enabled,
-            defaults::soracloud_runtime::INROU_ENABLED
-        );
-        assert_eq!(
-            actual.soracloud_runtime.inrou.proxy_only,
-            defaults::soracloud_runtime::INROU_PROXY_ONLY
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_compressed_bytes,
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_decoded_bytes,
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES
-        );
-        assert_eq!(
-            actual.soracloud_runtime.inrou.bundle_archive_max_entries,
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES
-        );
-        assert_eq!(
-            actual.soracloud_runtime.inrou.bundle_archive_max_file_bytes,
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_total_file_bytes,
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES
+        let runtime = &actual.soracloud_runtime;
+        let inrou = &runtime.inrou;
+        let hf = &runtime.hf;
+        assert_all_eq!(
+            runtime.production_mode => defaults::soracloud_runtime::PRODUCTION_MODE,
+            runtime.state_dir => defaults::soracloud_runtime::state_dir(),
+            runtime.reconcile_interval => StdDuration::from_millis(defaults::soracloud_runtime::RECONCILE_INTERVAL_MS),
+            runtime.hydration_concurrency => defaults::soracloud_runtime::HYDRATION_CONCURRENCY,
+            runtime.cache_budgets.bundle_bytes => defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES,
+            inrou.max_concurrent_vms => defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
+            inrou.enabled => defaults::soracloud_runtime::INROU_ENABLED,
+            inrou.proxy_only => defaults::soracloud_runtime::INROU_PROXY_ONLY,
+            inrou.bundle_archive_max_compressed_bytes => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
+            inrou.bundle_archive_max_decoded_bytes => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES,
+            inrou.bundle_archive_max_entries => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES,
+            inrou.bundle_archive_max_file_bytes => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES,
+            inrou.bundle_archive_max_total_file_bytes => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES,
+            inrou.start_grace => StdDuration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS),
+            runtime.egress.default_allow => defaults::soracloud_runtime::EGRESS_DEFAULT_ALLOW,
+            hf.hub_base_url => defaults::soracloud_runtime::hf::HUB_BASE_URL,
+            hf.local_execution_enabled => defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED,
+            hf.local_runner_program => defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM,
+            hf.model_host_heartbeat_ttl => StdDuration::from_millis(defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS),
+            hf.import_max_files => defaults::soracloud_runtime::hf::IMPORT_MAX_FILES,
+            hf.model_info_max_response_bytes => defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES,
+            hf.inference_max_response_bytes => defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES,
+            hf.allow_inference_bridge_fallback => defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK,
         );
         assert!(matches!(
-            actual.soracloud_runtime.submission.fee_payer,
+            &runtime.submission.fee_payer,
             actual::SoracloudRuntimeFeePayer::Authority
         ));
-        assert_eq!(
-            actual.soracloud_runtime.inrou.start_grace,
-            StdDuration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS)
-        );
-        assert_eq!(
-            actual.soracloud_runtime.egress.default_allow,
-            defaults::soracloud_runtime::EGRESS_DEFAULT_ALLOW
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.hub_base_url,
-            defaults::soracloud_runtime::hf::HUB_BASE_URL
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.local_execution_enabled,
-            defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.local_runner_program,
-            defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.model_host_heartbeat_ttl,
-            StdDuration::from_millis(defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS)
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.import_max_files,
-            defaults::soracloud_runtime::hf::IMPORT_MAX_FILES
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.model_info_max_response_bytes,
-            defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.inference_max_response_bytes,
-            defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.allow_inference_bridge_fallback,
-            defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK
-        );
-        assert!(
-            actual
-                .soracloud_runtime
-                .hf
-                .inference_credential_provider
-                .is_none()
-        );
+        assert!(hf.inference_credential_provider.is_none());
     }
     #[test]
     fn soracloud_runtime_inrou_bundle_archive_limits_allow_equal_file_total_and_decoded() {
@@ -34055,29 +34531,11 @@ publish_delay_seconds = 17
             ("bundle_archive_max_total_file_bytes", 4_096),
         ]);
         let actual = load_root(table);
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_decoded_bytes
-                .get(),
-            4_096
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_file_bytes
-                .get(),
-            4_096
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_total_file_bytes
-                .get(),
-            4_096
+        let inrou = &actual.soracloud_runtime.inrou;
+        assert_all_eq!(
+            inrou.bundle_archive_max_decoded_bytes.get() => 4_096,
+            inrou.bundle_archive_max_file_bytes.get() => 4_096,
+            inrou.bundle_archive_max_total_file_bytes.get() => 4_096,
         );
     }
     #[test]
@@ -34143,37 +34601,12 @@ publish_delay_seconds = 17
             )
         });
         let actual = load_root(table_with_soracloud_inrou_values(&values));
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_compressed_bytes
-                .get(),
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_decoded_bytes
-                .get(),
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES_LIMIT
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_file_bytes
-                .get(),
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES_LIMIT
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_total_file_bytes
-                .get(),
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES_LIMIT
+        let inrou = &actual.soracloud_runtime.inrou;
+        assert_all_eq!(
+            inrou.bundle_archive_max_compressed_bytes.get() => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT,
+            inrou.bundle_archive_max_decoded_bytes.get() => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES_LIMIT,
+            inrou.bundle_archive_max_file_bytes.get() => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES_LIMIT,
+            inrou.bundle_archive_max_total_file_bytes.get() => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES_LIMIT,
         );
     }
     #[test]
@@ -34234,25 +34667,13 @@ publish_delay_seconds = 17
             ),
         ]);
         let actual = load_root(table);
-        assert_eq!(
-            actual.soracloud_runtime.hf.import_max_files,
-            defaults::soracloud_runtime::hf::IMPORT_MAX_FILES_LIMIT
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.import_max_file_bytes,
-            defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES_LIMIT
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.import_max_total_bytes,
-            defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES_LIMIT
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.model_info_max_response_bytes,
-            defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.inference_max_response_bytes,
-            defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES_LIMIT
+        let hf = &actual.soracloud_runtime.hf;
+        assert_all_eq!(
+            hf.import_max_files => defaults::soracloud_runtime::hf::IMPORT_MAX_FILES_LIMIT,
+            hf.import_max_file_bytes => defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES_LIMIT,
+            hf.import_max_total_bytes => defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES_LIMIT,
+            hf.model_info_max_response_bytes => defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT,
+            hf.inference_max_response_bytes => defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES_LIMIT,
         );
     }
     #[test]
@@ -34309,148 +34730,124 @@ publish_delay_seconds = 17
         let key_pair = checked_onboarding_authority_ed25519_key_fixture();
         let authority = AccountId::new(key_pair.public_key().clone());
         let (_, public_key) = key_pair.public_key().to_bytes();
-        let mut signer = Table::new();
-        signer.insert(
-            "handle".into(),
-            Value::String("software://sorafs/ai/runtime-primary".into()),
-        );
-        signer.insert("authority".into(), Value::String(authority.to_string()));
-        signer.insert("algorithm".into(), Value::String("ed25519".into()));
-        signer.insert(
-            "public_key_hex".into(),
-            Value::String(hex::encode(public_key)),
-        );
-        signer.insert("revision".into(), Value::Integer(7));
-        signer.insert(
-            "policy_digest_hex".into(),
-            Value::String(hex::encode([0xA7; 32])),
-        );
-        let mut submission = Table::new();
-        submission.insert("fee_payer".into(), Value::String("authority".into()));
-        submission.insert("signer".into(), Value::Table(signer));
-        submission
+        Table::from_iter([
+            ("fee_payer".into(), Value::String("authority".into())),
+            (
+                "signer".into(),
+                Value::Table(Table::from_iter([
+                    (
+                        "handle".into(),
+                        Value::String("software://sorafs/ai/runtime-primary".into()),
+                    ),
+                    ("authority".into(), Value::String(authority.to_string())),
+                    ("algorithm".into(), Value::String("ed25519".into())),
+                    (
+                        "public_key_hex".into(),
+                        Value::String(hex::encode(public_key)),
+                    ),
+                    ("revision".into(), Value::Integer(7)),
+                    (
+                        "policy_digest_hex".into(),
+                        Value::String(hex::encode([0xA7; 32])),
+                    ),
+                ])),
+            ),
+        ])
+    }
+    fn production_soracloud_runtime_table(
+        inrou_posture: Option<(bool, bool)>,
+        bounded_egress: bool,
+    ) -> Table {
+        let mut source = "production_mode = true\n".to_owned();
+        if let Some((enabled, proxy_only)) = inrou_posture {
+            source.push_str(&format!(
+                r#"
+[inrou]
+enabled = {enabled}
+max_concurrent_vms = 8
+proxy_only = {proxy_only}
+start_grace_ms = 30000
+stop_grace_ms = 10000
+"#,
+            ));
+        }
+        if bounded_egress {
+            source.push_str(
+                r#"
+[egress]
+default_allow = false
+allowed_hosts = []
+rate_per_minute = 60
+max_bytes_per_minute = 1048576
+"#,
+            );
+        }
+        let mut table = table_with_soracloud_runtime(&source);
+        table
+            .get_mut("soracloud_runtime")
+            .and_then(Value::as_table_mut)
+            .expect("soracloud_runtime table")
+            .insert(
+                "submission".into(),
+                Value::Table(production_soracloud_submission_table()),
+            );
+        table
     }
     #[test]
     #[should_panic(expected = "egress.rate_per_minute")]
     fn soracloud_runtime_production_mode_requires_fail_closed_egress_limits() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        runtime.insert("production_mode".into(), Value::Boolean(true));
-        let mut inrou = Table::new();
-        inrou.insert("enabled".into(), Value::Boolean(true));
-        inrou.insert("max_concurrent_vms".into(), Value::Integer(8));
-        inrou.insert("proxy_only".into(), Value::Boolean(false));
-        inrou.insert("start_grace_ms".into(), Value::Integer(30_000));
-        inrou.insert("stop_grace_ms".into(), Value::Integer(10_000));
-        runtime.insert("inrou".into(), Value::Table(inrou));
-        runtime.insert(
-            "submission".into(),
-            Value::Table(production_soracloud_submission_table()),
-        );
-        let _ = load_root(table);
+        let _ = load_root(production_soracloud_runtime_table(
+            Some((true, false)),
+            false,
+        ));
     }
     #[test]
     fn soracloud_runtime_production_mode_accepts_bounded_posture() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        runtime.insert("production_mode".into(), Value::Boolean(true));
-        let mut inrou = Table::new();
-        inrou.insert("enabled".into(), Value::Boolean(true));
-        inrou.insert("max_concurrent_vms".into(), Value::Integer(8));
-        inrou.insert("proxy_only".into(), Value::Boolean(false));
-        inrou.insert("start_grace_ms".into(), Value::Integer(30_000));
-        inrou.insert("stop_grace_ms".into(), Value::Integer(10_000));
-        runtime.insert("inrou".into(), Value::Table(inrou));
-        runtime.insert(
-            "submission".into(),
-            Value::Table(production_soracloud_submission_table()),
-        );
-        let mut egress = Table::new();
-        egress.insert("default_allow".into(), Value::Boolean(false));
-        egress.insert("allowed_hosts".into(), Value::Array(Vec::new()));
-        egress.insert("rate_per_minute".into(), Value::Integer(60));
-        egress.insert("max_bytes_per_minute".into(), Value::Integer(1_048_576));
-        runtime.insert("egress".into(), Value::Table(egress));
-        let actual = load_root(table);
-        assert!(actual.soracloud_runtime.production_mode);
+        let actual = load_root(production_soracloud_runtime_table(
+            Some((true, false)),
+            true,
+        ));
+        let runtime = actual.soracloud_runtime;
+        assert!(runtime.production_mode);
         assert_eq!(
-            actual
-                .soracloud_runtime
-                .egress
-                .rate_per_minute
-                .expect("rate quota")
-                .get(),
+            runtime.egress.rate_per_minute.expect("rate quota").get(),
             60
         );
-        assert!(!actual.soracloud_runtime.hf.allow_inference_bridge_fallback);
-        let signer = actual
-            .soracloud_runtime
+        assert!(!runtime.hf.allow_inference_bridge_fallback);
+        let signer = runtime
             .submission
             .signer
             .expect("production signer binding");
-        assert_eq!(signer.handle, "software://sorafs/ai/runtime-primary");
-        assert_eq!(signer.algorithm, Algorithm::Ed25519);
-        assert_eq!(signer.revision, 7);
-        assert_eq!(signer.policy_digest, [0xA7; 32]);
+        assert_all_eq!(
+            signer.handle => "software://sorafs/ai/runtime-primary",
+            signer.algorithm => Algorithm::Ed25519,
+            signer.revision => 7,
+            signer.policy_digest => [0xA7; 32],
+        );
     }
     #[test]
     #[should_panic(expected = "inrou.enabled")]
     fn soracloud_runtime_production_mode_rejects_disabled_inrou() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        runtime.insert("production_mode".into(), Value::Boolean(true));
-        runtime.insert(
-            "submission".into(),
-            Value::Table(production_soracloud_submission_table()),
-        );
-        let _ = load_root(table);
+        let _ = load_root(production_soracloud_runtime_table(None, false));
     }
     #[test]
     #[should_panic(expected = "sponsor payer requires fee_program_id")]
     fn soracloud_runtime_sponsor_payer_requires_exact_program() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        let mut submission = Table::new();
-        submission.insert("fee_payer".into(), Value::String("sponsor".into()));
-        runtime.insert("submission".into(), Value::Table(submission));
-        let _ = load_root(table);
+        let _ = load_root(table_with_soracloud_runtime(
+            "[submission]\nfee_payer = \"sponsor\"\n",
+        ));
     }
     #[test]
     fn soracloud_runtime_sponsor_payer_parses_exact_program_revision() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
         let sponsor = iroha_data_model::account::AccountId::new(
             checked_onboarding_authority_ed25519_key_fixture()
                 .public_key()
                 .clone(),
         );
         let program_id = format!("{sponsor}/runtime");
-        let mut submission = Table::new();
-        submission.insert("fee_payer".into(), Value::String("sponsor".into()));
-        submission.insert("fee_program_id".into(), Value::String(program_id.clone()));
-        submission.insert("fee_program_revision".into(), Value::Integer(7));
-        runtime.insert("submission".into(), Value::Table(submission));
-        let actual = load_root(table);
+        let actual = load_root(table_with_soracloud_runtime(&format!(
+            "[submission]\nfee_payer = \"sponsor\"\nfee_program_id = \"{program_id}\"\nfee_program_revision = 7\n"
+        )));
         let actual::SoracloudRuntimeFeePayer::Sponsor {
             program_id: parsed,
             program_revision,
@@ -34463,25 +34860,14 @@ publish_delay_seconds = 17
     }
     #[test]
     fn soracloud_runtime_sponsor_payer_rejects_noncanonical_program_literal() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
         let sponsor = iroha_data_model::account::AccountId::new(
             checked_onboarding_authority_ed25519_key_fixture()
                 .public_key()
                 .clone(),
         );
-        let mut submission = Table::new();
-        submission.insert("fee_payer".into(), Value::String("sponsor".into()));
-        submission.insert(
-            "fee_program_id".into(),
-            Value::String(format!(" {sponsor}/runtime")),
-        );
-        submission.insert("fee_program_revision".into(), Value::Integer(7));
-        runtime.insert("submission".into(), Value::Table(submission));
+        let table = table_with_soracloud_runtime(&format!(
+            "[submission]\nfee_payer = \"sponsor\"\nfee_program_id = \" {sponsor}/runtime\"\nfee_program_revision = 7\n"
+        ));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| load_root(table)));
         assert!(
             result.is_err(),
@@ -34491,358 +34877,146 @@ publish_delay_seconds = 17
     #[test]
     #[should_panic(expected = "inrou.proxy_only")]
     fn soracloud_runtime_production_mode_rejects_proxy_only_inrou() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        runtime.insert("production_mode".into(), Value::Boolean(true));
-        let mut egress = Table::new();
-        egress.insert("default_allow".into(), Value::Boolean(false));
-        egress.insert("allowed_hosts".into(), Value::Array(Vec::new()));
-        egress.insert("rate_per_minute".into(), Value::Integer(60));
-        egress.insert("max_bytes_per_minute".into(), Value::Integer(1_048_576));
-        runtime.insert("egress".into(), Value::Table(egress));
-        runtime.insert(
-            "submission".into(),
-            Value::Table(production_soracloud_submission_table()),
-        );
-        let mut inrou = Table::new();
-        inrou.insert("enabled".into(), Value::Boolean(true));
-        inrou.insert("max_concurrent_vms".into(), Value::Integer(8));
-        inrou.insert("proxy_only".into(), Value::Boolean(true));
-        inrou.insert("start_grace_ms".into(), Value::Integer(30_000));
-        inrou.insert("stop_grace_ms".into(), Value::Integer(10_000));
-        runtime.insert("inrou".into(), Value::Table(inrou));
-        let _ = load_root(table);
+        let _ = load_root(production_soracloud_runtime_table(Some((true, true)), true));
     }
     #[test]
     fn soracloud_runtime_partial_hf_overrides_keep_defaults() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        let mut hf = Table::new();
-        hf.insert(
-            "hub_base_url".into(),
-            Value::String("http://127.0.0.1:52220".to_owned()),
-        );
-        hf.insert(
-            "api_base_url".into(),
-            Value::String("http://127.0.0.1:52220/api".to_owned()),
-        );
-        runtime.insert("hf".into(), Value::Table(hf));
-        let actual = load_root(table);
-        assert_eq!(
-            actual.soracloud_runtime.hf.hub_base_url,
-            "http://127.0.0.1:52220"
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.api_base_url,
-            "http://127.0.0.1:52220/api"
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.inference_base_url,
-            defaults::soracloud_runtime::hf::INFERENCE_BASE_URL
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.request_timeout,
-            StdDuration::from_millis(defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS)
+        let actual = load_root(table_with_soracloud_runtime(
+            "[hf]\nhub_base_url = \"http://127.0.0.1:52220\"\napi_base_url = \"http://127.0.0.1:52220/api\"\n",
+        ));
+        let hf = &actual.soracloud_runtime.hf;
+        assert_all_eq!(
+            hf.hub_base_url => "http://127.0.0.1:52220",
+            hf.api_base_url => "http://127.0.0.1:52220/api",
+            hf.inference_base_url => defaults::soracloud_runtime::hf::INFERENCE_BASE_URL,
+            hf.request_timeout => StdDuration::from_millis(defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS),
         );
         let mut expected_allowlist = defaults::soracloud_runtime::hf::import_file_allowlist();
         expected_allowlist.sort();
         expected_allowlist.dedup();
-        assert_eq!(
-            actual.soracloud_runtime.hf.import_file_allowlist,
-            expected_allowlist
-        );
+        assert_eq!(hf.import_file_allowlist, expected_allowlist);
     }
     #[test]
     fn soracloud_runtime_parse_applies_explicit_overrides() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        runtime.insert(
-            "state_dir".into(),
-            Value::String("./runtime/custom".to_string()),
-        );
-        runtime.insert("reconcile_interval_ms".into(), Value::Integer(2_500));
-        runtime.insert("hydration_concurrency".into(), Value::Integer(7));
-        let mut cache_budgets = Table::new();
-        cache_budgets.insert("bundle_bytes".into(), Value::Integer(1_024));
-        cache_budgets.insert("static_asset_bytes".into(), Value::Integer(2_048));
-        cache_budgets.insert("journal_bytes".into(), Value::Integer(3_072));
-        cache_budgets.insert("checkpoint_bytes".into(), Value::Integer(4_096));
-        cache_budgets.insert("model_artifact_bytes".into(), Value::Integer(5_120));
-        cache_budgets.insert("model_weight_bytes".into(), Value::Integer(6_144));
-        runtime.insert("cache_budgets".into(), Value::Table(cache_budgets));
-        let mut inrou = Table::new();
-        inrou.insert("max_concurrent_vms".into(), Value::Integer(5));
-        inrou.insert("enabled".into(), Value::Boolean(true));
-        inrou.insert("proxy_only".into(), Value::Boolean(true));
-        inrou.insert(
-            "bundle_archive_max_compressed_bytes".into(),
-            Value::Integer(10_000),
-        );
-        inrou.insert(
-            "bundle_archive_max_decoded_bytes".into(),
-            Value::Integer(40_000),
-        );
-        inrou.insert("bundle_archive_max_entries".into(), Value::Integer(123));
-        inrou.insert(
-            "bundle_archive_max_file_bytes".into(),
-            Value::Integer(20_000),
-        );
-        inrou.insert(
-            "bundle_archive_max_total_file_bytes".into(),
-            Value::Integer(30_000),
-        );
-        inrou.insert("start_grace_ms".into(), Value::Integer(7_500));
-        inrou.insert("stop_grace_ms".into(), Value::Integer(9_500));
-        runtime.insert("inrou".into(), Value::Table(inrou));
-        let mut submission = Table::new();
-        submission.insert("fee_payer".into(), Value::String(" authority ".to_string()));
-        runtime.insert("submission".into(), Value::Table(submission));
-        let mut egress = Table::new();
-        egress.insert("default_allow".into(), Value::Boolean(true));
-        egress.insert(
-            "allowed_hosts".into(),
-            Value::Array(vec![
-                Value::String("cdn.sora.test".to_string()),
-                Value::String(" api.sora.test ".to_string()),
-                Value::String("cdn.sora.test".to_string()),
-            ]),
-        );
-        egress.insert("rate_per_minute".into(), Value::Integer(120));
-        egress.insert("max_bytes_per_minute".into(), Value::Integer(262_144));
-        runtime.insert("egress".into(), Value::Table(egress));
-        let mut hf = Table::new();
-        hf.insert(
-            "hub_base_url".into(),
-            Value::String(" https://mirror.hf.test/ ".to_string()),
-        );
-        hf.insert(
-            "api_base_url".into(),
-            Value::String("https://mirror.hf.test/api/".to_string()),
-        );
-        hf.insert(
-            "inference_base_url".into(),
-            Value::String("https://router.hf.test/hf-inference/models/".to_string()),
-        );
-        hf.insert("request_timeout_ms".into(), Value::Integer(21_000));
-        hf.insert("local_execution_enabled".into(), Value::Boolean(false));
-        hf.insert(
-            "local_runner_program".into(),
-            Value::String(" python3.12 ".to_string()),
-        );
-        hf.insert("local_runner_timeout_ms".into(), Value::Integer(45_000));
-        hf.insert("model_host_heartbeat_ttl_ms".into(), Value::Integer(18_000));
-        hf.insert(
-            "allow_inference_bridge_fallback".into(),
-            Value::Boolean(false),
-        );
-        hf.insert("import_max_files".into(), Value::Integer(48));
-        hf.insert("import_max_file_bytes".into(), Value::Integer(777_777));
-        hf.insert("import_max_total_bytes".into(), Value::Integer(9_999_999));
-        hf.insert(
-            "model_info_max_response_bytes".into(),
-            Value::Integer(1_234_567),
-        );
-        hf.insert(
-            "inference_max_response_bytes".into(),
-            Value::Integer(7_654_321),
-        );
-        hf.insert(
-            "import_file_allowlist".into(),
-            Value::Array(vec![
-                Value::String(" config.json ".to_string()),
-                Value::String("*.safetensors".to_string()),
-                Value::String("CONFIG.JSON".to_string()),
-            ]),
-        );
-        let mut credential_provider = Table::new();
-        credential_provider.insert(
-            "handle".into(),
-            Value::String("kms://soracloud/hf-inference-primary".to_owned()),
-        );
-        credential_provider.insert("revision".into(), Value::Integer(7));
-        credential_provider.insert("policy_digest_hex".into(), Value::String("a7".repeat(32)));
-        hf.insert(
-            "inference_credential_provider".into(),
-            Value::Table(credential_provider),
-        );
-        runtime.insert("hf".into(), Value::Table(hf));
-        let actual = load_root(table);
+        let actual = load_root(table_with_soracloud_runtime(&format!(
+            r#"
+state_dir = "./runtime/custom"
+reconcile_interval_ms = 2500
+hydration_concurrency = 7
+
+[cache_budgets]
+bundle_bytes = 1024
+static_asset_bytes = 2048
+journal_bytes = 3072
+checkpoint_bytes = 4096
+model_artifact_bytes = 5120
+model_weight_bytes = 6144
+
+[inrou]
+max_concurrent_vms = 5
+enabled = true
+proxy_only = true
+bundle_archive_max_compressed_bytes = 10000
+bundle_archive_max_decoded_bytes = 40000
+bundle_archive_max_entries = 123
+bundle_archive_max_file_bytes = 20000
+bundle_archive_max_total_file_bytes = 30000
+start_grace_ms = 7500
+stop_grace_ms = 9500
+
+[submission]
+fee_payer = " authority "
+
+[egress]
+default_allow = true
+allowed_hosts = ["cdn.sora.test", " api.sora.test ", "cdn.sora.test"]
+rate_per_minute = 120
+max_bytes_per_minute = 262144
+
+[hf]
+hub_base_url = " https://mirror.hf.test/ "
+api_base_url = "https://mirror.hf.test/api/"
+inference_base_url = "https://router.hf.test/hf-inference/models/"
+request_timeout_ms = 21000
+local_execution_enabled = false
+local_runner_program = " python3.12 "
+local_runner_timeout_ms = 45000
+model_host_heartbeat_ttl_ms = 18000
+allow_inference_bridge_fallback = false
+import_max_files = 48
+import_max_file_bytes = 777777
+import_max_total_bytes = 9999999
+model_info_max_response_bytes = 1234567
+inference_max_response_bytes = 7654321
+import_file_allowlist = [" config.json ", "*.safetensors", "CONFIG.JSON"]
+
+[hf.inference_credential_provider]
+handle = "kms://soracloud/hf-inference-primary"
+revision = 7
+policy_digest_hex = "{}"
+"#,
+            "a7".repeat(32),
+        )));
+        let runtime = &actual.soracloud_runtime;
+        let inrou = &runtime.inrou;
+        let egress = &runtime.egress;
+        let hf = &runtime.hf;
         assert!(
-            actual
-                .soracloud_runtime
+            runtime
                 .state_dir
                 .to_string_lossy()
                 .ends_with("runtime/custom"),
             "resolved path should retain configured suffix: {}",
-            actual.soracloud_runtime.state_dir.display()
+            runtime.state_dir.display()
         );
-        assert_eq!(
-            actual.soracloud_runtime.reconcile_interval,
-            StdDuration::from_millis(2_500)
+        assert_all_eq!(
+            runtime.reconcile_interval => StdDuration::from_millis(2_500),
+            runtime.hydration_concurrency.get() => 7,
+            runtime.cache_budgets.bundle_bytes.get() => 1_024,
+            runtime.cache_budgets.model_weight_bytes.get() => 6_144,
+            inrou.max_concurrent_vms.get() => 5,
+            inrou.bundle_archive_max_compressed_bytes.get() => 10_000,
+            inrou.bundle_archive_max_decoded_bytes.get() => 40_000,
+            inrou.bundle_archive_max_entries.get() => 123,
+            inrou.bundle_archive_max_file_bytes.get() => 20_000,
+            inrou.bundle_archive_max_total_file_bytes.get() => 30_000,
+            inrou.start_grace => StdDuration::from_millis(7_500),
+            inrou.stop_grace => StdDuration::from_millis(9_500),
+            egress.allowed_hosts => vec!["api.sora.test".to_string(), "cdn.sora.test".to_string()],
+            egress.rate_per_minute.expect("rate cap").get() => 120,
+            egress.max_bytes_per_minute.expect("byte cap").get() => 262_144,
+            hf.hub_base_url => "https://mirror.hf.test",
+            hf.api_base_url => "https://mirror.hf.test/api",
+            hf.inference_base_url => "https://router.hf.test/hf-inference/models",
+            hf.request_timeout => StdDuration::from_millis(21_000),
+            hf.local_runner_program => "python3.12",
+            hf.local_runner_timeout => StdDuration::from_millis(45_000),
+            hf.model_host_heartbeat_ttl => StdDuration::from_millis(18_000),
+            hf.import_max_files => 48,
+            hf.import_max_file_bytes => 777_777,
+            hf.import_max_total_bytes => 9_999_999,
+            hf.model_info_max_response_bytes => 1_234_567,
+            hf.inference_max_response_bytes => 7_654_321,
+            hf.import_file_allowlist => vec!["*.safetensors".to_string(), "config.json".to_string()],
         );
-        assert_eq!(actual.soracloud_runtime.hydration_concurrency.get(), 7);
-        assert_eq!(
-            actual.soracloud_runtime.cache_budgets.bundle_bytes.get(),
-            1_024
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .cache_budgets
-                .model_weight_bytes
-                .get(),
-            6_144
-        );
-        assert_eq!(actual.soracloud_runtime.inrou.max_concurrent_vms.get(), 5);
-        assert!(actual.soracloud_runtime.inrou.enabled);
-        assert!(actual.soracloud_runtime.inrou.proxy_only);
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_compressed_bytes
-                .get(),
-            10_000
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_decoded_bytes
-                .get(),
-            40_000
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_entries
-                .get(),
-            123
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_file_bytes
-                .get(),
-            20_000
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_total_file_bytes
-                .get(),
-            30_000
-        );
+        assert!(inrou.enabled);
+        assert!(inrou.proxy_only);
         assert!(matches!(
-            actual.soracloud_runtime.submission.fee_payer,
+            &runtime.submission.fee_payer,
             actual::SoracloudRuntimeFeePayer::Authority
         ));
-        assert_eq!(
-            actual.soracloud_runtime.inrou.start_grace,
-            StdDuration::from_millis(7_500)
-        );
-        assert_eq!(
-            actual.soracloud_runtime.inrou.stop_grace,
-            StdDuration::from_millis(9_500)
-        );
-        assert!(actual.soracloud_runtime.egress.default_allow);
-        assert_eq!(
-            actual.soracloud_runtime.egress.allowed_hosts,
-            vec!["api.sora.test".to_string(), "cdn.sora.test".to_string()]
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .egress
-                .rate_per_minute
-                .expect("rate cap")
-                .get(),
-            120
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .egress
-                .max_bytes_per_minute
-                .expect("byte cap")
-                .get(),
-            262_144
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.hub_base_url,
-            "https://mirror.hf.test"
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.api_base_url,
-            "https://mirror.hf.test/api"
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.inference_base_url,
-            "https://router.hf.test/hf-inference/models"
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.request_timeout,
-            StdDuration::from_millis(21_000)
-        );
-        assert!(!actual.soracloud_runtime.hf.local_execution_enabled);
-        assert_eq!(
-            actual.soracloud_runtime.hf.local_runner_program,
-            "python3.12"
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.local_runner_timeout,
-            StdDuration::from_millis(45_000)
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.model_host_heartbeat_ttl,
-            StdDuration::from_millis(18_000)
-        );
-        assert!(!actual.soracloud_runtime.hf.allow_inference_bridge_fallback);
-        assert_eq!(actual.soracloud_runtime.hf.import_max_files, 48);
-        assert_eq!(actual.soracloud_runtime.hf.import_max_file_bytes, 777_777);
-        assert_eq!(
-            actual.soracloud_runtime.hf.import_max_total_bytes,
-            9_999_999
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.model_info_max_response_bytes,
-            1_234_567
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.inference_max_response_bytes,
-            7_654_321
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.import_file_allowlist,
-            vec!["*.safetensors".to_string(), "config.json".to_string()]
-        );
-        let credential_provider = actual
-            .soracloud_runtime
-            .hf
+        assert!(egress.default_allow);
+        assert!(!hf.local_execution_enabled);
+        assert!(!hf.allow_inference_bridge_fallback);
+        let credential_provider = hf
             .inference_credential_provider
             .as_ref()
             .expect("credential-provider binding");
-        assert_eq!(
-            credential_provider.handle,
-            "kms://soracloud/hf-inference-primary"
+        assert_all_eq!(
+            credential_provider.handle => "kms://soracloud/hf-inference-primary",
+            credential_provider.revision => 7,
+            credential_provider.policy_digest => [0xA7; 32],
         );
-        assert_eq!(credential_provider.revision, 7);
-        assert_eq!(credential_provider.policy_digest, [0xA7; 32]);
     }
     include!("user/runtime_tail_tests.rs");
 }

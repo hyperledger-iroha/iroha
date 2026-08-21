@@ -2049,8 +2049,13 @@ impl NativeTransactionIngressV1 {
         }
         let hash =
             HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(transaction_hash));
-        let Some(height) = self.state.committed_transaction_height(&hash) else {
-            return if self.queue.contains_pending_hash(hash, self.state.as_ref()) {
+        let entrypoint_hash =
+            iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone());
+        let Some(height) = self.state.committed_entrypoint_height(&entrypoint_hash) else {
+            return if self
+                .queue
+                .contains_pending_hash(entrypoint_hash, self.state.as_ref())
+            {
                 ProviderIngestTransactionObservationV1::Pending
             } else {
                 ProviderIngestTransactionObservationV1::Unknown

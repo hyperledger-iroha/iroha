@@ -62,32 +62,35 @@ fn certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier() {
         .expect("Validate completion validation follows its declaration");
     assert!(completion.contains("incumbent: DurableValidateBody"));
     let fetch_successor = production
-        .split("pub(super) struct PreparedCertifiedFetchStoreSuccessor<'a> {")
+        .split("pub(super) struct PreparedCertifiedFetchStoreSuccessor<'registry, 'adapter> {")
         .nth(1)
         .expect("Fetch-to-Store successor has one declaration")
-        .split("/// Borrow-bound registry conversion prepared")
+        .split("/// Closed recovered-WAL Fetch-to-Store registry/adapter successor.")
         .next()
         .expect("certified Fetch completion token follows its successor");
-    assert!(fetch_successor.contains("_replay_evidence: CertifiedStoreReplayEvidenceV1"));
+    assert!(fetch_successor.contains("replay_evidence: CertifiedStoreReplayEvidenceV1"));
+    assert!(fetch_successor.contains("PreparedCertifiedFetchStoreAdapterV1<'adapter>"));
     let validate_successor = production
-        .split("pub(super) struct PreparedDurableStoreValidateSuccessor<'a> {")
+        .split("pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {")
         .nth(1)
         .expect("Store-to-Validate successor has one declaration")
-        .split("/// Move-only Store-successor projection")
+        .split("/// Move-only Store projection sealed under its closed Fetch parent")
         .next()
         .expect("Fetch successor follows Validate successor");
-    assert!(validate_successor.contains("_replay_evidence: CertifiedValidateReplayEvidenceV1"));
+    assert!(validate_successor.contains("replay_evidence: CertifiedValidateReplayEvidenceV1"));
+    assert!(validate_successor.contains("PreparedDurableStoreValidateAdapterV1<'adapter>"));
     let fetch_projection = production
-        .split("pub(super) fn seal_store_successor(")
+        .split("pub(super) fn seal_store_successor<'adapter>(")
         .nth(1)
         .expect("Fetch-to-Store projection has one implementation")
         .split("impl<'a> PreparedDurableStoreExecution<'a>")
         .next()
         .expect("Store execution follows Fetch projection");
     assert!(fetch_projection.contains("completion.replay_evidence.project_store("));
-    assert!(fetch_projection.contains("_replay_evidence: replay_evidence"));
+    assert!(fetch_projection.contains("replay_evidence,"));
+    assert!(fetch_projection.contains("adapter,"));
     let validate_projection = production
-        .split("pub(super) fn seal_validate_successor(")
+        .split("pub(super) fn seal_validate_successor<'adapter>(")
         .nth(1)
         .expect("Store-to-Validate projection has one implementation")
         .split("// READY_DURABLE_VALIDATE_ADAPTER_JOIN_BEGIN")
@@ -95,7 +98,8 @@ fn certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier() {
         .expect("Ready Validate join follows Store projection");
     assert!(validate_projection.contains("store.replay_evidence.project_validate("));
     assert!(validate_projection.contains("&validate_pending"));
-    assert!(validate_projection.contains("_replay_evidence: replay_evidence"));
+    assert!(validate_projection.contains("replay_evidence,"));
+    assert!(validate_projection.contains("adapter,"));
     let detached = production
         .split("struct DetachedRecoveredValidateCompletion {")
         .nth(1)

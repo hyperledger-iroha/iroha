@@ -159,7 +159,6 @@ pub async fn handler_list_commitments(
 ) -> Result<JsonBody<DaCommitmentListResponse>, Error> {
     let snapshot = list_snapshot_for_state(app.state.as_ref());
     let nexus = app.state.nexus_snapshot();
-    crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_COMMITMENTS)?;
     let page = {
         let store = app.state.da_commitments();
         list_active_from_store(&store, &request, &nexus, snapshot)
@@ -184,7 +183,6 @@ pub async fn handler_prove_commitment(
     NoritoJson(request): NoritoJson<DaCommitmentProofRequest>,
 ) -> Result<JsonBody<Option<DaCommitmentProofResponse>>, Error> {
     let nexus = app.state.nexus_snapshot();
-    crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_COMMITMENTS_PROVE)?;
     let proof = build_active_proof_from_state(&request, &nexus, app.state.as_ref());
     proof.map_or_else(
         || Ok(JsonBody(None)),
@@ -201,8 +199,6 @@ pub async fn handler_verify_commitment(
     State(app): State<SharedAppState>,
     NoritoJson(proof): NoritoJson<DaCommitmentProof>,
 ) -> Result<JsonBody<DaCommitmentVerifyResponse>, Error> {
-    let nexus = app.state.nexus_snapshot();
-    crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_COMMITMENTS_VERIFY)?;
     let response = verify_against_kura_block(&proof, app.state.as_ref());
     Ok(JsonBody(response))
 }
@@ -211,7 +207,6 @@ pub async fn handler_list_proof_policies(
     State(app): State<SharedAppState>,
 ) -> Result<JsonBody<DaProofPolicyBundle>, Error> {
     let nexus = app.state.nexus_snapshot();
-    crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_PROOF_POLICIES)?;
     let policies = active_proof_policy_bundle_for_state(&nexus, app.state.as_ref());
     Ok(JsonBody(policies))
 }
@@ -220,7 +215,6 @@ pub async fn handler_proof_policy_bundle(
     State(app): State<SharedAppState>,
 ) -> Result<JsonBody<DaProofPolicyBundle>, Error> {
     let nexus = app.state.nexus_snapshot();
-    crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_PROOF_POLICY_SNAPSHOT)?;
     let bundle = active_proof_policy_bundle_for_state(&nexus, app.state.as_ref());
     Ok(JsonBody(bundle))
 }
@@ -542,15 +536,6 @@ mod tests {
             cursor: None,
         }
     }
-    fn enable_nexus(app: &mut crate::SharedAppState) {
-        let app = Arc::get_mut(app).expect("unique app state");
-        let state = Arc::get_mut(&mut app.state).expect("unique core state");
-        let mut nexus_cfg = state.nexus_snapshot();
-        nexus_cfg.enabled = true;
-        state
-            .set_nexus(nexus_cfg)
-            .expect("enable Nexus lane catalog for tests");
-    }
     fn install_stale_runtime_lane_geometry(app: &crate::SharedAppState, stale_lane: LaneId) {
         let authoritative_catalog =
             lane_catalog_with_entries(&[(LaneId::new(0), DaProofScheme::MerkleSha256)]);
@@ -559,7 +544,6 @@ mod tests {
             (stale_lane, DaProofScheme::MerkleSha256),
         ]);
         let mut nexus = app.state.nexus.write();
-        nexus.enabled = true;
         nexus.lane_catalog = authoritative_catalog;
         nexus.lane_config = ConfigLaneConfig::from_catalog(&stale_geometry_catalog);
         assert!(
@@ -592,7 +576,6 @@ mod tests {
         )
         .expect("future-created autoscale lane catalog");
         let mut nexus = app.state.nexus.write();
-        nexus.enabled = true;
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
         nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
@@ -601,7 +584,6 @@ mod tests {
     }
     fn app_with_da_commitment_bundle(records: Vec<DaCommitmentRecord>) -> crate::SharedAppState {
         let mut app = mk_app_state_for_tests();
-        enable_nexus(&mut app);
         let mut lane_entries = BTreeMap::from([(LaneId::new(0), DaProofScheme::MerkleSha256)]);
         lane_entries.extend(
             records
@@ -918,8 +900,7 @@ mod tests {
     }
     #[tokio::test]
     async fn list_handler_includes_policy_bundle() {
-        let mut app = mk_app_state_for_tests();
-        enable_nexus(&mut app);
+        let app = mk_app_state_for_tests();
         let request = DaCommitmentListRequest::default();
         let JsonBody(response) =
             super::handler_list_commitments(State(app.clone()), NoritoJson(request))
@@ -957,8 +938,7 @@ mod tests {
     }
     #[tokio::test]
     async fn proof_policy_handler_reports_lane_metadata() {
-        let mut app = mk_app_state_for_tests();
-        enable_nexus(&mut app);
+        let app = mk_app_state_for_tests();
         let JsonBody(bundle) = super::handler_list_proof_policies(State(app.clone()))
             .await
             .expect("handler should succeed");
@@ -977,8 +957,7 @@ mod tests {
     }
     #[tokio::test]
     async fn proof_policy_bundle_handler_exposes_hash() {
-        let mut app = mk_app_state_for_tests();
-        enable_nexus(&mut app);
+        let app = mk_app_state_for_tests();
         let JsonBody(bundle) = super::handler_proof_policy_bundle(State(app.clone()))
             .await
             .expect("handler should succeed");
@@ -1347,26 +1326,6 @@ mod tests {
             "a proof authenticated by the historical block policy must survive current lane removal: {verification:?}"
         );
         assert!(verification.error.is_none());
-    }
-    #[tokio::test]
-    async fn handlers_reject_when_nexus_disabled() {
-        let app = mk_app_state_for_tests();
-        let err = super::handler_list_commitments(
-            State(app),
-            NoritoJson(DaCommitmentListRequest::default()),
-        )
-        .await
-        .expect_err("DA endpoints should reject when Nexus is disabled");
-        match err {
-            Error::AppQueryValidation { code, message } => {
-                assert_eq!(code, "nexus_disabled");
-                assert!(
-                    message.contains("nexus.enabled=true"),
-                    "message should explain required flag: {message}"
-                );
-            }
-            other => panic!("unexpected error variant: {other:?}"),
-        }
     }
     #[tokio::test]
     async fn commitment_post_routes_reject_oversized_bodies() {

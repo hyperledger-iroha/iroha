@@ -1,6 +1,5 @@
 //! Schema metadata tests for floating-point primitives.
-mod common;
-use common::{assert_schema, entry};
+use crate::common::{assert_schema, entry};
 use iroha_schema::prelude::*;
 #[derive(IntoSchema)]
 #[allow(dead_code)]

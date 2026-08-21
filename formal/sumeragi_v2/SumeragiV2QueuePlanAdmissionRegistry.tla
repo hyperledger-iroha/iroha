@@ -5,10 +5,12 @@ EXTENDS Naturals, FiniteSets
 Bounded safety model for the global QueuePlan admission registry.
 
 One transaction-entrypoint key may be journaled and availability-certified
-under competing routing generations.  Certificates prove durable wire
-availability; they do not choose the canonical route.  Only the globally
-ordered compare-and-set chooses that route, and queue/autonomous execution is
-eligible only for the exact immutable binding selected by that compare-and-set.
+under competing routing generations.  An exact f+1 certificate becomes a
+public 202 only after that certificate is durable on the ingress node.  That
+acceptance does not claim that the binding is already present in canonical
+WSV.  A later proposal-native Sumeragi carrier applies the globally ordered
+compare-and-set, and queue/autonomous execution is eligible only for the exact
+immutable binding selected by that application.
 
 The model also keeps the admission tombstone after cancellation.  Cancellation
 stops execution but cannot make the key absent again, because absence would
@@ -46,6 +48,8 @@ VARIABLES
   \* @type: Set(Str);
   certificates,
   \* @type: Set(Str);
+  locallyDurableCertificates,
+  \* @type: Set(Str);
   canonicalBindings,
   \* @type: Set(Str);
   publicAccepted,
@@ -69,14 +73,16 @@ VARIABLES
   activeBinding
 
 vars ==
-  <<durableClaims, certificates, canonicalBindings, publicAccepted,
-    eligible, executedBinding, executionCount, registryTombstone,
-    everBound, cancelled, restarted, recreated, activeBinding>>
+  <<durableClaims, certificates, locallyDurableCertificates,
+    canonicalBindings, publicAccepted, eligible, executedBinding,
+    executionCount, registryTombstone, everBound, cancelled, restarted,
+    recreated, activeBinding>>
 
 Init ==
   /\ AdmissionConfiguration
   /\ durableClaims = {}
   /\ certificates = {}
+  /\ locallyDurableCertificates = {}
   /\ canonicalBindings = {}
   /\ publicAccepted = {}
   /\ eligible = {}
@@ -92,18 +98,29 @@ Init ==
 JournalClaim(binding) ==
   /\ binding \in Bindings
   /\ durableClaims' = durableClaims \union {binding}
-  /\ UNCHANGED <<certificates, canonicalBindings, publicAccepted, eligible,
-                 executedBinding, executionCount, registryTombstone,
-                 everBound, cancelled, restarted, recreated, activeBinding>>
+  /\ UNCHANGED <<certificates, locallyDurableCertificates,
+                 canonicalBindings, publicAccepted, eligible, executedBinding,
+                 executionCount, registryTombstone, everBound, cancelled,
+                 restarted, recreated, activeBinding>>
 
 CertifyAvailability(binding) ==
   /\ binding \in durableClaims
   /\ certificates' = certificates \union {binding}
-  /\ UNCHANGED <<durableClaims, canonicalBindings, publicAccepted, eligible,
-                 executedBinding, executionCount, registryTombstone,
-                 everBound, cancelled, restarted, recreated, activeBinding>>
+  /\ UNCHANGED <<durableClaims, locallyDurableCertificates,
+                 canonicalBindings, publicAccepted, eligible, executedBinding,
+                 executionCount, registryTombstone, everBound, cancelled,
+                 restarted, recreated, activeBinding>>
 
-CommitGlobalBinding(binding) ==
+PersistCertificateLocally(binding) ==
+  /\ binding \in certificates
+  /\ locallyDurableCertificates' =
+       locallyDurableCertificates \union {binding}
+  /\ UNCHANGED <<durableClaims, certificates, canonicalBindings,
+                 publicAccepted, eligible, executedBinding, executionCount,
+                 registryTombstone, everBound, cancelled, restarted,
+                 recreated, activeBinding>>
+
+ApplyProposalNativeBinding(binding) ==
   /\ binding \in certificates
   /\ \/ binding = activeBinding
      \/ Mode = "ConflictingCas"
@@ -114,32 +131,31 @@ CommitGlobalBinding(binding) ==
   /\ canonicalBindings' = canonicalBindings \union {binding}
   /\ registryTombstone' = TRUE
   /\ everBound' = TRUE
-  /\ UNCHANGED <<durableClaims, certificates, publicAccepted, eligible,
-                 executedBinding, executionCount, cancelled, restarted,
-                 recreated, activeBinding>>
+  /\ UNCHANGED <<durableClaims, certificates, locallyDurableCertificates,
+                 publicAccepted, eligible, executedBinding, executionCount,
+                 cancelled, restarted, recreated, activeBinding>>
 
 ReturnPublicAccepted(binding) ==
-  /\ binding \in certificates
+  /\ binding \in locallyDurableCertificates
   /\ binding = activeBinding
-  /\ IF Mode = "SplitRoutePublicAcceptance"
-     THEN TRUE
-     ELSE canonicalBindings = {binding}
+  /\ \/ publicAccepted = {}
+     \/ publicAccepted = {binding}
   /\ publicAccepted' = publicAccepted \union {binding}
-  /\ UNCHANGED <<durableClaims, certificates, canonicalBindings, eligible,
-                 executedBinding, executionCount, registryTombstone,
-                 everBound, cancelled, restarted, recreated, activeBinding>>
+  /\ UNCHANGED <<durableClaims, certificates, locallyDurableCertificates,
+                 canonicalBindings, eligible, executedBinding, executionCount,
+                 registryTombstone, everBound, cancelled, restarted,
+                 recreated, activeBinding>>
 
 ActivateExactQueueClaim(binding) ==
-  /\ binding \in publicAccepted
   /\ canonicalBindings = {binding}
   /\ binding = activeBinding
   /\ ~cancelled
   /\ executionCount = 0
   /\ eligible' = eligible \union {binding}
-  /\ UNCHANGED <<durableClaims, certificates, canonicalBindings,
-                 publicAccepted, executedBinding, executionCount,
-                 registryTombstone, everBound, cancelled, restarted,
-                 recreated, activeBinding>>
+  /\ UNCHANGED <<durableClaims, certificates, locallyDurableCertificates,
+                 canonicalBindings, publicAccepted, executedBinding,
+                 executionCount, registryTombstone, everBound, cancelled,
+                 restarted, recreated, activeBinding>>
 
 ExecuteEligible(binding) ==
   /\ binding \in eligible
@@ -151,18 +167,18 @@ ExecuteEligible(binding) ==
   /\ executedBinding' = binding
   /\ executionCount' = executionCount + 1
   /\ eligible' = eligible \ {binding}
-  /\ UNCHANGED <<durableClaims, certificates, canonicalBindings,
-                 publicAccepted, registryTombstone, everBound, cancelled,
-                 restarted, recreated, activeBinding>>
+  /\ UNCHANGED <<durableClaims, certificates, locallyDurableCertificates,
+                 canonicalBindings, publicAccepted, registryTombstone,
+                 everBound, cancelled, restarted, recreated, activeBinding>>
 
 Restart ==
   /\ ~restarted
   /\ restarted' = TRUE
   /\ eligible' = {}
-  /\ UNCHANGED <<durableClaims, certificates, canonicalBindings,
-                 publicAccepted, executedBinding, executionCount,
-                 registryTombstone, everBound, cancelled, recreated,
-                 activeBinding>>
+  /\ UNCHANGED <<durableClaims, certificates, locallyDurableCertificates,
+                 canonicalBindings, publicAccepted, executedBinding,
+                 executionCount, registryTombstone, everBound, cancelled,
+                 recreated, activeBinding>>
 
 ReconcileExactAfterRestart(binding) ==
   /\ restarted
@@ -172,19 +188,20 @@ ReconcileExactAfterRestart(binding) ==
   /\ ~cancelled
   /\ executionCount = 0
   /\ eligible' = eligible \union {binding}
-  /\ UNCHANGED <<durableClaims, certificates, canonicalBindings,
-                 publicAccepted, executedBinding, executionCount,
-                 registryTombstone, everBound, cancelled, restarted,
-                 recreated, activeBinding>>
+  /\ UNCHANGED <<durableClaims, certificates, locallyDurableCertificates,
+                 canonicalBindings, publicAccepted, executedBinding,
+                 executionCount, registryTombstone, everBound, cancelled,
+                 restarted, recreated, activeBinding>>
 
 RecreateLaneIncarnation ==
   /\ ~recreated
   /\ recreated' = TRUE
   /\ activeBinding' = BindingRecreated
   /\ eligible' = {}
-  /\ UNCHANGED <<durableClaims, certificates, canonicalBindings,
-                 publicAccepted, executedBinding, executionCount,
-                 registryTombstone, everBound, cancelled, restarted>>
+  /\ UNCHANGED <<durableClaims, certificates, locallyDurableCertificates,
+                 canonicalBindings, publicAccepted, executedBinding,
+                 executionCount, registryTombstone, everBound, cancelled,
+                 restarted>>
 
 CancelCanonicalBinding ==
   /\ canonicalBindings # {}
@@ -192,10 +209,10 @@ CancelCanonicalBinding ==
   /\ ~cancelled
   /\ cancelled' = TRUE
   /\ eligible' = {}
-  /\ UNCHANGED <<durableClaims, certificates, canonicalBindings,
-                 publicAccepted, executedBinding, executionCount,
-                 registryTombstone, everBound, restarted, recreated,
-                 activeBinding>>
+  /\ UNCHANGED <<durableClaims, certificates, locallyDurableCertificates,
+                 canonicalBindings, publicAccepted, executedBinding,
+                 executionCount, registryTombstone, everBound, restarted,
+                 recreated, activeBinding>>
 
 \* Negative controls.
 AcceptDeferredWithoutCertificateMutation ==
@@ -203,9 +220,10 @@ AcceptDeferredWithoutCertificateMutation ==
   /\ BindingA \notin publicAccepted
   /\ publicAccepted' = publicAccepted \union {BindingA}
   /\ eligible' = eligible \union {BindingA}
-  /\ UNCHANGED <<durableClaims, certificates, canonicalBindings,
-                 executedBinding, executionCount, registryTombstone,
-                 everBound, cancelled, restarted, recreated, activeBinding>>
+  /\ UNCHANGED <<durableClaims, certificates, locallyDurableCertificates,
+                 canonicalBindings, executedBinding, executionCount,
+                 registryTombstone, everBound, cancelled, restarted,
+                 recreated, activeBinding>>
 
 ActivateBeforeGlobalCasMutation ==
   /\ Mode = "ExecutionBeforeGlobalCas"
@@ -213,18 +231,20 @@ ActivateBeforeGlobalCasMutation ==
   /\ canonicalBindings = {}
   /\ publicAccepted' = publicAccepted \union {BindingA}
   /\ eligible' = eligible \union {BindingA}
-  /\ UNCHANGED <<durableClaims, certificates, canonicalBindings,
-                 executedBinding, executionCount, registryTombstone,
-                 everBound, cancelled, restarted, recreated, activeBinding>>
+  /\ UNCHANGED <<durableClaims, certificates, locallyDurableCertificates,
+                 canonicalBindings, executedBinding, executionCount,
+                 registryTombstone, everBound, cancelled, restarted,
+                 recreated, activeBinding>>
 
 AcceptCompetingRouteMutation ==
   /\ Mode = "SplitRoutePublicAcceptance"
-  /\ BindingA \in certificates
-  /\ BindingB \in certificates
+  /\ BindingA \in locallyDurableCertificates
+  /\ BindingB \in locallyDurableCertificates
   /\ publicAccepted' = publicAccepted \union {BindingA, BindingB}
-  /\ UNCHANGED <<durableClaims, certificates, canonicalBindings, eligible,
-                 executedBinding, executionCount, registryTombstone,
-                 everBound, cancelled, restarted, recreated, activeBinding>>
+  /\ UNCHANGED <<durableClaims, certificates, locallyDurableCertificates,
+                 canonicalBindings, eligible, executedBinding, executionCount,
+                 registryTombstone, everBound, cancelled, restarted,
+                 recreated, activeBinding>>
 
 ReplayStaleIncarnationMutation ==
   /\ Mode = "RestartAba"
@@ -232,10 +252,10 @@ ReplayStaleIncarnationMutation ==
   /\ recreated
   /\ BindingA \in certificates
   /\ eligible' = eligible \union {BindingA}
-  /\ UNCHANGED <<durableClaims, certificates, canonicalBindings,
-                 publicAccepted, executedBinding, executionCount,
-                 registryTombstone, everBound, cancelled, restarted,
-                 recreated, activeBinding>>
+  /\ UNCHANGED <<durableClaims, certificates, locallyDurableCertificates,
+                 canonicalBindings, publicAccepted, executedBinding,
+                 executionCount, registryTombstone, everBound, cancelled,
+                 restarted, recreated, activeBinding>>
 
 ClearTombstoneOnLocalExpiryMutation ==
   /\ Mode = "LocalExpiryClearsTombstone"
@@ -243,19 +263,19 @@ ClearTombstoneOnLocalExpiryMutation ==
   /\ registryTombstone
   /\ canonicalBindings' = {}
   /\ registryTombstone' = FALSE
-  /\ UNCHANGED <<durableClaims, certificates, publicAccepted, eligible,
-                 executedBinding, executionCount, everBound, cancelled,
-                 restarted, recreated, activeBinding>>
+  /\ UNCHANGED <<durableClaims, certificates, locallyDurableCertificates,
+                 publicAccepted, eligible, executedBinding, executionCount,
+                 everBound, cancelled, restarted, recreated, activeBinding>>
 
 ActivateCancelledMutation ==
   /\ Mode = "CancellationBypass"
   /\ cancelled
   /\ canonicalBindings = {BindingA}
   /\ eligible' = eligible \union {BindingA}
-  /\ UNCHANGED <<durableClaims, certificates, canonicalBindings,
-                 publicAccepted, executedBinding, executionCount,
-                 registryTombstone, everBound, cancelled, restarted,
-                 recreated, activeBinding>>
+  /\ UNCHANGED <<durableClaims, certificates, locallyDurableCertificates,
+                 canonicalBindings, publicAccepted, executedBinding,
+                 executionCount, registryTombstone, everBound, cancelled,
+                 restarted, recreated, activeBinding>>
 
 GuardDropDeletesDurableOwnerMutation ==
   /\ Mode = "GuardDropDeletesDurableOwner"
@@ -263,9 +283,10 @@ GuardDropDeletesDurableOwnerMutation ==
   /\ BindingA \in certificates
   /\ canonicalBindings = {BindingA}
   /\ durableClaims' = durableClaims \ {BindingA}
-  /\ UNCHANGED <<certificates, canonicalBindings, publicAccepted, eligible,
-                 executedBinding, executionCount, registryTombstone,
-                 everBound, cancelled, restarted, recreated, activeBinding>>
+  /\ UNCHANGED <<certificates, locallyDurableCertificates,
+                 canonicalBindings, publicAccepted, eligible, executedBinding,
+                 executionCount, registryTombstone, everBound, cancelled,
+                 restarted, recreated, activeBinding>>
 
 ExecuteDuplicateMutation ==
   /\ Mode = "DuplicateExecution"
@@ -274,14 +295,16 @@ ExecuteDuplicateMutation ==
   /\ ~cancelled
   /\ executedBinding' = executedBinding
   /\ executionCount' = executionCount + 1
-  /\ UNCHANGED <<durableClaims, certificates, canonicalBindings,
-                 publicAccepted, eligible, registryTombstone, everBound,
-                 cancelled, restarted, recreated, activeBinding>>
+  /\ UNCHANGED <<durableClaims, certificates, locallyDurableCertificates,
+                 canonicalBindings, publicAccepted, eligible,
+                 registryTombstone, everBound, cancelled, restarted,
+                 recreated, activeBinding>>
 
 Next ==
   \/ \E binding \in Bindings: JournalClaim(binding)
   \/ \E binding \in Bindings: CertifyAvailability(binding)
-  \/ \E binding \in Bindings: CommitGlobalBinding(binding)
+  \/ \E binding \in Bindings: PersistCertificateLocally(binding)
+  \/ \E binding \in Bindings: ApplyProposalNativeBinding(binding)
   \/ \E binding \in Bindings: ReturnPublicAccepted(binding)
   \/ \E binding \in Bindings: ActivateExactQueueClaim(binding)
   \/ \E binding \in Bindings: ExecuteEligible(binding)
@@ -302,6 +325,7 @@ QueuePlanAdmissionTypeInvariant ==
   /\ AdmissionConfiguration
   /\ durableClaims \subseteq Bindings
   /\ certificates \subseteq Bindings
+  /\ locallyDurableCertificates \subseteq Bindings
   /\ canonicalBindings \subseteq Bindings
   /\ publicAccepted \subseteq Bindings
   /\ eligible \subseteq Bindings
@@ -319,11 +343,12 @@ MLAdmissionCasUnique ==
 
 MLCertificateDurable ==
   /\ certificates \subseteq durableClaims
+  /\ locallyDurableCertificates \subseteq certificates
   /\ canonicalBindings \subseteq certificates
 
 MLPublic202Exact ==
-  \A binding \in publicAccepted:
-    canonicalBindings = {binding}
+  /\ publicAccepted \subseteq locallyDurableCertificates
+  /\ Cardinality(publicAccepted) <= 1
 
 MLExecutionRequiresExactBinding ==
   executedBinding # "None" =>
@@ -356,8 +381,9 @@ QueuePlanAdmissionRegistrySafetyInvariant ==
   /\ MLCancellationStopsExecution
 
 \* The executable source-binding ledger maps this obligation to the shared
-\* QueuePlan certificate verifier, MergeLedger CAS staging, queue selection
-\* fence, startup reconciliation, and immutable marker helpers.
+\* QueuePlan certificate verifier, ingress-local durable persistence,
+\* proposal-native CAS staging, queue selection fence, startup reconciliation,
+\* and immutable marker helpers.
 QueuePlanAdmissionRegistryProductionRefinementObligation ==
   QueuePlanAdmissionRegistrySafetyInvariant
 

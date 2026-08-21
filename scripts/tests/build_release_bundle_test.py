@@ -22,7 +22,7 @@ def _write_executable(path: Path, payload: str) -> Path:
     return path
 
 
-def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, str]:
+def _fixture(tmp_path: Path) -> tuple[Path, Path, str]:
     binaries = tmp_path / "binaries"
     binaries.mkdir()
     for name in (
@@ -42,9 +42,6 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, str]:
                 binaries / f"{name}.exe",
                 f"#!/bin/sh\nprintf '%s\\n' {name}.exe\n",
             )
-    config = tmp_path / "config"
-    config.mkdir()
-    (config / "config.toml").write_text("chain = \"test\"\n", encoding="utf-8")
     zstd = _write_executable(
         tmp_path / "zstd",
         "#!/usr/bin/env python3\n"
@@ -52,13 +49,12 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, str]:
         "shutil.copyfileobj(sys.stdin.buffer, sys.stdout.buffer)\n",
     )
     digest = hashlib.sha256(zstd.read_bytes()).hexdigest()
-    return binaries, config, zstd, digest
+    return binaries, zstd, digest
 
 
 def _run(
     output: Path,
     binaries: Path,
-    config: Path,
     zstd: Path,
     digest: str,
     *,
@@ -76,8 +72,6 @@ def _run(
         text=True,
     ).strip()
     option_pairs = [
-        ("--profile", "iroha2"),
-        ("--config", str(config)),
         ("--target", target),
         ("--source-commit", commit),
         ("--source-date-epoch", environment["SOURCE_DATE_EPOCH"]),
@@ -109,12 +103,11 @@ def test_bundle_requires_reviewed_release_identity_before_outputs(
     tmp_path: Path,
     missing_option: str,
 ) -> None:
-    binaries, config, zstd, digest = _fixture(tmp_path)
+    binaries, zstd, digest = _fixture(tmp_path)
     output = tmp_path / "out"
     result = _run(
         output,
         binaries,
-        config,
         zstd,
         digest,
         omit_options={missing_option},
@@ -127,22 +120,22 @@ def test_bundle_requires_reviewed_release_identity_before_outputs(
 def _outputs(
     root: Path, *, os_tag: str = "linux", arch: str = "x86_64"
 ) -> dict[str, Path]:
-    stem = f"iroha2-{VERSION}-{os_tag}-{arch}.tar.zst"
+    stem = f"iroha3-{VERSION}-{os_tag}-{arch}.tar.zst"
     return {
         "archive": root / stem,
         "checksum": root / f"{stem}.sha256",
-        "manifest": root / f"iroha2-{VERSION}-{os_tag}-{arch}-manifest.json",
+        "manifest": root / f"iroha3-{VERSION}-{os_tag}-{arch}-manifest.json",
     }
 
 
 def test_bundle_replay_is_byte_identical_and_metadata_normalized(
     tmp_path: Path,
 ) -> None:
-    binaries, config, zstd, digest = _fixture(tmp_path)
+    binaries, zstd, digest = _fixture(tmp_path)
     first_root = tmp_path / "first"
     second_root = tmp_path / "second"
-    first = _run(first_root, binaries, config, zstd, digest)
-    second = _run(second_root, binaries, config, zstd, digest)
+    first = _run(first_root, binaries, zstd, digest)
+    second = _run(second_root, binaries, zstd, digest)
     assert first.returncode == second.returncode == 0, first.stderr + second.stderr
     for key, first_path in _outputs(first_root).items():
         assert first_path.read_bytes() == _outputs(second_root)[key].read_bytes()
@@ -157,7 +150,7 @@ def test_bundle_replay_is_byte_identical_and_metadata_normalized(
         assert all(member.uid == member.gid == 0 for member in members)
         assert all(member.uname == member.gname == "" for member in members)
         assert all(member.mode in {0o644, 0o755} for member in members)
-        bundle_root = f"iroha2-{VERSION}-linux-x86_64"
+        bundle_root = f"iroha3-{VERSION}-linux-x86_64"
         expected_binaries = {
             f"{bundle_root}/bin/{name}"
             for name in (
@@ -189,6 +182,8 @@ def test_bundle_replay_is_byte_identical_and_metadata_normalized(
             "sorafs-external-software-signer@.service"
         ) in names
     manifest = json.loads(outputs["manifest"].read_text(encoding="utf-8"))
+    assert manifest["profile"] == "iroha3"
+    assert manifest["config"] == "nexus"
     assert manifest["commit"] and len(manifest["commit"]) == 40
     assert manifest["source_date_epoch"] == EPOCH
     assert manifest["built_at"] == "2009-02-13T23:31:30Z"
@@ -205,12 +200,11 @@ def test_bundle_replay_is_byte_identical_and_metadata_normalized(
 
 
 def test_bundle_macos_closes_launchd_inventory(tmp_path: Path) -> None:
-    binaries, config, zstd, digest = _fixture(tmp_path)
+    binaries, zstd, digest = _fixture(tmp_path)
     output = tmp_path / "out"
     result = _run(
         output,
         binaries,
-        config,
         zstd,
         digest,
         target="aarch64-apple-darwin",
@@ -219,7 +213,7 @@ def test_bundle_macos_closes_launchd_inventory(tmp_path: Path) -> None:
     archive_path = _outputs(output, os_tag="mac", arch="aarch64")["archive"]
     with tarfile.open(archive_path, "r:") as archive:
         names = {member.name for member in archive.getmembers()}
-    root = f"iroha2-{VERSION}-mac-aarch64"
+    root = f"iroha3-{VERSION}-mac-aarch64"
     for role in (
         "proof-outcome",
         "repair",
@@ -240,12 +234,11 @@ def test_bundle_macos_closes_launchd_inventory(tmp_path: Path) -> None:
 
 
 def test_bundle_windows_excludes_signer_and_never_smokes_it(tmp_path: Path) -> None:
-    binaries, config, zstd, digest = _fixture(tmp_path)
+    binaries, zstd, digest = _fixture(tmp_path)
     output = tmp_path / "out"
     result = _run(
         output,
         binaries,
-        config,
         zstd,
         digest,
         target="x86_64-pc-windows-msvc",
@@ -254,7 +247,7 @@ def test_bundle_windows_excludes_signer_and_never_smokes_it(tmp_path: Path) -> N
     outputs = _outputs(output, os_tag="win")
     with tarfile.open(outputs["archive"], "r:") as archive:
         names = {member.name for member in archive.getmembers()}
-    root = f"iroha2-{VERSION}-win-x86_64"
+    root = f"iroha3-{VERSION}-win-x86_64"
     assert f"{root}/WINDOWS-UNSUPPORTED-EXTERNAL-SOFTWARE-SIGNER.md" in names
     assert not any("sorafs_external_software_signer" in name for name in names)
     assert not any("runtime-provider-broker-v1" in name for name in names)
@@ -264,12 +257,12 @@ def test_bundle_windows_excludes_signer_and_never_smokes_it(tmp_path: Path) -> N
 
 
 def test_bundle_refuses_stale_output_without_replacement(tmp_path: Path) -> None:
-    binaries, config, zstd, digest = _fixture(tmp_path)
+    binaries, zstd, digest = _fixture(tmp_path)
     output = tmp_path / "out"
     output.mkdir()
     archive = _outputs(output)["archive"]
     archive.write_bytes(b"preserve")
-    result = _run(output, binaries, config, zstd, digest)
+    result = _run(output, binaries, zstd, digest)
     assert result.returncode != 0
     assert "refusing stale reuse" in result.stderr
     assert archive.read_bytes() == b"preserve"
@@ -278,9 +271,9 @@ def test_bundle_refuses_stale_output_without_replacement(tmp_path: Path) -> None
 def test_bundle_rejects_untrusted_compressor_and_scrubs_archive(
     tmp_path: Path,
 ) -> None:
-    binaries, config, zstd, _ = _fixture(tmp_path)
+    binaries, zstd, _ = _fixture(tmp_path)
     output = tmp_path / "out"
-    result = _run(output, binaries, config, zstd, "0" * 64)
+    result = _run(output, binaries, zstd, "0" * 64)
     assert result.returncode != 0
     assert "zstd executable SHA256 is not trusted" in result.stderr
     assert not _outputs(output)["archive"].exists()
@@ -289,7 +282,7 @@ def test_bundle_rejects_untrusted_compressor_and_scrubs_archive(
 def test_bundle_rejects_compressor_path_replacement_during_launch(
     tmp_path: Path,
 ) -> None:
-    binaries, config, zstd, _ = _fixture(tmp_path)
+    binaries, zstd, _ = _fixture(tmp_path)
     zstd.write_text(
         "#!/usr/bin/env python3\n"
         "import os, pathlib, shutil, sys\n"
@@ -309,7 +302,6 @@ def test_bundle_rejects_compressor_path_replacement_during_launch(
     result = _run(
         output,
         binaries,
-        config,
         zstd,
         digest,
         env={"MUTATE_ZSTD_SOURCE": str(zstd)},
@@ -320,30 +312,20 @@ def test_bundle_rejects_compressor_path_replacement_during_launch(
 
 
 def test_bundle_rejects_hardlinked_prebuilt_binary(tmp_path: Path) -> None:
-    binaries, config, zstd, digest = _fixture(tmp_path)
+    binaries, zstd, digest = _fixture(tmp_path)
     os.link(binaries / "iroha", tmp_path / "binary-hardlink")
-    result = _run(tmp_path / "out", binaries, config, zstd, digest)
+    result = _run(tmp_path / "out", binaries, zstd, digest)
     assert result.returncode != 0
     assert "exactly one hard link" in result.stderr
     assert not _outputs(tmp_path / "out")["archive"].exists()
 
 
-def test_bundle_rejects_symlinked_config_tree(tmp_path: Path) -> None:
-    binaries, config, zstd, digest = _fixture(tmp_path)
-    (config / "linked.toml").symlink_to(config / "config.toml")
-    result = _run(tmp_path / "out", binaries, config, zstd, digest)
-    assert result.returncode != 0
-    assert "must not be a symlink" in result.stderr
-    assert not _outputs(tmp_path / "out")["archive"].exists()
-
-
 @pytest.mark.parametrize("epoch", ("", "-1", "+1", "01", "4294967296"))
 def test_bundle_rejects_invalid_epoch(tmp_path: Path, epoch: str) -> None:
-    binaries, config, zstd, digest = _fixture(tmp_path)
+    binaries, zstd, digest = _fixture(tmp_path)
     result = _run(
         tmp_path / "out",
         binaries,
-        config,
         zstd,
         digest,
         env={"SOURCE_DATE_EPOCH": epoch},

@@ -13,7 +13,6 @@
   "error.submit_transaction": "𒄷𒋾𒌋 𒁺 𒅁𒋾𒂊",
   "error.submit_transaction_debug": "𒄷𒋾𒌋 𒁺: {transaction}",
   "label.hash": "𒆥:",
-  "info.build_line": "𒅁𒋾𒂊 𒅗𒂵: {build_line}",
   "help.heading.usage": "𒊑𒁕:",
   "help.heading.commands": "𒌝:",
   "help.heading.options": "𒉌𒋼:",

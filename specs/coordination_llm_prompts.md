@@ -33,7 +33,7 @@ finish the implementation?
 ````markdown
 We are documenting configuration/operator guidance and need input.
 
-**Topic**: [e.g., release artifact selection between Iroha 2 and 3]
+**Topic**: [e.g., Iroha 3 release artifact target selection]
 **Current draft**: [link or summary of doc/code]
 
 Questions:

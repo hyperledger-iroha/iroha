@@ -12,7 +12,10 @@ use iroha_data_model::{
     nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroU32,
+};
 /// Deterministic record for a confidential-compute commitment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfidentialComputeReceipt {
@@ -31,9 +34,9 @@ pub struct ConfidentialComputeReceipt {
     /// Policy mechanism used for the lane.
     pub mechanism: ConfidentialComputeMechanism,
     /// Policy key/share version expected for the lane.
-    pub key_version: u32,
+    pub key_version: NonZeroU32,
     /// Audience labels allowed to fetch the payload.
-    pub allowed_audiences: Vec<String>,
+    pub allowed_audiences: BTreeSet<String>,
 }
 /// Receipt paired with its location in the block.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,8 +147,8 @@ mod tests {
     fn policy(version: u32) -> ConfidentialComputePolicy {
         ConfidentialComputePolicy::new(
             ConfidentialComputeMechanism::Encryption,
-            version,
-            vec!["ops".to_string()],
+            NonZeroU32::new(version).expect("non-zero policy version"),
+            BTreeSet::from(["ops".to_string()]),
         )
     }
     fn record(lane: u32, epoch: u64, sequence: u64) -> DaCommitmentRecord {
@@ -194,7 +197,7 @@ mod tests {
         let fetched = store
             .get_by_lane_epoch_sequence(0, 1, 2)
             .expect("receipt present");
-        assert_eq!(fetched.receipt.key_version, 1);
+        assert_eq!(fetched.receipt.key_version.get(), 1);
         assert_eq!(fetched.location.block_height, 5);
     }
     #[test]

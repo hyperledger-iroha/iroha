@@ -877,6 +877,95 @@ fn all_sign_broadcast_continuations_roundtrip_with_canonical_wire_shapes() {
             Some(DurableContinuation::successor(edge, 2))
         );
     }
+
+    let round = wire::ConsensusRound {
+        context_id: wire::HeightContextId(iroha_crypto::HashOf::from_untyped_unchecked(
+            Hash::prehashed(*context().id().as_bytes()),
+        )),
+        height: context().height(),
+        view: 3,
+    };
+    let exact_timeout_pair = |signer, signature| {
+        let unsigned = wire::TimeoutVote {
+            round,
+            highest_prepare_qc: None,
+            signer,
+            signature: Vec::new(),
+        };
+        let mut signed = unsigned.clone();
+        signed.signature = vec![signature];
+        super::super::replay_authority::exact_timeout_sign_broadcast_fixture(
+            context(), unsigned, signed,
+        )
+    };
+    let [parent_case, _] = exact_timeout_pair(0, 0x71);
+    let [_, child_case] = exact_timeout_pair(1, 0x72);
+    let edge = DurableContinuationEdge::SignTimeoutToBroadcast;
+    assert!(durable_continuation_successor_is_exact(
+        edge,
+        parent_case.work_class,
+        parent_case.key,
+        parent_case.stage,
+        child_case.work_class,
+        child_case.key,
+        child_case.stage,
+    ));
+    assert_eq!(
+        signed_broadcast_continuation_is_exact(
+            edge,
+            &parent_case.authority,
+            parent_case.payload,
+            &child_case.authority,
+            child_case.payload,
+        ),
+        Some(false),
+    );
+    let parent = RecoveredLifecycleRecord::new(
+        parent_case.key,
+        owner(1),
+        1,
+        parent_case.work_class,
+        parent_case.stage,
+        Some(TerminalOutcome::Advanced),
+        digest(9),
+        parent_case.payload,
+        parent_case.authority,
+        DurableContinuation::successor(edge, 2),
+        BTreeSet::new(),
+    );
+    let child = RecoveredLifecycleRecord::new(
+        child_case.key,
+        owner(1),
+        2,
+        child_case.work_class,
+        child_case.stage,
+        None,
+        digest(9),
+        child_case.payload,
+        child_case.authority,
+        DurableContinuation::None,
+        BTreeSet::new(),
+    );
+    assert!(parent.replay_authority_is_exact(context()));
+    assert!(child.replay_authority_is_exact(context()));
+    let mut coordinator = LifecycleCoordinator::new(
+        context(),
+        2,
+        super::super::CapacityGeometry::new(
+            super::super::CapacityClass::ALL.map(|class| (class, 8)),
+        ),
+    );
+    coordinator.reconcile_restart(RecoverySnapshot::new(
+        context(),
+        2,
+        vec![parent, child],
+        BTreeMap::new(),
+    ));
+    assert_eq!(
+        coordinator.fault(),
+        Some(super::super::CoordinatorFault::RecoveryRejected)
+    );
+    assert!(coordinator.records.is_empty());
 }
 #[test]
 fn committed_proposal_broadcast_and_next_sign_pair_is_frame_bound() {
@@ -1368,10 +1457,43 @@ fn malformed_owner_and_producer_debt_are_rejected() {
 }
 #[test]
 fn completed_and_cancelled_atomic_pairs_are_valid_without_debt() {
-    let (mut serve, producer) = serve_pair();
-    serve.terminal = None;
-    serve.payload_reference =
-        LifecyclePayloadReferenceV1::certified_serve_pending(digest(2), digest(21), digest(22));
+    let pending = super::super::replay_authority::exact_record_fixture(
+        context(),
+        LifecycleStageKind::CertifiedServe,
+        2,
+    )
+    .payload;
+    let DurablePayloadReference::CertifiedServePending {
+        request,
+        certificate,
+    } = pending
+    else {
+        unreachable!("canonical Serve fixture has pending durable material")
+    };
+    let serve = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+        key(2, LifecyclePhase::Serve),
+        owner(1),
+        1,
+        LifecycleWorkClass::CertifiedServe,
+        stage(LifecycleStageKind::CertifiedServe),
+        None,
+        digest(20),
+        pending,
+        DurableContinuation::None,
+    )
+    .expect("live Serve row retains exact pending replay authority");
+    let producer = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+        key(2, LifecyclePhase::ProducerTurn),
+        owner(1),
+        2,
+        LifecycleWorkClass::ProducerTurn,
+        stage(LifecycleStageKind::ProducerTurn),
+        None,
+        digest(20),
+        DurablePayloadReference::None,
+        DurableContinuation::None,
+    )
+    .expect("live ProducerTurn row retains exact replay authority");
     LifecycleLedgerV1::new(
         context(),
         2,
@@ -1379,19 +1501,50 @@ fn completed_and_cancelled_atomic_pairs_are_valid_without_debt() {
         BTreeMap::from([(1, 2)]),
     )
     .expect("live atomic pair");
-    let (serve, mut producer) = serve_pair();
-    producer.terminal = Some(PersistedTerminalV1::from_schema(TerminalOutcome::Advanced));
+    let (serve, _) = serve_pair();
+    let producer = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+        key(2, LifecyclePhase::ProducerTurn),
+        owner(1),
+        2,
+        LifecycleWorkClass::ProducerTurn,
+        stage(LifecycleStageKind::ProducerTurn),
+        Some(TerminalOutcome::Advanced),
+        digest(20),
+        DurablePayloadReference::None,
+        DurableContinuation::None,
+    )
+    .expect("completed ProducerTurn row retains exact replay authority");
     LifecycleLedgerV1::new(context(), 2, vec![serve, producer], BTreeMap::new())
         .expect("completed atomic pair");
-    let (mut serve, mut producer) = serve_pair();
-    serve.terminal = Some(PersistedTerminalV1::from_schema(TerminalOutcome::Cancelled));
-    serve.payload_reference = LifecyclePayloadReferenceV1::certified_serve_negative(
-        digest(2),
-        digest(21),
-        digest(22),
-        DurableServeNegativeOutcome::Cancelled,
-    );
-    producer.terminal = Some(PersistedTerminalV1::from_schema(TerminalOutcome::Cancelled));
+    let cancelled_payload = DurablePayloadReference::CertifiedServeNegative {
+        request,
+        certificate,
+        outcome: DurableServeNegativeOutcome::Cancelled,
+    };
+    let serve = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+        key(2, LifecyclePhase::Serve),
+        owner(1),
+        1,
+        LifecycleWorkClass::CertifiedServe,
+        stage(LifecycleStageKind::CertifiedServe),
+        Some(TerminalOutcome::Cancelled),
+        digest(20),
+        cancelled_payload,
+        DurableContinuation::None,
+    )
+    .expect("cancelled Serve row retains exact negative replay authority");
+    let producer = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+        key(2, LifecyclePhase::ProducerTurn),
+        owner(1),
+        2,
+        LifecycleWorkClass::ProducerTurn,
+        stage(LifecycleStageKind::ProducerTurn),
+        Some(TerminalOutcome::Cancelled),
+        digest(20),
+        DurablePayloadReference::None,
+        DurableContinuation::None,
+    )
+    .expect("cancelled ProducerTurn row retains exact replay authority");
     LifecycleLedgerV1::new(context(), 2, vec![serve, producer], BTreeMap::new())
         .expect("cancelled atomic pair");
 }

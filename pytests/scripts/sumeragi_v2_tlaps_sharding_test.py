@@ -188,7 +188,7 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
     ):
         assert providers[theorem] == boundary_continuation
     for theorem in (
-        "AsyncServeProducerEpisodeTransitionPreservesTypeInvariant",
+        "AsyncServeProducerTurnTransitionPreservesTypeInvariant",
         "AsyncStrongTypeProjectsControlServiceStateType",
         "FreshReplayCandidateIsDisjointFromScheduled",
         "ReplayingOrdinaryStepPreservesRecoveryCorridor",
@@ -362,7 +362,7 @@ def test_global_mechanical_body_reconstruction_is_exact() -> None:
         checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256
     )
     assert checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 == (
-        "51b47a637adee8933d5980cd9c2335d4dbe56e5c7ff6753d7f6b7b77d47fbb54"
+        "dfedf4d3bef27c9c98991a8c38ad9bace40dd5617326bb4c2d266114f3b5f8ea"
     )
 
 

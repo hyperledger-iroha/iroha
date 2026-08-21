@@ -447,10 +447,11 @@ object NativeAmxV2 {
         ).hashCode()
     }
 
-    /** Participant proposal without a proposer-local recovery payload hint. */
+    /** Participant proposal whose required control-only recovery-hint field is null. */
     class ParticipantProposal internal constructor(
         val descriptor: ParticipantDescriptor,
         val proposalHash: ConsensusHash,
+        val payloadBlockHint: Nothing?,
     ) {
         override fun equals(other: Any?): Boolean =
             other is ParticipantProposal &&
@@ -1087,12 +1088,15 @@ object NativeAmxV2 {
 
     private fun parseProposal(value: Any?, path: String): ParticipantProposal {
         val record = exactObject(value, PROPOSAL_FIELDS, path)
+        require(record["payload_block_hint"] == null) {
+            "$path.payload_block_hint must be null"
+        }
         val descriptor = parseDescriptor(record["descriptor"], "$path.descriptor")
         val proposalHash = hash(record["proposal_hash"], "$path.proposal_hash")
         require(proposalHash == computeProposalHash(descriptor)) {
             "$path.proposal_hash does not match the canonical proposal preimage"
         }
-        return ParticipantProposal(descriptor, proposalHash)
+        return ParticipantProposal(descriptor, proposalHash, null)
     }
 
     private fun parseDescriptor(value: Any?, path: String): ParticipantDescriptor {
@@ -1856,7 +1860,7 @@ object NativeAmxV2 {
     )
     private val ROUND_FIELDS = setOf("context_id", "height", "view")
     private val PHASE_FIELDS = setOf("phase", "detail")
-    private val PROPOSAL_FIELDS = setOf("descriptor", "proposal_hash")
+    private val PROPOSAL_FIELDS = setOf("descriptor", "proposal_hash", "payload_block_hint")
     private val DESCRIPTOR_REQUIRED_FIELDS = setOf(
         "lane_id",
         "dataspace_id",

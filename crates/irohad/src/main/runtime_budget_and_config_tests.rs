@@ -52,7 +52,6 @@ fn explicit_budget_does_not_downgrade_structural_path_failures() -> eyre::Result
     symlink(&real_root, &linked_root)?;
     let (mut config, _dir, _config_path) = parse_config_with_overrides(|table, _genesis_key| {
         iroha_config::base::toml::Writer::new(table)
-            .write(["nexus", "enabled"], true)
             .write(["nexus", "storage", "local_budget_bytes"], 2_000_i64);
     })?;
     config.kura.store_dir = WithOrigin::inline(linked_root);
@@ -108,7 +107,6 @@ fn managed_root_measurement_rejects_descendant_links_and_identity_drift() -> eyr
 fn operator_explicit_budget_shortfall_accounts_for_managed_bytes() -> eyre::Result<()> {
     let (mut config, _dir, _config_path) = parse_config_with_overrides(|table, _genesis_key| {
         iroha_config::base::toml::Writer::new(table)
-            .write(["nexus", "enabled"], true)
             .write(["nexus", "storage", "local_budget_bytes"], 2_000_i64);
     })?;
     config.apply_storage_budget();

@@ -39,8 +39,7 @@ fn autonomous_payload_overlaps_group_transaction_identity(
 ) -> bool {
     payload.reservation_keys.iter().any(|candidate| {
         group.ordered_keys.iter().any(|expected| {
-            candidate.signed_transaction_hash == expected.signed_transaction_hash
-                || candidate.entrypoint_hash == expected.entrypoint_hash
+            candidate.entrypoint_hash == expected.entrypoint_hash
         })
     })
 }

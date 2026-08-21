@@ -604,7 +604,7 @@ public final class NativeAmxV2Models {
     }
   }
 
-  /** Participant proposal without proposer-local recovery hints. */
+  /** Participant proposal whose required control-only recovery-hint field is null. */
   public static final class ParticipantProposal {
     private final NativeAmxV2.ParticipantProposal delegate;
 
@@ -618,6 +618,11 @@ public final class NativeAmxV2Models {
 
     public ConsensusHash proposalHash() {
       return new ConsensusHash(delegate.getProposalHash());
+    }
+
+    /** Returns the required, uninhabited control-only payload hint (`null`). */
+    public Void payloadBlockHint() {
+      return delegate.getPayloadBlockHint();
     }
 
     @Override

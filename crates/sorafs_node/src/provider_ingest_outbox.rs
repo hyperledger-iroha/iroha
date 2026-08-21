@@ -7272,7 +7272,7 @@ mod tests {
     fn policy_bounds_worst_case_checkpoint_capacity() {
         let defaults = ProviderIngestOutboxPolicyV1::default();
         assert_eq!(defaults.max_active_entries, 128);
-        assert_eq!(defaults.checkpoint_max_bytes, 160 * 1024 * 1024);
+        assert_eq!(defaults.checkpoint_max_bytes, 192 * 1024 * 1024);
         assert_eq!(defaults.checkpoint_operation_timeout_ms, 30_000);
         defaults.validate().expect("default capacity fits");
         let mut invalid_checkpoint_deadline = policy();

@@ -711,13 +711,6 @@ impl OutstandingCertifiedBodyRequests {
     pub(crate) fn response_claim_count(&self) -> usize {
         self.response_claims.len()
     }
-    /// Exact response occurrence currently owning one request family.
-    pub(crate) fn response_claim_hash(
-        &self,
-        request_hash: HashOf<wire::CertifiedBodyRequest>,
-    ) -> Option<HashOf<wire::CertifiedBodyResponse>> {
-        self.response_claims.get(&request_hash).copied()
-    }
     /// Validate one registration without changing either bounded index.
     pub(crate) fn plan_registration(
         &self,
@@ -903,22 +896,6 @@ impl OutstandingCertifiedBodyRequests {
             response_hash,
             preflight,
         })
-    }
-    /// Claim the one physical response occurrence for a fully authenticated
-    /// outstanding request.
-    ///
-    /// The caller must first perform [`Self::authenticate_response`] and its
-    /// local pending-fetch lookup. Exact retransmission coalesces. A different
-    /// responder or body cannot replace the acquired occurrence while the
-    /// request remains outstanding. Reconstructing this tracker after restart
-    /// deliberately restores requests but no volatile claims.
-    pub(crate) fn claim_authenticated_response(
-        &mut self,
-        authenticated: &AuthenticatedCertifiedBodyResponse,
-    ) -> Result<CertifiedBodyResponseClaimDisposition, V2TransportError> {
-        Ok(self
-            .prepare_authenticated_response_claim(authenticated)?
-            .commit())
     }
 }
 /// Bounded exact-request tracker for CommitQC discovery.
@@ -1580,8 +1557,9 @@ mod tests {
         assert_eq!(admitted.response(), &valid);
         assert_eq!(
             tracker
-                .claim_authenticated_response(&admitted)
-                .expect("first authenticated response acquires its request slot"),
+                .prepare_authenticated_response_claim(&admitted)
+                .expect("first authenticated response prepares its request slot")
+                .commit(),
             CertifiedBodyResponseClaimDisposition::Acquired
         );
         assert!(tracker.contains(request_hash));
@@ -1590,8 +1568,9 @@ mod tests {
             .expect("authentication remains retryable before executor completion");
         assert_eq!(
             tracker
-                .claim_authenticated_response(&duplicate)
-                .expect("exact response retry coalesces"),
+                .prepare_authenticated_response_claim(&duplicate)
+                .expect("exact response retry prepares")
+                .commit(),
             CertifiedBodyResponseClaimDisposition::Coalesced
         );
         let competing = fixture.signed_response(&request, 1);
@@ -1603,7 +1582,7 @@ mod tests {
             )
             .expect("second certified responder authenticates before claim arbitration");
         assert!(matches!(
-            tracker.claim_authenticated_response(&competing),
+            tracker.prepare_authenticated_response_claim(&competing),
             Err(V2TransportError::ConflictingCertifiedBodyResponseClaim {
                 request,
                 ..
@@ -1732,7 +1711,7 @@ mod tests {
             .commit();
         assert_eq!(disposition, CertifiedBodyResponseClaimDisposition::Acquired);
         assert_eq!(
-            tracker.response_claim_hash(request_hash),
+            tracker.response_claims.get(&request_hash).copied(),
             Some(response_hash)
         );
         let retransmission = tracker
@@ -1748,7 +1727,7 @@ mod tests {
         );
         assert_eq!(tracker.response_claim_count(), 1);
         assert_eq!(
-            tracker.response_claim_hash(request_hash),
+            tracker.response_claims.get(&request_hash).copied(),
             Some(response_hash)
         );
         let identity = RequestIdentity::from(tracker.requests[&request_hash].request());
@@ -1785,8 +1764,9 @@ mod tests {
             .expect("authenticate first response");
         assert_eq!(
             first
-                .claim_authenticated_response(&first_authenticated)
-                .expect("acquire first response occurrence"),
+                .prepare_authenticated_response_claim(&first_authenticated)
+                .expect("prepare first response occurrence")
+                .commit(),
             CertifiedBodyResponseClaimDisposition::Acquired
         );
         assert_eq!(first.len(), 1);
@@ -1801,7 +1781,7 @@ mod tests {
             )
             .expect("authenticate competing response");
         assert!(matches!(
-            first.claim_authenticated_response(&competing_authenticated),
+            first.prepare_authenticated_response_claim(&competing_authenticated),
             Err(V2TransportError::ConflictingCertifiedBodyResponseClaim {
                 request,
                 ..
@@ -1821,14 +1801,15 @@ mod tests {
             .expect("authenticate response after restart");
         assert_eq!(
             restarted
-                .claim_authenticated_response(&after_restart)
-                .expect("response can reclaim the shared request slot after restart"),
+                .prepare_authenticated_response_claim(&after_restart)
+                .expect("response can prepare the shared request slot after restart")
+                .commit(),
             CertifiedBodyResponseClaimDisposition::Acquired
         );
         assert!(restarted.complete(request_hash));
         assert!(restarted.response_claims.is_empty());
         assert!(matches!(
-            restarted.claim_authenticated_response(&after_restart),
+            restarted.prepare_authenticated_response_claim(&after_restart),
             Err(V2TransportError::UnsolicitedResponse(hash)) if hash == request_hash
         ));
     }

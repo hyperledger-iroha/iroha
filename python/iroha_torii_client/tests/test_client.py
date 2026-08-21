@@ -640,6 +640,7 @@ def _native_amx_receipt_payload(source_index: int = 0) -> Dict[str, Any]:
                         "descriptor_hash": _canonical_hash(0x73),
                     },
                     "proposal_hash": participant_proposal_hash,
+                    "payload_block_hint": None,
                 },
                 "participant_settlement": {
                     "block_height": 8,
@@ -808,7 +809,6 @@ def _sample_sorafs_orderbook_payloads() -> Dict[str, Any]:
     }
     submission_receipt = {
         "payload": {
-            "tx_hash": _canonical_hash(0x71),
             "entrypoint_hash": _canonical_hash(0x72),
             "signed_transaction_hash": _canonical_hash(0x73),
             "submitted_at_ms": 1_700_000_200_000,
@@ -933,11 +933,9 @@ def test_sorafs_orderbook_read_helpers_build_paths_and_normalize_payloads() -> N
         "limit": 25,
     }
     assert session.calls[0]["headers"]["X-Trace"] == "book"
-
     trades = client.list_sorafs_orderbook_trades()
     assert trades["trades"]["trades"][0]["trade_id"] == fixed(0x22)
     assert session.calls[1]["url"].endswith("/v1/sorafs/orderbook/trades")
-
     channels = client.list_sorafs_orderbook_channels()
     assert channels["channels"]["channels"][0]["provider_id"] == fixed(0x55)
     assert channels["channels"]["channels"][0]["status"] == {
@@ -945,11 +943,9 @@ def test_sorafs_orderbook_read_helpers_build_paths_and_normalize_payloads() -> N
         "value": None,
     }
     assert session.calls[2]["url"].endswith("/v1/sorafs/orderbook/channels")
-
     receipts = client.list_sorafs_orderbook_receipts()
     assert receipts["receipts"]["receipts"][0]["receipt_id"] == fixed(0x44)
     assert session.calls[3]["url"].endswith("/v1/sorafs/orderbook/receipts")
-
     events = client.list_sorafs_orderbook_events(
         expected_finalized_height=42,
         expected_finalized_block_hash_hex=anchor_hex,
@@ -2075,9 +2071,7 @@ def test_list_peers_returns_typed_records() -> None:
         session=session,
         operator_signing_context=_operator_context(),
     )
-
     peers = client.list_peers()
-
     assert len(peers) == 2
     assert peers[0].address == "127.0.0.1:1337"
     assert peers[0].public_key_hex == "ed01"
@@ -2253,7 +2247,6 @@ def test_fee_sponsor_program_lookup_rejects_substituted_response_id() -> None:
             f"{CANONICAL_OWNER}/retail",
             canonical_auth=auth,
         )
-
 
 
 def test_call_contract_posts_selector_payload_and_parses_response() -> None:
@@ -3107,7 +3100,6 @@ def test_list_telemetry_peers_info_parses_payload() -> None:
         )
     )
     client = ToriiClient("http://node.test", session=session)
-
     peers = client.list_telemetry_peers_info()
 
     assert len(peers) == 1
@@ -3444,7 +3436,6 @@ def test_get_node_capabilities_parses_snapshot() -> None:
     assert capabilities.crypto.sm.acceleration.neon_sm3 is True
     assert capabilities.crypto.curves.registry_version == 2
     assert capabilities.crypto.curves.allowed_curve_bitmap == [32770]
-
 
 
 def test_contract_helpers_against_mock_server() -> None:
@@ -4074,6 +4065,7 @@ def test_get_sumeragi_diagnostics_parses_exact_nested_fee_and_native_amx_receipt
         leg["participant_proposal"]["proposal_hash"]
         == leg["prepare_qc"]["body"]["participant_proposal_hash"]
     )
+    assert leg["participant_proposal"]["payload_block_hint"] is None
     assert (
         leg["participant_settlement_hash"]
         == leg["commit_qc"]["body"]["participant_settlement_commitment"]
@@ -4614,8 +4606,14 @@ def test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tamper
     def mismatch_proposal_hash(leg: Dict[str, Any]) -> None:
         leg["participant_proposal"]["proposal_hash"] = _canonical_hash(0x75)
 
-    def add_payload_hint(leg: Dict[str, Any]) -> None:
-        leg["participant_proposal"]["payload_block_hint"] = None
+    def missing_payload_hint(leg: Dict[str, Any]) -> None:
+        del leg["participant_proposal"]["payload_block_hint"]
+
+    def nonnull_payload_hint(leg: Dict[str, Any]) -> None:
+        leg["participant_proposal"]["payload_block_hint"] = {}
+
+    def extra_proposal_field(leg: Dict[str, Any]) -> None:
+        leg["participant_proposal"]["future_proposal_field"] = None
 
     def missing_descriptor_field(leg: Dict[str, Any]) -> None:
         del leg["participant_proposal"]["descriptor"]["subject_hash"]
@@ -4693,7 +4691,9 @@ def test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tamper
         wrong_body_type,
         mismatch_commit_identity,
         mismatch_proposal_hash,
-        add_payload_hint,
+        missing_payload_hint,
+        nonnull_payload_hint,
+        extra_proposal_field,
         missing_descriptor_field,
         extra_descriptor_field,
         missing_predecessor,
@@ -5101,7 +5101,6 @@ def test_mock_server_rejects_retired_global_sumeragi_routes(method: str, path: s
         assert response.status_code == 404
     finally:
         server.stop()
-
 
 
 def test_get_runtime_abi_active_parses_payload() -> None:
@@ -5538,7 +5537,36 @@ def test_update_configuration_posts_payload() -> None:
     assert json.loads(session.calls[0]["data"]) == {"logger": {"level": "Info", "filter": "net=debug"}}
 
 
-def test_get_sumeragi_qc_parses_snapshot() -> None:
+def test_get_sumeragi_qc_parses_authoritative_v2_references() -> None:
+    highest = copy.deepcopy(_sumeragi_v2_status_payload()["last_commit_qc"]["certificate"])
+    highest["phase"] = {"phase": "prepare", "details": None}
+    locked = copy.deepcopy(highest)
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "highest_prepare_qc": highest,
+                "locked_prepare_qc": locked,
+            }
+        )
+    )
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
+
+    snapshot = client.get_sumeragi_qc()
+
+    assert snapshot.highest_prepare_qc is not None
+    assert snapshot.highest_prepare_qc.round.height == 9
+    assert snapshot.highest_prepare_qc.phase == "prepare"
+    assert snapshot.locked_prepare_qc is not None
+    assert snapshot.locked_prepare_qc.subject.block_hash == _canonical_hash(0x32)
+    assert session.calls[0]["url"].endswith("/v1/sumeragi/qc")
+
+
+def test_get_sumeragi_qc_rejects_pre_release_snapshot_shape() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
@@ -5554,11 +5582,21 @@ def test_get_sumeragi_qc_parses_snapshot() -> None:
         operator_signing_context=_operator_context(),
     )
 
-    snapshot = client.get_sumeragi_qc()
+    with pytest.raises(RuntimeError, match="unknown field highest_qc"):
+        client.get_sumeragi_qc()
 
-    assert snapshot.highest_qc.height == 10
-    assert snapshot.locked_qc.subject_block_hash is None
-    assert session.calls[0]["url"].endswith("/v1/sumeragi/qc")
+
+def test_get_sumeragi_qc_requires_both_nullable_slots() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload={"highest_prepare_qc": None}))
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
+
+    with pytest.raises(RuntimeError, match=r"locked_prepare_qc is required"):
+        client.get_sumeragi_qc()
 
 
 def test_get_status_snapshot_parses_payload_and_computes_metrics() -> None:
@@ -5835,43 +5873,6 @@ def test_get_sumeragi_pacemaker_parses_snapshot() -> None:
     assert pacemaker.backoff_ms == 50
     assert pacemaker.view_timeout_remaining_ms == 12
     assert session.calls[0]["url"].endswith("/v1/sumeragi/pacemaker")
-
-
-def test_get_sumeragi_phases_parses_snapshot() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "propose_ms": 1,
-                "collect_da_ms": 2,
-                "collect_prevote_ms": 3,
-                "collect_precommit_ms": 4,
-                "collect_aggregator_ms": 5,
-                "commit_ms": 8,
-                "pipeline_total_ms": 9,
-                "collect_aggregator_gossip_total": 10,
-                "block_created_dropped_by_lock_total": 11,
-                "block_created_hint_mismatch_total": 12,
-                "block_created_proposal_mismatch_total": 13,
-                "ema_ms": {
-                    "propose_ms": 14,
-                    "collect_da_ms": 15,
-                    "collect_prevote_ms": 16,
-                    "collect_precommit_ms": 17,
-                    "collect_aggregator_ms": 18,
-                    "commit_ms": 21,
-                    "pipeline_total_ms": 22,
-                },
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    phases = client.get_sumeragi_phases()
-
-    assert phases.collect_aggregator_ms == 5
-    assert phases.ema_ms.commit_ms == 21
-    assert session.calls[0]["url"].endswith("/v1/sumeragi/phases")
 
 
 def test_get_sumeragi_leader_parses_prf() -> None:
@@ -7431,9 +7432,7 @@ def test_offline_applied_status_rejects_zero_finality_fields() -> None:
             }
             result[field] = 0
             if kind == "top_up":
-                anchor = _offline_top_up_anchor(
-                    finalized_height=result["finalized_block_height"]
-                )
+                anchor = _offline_top_up_anchor(finalized_height=result["finalized_block_height"])
                 result["anchor"] = anchor
                 result["finality_proof"] = _offline_top_up_finality_proof(
                     anchor,
@@ -7473,9 +7472,7 @@ def test_offline_error_codes_use_the_global_finite_grammar() -> None:
         session = RecordingSession()
         session.queue(
             StubResponse(
-                payload=_offline_rejected_status(
-                    {"code": code, "message": "invalid code"}
-                )
+                payload=_offline_rejected_status({"code": code, "message": "invalid code"})
             )
         )
         with pytest.raises(RuntimeError):
@@ -7519,6 +7516,7 @@ def test_offline_error_details_are_closed_and_typed() -> None:
                         "actual": "replayed",
                         "profile": "minamoto",
                         "chain_discriminant": 753,
+                        "entrypoint_hash": _canonical_hash(0x21),
                         "tx_hash": OFFLINE_TRANSACTION_HASH,
                         "last_status": "queued",
                         "hint": "retry later",
@@ -7555,6 +7553,8 @@ def test_offline_error_details_are_closed_and_typed() -> None:
     assert details.reject_code == "QUEUE_FULL"
     assert details.retry_after_seconds == 3
     assert details.chain_discriminant == 753
+    assert details.entrypoint_hash == _canonical_hash(0x21)
+    assert details.tx_hash == OFFLINE_TRANSACTION_HASH
     assert details.queue is not None
     assert details.queue.queued == 5
     assert details.queue.saturated is True
@@ -7590,6 +7590,7 @@ def test_offline_error_details_reject_malformed_nested_types_and_ranges() -> Non
         },
         {"retry_after_seconds": -1},
         {"chain_discriminant": 65_536},
+        {"entrypoint_hash": 7},
         {"axt": {"lane": 1 << 32}},
         {"axt": {"snapshot_version": "1"}},
         {"axt": []},

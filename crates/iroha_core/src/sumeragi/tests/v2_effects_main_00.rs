@@ -94,7 +94,6 @@ struct FakeRuntime {
     locked_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     fail_enqueue: bool,
     fail_enqueue_hits: usize,
-    certified_fence_escape_credit: bool,
     panic_step: bool,
     scheduler_ownership_ready: bool,
     omit_scheduler_ownership: bool,
@@ -140,6 +139,8 @@ struct BodyOwnershipProjection {
     durable_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
     validated_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
     rejected_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
+    retired_rejected_bodies:
+        BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
     runtime_completions: Vec<RuntimeCompletion>,
     runtime_bound_validations: Vec<(wire::PayloadManifest, ValidatedBodyReceipt)>,
     runtime_body_reservation: Option<BodyAvailableReservation>,
@@ -164,6 +165,7 @@ impl V2EffectExecutor<FakeRuntime> {
             durable_bodies: self.durable_bodies.clone(),
             validated_bodies: self.validated_bodies.clone(),
             rejected_bodies: self.rejected_bodies.clone(),
+            retired_rejected_bodies: self.retired_rejected_bodies.clone(),
             runtime_completions: self.runtime.completions.clone(),
             runtime_bound_validations: self.runtime.bound_validations.clone(),
             runtime_body_reservation: self.runtime.reserved_body_available.clone(),
@@ -938,9 +940,6 @@ impl EffectRuntime for FakeRuntime {
         let Some(incumbent) = self.terminal_body_candidate_owners.get(&identity) else {
             return Ok(None);
         };
-        if incumbent.owner() != ownership.owner() {
-            return Err("fake runtime terminal query rejected exact owner replacement".to_owned());
-        }
         incumbent
             .adopt_incumbent_body_stage_for_retry_or_authority(ownership, effect)
             .map(Some)
@@ -999,9 +998,6 @@ impl EffectRuntime for FakeRuntime {
                 .saturating_add(usize::from(self.reserved_body_available.is_some())),
         )
     }
-    fn has_certified_fence_escape_credit(&self) -> bool {
-        self.certified_fence_escape_credit
-    }
     fn queue_snapshot(&self, _now: Instant) -> RuntimeQueueSnapshot {
         let empty = RuntimeQueueLaneSnapshot {
             depth: 0,
@@ -1039,7 +1035,6 @@ struct FakeServices {
     fetch_tasks: Vec<BodyFetchTask>,
     cancelled_fetches: Vec<EffectWorkId>,
     completed_reconstruction_fetches: Vec<EffectWorkId>,
-    completed_certified_fetches: Vec<EffectWorkId>,
     chunks: Vec<EffectWorkId>,
     reject_authenticated_chunks: bool,
     store_tasks: Vec<BodyStoreTask>,
@@ -1062,12 +1057,10 @@ struct FakeServices {
     closed: Vec<String>,
     fail_on: Option<&'static str>,
     fail_on_call: Option<(&'static str, usize)>,
-    retry_certified_fetch_once: bool,
     operation_calls: BTreeMap<&'static str, usize>,
     validation_error: Option<String>,
     leader_wire_terminals: Vec<LeaderWireRuntimeTerminal>,
-    decision_serve_reconciliation_pending: bool,
-    durable_serve_decision: Option<wire::BlockSubject>,
+    durable_runtime_decision: Option<wire::BlockSubject>,
 }
 impl FakeServices {
     fn check(&mut self, operation: &'static str) -> Result<(), String> {
@@ -1121,36 +1114,21 @@ impl FakeServices {
 }
 impl V2EffectServices for FakeServices {
     type Error = String;
-    fn begin_decision_serve_reconciliation(&mut self) -> Result<(), Self::Error> {
-        self.check("begin-decision-serve-reconciliation")?;
-        if self.decision_serve_reconciliation_pending {
-            return Err("Decision/Serve reconciliation fence is already active".to_owned());
-        }
-        self.decision_serve_reconciliation_pending = true;
-        Ok(())
-    }
-    fn finish_decision_serve_reconciliation(
+    fn finish_runtime_step_reconciliation(
         &mut self,
         decided_subject: Option<wire::BlockSubject>,
     ) -> Result<(), Self::Error> {
-        self.check("finish-decision-serve-reconciliation")?;
-        if !self.decision_serve_reconciliation_pending {
-            return Err("Decision/Serve reconciliation fence is not active".to_owned());
-        }
-        match (self.durable_serve_decision, decided_subject) {
+        self.check("finish-runtime-step-reconciliation")?;
+        match (self.durable_runtime_decision, decided_subject) {
             (Some(retained), Some(observed)) if retained != observed => {
-                return Err("one height published two durable Serve Decision subjects".to_owned());
+                return Err("one height published two durable Decision subjects".to_owned());
             }
             (Some(_), None) => {
-                return Err(
-                    "runtime lost its durable Decision while clearing the Serve admission fence"
-                        .to_owned(),
-                );
+                return Err("runtime lost its durable Decision after a WAL step".to_owned());
             }
-            (None, Some(observed)) => self.durable_serve_decision = Some(observed),
+            (None, Some(observed)) => self.durable_runtime_decision = Some(observed),
             (Some(_), Some(_)) | (None, None) => {}
         }
-        self.decision_serve_reconciliation_pending = false;
         Ok(())
     }
     fn complete_leader_wire_runtime_terminal(
@@ -1258,18 +1236,6 @@ impl V2EffectServices for FakeServices {
         self.check("complete-reconstruction-fetch")?;
         self.completed_reconstruction_fetches.push(task.id());
         Ok(())
-    }
-    fn complete_certified_body_fetch(
-        &mut self,
-        task: &BodyFetchTask,
-    ) -> Result<CertifiedBodyFetchCompletionDisposition, Self::Error> {
-        if self.retry_certified_fetch_once {
-            self.retry_certified_fetch_once = false;
-            return Ok(CertifiedBodyFetchCompletionDisposition::Retryable);
-        }
-        self.check("complete-certified-fetch")?;
-        self.completed_certified_fetches.push(task.id());
-        Ok(CertifiedBodyFetchCompletionDisposition::Completed)
     }
     fn accept_authenticated_chunk(
         &mut self,
@@ -1502,7 +1468,7 @@ struct ProductionTransportFixture {
     manifest: wire::PayloadManifest,
     canonical_commitment: wire::ExecutionCommitment,
     conflicting_commitment: wire::ExecutionCommitment,
-    lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+    _lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
     executor: V2EffectExecutor,
 }
 impl ProductionTransportFixture {
@@ -1650,7 +1616,7 @@ impl ProductionTransportFixture {
             manifest,
             canonical_commitment,
             conflicting_commitment,
-            lifecycle_ordinals,
+            _lifecycle_ordinals: lifecycle_ordinals,
             executor,
         }
     }

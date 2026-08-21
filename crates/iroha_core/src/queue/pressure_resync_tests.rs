@@ -1,32 +1,26 @@
 // Queue pressure, resynchronization, and requeue regression tests.
 #[test]
-fn lane_limits_respect_metadata_overrides() {
+fn lane_limits_respect_typed_overrides() {
     let fallback = LaneSchedulingLimits::new(6_000, 120);
     let mut lane = LaneConfig {
         id: LaneId::new(3),
         alias: "custom".to_string(),
-        metadata: BTreeMap::from([
-            ("scheduler.teu_capacity".to_string(), "8192".to_string()),
-            (
-                "scheduler.starvation_bound_slots".to_string(),
-                "42".to_string(),
-            ),
-        ]),
+        scheduler: Some(LaneSchedulerPolicy::new(
+            Some(NonZeroU64::new(8_192).expect("positive TEU capacity")),
+            Some(NonZeroU64::new(42).expect("positive starvation bound")),
+        )),
         ..LaneConfig::default()
     };
-    let limits = QueueLimits::lane_limits_from_metadata(&lane, fallback);
+    let limits = QueueLimits::lane_limits_from_policy(&lane, fallback);
     assert_eq!(limits.teu_capacity, 8_192);
     assert_eq!(limits.starvation_bound_slots, 42);
-    lane.metadata.insert(
-        "scheduler.teu_capacity".to_string(),
-        "not-a-number".to_string(),
-    );
-    lane.metadata.insert(
-        "scheduler.starvation_bound_slots".to_string(),
-        "NaN".to_string(),
-    );
-    let limits = QueueLimits::lane_limits_from_metadata(&lane, fallback);
-    assert_eq!(limits, fallback);
+    lane.scheduler = Some(LaneSchedulerPolicy::new(
+        None,
+        Some(NonZeroU64::new(11).expect("positive starvation bound")),
+    ));
+    let limits = QueueLimits::lane_limits_from_policy(&lane, fallback);
+    assert_eq!(limits.teu_capacity, fallback.teu_capacity);
+    assert_eq!(limits.starvation_bound_slots, 11);
 }
 #[tokio::test]
 async fn overweight_tx_not_starved_by_lane_teu_limit() {
@@ -213,7 +207,7 @@ async fn queue_pressure_counters_track_committed_removal_before_hash_drain() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let first = accepted_tx_by_someone(&time_source);
-    let first_hash = first.as_ref().hash();
+    let first_hash = first.as_ref().hash_as_entrypoint();
     queue
         .push(first, state.view())
         .expect("first push succeeds");
@@ -246,7 +240,7 @@ async fn queue_pressure_counters_restore_age_after_enqueue_compaction_retry() {
         &time_source,
     ));
     let first = accepted_tx_by_someone(&time_source);
-    let first_hash = first.as_ref().hash();
+    let first_hash = first.as_ref().hash_as_entrypoint();
     queue
         .push(first, state.view())
         .expect("first push succeeds");
@@ -255,7 +249,7 @@ async fn queue_pressure_counters_restore_age_after_enqueue_compaction_retry() {
     assert_eq!(queue.queued_len(), 0);
     queue.assert_pressure_counters_consistent_for_tests();
     let second = accepted_tx_by_someone(&time_source);
-    let second_hash = second.as_ref().hash();
+    let second_hash = second.as_ref().hash_as_entrypoint();
     queue
         .push(second, state.view())
         .expect("second push compacts stale hash and succeeds");
@@ -317,7 +311,7 @@ async fn resync_rebuilds_hash_queue_when_empty() {
     let mut admitted_hashes = Vec::new();
     for _ in 0..3 {
         let tx = accepted_tx_by_someone(&time_source);
-        admitted_hashes.push(tx.as_ref().hash());
+        admitted_hashes.push(tx.as_ref().hash_as_entrypoint());
         queue.push(tx, state.view()).expect("push succeeds");
     }
     while queue.tx_hashes.pop().is_some() {}
@@ -329,7 +323,7 @@ async fn resync_rebuilds_hash_queue_when_empty() {
     assert_eq!(
         guards
             .iter()
-            .map(|guard| guard.as_ref().hash())
+            .map(|guard| guard.as_ref().hash_as_entrypoint())
             .collect::<Vec<_>>(),
         admitted_hashes[..2],
         "empty-index recovery must preserve admitted FIFO order"
@@ -353,10 +347,10 @@ fn resync_fails_closed_without_a_complete_unique_durable_fifo_index() {
     for corrupt in ["missing", "duplicate"] {
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let first = accepted_tx_by_someone(&time_source);
-        let first_hash = first.as_ref().hash();
+        let first_hash = first.as_ref().hash_as_entrypoint();
         queue.push(first, state.view()).expect("push first");
         let second = accepted_tx_by_someone(&time_source);
-        let second_hash = second.as_ref().hash();
+        let second_hash = second.as_ref().hash_as_entrypoint();
         queue.push(second, state.view()).expect("push second");
         match corrupt {
             "missing" => {
@@ -472,7 +466,7 @@ async fn transaction_guard_clone_accepted_returns_owned_transaction() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let tx = accepted_tx_by_someone(&time_source);
-    let expected_hash = tx.as_ref().hash();
+    let expected_hash = tx.as_ref().hash_as_entrypoint();
     queue
         .push(tx, state.view())
         .expect("Failed to push tx into queue");
@@ -481,13 +475,13 @@ async fn transaction_guard_clone_accepted_returns_owned_transaction() {
         .pop_from_queue(&state.view(), &mut expired)
         .expect("Expected guard from queue");
     assert!(expired.is_empty());
-    let guard_hash = guard.as_ref().hash();
+    let guard_hash = guard.as_ref().hash_as_entrypoint();
     assert_eq!(guard_hash, expected_hash);
     let cloned = guard.clone_accepted();
-    assert_eq!(cloned.as_ref().hash(), guard_hash);
+    assert_eq!(cloned.as_ref().hash_as_entrypoint(), guard_hash);
     drop(guard);
     assert_eq!(queue.queued_len(), 0);
-    assert_eq!(cloned.as_ref().hash(), guard_hash);
+    assert_eq!(cloned.as_ref().hash_as_entrypoint(), guard_hash);
 }
 #[tokio::test]
 async fn push_tx_already_in_blockchain() {
@@ -510,7 +504,7 @@ async fn push_tx_already_in_blockchain() {
         .expect("block height should fit into usize");
     state_block
         .transactions
-        .insert_block_with_single_tx(tx.as_ref().hash(), block_height);
+        .insert_block_with_single_tx(tx.as_ref().hash_as_entrypoint(), block_height);
     state_block.commit().unwrap();
     let queue = Queue::test(config_factory(), &time_source);
     assert!(matches!(
@@ -531,7 +525,7 @@ async fn push_requeued_with_routing_plan_accepts_pending_transaction() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let tx = accepted_tx_by_someone(&time_source);
-    let hash = tx.as_ref().hash();
+    let hash = tx.as_ref().hash_as_entrypoint();
     let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     queue
         .push_requeued_with_routing_plan(tx, RoutingPlan::single(routing), &state)
@@ -539,9 +533,9 @@ async fn push_requeued_with_routing_plan_accepts_pending_transaction() {
     assert_eq!(queue.txs.len(), 1);
     assert_eq!(
         queue
-            .routing_decisions
+            .routing_plans
             .get(&hash)
-            .map(|entry| *entry.value()),
+            .map(|entry| entry.value().coordinator_route()),
         Some(routing)
     );
     assert!(
@@ -555,7 +549,7 @@ async fn push_requeued_with_routing_plan_accepts_pending_transaction() {
         .pop_from_queue(&state.view(), &mut expired)
         .expect("queued tx should be available");
     assert!(expired.is_empty());
-    assert_eq!(guard.as_ref().hash(), hash);
+    assert_eq!(guard.as_ref().hash_as_entrypoint(), hash);
     assert_eq!(guard.routing(), routing);
     drop(guard);
 }
@@ -569,7 +563,7 @@ fn push_requeued_with_routing_plan_rejects_native_amx_participant_drift() {
     );
     assert_ne!(fixture.stale_plan.digest(), fixture.current_plan.digest());
     let queue = Queue::test(config_factory(), &time_source);
-    let hash = fixture.tx.hash();
+    let hash = fixture.tx.hash_as_entrypoint();
     let err = queue
         .push_requeued_with_routing_plan(fixture.tx.clone(), fixture.stale_plan, &fixture.state)
         .expect_err("requeue must reject stale Native AMX participant legs");
@@ -597,7 +591,6 @@ fn push_requeued_with_routing_plan_rejects_native_amx_participant_drift() {
         fixture.current_plan
     );
     assert!(!queue.txs.contains_key(&hash));
-    assert!(queue.routing_decisions.get(&hash).is_none());
     assert!(queue.routing_plans.get(&hash).is_none());
     assert_eq!(queue.active_len(), 0);
     assert_eq!(queue.queued_len(), 0);
@@ -627,7 +620,7 @@ async fn push_requeued_with_routing_plan_rejects_committed_transaction() {
         .expect("block height should fit into usize");
     state_block
         .transactions
-        .insert_block_with_single_tx(tx.as_ref().hash(), block_height);
+        .insert_block_with_single_tx(tx.as_ref().hash_as_entrypoint(), block_height);
     state_block.commit().unwrap();
     let queue = Queue::test(config_factory(), &time_source);
     let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
@@ -688,7 +681,7 @@ async fn push_expired_tx_already_in_blockchain() {
         .expect("block height should fit into usize");
     state_block
         .transactions
-        .insert_block_with_single_tx(tx.as_ref().hash(), block_height);
+        .insert_block_with_single_tx(tx.as_ref().hash_as_entrypoint(), block_height);
     state_block.commit().unwrap();
     let queue = Queue::test(config_factory(), &time_source);
     time_handle.advance(Duration::from_secs(100));
@@ -709,7 +702,7 @@ async fn get_tx_drop_if_in_blockchain() {
     let state = State::new(world_with_test_domains(), kura, query_handle);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let tx = accepted_tx_by_someone(&time_source);
-    let tx_hash = tx.as_ref().hash();
+    let tx_hash = tx.as_ref().hash_as_entrypoint();
     let queue = Queue::test(config_factory(), &time_source);
     let queue = Arc::new(queue);
     queue.push(tx, state.view()).unwrap();
