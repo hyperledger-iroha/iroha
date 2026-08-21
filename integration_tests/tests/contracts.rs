@@ -1673,9 +1673,6 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
         .with_block_cadence(Duration::from_secs(8))
         .with_npos_consensus()
         .with_config_layer(|layer| {
-<<<<<<< Updated upstream
-            layer.write(["nexus", "lane_count"], 1i64);
-=======
             layer
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 1i64)
@@ -1704,7 +1701,6 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
                     ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
                     1_i64,
                 );
->>>>>>> Stashed changes
         })
         .with_genesis_instruction(Grant::account_permission(
             register_permission,

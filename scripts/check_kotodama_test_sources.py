@@ -68,10 +68,6 @@ TEST_SINGLE_CASE_MACROS = {
     "crates/kotodama_lang/src/ir.rs": ("alias_lowering_case",),
 }
 EXPECTED_FIXTURE_COUNT = 248
-<<<<<<< Updated upstream
-EXPECTED_TEMPLATE_COUNT = 53
-=======
->>>>>>> Stashed changes
 ROOT_KEYS = frozenset(
     {
         "format",
@@ -618,15 +614,7 @@ def validate_manifest(
         path = root / source_path
         text = _regular_bytes(path, source_path).decode("utf-8")
         spans = _function_spans(text)
-<<<<<<< Updated upstream
-        source_spans[source_path] = spans
         observed_names = _expanded_test_names(root, source_path, text)
-=======
-        masked = _mask_rust(text)
-        observed_names = [
-            match.group("name") for match in TEST_FUNCTION_RE.finditer(masked)
-        ]
->>>>>>> Stashed changes
         if observed_names != expected_names:
             _fail(f"Rust test name/order inventory changed in {source_path}")
         expected_include_prefix = PurePosixPath(directory).relative_to(

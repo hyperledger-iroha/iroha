@@ -11147,17 +11147,10 @@ def test_shared_tlc_result_contract_is_complete_and_source_sealed(
     module = load_checker()
     repo_root = copy_shared_tlc_result_contract_fixture(tmp_path, module)
 
-<<<<<<< Updated upstream
-    assert len(module.SHARED_TLC_RESULT_CONTRACT_CALLERS) == 34
-    assert len(set(module.SHARED_TLC_RESULT_CONTRACT_CALLERS)) == 34
-    assert len(module.SHARED_TLC_RESULT_SPECIALIZED_CALLERS) == 4
-    assert len(module.SHARED_TLC_RESULT_CONTRACT_SHA256) == 34
-=======
-    assert len(module.SHARED_TLC_RESULT_CONTRACT_CALLERS) == 32
-    assert len(set(module.SHARED_TLC_RESULT_CONTRACT_CALLERS)) == 32
+    assert len(module.SHARED_TLC_RESULT_CONTRACT_CALLERS) == 33
+    assert len(set(module.SHARED_TLC_RESULT_CONTRACT_CALLERS)) == 33
     assert len(module.SHARED_TLC_RESULT_SPECIALIZED_CALLERS) == 3
-    assert len(module.SHARED_TLC_RESULT_CONTRACT_SHA256) == 33
->>>>>>> Stashed changes
+    assert len(module.SHARED_TLC_RESULT_CONTRACT_SHA256) == 34
     assert set(module.SHARED_TLC_RESULT_BRANCH_PROFILES) == set(
         module.SHARED_TLC_RESULT_CONTRACT_CALLERS
     )

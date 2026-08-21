@@ -463,7 +463,7 @@ where
     Ok(digest)
 }
 
-fn canonical_residual_digest_v1(
+pub(super) fn canonical_residual_digest_v1(
     prior_context_digest: [u8; DIGEST_BYTES_V1],
     inventory_root: [u8; DIGEST_BYTES_V1],
     proof_set_root: [u8; DIGEST_BYTES_V1],

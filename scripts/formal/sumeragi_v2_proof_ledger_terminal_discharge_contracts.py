@@ -22,10 +22,9 @@ REPLAY_TRACE_SOURCE_SHA256 = {
     "scripts/formal/collect_sumeragi_v2_replay_receipt.py": (
         "374644faf49271b454d6323eb40a3c8b205bd6f0a14af3874e948a2be7e46788"
     ),
-<<<<<<< Updated upstream
     "scripts/formal/run_sumeragi_v2_harness.sh": (
         "e400734ca5d3a9079f5ac5b01cca06921b3811ea6ea8fa93e3e5d128984280b8"
-=======
+    ),
     "scripts/formal/check_sumeragi_v2_replay_receipt.py": (
         "94f2e2080d3a83349c7df002785ba245f42aea175212d91f2d8c06725ce18f83"
     ),
@@ -40,7 +39,6 @@ REPLAY_TRACE_SOURCE_SHA256 = {
     ),
     "scripts/formal/resolve_java.sh": (
         "ba15e07db976919babff8970495479fb4c9d37dbee703b1590ca45946b87eb1e"
->>>>>>> Stashed changes
     ),
 }
 

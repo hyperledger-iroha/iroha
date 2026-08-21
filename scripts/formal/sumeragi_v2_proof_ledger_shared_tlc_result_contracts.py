@@ -16,21 +16,12 @@ def _shared_tlc_result_contract_source_fidelity_errors(
     }
     specialized_callers = set(SHARED_TLC_RESULT_SPECIALIZED_CALLERS)
     if (
-<<<<<<< Updated upstream
-        len(SHARED_TLC_RESULT_CONTRACT_CALLERS) != 34
-        or len(expected_callers) != 34
+        len(SHARED_TLC_RESULT_CONTRACT_CALLERS) != 33
+        or len(expected_callers) != 33
     ):
         errors.append(
             "shared TLC result-contract caller inventory must contain "
-            "exactly thirty-four unique callers"
-=======
-        len(SHARED_TLC_RESULT_CONTRACT_CALLERS) != 32
-        or len(expected_callers) != 32
-    ):
-        errors.append(
-            "shared TLC result-contract caller inventory must contain "
-            "exactly thirty-two unique direct TLC callers"
->>>>>>> Stashed changes
+            "exactly thirty-three unique direct TLC callers"
         )
     if (
         len(SHARED_TLC_RESULT_SPECIALIZED_CALLERS) != 3
@@ -77,11 +68,7 @@ def _shared_tlc_result_contract_source_fidelity_errors(
     if digest_paths != expected_paths:
         errors.append(
             "shared TLC result-contract digest inventory must equal the "
-<<<<<<< Updated upstream
-            f"helper and exact thirty-four callers; "
-=======
-            f"helper and exact thirty-two direct TLC callers; "
->>>>>>> Stashed changes
+            f"helper and exact thirty-three direct TLC callers; "
             f"missing={sorted(expected_paths - digest_paths)}, "
             f"extra={sorted(digest_paths - expected_paths)}"
         )

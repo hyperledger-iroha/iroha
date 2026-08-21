@@ -28,8 +28,6 @@ fn upstream_v1() -> UpstreamBindingV1 {
         inventory_root: [0x22; DIGEST_BYTES_V1],
         statement3_proof_set_root: [0x33; DIGEST_BYTES_V1],
         statement3_verified_transcript_root: [0x44; DIGEST_BYTES_V1],
-        statement3_residual_digest: [0x55; DIGEST_BYTES_V1],
-        statement3_binding_digest: [0x66; DIGEST_BYTES_V1],
     }
 }
 
@@ -107,8 +105,6 @@ fn canonical_wire_v1(upstream: UpstreamBindingV1, residual: &[u8]) -> Vec<u8> {
         upstream.inventory_root,
         upstream.statement3_proof_set_root,
         upstream.statement3_verified_transcript_root,
-        upstream.statement3_residual_digest,
-        upstream.statement3_binding_digest,
         proof_set_root,
         residual_digest,
     ] {
@@ -143,7 +139,7 @@ fn statement5_codec_is_exact_canonical_capped_and_upstream_bound() {
     assert!(view.core_v1(GROUPS_V1 - 1, CHUNKS_PER_GROUP_V1 - 1).is_ok());
 
     let mut changed_upstream = upstream;
-    changed_upstream.statement3_binding_digest[0] ^= 1;
+    changed_upstream.statement3_verified_transcript_root[0] ^= 1;
     assert_eq!(
         ComparatorRangeCarryProofSetViewV1::from_components_v1(&wire, changed_upstream, |_| Some(
             commitments
@@ -167,6 +163,39 @@ fn statement5_codec_is_exact_canonical_capped_and_upstream_bound() {
         ),)
         .is_err()
     );
+
+    let cap_plus_one = vec![0_u8; RNS_NATIVE_COMPARATOR_PRODUCT_RESIDUAL_MAX_BYTES_V1 + 1];
+    assert_eq!(
+        ComparatorRangeCarryProofSetViewV1::from_components_v1(&cap_plus_one, upstream, |_| Some(
+            commitments
+        ),)
+        .map(|_| ()),
+        Err(RnsNativeComparatorRangeCarryErrorV1::ProofCapExceeded)
+    );
+}
+
+#[test]
+fn real_statement3_residual_digest_is_computed_after_nested_statement5_without_a_cycle() {
+    let upstream = upstream_v1();
+    let wire = canonical_wire_v1(upstream, b"downstream-after-statement5");
+    let predecessor_residual_digest =
+        super::super::rns_native_comparator_product::canonical_residual_digest_v1(
+            upstream.prior_context_digest,
+            upstream.inventory_root,
+            upstream.statement3_proof_set_root,
+            &wire,
+        )
+        .expect("real statement-3 residual digest over complete statement-5 bytes");
+    assert_ne!(predecessor_residual_digest, [0; DIGEST_BYTES_V1]);
+    assert!(
+        !wire
+            .windows(DIGEST_BYTES_V1)
+            .any(|window| window == predecessor_residual_digest.as_slice())
+    );
+    ComparatorRangeCarryProofSetViewV1::from_components_v1(&wire, upstream, |_| {
+        Some(test_commitments_v1())
+    })
+    .expect("nested statement-5 wire is independently canonical");
 }
 
 #[test]
@@ -622,6 +651,8 @@ fn statement5_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
     assert!(source.contains("build_range_carry_statement_v1"));
     assert!(source.contains(".verify(&mut transcript)?"));
     assert!(source.contains("REMAINING_RANGE_BOUNDARY_V1"));
+    assert_eq!(source.matches("previous.residual_digest()").count(), 1);
+    assert_eq!(source.matches("previous.binding_digest()").count(), 1);
 
     let parent = include_str!("../mkhe.rs");
     assert_eq!(

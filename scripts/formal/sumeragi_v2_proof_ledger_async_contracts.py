@@ -175,11 +175,7 @@ ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
 # bodies are independently pinned by ``_acyclic_liveness_debt_topology_errors``
 # before this reviewed global mechanical-body seal is accepted.
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
-<<<<<<< Updated upstream
-    "dfedf4d3bef27c9c98991a8c38ad9bace40dd5617326bb4c2d266114f3b5f8ea"
-=======
-    "1a06c79002482b8eaff8840f2c7f96016bf2b57f997bfc3b8d620bfbef55964d"
->>>>>>> Stashed changes
+    "67f49ac8eb83b4227351562d23a614559c385c7540e547dee0d97d51f112f62a"
 )
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
@@ -1272,11 +1268,7 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
 )
 SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-<<<<<<< Updated upstream
-        "75257acfd383539c408b47fcf3ef4e865bd4ce29f18d8ee93cd90d7925338161"
-=======
-        "6854ce7d6ed9779eb6f131ec5408f90dde5fbc4c6476c37f1a278e756122e897"
->>>>>>> Stashed changes
+        "27c993ed672015ed3ebb7977f0dae10c77619cacbfc02ae10a016b484993dfbc"
     ),
     "SumeragiV2AsyncRankAndInitProofs.tla": (
         "c6f6eade349f107e0572cb381690ad054b61493ef274a9127eed247f4f7b75ca"
@@ -1374,11 +1366,7 @@ COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_GLOBS = (
 )
 COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-<<<<<<< Updated upstream
-        "75257acfd383539c408b47fcf3ef4e865bd4ce29f18d8ee93cd90d7925338161"
-=======
-        "6854ce7d6ed9779eb6f131ec5408f90dde5fbc4c6476c37f1a278e756122e897"
->>>>>>> Stashed changes
+        "27c993ed672015ed3ebb7977f0dae10c77619cacbfc02ae10a016b484993dfbc"
     ),
     "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
         "fac37875375b831db6ed1bd1f64e194fd5e7eebde51019c345a85c4083664752"
@@ -1825,7 +1813,6 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
             1,
             1,
         ),
-<<<<<<< Updated upstream
         "scripts/formal/run_sumeragi_v2_durable_validate_lifecycle_mutations.sh": (
             1,
             1,
@@ -1833,9 +1820,6 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
             1,
             1,
         ),
-        "scripts/formal/check_sumeragi_v2_replay_trace.sh": (0, 0, 0, 0, 0),
-=======
->>>>>>> Stashed changes
         "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
             1,
             1,
@@ -1910,17 +1894,10 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
     }
 )
 SHARED_TLC_RESULT_BRANCH_PROFILES_SHA256 = (
-<<<<<<< Updated upstream
-    "63e10407bdfc8f5dc5d2ade6ea41439ff5a701dd919c4d16fde37e49b58db7bf"
+    "7d61a1a77e8289a2a59d7a614349a7a4b5ee9fb4e92a0d926b74e99aecf14640"
 )
 SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES_SHA256 = (
-    "fa1b830be143960116f2c56e30ce5a70c6be0ae52245803d6389fb84a638a582"
-=======
-    "c8e025b438c716fcb2fd275d4380369344d17ad7b385c92867c6815d2ad1ad86"
-)
-SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES_SHA256 = (
-    "534402593de35f57d6afd30c551770429b7aca2209317f1484dc95feef5dbe4a"
->>>>>>> Stashed changes
+    "1f802a03156468b1edd273fe1048db5be71c46c83cfa56b6535fa0131d286d71"
 )
 LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     "SumeragiV2Revision4CertifiedFenceReservation.tla": (

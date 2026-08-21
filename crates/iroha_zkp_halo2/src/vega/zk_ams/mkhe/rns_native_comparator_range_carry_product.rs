@@ -25,6 +25,12 @@
 //! reconstruction, inverse lookup relations, or the global lookup.  Those
 //! obligations remain fail-closed.  The output is private, move-only, and
 //! non-authorizing.
+//!
+//! The statement-3 residual and prerequisite-binding digests are intentionally
+//! absent from this nested wire and its proof transcripts: both are computed
+//! over a container that includes these statement-5 bytes.  They are retained
+//! only in the post-verification prerequisite binding, avoiding a Keccak
+//! fixed-point cycle while preserving the complete predecessor identity.
 
 use core::marker::PhantomData;
 
@@ -95,9 +101,9 @@ const CORE_BYTES_V1: usize = CORE_POINTS_V1 * POINT_BYTES_V1 + CORE_SCALARS_V1 *
 const RECORD_HEADER_BYTES_V1: usize = 2 + 1 + 2;
 const RECORD_BYTES_V1: usize = RECORD_HEADER_BYTES_V1 + CORE_BYTES_V1;
 
-// Fixed prefix through residual length: frame/geometry, eight binding digests,
+// Fixed prefix through residual length: frame/geometry, six binding digests,
 // and the residual length.
-const HEADER_BYTES_V1: usize = 308;
+const HEADER_BYTES_V1: usize = 244;
 const CODEC_DIGEST_BYTES_V1: usize = DIGEST_BYTES_V1;
 const RECORD_SET_BYTES_V1: usize = RECORDS_V1 * RECORD_BYTES_V1;
 const MIN_WIRE_BYTES_V1: usize = HEADER_BYTES_V1 + RECORD_SET_BYTES_V1 + 1 + CODEC_DIGEST_BYTES_V1;
@@ -154,10 +160,10 @@ const _: () = {
     assert!(CORE_BYTES_V1 == 1_777);
     assert!(RECORD_BYTES_V1 == 1_782);
     assert!(RECORD_SET_BYTES_V1 == 3_065_040);
-    assert!(HEADER_BYTES_V1 == 308);
-    assert!(MIN_WIRE_BYTES_V1 == 3_065_381);
+    assert!(HEADER_BYTES_V1 == 244);
+    assert!(MIN_WIRE_BYTES_V1 == 3_065_317);
     assert!(MIN_WIRE_BYTES_V1 <= RNS_NATIVE_COMPARATOR_PRODUCT_RESIDUAL_MAX_BYTES_V1);
-    assert!(RNS_NATIVE_COMPARATOR_RANGE_CARRY_RESIDUAL_MAX_BYTES_V1 == 3_147_406);
+    assert!(RNS_NATIVE_COMPARATOR_RANGE_CARRY_RESIDUAL_MAX_BYTES_V1 == 3_147_470);
     assert!(CARRY_INTEGER_ABSOLUTE_BOUND_V1 == 2);
     assert!(CONDITIONAL_RADIX_ROW_ABSOLUTE_BOUND_V1 == 65_535);
     assert!(VEGA_T256_SCALAR_MODULUS_BE_V1[0] != 0);
@@ -204,8 +210,6 @@ struct UpstreamBindingV1 {
     inventory_root: [u8; DIGEST_BYTES_V1],
     statement3_proof_set_root: [u8; DIGEST_BYTES_V1],
     statement3_verified_transcript_root: [u8; DIGEST_BYTES_V1],
-    statement3_residual_digest: [u8; DIGEST_BYTES_V1],
-    statement3_binding_digest: [u8; DIGEST_BYTES_V1],
 }
 
 impl UpstreamBindingV1 {
@@ -217,8 +221,6 @@ impl UpstreamBindingV1 {
             inventory_root: previous.inventory().inventory_root(),
             statement3_proof_set_root: previous.proof_set_root(),
             statement3_verified_transcript_root: previous.verified_transcript_root(),
-            statement3_residual_digest: previous.residual_digest(),
-            statement3_binding_digest: previous.binding_digest(),
         }
     }
 
@@ -228,8 +230,6 @@ impl UpstreamBindingV1 {
             self.inventory_root,
             self.statement3_proof_set_root,
             self.statement3_verified_transcript_root,
-            self.statement3_residual_digest,
-            self.statement3_binding_digest,
         ]
         .contains(&[0; DIGEST_BYTES_V1])
     }
@@ -451,8 +451,6 @@ impl<'a> ComparatorRangeCarryProofSetViewV1<'a> {
             inventory_root: decoder.array()?,
             statement3_proof_set_root: decoder.array()?,
             statement3_verified_transcript_root: decoder.array()?,
-            statement3_residual_digest: decoder.array()?,
-            statement3_binding_digest: decoder.array()?,
         };
         let proof_set_root = decoder.array()?;
         let residual_digest = decoder.array()?;
@@ -472,8 +470,6 @@ impl<'a> ComparatorRangeCarryProofSetViewV1<'a> {
             || upstream.statement3_proof_set_root != expected.statement3_proof_set_root
             || upstream.statement3_verified_transcript_root
                 != expected.statement3_verified_transcript_root
-            || upstream.statement3_residual_digest != expected.statement3_residual_digest
-            || upstream.statement3_binding_digest != expected.statement3_binding_digest
             || [proof_set_root, residual_digest].contains(&[0; DIGEST_BYTES_V1])
         {
             return Err(RnsNativeComparatorRangeCarryErrorV1::InvalidHeader);
@@ -567,8 +563,6 @@ fn absorb_upstream_v1(hash: &mut Keccak256, upstream: UpstreamBindingV1) {
         upstream.inventory_root,
         upstream.statement3_proof_set_root,
         upstream.statement3_verified_transcript_root,
-        upstream.statement3_residual_digest,
-        upstream.statement3_binding_digest,
     ] {
         hash.update(&digest);
     }
@@ -853,8 +847,6 @@ fn initial_transcript_state_v1(
         upstream.inventory_root.as_slice(),
         upstream.statement3_proof_set_root.as_slice(),
         upstream.statement3_verified_transcript_root.as_slice(),
-        upstream.statement3_residual_digest.as_slice(),
-        upstream.statement3_binding_digest.as_slice(),
         (group as u16).to_be_bytes().as_slice(),
         &[chunk as u8],
         (coordinates as u32).to_be_bytes().as_slice(),
@@ -1022,6 +1014,8 @@ fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     hash.update(&[VERSION_V1, STATEMENT_V1]);
     absorb_upstream_v1(&mut hash, upstream);
     for digest in [
+        previous.residual_digest(),
+        previous.binding_digest(),
         inventory.continuation_digest(),
         inventory.binding_digest(),
         linked.source().statement_anchor_digest(),
