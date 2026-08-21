@@ -29,6 +29,7 @@ DEFAULT_FIXTURES_PATH = DEFAULT_RESOURCES_DIR / "transaction_payloads.json"
 DEFAULT_MANIFEST_PATH = DEFAULT_RESOURCES_DIR / "transaction_fixtures.manifest.json"
 DEFAULT_STATE_PATH = Path("artifacts/android_fixture_regen_state.json")
 MAX_TRANSACTION_NONCE = 0xFFFF_FFFF
+MAX_U64 = 0xFFFF_FFFF_FFFF_FFFF
 NETWORK_ID_LITERAL = re.compile(r"hash:([0-9A-F]{64})#([0-9A-F]{4})")
 
 PAYLOAD_FIXTURE_FIELDS = frozenset(
@@ -48,6 +49,7 @@ PAYLOAD_FIXTURE_FIELDS = frozenset(
 )
 PAYLOAD_FIELDS = frozenset(
     {
+        "admission_intent",
         "authority",
         "network_id",
         "creation_time_ms",
@@ -58,6 +60,7 @@ PAYLOAD_FIELDS = frozenset(
         "time_to_live_ms",
     }
 )
+ADMISSION_INTENT_FIELDS = frozenset({"intent", "value"})
 EXECUTABLE_VARIANTS = frozenset({"Batch", "ContractCall", "Instructions", "Ivm"})
 INSTRUCTION_FIELDS = frozenset({"payload_base64", "wire_name"})
 CONTRACT_CALL_FIELDS = frozenset(
@@ -118,7 +121,7 @@ def require_exact_fields(
         )
 
 
-def validate_executable(executable: object, context: str) -> None:
+def validate_executable(executable: object, context: str) -> bool:
     if not isinstance(executable, dict):
         raise ValueError(f"{context} must be an object")
     variants = list(executable)
@@ -132,20 +135,21 @@ def validate_executable(executable: object, context: str) -> None:
         if not isinstance(body, str):
             raise ValueError(f"{context}.Ivm must be a base64 string")
         decode_base64(body, f"{context}.Ivm")
-        return
+        return True
     if variant == "Instructions":
         if not isinstance(body, list):
             raise ValueError(f"{context}.Instructions must be an array")
         for index, instruction in enumerate(body):
             validate_instruction(instruction, f"{context}.Instructions[{index}]")
-        return
+        return False
     if variant == "ContractCall":
         validate_contract_call(body, f"{context}.ContractCall")
-        return
+        return True
     if not isinstance(body, list):
         raise ValueError(f"{context}.Batch must be an array")
     if not body:
         raise ValueError(f"{context}.Batch must contain at least one item")
+    requires_gas_limit = False
     for index, item in enumerate(body):
         item_context = f"{context}.Batch[{index}]"
         if not isinstance(item, dict):
@@ -158,8 +162,10 @@ def validate_executable(executable: object, context: str) -> None:
             validate_instruction(item[item_variant], f"{item_context}.Instruction")
         elif item_variant == "ContractCall":
             validate_contract_call(item[item_variant], f"{item_context}.ContractCall")
+            requires_gas_limit = True
         else:
             raise ValueError(f"{item_context} has unknown variant {item_variant!r}")
+    return requires_gas_limit
 
 
 def validate_instruction(instruction: object, context: str) -> None:
@@ -197,27 +203,44 @@ def validate_contract_call(contract_call: object, context: str) -> None:
         raise ValueError(f"{context}.arguments must be null or an array of bytes")
 
 
-def validate_fee_payment(value: object, context: str) -> None:
+def validate_fee_payment(value: object, context: str) -> Optional[int]:
     if not isinstance(value, dict):
         raise ValueError(f"{context} must be an object")
     require_exact_fields(value, frozenset({"payer", "value"}), context)
     payer = value["payer"]
-    if payer not in {"authority", "sponsor"}:
-        raise ValueError(f"{context}.payer must be authority or sponsor")
+    if payer != "authority":
+        raise ValueError(f"{context}.payer must be exactly authority")
     fee_value = value["value"]
     if not isinstance(fee_value, dict):
         raise ValueError(f"{context}.value must be an object")
-    fields = {"charge_limits", "gas_limit"}
-    if payer == "sponsor":
-        fields.update({"program_id", "program_revision"})
-    require_exact_fields(fee_value, frozenset(fields), f"{context}.value")
+    require_exact_fields(
+        fee_value,
+        frozenset({"charge_limits", "gas_limit"}),
+        f"{context}.value",
+    )
     if not isinstance(fee_value["charge_limits"], list):
         raise ValueError(f"{context}.value.charge_limits must be an array")
     gas_limit = fee_value["gas_limit"]
     if gas_limit is not None and (
-        isinstance(gas_limit, bool) or not isinstance(gas_limit, int) or gas_limit <= 0
+        isinstance(gas_limit, bool)
+        or not isinstance(gas_limit, int)
+        or gas_limit <= 0
+        or gas_limit > MAX_U64
     ):
-        raise ValueError(f"{context}.value.gas_limit must be null or a positive integer")
+        raise ValueError(
+            f"{context}.value.gas_limit must be null or an integer in 1..={MAX_U64}"
+        )
+    return gas_limit
+
+
+def validate_admission_intent(value: object, context: str) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{context} must be an object")
+    require_exact_fields(value, ADMISSION_INTENT_FIELDS, context)
+    if value["intent"] != "ordinary" or value["value"] is not None:
+        raise ValueError(
+            f"{context} must be exactly {{'intent': 'ordinary', 'value': null}}"
+        )
 
 
 def validate_payload_descriptor(entry: dict, name: str, path: Path) -> None:
@@ -227,10 +250,20 @@ def validate_payload_descriptor(entry: dict, name: str, path: Path) -> None:
     require_exact_fields(payload, PAYLOAD_FIELDS, f"fixture entry {name} payload in {path}")
     validate_transaction_metadata(entry, f"fixture entry {name} in {path}")
     validate_transaction_metadata(payload, f"fixture entry {name} payload in {path}")
-    validate_executable(payload["executable"], f"fixture entry {name} executable")
-    validate_fee_payment(
+    requires_gas_limit = validate_executable(
+        payload["executable"], f"fixture entry {name} executable"
+    )
+    gas_limit = validate_fee_payment(
         payload["fee_payment"], f"fixture entry {name} fee_payment"
     )
+    validate_admission_intent(
+        payload["admission_intent"], f"fixture entry {name} admission_intent"
+    )
+    if requires_gas_limit and gas_limit is None:
+        raise ValueError(
+            f"fixture entry {name} fee_payment.value.gas_limit must be positive "
+            "for Ivm, ContractCall, or a Batch containing ContractCall"
+        )
     if not isinstance(payload["metadata"], dict):
         raise ValueError(f"fixture entry {name} metadata must be an object")
     for field in (

@@ -205,11 +205,11 @@ impl From<GeneralizedBulletproofErrorV1> for RnsNativeComparatorRangeCarryErrorV
 }
 
 #[derive(Clone, Copy)]
-struct UpstreamBindingV1 {
-    prior_context_digest: [u8; DIGEST_BYTES_V1],
-    inventory_root: [u8; DIGEST_BYTES_V1],
-    statement3_proof_set_root: [u8; DIGEST_BYTES_V1],
-    statement3_verified_transcript_root: [u8; DIGEST_BYTES_V1],
+pub(super) struct UpstreamBindingV1 {
+    pub(super) prior_context_digest: [u8; DIGEST_BYTES_V1],
+    pub(super) inventory_root: [u8; DIGEST_BYTES_V1],
+    pub(super) statement3_proof_set_root: [u8; DIGEST_BYTES_V1],
+    pub(super) statement3_verified_transcript_root: [u8; DIGEST_BYTES_V1],
 }
 
 impl UpstreamBindingV1 {
@@ -635,7 +635,7 @@ where
     Ok(digest)
 }
 
-fn canonical_residual_digest_v1(
+pub(super) fn canonical_residual_digest_v1(
     upstream: UpstreamBindingV1,
     proof_set_root: [u8; DIGEST_BYTES_V1],
     residual: &[u8],
@@ -1072,6 +1072,36 @@ pub(super) struct RnsNativeComparatorRangeCarryPrerequisiteV1<
     _verified_transcript_root: [u8; DIGEST_BYTES_V1],
     _residual_digest: [u8; DIGEST_BYTES_V1],
     _binding_digest: [u8; DIGEST_BYTES_V1],
+}
+
+impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
+    RnsNativeComparatorRangeCarryPrerequisiteV1<'source, 'proof, S>
+{
+    pub(super) const fn previous(
+        &self,
+    ) -> &RnsNativeComparatorProductPrerequisiteV1<'source, 'proof, S> {
+        &self._previous
+    }
+
+    pub(super) const fn residual(&self) -> &'proof [u8] {
+        self._residual
+    }
+
+    pub(super) const fn proof_set_root(&self) -> [u8; DIGEST_BYTES_V1] {
+        self._proof_set_root
+    }
+
+    pub(super) const fn verified_transcript_root(&self) -> [u8; DIGEST_BYTES_V1] {
+        self._verified_transcript_root
+    }
+
+    pub(super) const fn residual_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+        self._residual_digest
+    }
+
+    pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+        self._binding_digest
+    }
 }
 
 /// Consume statement 3 and verify every bounded statement-5 core

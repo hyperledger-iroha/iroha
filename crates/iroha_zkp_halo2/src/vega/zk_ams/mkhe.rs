@@ -184,6 +184,8 @@ mod rns_native_qpcs_prefix;
 mod rns_native_rlwe_source_statement;
 #[path = "mkhe/rns_native_section_codec.rs"]
 mod rns_native_section_codec;
+#[path = "mkhe/rns_native_small_sign_disjointness_product.rs"]
+mod rns_native_small_sign_disjointness_product;
 #[path = "mkhe/rns_native_source.rs"]
 mod rns_native_source;
 #[allow(

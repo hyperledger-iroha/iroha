@@ -188,6 +188,45 @@ pub(super) struct ComparatorRangeCarryCommitmentsV1 {
     pub(super) borrows: [Point; RADIX_DIGITS_V1],
 }
 
+/// Exact commitment tuple consumed by small-sign product statement 8.
+///
+/// `positive` is derived from the two authenticated inventory points and is
+/// rejected if the sum is the identity.  It is never accepted as an
+/// independently supplied commitment.
+#[derive(Clone, Copy)]
+pub(super) struct SmallSourceProductCommitmentsV1 {
+    pub(super) signed: Point,
+    pub(super) negative_magnitude: Point,
+    pub(super) positive: Point,
+}
+
+fn small_source_product_commitments_v1(
+    inventory: &[u8],
+    block: usize,
+) -> Option<SmallSourceProductCommitmentsV1> {
+    if inventory.len() != INVENTORY_BYTES_V1 || block >= SMALL_SOURCE_BLOCKS_V1 {
+        return None;
+    }
+    let point_at = |ordinal: usize| {
+        let offset = ordinal.checked_mul(POINT_BYTES_V1)?;
+        let end = offset.checked_add(POINT_BYTES_V1)?;
+        Point::from_non_identity_wire_bytes_exact(inventory.get(offset..end)?).ok()
+    };
+    let first = COMPARATOR_POINTS_V1
+        .checked_add(block.checked_mul(SMALL_SOURCE_POINTS_PER_BLOCK_V1)?)?;
+    let signed = point_at(first)?;
+    let negative_magnitude = point_at(first.checked_add(1)?)?;
+    let positive = signed + negative_magnitude;
+    if positive.is_identity() {
+        return None;
+    }
+    Some(SmallSourceProductCommitmentsV1 {
+        signed,
+        negative_magnitude,
+        positive,
+    })
+}
+
 fn inventory_coordinate_v1(
     ordinal: usize,
 ) -> Result<InventoryCoordinateV1, RnsNativeCrossFieldInventoryErrorV1> {
@@ -774,6 +813,13 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
             mixed_top: point_at(auxiliary.checked_add(17)?)?,
             borrows,
         })
+    }
+
+    pub(super) fn small_source_product_commitments(
+        &self,
+        block: usize,
+    ) -> Option<SmallSourceProductCommitmentsV1> {
+        small_source_product_commitments_v1(self.inventory, block)
     }
 
     pub(super) fn qpcs_evaluation(&self, limb: usize, repetition: usize) -> Option<(u64, u64)> {

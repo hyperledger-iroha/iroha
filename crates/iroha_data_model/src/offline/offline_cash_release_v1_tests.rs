@@ -396,8 +396,8 @@ fn exact_release_decoders_reject_forged_declared_lengths() {
 #[test]
 fn exact_release_decoders_enforce_semantic_collection_caps() {
     let base_artifacts = artifacts();
-    let receipt = receipt(&base_artifacts);
-    let mut oversized_manifest = manifest(base_artifacts, &receipt);
+    let base_receipt = receipt(&base_artifacts);
+    let mut oversized_manifest = manifest(base_artifacts, &base_receipt);
     oversized_manifest
         .artifacts
         .push(oversized_manifest.artifacts[0]);

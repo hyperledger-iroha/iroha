@@ -167,6 +167,34 @@ fn forty_limb_inventory_geometry_has_one_exact_role_order() {
 }
 
 #[test]
+fn statement8_small_source_accessor_uses_exact_raw_roles_and_derived_positive() {
+    let mut inventory = canonical_inventory_v1();
+    let signed = Point::from_non_identity_wire_bytes_exact(&point_bytes_v1())
+        .expect("canonical signed point");
+    let commitments = small_source_product_commitments_v1(&inventory, 0)
+        .expect("first small-source commitment tuple");
+    assert_eq!(commitments.signed, signed);
+    assert_eq!(commitments.negative_magnitude, signed);
+    assert_eq!(commitments.positive, signed + signed);
+    assert!(
+        small_source_product_commitments_v1(&inventory, SMALL_SOURCE_BLOCKS_V1 - 1).is_some()
+    );
+    assert!(small_source_product_commitments_v1(&inventory, SMALL_SOURCE_BLOCKS_V1).is_none());
+    assert!(
+        small_source_product_commitments_v1(&inventory[..inventory.len() - 1], 0).is_none()
+    );
+
+    let mut opposite = [0_u8; POINT_BYTES_V1];
+    (-signed)
+        .write_non_identity_wire_bytes_ref(&mut opposite)
+        .expect("canonical opposite point");
+    let negative_ordinal = COMPARATOR_POINTS_V1 + 1;
+    let negative_offset = negative_ordinal * POINT_BYTES_V1;
+    inventory[negative_offset..negative_offset + POINT_BYTES_V1].copy_from_slice(&opposite);
+    assert!(small_source_product_commitments_v1(&inventory, 0).is_none());
+}
+
+#[test]
 fn authenticated_qpcs_grid_is_exact_canonical_and_limb_major() {
     let mut bytes = vec![0_u8; QPCS_EVALUATION_BYTES_V1];
     let relation = (ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 - 1) * REPETITIONS_V1 + (REPETITIONS_V1 - 1);
