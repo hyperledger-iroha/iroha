@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { blake2b256 } from "../src/blake2b.js";
 import { validateNoritoFrame } from "../src/norito.js";
-import { parseStrictLosslessIntegerJson } from "../src/numericV1.js";
+import { NumericV1, parseStrictLosslessIntegerJson } from "../src/numericV1.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(__filename), "..", "..", "..");
@@ -55,6 +55,19 @@ const contractCallFields = new Set([
   "contract_address",
   "entrypoint",
   "expected_code_hash",
+]);
+const feePaymentFields = new Set(["payer", "value"]);
+const feeValueFields = new Set(["charge_limits", "gas_limit"]);
+const chargeLimitFields = new Set([
+  "asset_definition_id",
+  "kind",
+  "max_amount",
+]);
+const chargeKindFields = new Set(["kind", "value"]);
+const maxU64 = (1n << 64n) - 1n;
+const chargeKindRanks = new Map([
+  ["nexus", 0],
+  ["pipeline_gas", 1],
 ]);
 const manifestFields = new Set(["fixtures"]);
 const manifestFixtureFields = new Set([
@@ -222,7 +235,7 @@ function validateExecutable(executable, context) {
   const body = executable[variant];
   if (variant === "Ivm") {
     decodeCanonicalBase64(body, `${context}.Ivm`);
-    return;
+    return true;
   }
   if (variant === "Instructions") {
     if (!Array.isArray(body)) {
@@ -231,11 +244,11 @@ function validateExecutable(executable, context) {
     for (const [index, instruction] of body.entries()) {
       validateInstruction(instruction, `${context}.Instructions[${index}]`);
     }
-    return;
+    return false;
   }
   if (variant === "ContractCall") {
     validateContractCall(body, `${context}.ContractCall`);
-    return;
+    return true;
   }
   if (!Array.isArray(body)) {
     throw new Error(`${context}.Batch must be an array`);
@@ -243,6 +256,7 @@ function validateExecutable(executable, context) {
   if (body.length === 0) {
     throw new Error(`${context}.Batch must contain at least one item`);
   }
+  let requiresGasLimit = false;
   for (const [index, item] of body.entries()) {
     const itemContext = `${context}.Batch[${index}]`;
     requireRecord(item, itemContext);
@@ -255,10 +269,83 @@ function validateExecutable(executable, context) {
       validateInstruction(item.Instruction, `${itemContext}.Instruction`);
     } else if (itemVariant === "ContractCall") {
       validateContractCall(item.ContractCall, `${itemContext}.ContractCall`);
+      requiresGasLimit = true;
     } else {
       throw new Error(`${itemContext} has unknown variant '${itemVariant}'`);
     }
   }
+  return requiresGasLimit;
+}
+
+function positiveU64OrNull(value, context) {
+  if (value === null) return null;
+  let integer;
+  if (typeof value === "bigint") {
+    integer = value;
+  } else if (typeof value === "number" && Number.isSafeInteger(value)) {
+    integer = BigInt(value);
+  } else {
+    throw new Error(`${context} must be null or a positive u64`);
+  }
+  if (integer < 1n || integer > maxU64) {
+    throw new Error(`${context} must be null or a positive u64`);
+  }
+  return integer;
+}
+
+function validateCanonicalPositiveQuantity(value, context) {
+  let decoded;
+  try {
+    decoded = NumericV1.decodeQuantityJson(value);
+  } catch {
+    throw new Error(`${context} must be a canonical positive Quantity`);
+  }
+  if (decoded.mantissa === 0n) {
+    throw new Error(`${context} must be a canonical positive Quantity`);
+  }
+}
+
+function validateFeePayment(feePayment, context) {
+  requireExactFields(feePayment, feePaymentFields, context);
+  if (feePayment.payer !== "authority") {
+    throw new Error(`${context}.payer must be exactly authority`);
+  }
+  requireExactFields(feePayment.value, feeValueFields, `${context}.value`);
+  if (!Array.isArray(feePayment.value.charge_limits)) {
+    throw new Error(`${context}.value.charge_limits must be an array`);
+  }
+  let previousKindRank = -1;
+  for (const [index, limit] of feePayment.value.charge_limits.entries()) {
+    const limitContext = `${context}.value.charge_limits[${index}]`;
+    requireExactFields(limit, chargeLimitFields, limitContext);
+    if (
+      typeof limit.asset_definition_id !== "string" ||
+      limit.asset_definition_id.length === 0
+    ) {
+      throw new Error(`${limitContext} contains invalid scalar fields`);
+    }
+    validateCanonicalPositiveQuantity(
+      limit.max_amount,
+      `${limitContext}.max_amount`,
+    );
+    requireExactFields(limit.kind, chargeKindFields, `${limitContext}.kind`);
+    const kindRank = chargeKindRanks.get(limit.kind.kind);
+    if (kindRank === undefined || limit.kind.value !== null) {
+      throw new Error(
+        `${limitContext}.kind must be exactly nexus/null or pipeline_gas/null`,
+      );
+    }
+    if (kindRank <= previousKindRank) {
+      throw new Error(
+        `${context}.value.charge_limits must use unique canonical kind order`,
+      );
+    }
+    previousKindRank = kindRank;
+  }
+  return positiveU64OrNull(
+    feePayment.value.gas_limit,
+    `${context}.value.gas_limit`,
+  );
 }
 
 function validateInstruction(instruction, context) {
@@ -317,8 +404,19 @@ function validateSourceFixtureSchema(fixture, context) {
   validateTransactionMetadata(fixture, context);
   requireExactFields(fixture.payload, payloadFields, `${context}.payload`);
   validateTransactionMetadata(fixture.payload, `${context}.payload`);
-  validateExecutable(fixture.payload.executable, `${context}.payload.executable`);
-  requireRecord(fixture.payload.fee_payment, `${context}.payload.fee_payment`);
+  const requiresGasLimit = validateExecutable(
+    fixture.payload.executable,
+    `${context}.payload.executable`,
+  );
+  const gasLimit = validateFeePayment(
+    fixture.payload.fee_payment,
+    `${context}.payload.fee_payment`,
+  );
+  if (requiresGasLimit && gasLimit === null) {
+    throw new Error(
+      `${context}.payload.fee_payment.value.gas_limit is required by the executable`,
+    );
+  }
   requireExactFields(
     fixture.payload.admission_intent,
     new Set(["intent", "value"]),
@@ -641,7 +739,7 @@ function makeSourceFixture(name = "alpha") {
       executable: { Instructions: [] },
       fee_payment: {
         payer: "authority",
-        value: { charge_limits: [] },
+        value: { charge_limits: [], gas_limit: null },
       },
       admission_intent: { intent: "ordinary", value: null },
       metadata: {},
@@ -737,10 +835,178 @@ test("source descriptors require exact fields and one executable variant", () =>
           arguments: [],
         },
       },
+      fee_payment: {
+        payer: "authority",
+        value: { charge_limits: [], gas_limit: 1 },
+      },
     },
   };
   assert.doesNotThrow(() =>
     validateSourceFixtureSchema(directCall, directCall.name),
+  );
+  assert.throws(
+    () =>
+      validateSourceFixtureSchema(
+        {
+          ...directCall,
+          payload: {
+            ...directCall.payload,
+            fee_payment: {
+              payer: "authority",
+              value: { charge_limits: [], gas_limit: null },
+            },
+          },
+        },
+        directCall.name,
+      ),
+    /gas_limit is required by the executable/,
+  );
+});
+
+test("source descriptors require exact admission and fee policy", () => {
+  const fixture = makeSourceFixture();
+  for (const admissionIntent of [
+    undefined,
+    { intent: "queue_plan_synced", value: null },
+    { intent: "ordinary", value: {} },
+    { intent: "ordinary", value: null, unexpected: true },
+  ]) {
+    const payload = { ...fixture.payload };
+    if (admissionIntent === undefined) {
+      delete payload.admission_intent;
+    } else {
+      payload.admission_intent = admissionIntent;
+    }
+    assert.throws(
+      () => validateSourceFixtureSchema({ ...fixture, payload }, fixture.name),
+      /admission_intent|invalid fields/,
+    );
+  }
+
+  for (const gasLimit of [true, 0, -1, maxU64 + 1n]) {
+    assert.throws(
+      () =>
+        validateSourceFixtureSchema(
+          {
+            ...fixture,
+            payload: {
+              ...fixture.payload,
+              fee_payment: {
+                payer: "authority",
+                value: { charge_limits: [], gas_limit: gasLimit },
+              },
+            },
+          },
+          fixture.name,
+        ),
+      /positive u64/,
+    );
+  }
+  const missingGasPayload = structuredClone(fixture.payload);
+  delete missingGasPayload.fee_payment.value.gas_limit;
+  assert.throws(
+    () =>
+      validateSourceFixtureSchema(
+        { ...fixture, payload: missingGasPayload },
+        fixture.name,
+      ),
+    /missing=\["gas_limit"\]/,
+  );
+  assert.throws(
+    () =>
+      validateSourceFixtureSchema(
+        {
+          ...fixture,
+          payload: {
+            ...fixture.payload,
+            fee_payment: {
+              payer: "sponsor",
+              value: { charge_limits: [], gas_limit: null },
+            },
+          },
+        },
+        fixture.name,
+      ),
+    /payer must be exactly authority/,
+  );
+  assert.doesNotThrow(() =>
+    validateSourceFixtureSchema(
+      {
+        ...fixture,
+        payload: {
+          ...fixture.payload,
+          fee_payment: {
+            payer: "authority",
+            value: { charge_limits: [], gas_limit: maxU64 },
+          },
+        },
+      },
+      fixture.name,
+    ),
+  );
+
+  const charge = {
+    asset_definition_id: "asset",
+    kind: { kind: "nexus", value: null },
+    max_amount: "0.5",
+  };
+  assert.doesNotThrow(() =>
+    validateSourceFixtureSchema(
+      {
+        ...fixture,
+        payload: {
+          ...fixture.payload,
+          fee_payment: {
+            payer: "authority",
+            value: { charge_limits: [charge], gas_limit: null },
+          },
+        },
+      },
+      fixture.name,
+    ),
+  );
+  for (const invalidCharge of [
+    { ...charge, max_amount: "0" },
+    { ...charge, max_amount: "1.0" },
+    { ...charge, max_amount: "-1" },
+    { ...charge, max_amount: (NumericV1.INT_MAX + 1n).toString(10) },
+    { ...charge, kind: { kind: "legacy", value: null } },
+    { ...charge, kind: { kind: "nexus", value: 0 } },
+  ]) {
+    assert.throws(
+      () =>
+        validateSourceFixtureSchema(
+          {
+            ...fixture,
+            payload: {
+              ...fixture.payload,
+              fee_payment: {
+                payer: "authority",
+                value: { charge_limits: [invalidCharge], gas_limit: null },
+              },
+            },
+          },
+          fixture.name,
+        ),
+      /Quantity|kind/,
+    );
+  }
+  assert.throws(
+    () =>
+      validateSourceFixtureSchema(
+        {
+          ...fixture,
+          payload: {
+            ...fixture.payload,
+            fee_payment: {
+              payer: "authority",
+              value: { charge_limits: [charge, charge], gas_limit: null },
+            },
+          },
+        },
+        fixture.name,
+      ),
+    /unique canonical kind order/,
   );
 });
 

@@ -92,6 +92,10 @@ def payload_body(name: str, *, shared: bool) -> dict:
         }
     )
     return {
+        "admission_intent": {
+            "intent": "ordinary" if shared else "queue_plan_synced",
+            "value": None,
+        },
         "authority": f"authority-{name}",
         "creation_time_ms": 1,
         "executable": {"Instructions": [instruction]},
@@ -316,6 +320,12 @@ def test_direct_contract_call_and_canonical_ivm_are_first_class_variants(
     payloads[0]["payload"]["executable"] = {"ContractCall": contract_call}
     dump(source, "transaction_payloads.json", payloads)
     dump(target, "transaction_payloads.json", payloads)
+    with pytest.raises(ValueError, match="gas_limit"):
+        MODULE.compare(source, target)
+
+    payloads[0]["payload"]["fee_payment"]["value"]["gas_limit"] = 1
+    dump(source, "transaction_payloads.json", payloads)
+    dump(target, "transaction_payloads.json", payloads)
     assert MODULE.compare(source, target) == ([], [], [])
 
     payloads[0]["payload"]["executable"] = {"Ivm": "AA=="}
@@ -326,6 +336,80 @@ def test_direct_contract_call_and_canonical_ivm_are_first_class_variants(
     payloads[0]["payload"]["executable"] = {"Ivm": "YQ="}
     dump(source, "transaction_payloads.json", payloads)
     with pytest.raises(ValueError, match="invalid base64"):
+        MODULE.compare(source, target)
+
+
+def test_shared_mixed_batch_requires_positive_gas_limit(tmp_path: Path) -> None:
+    source, target, payloads, _ = populate_valid_corpus(tmp_path)
+    instruction = payloads[0]["payload"]["executable"]["Instructions"][0]
+    payloads[0]["payload"]["executable"] = {
+        "Batch": [
+            {"Instruction": instruction},
+            {
+                "ContractCall": {
+                    "arguments": None,
+                    "contract_address": "irohac1contract",
+                    "entrypoint": "run",
+                    "expected_code_hash": "hash:value",
+                }
+            },
+        ]
+    }
+    dump(source, "transaction_payloads.json", payloads)
+    dump(target, "transaction_payloads.json", payloads)
+
+    with pytest.raises(ValueError, match="gas_limit"):
+        MODULE.compare(source, target)
+
+    payloads[0]["payload"]["fee_payment"]["value"]["gas_limit"] = 2**64 - 1
+    dump(source, "transaction_payloads.json", payloads)
+    dump(target, "transaction_payloads.json", payloads)
+    assert MODULE.compare(source, target) == ([], [], [])
+
+
+@pytest.mark.parametrize(
+    "intent",
+    [
+        None,
+        {},
+        {"intent": "ordinary"},
+        {"intent": "ordinary", "value": None, "legacy": True},
+        {"intent": "queue_plan_synced", "value": None},
+        {"intent": "ordinary", "value": 0},
+    ],
+)
+def test_shared_admission_intent_is_exact_ordinary(
+    tmp_path: Path, intent: object
+) -> None:
+    source, target, payloads, _ = populate_valid_corpus(tmp_path)
+    payloads[0]["payload"]["admission_intent"] = intent
+    dump(source, "transaction_payloads.json", payloads)
+
+    with pytest.raises(ValueError, match="admission_intent"):
+        MODULE.compare(source, target)
+
+
+@pytest.mark.parametrize(
+    "intent",
+    [
+        None,
+        {},
+        {"intent": "queue_plan_synced"},
+        {"intent": "queue_plan_synced", "value": None, "legacy": True},
+        {"intent": "ordinary", "value": None},
+        {"intent": "queue_plan_synced", "value": 0},
+    ],
+)
+def test_swift_owned_admission_intent_is_exact_queue_plan_synced(
+    tmp_path: Path, intent: object
+) -> None:
+    source, target, _, _ = populate_valid_corpus(tmp_path)
+    path = target / "swift_parity_payloads.json"
+    payloads = json.loads(path.read_text())
+    payloads[0]["payload"]["admission_intent"] = intent
+    dump(target, path.name, payloads)
+
+    with pytest.raises(ValueError, match="admission_intent"):
         MODULE.compare(source, target)
 
 
@@ -545,6 +629,34 @@ def test_swift_fee_payment_requires_explicit_nullable_gas_limit(tmp_path: Path) 
     dump(target, path.name, payloads)
 
     with pytest.raises(ValueError, match="gas_limit"):
+        MODULE.compare(source, target)
+
+
+@pytest.mark.parametrize("gas_limit", [False, 0, -1, 2**64, 1.5, "1"])
+def test_shared_fee_payment_rejects_noncanonical_gas_limit(
+    tmp_path: Path, gas_limit: object
+) -> None:
+    source, target, payloads, _ = populate_valid_corpus(tmp_path)
+    payloads[0]["payload"]["fee_payment"]["value"]["gas_limit"] = gas_limit
+    dump(source, "transaction_payloads.json", payloads)
+
+    with pytest.raises(ValueError, match="gas_limit"):
+        MODULE.compare(source, target)
+
+
+def test_shared_fee_payment_requires_explicit_gas_limit_and_authority_shape(
+    tmp_path: Path,
+) -> None:
+    source, target, payloads, _ = populate_valid_corpus(tmp_path)
+    payloads[0]["payload"]["fee_payment"]["value"].pop("gas_limit")
+    dump(source, "transaction_payloads.json", payloads)
+    with pytest.raises(ValueError, match="gas_limit"):
+        MODULE.compare(source, target)
+
+    source, target, payloads, _ = populate_valid_corpus(tmp_path)
+    payloads[0]["payload"]["fee_payment"]["payer"] = "sponsor"
+    dump(source, "transaction_payloads.json", payloads)
+    with pytest.raises(ValueError, match="payer"):
         MODULE.compare(source, target)
 
 

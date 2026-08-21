@@ -5,13 +5,17 @@ use halo2_proofs::{
         group::prime::PrimeCurveAffine as _,
         pasta::{EpAffine, EqAffine, Fp, Fq},
     },
-    plonk::Circuit,
+    plonk::{Circuit, ConstraintSystem},
 };
 use iroha_data_model::offline::OFFLINE_CASH_HALO2_K_V1;
 use sha2::Digest as _;
 
 use super::{
     OfflineCashHalo2ParityV1,
+    protocol::{
+        OfflineCashHalo2CircuitRoleV1, OfflineCashRecursionActivationPreflightErrorV1,
+        preflight_offline_cash_recursion_activation_v1,
+    },
     state_abi::{
         AMOUNT_WORD_START, CONTEXT_WORD_START, LINK_WORD_START, OfflineCashStateAbiErrorV1,
         OfflineCashStateOperationV1, OfflineCashStatePublicInstancesV1, PARENT_0_WORD_START,
@@ -37,6 +41,20 @@ use super::{
     },
     state_transition::{OfflineCashStateContextV1, ReceiveFoldOutputV1},
 };
+use crate::zk::pasta_ipa_recursion::{
+    PastaIpaInstanceQueryV1, PastaIpaProofShapeV1, pasta_ipa_augmented_proof_shape_v1,
+};
+
+fn configured_state_shape<F, C>(instance_query: PastaIpaInstanceQueryV1) -> PastaIpaProofShapeV1
+where
+    F: PrimeField,
+    C: Circuit<F>,
+{
+    let mut constraints = ConstraintSystem::<F>::default();
+    let _ = C::configure(&mut constraints);
+    pasta_ipa_augmented_proof_shape_v1(&constraints, OFFLINE_CASH_HALO2_K_V1, instance_query)
+        .expect("configured STATE proof shape")
+}
 
 fn canonical_eq_history() -> Vec<u8> {
     let history = super::halo2_primitives::test_support::history_from_eq_parts(
@@ -549,6 +567,48 @@ fn circuit_rejects_closed_operation_parent_substitution_padding_and_224_bit_over
             .expect("224-bit-overflow synthesis")
             .verify()
             .is_err()
+    );
+}
+
+#[test]
+fn state_shapes_exceed_the_recursive_activation_cap_for_both_parities() {
+    let eq =
+        configured_state_shape::<Fp, OfflineCashEqStateCircuitV1>(PastaIpaInstanceQueryV1::Direct);
+    let ep =
+        configured_state_shape::<Fq, OfflineCashEpStateCircuitV1>(PastaIpaInstanceQueryV1::Direct);
+    assert_eq!(eq, ep);
+    assert_eq!(eq.k(), OFFLINE_CASH_HALO2_K_V1);
+    assert_eq!(eq.instance_columns(), 1);
+    assert_eq!(eq.instance_queries(), 1);
+    assert!(eq.permutation_columns() > 13);
+    assert!(eq.augmented_proof_bytes() > 3_200);
+
+    for (parity, shape) in [
+        (OfflineCashHalo2ParityV1::Eq, &eq),
+        (OfflineCashHalo2ParityV1::Ep, &ep),
+    ] {
+        let error = preflight_offline_cash_recursion_activation_v1(
+            parity,
+            OfflineCashHalo2CircuitRoleV1::State,
+            shape,
+        )
+        .expect_err("the current STATE binding shape must remain non-activating");
+        assert!(matches!(
+            error,
+            OfflineCashRecursionActivationPreflightErrorV1::ProofSizeExceeded {
+                parity: actual_parity,
+                circuit_role: OfflineCashHalo2CircuitRoleV1::State,
+                actual,
+                maximum: 3_200,
+            } if actual_parity == parity && actual == shape.augmented_proof_bytes()
+        ));
+    }
+
+    let queried =
+        configured_state_shape::<Fp, OfflineCashEqStateCircuitV1>(PastaIpaInstanceQueryV1::Queried);
+    assert_eq!(
+        queried.augmented_proof_bytes(),
+        eq.augmented_proof_bytes() + 32
     );
 }
 

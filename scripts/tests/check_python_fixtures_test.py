@@ -31,6 +31,7 @@ def test_compare_only_manages_descriptors_and_rejects_redundant_blobs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(MODULE, "validate_canonical_frames", lambda _path: None)
+    monkeypatch.setattr(MODULE, "validate_payload_descriptors", lambda _path: None)
     source = tmp_path / "source"
     target = tmp_path / "target"
     write(source, "transaction_payloads.json", "payloads")
@@ -54,6 +55,7 @@ def test_compare_reports_missing_and_content_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(MODULE, "validate_canonical_frames", lambda _path: None)
+    monkeypatch.setattr(MODULE, "validate_payload_descriptors", lambda _path: None)
     source = tmp_path / "source"
     target = tmp_path / "target"
     write(source, "transaction_payloads.json", "source")
@@ -78,6 +80,7 @@ def test_compare_requires_both_canonical_descriptors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(MODULE, "validate_canonical_frames", lambda _path: None)
+    monkeypatch.setattr(MODULE, "validate_payload_descriptors", lambda _path: None)
     source = tmp_path / "source"
     target = tmp_path / "target"
     write(source, "transaction_payloads.json", "payloads")
@@ -113,6 +116,151 @@ def _frame(payload: bytes, schema: bytes) -> bytes:
 def _field(payload: bytes) -> bytes:
     assert len(payload) < 128
     return bytes((len(payload),)) + payload
+
+
+def _payload_descriptor(
+    *,
+    executable: object | None = None,
+    gas_limit: object = None,
+    admission_intent: object | None = None,
+) -> dict:
+    common = {
+        "authority": "authority",
+        "creation_time_ms": 1,
+        "network_id": "network",
+        "nonce": None,
+        "time_to_live_ms": 1000,
+    }
+    return {
+        **common,
+        "name": "fixture",
+        "payload": {
+            **common,
+            "admission_intent": (
+                {"intent": "ordinary", "value": None}
+                if admission_intent is None
+                else admission_intent
+            ),
+            "executable": (
+                {"Instructions": []} if executable is None else executable
+            ),
+            "fee_payment": {
+                "payer": "authority",
+                "value": {"charge_limits": [], "gas_limit": gas_limit},
+            },
+            "metadata": {},
+        },
+        "payload_base64": "payload",
+        "payload_hash": "payload-hash",
+        "signed_base64": "signed",
+        "signed_hash": "signed-hash",
+    }
+
+
+def _write_payload_descriptor(path: Path, entries: list[dict]) -> Path:
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    return path
+
+
+def test_payload_descriptor_accepts_exact_ordinary_authority_shape(
+    tmp_path: Path,
+) -> None:
+    path = _write_payload_descriptor(
+        tmp_path / "transaction_payloads.json", [_payload_descriptor()]
+    )
+    MODULE.validate_payload_descriptors(path)
+
+    executable = {"Ivm": "AA=="}
+    path = _write_payload_descriptor(
+        path, [_payload_descriptor(executable=executable, gas_limit=MODULE.MAX_U64)]
+    )
+    MODULE.validate_payload_descriptors(path)
+
+
+def test_payload_descriptor_rejects_duplicate_and_unknown_fields(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "duplicate.json"
+    path.write_text('[{"name":"first","name":"second"}]', encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate JSON object key 'name'"):
+        MODULE.validate_payload_descriptors(path)
+
+    descriptor = _payload_descriptor()
+    descriptor["payload"]["legacy"] = True
+    path = _write_payload_descriptor(path, [descriptor])
+    with pytest.raises(ValueError, match=r"unexpected=\['legacy'\]"):
+        MODULE.validate_payload_descriptors(path)
+
+
+@pytest.mark.parametrize(
+    "admission_intent",
+    [
+        {},
+        {"intent": "ordinary"},
+        {"intent": "ordinary", "value": None, "legacy": True},
+        {"intent": "queue_plan_synced", "value": None},
+        {"intent": "Ordinary", "value": None},
+        {"intent": "ordinary", "value": 0},
+    ],
+)
+def test_payload_descriptor_requires_exact_ordinary_admission_intent(
+    tmp_path: Path, admission_intent: object
+) -> None:
+    path = _write_payload_descriptor(
+        tmp_path / "transaction_payloads.json",
+        [_payload_descriptor(admission_intent=admission_intent)],
+    )
+    with pytest.raises(ValueError, match="admission_intent"):
+        MODULE.validate_payload_descriptors(path)
+
+
+@pytest.mark.parametrize("gas_limit", [False, 0, -1, 2**64, 1.5, "1"])
+def test_payload_descriptor_rejects_noncanonical_gas_limit(
+    tmp_path: Path, gas_limit: object
+) -> None:
+    path = _write_payload_descriptor(
+        tmp_path / "transaction_payloads.json",
+        [_payload_descriptor(gas_limit=gas_limit)],
+    )
+    with pytest.raises(ValueError, match="gas_limit"):
+        MODULE.validate_payload_descriptors(path)
+
+
+def test_payload_descriptor_requires_explicit_gas_limit_and_authority_shape(
+    tmp_path: Path,
+) -> None:
+    descriptor = _payload_descriptor()
+    descriptor["payload"]["fee_payment"]["value"].pop("gas_limit")
+    path = _write_payload_descriptor(
+        tmp_path / "transaction_payloads.json", [descriptor]
+    )
+    with pytest.raises(ValueError, match="gas_limit"):
+        MODULE.validate_payload_descriptors(path)
+
+    descriptor = _payload_descriptor()
+    descriptor["payload"]["fee_payment"]["payer"] = "sponsor"
+    path = _write_payload_descriptor(path, [descriptor])
+    with pytest.raises(ValueError, match="payer"):
+        MODULE.validate_payload_descriptors(path)
+
+
+@pytest.mark.parametrize(
+    "executable",
+    [
+        {"Ivm": "AA=="},
+        {"ContractCall": {}},
+        {"Batch": [{"ContractCall": {}}]},
+    ],
+)
+def test_payload_descriptor_requires_gas_for_executable_code(
+    tmp_path: Path, executable: object
+) -> None:
+    path = _write_payload_descriptor(
+        tmp_path / "transaction_payloads.json",
+        [_payload_descriptor(executable=executable)],
+    )
+    with pytest.raises(ValueError, match="gas_limit"):
+        MODULE.validate_payload_descriptors(path)
 
 
 def test_manifest_frame_guard_hashes_the_complete_frame_and_rejects_bare(

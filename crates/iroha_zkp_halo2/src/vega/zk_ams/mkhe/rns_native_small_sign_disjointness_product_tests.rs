@@ -242,6 +242,16 @@ fn statement8_codec_rejects_geometry_point_scalar_order_commitment_and_residual_
         SmallSignProofSetViewV1::from_components_v1(&wire, upstream, |_| Some(changed)).map(|_| ()),
         Err(RnsNativeSmallSignDisjointnessErrorV1::InvalidIntegrity)
     );
+    let inconsistent = SmallSourceProductCommitmentsV1 {
+        signed: changed_signed,
+        negative_magnitude: commitments.negative_magnitude,
+        positive: commitments.positive,
+    };
+    assert_eq!(
+        SmallSignProofSetViewV1::from_components_v1(&wire, upstream, |_| Some(inconsistent))
+            .map(|_| ()),
+        Err(RnsNativeSmallSignDisjointnessErrorV1::InvalidContext)
+    );
 
     let mut residual = wire.clone();
     residual[HEADER_BYTES_V1 + RECORD_SET_BYTES_V1] ^= 1;

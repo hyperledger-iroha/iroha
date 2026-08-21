@@ -100,6 +100,7 @@ def _write_payloads(path: Path, entries: list[dict]) -> Path:
                 "authority": entry.get("authority"),
                 "network_id": entry.get("network_id"),
                 "creation_time_ms": entry.get("creation_time_ms"),
+                "admission_intent": {"intent": "ordinary", "value": None},
                 "executable": {"Instructions": []},
                 "fee_payment": {
                     "payer": "authority",
@@ -115,19 +116,80 @@ def _write_payloads(path: Path, entries: list[dict]) -> Path:
     return path
 
 
-def test_fee_payment_requires_explicit_nullable_gas_limit() -> None:
+def test_fee_payment_requires_explicit_gas_limit() -> None:
     with pytest.raises(ValueError, match="gas_limit"):
         MODULE.validate_fee_payment(
             {"payer": "authority", "value": {"charge_limits": []}},
             "fee payment",
         )
+
+
+@pytest.mark.parametrize("gas_limit", [None, 1, MODULE.MAX_U64])
+def test_fee_payment_accepts_explicit_nullable_u64_gas_limit(
+    gas_limit: Optional[int],
+) -> None:
     MODULE.validate_fee_payment(
         {
             "payer": "authority",
-            "value": {"charge_limits": [], "gas_limit": None},
+            "value": {"charge_limits": [], "gas_limit": gas_limit},
         },
         "fee payment",
     )
+
+
+@pytest.mark.parametrize(
+    "gas_limit", [False, 0, -1, MODULE.MAX_U64 + 1, 1.5, "1"]
+)
+def test_fee_payment_rejects_noncanonical_gas_limit(gas_limit: object) -> None:
+    with pytest.raises(ValueError, match="gas_limit"):
+        MODULE.validate_fee_payment(
+            {
+                "payer": "authority",
+                "value": {"charge_limits": [], "gas_limit": gas_limit},
+            },
+            "fee payment",
+        )
+
+
+def test_fee_payment_requires_exact_authority_shape() -> None:
+    with pytest.raises(ValueError, match="payer"):
+        MODULE.validate_fee_payment(
+            {
+                "payer": "sponsor",
+                "value": {"charge_limits": [], "gas_limit": None},
+            },
+            "fee payment",
+        )
+    with pytest.raises(ValueError, match="unexpected=.*program_id"):
+        MODULE.validate_fee_payment(
+            {
+                "payer": "authority",
+                "value": {
+                    "charge_limits": [],
+                    "gas_limit": None,
+                    "program_id": "legacy",
+                },
+            },
+            "fee payment",
+        )
+
+
+def test_admission_intent_requires_exact_ordinary_shape() -> None:
+    MODULE.validate_admission_intent(
+        {"intent": "ordinary", "value": None}, "admission intent"
+    )
+    invalid = [
+        None,
+        {},
+        {"intent": "ordinary"},
+        {"intent": "ordinary", "value": None, "legacy": True},
+        {"intent": "queue_plan_synced", "value": None},
+        {"intent": "Ordinary", "value": None},
+        {"intent": "ordinary", "value": 0},
+    ]
+    for value in invalid:
+        with pytest.raises(ValueError, match="admission intent"):
+            MODULE.validate_admission_intent(value, "admission intent")
 
 
 def _write_manifest(path: Path, fixtures: list[dict]) -> Path:
@@ -323,6 +385,11 @@ def test_payload_loader_requires_one_executable_variant_and_accepts_direct_call(
         }
     }
     direct_path.write_text(json.dumps(direct_document), encoding="utf-8")
+    with pytest.raises(ValueError, match="gas_limit"):
+        MODULE.load_payload_fixtures(direct_path)
+
+    direct_document[0]["payload"]["fee_payment"]["value"]["gas_limit"] = 1
+    direct_path.write_text(json.dumps(direct_document), encoding="utf-8")
     assert set(MODULE.load_payload_fixtures(direct_path)) == {"direct_call"}
 
     ambiguous_path = _write_payloads(
@@ -336,6 +403,38 @@ def test_payload_loader_requires_one_executable_variant_and_accepts_direct_call(
     ambiguous_path.write_text(json.dumps(ambiguous_document), encoding="utf-8")
     with pytest.raises(ValueError, match="exactly one executable variant"):
         MODULE.load_payload_fixtures(ambiguous_path)
+
+
+@pytest.mark.parametrize(
+    "executable",
+    [
+        {"Ivm": "AQ=="},
+        {
+            "Batch": [
+                {
+                    "ContractCall": {
+                        "contract_address": "irohac1example",
+                        "expected_code_hash": "hash:example",
+                        "entrypoint": "main",
+                        "arguments": None,
+                    }
+                }
+            ]
+        },
+    ],
+)
+def test_payload_loader_requires_gas_for_executable_code(
+    tmp_path: Path, executable: dict
+) -> None:
+    path = _write_payloads(
+        tmp_path / "requires-gas.json", [_payload_entry("requires_gas")]
+    )
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document[0]["payload"]["executable"] = executable
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="gas_limit"):
+        MODULE.load_payload_fixtures(path)
 
 
 def test_payload_loader_validates_exact_executable_variant_bodies() -> None:

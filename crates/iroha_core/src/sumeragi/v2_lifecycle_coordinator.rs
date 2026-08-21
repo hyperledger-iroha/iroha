@@ -73,16 +73,15 @@ mod wal_recovery;
 #[path = "v2_lifecycle_work_registry.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
 mod work_registry;
+#[cfg(test)]
+pub(crate) use authority::RolloverSnapshot;
 use authority::{
     AuthenticatedEpisodeAuthority, CoordinatorLifecycleOrdinalAuthority,
     DurableLifecycleOrdinalReservation, DurableLifecycleOrdinalReservationError,
 };
 pub(in crate::sumeragi) use authority::{
-    RuntimeLifecycleOrdinalAuthority,
-    runtime_lifecycle_ordinal_authority_after_high_watermark,
+    RuntimeLifecycleOrdinalAuthority, runtime_lifecycle_ordinal_authority_after_high_watermark,
 };
-#[cfg(test)]
-pub(crate) use authority::RolloverSnapshot;
 use body_pipeline_transition::durable_validate_payload_is_exact;
 pub(in crate::sumeragi) use body_pipeline_transition::{
     SealedInvalidBodyReportProjectionPermit, SealedValidateApplyProjectionPermit,
@@ -566,7 +565,10 @@ impl LifecycleCoordinator {
     fn reduce_admit_with_durable_ordinals(
         &mut self,
         request: AdmissionRequest,
-    ) -> (AdmissionDecision, Option<DurableLifecycleOrdinalReservation>) {
+    ) -> (
+        AdmissionDecision,
+        Option<DurableLifecycleOrdinalReservation>,
+    ) {
         let Some(authority) = self.lifecycle_ordinal_authority.clone() else {
             self.fault = Some(CoordinatorFault::DurabilityFailure);
             return (
@@ -575,9 +577,10 @@ impl LifecycleCoordinator {
             );
         };
         let mut reservation = None;
-        let decision = self.reduce_admit_with_ordinal_allocator(
-            request,
-            |high_water, count| match authority.begin_durable_range(high_water, count) {
+        let decision =
+            self.reduce_admit_with_ordinal_allocator(request, |high_water, count| match authority
+                .begin_durable_range(high_water, count)
+            {
                 Ok(pending) => {
                     let range = (pending.first(), pending.last());
                     reservation = Some(pending);
@@ -589,8 +592,7 @@ impl LifecycleCoordinator {
                 Err(DurableLifecycleOrdinalReservationError::Invariant) => Err(
                     AdmissionDecision::FailClosed(CoordinatorFault::DurabilityFailure),
                 ),
-            },
-        );
+            });
         if let AdmissionDecision::FailClosed(fault) = decision {
             self.fault = Some(fault);
         }
@@ -763,11 +765,7 @@ impl LifecycleCoordinator {
         }) {
             return AdmissionDecision::Rejected(AdmissionRejection::InvalidProducerTurn);
         }
-        let ordinal_count = if producer.is_some() {
-            2_usize
-        } else {
-            1_usize
-        };
+        let ordinal_count = if producer.is_some() { 2_usize } else { 1_usize };
         if !has_lifecycle_record_capacity(self.records.len(), ordinal_count) {
             self.admission_waits.remove(&candidate.key);
             return AdmissionDecision::Rejected(AdmissionRejection::AdmissionQueueFull);

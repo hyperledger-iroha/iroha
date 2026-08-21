@@ -265,12 +265,6 @@ pub use zk_ams::{
     ZkAmsMkheRnsNativeVerificationStageV1, verify_zk_ams_mkhe_rns_native_composite_v1,
 };
 pub use zk_ams::{
-    ZK_AMS_MKHE_RNS_NATIVE_SECTION_CODEC_VERSION_V1,
-    ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1,
-    ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1, ZkAmsMkheRnsNativeSectionCodecErrorV1,
-    ZkAmsMkheRnsNativeTerminalBridgeSectionV1, ZkAmsMkheRnsNativeZeroPaddingSectionV1,
-};
-pub use zk_ams::{
     ZK_AMS_MKHE_RNS_NATIVE_CROSS_FIELD_LOOKUP_SECTION_MAX_BYTES_V1,
     ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_HEADER_BYTES_V1,
     ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_MAX_BYTES_V1,
@@ -291,6 +285,12 @@ pub use zk_ams::{
     ZkAmsMkheRnsNativeQpcsRootsV1, ZkAmsMkheRnsNativeTerminalBoundTranscriptV1,
     ZkAmsMkheRnsNativeTerminalBridgeV1, ZkAmsMkheRnsNativeTerminalRootsV1,
     ZkAmsMkheRnsNativeTranscriptErrorV1, ZkAmsMkheRnsNativeTranscriptV1,
+};
+pub use zk_ams::{
+    ZK_AMS_MKHE_RNS_NATIVE_SECTION_CODEC_VERSION_V1,
+    ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1, ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1,
+    ZkAmsMkheRnsNativeSectionCodecErrorV1, ZkAmsMkheRnsNativeTerminalBridgeSectionV1,
+    ZkAmsMkheRnsNativeZeroPaddingSectionV1,
 };
 #[cfg(test)]
 pub use zk_ams::{

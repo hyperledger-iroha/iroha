@@ -71,6 +71,7 @@ SHARED_PAYLOAD_ENTRY_FIELDS = frozenset(
 SWIFT_PAYLOAD_ENTRY_FIELDS = frozenset({"name", "payload"})
 SHARED_PAYLOAD_FIELDS = frozenset(
     {
+        "admission_intent",
         "authority",
         "creation_time_ms",
         "executable",
@@ -83,6 +84,7 @@ SHARED_PAYLOAD_FIELDS = frozenset(
 )
 SWIFT_PAYLOAD_FIELDS = frozenset(
     {
+        "admission_intent",
         "authority",
         "creation_time_ms",
         "executable",
@@ -325,7 +327,7 @@ def validate_instruction(value: object, context: str, *, shared: bool) -> None:
             raise ValueError(f"{context}.arguments[{key!r}] must be a string")
 
 
-def validate_executable(value: object, context: str, *, shared: bool) -> None:
+def validate_executable(value: object, context: str, *, shared: bool) -> bool:
     if not isinstance(value, dict) or len(value) != 1:
         raise ValueError(f"{context} must contain exactly one executable variant")
     variant, body = next(iter(value.items()))
@@ -334,6 +336,7 @@ def validate_executable(value: object, context: str, *, shared: bool) -> None:
     if variant == "Ivm":
         if not decode_canonical_base64(body, f"{context}.Ivm"):
             raise ValueError(f"{context}.Ivm must not be empty")
+        return True
     elif variant == "Instructions":
         if not isinstance(body, list):
             raise ValueError(f"{context}.Instructions must be an array")
@@ -345,11 +348,14 @@ def validate_executable(value: object, context: str, *, shared: bool) -> None:
             validate_instruction(
                 instruction, f"{context}.Instructions[{index}]", shared=shared
             )
+        return False
     elif variant == "ContractCall":
         validate_contract_call(body, f"{context}.ContractCall")
+        return True
     elif variant == "Batch":
         if not isinstance(body, list):
             raise ValueError(f"{context}.Batch must be an array")
+        requires_gas_limit = False
         for index, item in enumerate(body):
             item_context = f"{context}.Batch[{index}]"
             if not isinstance(item, dict) or len(item) != 1:
@@ -361,18 +367,22 @@ def validate_executable(value: object, context: str, *, shared: bool) -> None:
                 validate_instruction(item_body, f"{item_context}.Instruction", shared=shared)
             elif item_variant == "ContractCall":
                 validate_contract_call(item_body, f"{item_context}.ContractCall")
+                requires_gas_limit = True
             else:
                 raise ValueError(f"{item_context} has unknown variant {item_variant!r}")
+        return requires_gas_limit
     else:
         raise ValueError(f"{context} has unknown variant {variant!r}")
 
 
-def validate_fee_payment(value: object, context: str, *, shared: bool) -> None:
+def validate_fee_payment(
+    value: object, context: str, *, shared: bool
+) -> Optional[int]:
     if not isinstance(value, dict):
         raise ValueError(f"{context} must be an object")
     require_exact_fields(value, frozenset({"payer", "value"}), context)
-    payer = require_nonempty_string(value["payer"], f"{context}.payer")
-    if not shared and payer != "authority":
+    payer = value["payer"]
+    if payer != "authority":
         raise ValueError(f"{context}.payer must be exactly 'authority'")
     fee_value = value["value"]
     if not isinstance(fee_value, dict):
@@ -417,6 +427,20 @@ def validate_fee_payment(value: object, context: str, *, shared: bool) -> None:
         )
     if not shared and gas_limit is not None:
         raise ValueError(f"{context}.value.gas_limit must be exactly null")
+    return gas_limit
+
+
+def validate_admission_intent(
+    value: object, context: str, *, shared: bool
+) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{context} must be an object")
+    require_exact_fields(value, frozenset({"intent", "value"}), context)
+    expected = "ordinary" if shared else "queue_plan_synced"
+    if value["intent"] != expected or value["value"] is not None:
+        raise ValueError(
+            f"{context} must be exactly {{'intent': '{expected}', 'value': null}}"
+        )
 
 
 @dataclass(frozen=True)
@@ -474,10 +498,20 @@ def validate_payload_body(value: object, context: str, *, shared: bool) -> Paylo
         raise ValueError(f"{context}.nonce must be an explicit positive integer")
     if not isinstance(value["metadata"], dict):
         raise ValueError(f"{context}.metadata must be an explicit object")
-    validate_fee_payment(
+    gas_limit = validate_fee_payment(
         value["fee_payment"], f"{context}.fee_payment", shared=shared
     )
-    validate_executable(value["executable"], f"{context}.executable", shared=shared)
+    validate_admission_intent(
+        value["admission_intent"], f"{context}.admission_intent", shared=shared
+    )
+    requires_gas_limit = validate_executable(
+        value["executable"], f"{context}.executable", shared=shared
+    )
+    if requires_gas_limit and gas_limit is None:
+        raise ValueError(
+            f"{context}.fee_payment.value.gas_limit must be positive for Ivm, "
+            "ContractCall, or a Batch containing ContractCall"
+        )
     return PayloadRecord(
         name="",
         authority=authority,

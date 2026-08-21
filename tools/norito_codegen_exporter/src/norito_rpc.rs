@@ -1203,6 +1203,9 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
             json::from_value::<TransactionAdmissionIntent>(value.clone())
                 .map_err(|err| eyre!(err.to_string()))
         })?;
+    if admission_intent != TransactionAdmissionIntent::Ordinary {
+        bail!("canonical Norito RPC fixtures require ordinary admission_intent");
+    }
     if executable.requires_transaction_gas_limit() && fee_payment.gas_limit().is_none() {
         bail!(
             "IVM and contract-call fixture executables require an explicit fee_payment gas_limit"
@@ -4292,6 +4295,30 @@ mod tests {
             error
                 .to_string()
                 .contains("missing required field 'admission_intent'")
+        );
+        let mut queue_plan_payload = entry
+            .get("payload")
+            .and_then(Value::as_object)
+            .expect("nested payload object")
+            .clone();
+        let mut queue_plan_intent = Map::new();
+        queue_plan_intent.insert(
+            "intent".to_owned(),
+            Value::String("queue_plan_synced".to_owned()),
+        );
+        queue_plan_intent.insert("value".to_owned(), Value::Null);
+        queue_plan_payload.insert(
+            "admission_intent".to_owned(),
+            Value::Object(queue_plan_intent),
+        );
+        let Err(error) = parse_payload(&Value::Object(queue_plan_payload)) else {
+            panic!("shared fixtures must not claim queue-plan admission");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("require ordinary admission_intent"),
+            "unexpected queue-plan admission error: {error}"
         );
     }
     #[test]

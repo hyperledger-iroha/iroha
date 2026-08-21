@@ -2160,9 +2160,7 @@ fn kagemusha_poseidon_commitment_chunks_v5(domain: u64, limbs: &[u32]) -> [u128;
 /// V4 verifier profile using direct public-instance Lagrange evaluation; disabling queried-instance
 /// IPA avoids fixed bases for thousands of public limbs.
 fn kagemusha_ipa_compile_config_v4(public_len: usize) -> snark_verifier::system::halo2::Config {
-    snark_verifier::system::halo2::Config::ipa()
-        .set_query_instance(false)
-        .with_num_instance(vec![public_len])
+    super::pasta_ipa_recursion::pasta_ipa_direct_instance_compile_config_v1(public_len)
 }
 /// IPA multi-open prover that delegates openings but disables Halo2's hard-coded queried instances,
 /// aligning [`kagemusha_ipa_compile_config_v4`] with snark-verifier without a crypto fork.
@@ -3136,11 +3134,14 @@ pub fn validate_kagemusha_proof_pair_measurement_v4(
     )?;
     Ok(bytes.len())
 }
-const KAGEMUSHA_POSEIDON_WIDTH: usize = 3;
-const KAGEMUSHA_POSEIDON_RATE: usize = 2;
-const KAGEMUSHA_POSEIDON_FULL_ROUNDS: usize = 8;
-const KAGEMUSHA_POSEIDON_PARTIAL_ROUNDS: usize = 57;
-const KAGEMUSHA_POSEIDON_SECURE_MDS: usize = 0;
+const KAGEMUSHA_POSEIDON_WIDTH: usize = super::pasta_ipa_recursion::PASTA_IPA_POSEIDON_WIDTH_V1;
+const KAGEMUSHA_POSEIDON_RATE: usize = super::pasta_ipa_recursion::PASTA_IPA_POSEIDON_RATE_V1;
+const KAGEMUSHA_POSEIDON_FULL_ROUNDS: usize =
+    super::pasta_ipa_recursion::PASTA_IPA_POSEIDON_FULL_ROUNDS_V1;
+const KAGEMUSHA_POSEIDON_PARTIAL_ROUNDS: usize =
+    super::pasta_ipa_recursion::PASTA_IPA_POSEIDON_PARTIAL_ROUNDS_V1;
+const KAGEMUSHA_POSEIDON_SECURE_MDS: usize =
+    super::pasta_ipa_recursion::PASTA_IPA_POSEIDON_SECURE_MDS_V1;
 fn catch_kagemusha_native_verifier_panic<T>(
     label: &str,
     verify: impl FnOnce() -> T,
@@ -4243,109 +4244,13 @@ fn kagemusha_augmented_proof_size_bytes_v5<F>(
 where
     F: ff::Field,
 {
-    use halo2_proofs::plonk::{Any, Column};
-    let degree = cs.degree();
-    let permutation_chunk_size = degree
-        .checked_sub(2)
-        .filter(|size| *size != 0)
-        .ok_or_else(|| "Kagemusha V5 proof-size preflight has invalid degree".to_owned())?;
-    let permutation_columns = cs.permutation().get_columns().len();
-    let permutation_chunks = permutation_columns.div_ceil(permutation_chunk_size);
-    // Keygen retains selectors; Halo2 converts each to a current-row fixed-column query.
-    let fixed_queries = cs
-        .fixed_queries()
-        .len()
-        .checked_add(cs.num_selectors())
-        .ok_or_else(|| "Kagemusha V5 fixed-query count overflow".to_owned())?;
-    // Mirror halo2-axiom's point set, omitting unqueried instance polynomials despite one column.
-    let mut column_queries =
-        std::collections::BTreeMap::<Column<Any>, std::collections::BTreeSet<i32>>::new();
-    for (column, rotation) in cs.advice_queries() {
-        column_queries
-            .entry((*column).into())
-            .or_default()
-            .insert(rotation.0);
-    }
-    for (column, rotation) in cs.fixed_queries() {
-        column_queries
-            .entry((*column).into())
-            .or_default()
-            .insert(rotation.0);
-    }
-    for column in cs.permutation().get_columns() {
-        column_queries.entry(column).or_default().insert(0);
-    }
-    let mut point_sets = column_queries
-        .into_values()
-        .map(|rotations| rotations.into_iter().collect::<Vec<_>>())
-        .collect::<std::collections::BTreeSet<_>>();
-    if cs.num_selectors() != 0 {
-        point_sets.insert(vec![0]);
-    }
-    if !cs.lookups().is_empty() {
-        point_sets.insert(vec![0, 1]);
-        point_sets.insert(vec![-1, 0]);
-        point_sets.insert(vec![0]);
-    }
-    if permutation_columns != 0 {
-        point_sets.insert(vec![0, 1]);
-        if permutation_columns > permutation_chunk_size {
-            let chained_rotation = i32::try_from(
-                cs.blinding_factors()
-                    .checked_add(1)
-                    .ok_or_else(|| "Kagemusha V5 blinding-factor overflow".to_owned())?,
-            )
-            .map_err(|_| "Kagemusha V5 blinding factor does not fit i32".to_owned())?;
-            point_sets.insert(vec![-chained_rotation, 0, 1]);
-        }
-    }
-    let lookup_count = cs.lookups().len();
-    let ipa_rounds =
-        usize::try_from(k).map_err(|_| "Kagemusha V5 IPA degree does not fit usize".to_owned())?;
-    let ipa_commitments = ipa_rounds
-        .checked_mul(2)
-        .and_then(|count| count.checked_add(1))
-        .ok_or_else(|| "Kagemusha V5 IPA commitment count overflow".to_owned())?;
-    let commitments = cs
-        .num_advice_columns()
-        .checked_add(
-            lookup_count
-                .checked_mul(3)
-                .ok_or_else(|| "Kagemusha V5 lookup commitment count overflow".to_owned())?,
-        )
-        .and_then(|count| count.checked_add(permutation_chunks))
-        .and_then(|count| count.checked_add(degree))
-        .and_then(|count| count.checked_add(1))
-        .and_then(|count| count.checked_add(ipa_commitments))
-        .ok_or_else(|| "Kagemusha V5 proof commitment count overflow".to_owned())?;
-    let permutation_evaluations = if permutation_chunks == 0 {
-        0
-    } else {
-        permutation_chunks
-            .checked_mul(3)
-            .and_then(|count| count.checked_sub(1))
-            .ok_or_else(|| "Kagemusha V5 permutation evaluation count overflow".to_owned())?
-    };
-    let evaluations = cs
-        .advice_queries()
-        .len()
-        .checked_add(fixed_queries)
-        .and_then(|count| count.checked_add(lookup_count.checked_mul(5)?))
-        .and_then(|count| count.checked_add(permutation_evaluations))
-        .and_then(|count| count.checked_add(permutation_columns))
-        .and_then(|count| count.checked_add(1))
-        .and_then(|count| count.checked_add(point_sets.len()))
-        .and_then(|count| count.checked_add(2))
-        .ok_or_else(|| "Kagemusha V5 proof evaluation count overflow".to_owned())?;
-    let transcript_elements = commitments
-        .checked_add(evaluations)
-        .and_then(|count| count.checked_add(1))
-        .ok_or_else(|| "Kagemusha V5 augmented proof element count overflow".to_owned())?;
-    let transcript_bytes = transcript_elements
-        .checked_mul(32)
-        .ok_or_else(|| "Kagemusha V5 augmented proof byte length overflow".to_owned())?;
-    u32::try_from(transcript_bytes)
-        .map_err(|_| "Kagemusha V5 augmented proof byte length does not fit u32".to_owned())
+    super::pasta_ipa_recursion::pasta_ipa_augmented_proof_shape_v1(
+        cs,
+        k,
+        super::pasta_ipa_recursion::PastaIpaInstanceQueryV1::Direct,
+    )
+    .map(|shape| shape.augmented_proof_bytes())
+    .map_err(|error| format!("Kagemusha V5 {error}"))
 }
 fn preflight_kagemusha_processed_vk_v4(
     scanner: &mut KagemushaWireScannerV4<'_>,

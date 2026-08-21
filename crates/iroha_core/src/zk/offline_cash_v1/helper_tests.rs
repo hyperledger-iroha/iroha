@@ -4,6 +4,7 @@ use halo2_proofs::{
         ff::PrimeField,
         pasta::{Fp, Fq},
     },
+    plonk::{Circuit, ConstraintSystem},
 };
 use iroha_data_model::offline::{
     KagemushaDevicePublicKeyV2, KagemushaDeviceSignatureV2, OFFLINE_CASH_HALO2_K_V1,
@@ -33,8 +34,25 @@ use super::{
         OfflineCashAndroidKeyCertWitnessV1, OfflineCashHelperRelationInputV1,
         OfflineCashValidatedHelperRelationV1, guard_bindings_v1, platform_message_v1,
     },
-    protocol::{OfflineCashHalo2CircuitRoleV1, offline_cash_halo2_protocol_identity_v1},
+    protocol::{
+        OfflineCashHalo2CircuitRoleV1, OfflineCashRecursionActivationPreflightErrorV1,
+        offline_cash_halo2_protocol_identity_v1, preflight_offline_cash_recursion_activation_v1,
+    },
 };
+use crate::zk::pasta_ipa_recursion::{
+    PastaIpaInstanceQueryV1, PastaIpaProofShapeV1, pasta_ipa_augmented_proof_shape_v1,
+};
+
+fn configured_helper_shape<F, C>(instance_query: PastaIpaInstanceQueryV1) -> PastaIpaProofShapeV1
+where
+    F: PrimeField,
+    C: Circuit<F>,
+{
+    let mut constraints = ConstraintSystem::<F>::default();
+    let _ = C::configure(&mut constraints);
+    pasta_ipa_augmented_proof_shape_v1(&constraints, OFFLINE_CASH_HALO2_K_V1, instance_query)
+        .expect("configured helper proof shape")
+}
 
 fn signing_key(seed: u8) -> SigningKey {
     SigningKey::from_bytes((&[seed; 32]).into()).expect("valid deterministic P-256 key")
@@ -345,6 +363,118 @@ fn binding_circuit_rejects_role_sequence_digest_optionality_and_inequality_subst
                 .is_err(),
             "{label} substitution must violate the binding circuit"
         );
+    }
+}
+
+#[test]
+fn helper_shapes_exceed_the_activation_cap_in_both_instance_profiles() {
+    let queried_eq = configured_helper_shape::<Fp, OfflineCashEqGuardBundleBindingCircuitV1>(
+        PastaIpaInstanceQueryV1::Queried,
+    );
+    let queried_ep = configured_helper_shape::<Fq, OfflineCashEpGuardBundleBindingCircuitV1>(
+        PastaIpaInstanceQueryV1::Queried,
+    );
+    for shape in [&queried_eq, &queried_ep] {
+        assert_eq!(shape.degree(), 3);
+        assert_eq!(shape.advice_columns(), 12);
+        assert_eq!(shape.instance_columns(), 1);
+        assert_eq!(shape.advice_queries(), 13);
+        assert_eq!(shape.instance_queries(), 1);
+        assert_eq!(shape.fixed_queries(), 1);
+        assert_eq!(shape.selectors(), 12);
+        assert_eq!(shape.lookups(), 0);
+        assert_eq!(shape.permutation_columns(), 13);
+        assert_eq!(shape.permutation_chunks(), 13);
+        assert_eq!(shape.point_sets(), 3);
+        assert_eq!(shape.commitments(), 62);
+        assert_eq!(shape.evaluations(), 84);
+        assert_eq!(shape.transcript_elements(), 147);
+        assert_eq!(shape.augmented_proof_bytes(), 4_704);
+    }
+    assert!(matches!(
+        preflight_offline_cash_recursion_activation_v1(
+            OfflineCashHalo2ParityV1::Eq,
+            OfflineCashHalo2CircuitRoleV1::GuardBundle,
+            &queried_eq,
+        ),
+        Err(
+            OfflineCashRecursionActivationPreflightErrorV1::InvalidInstanceQuery {
+                actual: PastaIpaInstanceQueryV1::Queried,
+            }
+        )
+    ));
+
+    let helper_roles = [
+        (
+            OfflineCashHalo2ParityV1::Eq,
+            OfflineCashHalo2CircuitRoleV1::GuardUse,
+            configured_helper_shape::<Fp, OfflineCashEqGuardUseBindingCircuitV1>(
+                PastaIpaInstanceQueryV1::Direct,
+            ),
+        ),
+        (
+            OfflineCashHalo2ParityV1::Ep,
+            OfflineCashHalo2CircuitRoleV1::GuardUse,
+            configured_helper_shape::<Fq, OfflineCashEpGuardUseBindingCircuitV1>(
+                PastaIpaInstanceQueryV1::Direct,
+            ),
+        ),
+        (
+            OfflineCashHalo2ParityV1::Eq,
+            OfflineCashHalo2CircuitRoleV1::PlatformBind,
+            configured_helper_shape::<Fp, OfflineCashEqPlatformBindBindingCircuitV1>(
+                PastaIpaInstanceQueryV1::Direct,
+            ),
+        ),
+        (
+            OfflineCashHalo2ParityV1::Ep,
+            OfflineCashHalo2CircuitRoleV1::PlatformBind,
+            configured_helper_shape::<Fq, OfflineCashEpPlatformBindBindingCircuitV1>(
+                PastaIpaInstanceQueryV1::Direct,
+            ),
+        ),
+        (
+            OfflineCashHalo2ParityV1::Eq,
+            OfflineCashHalo2CircuitRoleV1::AndroidKeyCert,
+            configured_helper_shape::<Fp, OfflineCashEqAndroidKeyCertBindingCircuitV1>(
+                PastaIpaInstanceQueryV1::Direct,
+            ),
+        ),
+        (
+            OfflineCashHalo2ParityV1::Ep,
+            OfflineCashHalo2CircuitRoleV1::AndroidKeyCert,
+            configured_helper_shape::<Fq, OfflineCashEpAndroidKeyCertBindingCircuitV1>(
+                PastaIpaInstanceQueryV1::Direct,
+            ),
+        ),
+        (
+            OfflineCashHalo2ParityV1::Eq,
+            OfflineCashHalo2CircuitRoleV1::GuardBundle,
+            configured_helper_shape::<Fp, OfflineCashEqGuardBundleBindingCircuitV1>(
+                PastaIpaInstanceQueryV1::Direct,
+            ),
+        ),
+        (
+            OfflineCashHalo2ParityV1::Ep,
+            OfflineCashHalo2CircuitRoleV1::GuardBundle,
+            configured_helper_shape::<Fq, OfflineCashEpGuardBundleBindingCircuitV1>(
+                PastaIpaInstanceQueryV1::Direct,
+            ),
+        ),
+    ];
+    for (parity, role, shape) in helper_roles {
+        assert_eq!(shape.augmented_proof_bytes(), 4_672);
+        assert!(matches!(
+            preflight_offline_cash_recursion_activation_v1(parity, role, &shape),
+            Err(
+                OfflineCashRecursionActivationPreflightErrorV1::ProofSizeExceeded {
+                    parity: actual_parity,
+                    circuit_role: actual_role,
+                    actual: 4_672,
+                    maximum: 3_200,
+                }
+            ) if actual_parity == parity && actual_role == role
+        ));
     }
 }
 

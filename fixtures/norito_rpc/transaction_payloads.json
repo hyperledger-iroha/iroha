@@ -27,6 +27,10 @@
           "gas_limit": 1000
         }
       },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
+      },
       "metadata": {
         "checked": true
       },
@@ -60,8 +64,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -94,8 +103,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -128,8 +142,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -162,8 +181,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -196,8 +220,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -230,8 +259,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -264,8 +298,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -302,8 +341,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -340,8 +384,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -378,8 +427,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -416,8 +470,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -450,8 +509,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -484,8 +548,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -518,8 +587,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -552,8 +626,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -586,8 +665,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -620,8 +704,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -658,8 +747,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -692,8 +786,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -726,8 +825,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -760,8 +864,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -794,8 +903,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -828,8 +942,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -862,8 +981,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -896,8 +1020,13 @@
       "fee_payment": {
         "payer": "authority",
         "value": {
-          "charge_limits": []
+          "charge_limits": [],
+          "gas_limit": null
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {},
       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -954,6 +1083,10 @@
           "charge_limits": [],
           "gas_limit": 100000
         }
+      },
+      "admission_intent": {
+        "intent": "ordinary",
+        "value": null
       },
       "metadata": {
         "fixture": "mixed-batch"

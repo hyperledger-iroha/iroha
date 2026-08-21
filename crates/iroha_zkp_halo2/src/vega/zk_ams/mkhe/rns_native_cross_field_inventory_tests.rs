@@ -173,16 +173,12 @@ fn statement8_small_source_accessor_uses_exact_raw_roles_and_derived_positive() 
         .expect("canonical signed point");
     let commitments = small_source_product_commitments_v1(&inventory, 0)
         .expect("first small-source commitment tuple");
-    assert_eq!(commitments.signed, signed);
-    assert_eq!(commitments.negative_magnitude, signed);
-    assert_eq!(commitments.positive, signed + signed);
-    assert!(
-        small_source_product_commitments_v1(&inventory, SMALL_SOURCE_BLOCKS_V1 - 1).is_some()
-    );
+    assert!(commitments.signed == signed);
+    assert!(commitments.negative_magnitude == signed);
+    assert!(commitments.positive == signed + signed);
+    assert!(small_source_product_commitments_v1(&inventory, SMALL_SOURCE_BLOCKS_V1 - 1).is_some());
     assert!(small_source_product_commitments_v1(&inventory, SMALL_SOURCE_BLOCKS_V1).is_none());
-    assert!(
-        small_source_product_commitments_v1(&inventory[..inventory.len() - 1], 0).is_none()
-    );
+    assert!(small_source_product_commitments_v1(&inventory[..inventory.len() - 1], 0).is_none());
 
     let mut opposite = [0_u8; POINT_BYTES_V1];
     (-signed)

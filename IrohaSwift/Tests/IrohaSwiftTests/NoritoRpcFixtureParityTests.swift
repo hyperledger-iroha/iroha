@@ -230,8 +230,9 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
             "executable": ["Instructions": []],
             "fee_payment": [
                 "payer": "authority",
-                "value": ["charge_limits": []],
+                "value": ["charge_limits": [], "gas_limit": NSNull()],
             ],
+            "admission_intent": ["intent": "ordinary", "value": NSNull()],
             "metadata": [:],
             "nonce": NSNull(),
             "time_to_live_ms": 100_000,
@@ -263,6 +264,233 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         XCTAssertThrowsError(
             try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(nestedData)
         )
+    }
+
+    func testSharedPayloadRequiresAdmissionAndExecutableGasPolicy() throws {
+        func descriptor(executable: [String: Any], gasLimit: Any) -> [String: Any] {
+            let common: [String: Any] = [
+                "authority": "authority",
+                "network_id": FixtureConstants.networkId,
+                "creation_time_ms": 1,
+                "time_to_live_ms": 100_000,
+                "nonce": NSNull(),
+            ]
+            var payload = common
+            payload["executable"] = executable
+            payload["fee_payment"] = [
+                "payer": "authority",
+                "value": ["charge_limits": [], "gas_limit": gasLimit],
+            ]
+            payload["admission_intent"] = ["intent": "ordinary", "value": NSNull()]
+            payload["metadata"] = [String: Any]()
+            var fixture = common
+            fixture["name"] = "schema-policy"
+            fixture["payload"] = payload
+            fixture["payload_base64"] = "AA=="
+            fixture["signed_base64"] = "AQ=="
+            fixture["payload_hash"] = "payload-hash"
+            fixture["signed_hash"] = "signed-hash"
+            return fixture
+        }
+
+        func encoded(_ fixture: [String: Any]) throws -> Data {
+            try JSONSerialization.data(withJSONObject: [fixture])
+        }
+
+        func replacingPayload(
+            _ fixture: [String: Any],
+            _ update: (inout [String: Any]) -> Void
+        ) throws -> [String: Any] {
+            var updated = fixture
+            var payload = try XCTUnwrap(updated["payload"] as? [String: Any])
+            update(&payload)
+            updated["payload"] = payload
+            return updated
+        }
+
+        func replacingFee(
+            _ fixture: [String: Any],
+            payer: String = "authority",
+            chargeLimits: [[String: Any]] = [],
+            gasLimit: Any
+        ) throws -> [String: Any] {
+            try replacingPayload(fixture) { payload in
+                payload["fee_payment"] = [
+                    "payer": payer,
+                    "value": ["charge_limits": chargeLimits, "gas_limit": gasLimit],
+                ]
+            }
+        }
+
+        let instructions = descriptor(
+            executable: ["Instructions": []],
+            gasLimit: NSNull()
+        )
+        XCTAssertNoThrow(
+            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(encoded(instructions))
+        )
+
+        var missingAdmission = instructions
+        var missingAdmissionPayload = try XCTUnwrap(missingAdmission["payload"] as? [String: Any])
+        missingAdmissionPayload.removeValue(forKey: "admission_intent")
+        missingAdmission["payload"] = missingAdmissionPayload
+        XCTAssertThrowsError(
+            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(encoded(missingAdmission))
+        )
+
+        var wrongAdmission = instructions
+        var wrongAdmissionPayload = try XCTUnwrap(wrongAdmission["payload"] as? [String: Any])
+        wrongAdmissionPayload["admission_intent"] = [
+            "intent": "queue_plan_synced", "value": NSNull(),
+        ]
+        wrongAdmission["payload"] = wrongAdmissionPayload
+        XCTAssertThrowsError(
+            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(encoded(wrongAdmission))
+        )
+
+        for invalidAdmission in [
+            ["intent": "ordinary", "value": 0] as [String: Any],
+            ["intent": "ordinary", "value": NSNull(), "legacy": true],
+        ] {
+            let invalid = try replacingPayload(instructions) { payload in
+                payload["admission_intent"] = invalidAdmission
+            }
+            XCTAssertThrowsError(
+                try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(encoded(invalid))
+            )
+        }
+
+        let missingGas = try replacingPayload(instructions) { payload in
+            payload["fee_payment"] = [
+                "payer": "authority",
+                "value": ["charge_limits": []],
+            ]
+        }
+        XCTAssertThrowsError(
+            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(encoded(missingGas))
+        )
+        let sponsor = try replacingFee(
+            instructions,
+            payer: "sponsor",
+            gasLimit: NSNull()
+        )
+        XCTAssertThrowsError(
+            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(encoded(sponsor))
+        )
+
+        let ivmWithoutGas = descriptor(executable: ["Ivm": "AQ=="], gasLimit: NSNull())
+        XCTAssertThrowsError(
+            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(encoded(ivmWithoutGas))
+        )
+        let ivmWithGas = descriptor(executable: ["Ivm": "AQ=="], gasLimit: 1)
+        XCTAssertNoThrow(
+            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(encoded(ivmWithGas))
+        )
+        let ivmWithZeroGas = descriptor(executable: ["Ivm": "AQ=="], gasLimit: 0)
+        XCTAssertThrowsError(
+            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(encoded(ivmWithZeroGas))
+        )
+
+        let contractCall: [String: Any] = [
+            "ContractCall": [
+                "arguments": NSNull(),
+                "contract_address": "irohac1contract",
+                "entrypoint": "run",
+                "expected_code_hash": "hash:value",
+            ],
+        ]
+        XCTAssertThrowsError(
+            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(
+                encoded(descriptor(executable: contractCall, gasLimit: NSNull()))
+            )
+        )
+        XCTAssertNoThrow(
+            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(
+                encoded(descriptor(executable: contractCall, gasLimit: 1))
+            )
+        )
+        XCTAssertThrowsError(
+            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(
+                encoded(descriptor(executable: ["Batch": []], gasLimit: NSNull()))
+            )
+        )
+        let mixedBatch: [String: Any] = [
+            "Batch": [
+                ["Instruction": ["payload_base64": "AQ==", "wire_name": "iroha.test"]],
+                ["ContractCall": try XCTUnwrap(contractCall["ContractCall"])],
+            ],
+        ]
+        XCTAssertThrowsError(
+            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(
+                encoded(descriptor(executable: mixedBatch, gasLimit: NSNull()))
+            )
+        )
+
+        let nexusCharge: [String: Any] = [
+            "asset_definition_id": "asset",
+            "kind": ["kind": "nexus", "value": NSNull()],
+            "max_amount": "0.5",
+        ]
+        let pipelineCharge: [String: Any] = [
+            "asset_definition_id": "asset",
+            "kind": ["kind": "pipeline_gas", "value": NSNull()],
+            "max_amount": "1",
+        ]
+        XCTAssertNoThrow(
+            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(
+                encoded(
+                    try replacingFee(
+                        instructions,
+                        chargeLimits: [nexusCharge, pipelineCharge],
+                        gasLimit: NSNull()
+                    )
+                )
+            )
+        )
+        for invalidCharge in [
+            [
+                "asset_definition_id": "asset",
+                "kind": ["kind": "nexus", "value": NSNull()],
+                "max_amount": "0",
+            ],
+            [
+                "asset_definition_id": "asset",
+                "kind": ["kind": "nexus", "value": NSNull()],
+                "max_amount": "1.0",
+            ],
+            [
+                "asset_definition_id": "asset",
+                "kind": ["kind": "legacy", "value": NSNull()],
+                "max_amount": "1",
+            ],
+            [
+                "asset_definition_id": "asset",
+                "kind": ["kind": "nexus", "value": 0],
+                "max_amount": "1",
+            ],
+        ] as [[String: Any]] {
+            let invalid = try replacingFee(
+                instructions,
+                chargeLimits: [invalidCharge],
+                gasLimit: NSNull()
+            )
+            XCTAssertThrowsError(
+                try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(encoded(invalid))
+            )
+        }
+        for invalidOrder in [
+            [nexusCharge, nexusCharge],
+            [pipelineCharge, nexusCharge],
+        ] {
+            let invalid = try replacingFee(
+                instructions,
+                chargeLimits: invalidOrder,
+                gasLimit: NSNull()
+            )
+            XCTAssertThrowsError(
+                try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(encoded(invalid))
+            )
+        }
     }
 
     func testMixedExecutableBatchFixturePreservesItemOrder() throws {
@@ -615,6 +843,7 @@ private struct NoritoRpcFixtureLoader {
             case nonce
             case executable
             case feePayment = "fee_payment"
+            case admissionIntent = "admission_intent"
             case metadata
         }
 
@@ -623,7 +852,7 @@ private struct NoritoRpcFixtureLoader {
                 decoder,
                 [
                     "authority", "network_id", "creation_time_ms", "executable", "fee_payment",
-                    "metadata", "nonce", "time_to_live_ms",
+                    "admission_intent", "metadata", "nonce", "time_to_live_ms",
                 ],
                 context: "shared transaction payload"
             )
@@ -655,8 +884,42 @@ private struct NoritoRpcFixtureLoader {
                 )
             }
             executable = try container.decode(SharedExecutable.self, forKey: .executable)
-            _ = try container.decode(SharedFeePayment.self, forKey: .feePayment)
+            let feePayment = try container.decode(SharedFeePayment.self, forKey: .feePayment)
+            _ = try container.decode(SharedAdmissionIntent.self, forKey: .admissionIntent)
+            guard !executable.requiresGasLimit || feePayment.gasLimit != nil else {
+                throw DecodingError.dataCorrupted(
+                    .init(
+                        codingPath: decoder.codingPath,
+                        debugDescription: "gas_limit is required by the executable"
+                    )
+                )
+            }
             metadata = try container.decode([String: ToriiJSONValue].self, forKey: .metadata)
+        }
+    }
+
+    private struct SharedAdmissionIntent: Decodable {
+        private enum CodingKeys: String, CodingKey {
+            case intent
+            case value
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactFixtureKeys(
+                decoder,
+                ["intent", "value"],
+                context: "shared admission intent"
+            )
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let intent = try container.decode(String.self, forKey: .intent)
+            guard intent == "ordinary", try container.decodeNil(forKey: .value) else {
+                throw DecodingError.dataCorrupted(
+                    .init(
+                        codingPath: decoder.codingPath,
+                        debugDescription: "shared admission_intent must be exactly ordinary/null"
+                    )
+                )
+            }
         }
     }
 
@@ -671,6 +934,17 @@ private struct NoritoRpcFixtureLoader {
             case ivm = "Ivm"
             case batch = "Batch"
             case contractCall = "ContractCall"
+        }
+
+        var requiresGasLimit: Bool {
+            switch self {
+            case .ivm, .contractCall:
+                true
+            case .instructions:
+                false
+            case let .batch(items):
+                items.contains { $0.requiresGasLimit }
+            }
         }
 
         init(from decoder: Decoder) throws {
@@ -703,7 +977,15 @@ private struct NoritoRpcFixtureLoader {
                 }
                 self = .ivm(bytes)
             case "Batch":
-                self = try .batch(container.decode([SharedBatchItem].self, forKey: .batch))
+                let items = try container.decode([SharedBatchItem].self, forKey: .batch)
+                guard !items.isEmpty else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .batch,
+                        in: container,
+                        debugDescription: "Batch must contain at least one item"
+                    )
+                }
+                self = .batch(items)
             case "ContractCall":
                 self = try .contractCall(container.decode(SharedContractCall.self, forKey: .contractCall))
             default:
@@ -749,6 +1031,15 @@ private struct NoritoRpcFixtureLoader {
         private enum CodingKeys: String, CodingKey {
             case instruction = "Instruction"
             case contractCall = "ContractCall"
+        }
+
+        var requiresGasLimit: Bool {
+            switch self {
+            case .instruction:
+                false
+            case .contractCall:
+                true
+            }
         }
 
         init(from decoder: Decoder) throws {
@@ -801,6 +1092,8 @@ private struct NoritoRpcFixtureLoader {
     }
 
     private struct SharedFeePayment: Decodable {
+        let gasLimit: UInt64?
+
         private enum CodingKeys: String, CodingKey {
             case payer
             case value
@@ -813,12 +1106,21 @@ private struct NoritoRpcFixtureLoader {
                 context: "shared fee payment"
             )
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            _ = try container.decode(String.self, forKey: .payer)
-            _ = try container.decode(SharedFeeValue.self, forKey: .value)
+            let payer = try container.decode(String.self, forKey: .payer)
+            guard payer == "authority" else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .payer,
+                    in: container,
+                    debugDescription: "shared fee payer must be exactly authority"
+                )
+            }
+            gasLimit = try container.decode(SharedFeeValue.self, forKey: .value).gasLimit
         }
     }
 
     private struct SharedFeeValue: Decodable {
+        let gasLimit: UInt64?
+
         private enum CodingKeys: String, CodingKey {
             case chargeLimits = "charge_limits"
             case gasLimit = "gas_limit"
@@ -833,8 +1135,23 @@ private struct NoritoRpcFixtureLoader {
                 )
             }
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            _ = try container.decode([SharedChargeLimit].self, forKey: .chargeLimits)
-            if let gasLimit = try container.decodeIfPresent(UInt64.self, forKey: .gasLimit) {
+            let chargeLimits = try container.decode(
+                [SharedChargeLimit].self,
+                forKey: .chargeLimits
+            )
+            var previousKindRank = -1
+            for limit in chargeLimits {
+                guard limit.kind.rank > previousKindRank else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .chargeLimits,
+                        in: container,
+                        debugDescription: "charge limits must use unique canonical kind order"
+                    )
+                }
+                previousKindRank = limit.kind.rank
+            }
+            gasLimit = try container.decodeIfPresent(UInt64.self, forKey: .gasLimit)
+            if let gasLimit {
                 guard gasLimit > 0 else {
                     throw DecodingError.dataCorruptedError(
                         forKey: .gasLimit,
@@ -847,6 +1164,8 @@ private struct NoritoRpcFixtureLoader {
     }
 
     private struct SharedChargeLimit: Decodable {
+        let kind: SharedChargeKind
+
         private enum CodingKeys: String, CodingKey {
             case assetDefinitionId = "asset_definition_id"
             case kind
@@ -860,13 +1179,30 @@ private struct NoritoRpcFixtureLoader {
                 context: "shared charge limit"
             )
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            _ = try container.decode(String.self, forKey: .assetDefinitionId)
-            _ = try container.decode(SharedChargeKind.self, forKey: .kind)
-            _ = try container.decode(String.self, forKey: .maxAmount)
+            let assetDefinitionId = try container.decode(String.self, forKey: .assetDefinitionId)
+            guard !assetDefinitionId.isEmpty else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .assetDefinitionId,
+                    in: container,
+                    debugDescription: "asset_definition_id must be non-empty"
+                )
+            }
+            kind = try container.decode(SharedChargeKind.self, forKey: .kind)
+            let maxAmount = try container.decode(String.self, forKey: .maxAmount)
+            let quantity = try KotodamaNumericV1Codec.decodeQuantityJSON(maxAmount)
+            guard quantity.canonicalString != "0" else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .maxAmount,
+                    in: container,
+                    debugDescription: "max_amount must be a positive canonical Quantity"
+                )
+            }
         }
     }
 
     private struct SharedChargeKind: Decodable {
+        let rank: Int
+
         private enum CodingKeys: String, CodingKey {
             case kind
             case value
@@ -879,8 +1215,26 @@ private struct NoritoRpcFixtureLoader {
                 context: "shared charge kind"
             )
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            _ = try container.decode(String.self, forKey: .kind)
-            _ = try container.decodeIfPresent(ToriiJSONValue.self, forKey: .value)
+            let name = try container.decode(String.self, forKey: .kind)
+            guard try container.decodeNil(forKey: .value) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .value,
+                    in: container,
+                    debugDescription: "fee charge kind value must be null"
+                )
+            }
+            switch name {
+            case "nexus":
+                rank = 0
+            case "pipeline_gas":
+                rank = 1
+            default:
+                throw DecodingError.dataCorruptedError(
+                    forKey: .kind,
+                    in: container,
+                    debugDescription: "unknown fee charge kind"
+                )
+            }
         }
     }
 

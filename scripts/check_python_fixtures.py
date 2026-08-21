@@ -30,6 +30,190 @@ MANAGED_FIXTURES = (
     Path("transaction_payloads.json"),
     Path("transaction_fixtures.manifest.json"),
 )
+MAX_U64 = 0xFFFF_FFFF_FFFF_FFFF
+PAYLOAD_ENTRY_FIELDS = frozenset(
+    {
+        "authority",
+        "creation_time_ms",
+        "name",
+        "network_id",
+        "nonce",
+        "payload",
+        "payload_base64",
+        "payload_hash",
+        "signed_base64",
+        "signed_hash",
+        "time_to_live_ms",
+    }
+)
+PAYLOAD_FIELDS = frozenset(
+    {
+        "admission_intent",
+        "authority",
+        "creation_time_ms",
+        "executable",
+        "fee_payment",
+        "metadata",
+        "network_id",
+        "nonce",
+        "time_to_live_ms",
+    }
+)
+EXECUTABLE_VARIANTS = frozenset({"Batch", "ContractCall", "Instructions", "Ivm"})
+
+
+class DuplicateJsonKeyError(ValueError):
+    """Raised before a last-wins JSON decoder can hide duplicate fields."""
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict:
+    result: dict = {}
+    for key, value in pairs:
+        if key in result:
+            raise DuplicateJsonKeyError(f"duplicate JSON object key {key!r}")
+        result[key] = value
+    return result
+
+
+def parse_json_strict(path: Path) -> object:
+    try:
+        return json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except (DuplicateJsonKeyError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid JSON in {path}: {exc}") from exc
+
+
+def require_exact_fields(record: dict, expected: frozenset[str], context: str) -> None:
+    actual = set(record)
+    missing = sorted(expected - actual)
+    unexpected = sorted(actual - expected)
+    if missing or unexpected:
+        raise ValueError(
+            f"{context} has invalid fields: missing={missing}, unexpected={unexpected}"
+        )
+
+
+def validate_admission_intent(value: object, context: str) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{context} must be an object")
+    require_exact_fields(value, frozenset({"intent", "value"}), context)
+    if value["intent"] != "ordinary" or value["value"] is not None:
+        raise ValueError(
+            f"{context} must be exactly {{'intent': 'ordinary', 'value': null}}"
+        )
+
+
+def validate_fee_payment(value: object, context: str) -> int | None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{context} must be an object")
+    require_exact_fields(value, frozenset({"payer", "value"}), context)
+    if value["payer"] != "authority":
+        raise ValueError(f"{context}.payer must be exactly 'authority'")
+    fee_value = value["value"]
+    if not isinstance(fee_value, dict):
+        raise ValueError(f"{context}.value must be an object")
+    require_exact_fields(
+        fee_value,
+        frozenset({"charge_limits", "gas_limit"}),
+        f"{context}.value",
+    )
+    if not isinstance(fee_value["charge_limits"], list):
+        raise ValueError(f"{context}.value.charge_limits must be an array")
+    gas_limit = fee_value["gas_limit"]
+    if gas_limit is not None and (
+        not isinstance(gas_limit, int)
+        or isinstance(gas_limit, bool)
+        or gas_limit < 1
+        or gas_limit > MAX_U64
+    ):
+        raise ValueError(
+            f"{context}.value.gas_limit must be null or an integer in 1..={MAX_U64}"
+        )
+    return gas_limit
+
+
+def executable_requires_gas_limit(value: object, context: str) -> bool:
+    if not isinstance(value, dict) or len(value) != 1:
+        raise ValueError(f"{context} must contain exactly one executable variant")
+    variant, body = next(iter(value.items()))
+    if variant not in EXECUTABLE_VARIANTS:
+        raise ValueError(f"{context} has unknown variant {variant!r}")
+    if variant == "Ivm":
+        if not isinstance(body, str):
+            raise ValueError(f"{context}.Ivm must be a base64 string")
+        return True
+    if variant == "ContractCall":
+        if not isinstance(body, dict):
+            raise ValueError(f"{context}.ContractCall must be an object")
+        return True
+    if variant == "Instructions":
+        if not isinstance(body, list):
+            raise ValueError(f"{context}.Instructions must be an array")
+        return False
+    if not isinstance(body, list) or not body:
+        raise ValueError(f"{context}.Batch must be a non-empty array")
+    requires_gas_limit = False
+    for index, item in enumerate(body):
+        item_context = f"{context}.Batch[{index}]"
+        if not isinstance(item, dict) or len(item) != 1:
+            raise ValueError(f"{item_context} must contain exactly one variant")
+        item_variant = next(iter(item))
+        if item_variant == "ContractCall":
+            if not isinstance(item[item_variant], dict):
+                raise ValueError(f"{item_context}.ContractCall must be an object")
+            requires_gas_limit = True
+        elif item_variant != "Instruction":
+            raise ValueError(f"{item_context} has unknown variant {item_variant!r}")
+    return requires_gas_limit
+
+
+def validate_payload_descriptors(path: Path) -> None:
+    document = parse_json_strict(path)
+    if not isinstance(document, list):
+        raise ValueError(f"payload descriptor at {path} must be an array")
+    seen_names: set[str] = set()
+    for index, entry in enumerate(document):
+        context = f"{path} fixture[{index}]"
+        if not isinstance(entry, dict):
+            raise ValueError(f"{context} must be an object")
+        require_exact_fields(entry, PAYLOAD_ENTRY_FIELDS, context)
+        name = entry["name"]
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"{context}.name must be a non-empty string")
+        if name in seen_names:
+            raise ValueError(f"duplicate fixture name {name!r} in {path}")
+        seen_names.add(name)
+        payload = entry["payload"]
+        if not isinstance(payload, dict):
+            raise ValueError(f"{context}.payload must be an object")
+        require_exact_fields(payload, PAYLOAD_FIELDS, f"{context}.payload")
+        validate_admission_intent(
+            payload["admission_intent"], f"{context}.payload.admission_intent"
+        )
+        gas_limit = validate_fee_payment(
+            payload["fee_payment"], f"{context}.payload.fee_payment"
+        )
+        requires_gas_limit = executable_requires_gas_limit(
+            payload["executable"], f"{context}.payload.executable"
+        )
+        if requires_gas_limit and gas_limit is None:
+            raise ValueError(
+                f"{context}.payload.fee_payment.value.gas_limit must be positive "
+                "for Ivm, ContractCall, or a Batch containing ContractCall"
+            )
+        if not isinstance(payload["metadata"], dict):
+            raise ValueError(f"{context}.payload.metadata must be an object")
+        for field in (
+            "authority",
+            "creation_time_ms",
+            "network_id",
+            "nonce",
+            "time_to_live_ms",
+        ):
+            if entry[field] != payload[field]:
+                raise ValueError(f"{context}.{field} does not match payload.{field}")
 
 
 def fingerprint(path: Path) -> str:
@@ -39,7 +223,7 @@ def fingerprint(path: Path) -> str:
 
 
 def validate_canonical_frames(manifest_path: Path) -> None:
-    document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    document = parse_json_strict(manifest_path)
     fixtures = document.get("fixtures") if isinstance(document, dict) else None
     if not isinstance(fixtures, list):
         raise ValueError(f"invalid fixture manifest: {manifest_path}")
@@ -81,8 +265,6 @@ def compare(
         if not root.is_dir():
             raise FileNotFoundError(f"missing directory: {root}")
 
-    validate_canonical_frames(source / "transaction_fixtures.manifest.json")
-
     source_map = {}
     target_map = {}
     for relative in MANAGED_FIXTURES:
@@ -93,6 +275,9 @@ def compare(
         target_path = target / relative
         if target_path.is_file():
             target_map[relative] = target_path
+
+    validate_payload_descriptors(source / "transaction_payloads.json")
+    validate_canonical_frames(source / "transaction_fixtures.manifest.json")
 
     missing = sorted(rel for rel in source_map if rel not in target_map)
     extra = sorted(
@@ -108,6 +293,9 @@ def compare(
             continue
         if fingerprint(src_path) != fingerprint(tgt_path):
             diffs.append((src_path, tgt_path))
+    if not missing and not diffs:
+        validate_payload_descriptors(target / "transaction_payloads.json")
+        validate_canonical_frames(target / "transaction_fixtures.manifest.json")
     return missing, extra, diffs
 
 

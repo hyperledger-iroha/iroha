@@ -10,6 +10,8 @@ use schema::{
     CapacityClass, CapacityGeometry, LifecycleContext, LifecycleDigest, LifecycleKey,
     PhysicalSlotId, SchedulerEpisodeUniverse,
 };
+#[cfg(test)]
+use std::path::PathBuf;
 use std::{
     collections::BTreeSet,
     sync::{
@@ -17,8 +19,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
-#[cfg(test)]
-use std::path::PathBuf;
 const ROSTER_IDENTITY_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:roster-identity:v1";
 
 #[derive(Debug)]
@@ -63,9 +63,10 @@ impl SharedLifecycleOrdinalAuthority {
         mut state: MutexGuard<'a, LifecycleOrdinalAuthorityState>,
     ) -> Result<MutexGuard<'a, LifecycleOrdinalAuthorityState>, String> {
         while state.pending.is_some() {
-            state = self.durable_publication.wait(state).map_err(|_| {
-                "Sumeragi v2 lifecycle ordinal authority was poisoned".to_owned()
-            })?;
+            state = self
+                .durable_publication
+                .wait(state)
+                .map_err(|_| "Sumeragi v2 lifecycle ordinal authority was poisoned".to_owned())?;
         }
         Ok(state)
     }
@@ -107,7 +108,8 @@ impl RuntimeLifecycleOrdinalAuthority {
     ) -> Result<Result<T, E>, String> {
         let state = self.shared.lock_state()?;
         let mut state = self.shared.wait_for_durable_publication(state)?;
-        let (first, successor) = SharedLifecycleOrdinalAuthority::prospective_range(state.next, count)?;
+        let (first, successor) =
+            SharedLifecycleOrdinalAuthority::prospective_range(state.next, count)?;
         let first = first.ok_or_else(|| {
             "Sumeragi v2 lifecycle ordinal reservation must contain an owner".to_owned()
         })?;
@@ -158,9 +160,9 @@ impl RuntimeLifecycleOrdinalAuthority {
             );
         }
         match state.next {
-            None => Err(
-                "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned(),
-            ),
+            None => {
+                Err("Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned())
+            }
             Some(candidate) if candidate <= high_watermark => {
                 state.next = Some(high_watermark.checked_add(1).ok_or_else(|| {
                     "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned()
@@ -251,9 +253,9 @@ impl CoordinatorLifecycleOrdinalAuthority {
 
     /// Verify that launch restoration placed the shared cursor after the ledger.
     pub(super) fn recognizes_high_water(&self, high_water: u128) -> Result<bool, String> {
-        self.shared
-            .lock_state()
-            .map(|state| state.pending.is_none() && state.next.is_some_and(|next| next > high_water))
+        self.shared.lock_state().map(|state| {
+            state.pending.is_none() && state.next.is_some_and(|next| next > high_water)
+        })
     }
 }
 

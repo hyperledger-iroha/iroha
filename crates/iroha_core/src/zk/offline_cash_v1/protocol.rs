@@ -5,6 +5,8 @@
 //! implementation exists: the backend remains fail-closed until the governed
 //! artifacts can also be parsed and verified by the first-party circuit code.
 
+use core::fmt;
+
 use iroha_data_model::offline::{
     OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1, OFFLINE_CASH_ARTIFACT_SET_MAX_BYTES_V1,
     OFFLINE_CASH_ENCRYPTED_CREDIT_MAX_BYTES_V1, OFFLINE_CASH_HALO2_K_V1,
@@ -17,6 +19,8 @@ use iroha_data_model::offline::{
     OFFLINE_CASH_WIRE_VERSION_V1, OfflineCashArtifactRoleV1,
 };
 use sha2::{Digest as _, Sha256};
+
+use crate::zk::pasta_ipa_recursion::{PastaIpaInstanceQueryV1, PastaIpaProofShapeV1};
 
 const PROFILE_DOMAIN: &[u8] = b"iroha:offline-cash:v1:halo2-profile";
 const PROTOCOL_DOMAIN: &[u8] = b"iroha:offline-cash:v1:halo2-protocol";
@@ -139,6 +143,127 @@ impl OfflineCashHalo2CircuitRoleV1 {
             Self::GuardBundle => b"guard-use+platform-bind+optional-android-key-cert/v1",
         }
     }
+}
+
+/// Non-authorizing failure from the recursive-proof shape activation gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OfflineCashRecursionActivationPreflightErrorV1 {
+    /// The configured IPA round count differs from the governed k=16 profile.
+    InvalidRoundCount {
+        /// Governed IPA round count.
+        expected: u32,
+        /// Configured IPA round count.
+        actual: u32,
+    },
+    /// The shape was not accounted under the reviewed direct-instance policy.
+    InvalidInstanceQuery {
+        /// Instance-query policy used for the shape report.
+        actual: PastaIpaInstanceQueryV1,
+    },
+    /// Recursive compilation requires exactly one public-instance column.
+    InvalidInstanceColumnCount {
+        /// Configured number of public-instance columns.
+        actual: usize,
+    },
+    /// The configured proof cap cannot be represented by the shape report.
+    InvalidProofCap,
+    /// The exact configured transcript exceeds the governed parity cap.
+    ProofSizeExceeded {
+        /// Circuit parity whose shape was measured.
+        parity: OfflineCashHalo2ParityV1,
+        /// Circuit role whose shape was measured.
+        circuit_role: OfflineCashHalo2CircuitRoleV1,
+        /// Exact configured augmented-proof bytes.
+        actual: u32,
+        /// Governed maximum parity-proof bytes.
+        maximum: u32,
+    },
+}
+
+impl fmt::Display for OfflineCashRecursionActivationPreflightErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRoundCount { expected, actual } => write!(
+                formatter,
+                "offline-cash recursive proof uses k={actual}, expected k={expected}"
+            ),
+            Self::InvalidInstanceQuery { actual } => write!(
+                formatter,
+                "offline-cash recursive proof uses unsupported instance-query policy {actual:?}"
+            ),
+            Self::InvalidInstanceColumnCount { actual } => write!(
+                formatter,
+                "offline-cash recursive proof uses {actual} instance columns, expected one"
+            ),
+            Self::InvalidProofCap => {
+                formatter.write_str("offline-cash parity proof cap does not fit u32")
+            }
+            Self::ProofSizeExceeded {
+                parity,
+                circuit_role,
+                actual,
+                maximum,
+            } => write!(
+                formatter,
+                "offline-cash {parity:?} {circuit_role:?} configured proof size {actual} exceeds the {maximum}-byte parity cap"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for OfflineCashRecursionActivationPreflightErrorV1 {}
+
+/// Apply the necessary fixed-profile shape checks for recursive activation.
+///
+/// Passing this gate is deliberately not proof authority: it only establishes
+/// k=16, the reviewed direct-instance opening policy, one instance column, and
+/// the governed byte cap. The current STATE and helper binding circuits fail
+/// this gate, and the production backend remains disconnected.
+///
+/// # Errors
+///
+/// Returns an error when any fixed shape property differs or when the exact
+/// augmented transcript exceeds the parity-proof cap.
+pub(super) fn preflight_offline_cash_recursion_activation_v1(
+    parity: OfflineCashHalo2ParityV1,
+    circuit_role: OfflineCashHalo2CircuitRoleV1,
+    shape: &PastaIpaProofShapeV1,
+) -> Result<(), OfflineCashRecursionActivationPreflightErrorV1> {
+    if shape.k() != OFFLINE_CASH_HALO2_K_V1 {
+        return Err(
+            OfflineCashRecursionActivationPreflightErrorV1::InvalidRoundCount {
+                expected: OFFLINE_CASH_HALO2_K_V1,
+                actual: shape.k(),
+            },
+        );
+    }
+    if shape.instance_query() != PastaIpaInstanceQueryV1::Direct {
+        return Err(
+            OfflineCashRecursionActivationPreflightErrorV1::InvalidInstanceQuery {
+                actual: shape.instance_query(),
+            },
+        );
+    }
+    if shape.instance_columns() != 1 {
+        return Err(
+            OfflineCashRecursionActivationPreflightErrorV1::InvalidInstanceColumnCount {
+                actual: shape.instance_columns(),
+            },
+        );
+    }
+    let maximum = u32::try_from(OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1)
+        .map_err(|_| OfflineCashRecursionActivationPreflightErrorV1::InvalidProofCap)?;
+    if shape.augmented_proof_bytes() > maximum {
+        return Err(
+            OfflineCashRecursionActivationPreflightErrorV1::ProofSizeExceeded {
+                parity,
+                circuit_role,
+                actual: shape.augmented_proof_bytes(),
+                maximum,
+            },
+        );
+    }
+    Ok(())
 }
 
 /// Immutable identity of one parity/role protocol contract.

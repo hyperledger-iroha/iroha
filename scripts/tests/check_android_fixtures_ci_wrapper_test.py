@@ -8,6 +8,7 @@ import json
 import sys
 import os
 import shutil
+import struct
 import subprocess
 import uuid
 from pathlib import Path
@@ -39,12 +40,39 @@ def _transaction_payload(suffix: bytes = b"") -> bytes:
     return _field(domain) + suffix
 
 
+def _crc64_xz(data: bytes) -> int:
+    crc = 0xFFFF_FFFF_FFFF_FFFF
+    for value in data:
+        crc ^= value
+        for _ in range(8):
+            crc = (
+                (crc >> 1) ^ 0xC96C_5795_D787_0F42 if crc & 1 else crc >> 1
+            )
+    return crc ^ 0xFFFF_FFFF_FFFF_FFFF
+
+
+def _canonical_frame(payload: bytes, schema: bytes) -> bytes:
+    return b"".join(
+        (
+            b"NRT0\x00\x00",
+            schema,
+            b"\x00",
+            struct.pack("<Q", len(payload)),
+            struct.pack("<Q", _crc64_xz(payload)),
+            b"\x02",
+            payload,
+        )
+    )
+
+
 def _write_fixture_set(base: Path) -> tuple[Path, Path, Path]:
     resources = base / "resources"
     resources.mkdir(parents=True, exist_ok=True)
 
-    payload_bytes = _transaction_payload(b"alpha-fixture")
-    signed_bytes = _signed_transaction(payload_bytes, b"alpha-signed")
+    payload_bare = _transaction_payload(b"alpha-fixture")
+    signed_bare = _signed_transaction(payload_bare, b"alpha-signed")
+    payload_bytes = _canonical_frame(payload_bare, MODULE.TRANSACTION_PAYLOAD_SCHEMA)
+    signed_bytes = _canonical_frame(signed_bare, MODULE.SIGNED_TRANSACTION_SCHEMA)
     (resources / "alpha.norito").write_bytes(payload_bytes)
 
     payloads_path = base / "transaction_payloads.json"
@@ -62,7 +90,7 @@ def _write_fixture_set(base: Path) -> tuple[Path, Path, Path]:
                     "payload_hash": MODULE.iroha_hash(payload_bytes),
                     "signed_base64": base64.b64encode(signed_bytes).decode(),
                     "signed_hash": MODULE.signed_transaction_entrypoint_hash(
-                        signed_bytes
+                        signed_bare
                     ),
                     "creation_time_ms": creation_time_ms,
                     "network_id": network_id,
@@ -73,10 +101,14 @@ def _write_fixture_set(base: Path) -> tuple[Path, Path, Path]:
                         "authority": authority,
                         "network_id": network_id,
                         "creation_time_ms": creation_time_ms,
+                        "admission_intent": {
+                            "intent": "ordinary",
+                            "value": None,
+                        },
                         "executable": {"Instructions": []},
                         "fee_payment": {
                             "payer": "authority",
-                            "value": {"charge_limits": []},
+                            "value": {"charge_limits": [], "gas_limit": None},
                         },
                         "metadata": {},
                         "nonce": nonce,
@@ -101,7 +133,7 @@ def _write_fixture_set(base: Path) -> tuple[Path, Path, Path]:
                         "payload_hash": MODULE.iroha_hash(payload_bytes),  # type: ignore[attr-defined]
                         "encoded_len": len(payload_bytes),
                         "signed_base64": base64.b64encode(signed_bytes).decode(),
-                        "signed_hash": MODULE.signed_transaction_entrypoint_hash(signed_bytes),  # type: ignore[attr-defined]
+                        "signed_hash": MODULE.signed_transaction_entrypoint_hash(signed_bare),  # type: ignore[attr-defined]
                         "signed_len": len(signed_bytes),
                         "creation_time_ms": creation_time_ms,
                         "network_id": network_id,

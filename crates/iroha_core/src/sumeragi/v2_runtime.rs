@@ -87,7 +87,10 @@ use norito::codec::{Decode as _, Encode as _};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
-    sync::{Arc, atomic::{AtomicBool, Ordering}},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 const RETRANSMIT_DIVISOR: u32 = 5;

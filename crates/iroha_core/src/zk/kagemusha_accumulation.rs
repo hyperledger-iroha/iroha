@@ -65,11 +65,12 @@ pub fn kagemusha_ipa_accumulation_proof_bytes_v4(round_count: u32) -> Result<usi
     )
     .map_err(|_| "Kagemusha V4 IPA fold length does not fit usize".to_owned())
 }
-const POSEIDON_WIDTH: usize = 3;
-const POSEIDON_RATE: usize = 2;
-const POSEIDON_FULL_ROUNDS: usize = 8;
-const POSEIDON_PARTIAL_ROUNDS: usize = 57;
-const POSEIDON_SECURE_MDS: usize = 0;
+const POSEIDON_WIDTH: usize = super::pasta_ipa_recursion::PASTA_IPA_POSEIDON_WIDTH_V1;
+const POSEIDON_RATE: usize = super::pasta_ipa_recursion::PASTA_IPA_POSEIDON_RATE_V1;
+const POSEIDON_FULL_ROUNDS: usize = super::pasta_ipa_recursion::PASTA_IPA_POSEIDON_FULL_ROUNDS_V1;
+const POSEIDON_PARTIAL_ROUNDS: usize =
+    super::pasta_ipa_recursion::PASTA_IPA_POSEIDON_PARTIAL_ROUNDS_V1;
+const POSEIDON_SECURE_MDS: usize = super::pasta_ipa_recursion::PASTA_IPA_POSEIDON_SECURE_MDS_V1;
 type EqAccumulation = IpaAs<EqAffine, Bgh19>;
 type EpAccumulation = IpaAs<EpAffine, Bgh19>;
 type EqTranscript<S> = PoseidonTranscript<

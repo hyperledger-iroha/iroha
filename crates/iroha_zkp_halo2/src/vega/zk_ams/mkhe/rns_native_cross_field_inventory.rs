@@ -212,8 +212,8 @@ fn small_source_product_commitments_v1(
         let end = offset.checked_add(POINT_BYTES_V1)?;
         Point::from_non_identity_wire_bytes_exact(inventory.get(offset..end)?).ok()
     };
-    let first = COMPARATOR_POINTS_V1
-        .checked_add(block.checked_mul(SMALL_SOURCE_POINTS_PER_BLOCK_V1)?)?;
+    let first =
+        COMPARATOR_POINTS_V1.checked_add(block.checked_mul(SMALL_SOURCE_POINTS_PER_BLOCK_V1)?)?;
     let signed = point_at(first)?;
     let negative_magnitude = point_at(first.checked_add(1)?)?;
     let positive = signed + negative_magnitude;

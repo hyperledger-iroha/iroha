@@ -538,6 +538,51 @@ fn terminal_boundary_cannot_mint_receipt_from_backend_skeleton() {
 }
 
 #[test]
+fn shared_pasta_profile_is_fixed_and_offline_cash_preflight_is_non_activating() {
+    use crate::zk::pasta_ipa_recursion::{
+        PASTA_IPA_POSEIDON_FULL_ROUNDS_V1, PASTA_IPA_POSEIDON_PARTIAL_ROUNDS_V1,
+        PASTA_IPA_POSEIDON_RATE_V1, PASTA_IPA_POSEIDON_SECURE_MDS_V1, PASTA_IPA_POSEIDON_WIDTH_V1,
+        pasta_ipa_direct_instance_compile_config_v1,
+    };
+
+    assert_eq!(PASTA_IPA_POSEIDON_WIDTH_V1, 3);
+    assert_eq!(PASTA_IPA_POSEIDON_RATE_V1, 2);
+    assert_eq!(PASTA_IPA_POSEIDON_FULL_ROUNDS_V1, 8);
+    assert_eq!(PASTA_IPA_POSEIDON_PARTIAL_ROUNDS_V1, 57);
+    assert_eq!(PASTA_IPA_POSEIDON_SECURE_MDS_V1, 0);
+    let config = format!("{:?}", pasta_ipa_direct_instance_compile_config_v1(27));
+    assert!(config.contains("zk: true"));
+    assert!(config.contains("query_instance: false"));
+    assert!(config.contains("num_proof: 1"));
+    assert!(config.contains("num_instance: [27]"));
+
+    let shared = include_str!("../pasta_ipa_recursion.rs");
+    assert!(shared.contains("final BGH19 folded generator contributes one extra"));
+    assert!(shared.contains("PastaIpaInstanceQueryV1::Direct => 0"));
+    assert!(shared.contains("PastaIpaInstanceQueryV1::Queried => cs.instance_queries().len()"));
+
+    let adapter = include_str!("../kagemusha_recursion_adapter.rs");
+    assert!(adapter.contains("pasta_ipa_direct_instance_compile_config_v1(public_len)"));
+    assert!(adapter.contains("pasta_ipa_augmented_proof_shape_v1("));
+    assert!(adapter.contains("PastaIpaInstanceQueryV1::Direct"));
+    let accumulation = include_str!("../kagemusha_accumulation.rs");
+    assert!(accumulation.contains("PASTA_IPA_POSEIDON_WIDTH_V1"));
+    assert!(accumulation.contains("PASTA_IPA_POSEIDON_PARTIAL_ROUNDS_V1"));
+
+    let protocol = include_str!("protocol.rs");
+    assert!(protocol.contains("preflight_offline_cash_recursion_activation_v1"));
+    assert!(protocol.contains("Passing this gate is deliberately not proof authority"));
+    assert!(
+        protocol.contains(
+            "const TRANSCRIPT_REVISION: &[u8] = b\"Blake2bRead+Blake2bWrite/Challenge255\""
+        )
+    );
+    let backend = include_str!("halo2_backend.rs");
+    assert!(backend.contains("VerificationUnavailable"));
+    assert!(!backend.contains("preflight_offline_cash_recursion_activation_v1"));
+}
+
+#[test]
 fn staged_warning_allowance_is_confined_and_proof_authority_stays_core_private() {
     const STAGING_REASON: &str = "staged offline-cash boundary remains disconnected until exact STATE circuits and activation wiring land";
 
