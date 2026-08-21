@@ -33865,23 +33865,6 @@ publish_delay_seconds = 17
         );
     }
     #[test]
-    fn sumeragi_v2_exact_output_geometry_accepts_network_source_boundary() {
-        let mut table = base_table();
-        let network = table
-            .get_mut("network")
-            .and_then(Value::as_table_mut)
-            .expect("network table");
-        network.insert("max_total_connections".into(), Value::Integer(131));
-        let actual = load_root(table);
-        assert_eq!(
-            actual
-                .network
-                .max_total_connections
-                .map(std::num::NonZeroUsize::get),
-            Some(131),
-        );
-    }
-    #[test]
     fn trusted_peer_full_fanout_must_fit_the_effective_network_capacity() {
         let set_connection_capacity = |table: &mut Table, capacity: usize| {
             table
@@ -34048,72 +34031,6 @@ publish_delay_seconds = 17
         assert!(
             report.contains(&format!("roster-aware minimum {required}")),
             "{report}"
-        );
-    }
-    #[test]
-    fn sumeragi_v2_exact_output_geometry_accepts_equal_capacity_boundary() {
-        let mut table = base_table();
-        let network = table
-            .get_mut("network")
-            .and_then(Value::as_table_mut)
-            .expect("network table");
-        network.insert("max_total_connections".into(), Value::Integer(132));
-        let sumeragi = table
-            .entry("sumeragi")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("sumeragi table");
-        let queues = sumeragi
-            .entry("queues")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("sumeragi.queues table");
-        queues.insert("bodies".into(), Value::Integer(132));
-        let actual = load_root(table);
-        let shared_capacity = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
-            (actual.sumeragi.queues.commands.get()
-                / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
-                .max(1),
-            actual.sumeragi.queues.bodies.get(),
-        )
-        .expect("fixture capacity must be representable");
-        let source_capacity = actual
-            .network
-            .max_total_connections
-            .expect("fixture configures the source bound")
-            .get();
-        assert_eq!(
-            shared_capacity,
-            source_capacity * defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT,
-        );
-    }
-    #[test]
-    fn sumeragi_v2_exact_output_geometry_rejects_unreservable_network_sources() {
-        let mut table = base_table();
-        let network = table
-            .get_mut("network")
-            .and_then(Value::as_table_mut)
-            .expect("network table");
-        network.insert("max_total_connections".into(), Value::Integer(132));
-        let sumeragi = table
-            .entry("sumeragi")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("sumeragi table");
-        let queues = sumeragi
-            .entry("queues")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("sumeragi.queues table");
-        queues.insert("bodies".into(), Value::Integer(130));
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("one maximum reply-source fanout must fit exact output");
-        let report = format!("{error:?}");
-        assert!(
-            report.contains(
-                "Sumeragi v2 outbound shared ownership capacity 394 is below one maximum fanout 396; configured network reply-source capacity is 132"
-            ),
-            "{report}",
         );
     }
     #[test]

@@ -721,29 +721,6 @@ fn run_lifecycle_active_height(
                 services
                     .replay_buffered_chunks(executor)
                     .map_err(V2RunnerError::Service)?;
-                while let Some(rejection) = services.take_validation_rejection() {
-                    let current = executor.local_proposal_directive()?;
-                    let expected_round = round_for_tag(context, current.tag())?;
-                    match local_proposal.state.handle_validation_rejection(
-                        LocalProposalOwner::from(current),
-                        expected_round,
-                        rejection.round(),
-                        rejection.subject(),
-                    ) {
-                        LocalValidationDisposition::Ignored => {}
-                        LocalValidationDisposition::FatalNonEmpty => {
-                            return Err(V2RunnerError::LocalNonEmptyRetryRejected(
-                                rejection.reason().to_owned(),
-                            ));
-                        }
-                        LocalValidationDisposition::RetryNonEmpty => {
-                            iroha_logger::warn!(
-                                reason = rejection.reason(),
-                                "local Sumeragi v2 candidate rejected; retrying with non-empty work only"
-                            );
-                        }
-                    }
-                }
                 if directive.decided_subject().is_none() {
                     drive_block_sync(
                         Instant::now(),
@@ -783,9 +760,9 @@ fn run_lifecycle_active_height(
             continue;
         }
 
-        let ready_to_finish = activated.with_runner_runtime(
+        let (ready_to_finish, lifecycle_yield) = activated.with_runner_runtime(
             &mut active_runner,
-            |_owner, executor, services, local_proposal| {
+            |owner, executor, services, local_proposal| {
                 let _ = retry_exact_output_and_apply_sidecar_admissions(
                     &mut lane_work,
                     services,
@@ -824,7 +801,9 @@ fn run_lifecycle_active_height(
                     services,
                     control_queue_capacity,
                 )?;
-                advance_executor(receiver, executor, services, control_queue_capacity)?;
+                if advance_executor(receiver, owner, executor, services, control_queue_capacity)? {
+                    return Ok::<_, V2RunnerError>((false, true));
+                }
                 let _ = retry_exact_output_and_apply_sidecar_admissions(
                     &mut lane_work,
                     services,
@@ -868,9 +847,13 @@ fn run_lifecycle_active_height(
                 services
                     .replay_buffered_chunks(executor)
                     .map_err(V2RunnerError::Service)?;
-                Ok::<_, V2RunnerError>(executor.ready_to_finish())
+                Ok::<_, V2RunnerError>((executor.ready_to_finish(), false))
             },
         )?;
+        if lifecycle_yield {
+            continue;
+        }
+
         if pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel) {
             let active_view = activated.with_runner_runtime(
                 &mut active_runner,
@@ -941,7 +924,9 @@ fn run_lifecycle_active_height(
             }
         }
 
-        let rollover_ready = if ready_to_finish {
+        let finalization_ready =
+            ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner);
+        let rollover_ready = if finalization_ready {
             activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, executor, services, _local_proposal| {

@@ -17,7 +17,12 @@ use iroha_crypto::{Hash, HashOf, MerkleError, MerkleProof, MerkleTree, MerkleTre
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use std::{cmp::Ordering, collections::BTreeMap, fmt, vec::Vec};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    vec::Vec,
+};
 #[model]
 mod model {
     use super::*;
@@ -81,6 +86,11 @@ mod model {
         pub trigger_completions: Vec<TriggerCompletedEvent>,
         /// Canonical AXT policy snapshot used while executing the block.
         pub axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
+        /// Dataspaces whose AXT authorization changed at least once during execution.
+        ///
+        /// This sticky set authenticates transient same-block rotations that the
+        /// final policy snapshot alone cannot reconstruct during Kura replay.
+        pub axt_transitioned_dataspaces: BTreeSet<crate::nexus::DataSpaceId>,
         /// Canonically ordered post-execution lane effects authenticated by the global `CommitQC`.
         ///
         /// Every V1 result field is required; this field stays last to make truncated layouts fail
@@ -144,6 +154,7 @@ impl PartialEq for BlockResult {
             && self.lane_finality_statements == other.lane_finality_statements
             && self.trigger_completions == other.trigger_completions
             && self.axt_policy_snapshot == other.axt_policy_snapshot
+            && self.axt_transitioned_dataspaces == other.axt_transitioned_dataspaces
     }
 }
 impl Eq for BlockResult {}
@@ -165,6 +176,7 @@ impl Ord for BlockResult {
             &self.lane_finality_statements,
             &self.trigger_completions,
             &self.axt_policy_snapshot,
+            &self.axt_transitioned_dataspaces,
         )
             .cmp(&(
                 &other.time_triggers,
@@ -177,6 +189,7 @@ impl Ord for BlockResult {
                 &other.lane_finality_statements,
                 &other.trigger_completions,
                 &other.axt_policy_snapshot,
+                &other.axt_transitioned_dataspaces,
             ))
     }
 }
@@ -595,6 +608,13 @@ impl SignedBlock {
         self.result
             .as_ref()
             .map(|result| &result.axt_policy_snapshot)
+    }
+    /// Sticky AXT authorization transitions captured during execution, when results are present.
+    #[inline]
+    pub fn axt_transitioned_dataspaces(&self) -> Option<&BTreeSet<crate::nexus::DataSpaceId>> {
+        self.result
+            .as_ref()
+            .map(|result| &result.axt_transitioned_dataspaces)
     }
     /// Successful transaction indices and data trigger sequences.
     pub fn successes(&self) -> impl Iterator<Item = (u64, &DataTriggerSequence)> {

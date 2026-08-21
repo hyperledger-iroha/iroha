@@ -388,7 +388,10 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY",
         "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID",
         "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY",
+        "KAGEMUSHA_V4_PROMOTION_ID",
+        "KAGEMUSHA_IOS_DEVICE_EVIDENCE_CATALOG_REVALIDATION_RECEIPT",
         "online-freshness-consumption-receipt-v1.json",
+        "catalog-revalidation-receipt-v1.json",
         "promotion Python runtime closure changed during the production gate",
         "static candidate corridor passed;",
         "production promotion was not evaluated.",
@@ -406,8 +409,26 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "OID_APP_ATTEST_NONCE",
         "iroha.kagemusha.ios.app_attest_online_freshness_consumption_receipt.v1",
         "def _validate_online_freshness_receipt(",
+        "iroha.kagemusha.ios.app_attest_catalog_revalidation_receipt.v1",
+        "def catalog_revalidation_digest(",
+        "def validate_catalog_revalidation_receipt(",
+        "def validate_historical_production_evidence_for_catalog_revalidation(",
         '"previous_assertion_counter"',
         '"consumption_id"',
+    )
+    require_pattern(
+        texts[PRODUCTION_IOS_EVIDENCE_MODULE],
+        PRODUCTION_IOS_EVIDENCE_MODULE,
+        errors,
+        (
+            r"def validate_production_signed_evidence\(.*?"
+            r"return _validate_production_signed_evidence\(.*?"
+            r"require_current_freshness_receipt=True,\s*\).*?"
+            r"def validate_historical_production_evidence_for_catalog_revalidation\("
+            r".*?return _validate_production_signed_evidence\(.*?"
+            r"require_current_freshness_receipt=False,\s*\)"
+        ),
+        "separate current and historical freshness validator wrappers",
     )
     shell_bootstrap = texts[READINESS].split("<<'PY'", 1)[0]
     require(
@@ -500,6 +521,18 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"require_no_macos_extended_acl\(descriptor, label\)"
         ),
         "descriptor-exact macOS ACL rejection in production custody",
+    )
+    require_pattern(
+        descriptor_custody_functions,
+        READINESS,
+        errors,
+        (
+            r"def require_production_root_custody\(.*?"
+            r"metadata\.st_uid != PRODUCTION_TRUSTED_UID.*?"
+            r"stat\.S_IMODE\(metadata\.st_mode\) & 0o022.*?"
+            r"require_no_macos_extended_acl\(descriptor, label\)"
+        ),
+        "root-owned non-group/world-writable production custody",
     )
     forbid(
         shell_bootstrap,
@@ -612,6 +645,16 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "physical-iOS evidence verification",
         errors,
         (
+            r"ios_root,\s*key_id,\s*_,\s*_,\s*freshness_key_id,\s*_,\s*_,\s*_\s*"
+            r"=\s*ios_configuration"
+        ),
+        "exact eight-field physical-iOS configuration unpack",
+    )
+    require_pattern(
+        ios_validator_function,
+        "physical-iOS evidence verification",
+        errors,
+        (
             r"validation_errors\s*=\s*validator\(\s*evidence_snapshot_path,"
             r".*?trusted_public_key_snapshot,\s*"
             r"trusted_production_policy_snapshot,\s*"
@@ -686,6 +729,21 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         ),
         "production-only iOS evidence validator entrypoint",
     )
+    require_pattern(
+        ios_loader_function,
+        READINESS,
+        errors,
+        (
+            r"historical_validator\s*=\s*production_module\.__dict__\.get\(\s*"
+            r'"validate_historical_production_evidence_for_catalog_revalidation"'
+            r"\s*\).*?catalog_validator\s*=\s*"
+            r"production_module\.__dict__\.get\(\s*"
+            r'"validate_catalog_revalidation_receipt"\s*\).*?'
+            r"return historical_validator\(.*?"
+            r"return validate, validate_catalog"
+        ),
+        "historical consumption plus separate current catalog validator boundary",
+    )
     if promotion_function.count("require_production_root_custody(") < 17:
         errors.append(
             f"{READINESS}: promotion does not root-custody every production trust class"
@@ -709,6 +767,20 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r".*?snapshot_pinned_executable\(.*?PROMOTION_STAGING_PARENT"
         ),
         "fixed pinned production staging parent",
+    )
+    require_pattern(
+        promotion_function,
+        READINESS,
+        errors,
+        (
+            r"if sealed_build_report is not None:\s*"
+            r"production_roots\.append\(sealed_build_report\.parent\).*?"
+            r"production_directory_paths\s*=\s*\{.*?"
+            r"for trusted_root in production_roots.*?"
+            r"if path in production_directory_paths:\s*try:\s*"
+            r"require_production_root_custody\(descriptor, label\)"
+        ),
+        "sealed-build-report ancestor root custody",
     )
     require_pattern(
         promotion_function,
@@ -820,6 +892,22 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"\s*trusted_ios_validator_snapshot,\s*production_validator_bytes,"
         ),
         "source-closure-authenticated candidate and production iOS validator snapshots",
+    )
+    require_pattern(
+        promotion_function,
+        READINESS,
+        errors,
+        (
+            r"physical-iOS catalog revalidation receipt.*?"
+            r"require_production_root_custody\(descriptor, label\).*?"
+            r"catalog_revalidation_receipt_snapshot,\s*"
+            r"trusted_catalog_revalidation_receipt_snapshot.*?"
+            r"ios_catalog_bindings\.append\(ios_catalog_binding\).*?"
+            r"ios_catalog_validator\(\s*"
+            r"trusted_catalog_revalidation_receipt_snapshot,.*?"
+            r"ios_configuration\[6\],\s*ios_catalog_bindings,"
+        ),
+        "current promotion-scoped exact-catalog App Attest revalidation",
     )
     snapshot_functions = texts[READINESS].split(
         "def snapshot_private_bytes(", 1
@@ -956,14 +1044,71 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "cargo test -p connect_norito_bridge output_membership_local_carrier --lib",
     )
     require(texts[PROMOTION_WORKFLOW], PROMOTION_WORKFLOW, errors,
+        "name: Verify Kagemusha V4 production readiness (publication blocked)",
+        "name: Verify reviewed production inputs (does not publish or activate)",
+        "ref: ${{ github.workflow_sha }}",
+        "PROMOTION_GITHUB_EVENT_NAME: ${{ github.event_name }}",
+        "PROMOTION_GITHUB_REF: ${{ github.ref }}",
+        "PROMOTION_GITHUB_REF_PROTECTED: ${{ github.ref_protected }}",
+        "PROMOTION_GITHUB_REPOSITORY: ${{ github.repository }}",
+        "PROMOTION_GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}",
+        "PROMOTION_GITHUB_RUN_ID: ${{ github.run_id }}",
+        "PROMOTION_GITHUB_SHA: ${{ github.sha }}",
+        "PROMOTION_GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}",
+        "PROMOTION_GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}",
+        "PROMOTION_GITHUB_WORKSPACE: ${{ github.workspace }}",
+        'test "$PROMOTION_GITHUB_EVENT_NAME" = workflow_dispatch',
+        'test "$PROMOTION_GITHUB_REPOSITORY" = hyperledger-iroha/iroha',
+        'test "$PROMOTION_GITHUB_REF_PROTECTED" = true',
+        '"hyperledger-iroha/iroha/.github/workflows/promote_kagemusha_v4.yml@$PROMOTION_GITHUB_REF"',
+        'test "$PROMOTION_GITHUB_WORKFLOW_SHA" = "$PROMOTION_GITHUB_SHA"',
+        'test "$workflow_checkout_head" = "$PROMOTION_GITHUB_SHA"',
+        'test "$reviewed_checkout_head" = "$PROMOTION_GITHUB_SHA"',
+        '-c safe.directory="$reviewed_checkout"',
+        'readonly promotion_identity_domain="iroha.kagemusha.github-promotion-run.v1"',
+        'readonly catalog_revalidation_receipt_root="/Library/SORA/Kagemusha/catalog-revalidation"',
+        'KAGEMUSHA_IOS_DEVICE_EVIDENCE_CATALOG_REVALIDATION_RECEIPT="$catalog_revalidation_receipt_root/$KAGEMUSHA_V4_PROMOTION_ID.json"',
+        "KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN: /Library/SORA/Kagemusha/bin/iroha_authenticated_tool_controller",
         'gate_snapshot="$gate_launch_dir/check_kagemusha_production_readiness.sh"',
         'KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH="$KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH"',
         'KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD="$KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD"',
+        'KAGEMUSHA_V4_PROMOTION_ID="$KAGEMUSHA_V4_PROMOTION_ID"',
+        'KAGEMUSHA_IOS_DEVICE_EVIDENCE_CATALOG_REVALIDATION_RECEIPT="$KAGEMUSHA_IOS_DEVICE_EVIDENCE_CATALOG_REVALIDATION_RECEIPT"',
+        '/usr/bin/sudo -n /usr/bin/env -i',
         '"$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"',
         "launch-kagemusha-readiness-v1",
         '--gate-snapshot "$gate_snapshot"',
         '--gate-source "$KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH"',
         '--python-runtime-tree-sha256 "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_TREE_SHA256"')
+    if (
+        texts[PROMOTION_WORKFLOW].count(
+            '-c safe.directory="$reviewed_checkout"'
+        )
+        != 1
+        or "safe.directory=*" in texts[PROMOTION_WORKFLOW]
+    ):
+        errors.append(
+            f"{PROMOTION_WORKFLOW}: reviewed checkout requires one exact "
+            "command-scoped safe.directory"
+        )
+    require_pattern(
+        texts[PROMOTION_WORKFLOW],
+        PROMOTION_WORKFLOW,
+        errors,
+        (
+            r'reviewed_checkout_head="\$\(.*?'
+            r'/usr/bin/git\s+-c\s+safe\.directory="\$reviewed_checkout"\s+\\\s*'
+            r'-C\s+"\$reviewed_checkout"\s+\\\s*'
+            r"rev-parse\s+--verify\s+'HEAD\^\{commit\}'"
+        ),
+        "exact reviewed-checkout-only Git ownership exception",
+    )
+    if re.search(
+        r"(?<![/A-Za-z0-9_])sudo(?=\s)", texts[PROMOTION_WORKFLOW]
+    ):
+        errors.append(
+            f"{PROMOTION_WORKFLOW}: privileged commands must use exact /usr/bin/sudo"
+        )
     runtime_dispatch = texts[READINESS].rsplit(
         "\nsource_contract_errors: list[str] = []\n", 1
     )[-1]

@@ -896,6 +896,19 @@ mod protocol {
         };
     }
 
+    macro_rules! required_binding_value {
+        ($binding:expr, $field:ident) => {
+            ($binding).$field.ok_or(BrokerError::BindingMismatch)?
+        };
+    }
+    macro_rules! required_binding_ref {
+        ($binding:expr, $field:ident) => {
+            ($binding)
+                .$field
+                .as_ref()
+                .ok_or(BrokerError::BindingMismatch)?
+        };
+    }
     /// Exact operation identifiers and foundational canonical wire containers.
     mod primitives {
         use super::*;
@@ -981,11 +994,7 @@ mod protocol {
     fn native_transaction_signer_binding_from_wire(
         binding: &ProviderBindingWireV1,
     ) -> Result<iroha_torii::SorafsNativeTransactionSignerBindingV1, BrokerError> {
-        binding
-            .native_signer_binding
-            .as_ref()
-            .ok_or(BrokerError::BindingMismatch)?
-            .to_binding(binding)
+        required_binding_ref!(binding, native_signer_binding).to_binding(binding)
     }
     fn soracloud_runtime_signer_binding_from_wire(
         binding: &ProviderBindingWireV1,
@@ -993,10 +1002,7 @@ mod protocol {
         if binding.slot != IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id() {
             return Err(BrokerError::BindingMismatch);
         }
-        let inner = binding
-            .native_signer_binding
-            .as_ref()
-            .ok_or(BrokerError::BindingMismatch)?;
+        let inner = required_binding_ref!(binding, native_signer_binding);
         if inner.role != SORACLOUD_RUNTIME_SIGNER_ROLE_WIRE_V1 {
             return Err(BrokerError::BindingMismatch);
         }
@@ -1005,8 +1011,8 @@ mod protocol {
             inner.authority.clone(),
             inner.public_key.clone(),
             crate::soracloud_runtime_signer::SoracloudRuntimeSignerQualificationV1::new(
-                binding.revision.ok_or(BrokerError::BindingMismatch)?,
-                binding.policy_digest.ok_or(BrokerError::BindingMismatch)?,
+                required_binding_value!(binding, revision),
+                required_binding_value!(binding, policy_digest),
                 true,
                 false,
             ),
@@ -1025,8 +1031,8 @@ mod protocol {
         crate::soracloud_hf_credential::SoracloudHfCredentialProviderBindingV1::try_new(
             binding.handle.clone(),
             crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationV1::new(
-                binding.revision.ok_or(BrokerError::BindingMismatch)?,
-                binding.policy_digest.ok_or(BrokerError::BindingMismatch)?,
+                required_binding_value!(binding, revision),
+                required_binding_value!(binding, policy_digest),
                 true,
                 false,
             ),
@@ -1197,10 +1203,7 @@ mod protocol {
     fn potr_provider_binding_from_wire(
         binding: &ProviderBindingWireV1,
     ) -> Result<iroha_torii::sorafs::PotrRuntimeProviderBindingV1, BrokerError> {
-        let runtime = binding
-            .potr_runtime_binding
-            .as_ref()
-            .ok_or(BrokerError::BindingMismatch)?;
+        let runtime = required_binding_ref!(binding, potr_runtime_binding);
         let (handle, signer_id, revision, policy_digest) =
             if binding.slot == IrohaRuntimeProviderSlotV1::PotrGatewaySigner.wire_id() {
                 (
@@ -1328,9 +1331,7 @@ mod protocol {
         let bootle_lantern_issuance = binding.slot
             == IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id();
         if bootle_lantern_issuance {
-            let exact = binding
-                .bootle_lantern_issuance_bindings
-                .ok_or(BrokerError::BindingMismatch)?;
+            let exact = required_binding_value!(binding, bootle_lantern_issuance_bindings);
             iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1::try_new(
                 iroha_data_model::privacy::PrivacyIssuerIdV1::new(exact.issuer_id),
                 iroha_data_model::privacy::PrivacyPolicyIdV1::new(exact.policy_id),
@@ -1401,9 +1402,7 @@ mod protocol {
             || binding.por_replay_archive_proof_limits.is_some()
             || binding.potr_runtime_binding.is_some();
         if stream_token {
-            let public_key = binding
-                .stream_token_signer_public_key
-                .ok_or(BrokerError::BindingMismatch)?;
+            let public_key = required_binding_value!(binding, stream_token_signer_public_key);
             if public_key == [0; 32]
                 || iroha_crypto::ed25519_parse_public_key(&public_key).is_err()
                 || binding.appeal_finance_signer_binding.is_some()
@@ -1418,9 +1417,8 @@ mod protocol {
                 return Err(BrokerError::BindingMismatch);
             }
         } else if stream_token_gateway_admission {
-            let qualification = binding
-                .stream_token_gateway_admission_qualification
-                .ok_or(BrokerError::BindingMismatch)?;
+            let qualification =
+                required_binding_value!(binding, stream_token_gateway_admission_qualification);
             qualification
                 .validate()
                 .map_err(|_| BrokerError::BindingMismatch)?;
@@ -1446,10 +1444,7 @@ mod protocol {
                 return Err(BrokerError::BindingMismatch);
             }
         } else if appeal_signer {
-            let exact = binding
-                .appeal_finance_signer_binding
-                .as_ref()
-                .ok_or(BrokerError::BindingMismatch)?;
+            let exact = required_binding_ref!(binding, appeal_finance_signer_binding);
             if exact_ed25519_public_key_bytes(&exact.public_key).is_err()
                 || iroha_data_model::account::AccountId::new(exact.public_key.clone())
                     != exact.authority
@@ -1469,13 +1464,9 @@ mod protocol {
                 return Err(BrokerError::BindingMismatch);
             }
         } else if appeal_checkpoint {
-            let exact = binding
-                .appeal_finance_checkpoint_binding
-                .as_ref()
-                .ok_or(BrokerError::BindingMismatch)?;
-            let checkpoint_max_bytes = binding
-                .appeal_finance_checkpoint_max_bytes
-                .ok_or(BrokerError::BindingMismatch)?;
+            let exact = required_binding_ref!(binding, appeal_finance_checkpoint_binding);
+            let checkpoint_max_bytes =
+                required_binding_value!(binding, appeal_finance_checkpoint_max_bytes);
             if exact_ed25519_public_key_bytes(&exact.public_key).is_err()
                 || checkpoint_max_bytes == 0
                 || checkpoint_max_bytes
@@ -1493,10 +1484,7 @@ mod protocol {
             }
         } else if pop_registry {
             use iroha_config::parameters::is_production_runtime_handle;
-            let exact = binding
-                .pop_credential_runtime_binding
-                .as_ref()
-                .ok_or(BrokerError::BindingMismatch)?;
+            let exact = required_binding_ref!(binding, pop_credential_runtime_binding);
             if exact.issuer_policy_digest == [0; 32]
                 || exact.issuer_id.is_empty()
                 || exact.issuer_id.len()
@@ -1523,12 +1511,8 @@ mod protocol {
                 return Err(BrokerError::BindingMismatch);
             }
         } else if por_replay_archive {
-            let exact = binding
-                .por_replay_archive_binding
-                .ok_or(BrokerError::BindingMismatch)?;
-            let limits = binding
-                .por_replay_archive_proof_limits
-                .ok_or(BrokerError::BindingMismatch)?;
+            let exact = required_binding_value!(binding, por_replay_archive_binding);
+            let limits = required_binding_value!(binding, por_replay_archive_proof_limits);
             sorafs_node::PorFinalizedReplayArchiveBindingV1::try_new(
                 exact.archive_id,
                 exact.revision,
@@ -1560,10 +1544,7 @@ mod protocol {
                 return Err(BrokerError::BindingMismatch);
             }
         } else if potr_signer {
-            let runtime = binding
-                .potr_runtime_binding
-                .as_ref()
-                .ok_or(BrokerError::BindingMismatch)?;
+            let runtime = required_binding_ref!(binding, potr_runtime_binding);
             validate_potr_runtime_wire(runtime)?;
             potr_provider_binding_from_wire(binding)?;
             if binding.stream_token_signer_public_key.is_some()
@@ -1796,9 +1777,8 @@ mod protocol {
             return Err(BrokerError::BindingMismatch);
         }
         if moderation_panel_notification_archive {
-            let archive = binding
-                .moderation_panel_notification_archive_binding
-                .ok_or(BrokerError::BindingMismatch)?;
+            let archive =
+                required_binding_value!(binding, moderation_panel_notification_archive_binding);
             if archive.archive_id == [0; 32]
                 || archive.bootstrap_public_key == [0; 32]
                 || iroha_crypto::ed25519_parse_public_key(&archive.bootstrap_public_key).is_err()
@@ -1846,9 +1826,7 @@ mod protocol {
             return Ok(());
         }
         if provider_ingest_source {
-            let limits = binding
-                .provider_ingest_source_limits
-                .ok_or(BrokerError::BindingMismatch)?;
+            let limits = required_binding_value!(binding, provider_ingest_source_limits);
             if limits.operation_timeout_ms == 0
                 || limits.max_content_bytes == 0
                 || limits.max_source_providers == 0
@@ -1865,14 +1843,10 @@ mod protocol {
             return Ok(());
         }
         if provider_ingest_resolver || provider_ingest_signer {
-            let signer = binding
-                .provider_ingest_signer_binding
-                .as_ref()
-                .ok_or(BrokerError::BindingMismatch)?;
+            let signer = required_binding_ref!(binding, provider_ingest_signer_binding);
             signer.to_binding()?;
-            let max_signed = binding
-                .provider_ingest_max_signed_transaction_bytes
-                .ok_or(BrokerError::BindingMismatch)?;
+            let max_signed =
+                required_binding_value!(binding, provider_ingest_max_signed_transaction_bytes);
             if max_signed < provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN
                 || max_signed
                     > u64::try_from(MAX_PROVIDER_INGEST_SIGNED_TRANSACTION_BYTES_V1)
@@ -1892,9 +1866,8 @@ mod protocol {
             return Ok(());
         }
         if provider_ingest_checkpoint {
-            let max_checkpoint = binding
-                .provider_ingest_checkpoint_max_bytes
-                .ok_or(BrokerError::BindingMismatch)?;
+            let max_checkpoint =
+                required_binding_value!(binding, provider_ingest_checkpoint_max_bytes);
             if max_checkpoint == 0
                 || max_checkpoint
                     > u64::try_from(MAX_BROKER_PROVIDER_INGEST_CHECKPOINT_BYTES_V1)
@@ -1922,10 +1895,7 @@ mod protocol {
             return Ok(());
         }
         if evidence_webauthn {
-            let webauthn = binding
-                .evidence_viewer_webauthn_binding
-                .as_ref()
-                .ok_or(BrokerError::BindingMismatch)?;
+            let webauthn = required_binding_ref!(binding, evidence_viewer_webauthn_binding);
             if validate_webauthn_wire_policy(&webauthn.rp_id, &webauthn.allowed_origins).is_err()
                 || webauthn.challenge_ttl_ms == 0
                 || webauthn.challenge_ttl_ms
@@ -1945,9 +1915,7 @@ mod protocol {
             return Ok(());
         }
         if evidence_grants {
-            let grant_ttl_ms = binding
-                .evidence_viewer_grant_ttl_ms
-                .ok_or(BrokerError::BindingMismatch)?;
+            let grant_ttl_ms = required_binding_value!(binding, evidence_viewer_grant_ttl_ms);
             if grant_ttl_ms == 0
                 || grant_ttl_ms
                     > sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_SESSION_TTL_MS_V1
@@ -1966,9 +1934,8 @@ mod protocol {
             return Ok(());
         }
         if evidence_receipt_signer {
-            let public_key = binding
-                .evidence_viewer_receipt_signer_public_key
-                .ok_or(BrokerError::BindingMismatch)?;
+            let public_key =
+                required_binding_value!(binding, evidence_viewer_receipt_signer_public_key);
             if public_key == [0; 32]
                 || iroha_crypto::PublicKey::from_bytes(
                     iroha_crypto::Algorithm::Ed25519,
@@ -1996,9 +1963,7 @@ mod protocol {
             return Ok(());
         }
         if evidence_checkpoint {
-            let max_bytes = binding
-                .evidence_viewer_checkpoint_max_bytes
-                .ok_or(BrokerError::BindingMismatch)?;
+            let max_bytes = required_binding_value!(binding, evidence_viewer_checkpoint_max_bytes);
             if max_bytes == 0
                 || max_bytes
                     > u64::try_from(MAX_EVIDENCE_VIEWER_CHECKPOINT_BYTES_V1)
@@ -2018,15 +1983,9 @@ mod protocol {
             return Ok(());
         }
         if evidence_archive {
-            let archive_id = binding
-                .evidence_viewer_archive_id
-                .ok_or(BrokerError::BindingMismatch)?;
-            let public_key = binding
-                .evidence_viewer_archive_public_key
-                .ok_or(BrokerError::BindingMismatch)?;
-            let max_bytes = binding
-                .evidence_viewer_archive_max_bytes
-                .ok_or(BrokerError::BindingMismatch)?;
+            let archive_id = required_binding_value!(binding, evidence_viewer_archive_id);
+            let public_key = required_binding_value!(binding, evidence_viewer_archive_public_key);
+            let max_bytes = required_binding_value!(binding, evidence_viewer_archive_max_bytes);
             if archive_id == [0; 32]
                 || public_key == [0; 32]
                 || iroha_crypto::PublicKey::from_bytes(
@@ -2051,9 +2010,8 @@ mod protocol {
             return Ok(());
         }
         if evidence_transparency_publisher {
-            let public_key = binding
-                .evidence_viewer_transparency_publisher_public_key
-                .ok_or(BrokerError::BindingMismatch)?;
+            let public_key =
+                required_binding_value!(binding, evidence_viewer_transparency_publisher_public_key);
             if public_key == [0; 32]
                 || iroha_crypto::PublicKey::from_bytes(
                     iroha_crypto::Algorithm::Ed25519,
@@ -2195,9 +2153,7 @@ mod protocol {
         {
             return Err(BrokerError::BindingMismatch);
         }
-        let exact = binding
-            .bootle_lantern_issuance_bindings
-            .ok_or(BrokerError::BindingMismatch)?;
+        let exact = required_binding_value!(binding, bootle_lantern_issuance_bindings);
         iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1::try_new(
             iroha_data_model::privacy::PrivacyIssuerIdV1::new(exact.issuer_id),
             iroha_data_model::privacy::PrivacyPolicyIdV1::new(exact.policy_id),
@@ -3013,8 +2969,8 @@ mod protocol {
     ) -> Result<sorafs_node::TransparencyRuntimeProviderBindingV1, BrokerError> {
         sorafs_node::TransparencyRuntimeProviderBindingV1::try_new(
             binding.handle.clone(),
-            binding.revision.ok_or(BrokerError::BindingMismatch)?,
-            binding.policy_digest.ok_or(BrokerError::BindingMismatch)?,
+            required_binding_value!(binding, revision),
+            required_binding_value!(binding, policy_digest),
         )
         .map_err(|_| BrokerError::BindingMismatch)
     }
@@ -4556,9 +4512,7 @@ mod protocol {
         {
             return Err(BrokerError::BindingMismatch);
         }
-        let limits = binding
-            .provider_ingest_source_limits
-            .ok_or(BrokerError::BindingMismatch)?;
+        let limits = required_binding_value!(binding, provider_ingest_source_limits);
         let max_sources =
             usize::try_from(limits.max_source_providers).map_err(|_| BrokerError::Rejected)?;
         if fetch.authorization.content_length() > limits.max_content_bytes
@@ -6507,10 +6461,7 @@ mod protocol {
         binding: &ProviderBindingWireV1,
     ) -> Result<iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderBindingsV1, BrokerError>
     {
-        let exact = binding
-            .pop_credential_runtime_binding
-            .as_ref()
-            .ok_or(BrokerError::BindingMismatch)?;
+        let exact = required_binding_ref!(binding, pop_credential_runtime_binding);
         iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderBindingsV1::try_new(
             exact.issuer_policy_digest,
             exact.issuer_id.clone(),
@@ -6752,9 +6703,7 @@ mod protocol {
     fn por_replay_archive_exact_binding(
         binding: &ProviderBindingWireV1,
     ) -> Result<sorafs_node::PorFinalizedReplayArchiveBindingV1, BrokerError> {
-        let exact = binding
-            .por_replay_archive_binding
-            .ok_or(BrokerError::BindingMismatch)?;
+        let exact = required_binding_value!(binding, por_replay_archive_binding);
         let canonical = sorafs_node::PorFinalizedReplayArchiveBindingV1::try_new(
             exact.archive_id,
             exact.revision,
@@ -6779,9 +6728,7 @@ mod protocol {
         ),
         BrokerError,
     > {
-        let limits = binding
-            .por_replay_archive_proof_limits
-            .ok_or(BrokerError::BindingMismatch)?;
+        let limits = required_binding_value!(binding, por_replay_archive_proof_limits);
         if limits.max_successor_receipts
             > iroha_config::parameters::defaults::sorafs::storage::por_replay_archive::
                 MAX_SUCCESSOR_RECEIPTS_LIMIT
@@ -7826,11 +7773,7 @@ mod protocol {
     fn provider_ingest_expected_signer_binding(
         binding: &ProviderBindingWireV1,
     ) -> Result<sorafs_node::ProviderIngestCompletionSignerBindingV1, BrokerError> {
-        binding
-            .provider_ingest_signer_binding
-            .as_ref()
-            .ok_or(BrokerError::BindingMismatch)?
-            .to_binding()
+        required_binding_ref!(binding, provider_ingest_signer_binding).to_binding()
     }
     fn ensure_transaction_session_network(
         payload: &iroha_data_model::transaction::TransactionPayload,
@@ -7934,12 +7877,10 @@ mod protocol {
         {
             return Err(BrokerError::BindingMismatch);
         }
-        let max_signed = usize::try_from(
-            request
-                .binding
-                .provider_ingest_max_signed_transaction_bytes
-                .ok_or(BrokerError::BindingMismatch)?,
-        )
+        let max_signed = usize::try_from(required_binding_value!(
+            &request.binding,
+            provider_ingest_max_signed_transaction_bytes
+        ))
         .map_err(|_| BrokerError::Rejected)?;
         let payload = decode_canonical::<iroha_data_model::transaction::TransactionPayload>(
             &sign.transaction_payload,
@@ -7964,9 +7905,7 @@ mod protocol {
         claims: &sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1,
         binding: &ProviderBindingWireV1,
     ) -> Result<(), BrokerError> {
-        let grant_ttl_ms = binding
-            .evidence_viewer_grant_ttl_ms
-            .ok_or(BrokerError::BindingMismatch)?;
+        let grant_ttl_ms = required_binding_value!(binding, evidence_viewer_grant_ttl_ms);
         let lifetime = claims
             .expires_at_unix_ms
             .checked_sub(claims.issued_at_unix_ms)
@@ -8029,11 +7968,10 @@ mod protocol {
     fn evidence_viewer_checkpoint_record_limit(
         binding: &ProviderBindingWireV1,
     ) -> Result<usize, BrokerError> {
-        let checkpoint_max = usize::try_from(
-            binding
-                .evidence_viewer_checkpoint_max_bytes
-                .ok_or(BrokerError::BindingMismatch)?,
-        )
+        let checkpoint_max = usize::try_from(required_binding_value!(
+            binding,
+            evidence_viewer_checkpoint_max_bytes
+        ))
         .map_err(|_| BrokerError::Rejected)?;
         checkpoint_max
             .checked_add(16 * 1024)
@@ -8049,11 +7987,10 @@ mod protocol {
         let record = decode_canonical::<
             sorafs_node::evidence_viewer::EvidenceViewerCheckpointStoreRecordV1,
         >(bytes, max_record)?;
-        let checkpoint_max = usize::try_from(
-            binding
-                .evidence_viewer_checkpoint_max_bytes
-                .ok_or(BrokerError::BindingMismatch)?,
-        )
+        let checkpoint_max = usize::try_from(required_binding_value!(
+            binding,
+            evidence_viewer_checkpoint_max_bytes
+        ))
         .map_err(|_| BrokerError::Rejected)?;
         let predecessor_shape_is_valid = match record.generation {
             1 => {
@@ -8126,9 +8063,7 @@ mod protocol {
     fn moderation_checkpoint_record_limit(
         binding: &ProviderBindingWireV1,
     ) -> Result<usize, BrokerError> {
-        let max_bytes = binding
-            .moderation_checkpoint_max_bytes
-            .ok_or(BrokerError::BindingMismatch)?;
+        let max_bytes = required_binding_value!(binding, moderation_checkpoint_max_bytes);
         usize::try_from(max_bytes)
             .map(|max_bytes| max_bytes.saturating_add(16 * 1024))
             .map_err(|_| BrokerError::BindingMismatch)
@@ -8144,16 +8079,14 @@ mod protocol {
         >(bytes, moderation_checkpoint_record_limit(binding)?)?;
         let qualification =
             sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1::new(
-                binding.revision.ok_or(BrokerError::BindingMismatch)?,
-                binding.policy_digest.ok_or(BrokerError::BindingMismatch)?,
+                required_binding_value!(binding, revision),
+                required_binding_value!(binding, policy_digest),
             );
         if expected_network_id.is_some_and(|expected| record.network_id != *expected)
             || !record.has_valid_provider_envelope(
                 &binding.handle,
                 qualification,
-                binding
-                    .moderation_checkpoint_max_bytes
-                    .ok_or(BrokerError::BindingMismatch)?,
+                required_binding_value!(binding, moderation_checkpoint_max_bytes),
             )
         {
             return Err(BrokerError::Rejected);
@@ -8360,8 +8293,8 @@ mod protocol {
     ) -> Result<[u8; 32], BrokerError> {
         let qualification =
             sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1::new(
-                binding.revision.ok_or(BrokerError::BindingMismatch)?,
-                binding.policy_digest.ok_or(BrokerError::BindingMismatch)?,
+                required_binding_value!(binding, revision),
+                required_binding_value!(binding, policy_digest),
             );
         let canonical_record =
             encode_canonical(current_record, moderation_checkpoint_record_limit(binding)?)?;
@@ -8376,9 +8309,7 @@ mod protocol {
                 network_id,
                 &binding.handle,
                 qualification,
-                binding
-                    .moderation_checkpoint_attestation_public_key
-                    .ok_or(BrokerError::BindingMismatch)?,
+                required_binding_value!(binding, moderation_checkpoint_attestation_public_key),
                 current_record,
             )
             .map_err(|_| BrokerError::Rejected)
@@ -9351,10 +9282,8 @@ mod protocol {
                         &request.payload,
                         MAX_STREAM_TOKEN_FRAME_BYTES_V1,
                     )?;
-                    let public_key = request
-                        .binding
-                        .stream_token_signer_public_key
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let public_key =
+                        required_binding_value!(&request.binding, stream_token_signer_public_key);
                     verify_evidence_viewer_ed25519_signature(
                         public_key,
                         signed.signature,
@@ -9371,10 +9300,10 @@ mod protocol {
                     let result = decode_canonical::<
                         iroha_torii::sorafs::StreamTokenGatewayAdmissionResultV1,
                     >(result, MAX_BROKER_UNARY_FRAME_BYTES_V1)?;
-                    let qualification = request
-                        .binding
-                        .stream_token_gateway_admission_qualification
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let qualification = required_binding_value!(
+                        &request.binding,
+                        stream_token_gateway_admission_qualification
+                    );
                     result
                         .validate_for_request(&admission, qualification)
                         .map_err(|_| BrokerError::Protocol)?;
@@ -9385,10 +9314,10 @@ mod protocol {
                     let pending = decode_canonical::<
                         iroha_torii::sorafs::StreamTokenGatewayAdmissionReadbackV1,
                     >(result, MAX_BROKER_UNARY_FRAME_BYTES_V1)?;
-                    let qualification = request
-                        .binding
-                        .stream_token_gateway_admission_qualification
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let qualification = required_binding_value!(
+                        &request.binding,
+                        stream_token_gateway_admission_qualification
+                    );
                     pending
                         .validate(max_items, qualification)
                         .map_err(|_| BrokerError::Protocol)?;
@@ -9410,11 +9339,8 @@ mod protocol {
                         &request.payload,
                         MAX_APPEAL_FINANCE_TRANSACTION_BYTES_V1,
                     )?;
-                    let exact = request
-                        .binding
-                        .appeal_finance_signer_binding
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let exact =
+                        required_binding_ref!(&request.binding, appeal_finance_signer_binding);
                     if signed.payload() != &expected
                         || signed.authority() != &exact.authority
                         || signed.verify_signature().is_err()
@@ -9432,11 +9358,7 @@ mod protocol {
                         MAX_STREAM_TOKEN_FRAME_BYTES_V1,
                     )?;
                     let public_key = exact_ed25519_public_key_bytes(
-                        &request
-                            .binding
-                            .appeal_finance_checkpoint_binding
-                            .as_ref()
-                            .ok_or(BrokerError::BindingMismatch)?
+                        &required_binding_ref!(&request.binding, appeal_finance_checkpoint_binding)
                             .public_key,
                     )?;
                     verify_evidence_viewer_ed25519_signature(public_key, signed.signature, &digest)
@@ -9449,12 +9371,10 @@ mod protocol {
                     >>(result, MAX_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1)?;
                     if let Some(record) = record {
                         record
-                            .validate(
-                                request
-                                    .binding
-                                    .appeal_finance_checkpoint_max_bytes
-                                    .ok_or(BrokerError::BindingMismatch)?,
-                            )
+                            .validate(required_binding_value!(
+                                &request.binding,
+                                appeal_finance_checkpoint_max_bytes
+                            ))
                             .map_err(|_| BrokerError::Protocol)?;
                     }
                 }
@@ -9528,11 +9448,8 @@ mod protocol {
                         result,
                         MAX_POP_RUNTIME_FRAME_BYTES_V1,
                     )?;
-                    let exact = request
-                        .binding
-                        .pop_credential_runtime_binding
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let exact =
+                        required_binding_ref!(&request.binding, pop_credential_runtime_binding);
                     validate_pop_open_result(&result, exact).map_err(|_| BrokerError::Protocol)?;
                 }
                 OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1
@@ -9553,11 +9470,8 @@ mod protocol {
                         &request.payload,
                         MAX_POP_RUNTIME_FRAME_BYTES_V1,
                     )?;
-                    let exact = request
-                        .binding
-                        .pop_credential_runtime_binding
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let exact =
+                        required_binding_ref!(&request.binding, pop_credential_runtime_binding);
                     if sign.digest == [0; 32]
                         || sorafs_node::pop_credentials::PopIssuerSigningPurposeV1::try_from_wire_id(
                             sign.purpose,
@@ -9594,11 +9508,8 @@ mod protocol {
                         MAX_POP_PROJECTION_BYTES_V1,
                     )?;
                     if let Some(projection) = next.projection.as_ref() {
-                        let exact = request
-                            .binding
-                            .pop_credential_runtime_binding
-                            .as_ref()
-                            .ok_or(BrokerError::BindingMismatch)?;
+                        let exact =
+                            required_binding_ref!(&request.binding, pop_credential_runtime_binding);
                         validate_pop_projection(projection, exact)
                             .map_err(|_| BrokerError::Protocol)?;
                     }
@@ -9612,11 +9523,8 @@ mod protocol {
                         &request.payload,
                         MAX_POP_RUNTIME_FRAME_BYTES_V1,
                     )?;
-                    let exact = request
-                        .binding
-                        .pop_credential_runtime_binding
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let exact =
+                        required_binding_ref!(&request.binding, pop_credential_runtime_binding);
                     validate_pop_draft(&draft, draft_request, exact)
                         .map_err(|_| BrokerError::Protocol)?;
                 }
@@ -9890,10 +9798,10 @@ mod protocol {
                     )?;
                     validate_evidence_purpose_signing_request(&sign, &request.binding)
                         .map_err(|_| BrokerError::Protocol)?;
-                    let public_key = request
-                        .binding
-                        .evidence_viewer_receipt_signer_public_key
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let public_key = required_binding_value!(
+                        &request.binding,
+                        evidence_viewer_receipt_signer_public_key
+                    );
                     verify_evidence_viewer_ed25519_signature(
                         public_key,
                         signed.signature,
@@ -9939,10 +9847,10 @@ mod protocol {
                         &request.payload,
                         MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
                     )?;
-                    let public_key = request
-                        .binding
-                        .evidence_viewer_archive_public_key
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let public_key = required_binding_value!(
+                        &request.binding,
+                        evidence_viewer_archive_public_key
+                    );
                     verify_evidence_viewer_ed25519_signature(
                         public_key,
                         signed.signature,
@@ -9956,12 +9864,10 @@ mod protocol {
                         MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
                     )?;
                     if let Some(readback) = readback {
-                        let max_bytes = usize::try_from(
-                            request
-                                .binding
-                                .evidence_viewer_archive_max_bytes
-                                .ok_or(BrokerError::BindingMismatch)?,
-                        )
+                        let max_bytes = usize::try_from(required_binding_value!(
+                            &request.binding,
+                            evidence_viewer_archive_max_bytes
+                        ))
                         .map_err(|_| BrokerError::Protocol)?;
                         if readback.canonical_artifact.is_empty()
                             || readback.canonical_artifact.len() > max_bytes
@@ -9977,10 +9883,10 @@ mod protocol {
                     >(
                         result, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1
                     )?;
-                    let exact = request
-                        .binding
-                        .moderation_panel_notification_archive_binding
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let exact = required_binding_value!(
+                        &request.binding,
+                        moderation_panel_notification_archive_binding
+                    );
                     if qualification.version
                         != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
                         || qualification.slot
@@ -10005,10 +9911,10 @@ mod protocol {
                     >(
                         &request.payload, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
                     )?;
-                    let exact = request
-                        .binding
-                        .moderation_panel_notification_archive_binding
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let exact = required_binding_value!(
+                        &request.binding,
+                        moderation_panel_notification_archive_binding
+                    );
                     if signed.version
                         != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
                         || signed.slot
@@ -10031,10 +9937,10 @@ mod protocol {
                         result, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
                     )?;
                     if let Some(readback) = readback {
-                        let exact = request
-                            .binding
-                            .moderation_panel_notification_archive_binding
-                            .ok_or(BrokerError::BindingMismatch)?;
+                        let exact = required_binding_value!(
+                            &request.binding,
+                            moderation_panel_notification_archive_binding
+                        );
                         let max_bytes =
                             usize::try_from(exact.max_bytes).map_err(|_| BrokerError::Protocol)?;
                         if readback.version
@@ -10194,8 +10100,8 @@ mod protocol {
     fn qualification_from_binding(
         binding: &ProviderBindingWireV1,
     ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, BrokerError> {
-        let revision = binding.revision.ok_or(BrokerError::BindingMismatch)?;
-        let policy_digest = binding.policy_digest.ok_or(BrokerError::BindingMismatch)?;
+        let revision = required_binding_value!(binding, revision);
+        let policy_digest = required_binding_value!(binding, policy_digest);
         if revision == 0 || policy_digest == [0; 32] {
             return Err(BrokerError::StaleOrRevoked);
         }
@@ -10207,8 +10113,8 @@ mod protocol {
         sorafs_node::reputation::runtime::ReputationRuntimeProviderQualificationV1,
         BrokerError,
     > {
-        let revision = binding.revision.ok_or(BrokerError::BindingMismatch)?;
-        let policy_digest = binding.policy_digest.ok_or(BrokerError::BindingMismatch)?;
+        let revision = required_binding_value!(binding, revision);
+        let policy_digest = required_binding_value!(binding, policy_digest);
         if revision == 0 || policy_digest == [0; 32] {
             return Err(BrokerError::StaleOrRevoked);
         }
@@ -10222,8 +10128,8 @@ mod protocol {
     fn moderation_quarantine_qualification_from_binding(
         binding: &ProviderBindingWireV1,
     ) -> Result<sorafs_node::ModerationQuarantineKeyProviderQualificationV1, BrokerError> {
-        let revision = binding.revision.ok_or(BrokerError::BindingMismatch)?;
-        let policy_digest = binding.policy_digest.ok_or(BrokerError::BindingMismatch)?;
+        let revision = required_binding_value!(binding, revision);
+        let policy_digest = required_binding_value!(binding, policy_digest);
         if revision == 0 || policy_digest == [0; 32] {
             return Err(BrokerError::StaleOrRevoked);
         }
@@ -10291,6 +10197,43 @@ mod protocol {
             observations: Vec<ProviderObservationWireV1>,
             backends: RuntimeProviderBrokerBackendsV1,
         }
+        macro_rules! broker_backend {
+            ($state:expr, $field:ident) => {
+                ($state)
+                    .backends
+                    .$field
+                    .as_ref()
+                    .ok_or(BrokerError::BindingMismatch)?
+            };
+        }
+        macro_rules! server_backend {
+            ($backends:expr, $field:ident) => {
+                ($backends)
+                    .$field
+                    .as_ref()
+                    .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?
+            };
+        }
+        macro_rules! provider_call {
+            ($provider:expr, $call:ident, $operation:expr, $payload:expr, $mutating:expr $(,)?) => {
+                ($provider).session.$call(
+                    &($provider).binding,
+                    ($provider).metadata_digest,
+                    $operation,
+                    $payload,
+                    $mutating,
+                )
+            };
+        }
+        macro_rules! resolved_provider {
+            ($provider:ident, $session:expr, $binding:expr, $observation:expr) => {
+                $provider {
+                    session: Arc::clone($session),
+                    binding: ($binding).clone(),
+                    metadata_digest: ($observation).metadata_digest,
+                }
+            };
+        }
         #[derive(Default)]
         struct PopBrokerServerSessionV1 {
             providers: Option<iroha_torii::sorafs::pop_api::PopCredentialRuntimeProvidersV1>,
@@ -10341,10 +10284,7 @@ mod protocol {
                 .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
             match exact.role() {
                 iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome => {
-                    let provider = backends
-                        .proof_outcome_transaction_signer
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let provider = server_backend!(backends, proof_outcome_transaction_signer);
                     iroha_torii::qualify_sorafs_proof_outcome_transaction_signer_v1(
                         exact,
                         Arc::clone(provider),
@@ -10353,10 +10293,7 @@ mod protocol {
                     .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                 }
                 iroha_torii::SorafsNativeTransactionSignerRoleV1::Repair => {
-                    let provider = backends
-                        .repair_transaction_signer
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let provider = server_backend!(backends, repair_transaction_signer);
                     iroha_torii::qualify_sorafs_repair_transaction_signer_v1(
                         exact,
                         Arc::clone(provider),
@@ -10365,10 +10302,7 @@ mod protocol {
                     .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                 }
                 iroha_torii::SorafsNativeTransactionSignerRoleV1::Reserve => {
-                    let provider = backends
-                        .reserve_transaction_signer
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let provider = server_backend!(backends, reserve_transaction_signer);
                     iroha_torii::qualify_sorafs_reserve_transaction_signer_v1(
                         exact,
                         Arc::clone(provider),
@@ -10377,10 +10311,7 @@ mod protocol {
                     .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                 }
                 iroha_torii::SorafsNativeTransactionSignerRoleV1::Orderbook => {
-                    let provider = backends
-                        .orderbook_transaction_signer
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let provider = server_backend!(backends, orderbook_transaction_signer);
                     iroha_torii::qualify_sorafs_orderbook_transaction_signer_v1(
                         exact,
                         Arc::clone(provider),
@@ -10511,10 +10442,7 @@ mod protocol {
                     == IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry
                         .wire_id() =>
                 {
-                    let backend = backends
-                        .bootle_lantern_issuance
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let backend = server_backend!(backends, bootle_lantern_issuance);
                     let expected_bindings = bootle_lantern_bindings_from_wire(binding)
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
                     let qualification = backend
@@ -10548,10 +10476,7 @@ mod protocol {
                     }
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id() => {
-                    let signer = backends
-                        .stream_token_signer
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let signer = server_backend!(backends, stream_token_signer);
                     let expected_key = binding
                         .stream_token_signer_public_key
                         .ok_or(RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -10586,10 +10511,7 @@ mod protocol {
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id() =>
                 {
-                    let provider = backends
-                        .stream_token_gateway_admission
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let provider = server_backend!(backends, stream_token_gateway_admission);
                     let expected = binding
                         .stream_token_gateway_admission_qualification
                         .ok_or(RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -10646,10 +10568,7 @@ mod protocol {
                     }
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::AppealFinanceCheckpoint.wire_id() => {
-                    let checkpoint = backends
-                        .appeal_finance_checkpoint
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let checkpoint = server_backend!(backends, appeal_finance_checkpoint);
                     let exact = binding
                         .appeal_finance_checkpoint_binding
                         .as_ref()
@@ -10679,10 +10598,7 @@ mod protocol {
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::PopCredentialProviderRegistry.wire_id() =>
                 {
-                    let registry = backends
-                        .pop_credential_provider_registry
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let registry = server_backend!(backends, pop_credential_provider_registry);
                     let qualification = registry
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -10706,10 +10622,7 @@ mod protocol {
                     }
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::PotrGatewaySigner.wire_id() => {
-                    let signer = backends
-                        .potr_gateway_signer
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let signer = server_backend!(backends, potr_gateway_signer);
                     let runtime = binding
                         .potr_runtime_binding
                         .as_ref()
@@ -10747,10 +10660,7 @@ mod protocol {
                     potr_signer_public_key = public_key.to_vec();
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::PotrProviderSigner.wire_id() => {
-                    let signer = backends
-                        .potr_provider_signer
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let signer = server_backend!(backends, potr_provider_signer);
                     let runtime = binding
                         .potr_runtime_binding
                         .as_ref()
@@ -10802,10 +10712,7 @@ mod protocol {
                     potr_signer_public_key = public_key;
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::GatewayAcmeClient.wire_id() => {
-                    let client = backends
-                        .gateway_acme_client
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let client = server_backend!(backends, gateway_acme_client);
                     let identity = client
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -10832,10 +10739,7 @@ mod protocol {
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::GatewayComplianceFeedTransport.wire_id() =>
                 {
-                    let transport = backends
-                        .gateway_compliance_feed_transport
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let transport = server_backend!(backends, gateway_compliance_feed_transport);
                     let identity = transport
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -10863,40 +10767,26 @@ mod protocol {
                     == IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter
                         .wire_id() =>
                 {
-                    let submitter = backends
-                        .reputation_journal_transaction_submitter
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let submitter =
+                        server_backend!(backends, reputation_journal_transaction_submitter);
                     qualify_reputation_runtime_backend(binding, submitter.as_ref())?;
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::ReputationThresholdSigner.wire_id() => {
-                    let signer = backends
-                        .reputation_threshold_signer
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let signer = server_backend!(backends, reputation_threshold_signer);
                     qualify_reputation_runtime_backend(binding, signer.as_ref())?;
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::ReputationGovernanceDag.wire_id() => {
-                    let governance_dag = backends
-                        .reputation_governance_dag
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let governance_dag = server_backend!(backends, reputation_governance_dag);
                     qualify_reputation_runtime_backend(binding, governance_dag.as_ref())?;
                 }
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint.wire_id() =>
                 {
-                    let checkpoint = backends
-                        .reputation_journal_checkpoint
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let checkpoint = server_backend!(backends, reputation_journal_checkpoint);
                     qualify_reputation_runtime_backend(binding, checkpoint.as_ref())?;
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::BillingFinalizedQuery.wire_id() => {
-                    let query = backends
-                        .billing_finalized_query
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let query = server_backend!(backends, billing_finalized_query);
                     qualify_billing_runtime_backend(binding, query.as_ref())?;
                     query
                         .check_readiness()
@@ -10915,10 +10805,7 @@ mod protocol {
                     }
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::BillingJournalVerifier.wire_id() => {
-                    let verifier = backends
-                        .billing_journal_verifier
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let verifier = server_backend!(backends, billing_journal_verifier);
                     qualify_billing_runtime_backend(binding, verifier.as_ref())?;
                     verifier
                         .check_readiness()
@@ -10937,10 +10824,7 @@ mod protocol {
                     }
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::BillingStatementSigner.wire_id() => {
-                    let signer = backends
-                        .billing_statement_signer
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let signer = server_backend!(backends, billing_statement_signer);
                     qualify_billing_runtime_backend(binding, signer.as_ref())?;
                     signer
                         .check_readiness()
@@ -10965,10 +10849,7 @@ mod protocol {
                     }
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::BillingStatementPublisher.wire_id() => {
-                    let publisher = backends
-                        .billing_statement_publisher
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let publisher = server_backend!(backends, billing_statement_publisher);
                     qualify_billing_runtime_backend(binding, publisher.as_ref())?;
                     publisher
                         .check_readiness()
@@ -11000,10 +10881,7 @@ mod protocol {
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::BillingAcknowledgementAuthority.wire_id() =>
                 {
-                    let authority = backends
-                        .billing_acknowledgement_authority
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let authority = server_backend!(backends, billing_acknowledgement_authority);
                     qualify_billing_runtime_backend(binding, authority.as_ref())?;
                     authority
                         .check_readiness()
@@ -11022,20 +10900,14 @@ mod protocol {
                     }
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::BillingEpochWitnessStore.wire_id() => {
-                    let store = backends
-                        .billing_epoch_witness_store
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let store = server_backend!(backends, billing_epoch_witness_store);
                     qualify_billing_runtime_backend(binding, store.as_ref())?;
                     store
                         .check_readiness()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::PorFinalizedReplayArchive.wire_id() => {
-                    let archive = backends
-                        .por_finalized_replay_archive
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let archive = server_backend!(backends, por_finalized_replay_archive);
                     let expected =
                         por_replay_archive_exact_binding(binding).map_err(server_error)?;
                     let observed = archive
@@ -11059,10 +10931,7 @@ mod protocol {
                     }
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider.wire_id() => {
-                    let provider = backends
-                        .privacy_cycle_prf_provider
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let provider = server_backend!(backends, privacy_cycle_prf_provider);
                     let qualification = provider
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11086,10 +10955,7 @@ mod protocol {
                     }
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::PrivacyReleaseAnchor.wire_id() => {
-                    let anchor = backends
-                        .privacy_release_anchor
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let anchor = server_backend!(backends, privacy_release_anchor);
                     let qualification = anchor
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11111,10 +10977,7 @@ mod protocol {
                     }
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::TransparencyLeaderLease.wire_id() => {
-                    let provider = backends
-                        .transparency_leader_lease_provider
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let provider = server_backend!(backends, transparency_leader_lease_provider);
                     let qualification = provider
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11138,10 +11001,7 @@ mod protocol {
                     }
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::FencedPrivacyPublisher.wire_id() => {
-                    let publisher = backends
-                        .fenced_privacy_publisher
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let publisher = server_backend!(backends, fenced_privacy_publisher);
                     let qualification = publisher
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11166,10 +11026,7 @@ mod protocol {
                     }
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::FencedPrivacyHeadReader.wire_id() => {
-                    let reader = backends
-                        .fenced_privacy_head_reader
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let reader = server_backend!(backends, fenced_privacy_head_reader);
                     let qualification = reader
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11193,10 +11050,7 @@ mod protocol {
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id() =>
                 {
-                    let key_wrapper = backends
-                        .moderation_quarantine_key_wrapper
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let key_wrapper = server_backend!(backends, moderation_quarantine_key_wrapper);
                     let qualification = key_wrapper
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11224,10 +11078,7 @@ mod protocol {
                     moderation_quarantine_active_key_id = Some(active_key_id);
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::GovernanceDagSigner.wire_id() => {
-                    let signer = backends
-                        .governance_dag_signer
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let signer = server_backend!(backends, governance_dag_signer);
                     let expected_peer_id = binding
                         .governance_dag_publisher_peer_id
                         .as_deref()
@@ -11312,10 +11163,7 @@ mod protocol {
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore.wire_id() =>
                 {
-                    let store = backends
-                        .governance_dag_checkpoint_store
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let store = server_backend!(backends, governance_dag_checkpoint_store);
                     let qualification = store
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11332,37 +11180,25 @@ mod protocol {
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::ModerationTransactionSigner.wire_id() =>
                 {
-                    let signer = backends
-                        .moderation_transaction_signer
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let signer = server_backend!(backends, moderation_transaction_signer);
                     qualify_moderation_runtime_backend(binding, signer.as_ref())?;
                 }
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::ModerationSettlementHandoff.wire_id() =>
                 {
-                    let boundary = backends
-                        .moderation_settlement_handoff
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let boundary = server_backend!(backends, moderation_settlement_handoff);
                     qualify_moderation_runtime_backend(binding, boundary.as_ref())?;
                 }
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id() =>
                 {
-                    let boundary = backends
-                        .moderation_publication_handoff
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let boundary = server_backend!(backends, moderation_publication_handoff);
                     qualify_moderation_runtime_backend(binding, boundary.as_ref())?;
                 }
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::ModerationPanelNotification.wire_id() =>
                 {
-                    let boundary = backends
-                        .moderation_panel_notification
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let boundary = server_backend!(backends, moderation_panel_notification);
                     qualify_moderation_runtime_backend(binding, boundary.as_ref())?;
                 }
                 slot if native_transaction_signer_role_for_slot(slot).is_some() => {
@@ -11375,12 +11211,7 @@ mod protocol {
                         .map_err(server_error)?;
                     crate::soracloud_runtime_signer::qualify_soracloud_runtime_mutation_signer_v1(
                         exact,
-                        Arc::clone(
-                            backends
-                                .soracloud_runtime_mutation_signer
-                                .as_ref()
-                                .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?,
-                        ),
+                        Arc::clone(server_backend!(backends, soracloud_runtime_mutation_signer)),
                     )
                     .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
                 }
@@ -11407,10 +11238,7 @@ mod protocol {
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id() =>
                 {
-                    let source = backends
-                        .provider_ingest_authenticated_source
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let source = server_backend!(backends, provider_ingest_authenticated_source);
                     let qualification = source
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11434,10 +11262,7 @@ mod protocol {
                     || slot
                         == IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSigner.wire_id() =>
                 {
-                    let resolver = backends
-                        .provider_ingest_signer_resolver
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let resolver = server_backend!(backends, provider_ingest_signer_resolver);
                     let qualification = resolver
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11478,10 +11303,7 @@ mod protocol {
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore.wire_id() =>
                 {
-                    let store = backends
-                        .provider_ingest_checkpoint_store
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let store = server_backend!(backends, provider_ingest_checkpoint_store);
                     let qualification = store
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11498,10 +11320,7 @@ mod protocol {
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::ProviderIngestRetentionAuthority.wire_id() =>
                 {
-                    let authority = backends
-                        .provider_ingest_retention_authority
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let authority = server_backend!(backends, provider_ingest_retention_authority);
                     let qualification = authority
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11519,10 +11338,8 @@ mod protocol {
                     == IrohaRuntimeProviderSlotV1::ReputationFinalizedArchiveRetentionAuthority
                         .wire_id() =>
                 {
-                    let authority = backends
-                        .reputation_finalized_archive_retention_authority
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let authority =
+                        server_backend!(backends, reputation_finalized_archive_retention_authority);
                     let qualification = authority
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11543,10 +11360,7 @@ mod protocol {
                     }
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn.wire_id() => {
-                    let boundary = backends
-                        .evidence_viewer_webauthn
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let boundary = server_backend!(backends, evidence_viewer_webauthn);
                     let qualification = boundary
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11569,10 +11383,7 @@ mod protocol {
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::EvidenceViewerGrantAuthority.wire_id() =>
                 {
-                    let boundary = backends
-                        .evidence_viewer_grants
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let boundary = server_backend!(backends, evidence_viewer_grants);
                     let qualification = boundary
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11595,10 +11406,7 @@ mod protocol {
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::EvidenceViewerReceiptSigner.wire_id() =>
                 {
-                    let signer = backends
-                        .evidence_viewer_receipt_signer
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let signer = server_backend!(backends, evidence_viewer_receipt_signer);
                     let qualification = signer
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11625,10 +11433,7 @@ mod protocol {
                     evidence_viewer_receipt_signer_public_key = Some(public_key);
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::EvidenceViewerErasure.wire_id() => {
-                    let boundary = backends
-                        .evidence_viewer_erasure
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let boundary = server_backend!(backends, evidence_viewer_erasure);
                     let qualification = boundary
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11651,10 +11456,7 @@ mod protocol {
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore.wire_id() =>
                 {
-                    let store = backends
-                        .evidence_viewer_checkpoint_store
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let store = server_backend!(backends, evidence_viewer_checkpoint_store);
                     let qualification = store
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11675,10 +11477,7 @@ mod protocol {
                     }
                 }
                 slot if slot == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id() => {
-                    let store = backends
-                        .moderation_checkpoint_store
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let store = server_backend!(backends, moderation_checkpoint_store);
                     qualify_moderation_runtime_backend(binding, store.as_ref())?;
                     let public_key = store.attestation_public_key();
                     if Some(public_key) != binding.moderation_checkpoint_attestation_public_key
@@ -11691,10 +11490,7 @@ mod protocol {
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id() =>
                 {
-                    let archive = backends
-                        .moderation_panel_notification_archive
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let archive = server_backend!(backends, moderation_panel_notification_archive);
                     let qualification = archive
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11729,10 +11525,7 @@ mod protocol {
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive.wire_id() =>
                 {
-                    let archive = backends
-                        .evidence_viewer_compaction_archive
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let archive = server_backend!(backends, evidence_viewer_compaction_archive);
                     let qualification = archive
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -11766,10 +11559,8 @@ mod protocol {
                     == IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher
                         .wire_id() =>
                 {
-                    let publisher = backends
-                        .evidence_viewer_transparency_publisher
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let publisher =
+                        server_backend!(backends, evidence_viewer_transparency_publisher);
                     let qualification = publisher
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
@@ -12254,11 +12045,7 @@ mod protocol {
             context: sorafs_node::ProviderIngestCompletionSignerResolutionContextV1,
         ) -> Result<Option<Arc<dyn sorafs_node::ProviderIngestCompletionSignerV1>>, BrokerError>
         {
-            let resolver = state
-                .backends
-                .provider_ingest_signer_resolver
-                .as_ref()
-                .ok_or(BrokerError::BindingMismatch)?;
+            let resolver = broker_backend!(state, provider_ingest_signer_resolver);
             block_on_provider_future(resolver.resolve(context))?.map_err(|error| match error {
                 sorafs_node::ProviderIngestCompletionSignerResolverErrorV1::Unavailable => {
                     BrokerError::Unavailable
@@ -12340,13 +12127,7 @@ mod protocol {
             let exact = soracloud_runtime_signer_binding_from_wire(binding)?;
             crate::soracloud_runtime_signer::qualify_soracloud_runtime_mutation_signer_v1(
                 exact,
-                Arc::clone(
-                    state
-                        .backends
-                        .soracloud_runtime_mutation_signer
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?,
-                ),
+                Arc::clone(broker_backend!(state, soracloud_runtime_mutation_signer)),
             )
             .map_err(soracloud_runtime_signer_qualification_error)
         }
@@ -12377,13 +12158,10 @@ mod protocol {
             let exact = soracloud_hf_credential_binding_from_wire(binding)?;
             crate::soracloud_hf_credential::qualify_soracloud_hf_inference_credential_provider_v1(
                 exact,
-                Arc::clone(
-                    state
-                        .backends
-                        .soracloud_hf_inference_credential_provider
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?,
-                ),
+                Arc::clone(broker_backend!(
+                    state,
+                    soracloud_hf_inference_credential_provider
+                )),
             )
             .map_err(soracloud_hf_credential_qualification_error)
         }
@@ -12416,11 +12194,7 @@ mod protocol {
             state: &BrokerServerStateV1,
             payload: &iroha_data_model::transaction::TransactionPayload,
         ) -> Result<iroha_data_model::transaction::SignedTransaction, BrokerError> {
-            let backend = state
-                .backends
-                .moderation_transaction_signer
-                .as_ref()
-                .ok_or(BrokerError::BindingMismatch)?;
+            let backend = broker_backend!(state, moderation_transaction_signer);
             let transaction = backend.sign(payload.clone()).map_err(|error| match error {
                 iroha_torii::sorafs::moderation_runtime::ModerationSigningFailureV1::Unavailable
                 | iroha_torii::sorafs::moderation_runtime::ModerationSigningFailureV1::Backpressure => {
@@ -12455,13 +12229,7 @@ mod protocol {
                 iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome => {
                     let signer = iroha_torii::qualify_sorafs_proof_outcome_transaction_signer_v1(
                         exact,
-                        Arc::clone(
-                            state
-                                .backends
-                                .proof_outcome_transaction_signer
-                                .as_ref()
-                                .ok_or(BrokerError::BindingMismatch)?,
-                        ),
+                        Arc::clone(broker_backend!(state, proof_outcome_transaction_signer)),
                     )
                     .map_err(native_transaction_signer_qualification_error)?;
                     signer.sign(payload).map_err(|error| match error {
@@ -12483,13 +12251,7 @@ mod protocol {
                 iroha_torii::SorafsNativeTransactionSignerRoleV1::Repair => {
                     let signer = iroha_torii::qualify_sorafs_repair_transaction_signer_v1(
                         exact,
-                        Arc::clone(
-                            state
-                                .backends
-                                .repair_transaction_signer
-                                .as_ref()
-                                .ok_or(BrokerError::BindingMismatch)?,
-                        ),
+                        Arc::clone(broker_backend!(state, repair_transaction_signer)),
                     )
                     .map_err(native_transaction_signer_qualification_error)?;
                     signer.sign(payload).map_err(|error| match error {
@@ -12511,13 +12273,7 @@ mod protocol {
                 iroha_torii::SorafsNativeTransactionSignerRoleV1::Reserve => {
                     let signer = iroha_torii::qualify_sorafs_reserve_transaction_signer_v1(
                         exact,
-                        Arc::clone(
-                            state
-                                .backends
-                                .reserve_transaction_signer
-                                .as_ref()
-                                .ok_or(BrokerError::BindingMismatch)?,
-                        ),
+                        Arc::clone(broker_backend!(state, reserve_transaction_signer)),
                     )
                     .map_err(native_transaction_signer_qualification_error)?;
                     signer.sign(payload).map_err(|error| match error {
@@ -12539,13 +12295,7 @@ mod protocol {
                 iroha_torii::SorafsNativeTransactionSignerRoleV1::Orderbook => {
                     let signer = iroha_torii::qualify_sorafs_orderbook_transaction_signer_v1(
                         exact,
-                        Arc::clone(
-                            state
-                                .backends
-                                .orderbook_transaction_signer
-                                .as_ref()
-                                .ok_or(BrokerError::BindingMismatch)?,
-                        ),
+                        Arc::clone(broker_backend!(state, orderbook_transaction_signer)),
                     )
                     .map_err(native_transaction_signer_qualification_error)?;
                     signer.sign(payload).map_err(|error| match error {
@@ -12575,7 +12325,10 @@ mod protocol {
             pop_session: &mut PopBrokerServerSessionV1,
             request: &OperationRequestV1,
         ) -> Result<ScrubbedBytes, BrokerError> {
-            qualify_server_binding(state, &request.binding, request.provider_metadata_digest)?;
+            let requalify = || {
+                qualify_server_binding(state, &request.binding, request.provider_metadata_digest)
+            };
+            requalify()?;
             let moderation_quarantine_slot =
                 IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id();
             let moderation_transaction_signer_slot =
@@ -12689,29 +12442,19 @@ mod protocol {
                         &qualify.network_id,
                         &state.network_id,
                     )?;
-                    let archive = state
-                        .backends
-                        .moderation_panel_notification_archive
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let archive = broker_backend!(state, moderation_panel_notification_archive);
                     let qualification = archive
                         .qualification()
                         .map_err(|_| BrokerError::StaleOrRevoked)?;
-                    let exact = request
-                        .binding
-                        .moderation_panel_notification_archive_binding
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let exact = required_binding_value!(
+                        &request.binding,
+                        moderation_panel_notification_archive_binding
+                    );
                     if archive.handle() != request.binding.handle
                         || qualification.revision()
-                            != request
-                                .binding
-                                .revision
-                                .ok_or(BrokerError::BindingMismatch)?
+                            != required_binding_value!(&request.binding, revision)
                         || qualification.policy_digest()
-                            != request
-                                .binding
-                                .policy_digest
-                                .ok_or(BrokerError::BindingMismatch)?
+                            != required_binding_value!(&request.binding, policy_digest)
                         || archive.archive_id() != exact.archive_id
                         || archive.signing_public_key() != exact.public_key
                     {
@@ -12730,11 +12473,7 @@ mod protocol {
                     )
                 }
                 (slot, OPERATION_QUALIFY_V1) if slot == bootle_lantern_issuance_slot => {
-                    let qualification = state
-                        .backends
-                        .bootle_lantern_issuance
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let qualification = broker_backend!(state, bootle_lantern_issuance)
                         .qualification()
                         .map_err(|error| match error {
                             iroha_torii::privacy_issuance_api::
@@ -12769,22 +12508,13 @@ mod protocol {
                         MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
                     )?;
                     let action = bootle_lantern_action_from_wire(authenticate.action)?;
-                    let outcome = state
-                        .backends
-                        .bootle_lantern_issuance
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
-                        .authenticate(
-                            &authenticate.opaque_credential,
-                            action,
-                            authenticate.request_binding,
-                            authenticate.committed_height,
-                        );
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    let outcome = broker_backend!(state, bootle_lantern_issuance).authenticate(
+                        &authenticate.opaque_credential,
+                        action,
+                        authenticate.request_binding,
+                        authenticate.committed_height,
+                    );
+                    requalify()?;
                     let principal = outcome.map_err(|error| {
                         match error {
                         iroha_torii::privacy_issuance_api::
@@ -12815,11 +12545,7 @@ mod protocol {
                         &request.payload,
                         MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
                     )?;
-                    let outcome = state
-                        .backends
-                        .bootle_lantern_issuance
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let outcome = broker_backend!(state, bootle_lantern_issuance)
                         .prepare_authorization(
                             &prepare.context,
                             prepare.canonical_genesis_hash,
@@ -12828,11 +12554,7 @@ mod protocol {
                             prepare.issued_at_height,
                             prepare.expires_at_height,
                         );
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     let authorization = outcome.map_err(|error| {
                         match error {
                         crate::runtime_provider_broker::
@@ -12888,24 +12610,15 @@ mod protocol {
                             issue.current_height,
                         )
                         .map_err(|_| BrokerError::Rejected)?;
-                    let outcome = state
-                        .backends
-                        .bootle_lantern_issuance
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
-                        .validate_request(
-                            &issue.context,
-                            issue.canonical_genesis_hash,
-                            &issue.policy,
-                            &authorization,
-                            &issue.request,
-                            issue.current_height,
-                        );
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    let outcome = broker_backend!(state, bootle_lantern_issuance).validate_request(
+                        &issue.context,
+                        issue.canonical_genesis_hash,
+                        &issue.policy,
+                        &authorization,
+                        &issue.request,
+                        issue.current_height,
+                    );
+                    requalify()?;
                     let digest = outcome.map_err(|error| {
                         match error {
                         crate::runtime_provider_broker::
@@ -12938,24 +12651,15 @@ mod protocol {
                         &request.binding,
                         &state.network_id,
                     )?;
-                    let outcome = state
-                        .backends
-                        .bootle_lantern_issuance
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
-                        .issue_validated(
-                            &issue.context,
-                            issue.canonical_genesis_hash,
-                            &issue.policy,
-                            &authorization,
-                            &issue.request,
-                            issue.current_height,
-                        );
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    let outcome = broker_backend!(state, bootle_lantern_issuance).issue_validated(
+                        &issue.context,
+                        issue.canonical_genesis_hash,
+                        &issue.policy,
+                        &authorization,
+                        &issue.request,
+                        issue.current_height,
+                    );
+                    requalify()?;
                     let response = outcome.map_err(|error| {
                         match error {
                         crate::runtime_provider_broker::
@@ -12995,11 +12699,7 @@ mod protocol {
                     )
                 }
                 (slot, OPERATION_QUALIFY_V1) if slot == moderation_quarantine_slot => {
-                    let qualification = state
-                        .backends
-                        .moderation_quarantine_key_wrapper
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let qualification = broker_backend!(state, moderation_quarantine_key_wrapper)
                         .qualification()
                         .map_err(|error| match error {
                             sorafs_node::ModerationQuarantineKeyProviderReadinessErrorV1::Unavailable => {
@@ -13026,21 +12726,12 @@ mod protocol {
                     )?;
                     validate_moderation_quarantine_context_and_dek(wrap.context_digest, wrap.dek)?;
                     let mut wrapped_dek = ScrubbedBytes::new(
-                        state
-                            .backends
-                            .moderation_quarantine_key_wrapper
-                            .as_ref()
-                            .ok_or(BrokerError::BindingMismatch)?
+                        broker_backend!(state, moderation_quarantine_key_wrapper)
                             .wrap_dek(wrap.context_digest, &wrap.dek)
                             .map_err(|error| moderation_quarantine_operation_error(error, true))?,
                     );
                     validate_moderation_quarantine_wrapped_dek(&wrapped_dek)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(
                         &ModerationQuarantineWrapDekResultWireV1 {
                             wrapped_dek: wrapped_dek.take(),
@@ -13062,30 +12753,18 @@ mod protocol {
                     }
                     validate_moderation_quarantine_wrapped_dek(&unwrap.wrapped_dek)?;
                     let unwrapped = ModerationQuarantineUnwrapDekResultWireV1 {
-                        dek: state
-                            .backends
-                            .moderation_quarantine_key_wrapper
-                            .as_ref()
-                            .ok_or(BrokerError::BindingMismatch)?
+                        dek: broker_backend!(state, moderation_quarantine_key_wrapper)
                             .unwrap_dek(&unwrap.key_id, unwrap.context_digest, &unwrap.wrapped_dek)
                             .map_err(|error| moderation_quarantine_operation_error(error, false))?,
                     };
                     if unwrapped.dek == [0; 32] {
                         return Err(BrokerError::Rejected);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&unwrapped, MAX_MODERATION_QUARANTINE_OPERATION_BYTES_V1)
                 }
                 (slot, OPERATION_QUALIFY_V1) if slot == provider_source_slot => {
-                    let source = state
-                        .backends
-                        .provider_ingest_authenticated_source
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let source = broker_backend!(state, provider_ingest_authenticated_source);
                     let qualification = source
                         .qualification()
                         .map_err(|_| BrokerError::StaleOrRevoked)?;
@@ -13100,11 +12779,7 @@ mod protocol {
                 (slot, OPERATION_PROVIDER_INGEST_SOURCE_READINESS_V1)
                     if slot == provider_source_slot =>
                 {
-                    state
-                        .backends
-                        .provider_ingest_authenticated_source
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    broker_backend!(state, provider_ingest_authenticated_source)
                         .check_readiness()
                         .map_err(|error| match error {
                             sorafs_node::ProviderIngestSourceFetchErrorV1::Unavailable => {
@@ -13120,11 +12795,7 @@ mod protocol {
                     encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_QUALIFY_V1) if slot == provider_resolver_slot => {
-                    let resolver = state
-                        .backends
-                        .provider_ingest_signer_resolver
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let resolver = broker_backend!(state, provider_ingest_signer_resolver);
                     let qualification = resolver
                         .qualification()
                         .map_err(|_| BrokerError::StaleOrRevoked)?;
@@ -13263,17 +12934,10 @@ mod protocol {
                     >(
                         &request.payload, MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1
                     )?;
-                    let submitter = state
-                        .backends
-                        .reputation_journal_transaction_submitter
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let submitter =
+                        broker_backend!(state, reputation_journal_transaction_submitter);
                     let supported = submitter.supports_authority(&supports.authority);
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&supported, MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_REPUTATION_JOURNAL_SUBMIT_V1)
@@ -13285,22 +12949,14 @@ mod protocol {
                     )?;
                     let submit = reputation_journal_request_from_wire(wire)?;
                     ensure_reputation_session_network(&submit.network_id, &state.network_id)?;
-                    let submitter = state
-                        .backends
-                        .reputation_journal_transaction_submitter
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let submitter =
+                        broker_backend!(state, reputation_journal_transaction_submitter);
                     if !submitter.supports_authority(&submit.authority) {
                         return Err(BrokerError::Rejected);
                     }
                     let outcome =
                         reputation_journal_submit_result_to_wire(submitter.submit(&submit))?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&outcome, MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1)
@@ -13315,11 +12971,7 @@ mod protocol {
                         &signing.material.network_id,
                         &state.network_id,
                     )?;
-                    let threshold_signer = state
-                        .backends
-                        .reputation_threshold_signer
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let threshold_signer = broker_backend!(state, reputation_threshold_signer);
                     let reconciled = threshold_signer.reconcile_signature(&signing);
                     let result = match reconciled {
                         Ok(None) => ReputationReconcileResultWireV1 {
@@ -13338,12 +12990,7 @@ mod protocol {
                             failure_receipt: error.receipt(),
                         },
                     };
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&result, MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_REPUTATION_GOVERNANCE_RECONCILE_V1)
@@ -13354,11 +13001,7 @@ mod protocol {
                         MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
                     )?;
                     let publication = reputation_governance_request_from_wire(wire)?;
-                    let governance_dag = state
-                        .backends
-                        .reputation_governance_dag
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let governance_dag = broker_backend!(state, reputation_governance_dag);
                     let reconciled = governance_dag.reconcile_publication(&publication);
                     let result = match reconciled {
                         Ok(None) => ReputationReconcileResultWireV1 {
@@ -13386,22 +13029,13 @@ mod protocol {
                             failure_receipt: error.receipt(),
                         },
                     };
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&result, MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1)
                     if slot == reputation_checkpoint_slot =>
                 {
-                    let checkpoint = state
-                        .backends
-                        .reputation_journal_checkpoint
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let checkpoint = broker_backend!(state, reputation_journal_checkpoint);
                     let record = checkpoint.load_latest().map_err(|error| {
                         match error {
                         sorafs_node::reputation::runtime::
@@ -13428,11 +13062,7 @@ mod protocol {
                                 .map_err(|_| BrokerError::Protocol)
                         })
                         .transpose()?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&record, MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1)
@@ -13450,11 +13080,7 @@ mod protocol {
                                 REPUTATION_JOURNAL_PRODUCER_MAX_CHECKPOINT_BYTES_V1,
                         )
                         .map_err(|_| BrokerError::Rejected)?;
-                    let checkpoint = state
-                        .backends
-                        .reputation_journal_checkpoint
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let checkpoint = broker_backend!(state, reputation_journal_checkpoint);
                     let current = checkpoint.load_latest().map_err(|error| {
                         match error {
                         sorafs_node::reputation::runtime::
@@ -13512,30 +13138,17 @@ mod protocol {
                     if readback.as_ref() != Some(&next) {
                         return Err(BrokerError::Ambiguous);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&(), MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_IDENTITY_V1) if slot == billing_finalized_query_slot => {
-                    let identity = state
-                        .backends
-                        .billing_finalized_query
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let identity = broker_backend!(state, billing_finalized_query)
                         .identity()
                         .map_err(|error| billing_external_error(error, false))?;
                     if identity.handle != request.binding.handle {
                         return Err(BrokerError::BindingMismatch);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(
                         &BillingAdapterIdentityWireV1 {
                             handle: identity.handle,
@@ -13544,21 +13157,13 @@ mod protocol {
                     )
                 }
                 (slot, OPERATION_BILLING_IDENTITY_V1) if slot == billing_journal_verifier_slot => {
-                    let identity = state
-                        .backends
-                        .billing_journal_verifier
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let identity = broker_backend!(state, billing_journal_verifier)
                         .identity()
                         .map_err(|error| billing_external_error(error, false))?;
                     if identity.handle != request.binding.handle {
                         return Err(BrokerError::BindingMismatch);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(
                         &BillingAdapterIdentityWireV1 {
                             handle: identity.handle,
@@ -13567,11 +13172,7 @@ mod protocol {
                     )
                 }
                 (slot, OPERATION_BILLING_IDENTITY_V1) if slot == billing_statement_signer_slot => {
-                    let identity = state
-                        .backends
-                        .billing_statement_signer
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let identity = broker_backend!(state, billing_statement_signer)
                         .identity()
                         .map_err(|error| billing_external_error(error, false))?;
                     let wire = BillingStatementSignerIdentityWireV1 {
@@ -13588,21 +13189,13 @@ mod protocol {
                     {
                         return Err(BrokerError::BindingMismatch);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&wire, MAX_BILLING_CONTROL_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_IDENTITY_V1)
                     if slot == billing_statement_publisher_slot =>
                 {
-                    let identity = state
-                        .backends
-                        .billing_statement_publisher
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let identity = broker_backend!(state, billing_statement_publisher)
                         .identity()
                         .map_err(|error| billing_external_error(error, false))?;
                     let wire = BillingStatementPublisherIdentityWireV1 {
@@ -13625,31 +13218,19 @@ mod protocol {
                     {
                         return Err(BrokerError::BindingMismatch);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&wire, MAX_BILLING_CONTROL_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_IDENTITY_V1)
                     if slot == billing_acknowledgement_authority_slot =>
                 {
-                    let identity = state
-                        .backends
-                        .billing_acknowledgement_authority
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let identity = broker_backend!(state, billing_acknowledgement_authority)
                         .identity()
                         .map_err(|error| billing_external_error(error, false))?;
                     if identity.provider_handle != request.binding.handle {
                         return Err(BrokerError::BindingMismatch);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(
                         &BillingAdapterIdentityWireV1 {
                             handle: identity.provider_handle,
@@ -13658,118 +13239,62 @@ mod protocol {
                     )
                 }
                 (slot, OPERATION_BILLING_READINESS_V1) if slot == billing_finalized_query_slot => {
-                    state
-                        .backends
-                        .billing_finalized_query
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    broker_backend!(state, billing_finalized_query)
                         .check_readiness()
                         .map_err(|error| billing_external_error(error, false))?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_READINESS_V1) if slot == billing_journal_verifier_slot => {
-                    state
-                        .backends
-                        .billing_journal_verifier
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    broker_backend!(state, billing_journal_verifier)
                         .check_readiness()
                         .map_err(|error| billing_external_error(error, false))?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_READINESS_V1) if slot == billing_statement_signer_slot => {
-                    state
-                        .backends
-                        .billing_statement_signer
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    broker_backend!(state, billing_statement_signer)
                         .check_readiness()
                         .map_err(|error| billing_external_error(error, false))?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_READINESS_V1)
                     if slot == billing_statement_publisher_slot =>
                 {
-                    state
-                        .backends
-                        .billing_statement_publisher
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    broker_backend!(state, billing_statement_publisher)
                         .check_readiness()
                         .map_err(|error| billing_external_error(error, false))?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_READINESS_V1)
                     if slot == billing_acknowledgement_authority_slot =>
                 {
-                    state
-                        .backends
-                        .billing_acknowledgement_authority
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    broker_backend!(state, billing_acknowledgement_authority)
                         .check_readiness()
                         .map_err(|error| billing_external_error(error, false))?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_READINESS_V1)
                     if slot == billing_epoch_witness_store_slot =>
                 {
-                    state
-                        .backends
-                        .billing_epoch_witness_store
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    broker_backend!(state, billing_epoch_witness_store)
                         .check_readiness()
                         .map_err(|error| billing_external_error(error, false))?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_QUERY_CAPABILITIES_V1)
                     if slot == billing_finalized_query_slot =>
                 {
-                    let supplies_period_closes = state
-                        .backends
-                        .billing_finalized_query
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
-                        .supplies_period_closes();
+                    let supplies_period_closes =
+                        broker_backend!(state, billing_finalized_query).supplies_period_closes();
                     if !supplies_period_closes {
                         return Err(BrokerError::StaleOrRevoked);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(
                         &BillingFinalizedQueryCapabilitiesWireV1 {
                             supplies_period_closes,
@@ -13780,19 +13305,11 @@ mod protocol {
                 (slot, OPERATION_BILLING_FINALIZED_HEAD_V1)
                     if slot == billing_finalized_query_slot =>
                 {
-                    let head = state
-                        .backends
-                        .billing_finalized_query
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let head = broker_backend!(state, billing_finalized_query)
                         .finalized_head()
                         .map_err(|error| billing_external_error(error, false))?;
                     validate_billing_cursor(head)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&head, MAX_BILLING_CONTROL_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_QUERY_PAGE_V1) if slot == billing_finalized_query_slot => {
@@ -13801,11 +13318,7 @@ mod protocol {
                         MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                     )?;
                     validate_billing_query_position(query.position, state.network_id)?;
-                    let page = state
-                        .backends
-                        .billing_finalized_query
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let page = broker_backend!(state, billing_finalized_query)
                         .query_finalized_page(
                             billing_query_position_from_wire(query.position),
                             query.max_events,
@@ -13820,11 +13333,7 @@ mod protocol {
                             return Err(BrokerError::BindingMismatch);
                         }
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&page, MAX_BILLING_RUNTIME_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_QUERY_PERIOD_CLOSE_V1)
@@ -13835,11 +13344,7 @@ mod protocol {
                         MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                     )?;
                     validate_billing_query_position(query.position, state.network_id)?;
-                    let close = state
-                        .backends
-                        .billing_finalized_query
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let close = broker_backend!(state, billing_finalized_query)
                         .query_finalized_period_close(
                             query.period_end_unix,
                             billing_query_position_from_wire(query.position),
@@ -13851,11 +13356,7 @@ mod protocol {
                             return Err(BrokerError::BindingMismatch);
                         }
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&close, MAX_BILLING_RUNTIME_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_VERIFY_PAGE_V1)
@@ -13874,18 +13375,10 @@ mod protocol {
                     if let Some(previous) = verify.previous {
                         validate_billing_journal_commitment(previous, verify.network_id)?;
                     }
-                    state
-                        .backends
-                        .billing_journal_verifier
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    broker_backend!(state, billing_journal_verifier)
                         .verify_page(&verify.network_id, verify.previous, &verify.page)
                         .map_err(|error| billing_external_error(error, false))?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_VERIFY_PERIOD_CLOSE_V1)
@@ -13901,18 +13394,10 @@ mod protocol {
                         return Err(BrokerError::BindingMismatch);
                     }
                     validate_billing_period_close_shape(&verify.close, None)?;
-                    state
-                        .backends
-                        .billing_journal_verifier
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    broker_backend!(state, billing_journal_verifier)
                         .verify_period_close(&verify.network_id, &verify.close)
                         .map_err(|error| billing_external_error(error, false))?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_VERIFY_EPOCH_TRANSITION_V1)
@@ -13928,18 +13413,10 @@ mod protocol {
                     {
                         return Err(BrokerError::BindingMismatch);
                     }
-                    state
-                        .backends
-                        .billing_journal_verifier
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    broker_backend!(state, billing_journal_verifier)
                         .verify_epoch_transition(&verify.network_id, &verify.transition)
                         .map_err(|error| billing_external_error(error, false))?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_SIGN_STATEMENT_DIGEST_V1)
@@ -13949,11 +13426,7 @@ mod protocol {
                         &request.payload,
                         MAX_BILLING_CONTROL_FRAME_BYTES_V1,
                     )?;
-                    let signer = state
-                        .backends
-                        .billing_statement_signer
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let signer = broker_backend!(state, billing_statement_signer);
                     let identity = signer
                         .identity()
                         .map_err(|error| billing_external_error(error, false))?;
@@ -13973,11 +13446,7 @@ mod protocol {
                         signature,
                         &sign.digest,
                     )?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(
                         &BillingSignDigestResultWireV1 { signature },
                         MAX_BILLING_CONTROL_FRAME_BYTES_V1,
@@ -13991,11 +13460,7 @@ mod protocol {
                         MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                     )?;
                     validate_billing_publish_request(&publish, state.network_id)?;
-                    let publisher = state
-                        .backends
-                        .billing_statement_publisher
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let publisher = broker_backend!(state, billing_statement_publisher);
                     let identity = publisher
                         .identity()
                         .map_err(|error| billing_external_error(error, false))?;
@@ -14032,12 +13497,7 @@ mod protocol {
                         state.network_id,
                     )
                     .map_err(|_| BrokerError::Ambiguous)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&receipt, MAX_BILLING_RUNTIME_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_LOOKUP_PUBLICATION_V1)
@@ -14047,11 +13507,7 @@ mod protocol {
                         &request.payload,
                         MAX_BILLING_CONTROL_FRAME_BYTES_V1,
                     )?;
-                    let publisher = state
-                        .backends
-                        .billing_statement_publisher
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let publisher = broker_backend!(state, billing_statement_publisher);
                     let identity = publisher
                         .identity()
                         .map_err(|error| billing_external_error(error, false))?;
@@ -14076,11 +13532,7 @@ mod protocol {
                             state.network_id,
                         )?;
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&publication, MAX_BILLING_RUNTIME_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_VERIFY_ACKNOWLEDGEMENT_V1)
@@ -14091,18 +13543,10 @@ mod protocol {
                         MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                     )?;
                     validate_billing_acknowledgement_request(&acknowledgement, state.network_id)?;
-                    state
-                        .backends
-                        .billing_acknowledgement_authority
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    broker_backend!(state, billing_acknowledgement_authority)
                         .verify(&acknowledgement.statement, &acknowledgement.acknowledgement)
                         .map_err(|error| billing_external_error(error, false))?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_RECORD_ACKNOWLEDGEMENT_V1)
@@ -14113,11 +13557,7 @@ mod protocol {
                         MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                     )?;
                     validate_billing_acknowledgement_request(&acknowledgement, state.network_id)?;
-                    let authority = state
-                        .backends
-                        .billing_acknowledgement_authority
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let authority = broker_backend!(state, billing_acknowledgement_authority);
                     let recorded = authority
                         .record(&acknowledgement.statement, &acknowledgement.acknowledgement)
                         .map_err(|error| billing_external_error(error, true))?;
@@ -14130,12 +13570,7 @@ mod protocol {
                     if readback.as_ref() != Some(&recorded) {
                         return Err(BrokerError::Ambiguous);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&recorded, MAX_BILLING_RUNTIME_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_LOOKUP_ACKNOWLEDGEMENT_V1)
@@ -14145,11 +13580,7 @@ mod protocol {
                         &request.payload,
                         MAX_BILLING_CONTROL_FRAME_BYTES_V1,
                     )?;
-                    let acknowledgement = state
-                        .backends
-                        .billing_acknowledgement_authority
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let acknowledgement = broker_backend!(state, billing_acknowledgement_authority)
                         .lookup(lookup.record_id)
                         .map_err(|error| billing_external_error(error, false))?;
                     if let Some(acknowledgement) = acknowledgement.as_ref()
@@ -14158,21 +13589,13 @@ mod protocol {
                     {
                         return Err(BrokerError::Rejected);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&acknowledgement, MAX_BILLING_RUNTIME_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_LOAD_LATEST_EPOCH_V1)
                     if slot == billing_epoch_witness_store_slot =>
                 {
-                    let record = state
-                        .backends
-                        .billing_epoch_witness_store
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let record = broker_backend!(state, billing_epoch_witness_store)
                         .load_latest()
                         .map_err(|error| billing_external_error(error, false))?;
                     if let Some(record) = record.as_ref() {
@@ -14186,11 +13609,7 @@ mod protocol {
                             )
                             .map_err(|_| BrokerError::Rejected)?;
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&record, MAX_BILLING_RUNTIME_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_LOAD_EPOCH_V1)
@@ -14200,11 +13619,7 @@ mod protocol {
                         &request.payload,
                         MAX_BILLING_CONTROL_FRAME_BYTES_V1,
                     )?;
-                    let record = state
-                        .backends
-                        .billing_epoch_witness_store
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let record = broker_backend!(state, billing_epoch_witness_store)
                         .load_epoch(load.epoch_sequence)
                         .map_err(|error| billing_external_error(error, false))?;
                     if let Some(record) = record.as_ref() {
@@ -14221,11 +13636,7 @@ mod protocol {
                             return Err(BrokerError::Rejected);
                         }
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&record, MAX_BILLING_RUNTIME_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_COMPARE_AND_SWAP_EPOCH_V1)
@@ -14245,11 +13656,7 @@ mod protocol {
                     if compare.next.network_id != state.network_id {
                         return Err(BrokerError::BindingMismatch);
                     }
-                    let store = state
-                        .backends
-                        .billing_epoch_witness_store
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let store = broker_backend!(state, billing_epoch_witness_store);
                     let current = store
                         .load_latest()
                         .map_err(|error| billing_external_error(error, false))?;
@@ -14291,12 +13698,7 @@ mod protocol {
                     {
                         return Err(BrokerError::Ambiguous);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_PRIVACY_CYCLE_PRF_DERIVE_V1) if slot == privacy_cycle_prf_slot => {
@@ -14305,11 +13707,7 @@ mod protocol {
                         MAX_TRANSPARENCY_PRF_FRAME_BYTES_V1,
                     )?;
                     let request_value = wire.to_request()?;
-                    let output = state
-                        .backends
-                        .privacy_cycle_prf_provider
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let output = broker_backend!(state, privacy_cycle_prf_provider)
                         .derive_cycle_output(&request_value)
                         .map_err(|error| match error {
                             sorafs_node::PrivacyCyclePrfProviderErrorV1::Unavailable
@@ -14324,11 +13722,7 @@ mod protocol {
                     let wire = PrivacyCyclePrfOutputWireV1 {
                         output: output.runtime_transport_bytes(),
                     };
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&wire, MAX_TRANSPARENCY_PRF_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_PRIVACY_RELEASE_ANCHOR_FINALIZED_HEAD_V1)
@@ -14340,11 +13734,7 @@ mod protocol {
                         &request.payload,
                         MAX_PRIVACY_RELEASE_ANCHOR_FRAME_BYTES_V1,
                     )?)?;
-                    let anchor = state
-                        .backends
-                        .privacy_release_anchor
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let anchor = broker_backend!(state, privacy_release_anchor);
                     let head = anchor.finalized_head(query).map_err(|error| match error {
                         sorafs_node::PrivacyReleaseAnchorErrorV1::Unavailable
                         | sorafs_node::PrivacyReleaseAnchorErrorV1::Internal => {
@@ -14360,11 +13750,7 @@ mod protocol {
                     if head.query_id != query || head.to_head().is_err() {
                         return Err(BrokerError::Rejected);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&head, MAX_PRIVACY_RELEASE_ANCHOR_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_PRIVACY_RELEASE_ANCHOR_COMPARE_AND_SET_V1)
@@ -14376,11 +13762,7 @@ mod protocol {
                     )?;
                     let (expected, next, lease) =
                         validate_privacy_release_anchor_compare_and_set(&compare)?;
-                    let anchor = state
-                        .backends
-                        .privacy_release_anchor
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let anchor = broker_backend!(state, privacy_release_anchor);
                     anchor
                         .compare_and_set_finalized_head(expected, next, &lease)
                         .map_err(|error| match error {
@@ -14396,24 +13778,14 @@ mod protocol {
                                 BrokerError::Ambiguous
                             }
                         })?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     let readback = anchor
                         .finalized_head(next.query_id())
                         .map_err(|_| BrokerError::Ambiguous)?;
                     if readback != next {
                         return Err(BrokerError::Ambiguous);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&(), MAX_PRIVACY_RELEASE_ANCHOR_FRAME_BYTES_V1)
                         .map_err(|_| BrokerError::Ambiguous)
                 }
@@ -14427,20 +13799,11 @@ mod protocol {
                     )?;
                     let lease_request =
                         validate_transparency_leader_lease_acquire(&wire, &configured)?;
-                    let provider = state
-                        .backends
-                        .transparency_leader_lease_provider
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let provider = broker_backend!(state, transparency_leader_lease_provider);
                     let grant = provider
                         .acquire(&lease_request)
                         .map_err(transparency_leader_lease_provider_error)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     validate_transparency_leader_lease_acquire_grant(
                         &lease_request,
                         &grant,
@@ -14463,20 +13826,11 @@ mod protocol {
                     )?;
                     let lease_request =
                         validate_transparency_leader_lease_renew(&wire, &configured)?;
-                    let provider = state
-                        .backends
-                        .transparency_leader_lease_provider
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let provider = broker_backend!(state, transparency_leader_lease_provider);
                     let grant = provider
                         .renew(&lease_request)
                         .map_err(transparency_leader_lease_provider_error)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     validate_transparency_leader_lease_renew_grant(
                         &lease_request,
                         &grant,
@@ -14499,20 +13853,11 @@ mod protocol {
                     )?;
                     let lease_request =
                         validate_transparency_leader_lease_release(&wire, &configured)?;
-                    let provider = state
-                        .backends
-                        .transparency_leader_lease_provider
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let provider = broker_backend!(state, transparency_leader_lease_provider);
                     let receipt = provider
                         .release(&lease_request)
                         .map_err(transparency_leader_lease_provider_error)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     validate_transparency_leader_lease_release_receipt(
                         &lease_request,
                         &receipt,
@@ -14533,20 +13878,11 @@ mod protocol {
                         MAX_FENCED_PRIVACY_PUBLICATION_FRAME_BYTES_V1,
                     )?
                     .to_request()?;
-                    let publisher = state
-                        .backends
-                        .fenced_privacy_publisher
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let publisher = broker_backend!(state, fenced_privacy_publisher);
                     let receipt = publisher
                         .compare_and_append_privacy(&publish)
                         .map_err(fenced_privacy_publish_error)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     let qualification = qualification_from_binding(&request.binding)?;
                     receipt
                         .validate_for_request(&publish, &request.binding.handle, qualification)
@@ -14566,22 +13902,14 @@ mod protocol {
                             MAX_FENCED_PRIVACY_HEAD_FRAME_BYTES_V1,
                         )?
                         .to_required_evidence()?;
-                    let reader = state
-                        .backends
-                        .fenced_privacy_head_reader
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let reader = broker_backend!(state, fenced_privacy_head_reader);
                     let proof = reader
                         .read_authoritative_head_with_ancestry(
                             &required_ancestors,
                             &required_publications,
                         )
                         .map_err(|_| BrokerError::Unavailable)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     let proof_wire = FencedTransparencyHeadAncestryProofWireV1::from_proof(&proof);
                     proof_wire
                         .to_proof(&required_ancestors, &required_publications)
@@ -14594,11 +13922,7 @@ mod protocol {
                         MAX_STREAM_TOKEN_FRAME_BYTES_V1,
                     )?;
                     validate_stream_token_signing_payload(&sign.payload)?;
-                    let signer = state
-                        .backends
-                        .stream_token_signer
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let signer = broker_backend!(state, stream_token_signer);
                     let signature = signer.sign(&sign.payload).map_err(|error| match error {
                         iroha_torii::sorafs::StreamTokenSigningError::Unavailable => {
                             BrokerError::Unavailable
@@ -14607,17 +13931,11 @@ mod protocol {
                             BrokerError::Rejected
                         }
                     })?;
-                    let public_key = request
-                        .binding
-                        .stream_token_signer_public_key
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let public_key =
+                        required_binding_value!(&request.binding, stream_token_signer_public_key);
                     verify_evidence_viewer_ed25519_signature(public_key, signature, &sign.payload)
                         .map_err(|_| BrokerError::Rejected)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(
                         &SignResultWireV1 { signature },
                         MAX_STREAM_TOKEN_FRAME_BYTES_V1,
@@ -14632,24 +13950,15 @@ mod protocol {
                         &request.payload, MAX_BROKER_UNARY_FRAME_BYTES_V1
                     )?;
                     admission.validate().map_err(|_| BrokerError::Rejected)?;
-                    let provider = state
-                        .backends
-                        .stream_token_gateway_admission
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let provider = broker_backend!(state, stream_token_gateway_admission);
                     let admission_result = provider
                         .admit(&admission)
                         .map_err(stream_token_gateway_provider_error)?;
-                    qualify_server_binding(
-                        state,
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
+                    let qualification = required_binding_value!(
                         &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
-                    let qualification = request
-                        .binding
-                        .stream_token_gateway_admission_qualification
-                        .ok_or(BrokerError::BindingMismatch)?;
+                        stream_token_gateway_admission_qualification
+                    );
                     admission_result
                         .validate_for_request(&admission, qualification)
                         .map_err(|_| BrokerError::Ambiguous)?;
@@ -14660,33 +13969,25 @@ mod protocol {
                 {
                     let max_items =
                         decode_canonical::<u32>(&request.payload, MAX_BROKER_UNARY_FRAME_BYTES_V1)?;
-                    let configured = request
-                        .binding
-                        .stream_token_gateway_admission_reconcile_max_items
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let configured = required_binding_value!(
+                        &request.binding,
+                        stream_token_gateway_admission_reconcile_max_items
+                    );
                     if max_items == 0 || max_items > configured {
                         return Err(BrokerError::Rejected);
                     }
-                    let provider = state
-                        .backends
-                        .stream_token_gateway_admission
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let provider = broker_backend!(state, stream_token_gateway_admission);
                     let pending = provider
                         .pending(max_items)
                         .map_err(stream_token_gateway_provider_error)?;
-                    let qualification = request
-                        .binding
-                        .stream_token_gateway_admission_qualification
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let qualification = required_binding_value!(
+                        &request.binding,
+                        stream_token_gateway_admission_qualification
+                    );
                     pending
                         .validate(max_items, qualification)
                         .map_err(|_| BrokerError::Rejected)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&pending, MAX_BROKER_UNARY_FRAME_BYTES_V1)
                 }
                 (
@@ -14699,18 +14000,14 @@ mod protocol {
                     >(
                         &request.payload, MAX_BROKER_UNARY_FRAME_BYTES_V1
                     )?;
-                    let qualification = request
-                        .binding
-                        .stream_token_gateway_admission_qualification
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let qualification = required_binding_value!(
+                        &request.binding,
+                        stream_token_gateway_admission_qualification
+                    );
                     record
                         .validate_shape(qualification)
                         .map_err(|_| BrokerError::Rejected)?;
-                    let provider = state
-                        .backends
-                        .stream_token_gateway_admission
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let provider = broker_backend!(state, stream_token_gateway_admission);
                     let outcome =
                         if request.operation == OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1 {
                             provider.acknowledge(record)
@@ -14718,12 +14015,7 @@ mod protocol {
                             provider.release_lease(record)
                         }
                         .map_err(stream_token_gateway_provider_error)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&outcome, MAX_BROKER_UNARY_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1)
@@ -14735,11 +14027,8 @@ mod protocol {
                     )?;
                     ensure_transaction_session_network(&payload, &state.network_id)?;
                     let expected = payload.clone();
-                    let exact = request
-                        .binding
-                        .appeal_finance_signer_binding
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let exact =
+                        required_binding_ref!(&request.binding, appeal_finance_signer_binding);
                     if payload.authority() != &exact.authority {
                         return Err(BrokerError::Rejected);
                     }
@@ -14763,12 +14052,7 @@ mod protocol {
                     {
                         return Err(BrokerError::Rejected);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::StaleOrRevoked)?;
+                    requalify().map_err(|_| BrokerError::StaleOrRevoked)?;
                     encode_canonical(&transaction, MAX_APPEAL_FINANCE_TRANSACTION_FRAME_BYTES_V1)
                         .map_err(|_| BrokerError::Protocol)
                 }
@@ -14782,11 +14066,7 @@ mod protocol {
                     if digest == [0; 32] {
                         return Err(BrokerError::Rejected);
                     }
-                    let checkpoint = state
-                        .backends
-                        .appeal_finance_checkpoint
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let checkpoint = broker_backend!(state, appeal_finance_checkpoint);
                     let signature = checkpoint.sign_digest(digest).map_err(|error| {
                         match error {
                             sorafs_node::appeal_finance_transaction_forwarder::
@@ -14802,20 +14082,12 @@ mod protocol {
                             }
                     })?;
                     let public_key = exact_ed25519_public_key_bytes(
-                        &request
-                            .binding
-                            .appeal_finance_checkpoint_binding
-                            .as_ref()
-                            .ok_or(BrokerError::BindingMismatch)?
+                        &required_binding_ref!(&request.binding, appeal_finance_checkpoint_binding)
                             .public_key,
                     )?;
                     verify_evidence_viewer_ed25519_signature(public_key, signature, &digest)
                         .map_err(|_| BrokerError::Rejected)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(
                         &SignResultWireV1 { signature },
                         MAX_STREAM_TOKEN_FRAME_BYTES_V1,
@@ -14825,15 +14097,11 @@ mod protocol {
                     if slot == appeal_checkpoint_slot =>
                 {
                     decode_canonical::<()>(&request.payload, MAX_STREAM_TOKEN_FRAME_BYTES_V1)?;
-                    let checkpoint_max = request
-                        .binding
-                        .appeal_finance_checkpoint_max_bytes
-                        .ok_or(BrokerError::BindingMismatch)?;
-                    let record = state
-                        .backends
-                        .appeal_finance_checkpoint
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let checkpoint_max = required_binding_value!(
+                        &request.binding,
+                        appeal_finance_checkpoint_max_bytes
+                    );
+                    let record = broker_backend!(state, appeal_finance_checkpoint)
                         .load_latest()
                         .map_err(|error| {
                             match error {
@@ -14854,11 +14122,7 @@ mod protocol {
                             .validate(checkpoint_max)
                             .map_err(|_| BrokerError::Rejected)?;
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&record, MAX_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_APPEAL_FINANCE_CHECKPOINT_COMPARE_AND_SWAP_V1)
@@ -14868,19 +14132,15 @@ mod protocol {
                         &request.payload,
                         MAX_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1,
                     )?;
-                    let checkpoint_max = request
-                        .binding
-                        .appeal_finance_checkpoint_max_bytes
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let checkpoint_max = required_binding_value!(
+                        &request.binding,
+                        appeal_finance_checkpoint_max_bytes
+                    );
                     compare
                         .next
                         .validate(checkpoint_max)
                         .map_err(|_| BrokerError::Rejected)?;
-                    let checkpoint = state
-                        .backends
-                        .appeal_finance_checkpoint
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let checkpoint = broker_backend!(state, appeal_finance_checkpoint);
                     let current = checkpoint
                         .load_latest()
                         .map_err(|_| BrokerError::Unavailable)?;
@@ -14926,12 +14186,7 @@ mod protocol {
                     {
                         return Err(BrokerError::Ambiguous);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&(), MAX_STREAM_TOKEN_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_POTR_SIGN_V1)
@@ -14941,21 +14196,13 @@ mod protocol {
                         &request.payload,
                         MAX_POTR_FRAME_BYTES_V1,
                     )?;
-                    let runtime = request
-                        .binding
-                        .potr_runtime_binding
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let runtime = required_binding_ref!(&request.binding, potr_runtime_binding);
                     validate_potr_signing_payload(
                         &sign.payload,
                         runtime.baseline_admission_policy.provider_id,
                     )?;
                     let (role, algorithm, signature) = if slot == potr_gateway_slot {
-                        let signer = state
-                            .backends
-                            .potr_gateway_signer
-                            .as_ref()
-                            .ok_or(BrokerError::BindingMismatch)?;
+                        let signer = broker_backend!(state, potr_gateway_signer);
                         let public_key =
                             signer.public_key().map_err(|_| BrokerError::Unavailable)?;
                         if sign.expected_public_key.as_slice() != public_key.as_slice() {
@@ -14974,11 +14221,7 @@ mod protocol {
                             })?,
                         )
                     } else {
-                        let signer = state
-                            .backends
-                            .potr_provider_signer
-                            .as_ref()
-                            .ok_or(BrokerError::BindingMismatch)?;
+                        let signer = broker_backend!(state, potr_provider_signer);
                         let public_key =
                             signer.public_key().map_err(|_| BrokerError::Unavailable)?;
                         if sign.expected_public_key != public_key {
@@ -15007,11 +14250,7 @@ mod protocol {
                     }
                     .verify(role, &sign.payload)
                     .map_err(|_| BrokerError::Rejected)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(
                         &VariableSignatureResultWireV1 { signature },
                         MAX_POTR_FRAME_BYTES_V1,
@@ -15035,11 +14274,7 @@ mod protocol {
                             tls_alpn_01: wire.tls_alpn_01,
                         },
                     };
-                    let outcome = match state
-                        .backends
-                        .gateway_acme_client
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let outcome = match broker_backend!(state, gateway_acme_client)
                         .order_certificate(&order)
                     {
                         Ok(bundle) => GatewayAcmeOrderOutcomeWireV1 {
@@ -15085,12 +14320,7 @@ mod protocol {
                         }
                     };
                     validate_gateway_acme_outcome(&outcome).map_err(|_| BrokerError::Ambiguous)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&outcome, MAX_GATEWAY_ACME_FRAME_BYTES_V1)
                         .map_err(|_| BrokerError::Ambiguous)
                 }
@@ -15102,11 +14332,7 @@ mod protocol {
                         128 * 1024,
                     )?;
                     let timeout = validate_gateway_compliance_resolve_request(&wire)?;
-                    let outcome = match state
-                        .backends
-                        .gateway_compliance_feed_transport
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let outcome = match broker_backend!(state, gateway_compliance_feed_transport)
                         .resolve(&wire.hostname, timeout)
                     {
                         Ok(addresses) => {
@@ -15133,11 +14359,7 @@ mod protocol {
                             }
                         }
                     };
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&outcome, 128 * 1024)
                 }
                 (slot, OPERATION_GATEWAY_COMPLIANCE_FETCH_V1)
@@ -15156,11 +14378,7 @@ mod protocol {
                         total_timeout,
                         max_encoded_bytes,
                     };
-                    let outcome = match state
-                        .backends
-                        .gateway_compliance_feed_transport
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let outcome = match broker_backend!(state, gateway_compliance_feed_transport)
                         .fetch(&fetch)
                     {
                         Ok(response) => GatewayComplianceFetchOutcomeWireV1 {
@@ -15202,22 +14420,15 @@ mod protocol {
                         }
                     };
                     validate_gateway_compliance_fetch_outcome(&outcome, &wire)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&outcome, MAX_GATEWAY_COMPLIANCE_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_POP_RUNTIME_OPEN_V1) if slot == pop_registry_slot => {
                     if pop_session.providers.is_some() {
                         return Err(BrokerError::Rejected);
                     }
-                    let exact = request
-                        .binding
-                        .pop_credential_runtime_binding
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let exact =
+                        required_binding_ref!(&request.binding, pop_credential_runtime_binding);
                     let requested = decode_canonical::<PopCredentialRuntimeBindingWireV1>(
                         &request.payload,
                         MAX_POP_RUNTIME_FRAME_BYTES_V1,
@@ -15226,18 +14437,9 @@ mod protocol {
                         return Err(BrokerError::BindingMismatch);
                     }
                     let bindings = pop_runtime_bindings_from_wire(&request.binding)?;
-                    let registry = state
-                        .backends
-                        .pop_credential_provider_registry
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let registry = broker_backend!(state, pop_credential_provider_registry);
                     let providers_result = registry.resolve(&bindings);
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     let providers = providers_result.map_err(|error| {
                         match error {
                         iroha_torii::sorafs::pop_api::
@@ -15316,11 +14518,8 @@ mod protocol {
                         MAX_POP_RUNTIME_FRAME_BYTES_V1,
                     )?;
                     validate_pop_recipient_open_request(&wire, operation)?;
-                    let exact = request
-                        .binding
-                        .pop_credential_runtime_binding
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let exact =
+                        required_binding_ref!(&request.binding, pop_credential_runtime_binding);
                     let providers = pop_session
                         .providers
                         .as_ref()
@@ -15347,11 +14546,7 @@ mod protocol {
                             .wallet_recipient
                             .open_wallet_delivery(&wire.encrypted_payload, &wire.aad)
                     };
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     if operation == OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1 {
                         if providers.enrollment_recipient.key_id()
                             != exact.enrollment_recipient_key_id
@@ -15383,11 +14578,8 @@ mod protocol {
                         &request.payload,
                         MAX_POP_RUNTIME_FRAME_BYTES_V1,
                     )?;
-                    let exact = request
-                        .binding
-                        .pop_credential_runtime_binding
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let exact =
+                        required_binding_ref!(&request.binding, pop_credential_runtime_binding);
                     let providers = pop_session
                         .providers
                         .as_ref()
@@ -15407,11 +14599,7 @@ mod protocol {
                     }
                     let signature_result =
                         providers.issuer_signer.sign_digest(purpose, wire.digest);
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     if providers.issuer_signer.key_id() != exact.issuer_signer_handle
                         || providers.issuer_signer.public_key() != exact.issuer_public_key
                     {
@@ -15444,11 +14632,7 @@ mod protocol {
                         wire.request_binding,
                         wire.now_epoch,
                     );
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     let principal = principal_result.map_err(|_| BrokerError::Rejected)?;
                     let outcome = PopAuthenticatedPrincipalWireV1 {
                         principal_digest: principal.principal_digest,
@@ -15473,12 +14657,7 @@ mod protocol {
                     let submit_result = providers
                         .registry_submitter
                         .submit(wire.idempotency_key, &wire.operation);
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     submit_result.map_err(|_| BrokerError::Rejected)?;
                     encode_canonical(&(), MAX_POP_RUNTIME_FRAME_BYTES_V1)
                         .map_err(|_| BrokerError::Ambiguous)
@@ -15488,21 +14667,14 @@ mod protocol {
                         &request.payload,
                         MAX_POP_RUNTIME_FRAME_BYTES_V1,
                     )?;
-                    let exact = request
-                        .binding
-                        .pop_credential_runtime_binding
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let exact =
+                        required_binding_ref!(&request.binding, pop_credential_runtime_binding);
                     let providers = pop_session
                         .providers
                         .as_ref()
                         .ok_or(BrokerError::Rejected)?;
                     let projection_result = providers.registry_reader.next_after(wire.cursor);
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     let projection = projection_result.map_err(|_| BrokerError::Unavailable)?;
                     if let Some(projection) = projection.as_ref() {
                         validate_pop_projection(projection, exact)?;
@@ -15517,11 +14689,8 @@ mod protocol {
                         &request.payload,
                         MAX_POP_RUNTIME_FRAME_BYTES_V1,
                     )?;
-                    let exact = request
-                        .binding
-                        .pop_credential_runtime_binding
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let exact =
+                        required_binding_ref!(&request.binding, pop_credential_runtime_binding);
                     let providers = pop_session
                         .providers
                         .as_ref()
@@ -15529,11 +14698,7 @@ mod protocol {
                     let draft_result = providers
                         .issuance_draft_provider
                         .resolve(wire.request_id, wire.now_epoch);
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     let draft = draft_result.map_err(|_| BrokerError::Unavailable)?;
                     let outcome = PopIssuanceDraftResultWireV1 {
                         request_id: draft.request_id,
@@ -15550,11 +14715,8 @@ mod protocol {
                         &request.payload,
                         MAX_POP_RUNTIME_FRAME_BYTES_V1,
                     )?;
-                    let exact = request
-                        .binding
-                        .pop_credential_runtime_binding
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let exact =
+                        required_binding_ref!(&request.binding, pop_credential_runtime_binding);
                     let providers = pop_session
                         .providers
                         .as_ref()
@@ -15566,12 +14728,7 @@ mod protocol {
                     let wrapped_result = providers
                         .wallet_key_wrapper
                         .wrap_dek(wire.context, &wire.dek);
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     if providers.wallet_key_wrapper.active_key_id() != exact.wallet_wrapping_key_id
                     {
                         return Err(BrokerError::Ambiguous);
@@ -15591,11 +14748,8 @@ mod protocol {
                         &request.payload,
                         MAX_POP_RUNTIME_FRAME_BYTES_V1,
                     )?;
-                    let exact = request
-                        .binding
-                        .pop_credential_runtime_binding
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let exact =
+                        required_binding_ref!(&request.binding, pop_credential_runtime_binding);
                     let providers = pop_session
                         .providers
                         .as_ref()
@@ -15609,11 +14763,7 @@ mod protocol {
                         wire.context,
                         &wire.wrapped_dek,
                     );
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     if providers.wallet_key_wrapper.active_key_id() != exact.wallet_wrapping_key_id
                     {
                         return Err(BrokerError::StaleOrRevoked);
@@ -15639,11 +14789,7 @@ mod protocol {
                     let witness_result = providers
                         .wallet_witness_provider
                         .resolve(wire.credential_commitment, &wire.projection);
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     let witness = witness_result.map_err(|_| BrokerError::Unavailable)?;
                     let outcome = PopMembershipWitnessWireV1::from_witness(&witness);
                     validate_pop_witness_wire(&outcome)?;
@@ -15656,11 +14802,7 @@ mod protocol {
                         .as_ref()
                         .ok_or(BrokerError::Rejected)?;
                     let sample_result = providers.finalized_time_provider.sample();
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     let sample = sample_result.map_err(|_| BrokerError::Unavailable)?;
                     let outcome = PopFinalizedTimeResultWireV1 {
                         finalized_block_height: sample.finalized_block_height,
@@ -15678,11 +14820,7 @@ mod protocol {
                         &request.payload,
                         MAX_POR_REPLAY_ARCHIVE_CONTROL_FRAME_BYTES_V1,
                     )?;
-                    state
-                        .backends
-                        .por_finalized_replay_archive
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    broker_backend!(state, por_finalized_replay_archive)
                         .check_readiness()
                         .map_err(|error| match error {
                             sorafs_node::PorFinalizedReplayArchiveExternalErrorV1::Unavailable => {
@@ -15692,11 +14830,7 @@ mod protocol {
                                 BrokerError::Rejected
                             }
                         })?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&(), MAX_POR_REPLAY_ARCHIVE_CONTROL_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_POR_REPLAY_ARCHIVE_CURRENT_HEAD_V1)
@@ -15707,11 +14841,7 @@ mod protocol {
                         MAX_POR_REPLAY_ARCHIVE_CONTROL_FRAME_BYTES_V1,
                     )?;
                     let exact = por_replay_archive_exact_binding(&request.binding)?;
-                    let head = state
-                        .backends
-                        .por_finalized_replay_archive
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let head = broker_backend!(state, por_finalized_replay_archive)
                         .current_head()
                         .map_err(|error| match error {
                             sorafs_node::PorFinalizedReplayArchiveExternalErrorV1::Unavailable => {
@@ -15724,11 +14854,7 @@ mod protocol {
                     if let Some(head) = head {
                         validate_por_replay_archive_receipt(&head, exact)?;
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&head, MAX_POR_REPLAY_ARCHIVE_CONTROL_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_POR_REPLAY_ARCHIVE_APPEND_V1)
@@ -15742,11 +14868,7 @@ mod protocol {
                     let exact = por_replay_archive_exact_binding(&request.binding)?;
                     let (_, configured_bounds) =
                         por_replay_archive_configured_proof_bounds(&request.binding)?;
-                    let archive = state
-                        .backends
-                        .por_finalized_replay_archive
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let archive = broker_backend!(state, por_finalized_replay_archive);
                     let receipt = archive
                         .append(&record, append.expected_previous_head)
                         .map_err(|error| match error {
@@ -15760,12 +14882,7 @@ mod protocol {
                     receipt
                         .validate_record(exact, &record, Some(append.expected_previous_head))
                         .map_err(|_| BrokerError::Ambiguous)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     let head = archive
                         .current_head()
                         .map_err(|_| BrokerError::Ambiguous)?
@@ -15793,12 +14910,7 @@ mod protocol {
                             }
                         }
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&receipt, MAX_POR_REPLAY_ARCHIVE_CONTROL_FRAME_BYTES_V1)
                         .map_err(|_| BrokerError::Ambiguous)
                 }
@@ -15812,11 +14924,7 @@ mod protocol {
                     let bounds =
                         validate_por_replay_archive_lookup_request(&lookup, &request.binding)?;
                     let exact = por_replay_archive_exact_binding(&request.binding)?;
-                    let outcome = state
-                        .backends
-                        .por_finalized_replay_archive
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let outcome = broker_backend!(state, por_finalized_replay_archive)
                         .lookup(lookup.challenge_id, lookup.expected_checkpoint_head, bounds)
                         .map_err(|error| match error {
                             sorafs_node::PorFinalizedReplayArchiveExternalErrorV1::Unavailable => {
@@ -15828,11 +14936,7 @@ mod protocol {
                         })?;
                     let outcome =
                         por_replay_archive_lookup_to_wire(outcome, &lookup, exact, bounds)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&outcome, MAX_POR_REPLAY_ARCHIVE_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_NATIVE_TRANSACTION_SIGN_V1)
@@ -15841,11 +14945,7 @@ mod protocol {
                     let payload = decode_native_transaction_payload(&request.payload)?;
                     ensure_transaction_session_network(&payload, &state.network_id)?;
                     let signed = sign_moderation_transaction(state, &payload)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&signed, MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1)
                 }
                 (slot, OPERATION_MODERATION_HANDOFF_DELIVER_ONCE_V1)
@@ -15884,12 +14984,7 @@ mod protocol {
                                 ModerationDurableHandoffOutcomeV1::AlreadyDelivered => 2,
                         },
                     };
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&outcome, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1)
                         .map_err(|_| BrokerError::Ambiguous)
                 }
@@ -15915,11 +15010,7 @@ mod protocol {
                     if validated_head != publication.head {
                         return Err(BrokerError::Rejected);
                     }
-                    let outcome = state
-                        .backends
-                        .moderation_publication_handoff
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let outcome = broker_backend!(state, moderation_publication_handoff)
                         .publish_archive_head_once(&publication)
                         .map_err(|error| {
                             match error {
@@ -15937,12 +15028,7 @@ mod protocol {
                             }
                         }
                         })?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(
                         &ModerationPanelNotificationArchiveHeadPublishResultWireV1 {
                             version:
@@ -15969,11 +15055,7 @@ mod protocol {
                         &request.payload,
                         MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
                     )?;
-                    let head = state
-                        .backends
-                        .moderation_publication_handoff
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let head = broker_backend!(state, moderation_publication_handoff)
                         .read_published_archive_head()
                         .map_err(|error| {
                             match error {
@@ -16008,11 +15090,7 @@ mod protocol {
                             return Err(BrokerError::Rejected);
                         }
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(
                         &ModerationPanelNotificationArchiveHeadReadResultWireV1 {
                             version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
@@ -16033,11 +15111,7 @@ mod protocol {
                         &wire,
                         Some(&state.network_id),
                     )?;
-                    let receipt = state
-                        .backends
-                        .moderation_panel_notification
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let receipt = broker_backend!(state, moderation_panel_notification)
                         .deliver_once(&notification)
                         .map_err(|error| {
                             match error {
@@ -16058,12 +15132,7 @@ mod protocol {
                     let receipt = moderation_panel_notification_receipt_to_wire(receipt);
                     validate_moderation_panel_notification_receipt(receipt, &wire)
                         .map_err(|_| BrokerError::Ambiguous)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&receipt, MAX_MODERATION_PANEL_NOTIFICATION_FRAME_BYTES_V1)
                         .map_err(|_| BrokerError::Ambiguous)
                 }
@@ -16073,12 +15142,7 @@ mod protocol {
                     let payload = decode_native_transaction_payload(&request.payload)?;
                     ensure_transaction_session_network(&payload, &state.network_id)?;
                     let signed = sign_native_transaction(state, &request.binding, payload)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&signed, MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1)
                         .map_err(|_| BrokerError::Ambiguous)
                 }
@@ -16091,12 +15155,7 @@ mod protocol {
                     let transaction = backend
                         .sign_transaction(payload)
                         .map_err(map_soracloud_runtime_signing_error)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&transaction, MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1)
                         .map_err(|_| BrokerError::Ambiguous)
                 }
@@ -16121,12 +15180,7 @@ mod protocol {
                     let signature = signer
                         .sign_provenance(purpose, &request_payload.preimage)
                         .map_err(map_soracloud_runtime_signing_error)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&signature, MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1)
                         .map_err(|_| BrokerError::Ambiguous)
                 }
@@ -16168,22 +15222,14 @@ mod protocol {
                     )?;
                     let purpose =
                         validate_governance_purpose_signing_request(&sign, &request.binding)?;
-                    let signer = state
-                        .backends
-                        .governance_dag_signer
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let signer = broker_backend!(state, governance_dag_signer);
                     let signature = signer
                         .sign(purpose, &sign.payload)
                         .map_err(|_| BrokerError::Rejected)?;
                     if signature == [0; 64] {
                         return Err(BrokerError::Rejected);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(
                         &SignResultWireV1 { signature },
                         MAX_OPERATION_FRAME_BYTES_V1,
@@ -16224,11 +15270,7 @@ mod protocol {
                         governance_request_auth_result_to_wire(&envelope),
                         ingress.public_key(),
                     )?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(
                         &governance_request_auth_result_to_wire(&envelope),
                         MAX_GOVERNANCE_REQUEST_AUTH_FRAME_BYTES_V1,
@@ -16240,11 +15282,7 @@ mod protocol {
                         MAX_OPERATION_FRAME_BYTES_V1,
                     )?;
                     let sealed_slot = sealed_slot_from_wire(load.slot)?;
-                    let store = state
-                        .backends
-                        .governance_dag_checkpoint_store
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let store = broker_backend!(state, governance_dag_checkpoint_store);
                     let record = store
                         .load(sealed_slot)
                         .map_err(|_| BrokerError::Unavailable)?
@@ -16262,11 +15300,7 @@ mod protocol {
                         )
                         .map_err(|_| BrokerError::Protocol)?;
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&record, MAX_OPERATION_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_SEALED_COMPARE_AND_SWAP_V1)
@@ -16282,11 +15316,7 @@ mod protocol {
                         revision: compare.next.revision,
                         payload: compare.next.payload,
                     };
-                    let store = state
-                        .backends
-                        .governance_dag_checkpoint_store
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let store = broker_backend!(state, governance_dag_checkpoint_store);
                     let current = store
                         .load(sealed_slot)
                         .map_err(|_| BrokerError::Unavailable)?;
@@ -16305,12 +15335,7 @@ mod protocol {
                     if readback.as_ref() != Some(&next) {
                         return Err(BrokerError::Ambiguous);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_SEALED_DELETE_V1) if slot == governance_checkpoint_slot => {
@@ -16320,11 +15345,7 @@ mod protocol {
                     )?;
                     let sealed_slot = sealed_slot_from_wire(delete.slot)?;
                     validate_sealed_delete(sealed_slot, delete.expected_revision)?;
-                    let store = state
-                        .backends
-                        .governance_dag_checkpoint_store
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let store = broker_backend!(state, governance_dag_checkpoint_store);
                     let current = store
                         .load(sealed_slot)
                         .map_err(|_| BrokerError::Unavailable)?;
@@ -16352,22 +15373,13 @@ mod protocol {
                     {
                         return Err(BrokerError::Ambiguous);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_PROVIDER_INGEST_RESOLVER_READINESS_V1)
                     if slot == provider_resolver_slot =>
                 {
-                    let resolver = state
-                        .backends
-                        .provider_ingest_signer_resolver
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let resolver = broker_backend!(state, provider_ingest_signer_resolver);
                     resolver.check_readiness().map_err(|error| match error {
                         sorafs_node::ProviderIngestCompletionSignerResolverErrorV1::Unavailable => {
                             BrokerError::Unavailable
@@ -16376,11 +15388,7 @@ mod protocol {
                             BrokerError::Rejected
                         }
                     })?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_PROVIDER_INGEST_RESOLVE_SIGNER_V1)
@@ -16407,11 +15415,7 @@ mod protocol {
                             &context.provider_owner,
                         )?;
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(
                         &ProviderIngestResolveSignerResultWireV1 {
                             eligible: signer.is_some(),
@@ -16422,12 +15426,10 @@ mod protocol {
                 (slot, OPERATION_PROVIDER_INGEST_SIGN_V1) if slot == provider_signer_slot => {
                     let (context, expected, payload) =
                         decode_provider_ingest_sign_operation(request)?;
-                    let max_signed = usize::try_from(
-                        request
-                            .binding
-                            .provider_ingest_max_signed_transaction_bytes
-                            .ok_or(BrokerError::BindingMismatch)?,
-                    )
+                    let max_signed = usize::try_from(required_binding_value!(
+                        &request.binding,
+                        provider_ingest_max_signed_transaction_bytes
+                    ))
                     .map_err(|_| BrokerError::Rejected)?;
                     ensure_provider_ingest_completion_payload(
                         &payload,
@@ -16463,11 +15465,7 @@ mod protocol {
                         &context,
                         &state.network_id,
                     )?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     let signed_transaction = encode_canonical(&transaction, max_signed)?;
                     encode_canonical(
                         &ProviderIngestSignResultWireV1 { signed_transaction },
@@ -16477,15 +15475,11 @@ mod protocol {
                 (slot, OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1)
                     if slot == provider_checkpoint_slot =>
                 {
-                    let store = state
-                        .backends
-                        .provider_ingest_checkpoint_store
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
-                    let max_bytes = request
-                        .binding
-                        .provider_ingest_checkpoint_max_bytes
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let store = broker_backend!(state, provider_ingest_checkpoint_store);
+                    let max_bytes = required_binding_value!(
+                        &request.binding,
+                        provider_ingest_checkpoint_max_bytes
+                    );
                     let record = store.load_latest().map_err(|error| match error {
                         sorafs_node::ProviderIngestCheckpointExternalErrorV1::Unavailable => {
                             BrokerError::Unavailable
@@ -16504,11 +15498,7 @@ mod protocol {
                                 .map_err(|_| BrokerError::Protocol)
                         })
                         .transpose()?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&record, MAX_OPERATION_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1)
@@ -16519,10 +15509,10 @@ mod protocol {
                     >(
                         &request.payload, MAX_OPERATION_FRAME_BYTES_V1
                     )?;
-                    let max_bytes = request
-                        .binding
-                        .provider_ingest_checkpoint_max_bytes
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let max_bytes = required_binding_value!(
+                        &request.binding,
+                        provider_ingest_checkpoint_max_bytes
+                    );
                     let max_bytes_limit =
                         usize::try_from(max_bytes).map_err(|_| BrokerError::Rejected)?;
                     reserve_external_canonical_decode(compare.next_record.len(), max_bytes_limit)?;
@@ -16532,11 +15522,7 @@ mod protocol {
                             max_bytes,
                         )
                         .map_err(|_| BrokerError::Rejected)?;
-                    let store = state
-                        .backends
-                        .provider_ingest_checkpoint_store
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let store = broker_backend!(state, provider_ingest_checkpoint_store);
                     let current = store.load_latest().map_err(|error| match error {
                         sorafs_node::ProviderIngestCheckpointExternalErrorV1::Unavailable => {
                             BrokerError::Unavailable
@@ -16584,12 +15570,7 @@ mod protocol {
                     if readback.as_ref() != Some(&next) {
                         return Err(BrokerError::Ambiguous);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_PROVIDER_INGEST_RETENTION_LOAD_V1)
@@ -16602,11 +15583,7 @@ mod protocol {
                     if state.network_id != load.network_id {
                         return Err(BrokerError::BindingMismatch);
                     }
-                    let authority = state
-                        .backends
-                        .provider_ingest_retention_authority
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let authority = broker_backend!(state, provider_ingest_retention_authority);
                     let record = authority.load_latest(&load.network_id).map_err(|error| {
                         match error {
                         iroha_core::query::provider_ingest_finalized::
@@ -16627,11 +15604,7 @@ mod protocol {
                                 .map_err(|_| BrokerError::Protocol)
                         })
                         .transpose()?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&record, MAX_OPERATION_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1)
@@ -16653,11 +15626,7 @@ mod protocol {
                         ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::
                             from_canonical_bytes(&compare.next_record)
                             .map_err(|_| BrokerError::Rejected)?;
-                    let authority = state
-                        .backends
-                        .provider_ingest_retention_authority
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let authority = broker_backend!(state, provider_ingest_retention_authority);
                     let current = authority
                         .load_latest(&compare.network_id)
                         .map_err(|error| {
@@ -16719,12 +15688,7 @@ mod protocol {
                     if readback.as_ref() != Some(&next) {
                         return Err(BrokerError::Ambiguous);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_REPUTATION_RETENTION_LOAD_V1)
@@ -16737,11 +15701,8 @@ mod protocol {
                     if state.network_id != load.network_id {
                         return Err(BrokerError::BindingMismatch);
                     }
-                    let authority = state
-                        .backends
-                        .reputation_finalized_archive_retention_authority
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let authority =
+                        broker_backend!(state, reputation_finalized_archive_retention_authority);
                     let record = authority.load_latest(&load.network_id).map_err(|error| {
                         match error {
                         iroha_core::query::reputation_finalized::
@@ -16768,11 +15729,7 @@ mod protocol {
                             Ok(bytes)
                         })
                         .transpose()?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&record, MAX_REPUTATION_RETENTION_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_REPUTATION_RETENTION_COMPARE_AND_SWAP_V1)
@@ -16806,11 +15763,8 @@ mod protocol {
                     {
                         return Err(BrokerError::BindingMismatch);
                     }
-                    let authority = state
-                        .backends
-                        .reputation_finalized_archive_retention_authority
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let authority =
+                        broker_backend!(state, reputation_finalized_archive_retention_authority);
                     let current = authority
                         .load_latest(&compare.network_id)
                         .map_err(|error| {
@@ -16873,12 +15827,7 @@ mod protocol {
                     if readback.as_ref() != Some(&next) {
                         return Err(BrokerError::Ambiguous);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&(), MAX_REPUTATION_RETENTION_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_EVIDENCE_VIEWER_ISSUE_CHALLENGE_V1)
@@ -16888,11 +15837,7 @@ mod protocol {
                         &request.payload,
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                     )?;
-                    let secret = state
-                        .backends
-                        .evidence_viewer_webauthn
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let secret = broker_backend!(state, evidence_viewer_webauthn)
                         .issue_challenge(issue.binding_digest, issue.expires_at_unix_ms)
                         .map_err(|error| match error {
                             sorafs_node::evidence_viewer::EvidenceViewerExternalErrorV1::Rejected => {
@@ -16907,12 +15852,7 @@ mod protocol {
                         secret: secret.expose().as_bytes().to_vec(),
                     };
                     validate_evidence_viewer_secret(&result.secret)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&result, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
                 }
                 (slot, OPERATION_EVIDENCE_VIEWER_VERIFY_AND_CONSUME_V1)
@@ -16922,18 +15862,11 @@ mod protocol {
                         &request.payload,
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                     )?;
-                    let configured = request
-                        .binding
-                        .evidence_viewer_webauthn_binding
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let configured =
+                        required_binding_ref!(&request.binding, evidence_viewer_webauthn_binding);
                     validate_evidence_viewer_verify_and_consume_wire(&verify, configured)?;
                     let challenge = validate_evidence_viewer_secret(&verify.challenge)?;
-                    let result = state
-                        .backends
-                        .evidence_viewer_webauthn
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let result = broker_backend!(state, evidence_viewer_webauthn)
                         .verify_and_consume(
                             challenge,
                             &verify.assertion,
@@ -16956,12 +15889,7 @@ mod protocol {
                     {
                         return Err(BrokerError::Rejected);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(
                         &EvidenceViewerWebAuthnResultWireV1 {
                             attestation_digest: result.attestation_digest,
@@ -16978,11 +15906,7 @@ mod protocol {
                         &request.payload,
                         MAX_EVIDENCE_VIEWER_CLAIMS_BYTES_V1,
                     )?;
-                    let secret = state
-                        .backends
-                        .evidence_viewer_grants
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let secret = broker_backend!(state, evidence_viewer_grants)
                         .issue(&issue.claims)
                         .map_err(|error| match error {
                             sorafs_node::evidence_viewer::EvidenceViewerExternalErrorV1::Rejected => {
@@ -16997,12 +15921,7 @@ mod protocol {
                         secret: secret.expose().as_bytes().to_vec(),
                     };
                     validate_evidence_viewer_secret(&result.secret)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&result, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
                 }
                 (slot, OPERATION_EVIDENCE_VIEWER_GRANT_VERIFY_V1)
@@ -17013,11 +15932,7 @@ mod protocol {
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                     )?;
                     let token = validate_evidence_viewer_secret(&verify.token)?;
-                    state
-                        .backends
-                        .evidence_viewer_grants
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    broker_backend!(state, evidence_viewer_grants)
                         .verify(token, &verify.claims, verify.now_unix_ms)
                         .map_err(|error| match error {
                             sorafs_node::evidence_viewer::EvidenceViewerExternalErrorV1::Rejected => {
@@ -17028,11 +15943,7 @@ mod protocol {
                                 BrokerError::Unavailable
                             }
                         })?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&(), MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
                 }
                 (slot, OPERATION_EVIDENCE_VIEWER_GRANT_REVOKE_V1)
@@ -17042,11 +15953,7 @@ mod protocol {
                         &request.payload,
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                     )?;
-                    state
-                        .backends
-                        .evidence_viewer_grants
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    broker_backend!(state, evidence_viewer_grants)
                         .revoke(revoke.token_digest)
                         .map_err(|error| match error {
                             sorafs_node::evidence_viewer::EvidenceViewerExternalErrorV1::Rejected => {
@@ -17057,12 +15964,7 @@ mod protocol {
                                 BrokerError::Ambiguous
                             }
                         })?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&(), MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
                 }
                 (slot, OPERATION_EVIDENCE_VIEWER_RECEIPT_SIGN_V1)
@@ -17074,11 +15976,7 @@ mod protocol {
                     )?;
                     let purpose =
                         validate_evidence_purpose_signing_request(&sign, &request.binding)?;
-                    let signer = state
-                        .backends
-                        .evidence_viewer_receipt_signer
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let signer = broker_backend!(state, evidence_viewer_receipt_signer);
                     let signature = signer.sign(purpose, &sign.payload).map_err(|error| match error {
                         sorafs_node::evidence_viewer::EvidenceViewerExternalErrorV1::Rejected => {
                             BrokerError::Rejected
@@ -17088,16 +15986,12 @@ mod protocol {
                             BrokerError::Unavailable
                         }
                     })?;
-                    let public_key = request
-                        .binding
-                        .evidence_viewer_receipt_signer_public_key
-                        .ok_or(BrokerError::BindingMismatch)?;
-                    verify_evidence_viewer_ed25519_signature(public_key, signature, &sign.payload)?;
-                    qualify_server_binding(
-                        state,
+                    let public_key = required_binding_value!(
                         &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                        evidence_viewer_receipt_signer_public_key
+                    );
+                    verify_evidence_viewer_ed25519_signature(public_key, signature, &sign.payload)?;
+                    requalify()?;
                     encode_canonical(
                         &SignResultWireV1 { signature },
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
@@ -17108,11 +16002,7 @@ mod protocol {
                         &request.payload,
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                     )?;
-                    let commit_digest = state
-                        .backends
-                        .evidence_viewer_erasure
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let commit_digest = broker_backend!(state, evidence_viewer_erasure)
                         .erase(
                             erase.operation_id,
                             erase.quarantine_id,
@@ -17131,12 +16021,7 @@ mod protocol {
                     if commit_digest == [0; 32] {
                         return Err(BrokerError::Rejected);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(
                         &EvidenceViewerEraseResultWireV1 { commit_digest },
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
@@ -17145,11 +16030,7 @@ mod protocol {
                 (slot, OPERATION_EVIDENCE_VIEWER_CHECKPOINT_LOAD_V1)
                     if slot == evidence_checkpoint_slot =>
                 {
-                    let store = state
-                        .backends
-                        .evidence_viewer_checkpoint_store
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let store = broker_backend!(state, evidence_viewer_checkpoint_store);
                     let record = store.load_latest().map_err(|error| {
                         match error {
                             sorafs_node::evidence_viewer::
@@ -17174,11 +16055,7 @@ mod protocol {
                             Ok(bytes)
                         })
                         .transpose()?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&record, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_EVIDENCE_VIEWER_CHECKPOINT_COMPARE_AND_SWAP_V1)
@@ -17193,11 +16070,7 @@ mod protocol {
                         &compare.next_record,
                         &request.binding,
                     )?;
-                    let store = state
-                        .backends
-                        .evidence_viewer_checkpoint_store
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let store = broker_backend!(state, evidence_viewer_checkpoint_store);
                     let current = store.load_latest().map_err(|error| {
                         match error {
                         sorafs_node::evidence_viewer::
@@ -17245,22 +16118,13 @@ mod protocol {
                     if readback.as_ref() != Some(&next) {
                         return Err(BrokerError::Ambiguous);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&(), MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
                 }
                 (slot, OPERATION_MODERATION_CHECKPOINT_LOAD_V1)
                     if slot == moderation_checkpoint_slot =>
                 {
-                    let store = state
-                        .backends
-                        .moderation_checkpoint_store
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let store = broker_backend!(state, moderation_checkpoint_store);
                     let record = store
                         .load_latest()
                         .map_err(moderation_checkpoint_backend_error)?;
@@ -17278,11 +16142,7 @@ mod protocol {
                             Ok(bytes)
                         })
                         .transpose()?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&record, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1)
@@ -17298,11 +16158,7 @@ mod protocol {
                         &request.binding,
                         Some(&state.network_id),
                     )?;
-                    let store = state
-                        .backends
-                        .moderation_checkpoint_store
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let store = broker_backend!(state, moderation_checkpoint_store);
                     let current = store
                         .load_latest()
                         .map_err(moderation_checkpoint_backend_error)?;
@@ -17343,12 +16199,7 @@ mod protocol {
                     if readback.as_ref() != Some(&next) {
                         return Err(BrokerError::Ambiguous);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&(), MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
                 }
                 (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1)
@@ -17365,11 +16216,7 @@ mod protocol {
                         &attest.network_id,
                         &state.network_id,
                     )?;
-                    let store = state
-                        .backends
-                        .moderation_checkpoint_store
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let store = broker_backend!(state, moderation_checkpoint_store);
                     let current_record = store
                         .load_latest()
                         .map_err(moderation_checkpoint_backend_error)?
@@ -17388,12 +16235,7 @@ mod protocol {
                         .statement
                         .verify(signature)
                         .map_err(|_| BrokerError::Ambiguous)?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(
                         &ModerationPanelNotificationSourceAttestResultWireV1 {
                             version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
@@ -17411,11 +16253,7 @@ mod protocol {
                         &request.payload,
                         MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
                     )?;
-                    let archive = state
-                        .backends
-                        .evidence_viewer_compaction_archive
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let archive = broker_backend!(state, evidence_viewer_compaction_archive);
                     let signature = archive
                         .install(
                             install.operation_id,
@@ -17431,10 +16269,10 @@ mod protocol {
                                 BrokerError::Ambiguous
                             }
                         })?;
-                    let public_key = request
-                        .binding
-                        .evidence_viewer_archive_public_key
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let public_key = required_binding_value!(
+                        &request.binding,
+                        evidence_viewer_archive_public_key
+                    );
                     verify_evidence_viewer_ed25519_signature(
                         public_key,
                         signature,
@@ -17449,12 +16287,7 @@ mod protocol {
                     {
                         return Err(BrokerError::Ambiguous);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(
                         &SignResultWireV1 { signature },
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
@@ -17467,18 +16300,12 @@ mod protocol {
                         &request.payload,
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                     )?;
-                    let max_bytes = usize::try_from(
-                        request
-                            .binding
-                            .evidence_viewer_archive_max_bytes
-                            .ok_or(BrokerError::BindingMismatch)?,
-                    )
+                    let max_bytes = usize::try_from(required_binding_value!(
+                        &request.binding,
+                        evidence_viewer_archive_max_bytes
+                    ))
                     .map_err(|_| BrokerError::Rejected)?;
-                    let readback = state
-                        .backends
-                        .evidence_viewer_compaction_archive
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let readback = broker_backend!(state, evidence_viewer_compaction_archive)
                         .read(read.operation_id)
                         .map_err(|error| match error {
                             sorafs_node::evidence_viewer::EvidenceViewerExternalErrorV1::Rejected => {
@@ -17502,11 +16329,7 @@ mod protocol {
                             })
                         })
                         .transpose()?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&readback, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1)
@@ -17535,11 +16358,7 @@ mod protocol {
                     {
                         return Err(BrokerError::Rejected);
                     }
-                    let archive = state
-                        .backends
-                        .moderation_panel_notification_archive
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let archive = broker_backend!(state, moderation_panel_notification_archive);
                     let signature = archive
                         .install(
                             validated.operation_id,
@@ -17547,10 +16366,10 @@ mod protocol {
                             &install.canonical_artifact,
                         )
                         .map_err(moderation_panel_notification_archive_backend_error)?;
-                    let public_key = request
-                        .binding
-                        .moderation_panel_notification_archive_binding
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let public_key = required_binding_value!(
+                        &request.binding,
+                        moderation_panel_notification_archive_binding
+                    );
                     verify_evidence_viewer_ed25519_signature(
                         public_key.public_key,
                         signature,
@@ -17565,12 +16384,7 @@ mod protocol {
                     {
                         return Err(BrokerError::Ambiguous);
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(
                         &ModerationPanelNotificationArchiveInstallResultWireV1 {
                             version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
@@ -17595,18 +16409,14 @@ mod protocol {
                         &state.network_id,
                     )?;
                     let max_bytes = usize::try_from(
-                        request
-                            .binding
-                            .moderation_panel_notification_archive_binding
-                            .ok_or(BrokerError::BindingMismatch)?
-                            .max_bytes,
+                        required_binding_value!(
+                            &request.binding,
+                            moderation_panel_notification_archive_binding
+                        )
+                        .max_bytes,
                     )
                     .map_err(|_| BrokerError::Rejected)?;
-                    let readback = state
-                        .backends
-                        .moderation_panel_notification_archive
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?
+                    let readback = broker_backend!(state, moderation_panel_notification_archive)
                         .read(read.operation_id)
                         .map_err(|error| {
                             match error {
@@ -17653,21 +16463,13 @@ mod protocol {
                             })
                         })
                         .transpose()?;
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&readback, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1)
                     if slot == evidence_transparency_publisher_slot =>
                 {
-                    let publisher = state
-                        .backends
-                        .evidence_viewer_transparency_publisher
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let publisher = broker_backend!(state, evidence_viewer_transparency_publisher);
                     let head = publisher.load_head().map_err(|error| {
                         match error {
                             sorafs_node::evidence_viewer::transparency_producer::
@@ -17693,11 +16495,7 @@ mod protocol {
                             return Err(BrokerError::Rejected);
                         }
                     }
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )?;
+                    requalify()?;
                     encode_canonical(&head, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1)
@@ -17710,18 +16508,9 @@ mod protocol {
                         &request.payload, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
                     )?;
                     validate_evidence_viewer_transparency_head_body(&body, &request.binding)?;
-                    let publisher = state
-                        .backends
-                        .evidence_viewer_transparency_publisher
-                        .as_ref()
-                        .ok_or(BrokerError::BindingMismatch)?;
+                    let publisher = broker_backend!(state, evidence_viewer_transparency_publisher);
                     let publish_result = publisher.compare_and_publish(&body);
-                    qualify_server_binding(
-                        state,
-                        &request.binding,
-                        request.provider_metadata_digest,
-                    )
-                    .map_err(|_| BrokerError::Ambiguous)?;
+                    requalify().map_err(|_| BrokerError::Ambiguous)?;
                     publish_result.map_err(|error| match error {
                             sorafs_node::evidence_viewer::transparency_producer::
                                 EvidenceViewerTransparencyPublisherExternalErrorV1::Rejected => {
@@ -17870,10 +16659,7 @@ mod protocol {
             state: &BrokerServerStateV1,
             request: &OperationRequestV1,
         ) -> Result<(), BrokerError> {
-            let limits = request
-                .binding
-                .provider_ingest_source_limits
-                .ok_or(BrokerError::BindingMismatch)?;
+            let limits = required_binding_value!(&request.binding, provider_ingest_source_limits);
             let deadline = std::time::Instant::now()
                 .checked_add(Duration::from_millis(limits.operation_timeout_ms))
                 .ok_or(BrokerError::Rejected)?;
@@ -17892,11 +16678,7 @@ mod protocol {
             )?;
             let authorization = fetch.authorization.clone();
             let source_request = source_request_from_wire(fetch)?;
-            let source = state
-                .backends
-                .provider_ingest_authenticated_source
-                .as_ref()
-                .ok_or(BrokerError::BindingMismatch)?;
+            let source = broker_backend!(state, provider_ingest_authenticated_source);
             let mut fetched = fetch_provider_ingest_source(
                 source.as_ref(),
                 source_request,
@@ -19139,13 +17921,7 @@ mod protocol {
                 BrokerError,
             >{
                 let payload = encode_canonical(&(), MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_QUALIFY_V1,
-                    payload,
-                    false,
-                )?;
+                let result = provider_call!(self, call, OPERATION_QUALIFY_V1, payload, false,)?;
                 let qualification = self
                     .session
                     .decode_operation_result::<QualificationResultWireV1>(
@@ -19170,13 +17946,7 @@ mod protocol {
                 payload: ScrubbedBytes,
             ) -> Result<ScrubbedBytes, BrokerError> {
                 self.live_qualification()?;
-                let outcome = self.session.call_sensitive(
-                    &self.binding,
-                    self.metadata_digest,
-                    operation,
-                    payload,
-                    false,
-                );
+                let outcome = provider_call!(self, call_sensitive, operation, payload, false,);
                 match outcome {
                     Ok(result) => {
                         self.live_qualification()
@@ -19809,13 +18579,7 @@ mod protocol {
             ) -> Result<sorafs_node::ProviderIngestRuntimeProviderQualificationV1, BrokerError>
             {
                 let payload = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_QUALIFY_V1,
-                    payload,
-                    false,
-                )?;
+                let result = provider_call!(self, call, OPERATION_QUALIFY_V1, payload, false,)?;
                 let qualification = self
                     .session
                     .decode_result::<ProviderIngestRuntimeQualificationWireV1>(&result)?;
@@ -19852,9 +18616,7 @@ mod protocol {
                 crate::sorafs_provider_ingest_runtime::VerifiedProviderIngestPayloadV1,
                 BrokerError,
             > {
-                let limits = binding
-                    .provider_ingest_source_limits
-                    .ok_or(BrokerError::BindingMismatch)?;
+                let limits = required_binding_value!(binding, provider_ingest_source_limits);
                 let deadline = std::time::Instant::now()
                     .checked_add(Duration::from_millis(limits.operation_timeout_ms))
                     .ok_or(BrokerError::Rejected)?;
@@ -20053,26 +18815,24 @@ mod protocol {
             fn check_readiness(&self) -> Result<(), sorafs_node::ProviderIngestSourceFetchErrorV1> {
                 let payload = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
                     .map_err(|_| sorafs_node::ProviderIngestSourceFetchErrorV1::Rejected)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_PROVIDER_INGEST_SOURCE_READINESS_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(|error| match error {
-                        BrokerError::Unavailable | BrokerError::Ambiguous => {
-                            sorafs_node::ProviderIngestSourceFetchErrorV1::Unavailable
-                        }
-                        BrokerError::Rejected | BrokerError::Protocol | BrokerError::Conflict => {
-                            sorafs_node::ProviderIngestSourceFetchErrorV1::ContentRejected
-                        }
-                        BrokerError::BindingMismatch | BrokerError::StaleOrRevoked => {
-                            sorafs_node::ProviderIngestSourceFetchErrorV1::Rejected
-                        }
-                    })?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_PROVIDER_INGEST_SOURCE_READINESS_V1,
+                    payload,
+                    false,
+                )
+                .map_err(|error| match error {
+                    BrokerError::Unavailable | BrokerError::Ambiguous => {
+                        sorafs_node::ProviderIngestSourceFetchErrorV1::Unavailable
+                    }
+                    BrokerError::Rejected | BrokerError::Protocol | BrokerError::Conflict => {
+                        sorafs_node::ProviderIngestSourceFetchErrorV1::ContentRejected
+                    }
+                    BrokerError::BindingMismatch | BrokerError::StaleOrRevoked => {
+                        sorafs_node::ProviderIngestSourceFetchErrorV1::Rejected
+                    }
+                })?;
                 self.session
                     .decode_result::<()>(&result)
                     .map_err(|_| sorafs_node::ProviderIngestSourceFetchErrorV1::Rejected)
@@ -20092,13 +18852,7 @@ mod protocol {
             ) -> Result<sorafs_node::ModerationQuarantineKeyProviderQualificationV1, BrokerError>
             {
                 let payload = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_QUALIFY_V1,
-                    payload,
-                    false,
-                )?;
+                let result = provider_call!(self, call, OPERATION_QUALIFY_V1, payload, false,)?;
                 let qualification = self
                     .session
                     .decode_result::<QualificationResultWireV1>(&result)?;
@@ -20177,16 +18931,14 @@ mod protocol {
                     MAX_MODERATION_QUARANTINE_OPERATION_BYTES_V1,
                 )
                 .map_err(|error| Self::operation_error(error, false))?;
-                let result = self
-                    .session
-                    .call_sensitive(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1,
-                        payload,
-                        true,
-                    )
-                    .map_err(|error| Self::operation_error(error, true))?;
+                let result = provider_call!(
+                    self,
+                    call_sensitive,
+                    OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1,
+                    payload,
+                    true,
+                )
+                .map_err(|error| Self::operation_error(error, true))?;
                 let mut wrapped = self
                     .session
                     .decode_nested_result::<ModerationQuarantineWrapDekResultWireV1>(
@@ -20224,16 +18976,14 @@ mod protocol {
                     MAX_MODERATION_QUARANTINE_OPERATION_BYTES_V1,
                 )
                 .map_err(|error| Self::operation_error(error, false))?;
-                let result = self
-                    .session
-                    .call_sensitive(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_MODERATION_QUARANTINE_UNWRAP_DEK_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(|error| Self::operation_error(error, false))?;
+                let result = provider_call!(
+                    self,
+                    call_sensitive,
+                    OPERATION_MODERATION_QUARANTINE_UNWRAP_DEK_V1,
+                    payload,
+                    false,
+                )
+                .map_err(|error| Self::operation_error(error, false))?;
                 let dek = self
                     .session
                     .decode_result::<ModerationQuarantineUnwrapDekResultWireV1>(&result)
@@ -20356,16 +19106,9 @@ mod protocol {
                     MAX_STREAM_TOKEN_FRAME_BYTES_V1,
                 )
                 .map_err(map_stream_token_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_STREAM_TOKEN_SIGN_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(map_stream_token_error)?;
+                let result =
+                    provider_call!(self, call, OPERATION_STREAM_TOKEN_SIGN_V1, payload, false,)
+                        .map_err(map_stream_token_error)?;
                 let signature = self
                     .session
                     .decode_result::<SignResultWireV1>(&result)
@@ -20472,25 +19215,23 @@ mod protocol {
                     MAX_APPEAL_FINANCE_TRANSACTION_BYTES_V1,
                 )
                 .map_err(|_| iroha_torii::SoraFsAppealFinanceSigningError::Refused)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(|error| match error {
-                        BrokerError::Unavailable | BrokerError::Ambiguous => {
-                            iroha_torii::SoraFsAppealFinanceSigningError::Unavailable
-                        }
-                        BrokerError::StaleOrRevoked | BrokerError::BindingMismatch => {
-                            self.session.poison();
-                            iroha_torii::SoraFsAppealFinanceSigningError::QualificationChanged
-                        }
-                        _ => iroha_torii::SoraFsAppealFinanceSigningError::Refused,
-                    })?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1,
+                    payload,
+                    false,
+                )
+                .map_err(|error| match error {
+                    BrokerError::Unavailable | BrokerError::Ambiguous => {
+                        iroha_torii::SoraFsAppealFinanceSigningError::Unavailable
+                    }
+                    BrokerError::StaleOrRevoked | BrokerError::BindingMismatch => {
+                        self.session.poison();
+                        iroha_torii::SoraFsAppealFinanceSigningError::QualificationChanged
+                    }
+                    _ => iroha_torii::SoraFsAppealFinanceSigningError::Refused,
+                })?;
                 let signed = self
                     .session
                     .decode_result::<iroha_data_model::transaction::SignedTransaction>(&result)
@@ -20590,16 +19331,14 @@ mod protocol {
                         sorafs_node::appeal_finance_transaction_forwarder::
                             AppealFinanceCheckpointExternalError::Rejected
                     })?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_APPEAL_FINANCE_CHECKPOINT_SIGN_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(appeal_checkpoint_external_error)?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_APPEAL_FINANCE_CHECKPOINT_SIGN_V1,
+                    payload,
+                    false,
+                )
+                .map_err(appeal_checkpoint_external_error)?;
                 let signature = self
                     .session
                     .decode_result::<SignResultWireV1>(&result)
@@ -20628,16 +19367,14 @@ mod protocol {
             >{
                 let payload = encode_canonical(&(), MAX_STREAM_TOKEN_FRAME_BYTES_V1)
                     .map_err(appeal_checkpoint_external_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_APPEAL_FINANCE_CHECKPOINT_LOAD_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(appeal_checkpoint_external_error)?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_APPEAL_FINANCE_CHECKPOINT_LOAD_V1,
+                    payload,
+                    false,
+                )
+                .map_err(appeal_checkpoint_external_error)?;
                 let record = self
                     .session
                     .decode_result::<Option<
@@ -20707,16 +19444,14 @@ mod protocol {
                     MAX_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1,
                 )
                 .map_err(appeal_checkpoint_external_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_APPEAL_FINANCE_CHECKPOINT_COMPARE_AND_SWAP_V1,
-                        payload,
-                        true,
-                    )
-                    .map_err(appeal_checkpoint_external_error)?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_APPEAL_FINANCE_CHECKPOINT_COMPARE_AND_SWAP_V1,
+                    payload,
+                    true,
+                )
+                .map_err(appeal_checkpoint_external_error)?;
                 self.session
                     .decode_result::<()>(&result)
                     .map_err(appeal_checkpoint_external_error)?;
@@ -20968,9 +19703,9 @@ mod protocol {
                 mutating: bool,
             ) -> Result<ScrubbedBytes, BrokerError> {
                 self.live_qualification()?;
-                let result = self.session.call_sensitive(
-                    &self.binding,
-                    self.metadata_digest,
+                let result = provider_call!(
+                    self,
+                    call_sensitive,
                     operation,
                     ScrubbedBytes::new(payload),
                     mutating,
@@ -21597,16 +20332,14 @@ mod protocol {
                 let payload =
                     encode_sensitive_canonical(&wire, MAX_TRANSPARENCY_PRF_FRAME_BYTES_V1)
                         .map_err(privacy_cycle_prf_error)?;
-                let result = self
-                    .session
-                    .call_sensitive(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_PRIVACY_CYCLE_PRF_DERIVE_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(privacy_cycle_prf_error)?;
+                let result = provider_call!(
+                    self,
+                    call_sensitive,
+                    OPERATION_PRIVACY_CYCLE_PRF_DERIVE_V1,
+                    payload,
+                    false,
+                )
+                .map_err(privacy_cycle_prf_error)?;
                 if self.live_qualification().is_err() {
                     self.session.poison();
                     return Err(sorafs_node::PrivacyCyclePrfProviderErrorV1::Unavailable);
@@ -21673,13 +20406,7 @@ mod protocol {
                 mutating: bool,
             ) -> Result<ScrubbedBytes, BrokerError> {
                 self.live_qualification()?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    operation,
-                    payload,
-                    mutating,
-                )?;
+                let result = provider_call!(self, call, operation, payload, mutating,)?;
                 if self.live_qualification().is_err() {
                     self.session.poison();
                     return Err(if mutating {
@@ -21823,13 +20550,7 @@ mod protocol {
             }
             fn call(&self, operation: u16, payload: Vec<u8>) -> Result<ScrubbedBytes, BrokerError> {
                 self.live_qualification()?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    operation,
-                    payload,
-                    true,
-                )?;
+                let result = provider_call!(self, call, operation, payload, true,)?;
                 if self.live_qualification().is_err() {
                     self.session.poison();
                     return Err(BrokerError::Ambiguous);
@@ -22008,9 +20729,9 @@ mod protocol {
             }
             fn call(&self, payload: Vec<u8>) -> Result<ScrubbedBytes, BrokerError> {
                 self.live_qualification()?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
+                let result = provider_call!(
+                    self,
+                    call,
                     OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1,
                     payload,
                     true,
@@ -22100,9 +20821,9 @@ mod protocol {
             }
             fn call(&self, payload: Vec<u8>) -> Result<ScrubbedBytes, BrokerError> {
                 self.live_qualification()?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
+                let result = provider_call!(
+                    self,
+                    call,
                     OPERATION_FENCED_PRIVACY_READ_HEAD_WITH_ANCESTRY_V1,
                     payload,
                     false,
@@ -22179,13 +20900,7 @@ mod protocol {
                 mutating: bool,
             ) -> Result<ScrubbedBytes, BrokerError> {
                 self.live_binding()?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    operation,
-                    payload,
-                    mutating,
-                )?;
+                let result = provider_call!(self, call, operation, payload, mutating,)?;
                 if self.live_binding().is_err() {
                     self.session.poison();
                     return Err(if mutating {
@@ -22390,19 +21105,17 @@ mod protocol {
                 validate_gateway_acme_order(&wire).map_err(|_| Error::Rejected)?;
                 let payload = encode_canonical(&wire, MAX_GATEWAY_ACME_FRAME_BYTES_V1)
                     .map_err(|_| Error::Rejected)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_GATEWAY_ACME_ORDER_CERTIFICATE_V1,
-                        payload,
-                        true,
-                    )
-                    .map_err(|error| match error {
-                        BrokerError::Rejected => Error::Rejected,
-                        _ => Error::Transport,
-                    })?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_GATEWAY_ACME_ORDER_CERTIFICATE_V1,
+                    payload,
+                    true,
+                )
+                .map_err(|error| match error {
+                    BrokerError::Rejected => Error::Rejected,
+                    _ => Error::Transport,
+                })?;
                 let outcome = self
                     .session
                     .decode_result::<GatewayAcmeOrderOutcomeWireV1>(&result)
@@ -22515,16 +21228,14 @@ mod protocol {
                     .map_err(|error| self.operation_error(error))?;
                 let payload = encode_canonical(&wire, 128 * 1024)
                     .map_err(|error| self.operation_error(error))?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_GATEWAY_COMPLIANCE_RESOLVE_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(|error| self.operation_error(error))?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_GATEWAY_COMPLIANCE_RESOLVE_V1,
+                    payload,
+                    false,
+                )
+                .map_err(|error| self.operation_error(error))?;
                 let outcome = self
                     .session
                     .decode_result::<GatewayComplianceResolveOutcomeWireV1>(&result)
@@ -22570,16 +21281,14 @@ mod protocol {
                     .map_err(|error| self.operation_error(error))?;
                 let payload = encode_canonical(&wire, MAX_GATEWAY_COMPLIANCE_FRAME_BYTES_V1)
                     .map_err(|error| self.operation_error(error))?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_GATEWAY_COMPLIANCE_FETCH_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(|error| self.operation_error(error))?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_GATEWAY_COMPLIANCE_FETCH_V1,
+                    payload,
+                    false,
+                )
+                .map_err(|error| self.operation_error(error))?;
                 let outcome = self
                     .session
                     .decode_result::<GatewayComplianceFetchOutcomeWireV1>(&result)
@@ -22721,16 +21430,14 @@ mod protocol {
                 let expected = payload.clone();
                 let payload = encode_native_transaction_payload(&payload)
                     .map_err(moderation_signing_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_NATIVE_TRANSACTION_SIGN_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(moderation_signing_error)?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_NATIVE_TRANSACTION_SIGN_V1,
+                    payload,
+                    false,
+                )
+                .map_err(moderation_signing_error)?;
                 let signed = decode_scrubbed_canonical::<
                     iroha_data_model::transaction::SignedTransaction,
                 >(&result, MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1)
@@ -23134,13 +21841,7 @@ mod protocol {
             ) -> Result<iroha_torii::SorafsNativeTransactionSignerQualificationV1, BrokerError>
             {
                 let payload = encode_canonical(&(), MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_QUALIFY_V1,
-                    payload,
-                    false,
-                )?;
+                let result = provider_call!(self, call, OPERATION_QUALIFY_V1, payload, false,)?;
                 let qualification = decode_scrubbed_canonical::<QualificationResultWireV1>(
                     &result,
                     MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
@@ -23170,9 +21871,9 @@ mod protocol {
                 }
                 ensure_transaction_session_network(payload, &self.session.network_id)?;
                 let payload = encode_native_transaction_payload(payload)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
+                let result = provider_call!(
+                    self,
+                    call,
                     OPERATION_NATIVE_TRANSACTION_SIGN_V1,
                     payload,
                     true,
@@ -23391,13 +22092,7 @@ mod protocol {
                 BrokerError,
             > {
                 let payload = encode_canonical(&(), MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_QUALIFY_V1,
-                    payload,
-                    false,
-                )?;
+                let result = provider_call!(self, call, OPERATION_QUALIFY_V1, payload, false,)?;
                 let qualification =
                     decode_scrubbed_canonical::<SoracloudSignerQualificationWireV1>(
                         &result,
@@ -23494,16 +22189,14 @@ mod protocol {
                     .map_err(|error| self.signing_error(error))?;
                 let payload = encode_native_transaction_payload(&payload)
                     .map_err(|error| self.signing_error(error))?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_NATIVE_TRANSACTION_SIGN_V1,
-                        payload,
-                        true,
-                    )
-                    .map_err(|error| self.signing_error(error))?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_NATIVE_TRANSACTION_SIGN_V1,
+                    payload,
+                    true,
+                )
+                .map_err(|error| self.signing_error(error))?;
                 decode_scrubbed_canonical::<iroha_data_model::transaction::SignedTransaction>(
                     &result,
                     MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1,
@@ -23538,16 +22231,14 @@ mod protocol {
                     MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
                 )
                 .map_err(|error| self.signing_error(error))?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_SORACLOUD_PROVENANCE_SIGN_V1,
-                        payload,
-                        true,
-                    )
-                    .map_err(|error| self.signing_error(error))?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_SORACLOUD_PROVENANCE_SIGN_V1,
+                    payload,
+                    true,
+                )
+                .map_err(|error| self.signing_error(error))?;
                 decode_scrubbed_canonical::<iroha_crypto::Signature>(
                     &result,
                     MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
@@ -23577,13 +22268,7 @@ mod protocol {
                 BrokerError,
             > {
                 let payload = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_QUALIFY_V1,
-                    payload,
-                    false,
-                )?;
+                let result = provider_call!(self, call, OPERATION_QUALIFY_V1, payload, false,)?;
                 let qualification = decode_scrubbed_canonical::<QualificationResultWireV1>(
                     &result,
                     MAX_OPERATION_FRAME_BYTES_V1,
@@ -23684,16 +22369,14 @@ mod protocol {
                 };
                 let payload = encode_canonical(&wire, MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1)
                     .map_err(|error| self.operation_error(error))?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(|error| self.operation_error(error))?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1,
+                    payload,
+                    false,
+                )
+                .map_err(|error| self.operation_error(error))?;
                 let mut response = decode_scrubbed_canonical::<
                     SoracloudHfAuthenticatedInferenceResponseWireV1,
                 >(
@@ -23733,13 +22416,7 @@ mod protocol {
             ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, BrokerError>
             {
                 let payload = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_QUALIFY_V1,
-                    payload,
-                    false,
-                )?;
+                let result = provider_call!(self, call, OPERATION_QUALIFY_V1, payload, false,)?;
                 let qualification = self
                     .session
                     .decode_result::<QualificationResultWireV1>(&result)?;
@@ -23782,15 +22459,7 @@ mod protocol {
                     .map_err(|_| ERROR_REJECTED.to_owned())?;
                 let payload = encode_canonical(&request, MAX_OPERATION_FRAME_BYTES_V1)
                     .map_err(redacted_provider_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_SIGN_V1,
-                        payload,
-                        false,
-                    )
+                let result = provider_call!(self, call, OPERATION_SIGN_V1, payload, false,)
                     .map_err(redacted_provider_error)?;
                 let signature = self
                     .session
@@ -23822,13 +22491,7 @@ mod protocol {
             ) -> Result<sorafs_node::GovernanceDagRequestIngressQualificationV1, BrokerError>
             {
                 let payload = encode_canonical(&(), MAX_GOVERNANCE_REQUEST_AUTH_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_QUALIFY_V1,
-                    payload,
-                    false,
-                )?;
+                let result = provider_call!(self, call, OPERATION_QUALIFY_V1, payload, false,)?;
                 let qualification = governance_request_ingress_qualification_from_wire(
                     self.session
                         .decode_result::<GovernanceRequestIngressQualificationWireV1>(&result)?,
@@ -23889,16 +22552,14 @@ mod protocol {
                     MAX_GOVERNANCE_REQUEST_AUTH_FRAME_BYTES_V1,
                 )
                 .map_err(redacted_provider_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_GOVERNANCE_REQUEST_AUTHENTICATE_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(redacted_provider_error)?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_GOVERNANCE_REQUEST_AUTHENTICATE_V1,
+                    payload,
+                    false,
+                )
+                .map_err(redacted_provider_error)?;
                 let result = self
                     .session
                     .decode_result::<GovernanceRequestAuthResultWireV1>(&result)
@@ -23935,13 +22596,7 @@ mod protocol {
             ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, BrokerError>
             {
                 let payload = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_QUALIFY_V1,
-                    payload,
-                    false,
-                )?;
+                let result = provider_call!(self, call, OPERATION_QUALIFY_V1, payload, false,)?;
                 let qualification = self
                     .session
                     .decode_result::<QualificationResultWireV1>(&result)?;
@@ -23976,15 +22631,7 @@ mod protocol {
                     MAX_OPERATION_FRAME_BYTES_V1,
                 )
                 .map_err(redacted_provider_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_SEALED_LOAD_V1,
-                        payload,
-                        false,
-                    )
+                let result = provider_call!(self, call, OPERATION_SEALED_LOAD_V1, payload, false,)
                     .map_err(redacted_provider_error)?;
                 let record = self
                     .session
@@ -24041,16 +22688,14 @@ mod protocol {
                     MAX_OPERATION_FRAME_BYTES_V1,
                 )
                 .map_err(redacted_provider_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_SEALED_COMPARE_AND_SWAP_V1,
-                        payload,
-                        true,
-                    )
-                    .map_err(redacted_provider_error)?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_SEALED_COMPARE_AND_SWAP_V1,
+                    payload,
+                    true,
+                )
+                .map_err(redacted_provider_error)?;
                 self.session
                     .decode_result::<()>(&result)
                     .map_err(|_| ERROR_AMBIGUOUS.to_owned())
@@ -24071,15 +22716,7 @@ mod protocol {
                     MAX_OPERATION_FRAME_BYTES_V1,
                 )
                 .map_err(redacted_provider_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_SEALED_DELETE_V1,
-                        payload,
-                        true,
-                    )
+                let result = provider_call!(self, call, OPERATION_SEALED_DELETE_V1, payload, true,)
                     .map_err(redacted_provider_error)?;
                 self.session
                     .decode_result::<()>(&result)
@@ -24186,13 +22823,7 @@ mod protocol {
                 BrokerError,
             > {
                 let payload = encode_canonical(&(), MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_QUALIFY_V1,
-                    payload,
-                    false,
-                )?;
+                let result = provider_call!(self, call, OPERATION_QUALIFY_V1, payload, false,)?;
                 let qualification = decode_scrubbed_canonical::<QualificationResultWireV1>(
                     &result,
                     MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
@@ -24225,13 +22856,7 @@ mod protocol {
                 mutating: bool,
             ) -> Result<ScrubbedBytes, BrokerError> {
                 let payload = encode_sensitive_canonical(payload, payload_limit)?;
-                self.session.call_sensitive(
-                    &self.binding,
-                    self.metadata_digest,
-                    operation,
-                    payload,
-                    mutating,
-                )
+                provider_call!(self, call_sensitive, operation, payload, mutating,)
             }
             fn decode_sensitive<T>(
                 &self,
@@ -25593,13 +24218,7 @@ mod protocol {
             ) -> Result<sorafs_node::ProviderIngestCheckpointProviderQualificationV1, BrokerError>
             {
                 let payload = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_QUALIFY_V1,
-                    payload,
-                    false,
-                )?;
+                let result = provider_call!(self, call, OPERATION_QUALIFY_V1, payload, false,)?;
                 let qualification = self
                     .session
                     .decode_result::<QualificationResultWireV1>(&result)?;
@@ -25625,9 +24244,9 @@ mod protocol {
                     &CHECKPOINT_LOAD_REQUEST_VERSION_V1,
                     MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
                 )?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
+                let result = provider_call!(
+                    self,
+                    call,
                     OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1,
                     payload,
                     false,
@@ -25724,21 +24343,20 @@ mod protocol {
                     MAX_OPERATION_FRAME_BYTES_V1,
                 )
                 .map_err(provider_ingest_checkpoint_error)?;
-                self.session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1,
-                        payload,
-                        true,
-                    )
-                    .map_err(provider_ingest_checkpoint_error)
-                    .and_then(|result| {
-                        self.session.decode_result::<()>(&result).map_err(|_| {
-                            self.session.poison();
-                            sorafs_node::ProviderIngestCheckpointExternalErrorV1::Ambiguous
-                        })
-                    })?;
+                provider_call!(
+                    self,
+                    call,
+                    OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1,
+                    payload,
+                    true,
+                )
+                .map_err(provider_ingest_checkpoint_error)
+                .and_then(|result| {
+                    self.session.decode_result::<()>(&result).map_err(|_| {
+                        self.session.poison();
+                        sorafs_node::ProviderIngestCheckpointExternalErrorV1::Ambiguous
+                    })
+                })?;
                 let readback = self.load_latest_raw().map_err(|error| {
                     self.session.poison();
                     match error {
@@ -25796,13 +24414,7 @@ mod protocol {
                 BrokerError,
             >{
                 let payload = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_QUALIFY_V1,
-                    payload,
-                    false,
-                )?;
+                let result = provider_call!(self, call, OPERATION_QUALIFY_V1, payload, false,)?;
                 let observed = self
                     .session
                     .decode_result::<QualificationResultWireV1>(&result)?;
@@ -25836,9 +24448,9 @@ mod protocol {
                     &ProviderIngestRetentionLoadRequestWireV1 { network_id },
                     MAX_OPERATION_FRAME_BYTES_V1,
                 )?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
+                let result = provider_call!(
+                    self,
+                    call,
                     OPERATION_PROVIDER_INGEST_RETENTION_LOAD_V1,
                     payload,
                     false,
@@ -25975,10 +24587,7 @@ mod protocol {
                     MAX_OPERATION_FRAME_BYTES_V1,
                 )
                 .map_err(provider_ingest_retention_error)?;
-                self.session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
+                provider_call!(self, call,
                         OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1,
                         payload,
                         true,
@@ -26047,13 +24656,7 @@ mod protocol {
                 BrokerError,
             >{
                 let payload = encode_canonical(&(), MAX_REPUTATION_RETENTION_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_QUALIFY_V1,
-                    payload,
-                    false,
-                )?;
+                let result = provider_call!(self, call, OPERATION_QUALIFY_V1, payload, false,)?;
                 let observed = self
                     .session
                     .decode_result::<QualificationResultWireV1>(&result)?;
@@ -26087,9 +24690,9 @@ mod protocol {
                     &ReputationRetentionLoadRequestWireV1 { network_id },
                     MAX_REPUTATION_RETENTION_FRAME_BYTES_V1,
                 )?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
+                let result = provider_call!(
+                    self,
+                    call,
                     OPERATION_REPUTATION_RETENTION_LOAD_V1,
                     payload,
                     false,
@@ -26229,21 +24832,20 @@ mod protocol {
                     MAX_REPUTATION_RETENTION_FRAME_BYTES_V1,
                 )
                 .map_err(reputation_retention_error)?;
-                self.session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_REPUTATION_RETENTION_COMPARE_AND_SWAP_V1,
-                        payload,
-                        true,
-                    )
-                    .map_err(reputation_retention_error)
-                    .and_then(|result| {
-                        self.session.decode_result::<()>(&result).map_err(|_| {
-                            self.session.poison();
-                            Error::Ambiguous
-                        })
-                    })?;
+                provider_call!(
+                    self,
+                    call,
+                    OPERATION_REPUTATION_RETENTION_COMPARE_AND_SWAP_V1,
+                    payload,
+                    true,
+                )
+                .map_err(reputation_retention_error)
+                .and_then(|result| {
+                    self.session.decode_result::<()>(&result).map_err(|_| {
+                        self.session.poison();
+                        Error::Ambiguous
+                    })
+                })?;
                 let readback = self.load_latest_raw(&network_id).map_err(|error| {
                     self.session.poison();
                     match error {
@@ -26286,13 +24888,7 @@ mod protocol {
                 BrokerError,
             > {
                 let payload = encode_canonical(&(), MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_QUALIFY_V1,
-                    payload,
-                    false,
-                )?;
+                let result = provider_call!(self, call, OPERATION_QUALIFY_V1, payload, false,)?;
                 let observed = self
                     .session
                     .decode_result::<QualificationResultWireV1>(&result)?;
@@ -26869,13 +25465,7 @@ mod protocol {
                 BrokerError,
             > {
                 let payload = encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_QUALIFY_V1,
-                    payload,
-                    false,
-                )?;
+                let result = provider_call!(self, call, OPERATION_QUALIFY_V1, payload, false,)?;
                 let observed = self
                     .session
                     .decode_operation_result::<QualificationResultWireV1>(
@@ -26893,13 +25483,7 @@ mod protocol {
             }
             fn call_unit(&self, operation: u16) -> Result<(), BrokerError> {
                 let payload = encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    operation,
-                    payload,
-                    false,
-                )?;
+                let result = provider_call!(self, call, operation, payload, false,)?;
                 self.session
                     .decode_operation_result::<()>(&result, operation)
             }
@@ -26914,13 +25498,8 @@ mod protocol {
             }
             fn adapter_identity(&self) -> Result<BillingAdapterIdentityWireV1, BrokerError> {
                 let payload = encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_BILLING_IDENTITY_V1,
-                    payload,
-                    false,
-                )?;
+                let result =
+                    provider_call!(self, call, OPERATION_BILLING_IDENTITY_V1, payload, false,)?;
                 let identity = self
                     .session
                     .decode_operation_result::<BillingAdapterIdentityWireV1>(
@@ -26935,13 +25514,8 @@ mod protocol {
             }
             fn signer_identity(&self) -> Result<BillingStatementSignerIdentityWireV1, BrokerError> {
                 let payload = encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_BILLING_IDENTITY_V1,
-                    payload,
-                    false,
-                )?;
+                let result =
+                    provider_call!(self, call, OPERATION_BILLING_IDENTITY_V1, payload, false,)?;
                 let identity = self
                     .session
                     .decode_operation_result::<BillingStatementSignerIdentityWireV1>(
@@ -26964,13 +25538,8 @@ mod protocol {
                 &self,
             ) -> Result<BillingStatementPublisherIdentityWireV1, BrokerError> {
                 let payload = encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    OPERATION_BILLING_IDENTITY_V1,
-                    payload,
-                    false,
-                )?;
+                let result =
+                    provider_call!(self, call, OPERATION_BILLING_IDENTITY_V1, payload, false,)?;
                 let identity = self
                     .session
                     .decode_operation_result::<BillingStatementPublisherIdentityWireV1>(
@@ -27011,9 +25580,9 @@ mod protocol {
                     },
                     MAX_BILLING_CONTROL_FRAME_BYTES_V1,
                 )?;
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
+                let result = provider_call!(
+                    self,
+                    call,
                     OPERATION_BILLING_LOOKUP_PUBLICATION_V1,
                     payload,
                     false,
@@ -27085,13 +25654,7 @@ mod protocol {
                     }
                     None => encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)?,
                 };
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
-                    operation,
-                    payload,
-                    false,
-                );
+                let result = provider_call!(self, call, operation, payload, false,);
                 let result = match result {
                     Ok(result) => result,
                     Err(_) if after_write => return Err(BrokerError::Ambiguous),
@@ -27222,9 +25785,9 @@ mod protocol {
                     Ok(payload) => payload,
                     Err(_) => return false,
                 };
-                let result = self.session.call(
-                    &self.binding,
-                    self.metadata_digest,
+                let result = provider_call!(
+                    self,
+                    call,
                     OPERATION_BILLING_QUERY_CAPABILITIES_V1,
                     payload,
                     false,
@@ -27253,16 +25816,14 @@ mod protocol {
             > {
                 let payload = encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)
                     .map_err(billing_client_external_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_BILLING_FINALIZED_HEAD_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(billing_client_external_error)?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_BILLING_FINALIZED_HEAD_V1,
+                    payload,
+                    false,
+                )
+                .map_err(billing_client_external_error)?;
                 let head = self
                     .session
                     .decode_operation_result::<
@@ -27304,16 +25865,9 @@ mod protocol {
                     MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                 )
                 .map_err(billing_client_external_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_BILLING_QUERY_PAGE_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(billing_client_external_error)?;
+                let result =
+                    provider_call!(self, call, OPERATION_BILLING_QUERY_PAGE_V1, payload, false,)
+                        .map_err(billing_client_external_error)?;
                 let page = self
                     .session
                     .decode_operation_result::<Option<
@@ -27359,16 +25913,14 @@ mod protocol {
                     MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                 )
                 .map_err(billing_client_external_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_BILLING_QUERY_PERIOD_CLOSE_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(billing_client_external_error)?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_BILLING_QUERY_PERIOD_CLOSE_V1,
+                    payload,
+                    false,
+                )
+                .map_err(billing_client_external_error)?;
                 let close = self
                     .session
                     .decode_operation_result::<Option<
@@ -27443,16 +25995,9 @@ mod protocol {
                     MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                 )
                 .map_err(billing_client_external_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_BILLING_VERIFY_PAGE_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(billing_client_external_error)?;
+                let result =
+                    provider_call!(self, call, OPERATION_BILLING_VERIFY_PAGE_V1, payload, false,)
+                        .map_err(billing_client_external_error)?;
                 self.session
                     .decode_operation_result::<()>(&result, OPERATION_BILLING_VERIFY_PAGE_V1)
                     .map_err(billing_client_external_error)
@@ -27480,16 +26025,14 @@ mod protocol {
                     MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                 )
                 .map_err(billing_client_external_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_BILLING_VERIFY_PERIOD_CLOSE_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(billing_client_external_error)?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_BILLING_VERIFY_PERIOD_CLOSE_V1,
+                    payload,
+                    false,
+                )
+                .map_err(billing_client_external_error)?;
                 self.session
                     .decode_operation_result::<()>(
                         &result,
@@ -27523,16 +26066,14 @@ mod protocol {
                     MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                 )
                 .map_err(billing_client_external_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_BILLING_VERIFY_EPOCH_TRANSITION_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(billing_client_external_error)?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_BILLING_VERIFY_EPOCH_TRANSITION_V1,
+                    payload,
+                    false,
+                )
+                .map_err(billing_client_external_error)?;
                 self.session
                     .decode_operation_result::<()>(
                         &result,
@@ -27583,16 +26124,14 @@ mod protocol {
                     MAX_BILLING_CONTROL_FRAME_BYTES_V1,
                 )
                 .map_err(billing_client_external_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_BILLING_SIGN_STATEMENT_DIGEST_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(billing_client_external_error)?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_BILLING_SIGN_STATEMENT_DIGEST_V1,
+                    payload,
+                    false,
+                )
+                .map_err(billing_client_external_error)?;
                 let _scope = result.enter_decode_admission();
                 let signed = self
                     .session
@@ -27667,16 +26206,14 @@ mod protocol {
                     .map_err(billing_client_external_error)?;
                 let payload = encode_canonical(&publish, MAX_BILLING_RUNTIME_FRAME_BYTES_V1)
                     .map_err(billing_client_external_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_BILLING_PUBLISH_STATEMENT_V1,
-                        payload,
-                        true,
-                    )
-                    .map_err(billing_client_external_error)?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_BILLING_PUBLISH_STATEMENT_V1,
+                    payload,
+                    true,
+                )
+                .map_err(billing_client_external_error)?;
                 let _scope = result.enter_decode_admission();
                 let receipt = self
                     .session
@@ -27782,16 +26319,14 @@ mod protocol {
                     .map_err(billing_client_external_error)?;
                 let payload = encode_canonical(&request, MAX_BILLING_RUNTIME_FRAME_BYTES_V1)
                     .map_err(billing_client_external_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_BILLING_VERIFY_ACKNOWLEDGEMENT_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(billing_client_external_error)?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_BILLING_VERIFY_ACKNOWLEDGEMENT_V1,
+                    payload,
+                    false,
+                )
+                .map_err(billing_client_external_error)?;
                 self.session
                     .decode_operation_result::<()>(
                         &result,
@@ -27816,16 +26351,14 @@ mod protocol {
                     .map_err(billing_client_external_error)?;
                 let payload = encode_canonical(&request, MAX_BILLING_RUNTIME_FRAME_BYTES_V1)
                     .map_err(billing_client_external_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_BILLING_RECORD_ACKNOWLEDGEMENT_V1,
-                        payload,
-                        true,
-                    )
-                    .map_err(billing_client_external_error)?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_BILLING_RECORD_ACKNOWLEDGEMENT_V1,
+                    payload,
+                    true,
+                )
+                .map_err(billing_client_external_error)?;
                 let _scope = result.enter_decode_admission();
                 let recorded = self
                     .session
@@ -27884,16 +26417,14 @@ mod protocol {
                     MAX_BILLING_CONTROL_FRAME_BYTES_V1,
                 )
                 .map_err(billing_client_external_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_BILLING_LOOKUP_ACKNOWLEDGEMENT_V1,
-                        payload,
-                        false,
-                    )
-                    .map_err(billing_client_external_error)?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_BILLING_LOOKUP_ACKNOWLEDGEMENT_V1,
+                    payload,
+                    false,
+                )
+                .map_err(billing_client_external_error)?;
                 let _scope = result.enter_decode_admission();
                 let acknowledgement =
                     self.session
@@ -27991,16 +26522,14 @@ mod protocol {
                     MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                 )
                 .map_err(billing_client_external_error)?;
-                let result = self
-                    .session
-                    .call(
-                        &self.binding,
-                        self.metadata_digest,
-                        OPERATION_BILLING_COMPARE_AND_SWAP_EPOCH_V1,
-                        payload,
-                        true,
-                    )
-                    .map_err(billing_client_external_error)?;
+                let result = provider_call!(
+                    self,
+                    call,
+                    OPERATION_BILLING_COMPARE_AND_SWAP_EPOCH_V1,
+                    payload,
+                    true,
+                )
+                .map_err(billing_client_external_error)?;
                 let _scope = result.enter_decode_admission();
                 self.session
                     .decode_operation_result::<()>(
@@ -28221,21 +26750,13 @@ mod protocol {
                     slot if slot
                         == IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider.wire_id() =>
                     {
-                        let provider = Arc::new(PrivacyCyclePrfBrokerProvider {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let provider = Arc::new(resolved_provider!(PrivacyCyclePrfBrokerProvider, &session, binding, observation));
                         provider.live_qualification().map_err(registry_error)?;
                         dependencies = dependencies.with_privacy_cycle_prf_provider(provider);
                     }
                     slot if slot == IrohaRuntimeProviderSlotV1::PrivacyReleaseAnchor.wire_id() => {
                         transparency_runtime_binding_from_wire(binding).map_err(registry_error)?;
-                        let anchor = Arc::new(PrivacyReleaseAnchorBroker {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let anchor = Arc::new(resolved_provider!(PrivacyReleaseAnchorBroker, &session, binding, observation));
                         anchor.live_qualification().map_err(registry_error)?;
                         dependencies = dependencies.with_privacy_release_anchor(anchor);
                     }
@@ -28243,22 +26764,14 @@ mod protocol {
                         == IrohaRuntimeProviderSlotV1::TransparencyLeaderLease.wire_id() =>
                     {
                         transparency_runtime_binding_from_wire(binding).map_err(registry_error)?;
-                        let provider = Arc::new(TransparencyLeaderLeaseBroker {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let provider = Arc::new(resolved_provider!(TransparencyLeaderLeaseBroker, &session, binding, observation));
                         provider.live_qualification().map_err(registry_error)?;
                         dependencies =
                             dependencies.with_transparency_leader_lease_provider(provider);
                     }
                     slot if slot == IrohaRuntimeProviderSlotV1::FencedPrivacyPublisher.wire_id() => {
                         qualification_from_binding(binding).map_err(registry_error)?;
-                        let publisher = Arc::new(FencedPrivacyPublisherBroker {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let publisher = Arc::new(resolved_provider!(FencedPrivacyPublisherBroker, &session, binding, observation));
                         publisher.live_qualification().map_err(registry_error)?;
                         dependencies =
                             dependencies.with_sorafs_fenced_transparency_publisher(publisher);
@@ -28267,11 +26780,7 @@ mod protocol {
                         == IrohaRuntimeProviderSlotV1::FencedPrivacyHeadReader.wire_id() =>
                     {
                         qualification_from_binding(binding).map_err(registry_error)?;
-                        let reader = Arc::new(FencedPrivacyHeadReaderBroker {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let reader = Arc::new(resolved_provider!(FencedPrivacyHeadReaderBroker, &session, binding, observation));
                         reader.live_qualification().map_err(registry_error)?;
                         dependencies =
                             dependencies.with_sorafs_fenced_transparency_head_reader(reader);
@@ -28424,11 +26933,7 @@ mod protocol {
                     {
                         pop_runtime_bindings_from_wire(binding).map_err(registry_error)?;
                         let registry = Arc::new(PopCredentialBrokerRegistry {
-                            provider: PopBrokerProvider {
-                                session: Arc::clone(&session),
-                                binding: binding.clone(),
-                                metadata_digest: observation.metadata_digest,
-                            },
+                            provider: resolved_provider!(PopBrokerProvider, &session, binding, observation),
                         });
                         iroha_torii::sorafs::pop_api::
                             PopCredentialRuntimeProviderRegistryV1::qualification(
@@ -28450,22 +26955,14 @@ mod protocol {
                             .with_sorafs_pop_credential_provider_registry(registry);
                     }
                     slot if slot == IrohaRuntimeProviderSlotV1::GatewayAcmeClient.wire_id() => {
-                        let client = Arc::new(GatewayAcmeBrokerClient {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let client = Arc::new(resolved_provider!(GatewayAcmeBrokerClient, &session, binding, observation));
                         client.live_identity().map_err(registry_error)?;
                         dependencies = dependencies.with_sorafs_gateway_acme_client(client);
                     }
                     slot if slot
                         == IrohaRuntimeProviderSlotV1::GatewayComplianceFeedTransport.wire_id() =>
                     {
-                        let transport = Arc::new(GatewayComplianceBrokerFeedTransport {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let transport = Arc::new(resolved_provider!(GatewayComplianceBrokerFeedTransport, &session, binding, observation));
                         transport.live_identity().map_err(registry_error)?;
                         dependencies =
                             dependencies.with_sorafs_gateway_compliance_feed_transport(transport);
@@ -28475,11 +26972,7 @@ mod protocol {
                             .wire_id() =>
                     {
                         let submitter = Arc::new(ReputationJournalBrokerSubmitter {
-                            provider: ReputationBrokerProvider {
-                                session: Arc::clone(&session),
-                                binding: binding.clone(),
-                                metadata_digest: observation.metadata_digest,
-                            },
+                            provider: resolved_provider!(ReputationBrokerProvider, &session, binding, observation),
                         });
                         submitter
                             .provider
@@ -28493,11 +26986,7 @@ mod protocol {
                             == IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint.wire_id() =>
                     {
                         let checkpoint = Arc::new(ReputationJournalBrokerCheckpoint {
-                            provider: ReputationBrokerProvider {
-                                session: Arc::clone(&session),
-                                binding: binding.clone(),
-                                metadata_digest: observation.metadata_digest,
-                            },
+                            provider: resolved_provider!(ReputationBrokerProvider, &session, binding, observation),
                         });
                         checkpoint
                             .provider
@@ -28526,11 +27015,7 @@ mod protocol {
                         == IrohaRuntimeProviderSlotV1::ReputationThresholdSigner.wire_id() =>
                     {
                         let signer = Arc::new(ReputationThresholdBrokerSigner {
-                            provider: ReputationBrokerProvider {
-                                session: Arc::clone(&session),
-                                binding: binding.clone(),
-                                metadata_digest: observation.metadata_digest,
-                            },
+                            provider: resolved_provider!(ReputationBrokerProvider, &session, binding, observation),
                         });
                         signer
                             .provider
@@ -28543,11 +27028,7 @@ mod protocol {
                         == IrohaRuntimeProviderSlotV1::ReputationGovernanceDag.wire_id() =>
                     {
                         let governance_dag = Arc::new(ReputationGovernanceBrokerClient {
-                            provider: ReputationBrokerProvider {
-                                session: Arc::clone(&session),
-                                binding: binding.clone(),
-                                metadata_digest: observation.metadata_digest,
-                            },
+                            provider: resolved_provider!(ReputationBrokerProvider, &session, binding, observation),
                         });
                         governance_dag
                             .provider
@@ -28559,11 +27040,7 @@ mod protocol {
                     slot if slot
                         == IrohaRuntimeProviderSlotV1::BillingFinalizedQuery.wire_id() =>
                     {
-                        let query = Arc::new(BillingBrokerProvider {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let query = Arc::new(resolved_provider!(BillingBrokerProvider, &session, binding, observation));
                         query.live_qualification().map_err(registry_error)?;
                         query.adapter_identity().map_err(registry_error)?;
                         query.call_unit(OPERATION_BILLING_READINESS_V1)
@@ -28579,11 +27056,7 @@ mod protocol {
                     slot if slot
                         == IrohaRuntimeProviderSlotV1::BillingJournalVerifier.wire_id() =>
                     {
-                        let verifier = Arc::new(BillingBrokerProvider {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let verifier = Arc::new(resolved_provider!(BillingBrokerProvider, &session, binding, observation));
                         verifier.live_qualification().map_err(registry_error)?;
                         verifier.adapter_identity().map_err(registry_error)?;
                         verifier
@@ -28595,11 +27068,7 @@ mod protocol {
                     slot if slot
                         == IrohaRuntimeProviderSlotV1::BillingStatementSigner.wire_id() =>
                     {
-                        let signer = Arc::new(BillingBrokerProvider {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let signer = Arc::new(resolved_provider!(BillingBrokerProvider, &session, binding, observation));
                         signer.live_qualification().map_err(registry_error)?;
                         signer.signer_identity().map_err(registry_error)?;
                         signer
@@ -28610,11 +27079,7 @@ mod protocol {
                     slot if slot
                         == IrohaRuntimeProviderSlotV1::BillingStatementPublisher.wire_id() =>
                     {
-                        let publisher = Arc::new(BillingBrokerProvider {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let publisher = Arc::new(resolved_provider!(BillingBrokerProvider, &session, binding, observation));
                         publisher.live_qualification().map_err(registry_error)?;
                         publisher.publisher_identity().map_err(registry_error)?;
                         publisher
@@ -28628,11 +27093,7 @@ mod protocol {
                             == IrohaRuntimeProviderSlotV1::BillingAcknowledgementAuthority
                                 .wire_id() =>
                     {
-                        let authority = Arc::new(BillingBrokerProvider {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let authority = Arc::new(resolved_provider!(BillingBrokerProvider, &session, binding, observation));
                         authority.live_qualification().map_err(registry_error)?;
                         authority.adapter_identity().map_err(registry_error)?;
                         authority
@@ -28644,11 +27105,7 @@ mod protocol {
                     slot if slot
                         == IrohaRuntimeProviderSlotV1::BillingEpochWitnessStore.wire_id() =>
                     {
-                        let store = Arc::new(BillingBrokerProvider {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let store = Arc::new(resolved_provider!(BillingBrokerProvider, &session, binding, observation));
                         store.live_qualification().map_err(registry_error)?;
                         store
                             .call_unit(OPERATION_BILLING_READINESS_V1)
@@ -28659,11 +27116,7 @@ mod protocol {
                     slot if slot
                         == IrohaRuntimeProviderSlotV1::PorFinalizedReplayArchive.wire_id() =>
                     {
-                        let archive = Arc::new(PorReplayArchiveBroker {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let archive = Arc::new(resolved_provider!(PorReplayArchiveBroker, &session, binding, observation));
                         archive.live_binding().map_err(registry_error)?;
                         sorafs_node::PorFinalizedReplayArchiveV1::check_readiness(archive.as_ref())
                             .map_err(|error| match error {
@@ -28768,11 +27221,7 @@ mod protocol {
                     slot if slot
                         == IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore.wire_id() =>
                     {
-                        let store = Arc::new(GovernanceDagBrokerCheckpointStore {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let store = Arc::new(resolved_provider!(GovernanceDagBrokerCheckpointStore, &session, binding, observation));
                         store.live_qualification().map_err(registry_error)?;
                         dependencies =
                             dependencies.with_sorafs_governance_dag_checkpoint_store(store);
@@ -28788,11 +27237,7 @@ mod protocol {
                                     expected.revision,
                                     expected.policy_digest,
                                 );
-                        let signer = Arc::new(ModerationTransactionBrokerSigner {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let signer = Arc::new(resolved_provider!(ModerationTransactionBrokerSigner, &session, binding, observation));
                         sorafs_node::moderation_orchestrator::
                             qualify_moderation_runtime_provider_v1(
                                 &binding.handle,
@@ -28819,11 +27264,7 @@ mod protocol {
                                     expected.policy_digest,
                                 );
                         let boundary = Arc::new(ModerationHandoffBrokerBoundary {
-                            provider: ModerationDeliveryBrokerProvider {
-                                session: Arc::clone(&session),
-                                binding: binding.clone(),
-                                metadata_digest: observation.metadata_digest,
-                            },
+                            provider: resolved_provider!(ModerationDeliveryBrokerProvider, &session, binding, observation),
                         });
                         sorafs_node::moderation_orchestrator::
                             qualify_moderation_runtime_provider_v1(
@@ -28854,11 +27295,7 @@ mod protocol {
                                     expected.policy_digest,
                                 );
                         let boundary = Arc::new(ModerationPanelNotificationBrokerBoundary {
-                            provider: ModerationDeliveryBrokerProvider {
-                                session: Arc::clone(&session),
-                                binding: binding.clone(),
-                                metadata_digest: observation.metadata_digest,
-                            },
+                            provider: resolved_provider!(ModerationDeliveryBrokerProvider, &session, binding, observation),
                         });
                         sorafs_node::moderation_orchestrator::
                             qualify_moderation_runtime_provider_v1(
@@ -29039,11 +27476,7 @@ mod protocol {
                         == IrohaRuntimeProviderSlotV1::ProviderIngestRetentionAuthority
                             .wire_id() =>
                     {
-                        let authority = Arc::new(ProviderIngestBrokerRetentionAuthority {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let authority = Arc::new(resolved_provider!(ProviderIngestBrokerRetentionAuthority, &session, binding, observation));
                         authority.live_qualification().map_err(registry_error)?;
                         dependencies =
                             dependencies.with_sorafs_provider_ingest_retention_authority(authority);
@@ -29053,11 +27486,7 @@ mod protocol {
                             ReputationFinalizedArchiveRetentionAuthority
                             .wire_id() =>
                     {
-                        let authority = Arc::new(ReputationBrokerRetentionAuthority {
-                            session: Arc::clone(&session),
-                            binding: binding.clone(),
-                            metadata_digest: observation.metadata_digest,
-                        });
+                        let authority = Arc::new(resolved_provider!(ReputationBrokerRetentionAuthority, &session, binding, observation));
                         authority.live_qualification().map_err(registry_error)?;
                         dependencies = dependencies
                             .with_sorafs_reputation_retention_authority(authority);
@@ -29066,11 +27495,7 @@ mod protocol {
                         == IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn.wire_id() =>
                     {
                         let boundary = Arc::new(EvidenceViewerBrokerWebAuthn {
-                            provider: EvidenceViewerBrokerProvider {
-                                session: Arc::clone(&session),
-                                binding: binding.clone(),
-                                metadata_digest: observation.metadata_digest,
-                            },
+                            provider: resolved_provider!(EvidenceViewerBrokerProvider, &session, binding, observation),
                         });
                         boundary
                             .provider
@@ -29082,11 +27507,7 @@ mod protocol {
                         == IrohaRuntimeProviderSlotV1::EvidenceViewerGrantAuthority.wire_id() =>
                     {
                         let boundary = Arc::new(EvidenceViewerBrokerGrants {
-                            provider: EvidenceViewerBrokerProvider {
-                                session: Arc::clone(&session),
-                                binding: binding.clone(),
-                                metadata_digest: observation.metadata_digest,
-                            },
+                            provider: resolved_provider!(EvidenceViewerBrokerProvider, &session, binding, observation),
                         });
                         boundary
                             .provider
@@ -29101,11 +27522,7 @@ mod protocol {
                             .evidence_viewer_receipt_signer_public_key
                             .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
                         let signer = Arc::new(EvidenceViewerBrokerReceiptSigner {
-                            provider: EvidenceViewerBrokerProvider {
-                                session: Arc::clone(&session),
-                                binding: binding.clone(),
-                                metadata_digest: observation.metadata_digest,
-                            },
+                            provider: resolved_provider!(EvidenceViewerBrokerProvider, &session, binding, observation),
                             public_key,
                         });
                         signer
@@ -29117,11 +27534,7 @@ mod protocol {
                     }
                     slot if slot == IrohaRuntimeProviderSlotV1::EvidenceViewerErasure.wire_id() => {
                         let boundary = Arc::new(EvidenceViewerBrokerErasure {
-                            provider: EvidenceViewerBrokerProvider {
-                                session: Arc::clone(&session),
-                                binding: binding.clone(),
-                                metadata_digest: observation.metadata_digest,
-                            },
+                            provider: resolved_provider!(EvidenceViewerBrokerProvider, &session, binding, observation),
                         });
                         boundary
                             .provider
@@ -29133,11 +27546,7 @@ mod protocol {
                         == IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore.wire_id() =>
                     {
                         let store = Arc::new(EvidenceViewerBrokerCheckpointStore {
-                            provider: EvidenceViewerBrokerProvider {
-                                session: Arc::clone(&session),
-                                binding: binding.clone(),
-                                metadata_digest: observation.metadata_digest,
-                            },
+                            provider: resolved_provider!(EvidenceViewerBrokerProvider, &session, binding, observation),
                         });
                         store
                             .provider
@@ -29150,11 +27559,7 @@ mod protocol {
                         == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id() =>
                     {
                         let store = Arc::new(ModerationCheckpointBrokerStore {
-                            provider: EvidenceViewerBrokerProvider {
-                                session: Arc::clone(&session),
-                                binding: binding.clone(),
-                                metadata_digest: observation.metadata_digest,
-                            },
+                            provider: resolved_provider!(EvidenceViewerBrokerProvider, &session, binding, observation),
                         });
                         sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1::
                             qualification(store.as_ref())
@@ -29170,11 +27575,7 @@ mod protocol {
                             .moderation_panel_notification_archive_binding
                             .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
                         let archive = Arc::new(ModerationPanelNotificationBrokerArchive {
-                            provider: EvidenceViewerBrokerProvider {
-                                session: Arc::clone(&session),
-                                binding: binding.clone(),
-                                metadata_digest: observation.metadata_digest,
-                            },
+                            provider: resolved_provider!(EvidenceViewerBrokerProvider, &session, binding, observation),
                             archive_id: archive_binding.archive_id,
                             public_key: archive_binding.public_key,
                         });
@@ -29195,11 +27596,7 @@ mod protocol {
                             .evidence_viewer_archive_public_key
                             .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
                         let archive = Arc::new(EvidenceViewerBrokerCompactionArchive {
-                            provider: EvidenceViewerBrokerProvider {
-                                session: Arc::clone(&session),
-                                binding: binding.clone(),
-                                metadata_digest: observation.metadata_digest,
-                            },
+                            provider: resolved_provider!(EvidenceViewerBrokerProvider, &session, binding, observation),
                             archive_id,
                             public_key,
                         });
@@ -29218,11 +27615,7 @@ mod protocol {
                             .evidence_viewer_transparency_publisher_public_key
                             .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
                         let publisher = Arc::new(EvidenceViewerBrokerTransparencyPublisher {
-                            provider: EvidenceViewerBrokerProvider {
-                                session: Arc::clone(&session),
-                                binding: binding.clone(),
-                                metadata_digest: observation.metadata_digest,
-                            },
+                            provider: resolved_provider!(EvidenceViewerBrokerProvider, &session, binding, observation),
                             public_key,
                         });
                         publisher

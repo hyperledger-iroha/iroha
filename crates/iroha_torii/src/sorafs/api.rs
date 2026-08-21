@@ -26603,6 +26603,62 @@ mod gateway_policy_violation_tests {
             catalog_valid_until_unix: 4_102_444_800,
         }
     }
+
+    fn manifest_envelope_fixture(
+        key_byte: u8,
+        manifest_byte: u8,
+        chunk_byte: u8,
+        por_byte: u8,
+    ) -> (PinManifestRecord, Map, Vec<u8>) {
+        let private =
+            iroha_crypto::PrivateKey::from_bytes(Algorithm::Ed25519, &[key_byte; 32]).expect("key");
+        let keypair = iroha_crypto::KeyPair::from_private_key(private).expect("keypair");
+        let record = PinManifestRecord::new(
+            ManifestDigest::new([manifest_byte; 32]),
+            canonical_fixture_manifest_root_cid(),
+            iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
+                profile_id: 1,
+                namespace: "sorafs".to_owned(),
+                name: "sf1".to_owned(),
+                semver: "1.0.0".to_owned(),
+                multihash_code: sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            },
+            [chunk_byte; 32],
+            [por_byte; 32],
+            1,
+            iroha_data_model::sorafs::pin_registry::PinPolicy::default(),
+            iroha_data_model::account::AccountId::new(keypair.public_key().clone()),
+            5,
+            None,
+            None,
+            iroha_data_model::metadata::Metadata::default(),
+        );
+        let signature = checked_test_signature(keypair.private_key(), record.digest.as_bytes())
+            .payload()
+            .to_vec();
+        let mut signature_entry = Map::new();
+        signature_entry.insert("algorithm".into(), Value::from("ed25519"));
+        signature_entry.insert(
+            "signer".into(),
+            Value::from(hex::encode(keypair.public_key().to_bytes().1)),
+        );
+        signature_entry.insert("signature".into(), Value::from(hex::encode(&signature)));
+        let mut envelope = Map::new();
+        envelope.insert(
+            "manifest_blake3".into(),
+            Value::from(hex::encode(record.digest.as_bytes())),
+        );
+        envelope.insert(
+            "chunk_digest_sha3_256".into(),
+            Value::from(hex::encode(record.chunk_digest_sha3_256)),
+        );
+        envelope.insert("profile".into(), Value::from(record.chunker.to_handle()));
+        envelope.insert(
+            "signatures".into(),
+            Value::Array(vec![Value::Object(signature_entry)]),
+        );
+        (record, envelope, signature)
+    }
     #[test]
     fn governed_compliance_cid_encoding_is_canonical_lower_base32() {
         let mut cid = vec![1, 0x71, 0x1f, 32];
@@ -26815,60 +26871,7 @@ mod gateway_policy_violation_tests {
     }
     #[test]
     fn manifest_envelope_validation_requires_signed_registry_metadata() {
-        let private =
-            iroha_crypto::PrivateKey::from_bytes(Algorithm::Ed25519, &[0x11; 32]).expect("key");
-        let keypair = iroha_crypto::KeyPair::from_private_key(private).expect("keypair");
-        let record = PinManifestRecord::new(
-            ManifestDigest::new([0x21; 32]),
-            canonical_fixture_manifest_root_cid(),
-            iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
-                profile_id: 1,
-                namespace: "sorafs".to_owned(),
-                name: "sf1".to_owned(),
-                semver: "1.0.0".to_owned(),
-                multihash_code: sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            },
-            [0x22; 32],
-            [0x23; 32],
-            1,
-            iroha_data_model::sorafs::pin_registry::PinPolicy::default(),
-            iroha_data_model::account::AccountId::new(keypair.public_key().clone()),
-            5,
-            None,
-            None,
-            iroha_data_model::metadata::Metadata::default(),
-        );
-        let signature = checked_test_signature(keypair.private_key(), record.digest.as_bytes());
-        let mut sig_entry = Map::new();
-        sig_entry.insert("algorithm".into(), Value::from("ed25519"));
-        sig_entry.insert(
-            "signer".into(),
-            Value::from(hex::encode(
-                keypair
-                    .public_key()
-                    .try_to_bytes()
-                    .expect("fixture public key must be valid")
-                    .1,
-            )),
-        );
-        sig_entry.insert(
-            "signature".into(),
-            Value::from(hex::encode(signature.payload())),
-        );
-        let mut envelope = Map::new();
-        envelope.insert(
-            "manifest_blake3".into(),
-            Value::from(hex::encode(record.digest.as_bytes())),
-        );
-        envelope.insert(
-            "chunk_digest_sha3_256".into(),
-            Value::from(hex::encode(record.chunk_digest_sha3_256)),
-        );
-        envelope.insert("profile".into(), Value::from(record.chunker.to_handle()));
-        envelope.insert(
-            "signatures".into(),
-            Value::Array(vec![Value::Object(sig_entry)]),
-        );
+        let (record, mut envelope, signature) = manifest_envelope_fixture(0x11, 0x21, 0x22, 0x23);
         let encoded = norito::json::to_vec(&Value::Object(envelope.clone())).expect("json");
         assert!(validate_manifest_envelope_bytes(&record, &encoded));
         let mut inert_signature_envelope = envelope.clone();
@@ -26931,7 +26934,7 @@ mod gateway_policy_violation_tests {
                 .first_mut()
                 .and_then(Value::as_object_mut)
                 .expect("signature entry");
-            let mut signature_bytes = signature.payload().to_vec();
+            let mut signature_bytes = signature.clone();
             signature_bytes[..32].copy_from_slice(&replacement_r);
             signature_entry.insert(
                 "signature".into(),
@@ -26953,54 +26956,7 @@ mod gateway_policy_violation_tests {
     }
     #[test]
     fn manifest_envelope_adapter_rejects_alias_or_malformed_envelope_substitution() {
-        let private =
-            iroha_crypto::PrivateKey::from_bytes(Algorithm::Ed25519, &[0x12; 32]).expect("key");
-        let keypair = iroha_crypto::KeyPair::from_private_key(private).expect("keypair");
-        let record = PinManifestRecord::new(
-            ManifestDigest::new([0x31; 32]),
-            canonical_fixture_manifest_root_cid(),
-            iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
-                profile_id: 1,
-                namespace: "sorafs".to_owned(),
-                name: "sf1".to_owned(),
-                semver: "1.0.0".to_owned(),
-                multihash_code: sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            },
-            [0x32; 32],
-            [0x33; 32],
-            1,
-            iroha_data_model::sorafs::pin_registry::PinPolicy::default(),
-            iroha_data_model::account::AccountId::new(keypair.public_key().clone()),
-            5,
-            None,
-            None,
-            iroha_data_model::metadata::Metadata::default(),
-        );
-        let signature = checked_test_signature(keypair.private_key(), record.digest.as_bytes());
-        let mut sig_entry = Map::new();
-        sig_entry.insert("algorithm".into(), Value::from("ed25519"));
-        sig_entry.insert(
-            "signer".into(),
-            Value::from(hex::encode(keypair.public_key().to_bytes().1)),
-        );
-        sig_entry.insert(
-            "signature".into(),
-            Value::from(hex::encode(signature.payload())),
-        );
-        let mut envelope = Map::new();
-        envelope.insert(
-            "manifest_blake3".into(),
-            Value::from(hex::encode(record.digest.as_bytes())),
-        );
-        envelope.insert(
-            "chunk_digest_sha3_256".into(),
-            Value::from(hex::encode(record.chunk_digest_sha3_256)),
-        );
-        envelope.insert("profile".into(), Value::from(record.chunker.to_handle()));
-        envelope.insert(
-            "signatures".into(),
-            Value::Array(vec![Value::Object(sig_entry)]),
-        );
+        let (record, mut envelope, _) = manifest_envelope_fixture(0x12, 0x31, 0x32, 0x33);
         let encoded = norito::json::to_vec(&Value::Object(envelope.clone())).expect("json");
         let encoded_b64 = BASE64_STANDARD.encode(&encoded);
         let mut headers = HeaderMap::new();
@@ -27057,54 +27013,7 @@ mod gateway_policy_violation_tests {
     }
     #[test]
     fn manifest_envelope_rejects_stale_registry_metadata_after_rotation() {
-        let private =
-            iroha_crypto::PrivateKey::from_bytes(Algorithm::Ed25519, &[0x13; 32]).expect("key");
-        let keypair = iroha_crypto::KeyPair::from_private_key(private).expect("keypair");
-        let record = PinManifestRecord::new(
-            ManifestDigest::new([0x41; 32]),
-            canonical_fixture_manifest_root_cid(),
-            iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
-                profile_id: 1,
-                namespace: "sorafs".to_owned(),
-                name: "sf1".to_owned(),
-                semver: "1.0.0".to_owned(),
-                multihash_code: sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            },
-            [0x42; 32],
-            [0x43; 32],
-            1,
-            iroha_data_model::sorafs::pin_registry::PinPolicy::default(),
-            iroha_data_model::account::AccountId::new(keypair.public_key().clone()),
-            5,
-            None,
-            None,
-            iroha_data_model::metadata::Metadata::default(),
-        );
-        let signature = checked_test_signature(keypair.private_key(), record.digest.as_bytes());
-        let mut sig_entry = Map::new();
-        sig_entry.insert("algorithm".into(), Value::from("ed25519"));
-        sig_entry.insert(
-            "signer".into(),
-            Value::from(hex::encode(keypair.public_key().to_bytes().1)),
-        );
-        sig_entry.insert(
-            "signature".into(),
-            Value::from(hex::encode(signature.payload())),
-        );
-        let mut envelope = Map::new();
-        envelope.insert(
-            "manifest_blake3".into(),
-            Value::from(hex::encode(record.digest.as_bytes())),
-        );
-        envelope.insert(
-            "chunk_digest_sha3_256".into(),
-            Value::from(hex::encode(record.chunk_digest_sha3_256)),
-        );
-        envelope.insert("profile".into(), Value::from(record.chunker.to_handle()));
-        envelope.insert(
-            "signatures".into(),
-            Value::Array(vec![Value::Object(sig_entry)]),
-        );
+        let (record, envelope, _) = manifest_envelope_fixture(0x13, 0x41, 0x42, 0x43);
         let encoded = norito::json::to_vec(&Value::Object(envelope)).expect("json");
         assert!(validate_manifest_envelope_bytes(&record, &encoded));
         let mut rotated_chunk_record = record.clone();
@@ -31495,6 +31404,78 @@ mod advert_tests {
         norito::json::from_slice(&body).expect("decode API test JSON response")
     }
 
+    async fn api_test_response_json_with_status(
+        response: Response,
+        expected_status: StatusCode,
+    ) -> Value {
+        assert_eq!(response.status(), expected_status);
+        api_test_response_json(response).await
+    }
+
+    fn api_test_header_str<'a>(
+        headers: &'a HeaderMap,
+        name: impl axum::http::header::AsHeaderName,
+    ) -> Option<&'a str> {
+        headers.get(name).and_then(|value| value.to_str().ok())
+    }
+
+    macro_rules! assert_json_fields {
+        ($value:expr; $($accessor:ident $path:tt => $expected:expr),+ $(,)?) => {
+            $(assert_eq!($value.$accessor(&$path), $expected);)+
+        };
+    }
+
+    macro_rules! api_test_route {
+        (@call get_cid_lookup($($args:expr),* $(,)?)) => { handle_get_sorafs_cid_lookup($($args),*) };
+        (@call get_cid_path($($args:expr),* $(,)?)) => { handle_get_sorafs_cid_path($($args),*) };
+        (@call get_cid_root($($args:expr),* $(,)?)) => { handle_get_sorafs_cid_root($($args),*) };
+        (@call get_governance_dag_car_queue($($args:expr),* $(,)?)) => { handle_get_sorafs_governance_dag_car_queue($($args),*) };
+        (@call get_governance_dag_car_queue_archive($($args:expr),* $(,)?)) => { handle_get_sorafs_governance_dag_car_queue_archive($($args),*) };
+        (@call get_governance_dag_car_queue_digest($($args:expr),* $(,)?)) => { handle_get_sorafs_governance_dag_car_queue_digest($($args),*) };
+        (@call get_governance_dag_car_queue_kind($($args:expr),* $(,)?)) => { handle_get_sorafs_governance_dag_car_queue_kind($($args),*) };
+        (@call get_governance_dag_publish_digest($($args:expr),* $(,)?)) => { handle_get_sorafs_governance_dag_publish_digest($($args),*) };
+        (@call get_governance_dag_publish_kind($($args:expr),* $(,)?)) => { handle_get_sorafs_governance_dag_publish_kind($($args),*) };
+        (@call get_governance_dag_runtime($($args:expr),* $(,)?)) => { handle_get_sorafs_governance_dag_runtime($($args),*) };
+        (@call get_governance_dag_runtime_block($($args:expr),* $(,)?)) => { handle_get_sorafs_governance_dag_runtime_block($($args),*) };
+        (@call get_governance_dag_runtime_digest($($args:expr),* $(,)?)) => { handle_get_sorafs_governance_dag_runtime_digest($($args),*) };
+        (@call get_governance_dag_runtime_head($($args:expr),* $(,)?)) => { handle_get_sorafs_governance_dag_runtime_head($($args),*) };
+        (@call get_governance_dag_runtime_kind($($args:expr),* $(,)?)) => { handle_get_sorafs_governance_dag_runtime_kind($($args),*) };
+        (@call get_governance_dag_runtime_node($($args:expr),* $(,)?)) => { handle_get_sorafs_governance_dag_runtime_node($($args),*) };
+        (@call get_moderation_model_registry($($args:expr),* $(,)?)) => { handle_get_sorafs_moderation_model_registry($($args),*) };
+        (@call get_moderation_quarantine($($args:expr),* $(,)?)) => { handle_get_sorafs_moderation_quarantine($($args),*) };
+        (@call get_moderation_quarantine_object($($args:expr),* $(,)?)) => { handle_get_sorafs_moderation_quarantine_object($($args),*) };
+        (@call get_moderation_quarantine_operator_panel($($args:expr),* $(,)?)) => { handle_get_sorafs_moderation_quarantine_operator_panel($($args),*) };
+        (@call get_moderation_screening_results($($args:expr),* $(,)?)) => { handle_get_sorafs_moderation_screening_results($($args),*) };
+        (@call get_pin_manifest($($args:expr),* $(,)?)) => { handle_get_sorafs_pin_manifest($($args),*) };
+        (@call get_pin_registry($($args:expr),* $(,)?)) => { handle_get_sorafs_pin_registry($($args),*) };
+        (@call get_reputation_events($($args:expr),* $(,)?)) => { handle_get_sorafs_reputation_events($($args),*) };
+        (@call get_reputation_events_stream($($args:expr),* $(,)?)) => { handle_get_sorafs_reputation_events_stream($($args),*) };
+        (@call get_reputation_events_ws($($args:expr),* $(,)?)) => { handle_get_sorafs_reputation_events_ws($($args),*) };
+        (@call get_reputation_latest($($args:expr),* $(,)?)) => { handle_get_sorafs_reputation_latest($($args),*) };
+        (@call get_reputation_provider($($args:expr),* $(,)?)) => { handle_get_sorafs_reputation_provider($($args),*) };
+        (@call get_reputation_snapshot($($args:expr),* $(,)?)) => { handle_get_sorafs_reputation_snapshot($($args),*) };
+        (@call get_reputation_weights($($args:expr),* $(,)?)) => { handle_get_sorafs_reputation_weights($($args),*) };
+        (@call get_site_manifest($($args:expr),* $(,)?)) => { handle_get_sorafs_site_manifest($($args),*) };
+        (@call get_site_path($($args:expr),* $(,)?)) => { handle_get_sorafs_site_path($($args),*) };
+        (@call get_site_root($($args:expr),* $(,)?)) => { handle_get_sorafs_site_root($($args),*) };
+        (@call get_storage_car_range($($args:expr),* $(,)?)) => { handle_get_sorafs_storage_car_range($($args),*) };
+        (@call get_storage_chunk($($args:expr),* $(,)?)) => { handle_get_sorafs_storage_chunk($($args),*) };
+        (@call get_storage_manifest($($args:expr),* $(,)?)) => { handle_get_sorafs_storage_manifest($($args),*) };
+        (@call get_storage_peers($($args:expr),* $(,)?)) => { handle_get_sorafs_storage_peers($($args),*) };
+        (@call get_storage_plan($($args:expr),* $(,)?)) => { handle_get_sorafs_storage_plan($($args),*) };
+        (@call post_moderation_model_registry_corpus_manifest($($args:expr),* $(,)?)) => { handle_post_sorafs_moderation_model_registry_corpus_manifest($($args),*) };
+        (@call post_moderation_model_registry_repro_manifest($($args:expr),* $(,)?)) => { handle_post_sorafs_moderation_model_registry_repro_manifest($($args),*) };
+        (@call post_moderation_quarantine_appeal_handoff($($args:expr),* $(,)?)) => { handle_post_sorafs_moderation_quarantine_appeal_handoff($($args),*) };
+        (@call post_moderation_quarantine_object($($args:expr),* $(,)?)) => { handle_post_sorafs_moderation_quarantine_object($($args),*) };
+        (@call post_moderation_quarantine_release($($args:expr),* $(,)?)) => { handle_post_sorafs_moderation_quarantine_release($($args),*) };
+        (@call post_moderation_quarantine_review($($args:expr),* $(,)?)) => { handle_post_sorafs_moderation_quarantine_review($($args),*) };
+        (@call post_moderation_screening_result($($args:expr),* $(,)?)) => { handle_post_sorafs_moderation_screening_result($($args),*) };
+        (@call post_storage_fetch($($args:expr),* $(,)?)) => { handle_post_sorafs_storage_fetch($($args),*) };
+        (@call post_storage_token($($args:expr),* $(,)?)) => { handle_post_sorafs_storage_token($($args),*) };
+        (@call post_storage_token_authenticated($($args:expr),* $(,)?)) => { handle_post_sorafs_storage_token_authenticated($($args),*) };
+        ($route:ident; $($arg:expr);+ $(;)?) => { api_test_route!(@call $route($($arg),+)).await };
+    }
+
     include!("api/exact_network_auth_tests.rs");
     include!("api/alias_page_tests.rs");
     #[test]
@@ -32259,14 +32240,9 @@ mod advert_tests {
             ],
         };
         let response =
-            handle_get_sorafs_storage_peers(State(state.clone()), axum::extract::RawQuery(None))
-                .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["gateway_base_url"]),
-            Some("https://taira.sora.org")
-        );
+            api_test_route!(get_storage_peers; State(state.clone()); axum::extract::RawQuery(None));
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
+        assert_json_fields!(value; json_str ["gateway_base_url"] => Some("https://taira.sora.org"));
         let urls = value
             .json_array(&["pin_torii_urls"])
             .expect("pin URL array");
@@ -32275,26 +32251,15 @@ mod advert_tests {
             urls.first().and_then(Value::as_str),
             Some("https://taira-validator-1.sora.org")
         );
-        assert_eq!(value.json_u64(&["count"]), Some(3));
-        assert_eq!(value.json_u64(&["returned_count"]), Some(3));
-        assert_eq!(value.json_u64(&["limit"]), Some(50));
-        assert_eq!(value.json_bool(&["truncated"]), Some(false));
+        assert_json_fields!(value; json_u64 ["count"] => Some(3), json_u64 ["returned_count"] => Some(3), json_u64 ["limit"] => Some(50), json_bool ["truncated"] => Some(false));
 
-        let response = handle_get_sorafs_storage_peers(
-            State(state),
-            axum::extract::RawQuery(Some("limit=1".to_owned())),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
+        let response = api_test_route!(get_storage_peers; State(state); axum::extract::RawQuery(Some("limit=1".to_owned())));
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
         let urls = value
             .json_array(&["pin_torii_urls"])
             .expect("capped pin URL array");
         assert_eq!(urls.len(), 1);
-        assert_eq!(value.json_u64(&["count"]), Some(3));
-        assert_eq!(value.json_u64(&["returned_count"]), Some(1));
-        assert_eq!(value.json_u64(&["limit"]), Some(1));
-        assert_eq!(value.json_bool(&["truncated"]), Some(true));
+        assert_json_fields!(value; json_u64 ["count"] => Some(3), json_u64 ["returned_count"] => Some(1), json_u64 ["limit"] => Some(1), json_bool ["truncated"] => Some(true));
     }
 
     fn is_current_wall_clock(timestamp: Option<u64>) -> bool {
@@ -32682,23 +32647,7 @@ mod advert_tests {
             "proof-token issuance etag",
             handle_get_sorafs_transparency_token_issuances,
             |value| {
-                assert_eq!(
-                    value.json_str(&["schema"]),
-                    Some("sorafs.transparency.proof_token_issuances.v1")
-                );
-                assert_eq!(
-                    value.json_str(&["payload_kind"]),
-                    Some(PROOF_TOKEN_ISSUANCE_KIND)
-                );
-                assert_eq!(value.json_u64(&["published_token_count"]), Some(1));
-                assert_eq!(value.json_u64(&["returned_token_count"]), Some(1));
-                assert_eq!(value.json_u64(&["limit"]), Some(DEFAULT_LIST_LIMIT as u64));
-                assert_eq!(value.json_bool(&["truncated"]), Some(false));
-                assert_eq!(value.json_u64(&["distinct_token_count"]), Some(1));
-                assert_eq!(value.json_u64(&["distinct_signer_count"]), Some(1));
-                assert_eq!(value.json_u64(&["bound_entry_count_total"]), Some(2));
-                assert_eq!(value.json_u64(&["expiring_token_count"]), Some(1));
-                assert_eq!(value.json_u64(&["evidence_digest_count"]), Some(1));
+                assert_json_fields!(value; json_str ["schema"] => Some("sorafs.transparency.proof_token_issuances.v1"), json_str ["payload_kind"] => Some(PROOF_TOKEN_ISSUANCE_KIND), json_u64 ["published_token_count"] => Some(1), json_u64 ["returned_token_count"] => Some(1), json_u64 ["limit"] => Some(DEFAULT_LIST_LIMIT as u64), json_bool ["truncated"] => Some(false), json_u64 ["distinct_token_count"] => Some(1), json_u64 ["distinct_signer_count"] => Some(1), json_u64 ["bound_entry_count_total"] => Some(2), json_u64 ["expiring_token_count"] => Some(1), json_u64 ["evidence_digest_count"] => Some(1));
                 assert_eq!(
                     value
                         .json_object(&["action_code_counts"])
@@ -32777,23 +32726,7 @@ mod advert_tests {
             "explorer snapshot etag",
             handle_get_sorafs_transparency_explorer,
             |value| {
-                assert_eq!(
-                    value.json_str(&["schema"]),
-                    Some("sorafs.transparency.explorer_snapshot.v1")
-                );
-                assert_eq!(value.json_u64(&["published_cycle_count"]), Some(0));
-                assert_eq!(value.json_u64(&["returned_cycle_count"]), Some(0));
-                assert_eq!(value.json_u64(&["proof_token_issuance_count"]), Some(1));
-                assert_eq!(
-                    value.json_u64(&["returned_proof_token_issuance_count"]),
-                    Some(1)
-                );
-                assert_eq!(value.json_u64(&["limit"]), Some(DEFAULT_LIST_LIMIT as u64));
-                assert_eq!(value.json_bool(&["truncated_cycles"]), Some(false));
-                assert_eq!(
-                    value.json_bool(&["truncated_proof_token_issuances"]),
-                    Some(false)
-                );
+                assert_json_fields!(value; json_str ["schema"] => Some("sorafs.transparency.explorer_snapshot.v1"), json_u64 ["published_cycle_count"] => Some(0), json_u64 ["returned_cycle_count"] => Some(0), json_u64 ["proof_token_issuance_count"] => Some(1), json_u64 ["returned_proof_token_issuance_count"] => Some(1), json_u64 ["limit"] => Some(DEFAULT_LIST_LIMIT as u64), json_bool ["truncated_cycles"] => Some(false), json_bool ["truncated_proof_token_issuances"] => Some(false));
                 assert_eq!(
                     value
                         .json_object(&["payload_kind_counts"])
@@ -32828,10 +32761,8 @@ mod advert_tests {
             axum::extract::RawQuery(None),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
-        assert_eq!(value.json_u64(&["published_cycle_count"]), Some(1));
-        assert_eq!(value.json_u64(&["returned_cycle_count"]), Some(1));
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
+        assert_json_fields!(value; json_u64 ["published_cycle_count"] => Some(1), json_u64 ["returned_cycle_count"] => Some(1));
         assert_eq!(
             value
                 .json_first_at(&["cycles"], &["cycle_id_hex"])
@@ -32852,29 +32783,7 @@ mod advert_tests {
             "report etag",
             handle_get_sorafs_appeal_finance_reports,
             |value| {
-                assert_eq!(
-                    value.json_str(&["schema"]),
-                    Some("sorafs.appeal_finance.reports.v1")
-                );
-                assert_eq!(
-                    value.json_str(&["payload_kind"]),
-                    Some(APPEAL_FINANCE_REPORT_KIND)
-                );
-                assert_eq!(value.json_u64(&["published_report_count"]), Some(1));
-                assert_eq!(value.json_u64(&["returned_report_count"]), Some(1));
-                assert_eq!(value.json_u64(&["limit"]), Some(DEFAULT_LIST_LIMIT as u64));
-                assert_eq!(value.json_bool(&["truncated"]), Some(false));
-                assert_eq!(value.json_u64(&["distinct_case_count"]), Some(1));
-                assert_eq!(value.json_str(&["total_deposit_xor"]), Some("420"));
-                assert_eq!(value.json_str(&["total_refund_xor"]), Some("420"));
-                assert_eq!(value.json_str(&["total_treasury_xor"]), Some("50"));
-                assert_eq!(value.json_str(&["total_held_xor"]), Some("0"));
-                assert_eq!(value.json_str(&["total_panel_reward_xor"]), Some("85"));
-                assert_eq!(value.json_str(&["total_rewards_paid_xor"]), Some("60"));
-                assert_eq!(
-                    value.json_str(&["total_rewards_forfeited_treasury_xor"]),
-                    Some("25")
-                );
+                assert_json_fields!(value; json_str ["schema"] => Some("sorafs.appeal_finance.reports.v1"), json_str ["payload_kind"] => Some(APPEAL_FINANCE_REPORT_KIND), json_u64 ["published_report_count"] => Some(1), json_u64 ["returned_report_count"] => Some(1), json_u64 ["limit"] => Some(DEFAULT_LIST_LIMIT as u64), json_bool ["truncated"] => Some(false), json_u64 ["distinct_case_count"] => Some(1), json_str ["total_deposit_xor"] => Some("420"), json_str ["total_refund_xor"] => Some("420"), json_str ["total_treasury_xor"] => Some("50"), json_str ["total_held_xor"] => Some("0"), json_str ["total_panel_reward_xor"] => Some("85"), json_str ["total_rewards_paid_xor"] => Some("60"), json_str ["total_rewards_forfeited_treasury_xor"] => Some("25"));
                 assert_eq!(
                     value
                         .json_object(&["outcomes"])
@@ -32941,21 +32850,7 @@ mod advert_tests {
             "rollup etag",
             handle_get_sorafs_appeal_finance_weekly_rollups,
             |value| {
-                assert_eq!(
-                    value.json_str(&["schema"]),
-                    Some("sorafs.appeal_finance.weekly_rollups.v1")
-                );
-                assert_eq!(
-                    value.json_str(&["payload_kind"]),
-                    Some(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND)
-                );
-                assert_eq!(value.json_u64(&["published_rollup_count"]), Some(1));
-                assert_eq!(value.json_u64(&["returned_rollup_count"]), Some(1));
-                assert_eq!(value.json_u64(&["limit"]), Some(DEFAULT_LIST_LIMIT as u64));
-                assert_eq!(value.json_bool(&["truncated"]), Some(false));
-                assert_eq!(value.json_u64(&["source_report_count_total"]), Some(1));
-                assert_eq!(value.json_u64(&["reported_case_count_total"]), Some(1));
-                assert_eq!(value.json_u64(&["juror_payout_count_total"]), Some(2));
+                assert_json_fields!(value; json_str ["schema"] => Some("sorafs.appeal_finance.weekly_rollups.v1"), json_str ["payload_kind"] => Some(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND), json_u64 ["published_rollup_count"] => Some(1), json_u64 ["returned_rollup_count"] => Some(1), json_u64 ["limit"] => Some(DEFAULT_LIST_LIMIT as u64), json_bool ["truncated"] => Some(false), json_u64 ["source_report_count_total"] => Some(1), json_u64 ["reported_case_count_total"] => Some(1), json_u64 ["juror_payout_count_total"] => Some(2));
                 assert_eq!(
                     value
                         .json_object(&["cycles"])
@@ -32980,22 +32875,7 @@ mod advert_tests {
             "receipt etag",
             handle_get_sorafs_appeal_finance_settlement_receipts,
             |value| {
-                assert_eq!(
-                    value.json_str(&["schema"]),
-                    Some("sorafs.appeal_finance.settlement_receipts.v1")
-                );
-                assert_eq!(
-                    value.json_str(&["payload_kind"]),
-                    Some(APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND)
-                );
-                assert_eq!(value.json_u64(&["published_receipt_count"]), Some(1));
-                assert_eq!(value.json_u64(&["returned_receipt_count"]), Some(1));
-                assert_eq!(value.json_u64(&["limit"]), Some(DEFAULT_LIST_LIMIT as u64));
-                assert_eq!(value.json_bool(&["truncated"]), Some(false));
-                assert_eq!(value.json_u64(&["distinct_case_count"]), Some(1));
-                assert_eq!(value.json_str(&["total_step_amount_xor"]), Some("420"));
-                assert_eq!(value.json_str(&["total_treasury_xor"]), Some("210"));
-                assert_eq!(value.json_str(&["total_held_xor"]), Some("210"));
+                assert_json_fields!(value; json_str ["schema"] => Some("sorafs.appeal_finance.settlement_receipts.v1"), json_str ["payload_kind"] => Some(APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND), json_u64 ["published_receipt_count"] => Some(1), json_u64 ["returned_receipt_count"] => Some(1), json_u64 ["limit"] => Some(DEFAULT_LIST_LIMIT as u64), json_bool ["truncated"] => Some(false), json_u64 ["distinct_case_count"] => Some(1), json_str ["total_step_amount_xor"] => Some("420"), json_str ["total_treasury_xor"] => Some("210"), json_str ["total_held_xor"] => Some("210"));
                 assert_eq!(
                     value
                         .json_object(&["steps"])
@@ -33123,45 +33003,15 @@ mod advert_tests {
     #[tokio::test]
     async fn governance_dag_publish_index_rejects_bad_and_missing_lookups() {
         let (app, _temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
-        let response = handle_get_sorafs_governance_dag_publish_digest(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path("abcd".to_string()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let response = api_test_route!(get_governance_dag_publish_digest; State(app.clone()); HeaderMap::new(); Path("abcd".to_string()); axum::extract::RawQuery(None));
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let response = handle_get_sorafs_governance_dag_publish_kind(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path(".".to_string()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let response = api_test_route!(get_governance_dag_publish_kind; State(app.clone()); HeaderMap::new(); Path(".".to_string()); axum::extract::RawQuery(None));
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let response = handle_get_sorafs_governance_dag_publish_kind(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path("bad kind".to_string()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let response = api_test_route!(get_governance_dag_publish_kind; State(app.clone()); HeaderMap::new(); Path("bad kind".to_string()); axum::extract::RawQuery(None));
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let response = handle_get_sorafs_governance_dag_publish_kind(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path("Uppercase".to_string()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let response = api_test_route!(get_governance_dag_publish_kind; State(app.clone()); HeaderMap::new(); Path("Uppercase".to_string()); axum::extract::RawQuery(None));
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let response = handle_get_sorafs_governance_dag_publish_digest(
-            State(app),
-            HeaderMap::new(),
-            Path("99".repeat(32)),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let response = api_test_route!(get_governance_dag_publish_digest; State(app); HeaderMap::new(); Path("99".repeat(32)); axum::extract::RawQuery(None));
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
     #[test]
@@ -33266,69 +33116,35 @@ mod advert_tests {
         let (app, _temp_dir, digest_hex, _car_archive_hex) =
             sorafs_app_state_with_governance_car_queue();
         let response =
-            handle_get_sorafs_governance_dag_car_queue(State(app.clone()), HeaderMap::new()).await;
+            api_test_route!(get_governance_dag_car_queue; State(app.clone()); HeaderMap::new());
         assert_eq!(response.status(), StatusCode::OK);
         let queue_etag = response.headers().get(ETAG).cloned().expect("queue etag");
         assert_eq!(
-            response
-                .headers()
-                .get(CACHE_CONTROL)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(response.headers(), CACHE_CONTROL),
             Some(GOVERNANCE_DAG_CACHE_CONTROL)
         );
         let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.governance_dag.car_queue.v1")
-        );
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.governance_dag.car_queue.v1"));
         assert_governance_source_metadata(&value, GOVERNANCE_DAG_PUBLICATION_SOURCE_V1, false);
-        assert_eq!(
-            value.json_str(&["queue", "root"]),
-            Some(GOVERNANCE_DAG_LOGICAL_ROOT)
-        );
-        assert_eq!(value.json_u64(&["segment_count"]), Some(4));
-        assert_eq!(value.json_u64(&["assembled_count"]), Some(4));
-        assert_eq!(value.json_u64(&["pending_count"]), Some(0));
+        assert_json_fields!(value; json_str ["queue", "root"] => Some(GOVERNANCE_DAG_LOGICAL_ROOT), json_u64 ["segment_count"] => Some(4), json_u64 ["assembled_count"] => Some(4), json_u64 ["pending_count"] => Some(0));
 
         let mut headers = HeaderMap::new();
         headers.insert(IF_NONE_MATCH, queue_etag.clone());
-        let response =
-            handle_get_sorafs_governance_dag_car_queue(State(app.clone()), headers).await;
+        let response = api_test_route!(get_governance_dag_car_queue; State(app.clone()); headers);
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(response.headers().get(ETAG), Some(&queue_etag));
-        let response = handle_get_sorafs_governance_dag_car_queue_digest(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path(format!("hex:{digest_hex}")),
-            axum::extract::RawQuery(None),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.governance_dag.car_queue.digest.lookup.v1")
-        );
-        assert_eq!(value.json_u64(&["count"]), Some(1));
+        let response = api_test_route!(get_governance_dag_car_queue_digest; State(app.clone()); HeaderMap::new(); Path(format!("hex:{digest_hex}")); axum::extract::RawQuery(None));
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.governance_dag.car_queue.digest.lookup.v1"), json_u64 ["count"] => Some(1));
         assert_eq!(
             value
                 .json_first_at(&["segments"], &["payload_kind"])
                 .and_then(Value::as_str),
             Some(APPEAL_FINANCE_REPORT_KIND)
         );
-        let response = handle_get_sorafs_governance_dag_car_queue_kind(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path(APPEAL_FINANCE_REPORT_KIND.to_string()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.governance_dag.car_queue.kind.lookup.v1")
-        );
+        let response = api_test_route!(get_governance_dag_car_queue_kind; State(app.clone()); HeaderMap::new(); Path(APPEAL_FINANCE_REPORT_KIND.to_string()); axum::extract::RawQuery(None));
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.governance_dag.car_queue.kind.lookup.v1"));
         assert_eq!(
             value
                 .json_first_at(&["segments"], &["encoded_blake3"])
@@ -33353,12 +33169,7 @@ mod advert_tests {
             .json_str(&["car_path"])
             .expect("producer CAR path")
             .to_owned();
-        let response = handle_get_sorafs_governance_dag_car_queue_archive(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path(archive_digest.clone()),
-        )
-        .await;
+        let response = api_test_route!(get_governance_dag_car_queue_archive; State(app.clone()); HeaderMap::new(); Path(archive_digest.clone()));
         assert_eq!(response.status(), StatusCode::OK);
         let archive_etag = response
             .headers()
@@ -33366,23 +33177,11 @@ mod advert_tests {
             .cloned()
             .expect("archive lookup etag");
         let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.governance_dag.car_queue.archive.lookup.v1")
-        );
-        assert_eq!(
-            value.json_str(&["segment", "car_archive_blake3"]),
-            Some(archive_digest.as_str())
-        );
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.governance_dag.car_queue.archive.lookup.v1"), json_str ["segment", "car_archive_blake3"] => Some(archive_digest.as_str()));
         fs::remove_file(governance_dir.join(car_path)).expect("remove retained producer CAR");
         let mut headers = HeaderMap::new();
         headers.insert(IF_NONE_MATCH, archive_etag);
-        let response = handle_get_sorafs_governance_dag_car_queue_archive(
-            State(app),
-            headers,
-            Path(archive_digest),
-        )
-        .await;
+        let response = api_test_route!(get_governance_dag_car_queue_archive; State(app); headers; Path(archive_digest));
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
     #[test]
@@ -33426,43 +33225,15 @@ mod advert_tests {
     async fn governance_dag_car_queue_rejects_bad_and_missing_lookups() {
         let (app, _temp_dir, _digest_hex, _car_archive_hex) =
             sorafs_app_state_with_governance_car_queue();
-        let response = handle_get_sorafs_governance_dag_car_queue_digest(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path("abcd".to_string()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let response = api_test_route!(get_governance_dag_car_queue_digest; State(app.clone()); HeaderMap::new(); Path("abcd".to_string()); axum::extract::RawQuery(None));
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let response = handle_get_sorafs_governance_dag_car_queue_kind(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path("bad kind".to_string()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let response = api_test_route!(get_governance_dag_car_queue_kind; State(app.clone()); HeaderMap::new(); Path("bad kind".to_string()); axum::extract::RawQuery(None));
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let response = handle_get_sorafs_governance_dag_car_queue_archive(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path("abcd".to_string()),
-        )
-        .await;
+        let response = api_test_route!(get_governance_dag_car_queue_archive; State(app.clone()); HeaderMap::new(); Path("abcd".to_string()));
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let response = handle_get_sorafs_governance_dag_car_queue_digest(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path("ff".repeat(32)),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let response = api_test_route!(get_governance_dag_car_queue_digest; State(app.clone()); HeaderMap::new(); Path("ff".repeat(32)); axum::extract::RawQuery(None));
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        let response = handle_get_sorafs_governance_dag_car_queue_archive(
-            State(app),
-            HeaderMap::new(),
-            Path("ee".repeat(32)),
-        )
-        .await;
+        let response = api_test_route!(get_governance_dag_car_queue_archive; State(app); HeaderMap::new(); Path("ee".repeat(32)));
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
     #[tokio::test]
@@ -33470,28 +33241,17 @@ mod advert_tests {
         let (app, _temp_dir, digest_hex, block_cid_hex, node_cid_hex) =
             sorafs_app_state_with_governance_runtime_index();
         let response =
-            handle_get_sorafs_governance_dag_runtime(State(app.clone()), HeaderMap::new()).await;
+            api_test_route!(get_governance_dag_runtime; State(app.clone()); HeaderMap::new());
         assert_eq!(response.status(), StatusCode::OK);
         let runtime_etag = response.headers().get(ETAG).cloned().expect("runtime etag");
         assert_eq!(
-            response
-                .headers()
-                .get(CACHE_CONTROL)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(response.headers(), CACHE_CONTROL),
             Some(GOVERNANCE_DAG_CACHE_CONTROL)
         );
         let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.governance_dag.runtime_index.v1")
-        );
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.governance_dag.runtime_index.v1"));
         assert_governance_source_metadata(&value, GOVERNANCE_DAG_RUNTIME_SOURCE_V1, true);
-        assert_eq!(
-            value.json_str(&["index", "root"]),
-            Some(GOVERNANCE_DAG_LOGICAL_ROOT)
-        );
-        assert_eq!(value.json_u64(&["block_count"]), Some(2));
-        assert_eq!(value.json_u64(&["indexed_block_count"]), Some(2));
+        assert_json_fields!(value; json_str ["index", "root"] => Some(GOVERNANCE_DAG_LOGICAL_ROOT), json_u64 ["block_count"] => Some(2), json_u64 ["indexed_block_count"] => Some(2));
         assert_eq!(
             value
                 .json_object(&["payload_kind_counts"])
@@ -33505,13 +33265,13 @@ mod advert_tests {
 
         let mut headers = HeaderMap::new();
         headers.insert(IF_NONE_MATCH, runtime_etag.clone());
-        let response = handle_get_sorafs_governance_dag_runtime(State(app.clone()), headers).await;
+        let response = api_test_route!(get_governance_dag_runtime; State(app.clone()); headers);
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(response.headers().get(ETAG), Some(&runtime_etag));
         let mut headers = HeaderMap::new();
         headers.insert(IF_NONE_MATCH, runtime_etag.clone());
         let response =
-            handle_get_sorafs_governance_dag_runtime_head(State(app.clone()), headers).await;
+            api_test_route!(get_governance_dag_runtime_head; State(app.clone()); headers);
         assert_eq!(response.status(), StatusCode::OK);
         let runtime_head_etag = response
             .headers()
@@ -33520,20 +33280,8 @@ mod advert_tests {
             .expect("runtime head etag");
         assert_ne!(runtime_head_etag, runtime_etag);
         let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.governance_dag.runtime_head.v1")
-        );
-        assert_eq!(
-            value.json_str(&["latest_block", "payload_kind"]),
-            Some(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND)
-        );
-        let response = handle_get_sorafs_governance_dag_runtime_block(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path(format!("hex:{block_cid_hex}")),
-        )
-        .await;
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.governance_dag.runtime_head.v1"), json_str ["latest_block", "payload_kind"] => Some(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND));
+        let response = api_test_route!(get_governance_dag_runtime_block; State(app.clone()); HeaderMap::new(); Path(format!("hex:{block_cid_hex}")));
         assert_eq!(response.status(), StatusCode::OK);
         let runtime_block_etag = response
             .headers()
@@ -33541,72 +33289,26 @@ mod advert_tests {
             .cloned()
             .expect("runtime block etag");
         let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.governance_dag.runtime.block.lookup.v1")
-        );
-        assert_eq!(
-            value.json_str(&["block", "block_cid_hex"]),
-            Some(block_cid_hex.as_str())
-        );
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.governance_dag.runtime.block.lookup.v1"), json_str ["block", "block_cid_hex"] => Some(block_cid_hex.as_str()));
         let mut headers = HeaderMap::new();
         headers.insert(IF_NONE_MATCH, runtime_block_etag);
-        let response = handle_get_sorafs_governance_dag_runtime_block(
-            State(app.clone()),
-            headers,
-            Path("ff".repeat(32)),
-        )
-        .await;
+        let response = api_test_route!(get_governance_dag_runtime_block; State(app.clone()); headers; Path("ff".repeat(32)));
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        let response = handle_get_sorafs_governance_dag_runtime_node(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path(node_cid_hex.clone()),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.governance_dag.runtime.node.lookup.v1")
-        );
-        assert_eq!(
-            value.json_str(&["block", "node_cid_hex"]),
-            Some(node_cid_hex.as_str())
-        );
-        let response = handle_get_sorafs_governance_dag_runtime_digest(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path(digest_hex.clone()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.governance_dag.runtime.digest.lookup.v1")
-        );
-        assert_eq!(value.json_u64(&["count"]), Some(1));
+        let response = api_test_route!(get_governance_dag_runtime_node; State(app.clone()); HeaderMap::new(); Path(node_cid_hex.clone()));
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.governance_dag.runtime.node.lookup.v1"), json_str ["block", "node_cid_hex"] => Some(node_cid_hex.as_str()));
+        let response = api_test_route!(get_governance_dag_runtime_digest; State(app.clone()); HeaderMap::new(); Path(digest_hex.clone()); axum::extract::RawQuery(None));
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.governance_dag.runtime.digest.lookup.v1"), json_u64 ["count"] => Some(1));
         assert_eq!(
             value
                 .json_first_at(&["blocks"], &["payload_kind"])
                 .and_then(Value::as_str),
             Some(APPEAL_FINANCE_REPORT_KIND)
         );
-        let response = handle_get_sorafs_governance_dag_runtime_kind(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path(APPEAL_FINANCE_REPORT_KIND.to_string()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.governance_dag.runtime.kind.lookup.v1")
-        );
+        let response = api_test_route!(get_governance_dag_runtime_kind; State(app.clone()); HeaderMap::new(); Path(APPEAL_FINANCE_REPORT_KIND.to_string()); axum::extract::RawQuery(None));
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.governance_dag.runtime.kind.lookup.v1"));
         assert_eq!(
             value
                 .json_first_at(&["blocks"], &["encoded_blake3"])
@@ -33649,28 +33351,11 @@ mod advert_tests {
     async fn governance_dag_runtime_rejects_bad_missing_and_malformed_lookups() {
         let (app, _temp_dir, _digest_hex, _block_cid_hex, _node_cid_hex) =
             sorafs_app_state_with_governance_runtime_index();
-        let response = handle_get_sorafs_governance_dag_runtime_digest(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path("abcd".to_string()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let response = api_test_route!(get_governance_dag_runtime_digest; State(app.clone()); HeaderMap::new(); Path("abcd".to_string()); axum::extract::RawQuery(None));
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let response = handle_get_sorafs_governance_dag_runtime_kind(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path("bad kind".to_string()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let response = api_test_route!(get_governance_dag_runtime_kind; State(app.clone()); HeaderMap::new(); Path("bad kind".to_string()); axum::extract::RawQuery(None));
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let response = handle_get_sorafs_governance_dag_runtime_block(
-            State(app.clone()),
-            HeaderMap::new(),
-            Path("ff".repeat(32)),
-        )
-        .await;
+        let response = api_test_route!(get_governance_dag_runtime_block; State(app.clone()); HeaderMap::new(); Path("ff".repeat(32)));
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         let snapshot = app
             .sorafs_node
@@ -33734,17 +33419,11 @@ mod advert_tests {
     fn assert_reputation_terminal_response(response: &Response, expected_status: StatusCode) {
         assert_eq!(response.status(), expected_status);
         assert_eq!(
-            response
-                .headers()
-                .get(CACHE_CONTROL)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(response.headers(), CACHE_CONTROL),
             Some(REPUTATION_STREAM_CACHE_CONTROL)
         );
         assert_eq!(
-            response
-                .headers()
-                .get(VARY)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(response.headers(), VARY),
             Some(REPUTATION_CACHE_VARY)
         );
     }
@@ -33755,10 +33434,7 @@ mod advert_tests {
     ) {
         assert_reputation_terminal_response(&response, expected_status);
         assert_eq!(
-            response
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(response.headers(), header::CONTENT_TYPE),
             Some("application/json")
         );
         let value = api_test_response_json(response).await;
@@ -34278,14 +33954,7 @@ mod advert_tests {
         let method = Method::POST;
         let uri = moderation_uri(MODERATION_ROUTE_MODEL_REGISTRY_REPRO);
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_moderation_model_registry_repro_manifest(
-            State(app),
-            headers,
-            method,
-            uri,
-            body,
-        )
-        .await
+        api_test_route!(post_moderation_model_registry_repro_manifest; State(app); headers; method; uri; body)
     }
     async fn post_moderation_registry_corpus_manifest(
         app: SharedAppState,
@@ -34295,14 +33964,7 @@ mod advert_tests {
         let method = Method::POST;
         let uri = moderation_uri(MODERATION_ROUTE_MODEL_REGISTRY_CORPORA);
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_moderation_model_registry_corpus_manifest(
-            State(app),
-            headers,
-            method,
-            uri,
-            body,
-        )
-        .await
+        api_test_route!(post_moderation_model_registry_corpus_manifest; State(app); headers; method; uri; body)
     }
     async fn post_moderation_screening_result(
         app: SharedAppState,
@@ -34312,7 +33974,7 @@ mod advert_tests {
         let method = Method::POST;
         let uri = moderation_uri(MODERATION_ROUTE_SCREENING_RESULTS);
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_moderation_screening_result(State(app), headers, method, uri, body).await
+        api_test_route!(post_moderation_screening_result; State(app); headers; method; uri; body)
     }
     async fn post_moderation_quarantine_review(
         app: SharedAppState,
@@ -34326,15 +33988,7 @@ mod advert_tests {
             MODERATION_ROUTE_QUARANTINE_REVIEW_SUFFIX,
         );
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_moderation_quarantine_review(
-            State(app),
-            headers,
-            method,
-            uri,
-            Path(quarantine_id_hex.to_owned()),
-            body,
-        )
-        .await
+        api_test_route!(post_moderation_quarantine_review; State(app); headers; method; uri; Path(quarantine_id_hex.to_owned()); body)
     }
     async fn post_moderation_quarantine_release(
         app: SharedAppState,
@@ -34348,15 +34002,7 @@ mod advert_tests {
             MODERATION_ROUTE_QUARANTINE_RELEASE_SUFFIX,
         );
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_moderation_quarantine_release(
-            State(app),
-            headers,
-            method,
-            uri,
-            Path(quarantine_id_hex.to_owned()),
-            body,
-        )
-        .await
+        api_test_route!(post_moderation_quarantine_release; State(app); headers; method; uri; Path(quarantine_id_hex.to_owned()); body)
     }
     async fn post_moderation_quarantine_appeal_handoff(
         app: SharedAppState,
@@ -34370,15 +34016,7 @@ mod advert_tests {
             MODERATION_ROUTE_QUARANTINE_APPEAL_HANDOFF_SUFFIX,
         );
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_moderation_quarantine_appeal_handoff(
-            State(app),
-            headers,
-            method,
-            uri,
-            Path(quarantine_id_hex.to_owned()),
-            body,
-        )
-        .await
+        api_test_route!(post_moderation_quarantine_appeal_handoff; State(app); headers; method; uri; Path(quarantine_id_hex.to_owned()); body)
     }
     async fn post_moderation_quarantine_object(
         app: SharedAppState,
@@ -34392,15 +34030,7 @@ mod advert_tests {
             MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX,
         );
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_moderation_quarantine_object(
-            State(app),
-            headers,
-            method,
-            uri,
-            Path(quarantine_id_hex.to_owned()),
-            body,
-        )
-        .await
+        api_test_route!(post_moderation_quarantine_object; State(app); headers; method; uri; Path(quarantine_id_hex.to_owned()); body)
     }
     async fn get_moderation_quarantine_object(
         app: SharedAppState,
@@ -34413,14 +34043,7 @@ mod advert_tests {
             MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX,
         );
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
-        handle_get_sorafs_moderation_quarantine_object(
-            State(app),
-            headers,
-            method,
-            uri,
-            Path(quarantine_id_hex.to_owned()),
-        )
-        .await
+        api_test_route!(get_moderation_quarantine_object; State(app); headers; method; uri; Path(quarantine_id_hex.to_owned()))
     }
     async fn get_moderation_quarantine_operator_panel(
         app: SharedAppState,
@@ -34439,15 +34062,7 @@ mod advert_tests {
         .parse()
         .expect("moderation quarantine operator panel URI");
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
-        handle_get_sorafs_moderation_quarantine_operator_panel(
-            State(app),
-            headers,
-            method,
-            uri,
-            Path(quarantine_id_hex.to_owned()),
-            axum::extract::RawQuery(raw_query.map(str::to_owned)),
-        )
-        .await
+        api_test_route!(get_moderation_quarantine_operator_panel; State(app); headers; method; uri; Path(quarantine_id_hex.to_owned()); axum::extract::RawQuery(raw_query.map(str::to_owned)))
     }
     async fn seed_moderation_quarantine_for_payload(
         app: SharedAppState,
@@ -35026,14 +34641,7 @@ mod advert_tests {
         let (app, _dir, _auth) = sorafs_app_state_with_orderbook_auth();
         let body =
             moderation_model_registry_body(&moderation_repro_manifest_fixture(0x12, 0x22, 0x32));
-        let response = handle_post_sorafs_moderation_model_registry_repro_manifest(
-            State(app),
-            HeaderMap::new(),
-            Method::POST,
-            moderation_uri(MODERATION_ROUTE_MODEL_REGISTRY_REPRO),
-            body,
-        )
-        .await;
+        let response = api_test_route!(post_moderation_model_registry_repro_manifest; State(app); HeaderMap::new(); Method::POST; moderation_uri(MODERATION_ROUTE_MODEL_REGISTRY_REPRO); body);
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
     #[tokio::test]
@@ -35048,14 +34656,7 @@ mod advert_tests {
             "quarantine",
             1_800_000_100,
         );
-        let response = handle_post_sorafs_moderation_screening_result(
-            State(app),
-            HeaderMap::new(),
-            Method::POST,
-            moderation_uri(MODERATION_ROUTE_SCREENING_RESULTS),
-            body,
-        )
-        .await;
+        let response = api_test_route!(post_moderation_screening_result; State(app); HeaderMap::new(); Method::POST; moderation_uri(MODERATION_ROUTE_SCREENING_RESULTS); body);
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
     #[tokio::test]
@@ -35067,17 +34668,9 @@ mod advert_tests {
             moderation_model_registry_body(&moderation_repro_manifest_fixture(0x12, 0x22, 0x32)),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let value = api_test_response_json(response).await;
+        let value = api_test_response_json_with_status(response, StatusCode::ACCEPTED).await;
         let expected_repro_manifest_id_hex = "12".repeat(16);
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.moderation.model_registry.repro_manifest_admission.v1")
-        );
-        assert_eq!(
-            value.json_str(&["record", "manifest_id_hex"]),
-            Some(expected_repro_manifest_id_hex.as_str())
-        );
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.moderation.model_registry.repro_manifest_admission.v1"), json_str ["record", "manifest_id_hex"] => Some(expected_repro_manifest_id_hex.as_str()));
         let response = post_moderation_registry_repro_manifest(
             app.clone(),
             &auth.provider,
@@ -35092,11 +34685,7 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let response = handle_get_sorafs_moderation_model_registry(
-            State(app),
-            axum::extract::RawQuery(Some("limit=1".to_owned())),
-        )
-        .await;
+        let response = api_test_route!(get_moderation_model_registry; State(app); axum::extract::RawQuery(Some("limit=1".to_owned())));
         if response.status() != StatusCode::OK {
             let status = response.status();
             let error_body = api_test_response_body(response).await;
@@ -35106,17 +34695,7 @@ mod advert_tests {
             );
         }
         let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.moderation.model_registry.snapshot.v1")
-        );
-        assert_eq!(value.json_u64(&["repro_manifest_count"]), Some(2));
-        assert_eq!(value.json_u64(&["returned_repro_manifest_count"]), Some(1));
-        assert_eq!(value.json_bool(&["truncated_repro_manifests"]), Some(true));
-        assert_eq!(value.json_u64(&["corpus_count"]), Some(1));
-        assert_eq!(value.json_u64(&["returned_corpus_count"]), Some(1));
-        assert_eq!(value.json_bool(&["truncated_corpora"]), Some(false));
-        assert_eq!(value.json_u64(&["limit"]), Some(1));
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.moderation.model_registry.snapshot.v1"), json_u64 ["repro_manifest_count"] => Some(2), json_u64 ["returned_repro_manifest_count"] => Some(1), json_bool ["truncated_repro_manifests"] => Some(true), json_u64 ["corpus_count"] => Some(1), json_u64 ["returned_corpus_count"] => Some(1), json_bool ["truncated_corpora"] => Some(false), json_u64 ["limit"] => Some(1));
         let repro = value
             .json_array(&["repro_manifests"])
             .expect("repro manifests array");
@@ -35147,17 +34726,8 @@ mod advert_tests {
             ),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.moderation.screening_result.authenticated_ingest.v1")
-        );
-        assert_eq!(value.json_str(&["record", "verdict"]), Some("quarantine"));
-        assert_eq!(
-            value.json_str(&["quarantine", "state"]),
-            Some("pending_review")
-        );
+        let value = api_test_response_json_with_status(response, StatusCode::ACCEPTED).await;
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.moderation.screening_result.authenticated_ingest.v1"), json_str ["record", "verdict"] => Some("quarantine"), json_str ["quarantine", "state"] => Some("pending_review"));
         let response = post_moderation_screening_result(
             app.clone(),
             &auth.provider,
@@ -35172,27 +34742,11 @@ mod advert_tests {
             ),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let value = api_test_response_json(response).await;
+        let value = api_test_response_json_with_status(response, StatusCode::ACCEPTED).await;
         assert_eq!(value.get("quarantine"), Some(&Value::Null));
-        let response = handle_get_sorafs_moderation_screening_results(
-            State(app.clone()),
-            axum::extract::RawQuery(Some("limit=1".to_owned())),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.moderation.screening_results.v1")
-        );
-        assert_eq!(value.json_u64(&["screening_count"]), Some(2));
-        assert_eq!(value.json_u64(&["authenticated_admission_count"]), Some(2));
-        assert_eq!(value.json_u64(&["returned_screening_count"]), Some(1));
-        assert_eq!(value.json_bool(&["truncated_screening"]), Some(true));
-        assert_eq!(value.json_u64(&["quarantine_count"]), Some(1));
-        assert_eq!(value.json_u64(&["returned_quarantine_count"]), Some(1));
-        assert_eq!(value.json_u64(&["limit"]), Some(1));
+        let response = api_test_route!(get_moderation_screening_results; State(app.clone()); axum::extract::RawQuery(Some("limit=1".to_owned())));
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.moderation.screening_results.v1"), json_u64 ["screening_count"] => Some(2), json_u64 ["authenticated_admission_count"] => Some(2), json_u64 ["returned_screening_count"] => Some(1), json_bool ["truncated_screening"] => Some(true), json_u64 ["quarantine_count"] => Some(1), json_u64 ["returned_quarantine_count"] => Some(1), json_u64 ["limit"] => Some(1));
         let records = value
             .json_array(&["records"])
             .expect("bounded screening records");
@@ -35202,15 +34756,9 @@ mod advert_tests {
             .expect("bounded quarantine records");
         assert_eq!(quarantines.len(), 1);
         let response =
-            handle_get_sorafs_moderation_quarantine(State(app), axum::extract::RawQuery(None))
-                .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.moderation.quarantine.v1")
-        );
-        assert_eq!(value.json_u64(&["quarantine_count"]), Some(1));
+            api_test_route!(get_moderation_quarantine; State(app); axum::extract::RawQuery(None));
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.moderation.quarantine.v1"), json_u64 ["quarantine_count"] => Some(1));
         let quarantines = value
             .json_array(&["quarantine_records"])
             .expect("quarantine records");
@@ -35254,10 +34802,7 @@ mod advert_tests {
                 .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         let retry_value = api_test_response_json(response).await;
-        assert_eq!(
-            retry_value.json_str(&["admission", "receipt_digest_hex"]),
-            Some(first_receipt_digest.as_str())
-        );
+        assert_json_fields!(retry_value; json_str ["admission", "receipt_digest_hex"] => Some(first_receipt_digest.as_str()));
         let mut replay_request: ModerationScreeningResultRequestDto =
             norito::json::from_slice(request_body.as_ref()).expect("decode screening request");
         replay_request.idempotency_key_hex = "48".repeat(32);
@@ -35328,8 +34873,7 @@ mod advert_tests {
             ),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let value = api_test_response_json(response).await;
+        let value = api_test_response_json_with_status(response, StatusCode::ACCEPTED).await;
         let quarantine_id_hex = value
             .json_str(&["quarantine", "quarantine_id_hex"])
             .expect("quarantine id")
@@ -35347,15 +34891,7 @@ mod advert_tests {
             &quarantine_id_hex,
             MODERATION_ROUTE_QUARANTINE_REVIEW_SUFFIX,
         );
-        let response = handle_post_sorafs_moderation_quarantine_review(
-            State(app.clone()),
-            HeaderMap::new(),
-            Method::POST,
-            review_uri,
-            Path(quarantine_id_hex.clone()),
-            review_body.clone(),
-        )
-        .await;
+        let response = api_test_route!(post_moderation_quarantine_review; State(app.clone()); HeaderMap::new(); Method::POST; review_uri; Path(quarantine_id_hex.clone()); review_body.clone());
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         let response = post_moderation_quarantine_review(
             app.clone(),
@@ -35364,18 +34900,8 @@ mod advert_tests {
             review_body,
         )
         .await;
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.moderation.quarantine.review.v1")
-        );
-        assert_eq!(value.json_str(&["status"]), Some("reviewed"));
-        assert_eq!(value.json_str(&["record", "state"]), Some("reviewed"));
-        assert_eq!(
-            value.json_str(&["record", "reviewed_by"]),
-            Some("operator@moderation")
-        );
+        let value = api_test_response_json_with_status(response, StatusCode::ACCEPTED).await;
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.moderation.quarantine.review.v1"), json_str ["status"] => Some("reviewed"), json_str ["record", "state"] => Some("reviewed"), json_str ["record", "reviewed_by"] => Some("operator@moderation"));
         let response = post_moderation_quarantine_release(
             app.clone(),
             &auth.provider,
@@ -35383,23 +34909,11 @@ mod advert_tests {
             moderation_quarantine_release_body("release-authority@moderation", 1_800_000_220),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.moderation.quarantine.release.v1")
-        );
-        assert_eq!(value.json_str(&["status"]), Some("released"));
-        assert_eq!(value.json_str(&["record", "state"]), Some("released"));
-        assert_eq!(
-            value.json_str(&["record", "release_authority"]),
-            Some("release-authority@moderation")
-        );
+        let value = api_test_response_json_with_status(response, StatusCode::ACCEPTED).await;
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.moderation.quarantine.release.v1"), json_str ["status"] => Some("released"), json_str ["record", "state"] => Some("released"), json_str ["record", "release_authority"] => Some("release-authority@moderation"));
         let response =
-            handle_get_sorafs_moderation_quarantine(State(app), axum::extract::RawQuery(None))
-                .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
+            api_test_route!(get_moderation_quarantine; State(app); axum::extract::RawQuery(None));
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
         let quarantines = value
             .json_array(&["quarantine_records"])
             .expect("quarantine records");
@@ -35482,14 +34996,7 @@ mod advert_tests {
             );
         }
         let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.moderation.quarantine.appeal_handoff.v1")
-        );
-        assert_eq!(
-            value.json_str(&["status"]),
-            Some("ready_for_native_intake_deposit")
-        );
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.moderation.quarantine.appeal_handoff.v1"), json_str ["status"] => Some("ready_for_native_intake_deposit"));
         assert!(
             value
                 .json_str(&["appealed_decision_digest_hex"])
@@ -35503,15 +35010,9 @@ mod advert_tests {
         let deposit_request = value
             .json_object(&["deposit_request"])
             .expect("deposit request");
-        assert_eq!(
-            deposit_request.json_str(&["case_id"]),
-            Some("quarantine-native-case")
-        );
+        assert_json_fields!(deposit_request; json_str ["case_id"] => Some("quarantine-native-case"));
         let payer_account = auth.provider.account.to_string();
-        assert_eq!(
-            deposit_request.json_str(&["payer_account"]),
-            Some(payer_account.as_str())
-        );
+        assert_json_fields!(deposit_request; json_str ["payer_account"] => Some(payer_account.as_str()));
         let evidence_hashes = deposit_request
             .json_array(&["evidence_hashes_hex"])
             .expect("evidence hashes");
@@ -35526,14 +35027,7 @@ mod advert_tests {
         let deposit_instruction = value
             .json_object(&["deposit_instruction"])
             .expect("deposit instruction");
-        assert_eq!(
-            deposit_instruction.json_str(&["status"]),
-            Some("ready_for_durable_submission")
-        );
-        assert_eq!(
-            deposit_instruction.json_str(&["deposit_xor"]),
-            pricing_quote.json_str(&["deposit_xor"])
-        );
+        assert_json_fields!(deposit_instruction; json_str ["status"] => Some("ready_for_durable_submission"), json_str ["deposit_xor"] => pricing_quote.json_str(&["deposit_xor"]));
         assert!(deposit_instruction.get("tx_instructions").is_none());
     }
     #[tokio::test]
@@ -35631,30 +35125,10 @@ mod advert_tests {
             moderation_quarantine_object_body(payload, 1_800_000_310),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.moderation.quarantine.object.store.v1")
-        );
-        assert_eq!(value.json_str(&["status"]), Some("stored"));
+        let value = api_test_response_json_with_status(response, StatusCode::ACCEPTED).await;
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.moderation.quarantine.object.store.v1"), json_str ["status"] => Some("stored"));
         let record = value.json_object(&["record"]).expect("object store record");
-        assert_eq!(
-            record.json_str(&["quarantine_id_hex"]),
-            Some(quarantine_id_hex.as_str())
-        );
-        assert_eq!(
-            record.json_str(&["payload_digest_hex"]),
-            Some(expected_digest_hex.as_str())
-        );
-        assert_eq!(
-            record.json_u64(&["payload_len"]),
-            Some(payload.len() as u64)
-        );
-        assert_eq!(
-            record.json_str(&["content_type"]),
-            Some("application/octet-stream")
-        );
+        assert_json_fields!(record; json_str ["quarantine_id_hex"] => Some(quarantine_id_hex.as_str()), json_str ["payload_digest_hex"] => Some(expected_digest_hex.as_str()), json_u64 ["payload_len"] => Some(payload.len() as u64), json_str ["content_type"] => Some("application/octet-stream"));
         assert!(record.get("notes").is_none());
         assert_eq!(record.json_str(&["object_id_hex"]).map(str::len), Some(32));
         assert_eq!(
@@ -35665,8 +35139,7 @@ mod advert_tests {
             record.json_str(&["nonce_prefix_hex"]).map(str::len),
             Some(16)
         );
-        assert_eq!(record.json_u64(&["chunk_plaintext_bytes"]), Some(64 * 1024));
-        assert_eq!(record.json_u64(&["chunk_count"]), Some(1));
+        assert_json_fields!(record; json_u64 ["chunk_plaintext_bytes"] => Some(64 * 1024), json_u64 ["chunk_count"] => Some(1));
         assert!(
             record
                 .json_str(&["envelope_path"])
@@ -35676,10 +35149,7 @@ mod advert_tests {
             get_moderation_quarantine_object(app.clone(), &auth.provider, &quarantine_id_hex).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
-            response
-                .headers()
-                .get(CACHE_CONTROL)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(response.headers(), CACHE_CONTROL),
             Some("private, no-store")
         );
         let vary = response
@@ -35691,20 +35161,13 @@ mod advert_tests {
         assert!(vary.contains("X-Iroha-Signature"));
         assert!(vary.contains("X-Iroha-Witness"));
         let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["schema"]),
-            Some("sorafs.moderation.quarantine.object.payload.v1")
-        );
-        assert_eq!(value.json_str(&["status"]), Some("read"));
+        assert_json_fields!(value; json_str ["schema"] => Some("sorafs.moderation.quarantine.object.payload.v1"), json_str ["status"] => Some("read"));
         let payload_b64 = value.json_str(&["payload_b64"]).expect("payload b64");
         let decoded = BASE64_STANDARD
             .decode(payload_b64.as_bytes())
             .expect("decode payload b64");
         assert_eq!(decoded, payload);
-        assert_eq!(
-            value.json_str(&["record", "payload_digest_hex"]),
-            Some(expected_digest_hex.as_str())
-        );
+        assert_json_fields!(value; json_str ["record", "payload_digest_hex"] => Some(expected_digest_hex.as_str()));
     }
     #[tokio::test]
     async fn moderation_quarantine_object_endpoint_requires_canonical_auth() {
@@ -35723,29 +35186,14 @@ mod advert_tests {
             &quarantine_id_hex,
             MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX,
         );
-        let response = handle_post_sorafs_moderation_quarantine_object(
-            State(app.clone()),
-            HeaderMap::new(),
-            method,
-            uri,
-            Path(quarantine_id_hex.clone()),
-            moderation_quarantine_object_body(payload, 1_800_000_321),
-        )
-        .await;
+        let response = api_test_route!(post_moderation_quarantine_object; State(app.clone()); HeaderMap::new(); method; uri; Path(quarantine_id_hex.clone()); moderation_quarantine_object_body(payload, 1_800_000_321));
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         let method = Method::GET;
         let uri = moderation_quarantine_action_uri(
             &quarantine_id_hex,
             MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX,
         );
-        let response = handle_get_sorafs_moderation_quarantine_object(
-            State(app),
-            HeaderMap::new(),
-            method,
-            uri,
-            Path(quarantine_id_hex),
-        )
-        .await;
+        let response = api_test_route!(get_moderation_quarantine_object; State(app); HeaderMap::new(); method; uri; Path(quarantine_id_hex));
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
     #[tokio::test]
@@ -35794,8 +35242,7 @@ mod advert_tests {
             ),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::CONFLICT);
-        let value = api_test_response_json(response).await;
+        let value = api_test_response_json_with_status(response, StatusCode::CONFLICT).await;
         let message = value.json_str(&["error"]).expect("digest mismatch error");
         assert!(
             message.contains("digest mismatch"),
@@ -35806,14 +35253,7 @@ mod advert_tests {
     fn moderation_operator_panel_advertises_only_signed_viewer_audit_reads() {
         let routes = moderation_quarantine_operator_panel_routes_json("001122");
         let routes = routes.as_object().expect("operator routes object");
-        assert_eq!(
-            routes.json_str(&["signed_viewer_audit_receipts"]),
-            Some(EVIDENCE_ROUTE_SIGNED_AUDIT)
-        );
-        assert_eq!(
-            routes.json_str(&["signed_viewer_audit_status"]),
-            Some(EVIDENCE_ROUTE_SIGNED_STATUS)
-        );
+        assert_json_fields!(routes; json_str ["signed_viewer_audit_receipts"] => Some(EVIDENCE_ROUTE_SIGNED_AUDIT), json_str ["signed_viewer_audit_status"] => Some(EVIDENCE_ROUTE_SIGNED_STATUS));
         assert!(!routes.contains_key("viewer_audit_reports"));
         assert!(!routes.contains_key("viewer_audit_reports_publish_due"));
     }
@@ -35841,9 +35281,7 @@ mod advert_tests {
             .expect("decode frame");
         assert_eq!(frame.json_str(&["event"]), Some("receipt_recorded"));
         let data = frame.json_object(&["data"]).expect("frame data");
-        assert_eq!(data.json_u64(&["sequence"]), Some(42));
-        assert_eq!(data.json_u64(&["block_height"]), Some(7));
-        assert_eq!(data.json_u64(&["event", "book_revision"]), Some(9));
+        assert_json_fields!(data; json_u64 ["sequence"] => Some(42), json_u64 ["block_height"] => Some(7), json_u64 ["event", "book_revision"] => Some(9));
     }
     #[test]
     fn reputation_path_identifiers_are_exact_canonical_hard_cuts() {
@@ -35921,17 +35359,11 @@ mod advert_tests {
             .expect("matching ETag");
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(
-            response
-                .headers()
-                .get(CACHE_CONTROL)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(response.headers(), CACHE_CONTROL),
             Some(REPUTATION_CACHE_CONTROL)
         );
         assert_eq!(
-            response
-                .headers()
-                .get(VARY)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(response.headers(), VARY),
             Some(REPUTATION_CACHE_VARY)
         );
         let different = format!("\"{}\"", "cd".repeat(32));
@@ -36105,27 +35537,11 @@ mod advert_tests {
         );
         let stream_uri = Uri::from_static("/v1/sorafs/reputation/events/stream?since=0&limit=1");
         let raw_query = Some("since=0&limit=1".to_owned());
-        let response = handle_get_sorafs_reputation_events_stream(
-            State(app.clone()),
-            reputation_signed_get_headers(&stream_uri, &[]),
-            Method::GET,
-            stream_uri.clone(),
-            axum::extract::RawQuery(raw_query.clone()),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_events_stream; State(app.clone()); reputation_signed_get_headers(&stream_uri, &[]); Method::GET; stream_uri.clone(); axum::extract::RawQuery(raw_query.clone()); Bytes::new());
         assert_eq!(response.status(), StatusCode::OK);
         let mut aliased_headers = reputation_signed_get_headers(&stream_uri, &[]);
         aliased_headers.insert("last-event-id", HeaderValue::from_static("1"));
-        let response = handle_get_sorafs_reputation_events_stream(
-            State(app.clone()),
-            aliased_headers,
-            Method::GET,
-            stream_uri.clone(),
-            axum::extract::RawQuery(raw_query.clone()),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_events_stream; State(app.clone()); aliased_headers; Method::GET; stream_uri.clone(); axum::extract::RawQuery(raw_query.clone()); Bytes::new());
         assert_reputation_json_terminal_response(
             response,
             StatusCode::BAD_REQUEST,
@@ -36225,136 +35641,46 @@ mod advert_tests {
             committed_reputation_projection_fixture(reputation_snapshot_fixture()),
         );
         let latest_uri = Uri::from_static("/v1/sorafs/reputation/latest");
-        let response = handle_get_sorafs_reputation_latest(
-            State(app.clone()),
-            HeaderMap::new(),
-            Method::GET,
-            latest_uri.clone(),
-            axum::extract::RawQuery(None),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_latest; State(app.clone()); HeaderMap::new(); Method::GET; latest_uri.clone(); axum::extract::RawQuery(None); Bytes::new());
         assert_reputation_terminal_response(&response, StatusCode::UNAUTHORIZED);
         let response_body = api_test_response_body(response).await;
         assert!(
             response_body.is_empty(),
             "canonical authentication failures must be payload-free"
         );
-        let response = handle_get_sorafs_reputation_latest(
-            State(app.clone()),
-            reputation_signed_get_headers(&latest_uri, &[]),
-            Method::POST,
-            latest_uri.clone(),
-            axum::extract::RawQuery(None),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_latest; State(app.clone()); reputation_signed_get_headers(&latest_uri, &[]); Method::POST; latest_uri.clone(); axum::extract::RawQuery(None); Bytes::new());
         assert_reputation_terminal_response(&response, StatusCode::METHOD_NOT_ALLOWED);
         let different_path = Uri::from_static("/v1/sorafs/reputation/weights");
-        let response = handle_get_sorafs_reputation_latest(
-            State(app.clone()),
-            reputation_signed_get_headers(&latest_uri, &[]),
-            Method::GET,
-            different_path,
-            axum::extract::RawQuery(None),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_latest; State(app.clone()); reputation_signed_get_headers(&latest_uri, &[]); Method::GET; different_path; axum::extract::RawQuery(None); Bytes::new());
         assert_reputation_terminal_response(&response, StatusCode::UNAUTHORIZED);
         let signed_uri = Uri::from_static("/v1/sorafs/reputation/latest?limit=1");
         let tampered_uri = Uri::from_static("/v1/sorafs/reputation/latest?limit=2");
-        let response = handle_get_sorafs_reputation_latest(
-            State(app.clone()),
-            reputation_signed_get_headers(&signed_uri, &[]),
-            Method::GET,
-            tampered_uri,
-            axum::extract::RawQuery(Some("limit=2".to_owned())),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_latest; State(app.clone()); reputation_signed_get_headers(&signed_uri, &[]); Method::GET; tampered_uri; axum::extract::RawQuery(Some("limit=2".to_owned())); Bytes::new());
         assert_reputation_terminal_response(&response, StatusCode::UNAUTHORIZED);
         let invalid_auth_body = api_test_response_body(response).await;
         assert!(invalid_auth_body.is_empty());
-        let response = handle_get_sorafs_reputation_latest(
-            State(app.clone()),
-            reputation_signed_get_headers(&signed_uri, &[]),
-            Method::GET,
-            signed_uri,
-            axum::extract::RawQuery(Some("limit=2".to_owned())),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_latest; State(app.clone()); reputation_signed_get_headers(&signed_uri, &[]); Method::GET; signed_uri; axum::extract::RawQuery(Some("limit=2".to_owned())); Bytes::new());
         assert_reputation_terminal_response(&response, StatusCode::BAD_REQUEST);
         let unsigned_body = Bytes::from_static(b"body-tamper");
-        let response = handle_get_sorafs_reputation_latest(
-            State(app.clone()),
-            reputation_signed_get_headers(&latest_uri, &[]),
-            Method::GET,
-            latest_uri.clone(),
-            axum::extract::RawQuery(None),
-            unsigned_body,
-        )
-        .await;
+        let response = api_test_route!(get_reputation_latest; State(app.clone()); reputation_signed_get_headers(&latest_uri, &[]); Method::GET; latest_uri.clone(); axum::extract::RawQuery(None); unsigned_body);
         assert_reputation_terminal_response(&response, StatusCode::UNAUTHORIZED);
         let body = Bytes::from_static(b"not-empty");
-        let response = handle_get_sorafs_reputation_latest(
-            State(app.clone()),
-            reputation_signed_get_headers(&latest_uri, body.as_ref()),
-            Method::GET,
-            latest_uri,
-            axum::extract::RawQuery(None),
-            body,
-        )
-        .await;
+        let response = api_test_route!(get_reputation_latest; State(app.clone()); reputation_signed_get_headers(&latest_uri, body.as_ref()); Method::GET; latest_uri; axum::extract::RawQuery(None); body);
         assert_reputation_terminal_response(&response, StatusCode::BAD_REQUEST);
         let weights_uri = Uri::from_static("/v1/sorafs/reputation/weights?legacy=true");
-        let response = handle_get_sorafs_reputation_weights(
-            State(app.clone()),
-            reputation_signed_get_headers(&weights_uri, &[]),
-            Method::GET,
-            weights_uri,
-            axum::extract::RawQuery(Some("legacy=true".to_owned())),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_weights; State(app.clone()); reputation_signed_get_headers(&weights_uri, &[]); Method::GET; weights_uri; axum::extract::RawQuery(Some("legacy=true".to_owned())); Bytes::new());
         assert_reputation_terminal_response(&response, StatusCode::BAD_REQUEST);
         let uppercase_id = "AB".repeat(16);
         let snapshot_uri: Uri = format!("/v1/sorafs/reputation/snapshots/{uppercase_id}")
             .parse()
             .expect("uppercase snapshot URI");
-        let response = handle_get_sorafs_reputation_snapshot(
-            State(app.clone()),
-            reputation_signed_get_headers(&snapshot_uri, &[]),
-            Method::GET,
-            snapshot_uri,
-            Path(uppercase_id),
-            axum::extract::RawQuery(None),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_snapshot; State(app.clone()); reputation_signed_get_headers(&snapshot_uri, &[]); Method::GET; snapshot_uri; Path(uppercase_id); axum::extract::RawQuery(None); Bytes::new());
         assert_reputation_terminal_response(&response, StatusCode::BAD_REQUEST);
         let provider_uri = Uri::from_static("/v1/sorafs/reputation/providers/provider%20alias");
-        let response = handle_get_sorafs_reputation_provider(
-            State(app.clone()),
-            reputation_signed_get_headers(&provider_uri, &[]),
-            Method::GET,
-            provider_uri,
-            Path("provider alias".to_owned()),
-            axum::extract::RawQuery(None),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_provider; State(app.clone()); reputation_signed_get_headers(&provider_uri, &[]); Method::GET; provider_uri; Path("provider alias".to_owned()); axum::extract::RawQuery(None); Bytes::new());
         assert_reputation_terminal_response(&response, StatusCode::BAD_REQUEST);
         let stream_uri = Uri::from_static("/v1/sorafs/reputation/events/stream");
-        let response = handle_get_sorafs_reputation_events_stream(
-            State(app.clone()),
-            HeaderMap::new(),
-            Method::GET,
-            stream_uri,
-            axum::extract::RawQuery(None),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_events_stream; State(app.clone()); HeaderMap::new(); Method::GET; stream_uri; axum::extract::RawQuery(None); Bytes::new());
         assert_reputation_terminal_response(&response, StatusCode::UNAUTHORIZED);
         let websocket_uri = Uri::from_static("/v1/sorafs/reputation/events/ws?since=0");
         assert_eq!(
@@ -36377,17 +35703,7 @@ mod advert_tests {
             &[],
         )
         .expect("exact signed WebSocket handshake");
-        let response = handle_get_sorafs_reputation_events_ws(
-            State(app),
-            reputation_signed_get_headers(&websocket_uri, &[]),
-            Method::GET,
-            websocket_uri,
-            None,
-            axum::extract::RawQuery(Some("since=0".to_owned())),
-            Err(axum::extract::ws::rejection::WebSocketKeyHeaderMissing::default().into()),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_events_ws; State(app); reputation_signed_get_headers(&websocket_uri, &[]); Method::GET; websocket_uri; None; axum::extract::RawQuery(Some("since=0".to_owned())); Err(axum::extract::ws::rejection::WebSocketKeyHeaderMissing::default().into()); Bytes::new());
         assert_reputation_terminal_response(&response, StatusCode::BAD_REQUEST);
     }
     #[tokio::test]
@@ -36399,15 +35715,7 @@ mod advert_tests {
         projection.events[0].version = 0;
         attach_reputation_committed_projection(&mut app, projection.clone());
         let stream_uri = Uri::from_static(REPUTATION_EVENTS_STREAM_PATH_V1);
-        let response = handle_get_sorafs_reputation_events_stream(
-            State(app),
-            reputation_signed_get_headers(&stream_uri, &[]),
-            Method::GET,
-            stream_uri,
-            axum::extract::RawQuery(None),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_events_stream; State(app); reputation_signed_get_headers(&stream_uri, &[]); Method::GET; stream_uri; axum::extract::RawQuery(None); Bytes::new());
         assert_reputation_json_terminal_response(
             response,
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -36443,15 +35751,7 @@ mod advert_tests {
         let _auth_guard = reputation_auth_test_guard();
         let (app, _dir) = sorafs_app_state_with_reputation_storage();
         let uri = Uri::from_static("/v1/sorafs/reputation/latest");
-        let response = handle_get_sorafs_reputation_latest(
-            State(app),
-            reputation_signed_get_headers(&uri, &[]),
-            Method::GET,
-            uri,
-            axum::extract::RawQuery(None),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_latest; State(app); reputation_signed_get_headers(&uri, &[]); Method::GET; uri; axum::extract::RawQuery(None); Bytes::new());
         assert_reputation_terminal_response(&response, StatusCode::SERVICE_UNAVAILABLE);
     }
     #[tokio::test]
@@ -36468,15 +35768,7 @@ mod advert_tests {
             },
         );
         let uri = Uri::from_static("/v1/sorafs/reputation/latest");
-        let response = handle_get_sorafs_reputation_latest(
-            State(app),
-            reputation_signed_get_headers(&uri, &[]),
-            Method::GET,
-            uri,
-            axum::extract::RawQuery(None),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_latest; State(app); reputation_signed_get_headers(&uri, &[]); Method::GET; uri; axum::extract::RawQuery(None); Bytes::new());
         assert_reputation_terminal_response(&response, StatusCode::SERVICE_UNAVAILABLE);
     }
     #[tokio::test]
@@ -36500,54 +35792,26 @@ mod advert_tests {
                 .is_none()
         );
         let latest_uri = Uri::from_static("/v1/sorafs/reputation/latest");
-        let response = handle_get_sorafs_reputation_latest(
-            State(app.clone()),
-            reputation_signed_get_headers(&latest_uri, &[]),
-            Method::GET,
-            latest_uri,
-            axum::extract::RawQuery(None),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_latest; State(app.clone()); reputation_signed_get_headers(&latest_uri, &[]); Method::GET; latest_uri; axum::extract::RawQuery(None); Bytes::new());
         assert_eq!(response.status(), StatusCode::OK);
         let latest_etag = response.headers().get(ETAG).cloned().expect("latest etag");
         assert_eq!(
-            response
-                .headers()
-                .get(CACHE_CONTROL)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(response.headers(), CACHE_CONTROL),
             Some(REPUTATION_CACHE_CONTROL)
         );
         let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["merkle_root_hex"]),
-            Some(hex::encode(snapshot.merkle_root).as_str())
-        );
+        assert_json_fields!(value; json_str ["merkle_root_hex"] => Some(hex::encode(snapshot.merkle_root).as_str()));
         let providers = value.json_array(&["providers"]).expect("providers array");
         assert_eq!(providers.len(), 2);
-        assert_eq!(value.json_u64(&["provider_count"]), Some(2));
-        assert_eq!(value.json_u64(&["returned_provider_count"]), Some(2));
-        assert_eq!(value.json_u64(&["limit"]), Some(DEFAULT_LIST_LIMIT as u64));
-        assert_eq!(value.json_bool(&["truncated_providers"]), Some(false));
+        assert_json_fields!(value; json_u64 ["provider_count"] => Some(2), json_u64 ["returned_provider_count"] => Some(2), json_u64 ["limit"] => Some(DEFAULT_LIST_LIMIT as u64), json_bool ["truncated_providers"] => Some(false));
 
         let capped_uri = Uri::from_static("/v1/sorafs/reputation/latest?limit=1");
-        let response = handle_get_sorafs_reputation_latest(
-            State(app.clone()),
-            reputation_signed_get_headers(&capped_uri, &[]),
-            Method::GET,
-            capped_uri,
-            axum::extract::RawQuery(Some("limit=1".to_owned())),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_latest; State(app.clone()); reputation_signed_get_headers(&capped_uri, &[]); Method::GET; capped_uri; axum::extract::RawQuery(Some("limit=1".to_owned())); Bytes::new());
         assert_eq!(response.status(), StatusCode::OK);
         let capped_etag = response.headers().get(ETAG).cloned().expect("capped etag");
         assert_ne!(latest_etag, capped_etag);
         let value = api_test_response_json(response).await;
-        assert_eq!(value.json_u64(&["provider_count"]), Some(2));
-        assert_eq!(value.json_u64(&["returned_provider_count"]), Some(1));
-        assert_eq!(value.json_u64(&["limit"]), Some(1));
-        assert_eq!(value.json_bool(&["truncated_providers"]), Some(true));
+        assert_json_fields!(value; json_u64 ["provider_count"] => Some(2), json_u64 ["returned_provider_count"] => Some(1), json_u64 ["limit"] => Some(1), json_bool ["truncated_providers"] => Some(true));
         let providers = value
             .json_array(&["providers"])
             .expect("capped providers array");
@@ -36555,42 +35819,16 @@ mod advert_tests {
         let conditional_uri = Uri::from_static("/v1/sorafs/reputation/latest");
         let mut conditional_headers = reputation_signed_get_headers(&conditional_uri, &[]);
         conditional_headers.insert(IF_NONE_MATCH, latest_etag.clone());
-        let response = handle_get_sorafs_reputation_latest(
-            State(app.clone()),
-            conditional_headers,
-            Method::GET,
-            conditional_uri,
-            axum::extract::RawQuery(None),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_latest; State(app.clone()); conditional_headers; Method::GET; conditional_uri; axum::extract::RawQuery(None); Bytes::new());
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(response.headers().get(ETAG), Some(&latest_etag));
         let provider_uri = Uri::from_static("/v1/sorafs/reputation/providers/provider-a");
-        let response = handle_get_sorafs_reputation_provider(
-            State(app.clone()),
-            reputation_signed_get_headers(&provider_uri, &[]),
-            Method::GET,
-            provider_uri,
-            Path("provider-a".to_owned()),
-            axum::extract::RawQuery(None),
-            Bytes::new(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
+        let response = api_test_route!(get_reputation_provider; State(app.clone()); reputation_signed_get_headers(&provider_uri, &[]); Method::GET; provider_uri; Path("provider-a".to_owned()); axum::extract::RawQuery(None); Bytes::new());
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
         let provider = value.json_object(&["provider"]).expect("provider object");
         assert_eq!(provider.json_str(&["provider_id"]), Some("provider-a"));
         let proof = value.json_object(&["proof"]).expect("proof object");
-        assert_eq!(proof.json_str(&["provider_id"]), Some("provider-a"));
-        assert_eq!(
-            proof.json_u64(&["leaf_index"]),
-            Some(u64::from(expected_proof.leaf_index))
-        );
-        assert_eq!(
-            proof.json_u64(&["leaf_count"]),
-            Some(u64::from(expected_proof.leaf_count))
-        );
+        assert_json_fields!(proof; json_str ["provider_id"] => Some("provider-a"), json_u64 ["leaf_index"] => Some(u64::from(expected_proof.leaf_index)), json_u64 ["leaf_count"] => Some(u64::from(expected_proof.leaf_count)));
         let siblings = proof.json_array(&["siblings_hex"]).expect("siblings array");
         assert_eq!(siblings.len(), expected_proof.siblings.len());
         let reconstructed_proof = ReputationMerkleProofV1 {
@@ -36625,88 +35863,36 @@ mod advert_tests {
         let snapshot_uri: Uri = format!("/v1/sorafs/reputation/snapshots/{snapshot_id_hex}")
             .parse()
             .expect("snapshot URI");
-        let response = handle_get_sorafs_reputation_snapshot(
-            State(app.clone()),
-            reputation_signed_get_headers(&snapshot_uri, &[]),
-            Method::GET,
-            snapshot_uri,
-            Path(snapshot_id_hex),
-            axum::extract::RawQuery(None),
-            Bytes::new(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["snapshot_id_hex"]),
-            Some(hex::encode(snapshot.snapshot_id).as_str())
-        );
+        let response = api_test_route!(get_reputation_snapshot; State(app.clone()); reputation_signed_get_headers(&snapshot_uri, &[]); Method::GET; snapshot_uri; Path(snapshot_id_hex); axum::extract::RawQuery(None); Bytes::new());
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
+        assert_json_fields!(value; json_str ["snapshot_id_hex"] => Some(hex::encode(snapshot.snapshot_id).as_str()));
         let weights_uri = Uri::from_static("/v1/sorafs/reputation/weights");
-        let response = handle_get_sorafs_reputation_weights(
-            State(app.clone()),
-            reputation_signed_get_headers(&weights_uri, &[]),
-            Method::GET,
-            weights_uri,
-            axum::extract::RawQuery(None),
-            Bytes::new(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_u64(&["alpha_bps"]),
-            Some(u64::from(snapshot.alpha_bps))
-        );
+        let response = api_test_route!(get_reputation_weights; State(app.clone()); reputation_signed_get_headers(&weights_uri, &[]); Method::GET; weights_uri; axum::extract::RawQuery(None); Bytes::new());
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
+        assert_json_fields!(value; json_u64 ["alpha_bps"] => Some(u64::from(snapshot.alpha_bps)));
         assert!(value.json_object(&["weights"]).is_some());
 
         let events_uri = Uri::from_static("/v1/sorafs/reputation/events?since=0&limit=1");
-        let response = handle_get_sorafs_reputation_events(
-            State(app.clone()),
-            reputation_signed_get_headers(&events_uri, &[]),
-            Method::GET,
-            events_uri,
-            axum::extract::RawQuery(Some("since=0&limit=1".to_owned())),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_events; State(app.clone()); reputation_signed_get_headers(&events_uri, &[]); Method::GET; events_uri; axum::extract::RawQuery(Some("since=0&limit=1".to_owned())); Bytes::new());
         assert_eq!(response.status(), StatusCode::OK);
         let events_etag = response.headers().get(ETAG).cloned().expect("events etag");
         let value = api_test_response_json(response).await;
-        assert_eq!(value.json_u64(&["count"]), Some(1));
-        assert_eq!(value.json_u64(&["next_since"]), Some(1));
+        assert_json_fields!(value; json_u64 ["count"] => Some(1), json_u64 ["next_since"] => Some(1));
         let events = value.json_array(&["events"]).expect("events array");
         let event = events
             .first()
             .and_then(Value::as_object)
             .expect("event object");
-        assert_eq!(event.json_u64(&["sequence"]), Some(1));
-        assert_eq!(
-            event.json_str(&["snapshot_id_hex"]),
-            Some(hex::encode(snapshot.snapshot_id).as_str())
-        );
+        assert_json_fields!(event; json_u64 ["sequence"] => Some(1), json_str ["snapshot_id_hex"] => Some(hex::encode(snapshot.snapshot_id).as_str()));
         let stream_uri = Uri::from_static("/v1/sorafs/reputation/events/stream?since=0&limit=1");
-        let response = handle_get_sorafs_reputation_events_stream(
-            State(app.clone()),
-            reputation_signed_get_headers(&stream_uri, &[]),
-            Method::GET,
-            stream_uri,
-            axum::extract::RawQuery(Some("since=0&limit=1".to_owned())),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_events_stream; State(app.clone()); reputation_signed_get_headers(&stream_uri, &[]); Method::GET; stream_uri; axum::extract::RawQuery(Some("since=0&limit=1".to_owned())); Bytes::new());
         assert_eq!(response.status(), StatusCode::OK);
         assert!(
-            response
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok())
+            api_test_header_str(response.headers(), header::CONTENT_TYPE)
                 .is_some_and(|value| value.contains("text/event-stream"))
         );
         assert_eq!(
-            response
-                .headers()
-                .get(CACHE_CONTROL)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(response.headers(), CACHE_CONTROL),
             Some(REPUTATION_STREAM_CACHE_CONTROL)
         );
         let mut body = response.into_body();
@@ -36724,15 +35910,7 @@ mod advert_tests {
             Uri::from_static("/v1/sorafs/reputation/events?since=0&limit=1");
         let mut conditional_headers = reputation_signed_get_headers(&conditional_events_uri, &[]);
         conditional_headers.insert(IF_NONE_MATCH, events_etag.clone());
-        let response = handle_get_sorafs_reputation_events(
-            State(app),
-            conditional_headers,
-            Method::GET,
-            conditional_events_uri,
-            axum::extract::RawQuery(Some("since=0&limit=1".to_owned())),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_events; State(app); conditional_headers; Method::GET; conditional_events_uri; axum::extract::RawQuery(Some("since=0&limit=1".to_owned())); Bytes::new());
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(response.headers().get(ETAG), Some(&events_etag));
     }
@@ -36760,22 +35938,9 @@ mod advert_tests {
         let older_uri: Uri = format!("/v1/sorafs/reputation/snapshots/{older_id_hex}")
             .parse()
             .expect("older snapshot URI");
-        let response = handle_get_sorafs_reputation_snapshot(
-            State(app.clone()),
-            reputation_signed_get_headers(&older_uri, &[]),
-            Method::GET,
-            older_uri.clone(),
-            Path(older_id_hex.clone()),
-            axum::extract::RawQuery(None),
-            Bytes::new(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["snapshot_id_hex"]),
-            Some(hex::encode(older.snapshot.snapshot_id).as_str())
-        );
+        let response = api_test_route!(get_reputation_snapshot; State(app.clone()); reputation_signed_get_headers(&older_uri, &[]); Method::GET; older_uri.clone(); Path(older_id_hex.clone()); axum::extract::RawQuery(None); Bytes::new());
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
+        assert_json_fields!(value; json_str ["snapshot_id_hex"] => Some(hex::encode(older.snapshot.snapshot_id).as_str()));
         assert_ne!(
             value.json_str(&["snapshot_id_hex"]),
             Some(hex::encode(newer.snapshot.snapshot_id).as_str()),
@@ -36787,16 +35952,7 @@ mod advert_tests {
             projection,
             vec![newer.snapshot.clone()],
         );
-        let response = handle_get_sorafs_reputation_snapshot(
-            State(evicted_app),
-            reputation_signed_get_headers(&older_uri, &[]),
-            Method::GET,
-            older_uri,
-            Path(older_id_hex),
-            axum::extract::RawQuery(None),
-            Bytes::new(),
-        )
-        .await;
+        let response = api_test_route!(get_reputation_snapshot; State(evicted_app); reputation_signed_get_headers(&older_uri, &[]); Method::GET; older_uri; Path(older_id_hex); axum::extract::RawQuery(None); Bytes::new());
         assert_reputation_terminal_response(&response, StatusCode::NOT_FOUND);
     }
     #[test]
@@ -36809,17 +35965,12 @@ mod advert_tests {
         let frame: Value = norito::json::from_str(&frame_text).expect("decode websocket frame");
         assert_eq!(frame.json_str(&["event"]), Some("reputation_snapshot"));
         let data = frame.json_object(&["data"]).expect("websocket frame data");
-        assert_eq!(data.json_u64(&["sequence"]), Some(9));
-        assert_eq!(
-            data.json_str(&["snapshot_id_hex"]),
-            Some(hex::encode(snapshot.snapshot.snapshot_id).as_str())
-        );
+        assert_json_fields!(data; json_u64 ["sequence"] => Some(9), json_str ["snapshot_id_hex"] => Some(hex::encode(snapshot.snapshot.snapshot_id).as_str()));
         let lagged_text =
             reputation_lagged_websocket_frame(3).expect("serialize lagged websocket frame");
         let lagged: Value =
             norito::json::from_str(&lagged_text).expect("decode lagged websocket frame");
-        assert_eq!(lagged.json_str(&["event"]), Some("lagged"));
-        assert_eq!(lagged.json_u64(&["skipped"]), Some(3));
+        assert_json_fields!(lagged; json_str ["event"] => Some("lagged"), json_u64 ["skipped"] => Some(3));
     }
     #[tokio::test]
     async fn reputation_stream_serialization_fails_closed_without_fallback_frames() {
@@ -36963,8 +36114,7 @@ mod advert_tests {
         assert_eq!(backlog.frames.len(), 2);
         let lagged: Value =
             norito::json::from_str(&backlog.frames[0]).expect("decode retained lag frame");
-        assert_eq!(lagged.json_str(&["event"]), Some("lagged"));
-        assert_eq!(lagged.json_u64(&["skipped"]), Some(1_024));
+        assert_json_fields!(lagged; json_str ["event"] => Some("lagged"), json_u64 ["skipped"] => Some(1_024));
         let event: Value =
             norito::json::from_str(&backlog.frames[1]).expect("decode retained event frame");
         assert_eq!(event.json_u64(&["data", "sequence"]), Some(1_025));
@@ -38549,12 +37699,7 @@ mod advert_tests {
         let stream_budget = obj
             .json_object(&["stream_budget"])
             .expect("stream_budget object");
-        assert_eq!(stream_budget.json_u64(&["max_in_flight"]), Some(4));
-        assert_eq!(
-            stream_budget.json_u64(&["max_bytes_per_sec"]),
-            Some(5_000_000)
-        );
-        assert_eq!(stream_budget.json_u64(&["burst_bytes"]), Some(2_500_000));
+        assert_json_fields!(stream_budget; json_u64 ["max_in_flight"] => Some(4), json_u64 ["max_bytes_per_sec"] => Some(5_000_000), json_u64 ["burst_bytes"] => Some(2_500_000));
 
         let transport_hints = obj
             .json_array(&["transport_hints"])
@@ -38563,8 +37708,7 @@ mod advert_tests {
         let hint = transport_hints[0]
             .as_object()
             .expect("transport hint object");
-        assert_eq!(hint.json_str(&["protocol"]), Some("torii_http_range"));
-        assert_eq!(hint.json_u64(&["priority"]), Some(0));
+        assert_json_fields!(hint; json_str ["protocol"] => Some("torii_http_range"), json_u64 ["priority"] => Some(0));
 
         let capabilities = obj
             .json_array(&["capabilities"])
@@ -38579,8 +37723,7 @@ mod advert_tests {
         let range_obj = range_cap
             .json_object(&["range"])
             .expect("range metadata present");
-        assert_eq!(range_obj.json_u64(&["max_chunk_span"]), Some(32));
-        assert_eq!(range_obj.json_u64(&["min_granularity"]), Some(8));
+        assert_json_fields!(range_obj; json_u64 ["max_chunk_span"] => Some(32), json_u64 ["min_granularity"] => Some(8));
     }
     use tokio::sync::RwLock;
     const TEST_QUARANTINE_KEY_PROVIDER_HANDLE: &str = "kms://moderation/quarantine/primary";
@@ -38890,13 +38033,7 @@ mod advert_tests {
         headers: HeaderMap,
         request: JsonOnly<StreamTokenRequestDto>,
     ) -> Response {
-        handle_post_sorafs_storage_token_authenticated(
-            test_stream_token_operator(),
-            state,
-            headers,
-            request,
-        )
-        .await
+        api_test_route!(post_storage_token_authenticated; test_stream_token_operator(); state; headers; request)
     }
     fn token_enabled_state() -> (SharedAppState, TempDir, String) {
         let app = mk_app_state_for_tests();
@@ -39165,6 +38302,21 @@ mod advert_tests {
                 .manifest_metadata(&self.manifest_id_hex)
                 .expect("manifest")
         }
+
+        fn token_request(&self, overrides: TokenOverrides) -> StreamTokenRequestDto {
+            StreamTokenRequestDto {
+                manifest_id_hex: self.manifest_id_hex.clone(),
+                provider_id_hex: self.provider_id_hex.clone(),
+                ttl_secs: overrides.ttl_secs,
+                max_streams: overrides.max_streams,
+                rate_limit_bytes: overrides.rate_limit_bytes,
+                requests_per_minute: overrides.requests_per_minute,
+            }
+        }
+
+        async fn car_range(&self, headers: HeaderMap, port: u16) -> Response {
+            api_test_route!(get_storage_car_range; State(self.app.clone()); Path(self.manifest_id_hex.clone()); headers; ConnectInfo(SocketAddr::from(([127, 0, 0, 1], port))))
+        }
     }
 
     fn token_test_context() -> TokenTestContext {
@@ -39247,20 +38399,8 @@ mod advert_tests {
         insert_api_test_header(&mut headers, HEADER_SORA_CLIENT, &context.client_id);
         insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "issuer-nonce");
 
-        let request = StreamTokenRequestDto {
-            manifest_id_hex: context.manifest_id_hex.clone(),
-            provider_id_hex: context.provider_id_hex.clone(),
-            ttl_secs: overrides.ttl_secs,
-            max_streams: overrides.max_streams,
-            rate_limit_bytes: overrides.rate_limit_bytes,
-            requests_per_minute: overrides.requests_per_minute,
-        };
-        let response = handle_post_sorafs_storage_token(
-            State(context.app.clone()),
-            headers,
-            JsonOnly(request),
-        )
-        .await;
+        let request = context.token_request(overrides);
+        let response = api_test_route!(post_storage_token; State(context.app.clone()); headers; JsonOnly(request));
         assert_eq!(response.status(), StatusCode::OK);
         let (_, body) = response.into_parts();
         let body_bytes = body::to_bytes(body, usize::MAX)
@@ -39458,23 +38598,7 @@ mod advert_tests {
         };
         let json = snapshot_to_json(snapshot, 1).expect("serialize limited snapshot");
         let map = json.as_object().expect("json object");
-        assert_eq!(map.json_u64(&["declaration_count"]), Some(2));
-        assert_eq!(map.json_u64(&["ledger_count"]), Some(2));
-        assert_eq!(map.json_u64(&["credit_ledger_count"]), Some(2));
-        assert_eq!(map.json_u64(&["dispute_count"]), Some(2));
-        assert_eq!(map.json_u64(&["returned_declaration_count"]), Some(1));
-        assert_eq!(map.json_u64(&["returned_ledger_count"]), Some(1));
-        assert_eq!(map.json_u64(&["returned_credit_ledger_count"]), Some(1));
-        assert_eq!(map.json_u64(&["returned_dispute_count"]), Some(1));
-        assert_eq!(map.json_u64(&["limit"]), Some(1));
-        assert_eq!(map.json_bool(&["truncated_declarations"]), Some(true));
-        assert_eq!(map.json_bool(&["truncated_fee_ledger"]), Some(true));
-        assert_eq!(map.json_bool(&["truncated_credit_ledger"]), Some(true));
-        assert_eq!(map.json_bool(&["truncated_disputes"]), Some(true));
-        assert_eq!(map.json_len(&["declarations"]), Some(1));
-        assert_eq!(map.json_len(&["fee_ledger"]), Some(1));
-        assert_eq!(map.json_len(&["credit_ledger"]), Some(1));
-        assert_eq!(map.json_len(&["disputes"]), Some(1));
+        assert_json_fields!(map; json_u64 ["declaration_count"] => Some(2), json_u64 ["ledger_count"] => Some(2), json_u64 ["credit_ledger_count"] => Some(2), json_u64 ["dispute_count"] => Some(2), json_u64 ["returned_declaration_count"] => Some(1), json_u64 ["returned_ledger_count"] => Some(1), json_u64 ["returned_credit_ledger_count"] => Some(1), json_u64 ["returned_dispute_count"] => Some(1), json_u64 ["limit"] => Some(1), json_bool ["truncated_declarations"] => Some(true), json_bool ["truncated_fee_ledger"] => Some(true), json_bool ["truncated_credit_ledger"] => Some(true), json_bool ["truncated_disputes"] => Some(true), json_len ["declarations"] => Some(1), json_len ["fee_ledger"] => Some(1), json_len ["credit_ledger"] => Some(1), json_len ["disputes"] => Some(1));
     }
     #[tokio::test]
     async fn provider_list_limit_bounds_cached_adverts() {
@@ -39488,13 +38612,8 @@ mod advert_tests {
             axum::extract::RawQuery(Some("limit=1".to_owned())),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
-        assert_eq!(value.json_u64(&["count"]), Some(2));
-        assert_eq!(value.json_u64(&["returned_count"]), Some(1));
-        assert_eq!(value.json_u64(&["limit"]), Some(1));
-        assert_eq!(value.json_bool(&["truncated"]), Some(true));
-        assert_eq!(value.json_len(&["providers"]), Some(1));
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
+        assert_json_fields!(value; json_u64 ["count"] => Some(2), json_u64 ["returned_count"] => Some(1), json_u64 ["limit"] => Some(1), json_bool ["truncated"] => Some(true), json_len ["providers"] => Some(1));
     }
     #[tokio::test]
     async fn post_provider_advert_accepts_valid_payload() {
@@ -39612,14 +38731,7 @@ mod advert_tests {
         let mut app = Arc::new(inner);
         push_finalized_block_hash(&mut app, &default_block_header());
 
-        let response = handle_get_sorafs_pin_registry(
-            State(app),
-            axum::extract::RawQuery(None),
-            Some(ExtractAccept(axum::http::HeaderValue::from_static(
-                crate::utils::NORITO_MIME_TYPE,
-            ))),
-        )
-        .await;
+        let response = api_test_route!(get_pin_registry; State(app); axum::extract::RawQuery(None); Some(ExtractAccept(axum::http::HeaderValue::from_static( crate::utils::NORITO_MIME_TYPE, ))));
         assert_eq!(response.status(), StatusCode::OK);
         let content_type = response
             .headers()
@@ -39686,19 +38798,10 @@ mod advert_tests {
         block.commit().expect("commit pin manifest readback seed");
         push_finalized_block_hash(&mut app, &header);
 
-        let response = handle_get_sorafs_pin_manifest(
-            State(app.clone()),
-            Path(hex::encode(manifest_digest.as_bytes())),
-            axum::extract::RawQuery(None),
-            None,
-        )
-        .await;
+        let response = api_test_route!(get_pin_manifest; State(app.clone()); Path(hex::encode(manifest_digest.as_bytes())); axum::extract::RawQuery(None); None);
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
-            response
-                .headers()
-                .get(CACHE_CONTROL)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(response.headers(), CACHE_CONTROL),
             Some("no-store, max-age=0")
         );
         let body_bytes = api_test_response_body(response).await;
@@ -39715,13 +38818,7 @@ mod advert_tests {
             finalized.finalized_cursor.height,
             hex::encode(finalized.finalized_cursor.block_hash)
         );
-        let anchored = handle_get_sorafs_pin_manifest(
-            State(app.clone()),
-            Path(hex::encode(manifest_digest.as_bytes())),
-            axum::extract::RawQuery(Some(anchored_query)),
-            None,
-        )
-        .await;
+        let anchored = api_test_route!(get_pin_manifest; State(app.clone()); Path(hex::encode(manifest_digest.as_bytes())); axum::extract::RawQuery(Some(anchored_query)); None);
         assert_eq!(anchored.status(), StatusCode::OK);
         let list_query = format!(
             "expected_finalized_height={}&expected_finalized_block_hash_hex={}&limit=1&max_bytes={}&status=approved",
@@ -39729,12 +38826,7 @@ mod advert_tests {
             hex::encode(finalized.finalized_cursor.block_hash),
             PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1,
         );
-        let list = handle_get_sorafs_pin_registry(
-            State(app.clone()),
-            axum::extract::RawQuery(Some(list_query.clone())),
-            Some(ExtractAccept(HeaderValue::from_static("application/json"))),
-        )
-        .await;
+        let list = api_test_route!(get_pin_registry; State(app.clone()); axum::extract::RawQuery(Some(list_query.clone())); Some(ExtractAccept(HeaderValue::from_static("application/json"))));
         assert_eq!(list.status(), StatusCode::OK);
         assert_eq!(
             list.headers()
@@ -39751,15 +38843,7 @@ mod advert_tests {
         assert_eq!(page.manifests.len(), 1);
         assert_eq!(page.manifests[0].digest, manifest_digest);
         assert!(!page.has_more);
-        let exhausted = handle_get_sorafs_pin_registry(
-            State(app.clone()),
-            axum::extract::RawQuery(Some(format!(
-                "{list_query}&after_digest_hex={}",
-                hex::encode(manifest_digest.as_bytes())
-            ))),
-            Some(ExtractAccept(HeaderValue::from_static("application/json"))),
-        )
-        .await;
+        let exhausted = api_test_route!(get_pin_registry; State(app.clone()); axum::extract::RawQuery(Some(format!( "{list_query}&after_digest_hex={}", hex::encode(manifest_digest.as_bytes()) ))); Some(ExtractAccept(HeaderValue::from_static("application/json"))));
         assert_eq!(exhausted.status(), StatusCode::OK);
         let exhausted_body = api_test_response_body(exhausted).await;
         let exhausted_page: PinManifestPageV1 =
@@ -39768,29 +38852,9 @@ mod advert_tests {
         assert!(!exhausted_page.has_more);
         let mut stale_block_hash = finalized.finalized_cursor.block_hash;
         stale_block_hash[0] ^= 0xFF;
-        let stale = handle_get_sorafs_pin_manifest(
-            State(app.clone()),
-            Path(hex::encode(manifest_digest.as_bytes())),
-            axum::extract::RawQuery(Some(format!(
-                "expected_finalized_height={}&expected_finalized_block_hash_hex={}",
-                finalized.finalized_cursor.height,
-                hex::encode(stale_block_hash)
-            ))),
-            None,
-        )
-        .await;
+        let stale = api_test_route!(get_pin_manifest; State(app.clone()); Path(hex::encode(manifest_digest.as_bytes())); axum::extract::RawQuery(Some(format!( "expected_finalized_height={}&expected_finalized_block_hash_hex={}", finalized.finalized_cursor.height, hex::encode(stale_block_hash) ))); None);
         assert_eq!(stale.status(), StatusCode::CONFLICT);
-        let stale_list = handle_get_sorafs_pin_registry(
-            State(app),
-            axum::extract::RawQuery(Some(format!(
-                "expected_finalized_height={}&expected_finalized_block_hash_hex={}&limit=1&max_bytes={}",
-                finalized.finalized_cursor.height,
-                hex::encode(stale_block_hash),
-                PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1,
-            ))),
-            None,
-        )
-        .await;
+        let stale_list = api_test_route!(get_pin_registry; State(app); axum::extract::RawQuery(Some(format!( "expected_finalized_height={}&expected_finalized_block_hash_hex={}&limit=1&max_bytes={}", finalized.finalized_cursor.height, hex::encode(stale_block_hash), PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1, ))); None);
         assert_eq!(stale_list.status(), StatusCode::CONFLICT);
     }
     #[tokio::test]
@@ -39806,12 +38870,8 @@ mod advert_tests {
             axum::extract::RawQuery(Some("limit=1".to_owned())),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
-        assert_eq!(value.json_u64(&["declaration_count"]), Some(0));
-        assert_eq!(value.json_u64(&["ledger_count"]), Some(0));
-        assert_eq!(value.json_u64(&["limit"]), Some(1));
-        assert_eq!(value.json_u64(&["returned_declaration_count"]), Some(0));
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
+        assert_json_fields!(value; json_u64 ["declaration_count"] => Some(0), json_u64 ["ledger_count"] => Some(0), json_u64 ["limit"] => Some(1), json_u64 ["returned_declaration_count"] => Some(0));
         assert!(
             !value
                 .as_object()
@@ -39874,30 +38934,14 @@ mod advert_tests {
         );
         seed_capacity_declaration(&inner.sorafs_node, [0xAA; 32], &chunker_handle);
         let state = Arc::new(inner);
-        let response = handle_get_sorafs_storage_manifest(
-            State(state.clone()),
-            Path(manifest_id.clone()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let value = api_test_response_json(response).await;
+        let response = api_test_route!(get_storage_manifest; State(state.clone()); Path(manifest_id.clone()); axum::extract::RawQuery(None));
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
 
         assert_eq!(
             value.json_str(&["manifest_id_hex"]).map(str::to_owned),
             Some(manifest_id.clone())
         );
-        assert_eq!(
-            value.json_u64(&["content_length"]),
-            Some(plan.content_length)
-        );
-        assert_eq!(value.json_u64(&["file_count"]), Some(3));
-        assert_eq!(value.json_u64(&["returned_file_count"]), Some(3));
-        assert_eq!(value.json_u64(&["limit"]), Some(3));
-        assert_eq!(value.json_u64(&["offset"]), Some(0));
-        assert_eq!(value.json_bool(&["truncated_files"]), Some(false));
-        assert_eq!(value.json_len(&["files"]), Some(3));
+        assert_json_fields!(value; json_u64 ["content_length"] => Some(plan.content_length), json_u64 ["file_count"] => Some(3), json_u64 ["returned_file_count"] => Some(3), json_u64 ["limit"] => Some(3), json_u64 ["offset"] => Some(0), json_bool ["truncated_files"] => Some(false), json_len ["files"] => Some(3));
         let manifest_b64 = value
             .json_str(&["manifest_b64"])
             .expect("manifest_b64 present");
@@ -39905,19 +38949,10 @@ mod advert_tests {
             .decode(manifest_b64.as_bytes())
             .expect("decode manifest");
         assert_eq!(decoded, manifest_bytes);
-        let paged_response = handle_get_sorafs_storage_manifest(
-            State(state.clone()),
-            Path(manifest_id.clone()),
-            axum::extract::RawQuery(Some("offset=1&limit=1".to_owned())),
-        )
-        .await;
+        let paged_response = api_test_route!(get_storage_manifest; State(state.clone()); Path(manifest_id.clone()); axum::extract::RawQuery(Some("offset=1&limit=1".to_owned())));
         assert_eq!(paged_response.status(), StatusCode::OK);
         let paged = api_test_response_json(paged_response).await;
-        assert_eq!(paged.json_u64(&["file_count"]), Some(3));
-        assert_eq!(paged.json_u64(&["returned_file_count"]), Some(1));
-        assert_eq!(paged.json_u64(&["limit"]), Some(1));
-        assert_eq!(paged.json_u64(&["offset"]), Some(1));
-        assert_eq!(paged.json_bool(&["truncated_files"]), Some(true));
+        assert_json_fields!(paged; json_u64 ["file_count"] => Some(3), json_u64 ["returned_file_count"] => Some(1), json_u64 ["limit"] => Some(1), json_u64 ["offset"] => Some(1), json_bool ["truncated_files"] => Some(true));
         let paged_files = paged.json_array(&["files"]).expect("paged files");
         assert_eq!(paged_files.len(), 1);
         assert_eq!(
@@ -39928,18 +38963,10 @@ mod advert_tests {
                 .and_then(Value::as_str),
             Some("second.bin")
         );
-        let remaining_response = handle_get_sorafs_storage_manifest(
-            State(state),
-            Path(manifest_id),
-            axum::extract::RawQuery(Some("offset=1".to_owned())),
-        )
-        .await;
+        let remaining_response = api_test_route!(get_storage_manifest; State(state); Path(manifest_id); axum::extract::RawQuery(Some("offset=1".to_owned())));
         assert_eq!(remaining_response.status(), StatusCode::OK);
         let remaining = api_test_response_json(remaining_response).await;
-        assert_eq!(remaining.json_u64(&["returned_file_count"]), Some(2));
-        assert_eq!(remaining.json_u64(&["limit"]), Some(2));
-        assert_eq!(remaining.json_u64(&["offset"]), Some(1));
-        assert_eq!(remaining.json_bool(&["truncated_files"]), Some(false));
+        assert_json_fields!(remaining; json_u64 ["returned_file_count"] => Some(2), json_u64 ["limit"] => Some(2), json_u64 ["offset"] => Some(1), json_bool ["truncated_files"] => Some(false));
     }
     #[tokio::test]
     async fn site_binding_serves_manifest_and_spa_fallback() {
@@ -39988,7 +39015,7 @@ mod advert_tests {
         let state = Arc::new(inner);
         let mut root_headers = HeaderMap::new();
         root_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
-        let root_response = handle_get_sorafs_site_root(State(state.clone()), root_headers).await;
+        let root_response = api_test_route!(get_site_root; State(state.clone()); root_headers);
         assert_eq!(root_response.status(), StatusCode::OK);
         assert_eq!(
             root_response.headers().get(header::CONTENT_TYPE),
@@ -39998,61 +39025,24 @@ mod advert_tests {
         assert_eq!(root_body, &index_bytes[..]);
         let mut manifest_headers = HeaderMap::new();
         manifest_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
-        let manifest_response = handle_get_sorafs_site_manifest(
-            State(state.clone()),
-            manifest_headers.clone(),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let manifest_response = api_test_route!(get_site_manifest; State(state.clone()); manifest_headers.clone(); axum::extract::RawQuery(None));
         assert_eq!(manifest_response.status(), StatusCode::OK);
         let manifest_value = api_test_response_json(manifest_response).await;
-        assert_eq!(
-            manifest_value.json_str(&["hostname"]),
-            Some("taira.sora.org")
-        );
-        assert_eq!(manifest_value.json_len(&["files"]), Some(2));
-        assert_eq!(manifest_value.json_u64(&["file_count"]), Some(2));
-        assert_eq!(manifest_value.json_u64(&["returned_file_count"]), Some(2));
-        assert_eq!(
-            manifest_value.json_u64(&["limit"]),
-            Some(DEFAULT_LIST_LIMIT as u64)
-        );
-        assert_eq!(manifest_value.json_bool(&["truncated_files"]), Some(false));
+        assert_json_fields!(manifest_value; json_str ["hostname"] => Some("taira.sora.org"), json_len ["files"] => Some(2), json_u64 ["file_count"] => Some(2), json_u64 ["returned_file_count"] => Some(2), json_u64 ["limit"] => Some(DEFAULT_LIST_LIMIT as u64), json_bool ["truncated_files"] => Some(false));
 
-        let capped_manifest_response = handle_get_sorafs_site_manifest(
-            State(state.clone()),
-            manifest_headers,
-            axum::extract::RawQuery(Some("limit=1".to_owned())),
-        )
-        .await;
+        let capped_manifest_response = api_test_route!(get_site_manifest; State(state.clone()); manifest_headers; axum::extract::RawQuery(Some("limit=1".to_owned())));
         assert_eq!(capped_manifest_response.status(), StatusCode::OK);
         let capped_manifest_value = api_test_response_json(capped_manifest_response).await;
-        assert_eq!(capped_manifest_value.json_len(&["files"]), Some(1));
-        assert_eq!(capped_manifest_value.json_u64(&["file_count"]), Some(2));
-        assert_eq!(
-            capped_manifest_value.json_u64(&["returned_file_count"]),
-            Some(1)
-        );
-        assert_eq!(
-            capped_manifest_value.json_bool(&["truncated_files"]),
-            Some(true)
-        );
+        assert_json_fields!(capped_manifest_value; json_len ["files"] => Some(1), json_u64 ["file_count"] => Some(2), json_u64 ["returned_file_count"] => Some(1), json_bool ["truncated_files"] => Some(true));
         let mut spa_headers = HeaderMap::new();
         spa_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
-        let spa_response =
-            handle_get_sorafs_site_path(State(state.clone()), spa_headers, Path("swap".to_owned()))
-                .await;
+        let spa_response = api_test_route!(get_site_path; State(state.clone()); spa_headers; Path("swap".to_owned()));
         assert_eq!(spa_response.status(), StatusCode::OK);
         let spa_body = api_test_response_body(spa_response).await;
         assert_eq!(spa_body, &index_bytes[..]);
         let mut asset_headers = HeaderMap::new();
         asset_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
-        let asset_response = handle_get_sorafs_site_path(
-            State(state.clone()),
-            asset_headers,
-            Path("assets/app.js".to_owned()),
-        )
-        .await;
+        let asset_response = api_test_route!(get_site_path; State(state.clone()); asset_headers; Path("assets/app.js".to_owned()));
         assert_eq!(asset_response.status(), StatusCode::OK);
         assert_eq!(
             asset_response.headers().get(header::CONTENT_TYPE),
@@ -40063,12 +39053,7 @@ mod advert_tests {
         let mut range_headers = HeaderMap::new();
         range_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
         range_headers.insert(header::RANGE, HeaderValue::from_static("bytes=1-4"));
-        let range_response = handle_get_sorafs_site_path(
-            State(state.clone()),
-            range_headers,
-            Path("assets/app.js".to_owned()),
-        )
-        .await;
+        let range_response = api_test_route!(get_site_path; State(state.clone()); range_headers; Path("assets/app.js".to_owned()));
         assert_eq!(range_response.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(
             range_response.headers().get(header::CONTENT_RANGE),
@@ -40079,80 +39064,32 @@ mod advert_tests {
         );
         let range_body = api_test_response_body(range_response).await;
         assert_eq!(range_body, &asset_bytes[1..=4]);
-        let cid_lookup = handle_get_sorafs_cid_lookup(
-            State(state.clone()),
-            Path(content_cid.clone()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let cid_lookup = api_test_route!(get_cid_lookup; State(state.clone()); Path(content_cid.clone()); axum::extract::RawQuery(None));
         assert_eq!(cid_lookup.status(), StatusCode::OK);
         let cid_lookup_value = api_test_response_json(cid_lookup).await;
-        assert_eq!(
-            cid_lookup_value.json_str(&["content_cid"]),
-            Some(content_cid.as_str())
-        );
-        assert_eq!(cid_lookup_value.json_u64(&["file_count"]), Some(2));
-        assert_eq!(cid_lookup_value.json_u64(&["returned_file_count"]), Some(2));
-        assert_eq!(
-            cid_lookup_value.json_u64(&["limit"]),
-            Some(DEFAULT_LIST_LIMIT as u64)
-        );
-        assert_eq!(
-            cid_lookup_value.json_bool(&["truncated_files"]),
-            Some(false)
-        );
+        assert_json_fields!(cid_lookup_value; json_str ["content_cid"] => Some(content_cid.as_str()), json_u64 ["file_count"] => Some(2), json_u64 ["returned_file_count"] => Some(2), json_u64 ["limit"] => Some(DEFAULT_LIST_LIMIT as u64), json_bool ["truncated_files"] => Some(false));
         assert!(cid_lookup_value.get("moderation").is_none());
-        let capped_cid_lookup = handle_get_sorafs_cid_lookup(
-            State(state.clone()),
-            Path(content_cid.clone()),
-            axum::extract::RawQuery(Some("limit=1".to_owned())),
-        )
-        .await;
+        let capped_cid_lookup = api_test_route!(get_cid_lookup; State(state.clone()); Path(content_cid.clone()); axum::extract::RawQuery(Some("limit=1".to_owned())));
         assert_eq!(capped_cid_lookup.status(), StatusCode::OK);
         let capped_cid_lookup_value = api_test_response_json(capped_cid_lookup).await;
-        assert_eq!(capped_cid_lookup_value.json_len(&["files"]), Some(1));
-        assert_eq!(capped_cid_lookup_value.json_u64(&["file_count"]), Some(2));
-        assert_eq!(
-            capped_cid_lookup_value.json_u64(&["returned_file_count"]),
-            Some(1)
-        );
-        assert_eq!(
-            capped_cid_lookup_value.json_bool(&["truncated_files"]),
-            Some(true)
-        );
+        assert_json_fields!(capped_cid_lookup_value; json_len ["files"] => Some(1), json_u64 ["file_count"] => Some(2), json_u64 ["returned_file_count"] => Some(1), json_bool ["truncated_files"] => Some(true));
         let mut cid_headers = HeaderMap::new();
         cid_headers.insert(
             header::HOST,
             HeaderValue::from_str(&format!("{content_cid}.sorafs.taira.sora.org"))
                 .expect("CID host"),
         );
-        let cid_root = handle_get_sorafs_cid_root(
-            State(state.clone()),
-            cid_headers.clone(),
-            format!("/sorafs/cid/{content_cid}")
-                .parse::<Uri>()
-                .expect("cid root uri"),
-            Path(content_cid.clone()),
-        )
-        .await;
+        let cid_root = api_test_route!(get_cid_root; State(state.clone()); cid_headers.clone(); format!("/sorafs/cid/{content_cid}") .parse::<Uri>() .expect("cid root uri"); Path(content_cid.clone()));
         assert_eq!(cid_root.status(), StatusCode::OK);
         let cid_root_body = api_test_response_body(cid_root).await;
         assert_eq!(cid_root_body, &index_bytes[..]);
-        let cid_asset = handle_get_sorafs_cid_path(
-            State(state.clone()),
-            cid_headers,
-            format!("/sorafs/cid/{content_cid}/assets/app.js")
-                .parse::<Uri>()
-                .expect("cid asset uri"),
-            Path((content_cid.clone(), "assets/app.js".to_owned())),
-        )
-        .await;
+        let cid_asset = api_test_route!(get_cid_path; State(state.clone()); cid_headers; format!("/sorafs/cid/{content_cid}/assets/app.js") .parse::<Uri>() .expect("cid asset uri"); Path((content_cid.clone(), "assets/app.js".to_owned())));
         assert_eq!(cid_asset.status(), StatusCode::OK);
         assert_eq!(
-            cid_asset
-                .headers()
-                .get(HeaderName::from_static(HEADER_SORA_CONTENT_CID))
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(
+                cid_asset.headers(),
+                HeaderName::from_static(HEADER_SORA_CONTENT_CID)
+            ),
             Some(content_cid.as_str())
         );
         assert_eq!(
@@ -40299,7 +39236,7 @@ mod advert_tests {
         let state = Arc::new(inner);
         let mut root_headers = HeaderMap::new();
         root_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
-        let root_response = handle_get_sorafs_site_root(State(state.clone()), root_headers).await;
+        let root_response = api_test_route!(get_site_root; State(state.clone()); root_headers);
         assert_eq!(root_response.status(), StatusCode::OK);
         let root_body = api_test_response_body(root_response).await;
         let (expected_index, expected_content_cid) = match case {
@@ -40309,18 +39246,10 @@ mod advert_tests {
         assert_eq!(root_body, expected_index);
         let mut manifest_headers = HeaderMap::new();
         manifest_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
-        let manifest_response = handle_get_sorafs_site_manifest(
-            State(state),
-            manifest_headers,
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let manifest_response = api_test_route!(get_site_manifest; State(state); manifest_headers; axum::extract::RawQuery(None));
         assert_eq!(manifest_response.status(), StatusCode::OK);
         let manifest_value = api_test_response_json(manifest_response).await;
-        assert_eq!(
-            manifest_value.json_str(&["content_cid"]),
-            Some(expected_content_cid.as_str())
-        );
+        assert_json_fields!(manifest_value; json_str ["content_cid"] => Some(expected_content_cid.as_str()));
     }
     #[tokio::test]
     async fn site_binding_prefers_authoritative_soracloud_app_state() {
@@ -40375,7 +39304,7 @@ mod advert_tests {
             header::HOST,
             HeaderValue::from_str(&cid_host).expect("cid host header"),
         );
-        let root_response = handle_get_sorafs_site_root(State(state.clone()), root_headers).await;
+        let root_response = api_test_route!(get_site_root; State(state.clone()); root_headers);
         assert_eq!(root_response.status(), StatusCode::OK);
         let root_body = api_test_response_body(root_response).await;
         assert_eq!(root_body, &index_bytes[..]);
@@ -40384,35 +39313,17 @@ mod advert_tests {
             header::HOST,
             HeaderValue::from_str(&cid_host).expect("cid host header"),
         );
-        let manifest_response = handle_get_sorafs_site_manifest(
-            State(state.clone()),
-            manifest_headers,
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let manifest_response = api_test_route!(get_site_manifest; State(state.clone()); manifest_headers; axum::extract::RawQuery(None));
         assert_eq!(manifest_response.status(), StatusCode::OK);
         let manifest_value = api_test_response_json(manifest_response).await;
-        assert_eq!(
-            manifest_value.json_str(&["hostname"]),
-            Some(cid_host.as_str())
-        );
-        assert_eq!(
-            manifest_value.json_str(&["index_document"]),
-            Some("index.html")
-        );
-        assert_eq!(manifest_value.json_bool(&["spa_fallback"]), Some(true));
+        assert_json_fields!(manifest_value; json_str ["hostname"] => Some(cid_host.as_str()), json_str ["index_document"] => Some("index.html"), json_bool ["spa_fallback"] => Some(true));
 
         let mut spa_headers = HeaderMap::new();
         spa_headers.insert(
             header::HOST,
             HeaderValue::from_str(&cid_host).expect("cid host header"),
         );
-        let spa_response = handle_get_sorafs_site_path(
-            State(state.clone()),
-            spa_headers,
-            Path("swap/ton/usdt".to_owned()),
-        )
-        .await;
+        let spa_response = api_test_route!(get_site_path; State(state.clone()); spa_headers; Path("swap/ton/usdt".to_owned()));
         assert_eq!(spa_response.status(), StatusCode::OK);
         let spa_body = api_test_response_body(spa_response).await;
         assert_eq!(spa_body, &index_bytes[..]);
@@ -40421,12 +39332,7 @@ mod advert_tests {
             header::HOST,
             HeaderValue::from_str(&cid_host).expect("cid host header"),
         );
-        let asset_response = handle_get_sorafs_site_path(
-            State(state),
-            asset_headers,
-            Path("assets/app.js".to_owned()),
-        )
-        .await;
+        let asset_response = api_test_route!(get_site_path; State(state); asset_headers; Path("assets/app.js".to_owned()));
         assert_eq!(asset_response.status(), StatusCode::OK);
         let asset_body = api_test_response_body(asset_response).await;
         assert_eq!(asset_body, &asset_bytes[..]);
@@ -40449,7 +39355,7 @@ mod advert_tests {
             header::HOST,
             HeaderValue::from_static("notacid.sorafs.taira.sora.org"),
         );
-        let response = handle_get_sorafs_site_root(State(state), headers).await;
+        let response = api_test_route!(get_site_root; State(state); headers);
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
     #[tokio::test]
@@ -40490,15 +39396,7 @@ mod advert_tests {
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
         headers.insert(header::ACCEPT, HeaderValue::from_static("text/html"));
-        let response = handle_get_sorafs_cid_path(
-            State(state),
-            headers,
-            format!("/sorafs/cid/{content_cid}/swap/ton/usdt?x=1")
-                .parse::<Uri>()
-                .expect("browser redirect uri"),
-            Path((content_cid.clone(), "swap/ton/usdt".to_owned())),
-        )
-        .await;
+        let response = api_test_route!(get_cid_path; State(state); headers; format!("/sorafs/cid/{content_cid}/swap/ton/usdt?x=1") .parse::<Uri>() .expect("browser redirect uri"); Path((content_cid.clone(), "swap/ton/usdt".to_owned())));
         assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
         assert_eq!(
             response.headers().get(header::LOCATION),
@@ -40559,15 +39457,7 @@ mod advert_tests {
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
         headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
-        let response = handle_get_sorafs_cid_path(
-            State(state.clone()),
-            headers.clone(),
-            format!("/sorafs/cid/{content_cid}/assets/app.js")
-                .parse::<Uri>()
-                .expect("non-browser uri"),
-            Path((content_cid.clone(), "assets/app.js".to_owned())),
-        )
-        .await;
+        let response = api_test_route!(get_cid_path; State(state.clone()); headers.clone(); format!("/sorafs/cid/{content_cid}/assets/app.js") .parse::<Uri>() .expect("non-browser uri"); Path((content_cid.clone(), "assets/app.js".to_owned())));
         assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
         assert_eq!(
             response.headers().get(header::LOCATION),
@@ -40578,15 +39468,7 @@ mod advert_tests {
                 .expect("redirect header")
             )
         );
-        let passive = handle_get_sorafs_cid_path(
-            State(state),
-            headers,
-            format!("/sorafs/cid/{content_cid}/assets/logo.png")
-                .parse::<Uri>()
-                .expect("passive asset uri"),
-            Path((content_cid, "assets/logo.png".to_owned())),
-        )
-        .await;
+        let passive = api_test_route!(get_cid_path; State(state); headers; format!("/sorafs/cid/{content_cid}/assets/logo.png") .parse::<Uri>() .expect("passive asset uri"); Path((content_cid, "assets/logo.png".to_owned())));
         assert_eq!(passive.status(), StatusCode::OK);
         assert!(passive.headers().get(header::LOCATION).is_none());
         assert_eq!(
@@ -40657,31 +39539,14 @@ mod advert_tests {
             HeaderValue::from_str(&format!("{content_cid}.sorafs.taira.sora.org"))
                 .expect("CID host"),
         );
-        let cid_root = handle_get_sorafs_cid_root(
-            State(state.clone()),
-            cid_headers,
-            format!("/sorafs/cid/{content_cid}")
-                .parse::<Uri>()
-                .expect("preferred cid root uri"),
-            Path(content_cid.clone()),
-        )
-        .await;
+        let cid_root = api_test_route!(get_cid_root; State(state.clone()); cid_headers; format!("/sorafs/cid/{content_cid}") .parse::<Uri>() .expect("preferred cid root uri"); Path(content_cid.clone()));
         assert_eq!(cid_root.status(), StatusCode::OK);
         let cid_root_body = api_test_response_body(cid_root).await;
         assert_eq!(cid_root_body, &index_bytes[..]);
-        let cid_lookup = handle_get_sorafs_cid_lookup(
-            State(state.clone()),
-            Path(content_cid.clone()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let cid_lookup = api_test_route!(get_cid_lookup; State(state.clone()); Path(content_cid.clone()); axum::extract::RawQuery(None));
         assert_eq!(cid_lookup.status(), StatusCode::OK);
         let cid_lookup_value = api_test_response_json(cid_lookup).await;
-        assert_eq!(
-            cid_lookup_value.json_str(&["index_document"]),
-            Some("index.html")
-        );
-        assert_eq!(cid_lookup_value.json_len(&["files"]), Some(1));
+        assert_json_fields!(cid_lookup_value; json_str ["index_document"] => Some("index.html"), json_len ["files"] => Some(1));
         assert!(cid_lookup_value.get("moderation").is_none());
     }
     #[tokio::test]
@@ -40724,15 +39589,7 @@ mod advert_tests {
             .cid_host_suffixes
             .taira = "sorafs.taira.sora.org".to_owned();
         let state = Arc::new(inner);
-        let cid_root = handle_get_sorafs_cid_root(
-            State(state.clone()),
-            HeaderMap::new(),
-            format!("/sorafs/cid/{content_cid}")
-                .parse::<Uri>()
-                .expect("remote cid root uri"),
-            Path(content_cid),
-        )
-        .await;
+        let cid_root = api_test_route!(get_cid_root; State(state.clone()); HeaderMap::new(); format!("/sorafs/cid/{content_cid}") .parse::<Uri>() .expect("remote cid root uri"); Path(content_cid));
         assert_eq!(cid_root.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert!(
             state
@@ -40939,117 +39796,34 @@ mod advert_tests {
             .expect("ingest manifest");
         inner.sorafs_node = node;
         let state = Arc::new(inner);
-        let response = handle_get_sorafs_storage_plan(
-            State(state.clone()),
-            Path(manifest_id.clone()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let value = api_test_response_json(response).await;
+        let response = api_test_route!(get_storage_plan; State(state.clone()); Path(manifest_id.clone()); axum::extract::RawQuery(None));
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
         assert_eq!(
             value.json_str(&["manifest_id_hex"]).map(str::to_owned),
             Some(manifest_id.clone())
         );
 
         let plan_value = value.json_object(&["plan"]).expect("plan object");
-        assert_eq!(
-            plan_value.json_u64(&["chunk_count"]),
-            Some(plan.chunks.len() as u64)
-        );
-        assert_eq!(
-            plan_value.json_u64(&["returned_chunk_count"]),
-            Some(plan.chunks.len() as u64)
-        );
-        assert_eq!(
-            plan_value.json_u64(&["returned_chunk_digest_count"]),
-            Some(plan.chunks.len() as u64)
-        );
-        assert_eq!(plan_value.json_u64(&["file_count"]), Some(2));
-        assert_eq!(plan_value.json_u64(&["returned_file_count"]), Some(2));
-        assert_eq!(
-            plan_value.json_u64(&["limit"]),
-            Some(DEFAULT_LIST_LIMIT as u64)
-        );
-        assert_eq!(plan_value.json_u64(&["offset"]), Some(0));
-        assert_eq!(plan_value.json_bool(&["truncated_chunks"]), Some(false));
-        assert_eq!(
-            plan_value.json_bool(&["truncated_chunk_digests"]),
-            Some(false)
-        );
-        assert_eq!(plan_value.json_bool(&["truncated_files"]), Some(false));
-        assert_eq!(
-            plan_value.json_u64(&["content_length"]),
-            Some(plan.content_length)
-        );
+        assert_json_fields!(plan_value; json_u64 ["chunk_count"] => Some(plan.chunks.len() as u64), json_u64 ["returned_chunk_count"] => Some(plan.chunks.len() as u64), json_u64 ["returned_chunk_digest_count"] => Some(plan.chunks.len() as u64), json_u64 ["file_count"] => Some(2), json_u64 ["returned_file_count"] => Some(2), json_u64 ["limit"] => Some(DEFAULT_LIST_LIMIT as u64), json_u64 ["offset"] => Some(0), json_bool ["truncated_chunks"] => Some(false), json_bool ["truncated_chunk_digests"] => Some(false), json_bool ["truncated_files"] => Some(false), json_u64 ["content_length"] => Some(plan.content_length));
         let chunks = plan_value.json_array(&["chunks"]).expect("chunks array");
         assert_eq!(chunks.len(), plan.chunks.len());
-        assert_eq!(
-            plan_value.json_len(&["chunk_digests_blake3"]),
-            Some(plan.chunks.len())
-        );
-        assert_eq!(plan_value.json_len(&["files"]), Some(2));
+        assert_json_fields!(plan_value; json_len ["chunk_digests_blake3"] => Some(plan.chunks.len()), json_len ["files"] => Some(2));
 
-        let capped_response = handle_get_sorafs_storage_plan(
-            State(state.clone()),
-            Path(manifest_id.clone()),
-            axum::extract::RawQuery(Some("limit=1".to_owned())),
-        )
-        .await;
+        let capped_response = api_test_route!(get_storage_plan; State(state.clone()); Path(manifest_id.clone()); axum::extract::RawQuery(Some("limit=1".to_owned())));
         assert_eq!(capped_response.status(), StatusCode::OK);
         let capped_value = api_test_response_json(capped_response).await;
         let capped_plan = capped_value
             .json_object(&["plan"])
             .expect("capped plan object");
-        assert_eq!(
-            capped_plan.json_u64(&["chunk_count"]),
-            Some(plan.chunks.len() as u64)
-        );
-        assert_eq!(capped_plan.json_u64(&["offset"]), Some(0));
-        assert_eq!(capped_plan.json_u64(&["limit"]), Some(1));
-        assert_eq!(capped_plan.json_u64(&["returned_chunk_count"]), Some(1));
-        assert_eq!(capped_plan.json_u64(&["file_count"]), Some(2));
-        assert_eq!(capped_plan.json_u64(&["returned_file_count"]), Some(1));
-        assert_eq!(capped_plan.json_bool(&["truncated_chunks"]), Some(true));
-        assert_eq!(
-            capped_plan.json_bool(&["truncated_chunk_digests"]),
-            Some(true)
-        );
-        assert_eq!(capped_plan.json_bool(&["truncated_files"]), Some(true));
-        assert_eq!(
-            capped_plan.json_bool(&["truncated_chunk_digests"]),
-            Some(true)
-        );
-        assert_eq!(capped_plan.json_len(&["chunks"]), Some(1));
-        assert_eq!(capped_plan.json_len(&["chunk_digests_blake3"]), Some(1));
-        assert_eq!(capped_plan.json_len(&["files"]), Some(1));
+        assert_json_fields!(capped_plan; json_u64 ["chunk_count"] => Some(plan.chunks.len() as u64), json_u64 ["offset"] => Some(0), json_u64 ["limit"] => Some(1), json_u64 ["returned_chunk_count"] => Some(1), json_u64 ["file_count"] => Some(2), json_u64 ["returned_file_count"] => Some(1), json_bool ["truncated_chunks"] => Some(true), json_bool ["truncated_chunk_digests"] => Some(true), json_bool ["truncated_files"] => Some(true), json_bool ["truncated_chunk_digests"] => Some(true), json_len ["chunks"] => Some(1), json_len ["chunk_digests_blake3"] => Some(1), json_len ["files"] => Some(1));
 
-        let paged_response = handle_get_sorafs_storage_plan(
-            State(state),
-            Path(manifest_id),
-            axum::extract::RawQuery(Some("offset=1&limit=1".to_owned())),
-        )
-        .await;
+        let paged_response = api_test_route!(get_storage_plan; State(state); Path(manifest_id); axum::extract::RawQuery(Some("offset=1&limit=1".to_owned())));
         assert_eq!(paged_response.status(), StatusCode::OK);
         let paged_value = api_test_response_json(paged_response).await;
         let paged_plan = paged_value
             .json_object(&["plan"])
             .expect("paged plan object");
-        assert_eq!(paged_plan.json_u64(&["offset"]), Some(1));
-        assert_eq!(paged_plan.json_u64(&["limit"]), Some(1));
-        assert_eq!(paged_plan.json_u64(&["returned_chunk_count"]), Some(1));
-        assert_eq!(
-            paged_plan.json_u64(&["returned_chunk_digest_count"]),
-            Some(1)
-        );
-        assert_eq!(paged_plan.json_u64(&["returned_file_count"]), Some(1));
-        assert_eq!(paged_plan.json_bool(&["truncated_chunks"]), Some(true));
-        assert_eq!(
-            paged_plan.json_bool(&["truncated_chunk_digests"]),
-            Some(true)
-        );
-        assert_eq!(paged_plan.json_bool(&["truncated_files"]), Some(false));
+        assert_json_fields!(paged_plan; json_u64 ["offset"] => Some(1), json_u64 ["limit"] => Some(1), json_u64 ["returned_chunk_count"] => Some(1), json_u64 ["returned_chunk_digest_count"] => Some(1), json_u64 ["returned_file_count"] => Some(1), json_bool ["truncated_chunks"] => Some(true), json_bool ["truncated_chunk_digests"] => Some(true), json_bool ["truncated_files"] => Some(false));
         let paged_chunks = paged_plan.json_array(&["chunks"]).expect("paged chunks");
         assert_eq!(paged_chunks.len(), 1);
         assert_eq!(
@@ -41121,16 +39895,8 @@ mod advert_tests {
             axum::extract::RawQuery(Some("limit=1".to_owned())),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.json_str(&["manifest_digest_hex"]),
-            Some(hex::encode(challenge.manifest_digest).as_str())
-        );
-        assert_eq!(value.json_u64(&["provider_count"]), Some(2));
-        assert_eq!(value.json_u64(&["returned_provider_count"]), Some(1));
-        assert_eq!(value.json_u64(&["limit"]), Some(1));
-        assert_eq!(value.json_bool(&["truncated_providers"]), Some(true));
+        let value = api_test_response_json_with_status(response, StatusCode::OK).await;
+        assert_json_fields!(value; json_str ["manifest_digest_hex"] => Some(hex::encode(challenge.manifest_digest).as_str()), json_u64 ["provider_count"] => Some(2), json_u64 ["returned_provider_count"] => Some(1), json_u64 ["limit"] => Some(1), json_bool ["truncated_providers"] => Some(true));
         let providers = value.json_array(&["providers"]).expect("providers array");
         assert_eq!(providers.len(), 1);
         assert_eq!(
@@ -41200,18 +39966,9 @@ mod advert_tests {
                 &[],
             )
             .expect("reconcile declaration");
-        let response = handle_get_sorafs_storage_manifest(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.get("error"),
-            Some(&Value::String("unsupported_chunker".into()))
-        );
+        let response = api_test_route!(get_storage_manifest; State(context.app.clone()); Path(context.manifest_id_hex.clone()); axum::extract::RawQuery(None));
+        let value = api_test_response_json_with_status(response, StatusCode::NOT_ACCEPTABLE).await;
+        assert_json_fields!(value; json_at ["error"] => Some(&Value::String("unsupported_chunker".into())));
     }
     #[tokio::test]
     async fn storage_restart_recovers_manifest_metadata() {
@@ -41271,13 +40028,7 @@ mod advert_tests {
             offset: 0,
             length: payload.len() as u64,
         };
-        let fetch_response = handle_post_sorafs_storage_fetch(
-            State(state_after.clone()),
-            fetch_headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8089))),
-            JsonOnly(fetch_request),
-        )
-        .await;
+        let fetch_response = api_test_route!(post_storage_fetch; State(state_after.clone()); fetch_headers; ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8089))); JsonOnly(fetch_request));
         assert_eq!(fetch_response.status(), StatusCode::OK);
         let fetch_value = api_test_response_json(fetch_response).await;
         let data_b64 = fetch_value.json_str(&["data_b64"]).expect("payload data");
@@ -41293,38 +40044,20 @@ mod advert_tests {
         insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-token-1");
         insert_api_test_header(&mut headers, HEADER_SORA_CLIENT, &context.client_id);
 
-        let request = StreamTokenRequestDto {
-            manifest_id_hex: context.manifest_id_hex.clone(),
-            provider_id_hex: context.provider_id_hex.clone(),
-            ttl_secs: None,
-            max_streams: None,
-            rate_limit_bytes: None,
-            requests_per_minute: None,
-        };
-        let response = handle_post_sorafs_storage_token(
-            State(context.app.clone()),
-            headers,
-            JsonOnly(request),
-        )
-        .await;
+        let request = context.token_request(TokenOverrides::default());
+        let response = api_test_route!(post_storage_token; State(context.app.clone()); headers; JsonOnly(request));
         assert_eq!(response.status(), StatusCode::OK);
         let headers = response.headers().clone();
         assert_eq!(
-            headers
-                .get(HEADER_SORA_NONCE)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(&headers, HEADER_SORA_NONCE),
             Some("nonce-token-1")
         );
         assert_eq!(
-            headers
-                .get(HEADER_SORA_CLIENT)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(&headers, HEADER_SORA_CLIENT),
             Some(context.client_id.as_str())
         );
         assert_eq!(
-            headers
-                .get(HEADER_SORA_VERIFYING_KEY)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(&headers, HEADER_SORA_VERIFYING_KEY),
             Some(context.verifying_key_hex.as_str())
         );
         let token_id = headers
@@ -41333,15 +40066,11 @@ mod advert_tests {
             .expect("token id header");
         assert!(!token_id.is_empty());
         assert_eq!(
-            headers
-                .get(HEADER_SORA_ISSUANCE_QUOTA_REMAINING)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(&headers, HEADER_SORA_ISSUANCE_QUOTA_REMAINING),
             Some("2")
         );
         assert_eq!(
-            headers
-                .get(CACHE_CONTROL)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(&headers, CACHE_CONTROL),
             Some("no-store")
         );
 
@@ -41403,38 +40132,26 @@ mod advert_tests {
                 rate_limit_bytes: None,
                 requests_per_minute: None,
             };
-            handle_post_sorafs_storage_token(State(context.app), headers, JsonOnly(request)).await
+            api_test_route!(post_storage_token; State(context.app); headers; JsonOnly(request))
         }
         let unavailable = issue_with_mode(ApiTestStreamTokenSignerMode::Unavailable).await;
         assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
-            unavailable
-                .headers()
-                .get(RETRY_AFTER)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(unavailable.headers(), RETRY_AFTER),
             Some("1")
         );
         let unavailable_value = api_test_response_json(unavailable).await;
-        assert_eq!(
-            unavailable_value.json_str(&["error"]),
-            Some("stream token issuance is temporarily unavailable")
-        );
+        assert_json_fields!(unavailable_value; json_str ["error"] => Some("stream token issuance is temporarily unavailable"));
         let drifted = issue_with_mode(ApiTestStreamTokenSignerMode::QualificationDrift).await;
         assert_eq!(drifted.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
-            drifted
-                .headers()
-                .get(RETRY_AFTER)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(drifted.headers(), RETRY_AFTER),
             Some("1")
         );
         let drifted_body = api_test_response_body(drifted).await;
         let drifted_value: Value =
             norito::json::from_slice(&drifted_body).expect("decode drifted response");
-        assert_eq!(
-            drifted_value.json_str(&["error"]),
-            Some("stream token issuance is temporarily unavailable")
-        );
+        assert_json_fields!(drifted_value; json_str ["error"] => Some("stream token issuance is temporarily unavailable"));
         assert!(!String::from_utf8_lossy(&drifted_body).contains("qualification"));
         for mode in [
             ApiTestStreamTokenSignerMode::Refused,
@@ -41446,10 +40163,7 @@ mod advert_tests {
             let response_body = api_test_response_body(response).await;
             let response_value: Value =
                 norito::json::from_slice(&response_body).expect("decode signer failure response");
-            assert_eq!(
-                response_value.json_str(&["error"]),
-                Some("failed to issue stream token")
-            );
+            assert_json_fields!(response_value; json_str ["error"] => Some("failed to issue stream token"));
             let rendered = String::from_utf8_lossy(&response_body);
             assert!(!rendered.contains("pkcs11:"));
             assert!(!rendered.contains("runtime signer"));
@@ -41459,26 +40173,9 @@ mod advert_tests {
     #[tokio::test]
     async fn storage_token_requires_nonce_header() {
         let context = token_test_context();
-        let request = StreamTokenRequestDto {
-            manifest_id_hex: context.manifest_id_hex.clone(),
-            provider_id_hex: context.provider_id_hex.clone(),
-            ttl_secs: None,
-            max_streams: None,
-            rate_limit_bytes: None,
-            requests_per_minute: None,
-        };
-        let response = handle_post_sorafs_storage_token(
-            State(context.app.clone()),
-            {
-                let mut headers = HeaderMap::new();
-                insert_api_test_header(&mut headers, HEADER_SORA_CLIENT, &context.client_id);
-                headers
-            },
-            JsonOnly(request),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let value = api_test_response_json(response).await;
+        let request = context.token_request(TokenOverrides::default());
+        let response = api_test_route!(post_storage_token; State(context.app.clone()); { let mut headers = HeaderMap::new(); insert_api_test_header(&mut headers, HEADER_SORA_CLIENT, &context.client_id); headers }; JsonOnly(request));
+        let value = api_test_response_json_with_status(response, StatusCode::BAD_REQUEST).await;
         let error_message = value.json_str(&["error"]).expect("error string");
         assert!(
             error_message.contains("missing X-SoraFS-Nonce"),
@@ -41488,14 +40185,7 @@ mod advert_tests {
     #[tokio::test]
     async fn storage_token_rejects_noncanonical_or_oversized_request_fields() {
         let context = token_test_context();
-        let request = || StreamTokenRequestDto {
-            manifest_id_hex: context.manifest_id_hex.clone(),
-            provider_id_hex: context.provider_id_hex.clone(),
-            ttl_secs: None,
-            max_streams: None,
-            rate_limit_bytes: None,
-            requests_per_minute: None,
-        };
+        let request = || context.token_request(TokenOverrides::default());
         for (name, value) in [
             (HEADER_SORA_CLIENT, "x".repeat(MAX_CLIENT_ID_BYTES + 1)),
             (HEADER_SORA_CLIENT, "client with spaces".to_string()),
@@ -41509,12 +40199,7 @@ mod advert_tests {
                 header::HeaderName::from_static(name),
                 HeaderValue::from_str(&value).expect("test header"),
             );
-            let response = handle_post_sorafs_storage_token(
-                State(context.app.clone()),
-                headers,
-                JsonOnly(request()),
-            )
-            .await;
+            let response = api_test_route!(post_storage_token; State(context.app.clone()); headers; JsonOnly(request()));
             assert_eq!(
                 response.status(),
                 StatusCode::BAD_REQUEST,
@@ -41526,21 +40211,11 @@ mod advert_tests {
         insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-a");
         let mut noncanonical_manifest = request();
         noncanonical_manifest.manifest_id_hex.push('A');
-        let response = handle_post_sorafs_storage_token(
-            State(context.app.clone()),
-            headers.clone(),
-            JsonOnly(noncanonical_manifest),
-        )
-        .await;
+        let response = api_test_route!(post_storage_token; State(context.app.clone()); headers.clone(); JsonOnly(noncanonical_manifest));
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let mut noncanonical_provider = request();
         noncanonical_provider.provider_id_hex.make_ascii_uppercase();
-        let response = handle_post_sorafs_storage_token(
-            State(context.app.clone()),
-            headers,
-            JsonOnly(noncanonical_provider),
-        )
-        .await;
+        let response = api_test_route!(post_storage_token; State(context.app.clone()); headers; JsonOnly(noncanonical_provider));
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
     #[tokio::test]
@@ -41561,12 +40236,7 @@ mod advert_tests {
             requests_per_minute: overrides.requests_per_minute,
         };
         for provider in [[0_u8; 32], [0xAC; 32]] {
-            let response = handle_post_sorafs_storage_token(
-                State(context.app.clone()),
-                headers(),
-                JsonOnly(request(hex::encode(provider), TokenOverrides::default())),
-            )
-            .await;
+            let response = api_test_route!(post_storage_token; State(context.app.clone()); headers(); JsonOnly(request(hex::encode(provider), TokenOverrides::default())));
             assert!(
                 matches!(
                     response.status(),
@@ -41598,12 +40268,7 @@ mod advert_tests {
                 ..TokenOverrides::default()
             },
         ] {
-            let response = handle_post_sorafs_storage_token(
-                State(context.app.clone()),
-                headers(),
-                JsonOnly(request(context.provider_id_hex.clone(), overrides)),
-            )
-            .await;
+            let response = api_test_route!(post_storage_token; State(context.app.clone()); headers(); JsonOnly(request(context.provider_id_hex.clone(), overrides)));
             assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         }
     }
@@ -41702,38 +40367,16 @@ mod advert_tests {
     #[tokio::test]
     async fn storage_token_requires_an_authenticated_operator_identity() {
         let context = token_test_context();
-        let request = || StreamTokenRequestDto {
-            manifest_id_hex: context.manifest_id_hex.clone(),
-            provider_id_hex: context.provider_id_hex.clone(),
-            ttl_secs: None,
-            max_streams: None,
-            rate_limit_bytes: None,
-            requests_per_minute: None,
-        };
+        let request = || context.token_request(TokenOverrides::default());
         let mut headers = HeaderMap::new();
         insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "operator-auth-test");
         insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "operator-auth-nonce");
-        let missing = handle_post_sorafs_storage_token_authenticated(
-            None,
-            State(context.app.clone()),
-            headers.clone(),
-            JsonOnly(request()),
-        )
-        .await;
+        let missing = api_test_route!(post_storage_token_authenticated; None; State(context.app.clone()); headers.clone(); JsonOnly(request()));
         assert_eq!(missing.status(), StatusCode::FORBIDDEN);
-        let valid = handle_post_sorafs_storage_token_authenticated(
-            test_stream_token_operator(),
-            State(context.app.clone()),
-            headers,
-            JsonOnly(request()),
-        )
-        .await;
+        let valid = api_test_route!(post_storage_token_authenticated; test_stream_token_operator(); State(context.app.clone()); headers; JsonOnly(request()));
         assert_eq!(valid.status(), StatusCode::OK);
         assert_eq!(
-            valid
-                .headers()
-                .get(HEADER_SORA_ISSUANCE_QUOTA_REMAINING)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(valid.headers(), HEADER_SORA_ISSUANCE_QUOTA_REMAINING),
             Some("2"),
             "rejected unauthenticated calls must not consume operator quota"
         );
@@ -41741,14 +40384,7 @@ mod advert_tests {
     #[tokio::test]
     async fn storage_token_client_label_rotation_cannot_escape_operator_quota() {
         let context = token_test_context();
-        let request_builder = || StreamTokenRequestDto {
-            manifest_id_hex: context.manifest_id_hex.clone(),
-            provider_id_hex: context.provider_id_hex.clone(),
-            ttl_secs: None,
-            max_streams: None,
-            rate_limit_bytes: None,
-            requests_per_minute: None,
-        };
+        let request_builder = || context.token_request(TokenOverrides::default());
         let expected = ["2", "1", "0"];
         for (idx, quota_remaining) in expected.into_iter().enumerate() {
             let mut headers = HeaderMap::new();
@@ -41762,12 +40398,7 @@ mod advert_tests {
                 HEADER_SORA_CLIENT,
                 format!("rotating-label-{idx}"),
             );
-            let response = handle_post_sorafs_storage_token(
-                State(context.app.clone()),
-                headers,
-                JsonOnly(request_builder()),
-            )
-            .await;
+            let response = api_test_route!(post_storage_token; State(context.app.clone()); headers; JsonOnly(request_builder()));
             assert_eq!(response.status(), StatusCode::OK);
             let remaining = response
                 .headers()
@@ -41780,12 +40411,7 @@ mod advert_tests {
         insert_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-quota-3");
         insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "fresh-label-after-quota");
 
-        let response = handle_post_sorafs_storage_token(
-            State(context.app.clone()),
-            headers,
-            JsonOnly(request_builder()),
-        )
-        .await;
+        let response = api_test_route!(post_storage_token; State(context.app.clone()); headers; JsonOnly(request_builder()));
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         let retry_after = response
             .headers()
@@ -41827,9 +40453,8 @@ mod advert_tests {
             requests_per_minute: None,
         };
         let response =
-            handle_post_sorafs_storage_token(State(state), headers, JsonOnly(request)).await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        let value = api_test_response_json(response).await;
+            api_test_route!(post_storage_token; State(state); headers; JsonOnly(request));
+        let value = api_test_response_json_with_status(response, StatusCode::NOT_FOUND).await;
         let error_message = value.json_str(&["error"]).expect("error string");
         assert!(
             error_message.contains("stream token issuance is not enabled"),
@@ -41849,8 +40474,7 @@ mod advert_tests {
             rate_limit_bytes: None,
             requests_per_minute: None,
         };
-        let response =
-            handle_post_sorafs_storage_token(State(app), headers, JsonOnly(request)).await;
+        let response = api_test_route!(post_storage_token; State(app); headers; JsonOnly(request));
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
     #[tokio::test]
@@ -41876,44 +40500,31 @@ mod advert_tests {
             requests_per_minute: Some(2),
         };
         let response =
-            handle_post_sorafs_storage_token(State(app.clone()), headers, JsonOnly(request)).await;
+            api_test_route!(post_storage_token; State(app.clone()); headers; JsonOnly(request));
         assert_eq!(response.status(), StatusCode::OK);
         let headers = response.headers().clone();
         assert_eq!(
-            headers
-                .get(HEADER_SORA_NONCE)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(&headers, HEADER_SORA_NONCE),
             Some("nonce-123")
         );
         assert_eq!(
-            headers
-                .get(HEADER_SORA_CLIENT)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(&headers, HEADER_SORA_CLIENT),
             Some("gateway-alpha")
         );
         assert!(
-            headers
-                .get(HEADER_SORA_TOKEN_ID)
-                .and_then(|value| value.to_str().ok())
-                .is_some(),
+            api_test_header_str(&headers, HEADER_SORA_TOKEN_ID).is_some(),
             "token id header must be present"
         );
         assert_eq!(
-            headers
-                .get(HEADER_SORA_VERIFYING_KEY)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(&headers, HEADER_SORA_VERIFYING_KEY),
             Some(verifying_hex.as_str())
         );
         assert_eq!(
-            headers
-                .get(HEADER_SORA_ISSUANCE_QUOTA_REMAINING)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(&headers, HEADER_SORA_ISSUANCE_QUOTA_REMAINING),
             Some("2")
         );
         assert_eq!(
-            headers
-                .get(CACHE_CONTROL)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(&headers, CACHE_CONTROL),
             Some("no-store")
         );
 
@@ -41945,13 +40556,7 @@ mod advert_tests {
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
         );
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))),
-        )
-        .await;
+        let response = context.car_range(headers, 8080).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
     #[tokio::test]
@@ -41971,13 +40576,7 @@ mod advert_tests {
         );
         insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-download");
 
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8082))),
-        )
-        .await;
+        let response = context.car_range(headers, 8082).await;
         assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
         let request_id_header = response
             .headers()
@@ -41992,10 +40591,7 @@ mod advert_tests {
         );
 
         let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.get("error"),
-            Some(&Value::String("missing_header".into()))
-        );
+        assert_json_fields!(value; json_at ["error"] => Some(&Value::String("missing_header".into())));
         let reason = value.json_str(&["reason"]).expect("reason field present");
         assert!(
             reason.contains("dag-scope"),
@@ -42037,13 +40633,7 @@ mod advert_tests {
         );
         insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-download");
 
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8090))),
-        )
-        .await;
+        let response = context.car_range(headers, 8090).await;
         assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
         let metrics_after = context.app.telemetry.metrics().await;
         let counter_after = metrics_after
@@ -42069,13 +40659,7 @@ mod advert_tests {
             &token_base64,
             "nonce-download",
         );
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8081))),
-        )
-        .await;
+        let response = context.car_range(headers, 8081).await;
         assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
         let (parts, body) = response.into_parts();
         let headers = parts.headers;
@@ -42084,16 +40668,12 @@ mod advert_tests {
             .expect("collect CAR body");
         let car_bytes = body_bytes.to_vec();
         assert_eq!(
-            headers
-                .get(header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(&headers, header::CONTENT_TYPE),
             Some(MIME_CAR)
         );
         let expected_length_header = car_bytes.len().to_string();
         assert_eq!(
-            headers
-                .get(header::CONTENT_LENGTH)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(&headers, header::CONTENT_LENGTH),
             Some(expected_length_header.as_str())
         );
         let tls_state = headers
@@ -42182,13 +40762,7 @@ mod advert_tests {
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
         );
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8086))),
-        )
-        .await;
+        let response = context.car_range(headers, 8086).await;
         assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
         let (parts, body) = response.into_parts();
         let headers = parts.headers;
@@ -42220,9 +40794,7 @@ mod advert_tests {
             manifest.content_length()
         );
         assert_eq!(
-            headers
-                .get(header::CONTENT_RANGE)
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(&headers, header::CONTENT_RANGE),
             Some(expected_content_range.as_str())
         );
         let chunk_range_header = headers
@@ -42245,13 +40817,7 @@ mod advert_tests {
             &token_base64,
             "nonce-download",
         );
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8082))),
-        )
-        .await;
+        let response = context.car_range(headers, 8082).await;
         assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
         let (parts, _) = response.into_parts();
         let headers = parts.headers;
@@ -42265,9 +40831,7 @@ mod advert_tests {
         );
         let expected_content_cid_hex = hex::encode(manifest.manifest_cid());
         assert_eq!(
-            headers
-                .get(HeaderName::from_static(HEADER_SORA_CONTENT_CID))
-                .and_then(|value| value.to_str().ok()),
+            api_test_header_str(&headers, HeaderName::from_static(HEADER_SORA_CONTENT_CID)),
             Some(expected_content_cid_hex.as_str()),
             "Sora-Content-CID must match manifest root CID"
         );
@@ -42290,13 +40854,7 @@ mod advert_tests {
             &token_base64,
             "quota-nonce",
         );
-        let first_response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            first_headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8083))),
-        )
-        .await;
+        let first_response = context.car_range(first_headers, 8083).await;
         assert_eq!(first_response.status(), StatusCode::PARTIAL_CONTENT);
         let second_headers = alias_bound_car_range_headers(
             manifest.chunk_profile_handle(),
@@ -42304,13 +40862,7 @@ mod advert_tests {
             &token_base64,
             "quota-nonce",
         );
-        let second_response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            second_headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8084))),
-        )
-        .await;
+        let second_response = context.car_range(second_headers, 8084).await;
         assert_eq!(second_response.status(), StatusCode::TOO_MANY_REQUESTS);
         let retry_after = second_response
             .headers()
@@ -42358,19 +40910,10 @@ mod advert_tests {
         insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-download");
         insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
 
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8085))),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.get("error"),
-            Some(&Value::String("manifest_envelope_required".into()))
-        );
+        let response = context.car_range(headers, 8085).await;
+        let value =
+            api_test_response_json_with_status(response, StatusCode::PRECONDITION_REQUIRED).await;
+        assert_json_fields!(value; json_at ["error"] => Some(&Value::String("manifest_envelope_required".into())));
     }
     #[derive(Clone, Copy)]
     enum ManifestEnvelopePolicyCase {
@@ -42441,29 +40984,17 @@ mod advert_tests {
             ManifestEnvelopePolicyCase::Required => None,
             ManifestEnvelopePolicyCase::Optional => Some(fetch_request.manifest_id_hex.clone()),
         };
-        let response = handle_post_sorafs_storage_fetch(
-            State(state.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], port))),
-            JsonOnly(fetch_request),
-        )
-        .await;
+        let response = api_test_route!(post_storage_fetch; State(state.clone()); headers; ConnectInfo(SocketAddr::from(([127, 0, 0, 1], port))); JsonOnly(fetch_request));
         match case {
             ManifestEnvelopePolicyCase::Required => {
-                assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
-                let value = api_test_response_json(response).await;
-                assert_eq!(
-                    value.get("error"),
-                    Some(&Value::String("manifest_envelope_required".into()))
-                );
+                let value =
+                    api_test_response_json_with_status(response, StatusCode::PRECONDITION_REQUIRED)
+                        .await;
+                assert_json_fields!(value; json_at ["error"] => Some(&Value::String("manifest_envelope_required".into())));
             }
             ManifestEnvelopePolicyCase::Optional => {
-                assert_eq!(response.status(), StatusCode::OK);
-                let value = api_test_response_json(response).await;
-                assert_eq!(
-                    value.get("manifest_id_hex"),
-                    Some(&Value::String(expected_manifest_id.unwrap()))
-                );
+                let value = api_test_response_json_with_status(response, StatusCode::OK).await;
+                assert_json_fields!(value; json_at ["manifest_id_hex"] => Some(&Value::String(expected_manifest_id.unwrap())));
             }
         }
     }
@@ -42506,19 +41037,10 @@ mod advert_tests {
             offset: 0,
             length: payload.len() as u64,
         };
-        let response = handle_post_sorafs_storage_fetch(
-            State(state.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8100))),
-            JsonOnly(fetch_request),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.get("error"),
-            Some(&Value::String("gateway_compliance_unavailable".into()))
-        );
+        let response = api_test_route!(post_storage_fetch; State(state.clone()); headers; ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8100))); JsonOnly(fetch_request));
+        let value =
+            api_test_response_json_with_status(response, StatusCode::SERVICE_UNAVAILABLE).await;
+        assert_json_fields!(value; json_at ["error"] => Some(&Value::String("gateway_compliance_unavailable".into())));
     }
     #[tokio::test]
     async fn storage_chunk_requires_manifest_envelope_when_policy_enabled() {
@@ -42542,19 +41064,10 @@ mod advert_tests {
         app_inner.sorafs_gateway_config.require_manifest_envelope = true;
         refresh_api_test_gateway_security(&mut app_inner);
         context.app = Arc::new(app_inner);
-        let response = handle_get_sorafs_storage_chunk(
-            State(context.app.clone()),
-            Path((context.manifest_id_hex.clone(), chunk_digest_hex)),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8096))),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.get("error"),
-            Some(&Value::String("manifest_envelope_required".into()))
-        );
+        let response = api_test_route!(get_storage_chunk; State(context.app.clone()); Path((context.manifest_id_hex.clone(), chunk_digest_hex)); headers; ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8096))));
+        let value =
+            api_test_response_json_with_status(response, StatusCode::PRECONDITION_REQUIRED).await;
+        assert_json_fields!(value; json_at ["error"] => Some(&Value::String("manifest_envelope_required".into())));
     }
     #[tokio::test]
     async fn storage_fetch_allows_missing_manifest_envelope_when_policy_disabled() {
@@ -42586,13 +41099,7 @@ mod advert_tests {
         insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-optional-envelope");
         insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
 
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8094))),
-        )
-        .await;
+        let response = context.car_range(headers, 8094).await;
         assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
     }
     #[tokio::test]
@@ -42653,42 +41160,20 @@ mod advert_tests {
             length: payload.len() as u64,
         };
         // Capability advertised via discovery should allow fetch.
-        let response_success = handle_post_sorafs_storage_fetch(
-            State(state.clone()),
-            make_headers("capability-allowed"),
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8094))),
-            JsonOnly(make_request()),
-        )
-        .await;
+        let response_success = api_test_route!(post_storage_fetch; State(state.clone()); make_headers("capability-allowed"); ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8094))); JsonOnly(make_request()));
         assert_eq!(response_success.status(), StatusCode::OK);
         // Capability override denies chunk-range fetch (missing capability branch).
         state
             .sorafs_chunk_range_overrides
             .insert(provider_bytes, false);
-        let response_missing = handle_post_sorafs_storage_fetch(
-            State(state.clone()),
-            make_headers("capability-missing"),
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8095))),
-            JsonOnly(make_request()),
-        )
-        .await;
+        let response_missing = api_test_route!(post_storage_fetch; State(state.clone()); make_headers("capability-missing"); ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8095))); JsonOnly(make_request()));
         assert_eq!(response_missing.status(), StatusCode::PRECONDITION_FAILED);
         let missing_value = api_test_response_json(response_missing).await;
-        assert_eq!(
-            missing_value.get("error"),
-            Some(&Value::String("capability_missing".into()))
-        );
+        assert_json_fields!(missing_value; json_at ["error"] => Some(&Value::String("capability_missing".into())));
         let missing_details = missing_value
             .json_object(&["details"])
             .expect("missing capability details");
-        assert_eq!(
-            missing_details.json_str(&["provider_id_hex"]),
-            Some(provider_id_hex.as_str())
-        );
-        assert_eq!(
-            missing_details.json_str(&["capability"]),
-            Some("chunk_range_fetch")
-        );
+        assert_json_fields!(missing_details; json_str ["provider_id_hex"] => Some(provider_id_hex.as_str()), json_str ["capability"] => Some("chunk_range_fetch"));
         // Drop override so capability state becomes unknown.
         state.sorafs_chunk_range_overrides.remove(&provider_bytes);
         if let Some(cache) = &state.sorafs_cache {
@@ -42697,41 +41182,19 @@ mod advert_tests {
                 .expect("expire cached provider advert entry");
             guard.prune_stale(fixture.expires_at().saturating_add(TTL_SECS));
         }
-        let response_unknown = handle_post_sorafs_storage_fetch(
-            State(state.clone()),
-            make_headers("capability-unknown"),
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8096))),
-            JsonOnly(make_request()),
-        )
-        .await;
+        let response_unknown = api_test_route!(post_storage_fetch; State(state.clone()); make_headers("capability-unknown"); ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8096))); JsonOnly(make_request()));
         assert_eq!(response_unknown.status(), StatusCode::PRECONDITION_FAILED);
         let unknown_value = api_test_response_json(response_unknown).await;
-        assert_eq!(
-            unknown_value.get("error"),
-            Some(&Value::String("capability_state_unknown".into()))
-        );
+        assert_json_fields!(unknown_value; json_at ["error"] => Some(&Value::String("capability_state_unknown".into())));
         let unknown_details = unknown_value
             .json_object(&["details"])
             .expect("unknown capability details");
-        assert_eq!(
-            unknown_details.json_str(&["provider_id_hex"]),
-            Some(provider_id_hex.as_str())
-        );
-        assert_eq!(
-            unknown_details.json_str(&["capability"]),
-            Some("chunk_range_fetch")
-        );
+        assert_json_fields!(unknown_details; json_str ["provider_id_hex"] => Some(provider_id_hex.as_str()), json_str ["capability"] => Some("chunk_range_fetch"));
         // Advertise capability (override) and ensure the fetch succeeds.
         state
             .sorafs_chunk_range_overrides
             .insert(provider_bytes, true);
-        let response_restored = handle_post_sorafs_storage_fetch(
-            State(state),
-            make_headers("capability-restored"),
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8097))),
-            JsonOnly(make_request()),
-        )
-        .await;
+        let response_restored = api_test_route!(post_storage_fetch; State(state); make_headers("capability-restored"); ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8097))); JsonOnly(make_request()));
         assert_eq!(response_restored.status(), StatusCode::OK);
         let restored_value = api_test_response_json(response_restored).await;
         let data_b64 = restored_value
@@ -42777,25 +41240,10 @@ mod advert_tests {
         ) -> Response {
             match self {
                 Self::Car => {
-                    handle_get_sorafs_storage_car_range(
-                        State(context.app.clone()),
-                        Path(context.manifest_id_hex.clone()),
-                        headers,
-                        ConnectInfo(SocketAddr::from(([127, 0, 0, 1], port))),
-                    )
-                    .await
+                    api_test_route!(get_storage_car_range; State(context.app.clone()); Path(context.manifest_id_hex.clone()); headers; ConnectInfo(SocketAddr::from(([127, 0, 0, 1], port))))
                 }
                 Self::Chunk => {
-                    handle_get_sorafs_storage_chunk(
-                        State(context.app.clone()),
-                        Path((
-                            context.manifest_id_hex.clone(),
-                            chunk_digest_hex.expect("chunk metadata present"),
-                        )),
-                        headers,
-                        ConnectInfo(SocketAddr::from(([127, 0, 0, 1], port))),
-                    )
-                    .await
+                    api_test_route!(get_storage_chunk; State(context.app.clone()); Path(( context.manifest_id_hex.clone(), chunk_digest_hex.expect("chunk metadata present"), )); headers; ConnectInfo(SocketAddr::from(([127, 0, 0, 1], port))))
                 }
             }
         }
@@ -42862,17 +41310,11 @@ mod advert_tests {
             .await;
         assert_eq!(response_missing.status(), StatusCode::PRECONDITION_FAILED);
         let missing_value = api_test_response_json(response_missing).await;
-        assert_eq!(
-            missing_value.get("error"),
-            Some(&Value::String("capability_missing".into()))
-        );
+        assert_json_fields!(missing_value; json_at ["error"] => Some(&Value::String("capability_missing".into())));
         let missing_details = missing_value
             .json_object(&["details"])
             .expect("missing capability details");
-        assert_eq!(
-            missing_details.json_str(&["provider_id_hex"]),
-            Some(provider_id_hex.as_str())
-        );
+        assert_json_fields!(missing_details; json_str ["provider_id_hex"] => Some(provider_id_hex.as_str()));
         context
             .app
             .sorafs_chunk_range_overrides
@@ -42897,17 +41339,11 @@ mod advert_tests {
             .await;
         assert_eq!(response_unknown.status(), StatusCode::PRECONDITION_FAILED);
         let unknown_value = api_test_response_json(response_unknown).await;
-        assert_eq!(
-            unknown_value.get("error"),
-            Some(&Value::String("capability_state_unknown".into()))
-        );
+        assert_json_fields!(unknown_value; json_at ["error"] => Some(&Value::String("capability_state_unknown".into())));
         let unknown_details = unknown_value
             .json_object(&["details"])
             .expect("unknown capability details");
-        assert_eq!(
-            unknown_details.json_str(&["provider_id_hex"]),
-            Some(provider_id_hex.as_str())
-        );
+        assert_json_fields!(unknown_details; json_str ["provider_id_hex"] => Some(provider_id_hex.as_str()));
     }
 
     #[tokio::test]
@@ -42948,23 +41384,10 @@ mod advert_tests {
         insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
         insert_static_api_test_header(&mut headers, HEADER_SORA_MANIFEST_ENVELOPE, "dummy");
 
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8087))),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
-        let value = api_test_response_json(response).await;
-        assert_eq!(
-            value.get("error"),
-            Some(&Value::String("provider_not_admitted".into()))
-        );
-        assert_eq!(
-            value.get("provider_id_hex"),
-            Some(&Value::String(context.provider_id_hex.clone()))
-        );
+        let response = context.car_range(headers, 8087).await;
+        let value =
+            api_test_response_json_with_status(response, StatusCode::PRECONDITION_FAILED).await;
+        assert_json_fields!(value; json_at ["error"] => Some(&Value::String("provider_not_admitted".into())), json_at ["provider_id_hex"] => Some(&Value::String(context.provider_id_hex.clone())));
     }
     #[tokio::test]
     async fn car_range_rate_limits_repeated_clients() {
@@ -42998,13 +41421,7 @@ mod advert_tests {
         insert_static_api_test_header(&mut headers, HEADER_SORA_MANIFEST_ENVELOPE, "dummy");
         insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "gateway-alpha");
 
-        let success_response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            headers.clone(),
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8092))),
-        )
-        .await;
+        let success_response = context.car_range(headers.clone(), 8092).await;
         assert_eq!(success_response.status(), StatusCode::PARTIAL_CONTENT);
         let tls_header = success_response
             .headers()
@@ -43018,19 +41435,10 @@ mod advert_tests {
         let mut throttled_headers = headers;
         insert_static_api_test_header(&mut throttled_headers, HEADER_SORA_NONCE, "nonce-rate-1");
 
-        let throttled = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            throttled_headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8092))),
-        )
-        .await;
+        let throttled = context.car_range(throttled_headers, 8092).await;
         assert_eq!(throttled.status(), StatusCode::TOO_MANY_REQUESTS);
         let value = api_test_response_json(throttled).await;
-        assert_eq!(
-            value.get("error"),
-            Some(&Value::String("rate_limited".into()))
-        );
+        assert_json_fields!(value; json_at ["error"] => Some(&Value::String("rate_limited".into())));
     }
     #[tokio::test]
     async fn car_range_rate_limit_uses_forwarded_client_ip_from_trusted_proxy() {
@@ -43081,49 +41489,21 @@ mod advert_tests {
                 }
                 headers
             };
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            build_headers("nonce-fwd-a-0", Some("203.0.113.10"), &trusted_token_base64),
-            trusted_proxy.clone(),
-        )
-        .await;
+        let response = api_test_route!(get_storage_car_range; State(context.app.clone()); Path(context.manifest_id_hex.clone()); build_headers("nonce-fwd-a-0", Some("203.0.113.10"), &trusted_token_base64); trusted_proxy.clone());
         assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            build_headers("nonce-fwd-b-0", Some("203.0.113.11"), &trusted_token_base64),
-            trusted_proxy.clone(),
-        )
-        .await;
+        let response = api_test_route!(get_storage_car_range; State(context.app.clone()); Path(context.manifest_id_hex.clone()); build_headers("nonce-fwd-b-0", Some("203.0.113.11"), &trusted_token_base64); trusted_proxy.clone());
         assert_eq!(
             response.status(),
             StatusCode::PARTIAL_CONTENT,
             "distinct forwarded client IPs should not share one gateway bucket"
         );
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            build_headers("nonce-fwd-a-1", Some("203.0.113.10"), &trusted_token_base64),
-            trusted_proxy,
-        )
-        .await;
+        let response = api_test_route!(get_storage_car_range; State(context.app.clone()); Path(context.manifest_id_hex.clone()); build_headers("nonce-fwd-a-1", Some("203.0.113.10"), &trusted_token_base64); trusted_proxy);
         assert_eq!(
             response.status(),
             StatusCode::TOO_MANY_REQUESTS,
             "reusing the same trusted forwarded client IP should hit the same gateway bucket"
         );
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app),
-            Path(context.manifest_id_hex),
-            build_headers(
-                "nonce-untrusted-0",
-                Some("203.0.113.10"),
-                &untrusted_token_base64,
-            ),
-            untrusted_remote,
-        )
-        .await;
+        let response = api_test_route!(get_storage_car_range; State(context.app); Path(context.manifest_id_hex); build_headers( "nonce-untrusted-0", Some("203.0.113.10"), &untrusted_token_base64, ); untrusted_remote);
         assert_eq!(
             response.status(),
             StatusCode::PARTIAL_CONTENT,
@@ -43157,13 +41537,7 @@ mod advert_tests {
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
         );
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8084))),
-        )
-        .await;
+        let response = context.car_range(headers, 8084).await;
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let (parts, body) = response.into_parts();
         assert_eq!(parts.status, StatusCode::UNPROCESSABLE_ENTITY);
@@ -43194,13 +41568,7 @@ mod advert_tests {
             &token_base64,
             "nonce-download",
         );
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8085))),
-        )
-        .await;
+        let response = context.car_range(headers, 8085).await;
         let (parts, body) = response.into_parts();
         let status = parts.status;
         let body_bytes = body::to_bytes(body, usize::MAX)
@@ -43209,10 +41577,7 @@ mod advert_tests {
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
         let value: Value =
             norito::json::from_slice(&body_bytes).expect("decode rate-limit response");
-        assert_eq!(
-            value.json_str(&["error"]),
-            Some("stream token rate limit exceeded")
-        );
+        assert_json_fields!(value; json_str ["error"] => Some("stream token rate limit exceeded"));
     }
     #[tokio::test]
     async fn car_range_accepts_multi_chunk_requests_with_small_stream_budget() {
@@ -43255,13 +41620,7 @@ mod advert_tests {
         insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-download");
         insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
 
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
-        )
-        .await;
+        let response = context.car_range(headers, 0).await;
         let status = response.status();
         if status != StatusCode::PARTIAL_CONTENT {
             let (_, resp_body) = response.into_parts();
@@ -43295,13 +41654,7 @@ mod advert_tests {
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
         );
-        let response = handle_get_sorafs_storage_chunk(
-            State(context.app.clone()),
-            Path((context.manifest_id_hex.clone(), chunk_digest_hex)),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8082))),
-        )
-        .await;
+        let response = api_test_route!(get_storage_chunk; State(context.app.clone()); Path((context.manifest_id_hex.clone(), chunk_digest_hex)); headers; ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8082))));
         let (parts, _) = response.into_parts();
         assert_eq!(parts.status, StatusCode::OK);
         let tls_state = parts
@@ -43361,13 +41714,7 @@ mod advert_tests {
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
         );
-        let car_response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            range_headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))),
-        )
-        .await;
+        let car_response = context.car_range(range_headers, 8080).await;
         assert_eq!(car_response.status(), StatusCode::PARTIAL_CONTENT);
         let car_body_bytes = api_test_response_body(car_response).await;
         let car_payload_len = car_body_bytes.len() as u64;
@@ -43384,13 +41731,7 @@ mod advert_tests {
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
         );
-        let chunk_response = handle_get_sorafs_storage_chunk(
-            State(context.app.clone()),
-            Path((context.manifest_id_hex.clone(), chunk_digest_hex)),
-            chunk_headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8083))),
-        )
-        .await;
+        let chunk_response = api_test_route!(get_storage_chunk; State(context.app.clone()); Path((context.manifest_id_hex.clone(), chunk_digest_hex)); chunk_headers; ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8083))));
         assert_eq!(chunk_response.status(), StatusCode::OK);
         let chunk_body_bytes = api_test_response_body(chunk_response).await;
         let chunk_payload_len = chunk_body_bytes.len() as u64;

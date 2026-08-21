@@ -1,4 +1,23 @@
 impl Reducer {
+    /// Return the exact authenticated Proposal whose ordinary body fetch is
+    /// deliberately dormant until this Set-B validator's fallback boundary.
+    #[must_use]
+    pub(crate) fn dormant_set_b_proposal_fetch_candidate(&self) -> Option<&SignedProposal> {
+        let proposal = self.candidate_signed.as_ref()?;
+        let round = proposal.proposal().round();
+        let subject = proposal.proposal().manifest().subject();
+        let certificate = CertificateRef::new(self.context.id(), round, Phase::Prepare, subject);
+        (self.durable.decision().is_none()
+            && self.pending_persistence.is_none()
+            && self.durable.timeout_intent(round).is_none()
+            && round == Round::new(self.context.height(), self.durable.current_view())
+            && self.local_committee_role() == Some(CommitteeRole::SetBValidator)
+            && !self.fallback_active
+            && self.body_state(round, subject) == BodyState::Missing
+            && !self.pending_prepare.contains_key(&certificate))
+        .then_some(proposal)
+    }
+
     fn on_certificate(
         &mut self,
         certificate: QuorumCertificate,

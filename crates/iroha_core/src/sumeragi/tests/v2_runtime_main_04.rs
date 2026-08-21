@@ -1368,7 +1368,7 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
     );
 }
 #[test]
-fn completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
+fn store_completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
     let directory = TempDir::new().expect("temporary completion-coalescing directory");
     let (mut runtime, context, _keys) =
         authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
@@ -1414,7 +1414,6 @@ fn completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
         RetiredBodyPipelineCompletions {
             body_available: 0,
             body_stored: 1,
-            validation: 0,
             local_proposal: 0,
         }
     );
@@ -1467,7 +1466,6 @@ fn completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
         RetiredBodyPipelineCompletions {
             body_available: 0,
             body_stored: 1,
-            validation: 0,
             local_proposal: 0,
         }
     );
@@ -1479,53 +1477,6 @@ fn completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
             .expect("retirement cannot retain a phantom store owner"),
         None
     );
-    let deferred_validation = runtime_manifest(&context, 0x93);
-    let (_, validated) = receipts(&deferred_validation);
-    runtime
-        .driver
-        .defer_body_pipeline_stage_for_test(
-            owner_tag,
-            &deferred_validation,
-            DeferredBodyPipelineStageForTest::ValidationSucceeded,
-        )
-        .expect("stage a Busy-deferred validation completion");
-    runtime
-        .enqueue_validation_succeeded(
-            owner_tag,
-            deferred_validation.round,
-            deferred_validation.subject,
-            validated,
-        )
-        .expect("a retransmit coalesces with the Busy-deferred validation owner");
-    assert_eq!(runtime.queued_commands(), 0);
-    runtime
-        .retire_body_pipeline_completions(
-            owner_tag,
-            deferred_validation.round,
-            deferred_validation.subject,
-        )
-        .expect("retire the coalesced Busy-deferred validation owner");
-    let deferred_proposal = runtime_manifest(&context, 0x94);
-    let (durable, validated) = receipts(&deferred_proposal);
-    runtime
-        .driver
-        .defer_body_pipeline_stage_for_test(
-            owner_tag,
-            &deferred_proposal,
-            DeferredBodyPipelineStageForTest::LocalProposalReady,
-        )
-        .expect("stage a Busy-deferred local-proposal completion");
-    runtime
-        .enqueue_local_proposal(owner_tag, deferred_proposal.clone(), durable, validated)
-        .expect("a retransmit coalesces with the Busy-deferred proposal owner");
-    assert_eq!(runtime.queued_commands(), 0);
-    runtime
-        .retire_body_pipeline_completions(
-            owner_tag,
-            deferred_proposal.round,
-            deferred_proposal.subject,
-        )
-        .expect("retire the coalesced Busy-deferred proposal owner");
 }
 #[test]
 fn body_available_rebind_rejects_uninstalled_destination_without_mutation() {
@@ -1571,6 +1522,275 @@ fn body_available_rebind_rejects_uninstalled_destination_without_mutation() {
     );
     assert_eq!(runtime.queued_commands(), 0);
 }
+#[test]
+fn authenticated_remote_proposal_fetch_consumer_retag_preserves_replay_owner() {
+    let directory = TempDir::new().expect("temporary remote Proposal retag directory");
+    let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        RuntimeQueueConfig::new(8, 1, 1),
+        Some(0),
+    );
+    let now = Instant::now();
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm runtime for authenticated Proposal retag");
+    runtime
+        .enqueue_network(signed_runtime_proposal(&context, &keys, 0xA6))
+        .expect("enqueue exact authenticated Proposal");
+    let RuntimeStep::Advanced(effects) = runtime.step(now).expect("dispatch Proposal") else {
+        panic!("authenticated Proposal unexpectedly idled")
+    };
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("Proposal publishes scheduler ownership");
+    let [previous] = effects.as_slice() else {
+        panic!("Proposal must emit one exact Fetch: {effects:?}")
+    };
+    let AdapterEffect::FetchBody {
+        tag: previous_tag,
+        round: previous_round,
+        subject: previous_subject,
+        certificate: None,
+        certified_sources,
+        ..
+    } = previous
+    else {
+        panic!("authenticated Proposal must emit one ordinary Fetch")
+    };
+    assert!(certified_sources.is_empty());
+    let ownership = runtime
+        .take_effect_ownership(effects.len())
+        .expect("Fetch retains exact runtime ownership")
+        .pop()
+        .expect("one Fetch has one exact owner");
+    assert!(
+        ownership
+            .exact_remote_proposal_fetch_replay(previous)
+            .is_some()
+    );
+
+    let rebound_tag = EventTag::new(
+        previous_tag.height(),
+        previous_tag.view() + 1,
+        Generation::new(previous_tag.generation().get() + 1),
+    );
+    let mut rebound = previous.clone();
+    let AdapterEffect::FetchBody { tag, .. } = &mut rebound else {
+        unreachable!("fixture remains FetchBody")
+    };
+    *tag = rebound_tag;
+    let rebound_ownership = ownership
+        .rebind_fetch_consumer(previous, &rebound)
+        .expect("strictly later consumer retains exact ordinary Fetch ownership");
+    assert_eq!(rebound_ownership.owner(), ownership.owner());
+    assert!(
+        rebound_ownership
+            .exact_remote_proposal_fetch_replay(&rebound)
+            .is_some(),
+        "the retagged Fetch must retain its authenticated Proposal envelope"
+    );
+    assert!(
+        rebound_ownership
+            .exact_remote_proposal_fetch_replay(previous)
+            .is_none(),
+        "the replay envelope must bind only the new consumer tag"
+    );
+
+    let mut foreign_manifest = rebound.clone();
+    let AdapterEffect::FetchBody {
+        manifest: Some(manifest),
+        ..
+    } = &mut foreign_manifest
+    else {
+        unreachable!("ordinary Fetch retains its Proposal manifest")
+    };
+    manifest.chunk_root = Hash::new(b"foreign retagged Proposal manifest");
+    assert!(
+        ownership
+            .rebind_fetch_consumer(previous, &foreign_manifest)
+            .is_err()
+    );
+
+    let mut foreign_sources = rebound.clone();
+    let AdapterEffect::FetchBody {
+        certified_sources, ..
+    } = &mut foreign_sources
+    else {
+        unreachable!("fixture remains FetchBody")
+    };
+    certified_sources.push(PeerId::new(keys[0].public_key().clone()));
+    assert!(
+        ownership
+            .rebind_fetch_consumer(previous, &foreign_sources)
+            .is_err()
+    );
+
+    let mut certified = rebound;
+    let AdapterEffect::FetchBody { certificate, .. } = &mut certified else {
+        unreachable!("fixture remains FetchBody")
+    };
+    let mut genuine_certificate = signed_runtime_quorum_certificate(&context, &keys, 0xA5);
+    genuine_certificate.round = *previous_round;
+    genuine_certificate.proposal_round = *previous_round;
+    genuine_certificate.subject = *previous_subject;
+    *certificate = Some(genuine_certificate);
+    assert!(
+        ownership
+            .rebind_fetch_consumer(previous, &certified)
+            .is_err(),
+        "certified Fetch cannot enter the ordinary Proposal retag seam"
+    );
+
+    let certified_ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&certified),
+        vec![RuntimeEffectOwnership::fresh_for_test(rebound_tag, 98_001)],
+    )
+    .expect("bind a genuine certified Fetch owner")
+    .pop()
+    .expect("one certified Fetch has one exact owner");
+    let mut certified_rebound = certified.clone();
+    let AdapterEffect::FetchBody { tag, .. } = &mut certified_rebound else {
+        unreachable!("fixture remains FetchBody")
+    };
+    *tag = EventTag::new(
+        rebound_tag.height(),
+        rebound_tag.view() + 1,
+        Generation::new(rebound_tag.generation().get() + 1),
+    );
+    assert!(
+        certified_ownership
+            .rebind_fetch_consumer(&certified, &certified_rebound)
+            .is_err(),
+        "a genuinely certified Fetch cannot invoke the Proposal-only proof"
+    );
+}
+
+#[test]
+fn set_b_proposal_replay_waits_for_and_authenticates_periodic_fallback_fetch() {
+    let directory = TempDir::new().expect("temporary Set-B Proposal replay directory");
+    let (expected_context, _) = authenticated_runtime_context();
+    let committee = crate::sumeragi::v2_core::Committee::project_indices(
+        expected_context.height,
+        0,
+        expected_context.roster.len(),
+        expected_context.leader(0),
+    )
+    .expect("project the deterministic view-zero committee");
+    let local_validator = (0..u32::try_from(expected_context.roster.len()).expect("small roster"))
+        .find(|index| {
+            committee.role(*index) == Ok(crate::sumeragi::v2_core::CommitteeRole::SetBValidator)
+        })
+        .expect("four-validator committee has one Set-B validator");
+    let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        RuntimeQueueConfig::new(8, 1, 1),
+        Some(local_validator),
+    );
+    assert_eq!(context.id(), expected_context.id());
+    let now = Instant::now();
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm runtime for Set-B Proposal fallback");
+    let message = signed_runtime_proposal(&context, &keys, 0xB7);
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = message.payload.clone() else {
+        unreachable!("signed runtime Proposal fixture carries Proposal")
+    };
+    runtime
+        .enqueue_network(message.clone())
+        .expect("enqueue exact authenticated Proposal for Set B");
+    let RuntimeStep::Advanced(initial_effects) =
+        runtime.step(now).expect("dispatch Set-B Proposal")
+    else {
+        panic!("authenticated Set-B Proposal unexpectedly idled")
+    };
+    assert!(
+        initial_effects.is_empty(),
+        "Set B must wait until periodic fallback before fetching"
+    );
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("Set-B Proposal publishes scheduler ownership");
+    runtime
+        .take_effect_ownership(0)
+        .expect("dormant Proposal emits no effect ownership yet");
+    let _proposal_terminals = runtime.take_leader_wire_runtime_terminals();
+    assert!(runtime.has_dormant_remote_proposal_replay());
+
+    runtime
+        .enqueue_network(message)
+        .expect("an exact Proposal replay remains idempotent");
+    if runtime.queued_commands() != 0 {
+        let RuntimeStep::Advanced(duplicate_effects) =
+            runtime.step(now).expect("dispatch exact Proposal replay")
+        else {
+            panic!("queued exact Proposal replay unexpectedly idled")
+        };
+        assert!(duplicate_effects.is_empty());
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("exact Proposal replay publishes scheduler ownership");
+        runtime
+            .take_effect_ownership(0)
+            .expect("exact Proposal replay still emits no effect owner");
+        let _duplicate_terminals = runtime.take_leader_wire_runtime_terminals();
+    }
+    assert!(
+        runtime.has_dormant_remote_proposal_replay(),
+        "an exact duplicate cannot replace or retire the incumbent replay origin"
+    );
+
+    let periodic_at = now + runtime.retransmit_interval();
+    let RuntimeStep::Advanced(effects) = runtime
+        .step(periodic_at)
+        .expect("periodic Set-B fallback advances")
+    else {
+        panic!("periodic Set-B fallback unexpectedly idled")
+    };
+    assert_eq!(
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("periodic fallback publishes scheduler ownership")
+            .selected,
+        RuntimeSelectedOwnerKind::PeriodicTimer,
+    );
+    let fetch_position = effects
+        .iter()
+        .position(|effect| {
+            matches!(
+                effect,
+                AdapterEffect::FetchBody {
+                    round,
+                    subject,
+                    manifest: Some(manifest),
+                    certified_sources,
+                    certificate: None,
+                    ..
+                } if *round == proposal.round
+                    && *subject == proposal.subject
+                    && manifest == &proposal.manifest
+                    && certified_sources.is_empty()
+            )
+        })
+        .expect("periodic Set-B fallback emits the exact ordinary Proposal Fetch");
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|effect| matches!(effect, AdapterEffect::FetchBody { .. }))
+            .count(),
+        1,
+    );
+    let ownership = runtime
+        .take_effect_ownership(effects.len())
+        .expect("periodic Set-B Fetch retains exact runtime ownership");
+    assert!(
+        ownership[fetch_position]
+            .exact_remote_proposal_fetch_replay(&effects[fetch_position])
+            .is_some(),
+        "the delayed first Fetch must consume the genuine authenticated Proposal origin"
+    );
+    assert!(!runtime.has_dormant_remote_proposal_replay());
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origin() {
@@ -1625,14 +1845,38 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
         .pop()
         .expect("one Fetch has one exact owner");
     let fetch_pending = fetch_ownership
-        .current_effect_producer(fetch_effect)
-        .expect("Fetch owns one exact producer")
-        .mint_pending_binding();
+        .exact_pending_adapter_effect_binding(fetch_effect)
+        .expect("Fetch owns one exact pending binding");
     let fetch_replay = fetch_ownership
         .exact_remote_proposal_fetch_replay(fetch_effect)
         .expect("authenticated Proposal attaches its replay origin");
     assert!(fetch_replay.exactly_matches_fetch_pending(fetch_effect, &fetch_pending));
     assert!(fetch_replay.exactly_matches_retry(&fetch_replay.clone(), fetch_effect,));
+    let rebound_fetch_ownership = fetch_ownership
+        .rebind_same_adapter_effect(fetch_effect)
+        .expect("an exact Fetch retry retains its incumbent owner");
+    assert!(
+        rebound_fetch_ownership
+            .exact_remote_proposal_fetch_replay(fetch_effect)
+            .is_some(),
+        "an idempotent service retry must retain authenticated Proposal replay authority"
+    );
+    let independent_retry_ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(fetch_effect),
+        vec![RuntimeEffectOwnership::fresh_for_test(tag, 98_000)],
+    )
+    .expect("bind an independent semantic Fetch retry")
+    .pop()
+    .expect("one semantic retry has one exact owner");
+    let adopted_fetch_ownership = fetch_ownership
+        .adopt_incumbent_candidate_for_semantic_retry(&independent_retry_ownership, fetch_effect)
+        .expect("semantic Fetch retry retains the incumbent physical owner");
+    assert!(
+        adopted_fetch_ownership
+            .exact_remote_proposal_fetch_replay(fetch_effect)
+            .is_some(),
+        "semantic retry adoption must not erase authenticated Proposal replay authority"
+    );
     let mut foreign_manifest_fetch = fetch_effect.clone();
     let AdapterEffect::FetchBody {
         manifest: Some(foreign_manifest),
@@ -1681,9 +1925,8 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
         .pop()
         .expect("one Store has one exact owner");
     let store_pending = store_ownership
-        .current_effect_producer(store_effect)
-        .expect("Store owns one exact producer")
-        .mint_pending_binding();
+        .exact_pending_adapter_effect_binding(store_effect)
+        .expect("Store owns one exact pending binding");
     assert!(fetch_replay.exactly_projects_store(store_effect, &store_pending));
     let foreign_store_ownership = bind_adapter_effect_batch_ownership(
         core::slice::from_ref(store_effect),
@@ -1693,9 +1936,8 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
     .pop()
     .expect("one foreign Store owner");
     let foreign_store_pending = foreign_store_ownership
-        .current_effect_producer(store_effect)
-        .expect("foreign Store has one producer")
-        .mint_pending_binding();
+        .exact_pending_adapter_effect_binding(store_effect)
+        .expect("foreign Store has one binding");
     assert!(
         fetch_replay
             .clone()
@@ -1757,9 +1999,8 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
         .pop()
         .expect("one Validate has one exact owner");
     let validate_pending = validate_ownership
-        .current_effect_producer(validate_effect)
-        .expect("Validate owns one exact producer")
-        .mint_pending_binding();
+        .exact_pending_adapter_effect_binding(validate_effect)
+        .expect("Validate owns one exact pending binding");
     let foreign_validate_ownership = bind_adapter_effect_batch_ownership(
         core::slice::from_ref(validate_effect),
         vec![RuntimeEffectOwnership::fresh_for_test(tag, 98_002)],
@@ -1768,9 +2009,8 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
     .pop()
     .expect("one foreign Validate owner");
     let foreign_validate_pending = foreign_validate_ownership
-        .current_effect_producer(validate_effect)
-        .expect("foreign Validate has one producer")
-        .mint_pending_binding();
+        .exact_pending_adapter_effect_binding(validate_effect)
+        .expect("foreign Validate has one binding");
     assert!(
         stored_replay
             .clone()
@@ -1886,8 +2126,8 @@ fn periodic_decision_store_retry_carries_durable_commit_authority() {
     );
     let validated = ValidatedBodyReceipt::for_test(durable);
     runtime
-        .bind_validated_body(&manifest, &validated)
-        .expect("register the exact deterministic execution commitment");
+        .recover_validated_body(&manifest, &validated)
+        .expect("recover the exact durable execution commitment");
     let decision = wire::QuorumCertificate {
         round: manifest.round,
         proposal_round: manifest.round,

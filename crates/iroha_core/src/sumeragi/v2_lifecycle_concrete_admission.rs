@@ -1,9 +1,13 @@
 //! Atomic admission boundary between digest-only lifecycle state and concrete work.
+#[cfg(test)]
+use super::work_registry::{ConcreteLifecycleWork, RegistryPublicationError};
 use super::{
     AdmissionDecision, AdmissionRequest, CandidateAdmission, CoordinatorFault,
     LifecycleCoordinator, LifecycleDigest, LifecyclePhase, LifecycleStageKind, LifecycleState,
-    LifecycleWorkClass, PredecessorScope, TurnLease, TurnOutcome, WaitSource, WaitToken,
+    LifecycleWorkClass, PredecessorScope, ProductionLifecycleOwnerV1, TurnLease, TurnOutcome,
+    WaitSource, WaitToken,
     body_pipeline_transition::durable_validate_payload_is_exact,
+    projection::AdapterEffectAdmissionError,
     schema::AttestedReadyValidateDemand,
     work_registry::{
         AuthenticatedRecoveredWalValidateLifecycleRepair, BoundAdapterRegistryPublicationErrorV1,
@@ -11,18 +15,17 @@ use super::{
         DurableValidateCompletionPublication, DurableValidateCompletionPublicationError,
         DurableValidateDispatch, DurableValidateExecutionError,
         DurableValidateRegistryPublicationErrorV1, ExecutedDurableValidateDispatch,
-        OpenedRecoveredWalValidateLedger, PreparedLifecycleAdmissionErrorV1,
-        PreparedLifecycleAdmissionOwnerV1, PreparedLifecycleAdmissionV1,
-        PreparedRecoveredDecisionApplyDispatch, PublishedDurableValidateCompletion,
-        ReadyRecoveredDecisionApplyAttestation, ReadyRecoveredDecisionApplyAttestationError,
-        ReadyValidateCarrierError, RecoveredDecisionApplyDispatchProjectionError,
-        RecoveredWalParentFactoryError, RegistryError, reconstruct_recovered_wal_validate_parent,
+        LifecycleOutputRegistryJoinV1, LiveWalRegistryPublicationErrorV1,
+        OpenedRecoveredWalValidateLedger, PendingDurableValidateAdmissionV1,
+        PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
+        PreparedLifecycleAdmissionErrorV1, PreparedLifecycleAdmissionOwnerV1,
+        PreparedLifecycleAdmissionV1, PreparedLifecycleOutputExecutionV1,
+        PreparedLifecycleOutputRegistryRetirementV1, PreparedRecoveredDecisionApplyDispatch,
+        PublishedDurableValidateCompletion, ReadyRecoveredDecisionApplyAttestation,
+        ReadyRecoveredDecisionApplyAttestationError, ReadyValidateCarrierError,
+        RecoveredDecisionApplyDispatchProjectionError, RecoveredWalParentFactoryError,
+        RegistryError, reconstruct_recovered_wal_validate_parent,
     },
-};
-#[cfg(test)]
-use super::{
-    projection::AdapterEffectAdmissionError,
-    work_registry::{ConcreteLifecycleWork, RegistryPublicationError},
 };
 use crate::sumeragi::{
     v2::{AdapterEffect, RecoveredWalVoteSign, VerifiedHeightContext},
@@ -37,7 +40,7 @@ pub(crate) struct LifecycleWorkRegistryHolder {
     registry: ConcreteLifecycleWorkRegistry,
 }
 impl LifecycleWorkRegistryHolder {
-    /// Construct an empty holder for a future production lifecycle service.
+    /// Construct an empty holder for the production lifecycle service.
     pub(crate) fn empty() -> Self {
         Self {
             registry: ConcreteLifecycleWorkRegistry::default(),
@@ -50,6 +53,33 @@ impl LifecycleWorkRegistryHolder {
     /// Borrow the concrete map only for one coordinator-owned composite transaction.
     pub(super) fn registry_mut(&mut self) -> &mut ConcreteLifecycleWorkRegistry {
         &mut self.registry
+    }
+    /// Join one runtime output to its exact next lifecycle row.
+    fn join_lifecycle_output(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        execution: &PreparedLifecycleOutputExecutionV1,
+    ) -> Result<LifecycleOutputRegistryJoinV1, RegistryError> {
+        self.registry.join_lifecycle_output(coordinator, execution)
+    }
+    /// Recheck one staged output terminal before its LedgerV1 fsync.
+    fn lifecycle_output_terminal_is_exact(
+        &self,
+        current: &LifecycleCoordinator,
+        staged: &LifecycleCoordinator,
+        prepared: PreparedLifecycleOutputRegistryRetirementV1,
+        execution: &PreparedLifecycleOutputExecutionV1,
+    ) -> bool {
+        self.registry
+            .lifecycle_output_terminal_is_exact(current, staged, prepared, execution)
+    }
+    /// Remove one preflighted output carrier after its terminal row is durable.
+    fn publish_lifecycle_output_terminal_after_fsync(
+        &mut self,
+        prepared: PreparedLifecycleOutputRegistryRetirementV1,
+    ) {
+        self.registry
+            .publish_lifecycle_output_terminal_after_fsync(prepared);
     }
     /// Bind the exact Ready Apply row to its sealed recovered-Decision carrier.
     ///
@@ -302,6 +332,117 @@ pub(super) enum AdapterEffectAdmissionTransaction {
         prepared: PreparedLifecycleAdmissionV1,
     },
 }
+/// Closed retry/fail-stop class for owner-facing durable Validate admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ProductionDurableValidateAdmissionFailureV1 {
+    /// Origin-specific projection did not match the owner's active verified context.
+    Projection(AdapterEffectAdmissionError),
+    /// Concrete registration rejected the exact carrier before publication.
+    Registry,
+    /// LedgerV1 publication was attempted and the owner is now fail-closed.
+    Durability,
+}
+/// Owner-preserving result of one live durable Validate admission settlement.
+///
+/// Success consumes the origin-specific pending owner. Every non-committing
+/// outcome returns that same move-only owner; neither a generic effect,
+/// pending binding, candidate, nor caller-selected ordinal crosses this seam.
+#[allow(variant_size_differences)]
+#[derive(Debug)]
+#[must_use = "durable Validate admission settlement must be observed"]
+pub(in crate::sumeragi) enum ProductionDurableValidateAdmissionSettlementV1 {
+    /// A new logical ordinal and its exact concrete carrier committed atomically.
+    Admitted(AdmissionDecision),
+    /// The exact recovered logical ordinal regained its concrete carrier.
+    Rebound(AdmissionDecision),
+    /// Logical reduction did not install work and returned the exact owner.
+    Returned {
+        /// Deterministic logical decision governing retry, wait, replay, or rejection.
+        decision: AdmissionDecision,
+        /// Complete origin-specific durable Validate owner retained for settlement.
+        pending: PendingDurableValidateAdmissionV1,
+    },
+    /// Preparation, registration, or publication failed with ownership intact.
+    Failed {
+        /// Closed retry/fail-stop classification.
+        failure: ProductionDurableValidateAdmissionFailureV1,
+        /// Complete origin-specific durable Validate owner retained by the caller.
+        pending: PendingDurableValidateAdmissionV1,
+    },
+}
+/// Closed retry/fail-stop class for live-WAL Sign admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ProductionLiveWalSignAdmissionFailureV1 {
+    /// The exact WAL/local companion did not match the active verified context.
+    Projection(AdapterEffectAdmissionError),
+    /// Concrete registration rejected the exact carrier before publication.
+    Registry,
+    /// LedgerV1 publication was attempted and the owner is now fail-closed.
+    Durability,
+}
+
+/// Owner-preserving result of one live-WAL Sign admission settlement.
+#[derive(Debug)]
+#[must_use = "live WAL Sign admission settlement must be observed"]
+pub(in crate::sumeragi) enum ProductionLiveWalSignAdmissionSettlementV1 {
+    /// A new logical ordinal and its exact Sign carrier committed atomically.
+    Admitted(AdmissionDecision),
+    /// The exact durable logical ordinal regained its live concrete carrier.
+    Rebound(AdmissionDecision),
+    /// Logical reduction returned the exact pending owner without publication.
+    Returned {
+        /// Deterministic logical decision governing retry or capacity.
+        decision: AdmissionDecision,
+        /// Complete live-WAL owner retained for settlement.
+        pending: PendingLiveWalSignAdmissionV1,
+    },
+    /// Preparation, registration, or publication failed with ownership intact.
+    Failed {
+        /// Closed failure classification.
+        failure: ProductionLiveWalSignAdmissionFailureV1,
+        /// Complete live-WAL owner retained by the caller.
+        pending: PendingLiveWalSignAdmissionV1,
+    },
+}
+/// Closed failure from lifecycle-owned output admission, service I/O, or terminal fsync.
+#[derive(Debug)]
+pub(in crate::sumeragi) enum ProductionLifecycleOutputAdmissionFailureV1<E> {
+    /// A genuinely direct output did not project in the active verified context.
+    Projection(AdapterEffectAdmissionError),
+    /// The exact concrete row or its staged terminal successor was invalid.
+    Registry,
+    /// The output service rejected or failed the exact effect.
+    Service(E),
+    /// LedgerV1 publication was attempted and the lifecycle owner is fail-closed.
+    Durability,
+}
+/// Closed result of one lifecycle-owned output service attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum LifecycleOutputServiceDispositionV1 {
+    /// The output service durably accepted the complete exact occurrence.
+    Accepted,
+    /// The bounded service retained no occurrence, so the exact source must retry.
+    SourceRetained,
+}
+/// Ownership-preserving result of settling one runtime lifecycle output.
+#[derive(Debug)]
+#[must_use = "lifecycle output settlement must be observed"]
+pub(in crate::sumeragi) enum ProductionLifecycleOutputAdmissionSettlementV1<E> {
+    /// Service I/O completed and the same lifecycle row is durably terminal.
+    Completed,
+    /// A terminal duplicate or typed recovered-Broadcast retransmit was
+    /// consumed without repeating generic service I/O.
+    AlreadyCompleted,
+    /// The exact owner remains parked behind ordering, capacity, or service backpressure.
+    Deferred(PendingLifecycleOutputAdmissionV1),
+    /// Settlement failed with the move-only output owner retained intact.
+    Failed {
+        /// Closed failure classification.
+        failure: ProductionLifecycleOutputAdmissionFailureV1<E>,
+        /// Exact output retained for restart diagnosis or a safe pre-I/O retry.
+        pending: PendingLifecycleOutputAdmissionV1,
+    },
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AdmittedWorkLocation {
     address: ConcreteWorkAddress,
@@ -408,7 +549,7 @@ impl LifecycleCoordinator {
     /// registry staging. The specialized registry guard then owns rollback
     /// until the adjacent, non-panicking coordinator swap and guard commit.
     /// Merge-sidecar deferral changes neither side and retains the full
-    /// executed dispatch for its future sealed service transaction.
+    /// executed dispatch for its sealed service transaction.
     ///
     /// Waiting/Ready state and concrete physical carriers are intentionally
     /// excluded from LifecycleLedgerV1, so this volatile cut performs no
@@ -599,9 +740,9 @@ impl LifecycleCoordinator {
     /// undone if publication fails. An exact recovered retry installs at its
     /// existing immutable address with the same ordering. Every other decision
     /// returns the complete prepared owner and leaves incumbent work untouched.
-    // TODO: The production executor switch must retain or drop each returned
-    // prepared owner according to its decision; Retry executes the incumbent
-    // entry and must never replace it with the returned duplicate.
+    // Production settlement retains or drops each returned prepared owner
+    // according to its decision; Retry executes the incumbent entry and never
+    // replaces it with the returned duplicate.
     pub(super) fn admit_prepared_lifecycle(
         &mut self,
         registry: &mut LifecycleWorkRegistryHolder,
@@ -651,7 +792,54 @@ impl LifecycleCoordinator {
                 }
             };
             return match prepared.into_owner() {
-                PreparedLifecycleAdmissionOwnerV1::Bound(bound) => {
+                PreparedLifecycleAdmissionOwnerV1::LiveWal(live) => {
+                    match registry.registry.install_live_wal_before_publication(
+                        self.active_context,
+                        &candidate,
+                        location.address,
+                        location.digest,
+                        live,
+                        || next.persist_durable_projection(),
+                    ) {
+                        Ok(()) => {
+                            *self = next;
+                            if first_admission {
+                                AdapterEffectAdmissionTransaction::Admitted(decision)
+                            } else {
+                                AdapterEffectAdmissionTransaction::Rebound(decision)
+                            }
+                        }
+                        Err(LiveWalRegistryPublicationErrorV1::Install(error, live)) => {
+                            let prepared = PreparedLifecycleAdmissionV1::from_returned_live_wal(
+                                self.active_context,
+                                candidate,
+                                live,
+                            )
+                            .expect("registry rollback returns the exact live-WAL admission owner");
+                            AdapterEffectAdmissionTransaction::Failed {
+                                failure: AdapterEffectAdmissionFailure::Registry(error),
+                                prepared,
+                            }
+                        }
+                        Err(LiveWalRegistryPublicationErrorV1::Publication(_, live)) => {
+                            self.fault = Some(CoordinatorFault::DurabilityFailure);
+                            let prepared = PreparedLifecycleAdmissionV1::from_returned_live_wal(
+                                self.active_context,
+                                candidate,
+                                live,
+                            )
+                            .expect(
+                                "publication rollback returns the exact live-WAL admission owner",
+                            );
+                            AdapterEffectAdmissionTransaction::Failed {
+                                failure: AdapterEffectAdmissionFailure::Durability,
+                                prepared,
+                            }
+                        }
+                    }
+                }
+                PreparedLifecycleAdmissionOwnerV1::InvalidBodyReport(bound)
+                | PreparedLifecycleAdmissionOwnerV1::DirectSigned(bound) => {
                     match registry.registry.install_bound_before_publication(
                         self.active_context,
                         &candidate,
@@ -697,7 +885,23 @@ impl LifecycleCoordinator {
                         }
                     }
                 }
-                PreparedLifecycleAdmissionOwnerV1::DurableValidate(validate) => {
+                owner @ (PreparedLifecycleAdmissionOwnerV1::LocalBody(_)
+                | PreparedLifecycleAdmissionOwnerV1::RemoteProposal(_)) => {
+                    let validate = match owner {
+                        PreparedLifecycleAdmissionOwnerV1::LocalBody(validate) => {
+                            super::work_registry::PreparedDurableValidateAdmissionV1::LocalBody(
+                                validate,
+                            )
+                        }
+                        PreparedLifecycleAdmissionOwnerV1::RemoteProposal(validate) => {
+                            super::work_registry::PreparedDurableValidateAdmissionV1::RemoteProposal(
+                                validate,
+                            )
+                        }
+                        PreparedLifecycleAdmissionOwnerV1::LiveWal(_)
+                        | PreparedLifecycleAdmissionOwnerV1::InvalidBodyReport(_)
+                        | PreparedLifecycleAdmissionOwnerV1::DirectSigned(_) => unreachable!(),
+                    };
                     match registry
                         .registry
                         .install_durable_validate_before_publication(
@@ -759,6 +963,296 @@ impl LifecycleCoordinator {
         }
         *self = next;
         AdapterEffectAdmissionTransaction::Returned { decision, prepared }
+    }
+}
+impl ProductionLifecycleOwnerV1 {
+    /// Prepare and atomically admit one post-fsync live-WAL Sign owner.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn settle_live_wal_sign_admission(
+        &mut self,
+        pending: PendingLiveWalSignAdmissionV1,
+    ) -> ProductionLiveWalSignAdmissionSettlementV1 {
+        let prepared = match pending.prepare(self.coordinator.active_context(), &self.verified) {
+            Ok(prepared) => prepared,
+            Err((failure, pending)) => {
+                return ProductionLiveWalSignAdmissionSettlementV1::Failed {
+                    failure: ProductionLiveWalSignAdmissionFailureV1::Projection(failure),
+                    pending,
+                };
+            }
+        };
+        match self
+            .coordinator
+            .admit_prepared_lifecycle(&mut self.registry, prepared)
+        {
+            AdapterEffectAdmissionTransaction::Admitted(decision) => {
+                ProductionLiveWalSignAdmissionSettlementV1::Admitted(decision)
+            }
+            AdapterEffectAdmissionTransaction::Rebound(decision) => {
+                ProductionLiveWalSignAdmissionSettlementV1::Rebound(decision)
+            }
+            AdapterEffectAdmissionTransaction::Returned { decision, prepared } => {
+                ProductionLiveWalSignAdmissionSettlementV1::Returned {
+                    decision,
+                    pending: PendingLiveWalSignAdmissionV1::reclaim_returned(prepared),
+                }
+            }
+            AdapterEffectAdmissionTransaction::Failed { failure, prepared } => {
+                let failure = match failure {
+                    AdapterEffectAdmissionFailure::Registry(_) => {
+                        ProductionLiveWalSignAdmissionFailureV1::Registry
+                    }
+                    AdapterEffectAdmissionFailure::Durability => {
+                        ProductionLiveWalSignAdmissionFailureV1::Durability
+                    }
+                };
+                ProductionLiveWalSignAdmissionSettlementV1::Failed {
+                    failure,
+                    pending: PendingLiveWalSignAdmissionV1::reclaim_returned(prepared),
+                }
+            }
+        }
+    }
+
+    /// Prepare and atomically settle one origin-specific durable Validate owner.
+    ///
+    /// The pending owner can be projected only against this production owner's
+    /// coheld logical and verified height contexts. The existing atomic
+    /// coordinator/registry transaction remains the sole ordinal allocator.
+    /// In particular, a returned `Retry` keeps the exact pending owner and the
+    /// incumbent ordinal; resubmission cannot allocate a replacement ordinal.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn settle_durable_validate_admission(
+        &mut self,
+        pending: PendingDurableValidateAdmissionV1,
+    ) -> ProductionDurableValidateAdmissionSettlementV1 {
+        let prepared = match pending.prepare(self.coordinator.active_context(), &self.verified) {
+            Ok(prepared) => prepared,
+            Err((failure, pending)) => {
+                return ProductionDurableValidateAdmissionSettlementV1::Failed {
+                    failure: ProductionDurableValidateAdmissionFailureV1::Projection(failure),
+                    pending,
+                };
+            }
+        };
+        match self
+            .coordinator
+            .admit_prepared_lifecycle(&mut self.registry, prepared)
+        {
+            AdapterEffectAdmissionTransaction::Admitted(decision) => {
+                ProductionDurableValidateAdmissionSettlementV1::Admitted(decision)
+            }
+            AdapterEffectAdmissionTransaction::Rebound(decision) => {
+                ProductionDurableValidateAdmissionSettlementV1::Rebound(decision)
+            }
+            AdapterEffectAdmissionTransaction::Returned { decision, prepared } => {
+                ProductionDurableValidateAdmissionSettlementV1::Returned {
+                    decision,
+                    pending: PendingDurableValidateAdmissionV1::reclaim_returned(prepared),
+                }
+            }
+            AdapterEffectAdmissionTransaction::Failed { failure, prepared } => {
+                let failure = match failure {
+                    AdapterEffectAdmissionFailure::Registry(_) => {
+                        ProductionDurableValidateAdmissionFailureV1::Registry
+                    }
+                    AdapterEffectAdmissionFailure::Durability => {
+                        ProductionDurableValidateAdmissionFailureV1::Durability
+                    }
+                };
+                ProductionDurableValidateAdmissionSettlementV1::Failed {
+                    failure,
+                    pending: PendingDurableValidateAdmissionV1::reclaim_returned(prepared),
+                }
+            }
+        }
+    }
+
+    /// Admit or rejoin one exact runtime output, execute its service effect in
+    /// lifecycle ordinal order, and durably terminalize the same row.
+    ///
+    /// Live-WAL and rejected-Validate successors rejoin their already-installed
+    /// concrete row. Only an absent complete signed output may invoke direct
+    /// admission. Every branch before service I/O returns the same move-only
+    /// owner; after service success, any publication ambiguity closes the
+    /// lifecycle owner for restart rather than replaying volatile state.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn settle_lifecycle_output_admission<E>(
+        &mut self,
+        pending: PendingLifecycleOutputAdmissionV1,
+        execute: impl FnOnce(
+            &AdapterEffect,
+            &crate::sumeragi::v2_runtime::RuntimeEffectOwnership,
+        ) -> Result<LifecycleOutputServiceDispositionV1, E>,
+    ) -> ProductionLifecycleOutputAdmissionSettlementV1<E> {
+        let mut execution = pending.into_existing_execution();
+        let initial_join = match self
+            .registry
+            .join_lifecycle_output(&self.coordinator, &execution)
+        {
+            Ok(join) => join,
+            Err(_) => {
+                return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                    pending: execution.into_pending(),
+                };
+            }
+        };
+        match initial_join {
+            LifecycleOutputRegistryJoinV1::Ready(_) => {}
+            LifecycleOutputRegistryJoinV1::RecoveredBroadcastOwned
+            | LifecycleOutputRegistryJoinV1::TerminalDirectOutputDuplicate => {
+                return ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted;
+            }
+            LifecycleOutputRegistryJoinV1::Deferred => {
+                return ProductionLifecycleOutputAdmissionSettlementV1::Deferred(
+                    execution.into_pending(),
+                );
+            }
+            LifecycleOutputRegistryJoinV1::Missing => {
+                let pending = execution.into_pending();
+                let (prepared, returned_execution) = match pending
+                    .prepare_direct_signed(self.coordinator.active_context(), &self.verified)
+                {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                            failure: ProductionLifecycleOutputAdmissionFailureV1::Projection(
+                                error.failure,
+                            ),
+                            pending: error.pending,
+                        };
+                    }
+                };
+                execution = returned_execution;
+                match self
+                    .coordinator
+                    .admit_prepared_lifecycle(&mut self.registry, prepared)
+                {
+                    AdapterEffectAdmissionTransaction::Admitted(AdmissionDecision::Admitted {
+                        ..
+                    })
+                    | AdapterEffectAdmissionTransaction::Rebound(AdmissionDecision::Retry {
+                        ..
+                    }) => {}
+                    AdapterEffectAdmissionTransaction::Admitted(_)
+                    | AdapterEffectAdmissionTransaction::Rebound(_) => {
+                        return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                            failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                            pending: execution.into_pending(),
+                        };
+                    }
+                    AdapterEffectAdmissionTransaction::Returned { decision, prepared } => {
+                        let pending = PendingLifecycleOutputAdmissionV1::reclaim_returned(
+                            prepared, execution,
+                        );
+                        return match decision {
+                            AdmissionDecision::WaitForCapacity(_)
+                            | AdmissionDecision::Retry { .. } => {
+                                ProductionLifecycleOutputAdmissionSettlementV1::Deferred(pending)
+                            }
+                            AdmissionDecision::ReplayTerminal { .. }
+                            | AdmissionDecision::StutterTerminal { .. } => {
+                                ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
+                            }
+                            AdmissionDecision::Admitted { .. }
+                            | AdmissionDecision::NonCandidate
+                            | AdmissionDecision::Rejected(_)
+                            | AdmissionDecision::FailClosed(_) => {
+                                ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                                    pending,
+                                }
+                            }
+                        };
+                    }
+                    AdapterEffectAdmissionTransaction::Failed { failure, prepared } => {
+                        let pending = PendingLifecycleOutputAdmissionV1::reclaim_returned(
+                            prepared, execution,
+                        );
+                        let failure = match failure {
+                            AdapterEffectAdmissionFailure::Registry(_) => {
+                                ProductionLifecycleOutputAdmissionFailureV1::Registry
+                            }
+                            AdapterEffectAdmissionFailure::Durability => {
+                                ProductionLifecycleOutputAdmissionFailureV1::Durability
+                            }
+                        };
+                        return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                            failure,
+                            pending,
+                        };
+                    }
+                }
+            }
+        }
+        let retirement = match self
+            .registry
+            .join_lifecycle_output(&self.coordinator, &execution)
+        {
+            Ok(LifecycleOutputRegistryJoinV1::Ready(retirement)) => retirement,
+            Ok(LifecycleOutputRegistryJoinV1::Deferred) => {
+                return ProductionLifecycleOutputAdmissionSettlementV1::Deferred(
+                    execution.into_pending(),
+                );
+            }
+            Ok(
+                LifecycleOutputRegistryJoinV1::Missing
+                | LifecycleOutputRegistryJoinV1::RecoveredBroadcastOwned
+                | LifecycleOutputRegistryJoinV1::TerminalDirectOutputDuplicate,
+            )
+            | Err(_) => {
+                return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                    pending: execution.into_pending(),
+                };
+            }
+        };
+        match execution.execute_with(execute) {
+            Ok(LifecycleOutputServiceDispositionV1::Accepted) => {}
+            Ok(LifecycleOutputServiceDispositionV1::SourceRetained) => {
+                return ProductionLifecycleOutputAdmissionSettlementV1::Deferred(
+                    execution.into_pending(),
+                );
+            }
+            Err(error) => {
+                return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                    failure: ProductionLifecycleOutputAdmissionFailureV1::Service(error),
+                    pending: execution.into_pending(),
+                };
+            }
+        }
+        let mut staged = self.coordinator.stage_durable_transaction();
+        if staged
+            .finish_terminal(retirement.ordinal(), super::TerminalOutcome::Advanced)
+            .is_err()
+            || !self.registry.lifecycle_output_terminal_is_exact(
+                &self.coordinator,
+                &staged,
+                retirement,
+                &execution,
+            )
+        {
+            return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                pending: execution.into_pending(),
+            };
+        }
+        if self
+            .coordinator
+            .persist_exact_staged_successor(&staged)
+            .is_err()
+        {
+            self.coordinator.fault = Some(CoordinatorFault::DurabilityFailure);
+            return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                failure: ProductionLifecycleOutputAdmissionFailureV1::Durability,
+                pending: execution.into_pending(),
+            };
+        }
+        self.registry
+            .publish_lifecycle_output_terminal_after_fsync(retirement);
+        self.coordinator = staged;
+        ProductionLifecycleOutputAdmissionSettlementV1::Completed
     }
 }
 fn waiting_durable_validate_record_is_exact(
@@ -1047,21 +1541,41 @@ fn concrete_work_location(
 }
 #[cfg(test)]
 mod tests {
-    use super::super::{OwnerId, PhysicalSlotId};
+    use super::super::{
+        OwnerId, PhysicalSlotId,
+        work_registry::{
+            PreparedLocalBodyValidateReplayPreAdmission,
+            PreparedRemoteProposalFetchReplayPreAdmission,
+        },
+    };
     use super::*;
     use crate::sumeragi::{
+        v2::AdapterEquivocationEvidence,
+        v2_body_store::V2BodyStore,
         v2_core::{EventTag, Generation},
-        v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
+        v2_runtime::{
+            LocalProposalEffectOwnership, RuntimeEffectOwnership,
+            bind_adapter_effect_batch_ownership,
+        },
     };
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
-    use std::cell::Cell;
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
+    use iroha_data_model::{
+        block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
+        peer::PeerId,
+    };
+    use std::{cell::Cell, num::NonZeroU64};
     use tempfile::TempDir;
     struct Fixture {
         verified: VerifiedHeightContext,
         context: wire::HeightContext,
         round: wire::ConsensusRound,
         tag: EventTag,
+        keys: Vec<KeyPair>,
+    }
+    #[derive(Clone, Copy)]
+    enum DurableValidateOriginFixture {
+        LocalBody,
+        RemoteProposal,
     }
     impl Fixture {
         fn new() -> Self {
@@ -1124,6 +1638,7 @@ mod tests {
                 context,
                 round,
                 tag: EventTag::new(1, 2, Generation::new(1)),
+                keys,
             }
         }
         fn active_context(&self) -> super::super::LifecycleContext {
@@ -1184,10 +1699,223 @@ mod tests {
             .pop()
             .expect("one concrete-admission owner");
             let pending = ownership
-                .current_effect_producer(&effect)
-                .expect("seal concrete-admission producer")
-                .mint_pending_binding();
+                .exact_pending_adapter_effect_binding(&effect)
+                .expect("mint pending concrete-admission binding");
             (effect, pending)
+        }
+        fn output_pending(
+            &self,
+            effect: AdapterEffect,
+            source_ordinal: u128,
+        ) -> PendingLifecycleOutputAdmissionV1 {
+            let ownership = bind_adapter_effect_batch_ownership(
+                core::slice::from_ref(&effect),
+                vec![RuntimeEffectOwnership::fresh_for_test(
+                    self.tag,
+                    source_ordinal,
+                )],
+            )
+            .expect("bind exact lifecycle output fixture")
+            .pop()
+            .expect("one lifecycle output owner");
+            PendingLifecycleOutputAdmissionV1::seal_exact(effect, ownership)
+                .unwrap_or_else(|_| panic!("seal exact lifecycle output fixture"))
+        }
+        #[allow(clippy::too_many_lines)]
+        fn pending_durable_validate(
+            &self,
+            marker: u8,
+            origin: DurableValidateOriginFixture,
+        ) -> (PendingDurableValidateAdmissionV1, AdapterEffect) {
+            let leader = self.context.leader(self.round.view);
+            let leader_index = usize::try_from(leader).expect("fixture leader fits usize");
+            let header = BlockHeader::new(
+                NonZeroU64::new(self.context.height).expect("fixture height is non-zero"),
+                None,
+                None,
+                None,
+                5_000 + u64::from(marker),
+                self.round.view,
+            );
+            let signature =
+                SignatureOf::try_from_hash(self.keys[leader_index].private_key(), header.hash())
+                    .expect("sign durable Validate fixture block");
+            let block = SignedBlock::presigned(
+                BlockSignature::new(u64::from(leader), signature),
+                header,
+                Vec::new(),
+            );
+            let body = block
+                .encode_wire()
+                .expect("encode durable Validate fixture block");
+            let subject = wire::BlockSubject {
+                parent_block_hash: None,
+                block_hash: block.hash(),
+                payload_hash: Hash::new(&body),
+            };
+            let chunks = wire::encode_payload_chunks(self.context.da_layout, &body)
+                .expect("encode durable Validate fixture chunks");
+            let manifest = wire::PayloadManifest::derive(
+                &self.context,
+                self.round,
+                subject,
+                u64::try_from(body.len()).expect("fixture body length fits u64"),
+                &chunks,
+            )
+            .expect("derive durable Validate fixture manifest");
+            let body_directory = TempDir::new().expect("temporary durable Validate body store");
+            let mut body_store = V2BodyStore::open(body_directory.path(), self.context.clone())
+                .expect("open durable Validate body store");
+            let durable_receipt = body_store
+                .store(manifest.clone(), body)
+                .expect("fsync durable Validate fixture body");
+            let store_effect = AdapterEffect::StoreBody {
+                tag: self.tag,
+                round: self.round,
+                subject,
+            };
+            let validate_effect = AdapterEffect::ValidateBody {
+                tag: self.tag,
+                round: self.round,
+                subject,
+            };
+            let source_ordinal = u128::from(marker);
+            let pending = match origin {
+                DurableValidateOriginFixture::LocalBody => {
+                    let store_ownership = bind_adapter_effect_batch_ownership(
+                        core::slice::from_ref(&store_effect),
+                        vec![RuntimeEffectOwnership::fresh_for_test(
+                            self.tag,
+                            source_ordinal,
+                        )],
+                    )
+                    .expect("bind local Store owner")
+                    .pop()
+                    .expect("one local Store owner");
+                    let local = LocalProposalEffectOwnership::for_test(
+                        store_ownership,
+                        &store_effect,
+                        &manifest,
+                    )
+                    .expect("seal local Store replay");
+                    let validate_ownership = local
+                        .exact_store_task_ownership(&store_effect, &manifest)
+                        .expect("project local Store scheduling owner")
+                        .rebind_as_inherited_adapter_effect(&validate_effect)
+                        .expect("project local Validate owner");
+                    let replay = local
+                        .project_exact_validate(
+                            &store_effect,
+                            &manifest,
+                            &durable_receipt,
+                            &validate_effect,
+                            &validate_ownership,
+                        )
+                        .unwrap_or_else(|_| panic!("project local Validate replay"));
+                    PreparedLocalBodyValidateReplayPreAdmission::seal_exact_validate(
+                        validate_effect.clone(),
+                        validate_ownership,
+                        durable_receipt,
+                        replay,
+                    )
+                    .unwrap_or_else(|_| panic!("seal local Validate pre-admission"))
+                    .into_pending_durable_validate_admission()
+                }
+                DurableValidateOriginFixture::RemoteProposal => {
+                    let mut proposal = wire::Proposal {
+                        round: self.round,
+                        proposer: leader,
+                        subject,
+                        manifest: manifest.clone(),
+                        justification: wire::ProposalJustification::ParentCommit(
+                            wire::ParentCommitJustification { certificate: None },
+                        ),
+                        signature: Vec::new(),
+                    };
+                    proposal.signature = Signature::new(
+                        self.keys[leader_index].private_key(),
+                        &proposal.signature_preimage(),
+                    )
+                    .payload()
+                    .to_vec();
+                    let fetch_effect = AdapterEffect::FetchBody {
+                        tag: self.tag,
+                        round: self.round,
+                        subject,
+                        manifest: Some(manifest),
+                        certified_sources: Vec::new(),
+                        certificate: None,
+                    };
+                    let mut fetch_ownership = bind_adapter_effect_batch_ownership(
+                        core::slice::from_ref(&fetch_effect),
+                        vec![RuntimeEffectOwnership::fresh_for_test(
+                            self.tag,
+                            source_ordinal,
+                        )],
+                    )
+                    .expect("bind remote Fetch owner")
+                    .pop()
+                    .expect("one remote Fetch owner");
+                    let store_ownership = fetch_ownership
+                        .rebind_as_inherited_adapter_effect(&store_effect)
+                        .expect("project remote Store owner");
+                    let validate_ownership = store_ownership
+                        .rebind_as_inherited_adapter_effect(&validate_effect)
+                        .expect("project remote Validate owner");
+                    assert!(
+                        fetch_ownership.bind_authenticated_remote_proposal_replay_for_test(
+                            proposal,
+                            &fetch_effect,
+                        )
+                    );
+                    PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(
+                        fetch_effect,
+                        fetch_ownership,
+                    )
+                    .unwrap_or_else(|_| panic!("seal remote Fetch pre-admission"))
+                    .project_store(store_effect, store_ownership)
+                    .unwrap_or_else(|_| panic!("project remote Store pre-admission"))
+                    .bind_durable_body(durable_receipt)
+                    .unwrap_or_else(|_| panic!("bind remote durable body"))
+                    .project_validate(validate_effect.clone(), validate_ownership)
+                    .unwrap_or_else(|_| panic!("project remote Validate pre-admission"))
+                    .into_pending_durable_validate_admission()
+                }
+            };
+            (pending, validate_effect)
+        }
+        fn production_owner(&self, effect_capacity: usize) -> ProductionLifecycleOwnerV1 {
+            let payload_directory =
+                TempDir::new().expect("temporary durable Validate payload store");
+            let (payload_store, serve_payloads) = crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open_lifecycle_fixture_for_test(
+                payload_directory.path(),
+                &self.context,
+            )
+            .expect("open empty durable Validate payload owner");
+            let coordinator = LifecycleCoordinator::new(
+                self.active_context(),
+                0,
+                super::super::schema::CapacityGeometry::new([
+                    (super::super::CapacityClass::Consensus, 64),
+                    (super::super::CapacityClass::Effect, effect_capacity),
+                    (super::super::CapacityClass::Serve, 64),
+                    (super::super::CapacityClass::Producer, 64),
+                ]),
+            );
+            ProductionLifecycleOwnerV1 {
+                verified: self.verified.clone(),
+                coordinator,
+                registry: LifecycleWorkRegistryHolder::empty(),
+                recovered_lifecycle_outputs: None,
+                payload_store,
+                serve_payloads,
+                body_store: None,
+                body_store_identity: None,
+                kura_binding: None,
+                apply_service: None,
+                adapter_startup: None,
+                timeout_supersession_successor: None,
+            }
         }
         fn admit(
             &self,
@@ -1238,12 +1966,557 @@ mod tests {
         }
     }
     #[test]
+    fn owner_settlement_admits_both_durable_validate_origins() {
+        let fixture = Fixture::new();
+        for (origin, remote_proposal) in [
+            (DurableValidateOriginFixture::LocalBody, false),
+            (DurableValidateOriginFixture::RemoteProposal, true),
+        ] {
+            let mut owner = fixture.production_owner(64);
+            let (pending, effect) = fixture.pending_durable_validate(0xB1, origin);
+            assert!(pending.exactly_retains_for_test(&effect, remote_proposal));
+            let ProductionDurableValidateAdmissionSettlementV1::Admitted(
+                AdmissionDecision::Admitted { ordinal: 1, .. },
+            ) = owner.settle_durable_validate_admission(pending)
+            else {
+                panic!("exact durable Validate origin must commit one fresh admission")
+            };
+            assert_eq!(owner.coordinator.high_water(), 1);
+            assert_eq!(owner.coordinator.records.len(), 1);
+            assert_eq!(owner.registry.registry.len(), 1);
+            assert_eq!(
+                owner.coordinator.records[&1].work_class,
+                LifecycleWorkClass::Validate
+            );
+            assert_eq!(owner.coordinator.records[&1].state, LifecycleState::Ready);
+        }
+    }
+    #[test]
+    fn owner_settlement_rebinds_a_recovered_validate_at_the_same_ordinal() {
+        let fixture = Fixture::new();
+        let mut live = fixture.production_owner(64);
+        let (pending, _) =
+            fixture.pending_durable_validate(0xB2, DurableValidateOriginFixture::LocalBody);
+        assert!(matches!(
+            live.settle_durable_validate_admission(pending),
+            ProductionDurableValidateAdmissionSettlementV1::Admitted(AdmissionDecision::Admitted {
+                ordinal: 1,
+                ..
+            })
+        ));
+        let snapshot = recovery_snapshot(&live.coordinator);
+        let mut recovered = fixture.production_owner(64);
+        recovered.coordinator.high_water = snapshot.high_water;
+        recovered.coordinator.reconcile_restart(snapshot);
+        assert_eq!(recovered.coordinator.high_water(), 1);
+        assert!(matches!(
+            recovered.coordinator.records[&1].state,
+            LifecycleState::Waiting(WaitToken {
+                source: WaitSource::Recovery(_),
+                ..
+            })
+        ));
+        let (pending, _) =
+            fixture.pending_durable_validate(0xB2, DurableValidateOriginFixture::LocalBody);
+        assert!(matches!(
+            recovered.settle_durable_validate_admission(pending),
+            ProductionDurableValidateAdmissionSettlementV1::Rebound(AdmissionDecision::Retry {
+                ordinal: 1,
+                ..
+            })
+        ));
+        assert_eq!(recovered.coordinator.high_water(), 1);
+        assert_eq!(recovered.coordinator.records.len(), 1);
+        assert_eq!(recovered.registry.registry.len(), 1);
+        assert_eq!(
+            recovered.coordinator.records[&1].state,
+            LifecycleState::Ready
+        );
+    }
+    #[test]
+    fn owner_settlement_returns_the_exact_retry_without_reminting_an_ordinal() {
+        let fixture = Fixture::new();
+        let mut owner = fixture.production_owner(64);
+        let (pending, _) =
+            fixture.pending_durable_validate(0xB3, DurableValidateOriginFixture::RemoteProposal);
+        assert!(matches!(
+            owner.settle_durable_validate_admission(pending),
+            ProductionDurableValidateAdmissionSettlementV1::Admitted(AdmissionDecision::Admitted {
+                ordinal: 1,
+                ..
+            })
+        ));
+        let (pending, effect) =
+            fixture.pending_durable_validate(0xB3, DurableValidateOriginFixture::RemoteProposal);
+        let ProductionDurableValidateAdmissionSettlementV1::Returned {
+            decision: first_decision @ AdmissionDecision::Retry { ordinal: 1, .. },
+            pending,
+        } = owner.settle_durable_validate_admission(pending)
+        else {
+            panic!("an exact live duplicate must return its remote-Proposal owner")
+        };
+        assert!(pending.exactly_retains_for_test(&effect, true));
+        assert_eq!(owner.coordinator.high_water(), 1);
+        assert_eq!(owner.coordinator.records.len(), 1);
+        assert_eq!(owner.registry.registry.len(), 1);
+        let ProductionDurableValidateAdmissionSettlementV1::Returned {
+            decision: second_decision,
+            pending,
+        } = owner.settle_durable_validate_admission(pending)
+        else {
+            panic!("retrying the exact returned owner must remain non-mutating")
+        };
+        assert_eq!(second_decision, first_decision);
+        assert!(pending.exactly_retains_for_test(&effect, true));
+        assert_eq!(owner.coordinator.high_water(), 1);
+        assert_eq!(owner.coordinator.records.len(), 1);
+        assert_eq!(owner.registry.registry.len(), 1);
+    }
+    fn run_lifecycle_output_test_on_stack(body: impl FnOnce() + Send + 'static) {
+        let handle = std::thread::Builder::new()
+            .name("lifecycle-output-settlement".to_owned())
+            .stack_size(32 * 1024 * 1024)
+            .spawn(body)
+            .expect("spawn lifecycle output settlement test");
+        if let Err(payload) = handle.join() {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    #[test]
+    fn lifecycle_output_settlement_executes_once_and_terminalizes_the_same_row() {
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            let mut owner = fixture.production_owner(64);
+            let ledger = TempDir::new().expect("temporary lifecycle output ledger");
+            owner
+                .coordinator
+                .attach_empty_test_ledger(ledger.path())
+                .expect("attach lifecycle output ledger");
+            let effect = fixture.effect(0xD1);
+            let called = Cell::new(0_u8);
+            assert!(matches!(
+                owner.settle_lifecycle_output_admission(
+                    fixture.output_pending(effect.clone(), 0xD1),
+                    |observed, _ownership| {
+                        assert_eq!(observed, &effect);
+                        called.set(called.get().saturating_add(1));
+                        Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                            LifecycleOutputServiceDispositionV1::Accepted,
+                        )
+                    },
+                ),
+                ProductionLifecycleOutputAdmissionSettlementV1::Completed
+            ));
+            assert_eq!(called.get(), 1);
+            assert_eq!(owner.coordinator.high_water(), 1);
+            assert_eq!(
+                owner.coordinator.records[&1].state,
+                LifecycleState::Terminal(super::super::TerminalOutcome::Advanced)
+            );
+            assert!(owner.registry.registry().is_empty());
+            assert!(matches!(
+                owner.settle_lifecycle_output_admission(
+                    fixture.output_pending(effect, 0xD1),
+                    |_effect, _ownership| -> Result<
+                        LifecycleOutputServiceDispositionV1,
+                        &'static str,
+                    > {
+                        panic!("terminal output duplicate must not repeat service I/O")
+                    },
+                ),
+                ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
+            ));
+            assert_eq!(owner.coordinator.high_water(), 1);
+        });
+    }
+
+    #[test]
+    fn lifecycle_output_terminal_duplicate_with_new_runtime_root_stutters_exactly() {
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            let mut owner = fixture.production_owner(64);
+            let ledger = TempDir::new().expect("temporary terminal duplicate ledger");
+            owner
+                .coordinator
+                .attach_empty_test_ledger(ledger.path())
+                .expect("attach terminal duplicate ledger");
+            let effect = fixture.effect(0xD6);
+            let calls = Cell::new(0_u8);
+            assert!(matches!(
+                owner.settle_lifecycle_output_admission(
+                    fixture.output_pending(effect.clone(), 0xD6),
+                    |_effect, _ownership| {
+                        calls.set(calls.get().saturating_add(1));
+                        Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                            LifecycleOutputServiceDispositionV1::Accepted,
+                        )
+                    },
+                ),
+                ProductionLifecycleOutputAdmissionSettlementV1::Completed
+            ));
+            assert_eq!(calls.get(), 1);
+
+            let rebound_tag = EventTag::new(
+                fixture.tag.height(),
+                fixture.tag.view(),
+                Generation::new(fixture.tag.generation().get().saturating_add(1)),
+            );
+            let rebound_ownership = bind_adapter_effect_batch_ownership(
+                core::slice::from_ref(&effect),
+                vec![RuntimeEffectOwnership::fresh_for_test(rebound_tag, 0xD7)],
+            )
+            .expect("bind byte-identical output under a fresh runtime root")
+            .pop()
+            .expect("one rebound output owner");
+            let rebound =
+                PendingLifecycleOutputAdmissionV1::seal_exact(effect.clone(), rebound_ownership)
+                    .unwrap_or_else(|_| panic!("seal byte-identical terminal output retry"));
+            assert!(matches!(
+                owner.settle_lifecycle_output_admission(
+                    rebound,
+                    |_effect, _ownership| -> Result<
+                        LifecycleOutputServiceDispositionV1,
+                        &'static str,
+                    > {
+                        panic!("exact terminal duplicate must not repeat service I/O")
+                    },
+                ),
+                ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
+            ));
+            assert_eq!(calls.get(), 1);
+            assert_eq!(owner.coordinator.high_water(), 1);
+            assert!(owner.registry.registry().is_empty());
+
+            let mut drifted = effect;
+            let AdapterEffect::Broadcast(message) = &mut drifted else {
+                unreachable!("fixture output is one signed Broadcast")
+            };
+            let wire::ConsensusMessageV2Payload::Vote(vote) = &mut message.payload else {
+                unreachable!("fixture output is one signed Vote")
+            };
+            vote.signature.push(0xFF);
+            let drifted_ownership = bind_adapter_effect_batch_ownership(
+                core::slice::from_ref(&drifted),
+                vec![RuntimeEffectOwnership::fresh_for_test(rebound_tag, 0xD8)],
+            )
+            .expect("bind semantically drifted output")
+            .pop()
+            .expect("one drifted output owner");
+            let drifted = PendingLifecycleOutputAdmissionV1::seal_exact(drifted, drifted_ownership)
+                .unwrap_or_else(|_| panic!("seal drifted terminal output retry"));
+            assert!(matches!(
+                owner.settle_lifecycle_output_admission(
+                    drifted,
+                    |_effect, _ownership| -> Result<
+                        LifecycleOutputServiceDispositionV1,
+                        &'static str,
+                    > {
+                        panic!("semantic drift must fail before service I/O")
+                    },
+                ),
+                ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                    ..
+                }
+            ));
+            assert_eq!(owner.coordinator.high_water(), 1);
+        });
+    }
+
+    #[test]
+    fn lifecycle_output_settlement_defers_behind_an_older_ready_row() {
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            let mut owner = fixture.production_owner(64);
+            let ledger = TempDir::new().expect("temporary ordered output ledger");
+            owner
+                .coordinator
+                .attach_empty_test_ledger(ledger.path())
+                .expect("attach ordered output ledger");
+            let blocker = fixture.effect(0xD2);
+            let (blocker, blocker_pending) = fixture.pair(blocker, 0xD2);
+            assert!(matches!(
+                fixture.admit(
+                    &mut owner.coordinator,
+                    &mut owner.registry,
+                    blocker,
+                    blocker_pending,
+                ),
+                AdapterEffectAdmissionTransaction::Admitted(AdmissionDecision::Admitted {
+                    ordinal: 1,
+                    ..
+                })
+            ));
+            let effect = fixture.effect(0xD3);
+            assert!(matches!(
+                owner.settle_lifecycle_output_admission(
+                    fixture.output_pending(effect, 0xD3),
+                    |_effect, _ownership| -> Result<
+                        LifecycleOutputServiceDispositionV1,
+                        &'static str,
+                    > {
+                        panic!("a later output must not overtake the first Ready row")
+                    },
+                ),
+                ProductionLifecycleOutputAdmissionSettlementV1::Deferred(_)
+            ));
+            assert_eq!(owner.coordinator.high_water(), 2);
+            assert_eq!(owner.registry.registry().len(), 2);
+            assert_eq!(owner.coordinator.ready_index.first().copied(), Some(1));
+        });
+    }
+
+    #[test]
+    fn lifecycle_output_settlement_service_failure_retains_the_same_ready_owner() {
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            let mut owner = fixture.production_owner(64);
+            let ledger = TempDir::new().expect("temporary failed-output ledger");
+            owner
+                .coordinator
+                .attach_empty_test_ledger(ledger.path())
+                .expect("attach failed-output ledger");
+            let effect = fixture.effect(0xD4);
+            let ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                failure: ProductionLifecycleOutputAdmissionFailureV1::Service("offline"),
+                pending,
+            } = owner.settle_lifecycle_output_admission(
+                fixture.output_pending(effect.clone(), 0xD4),
+                |_effect, _ownership| Err("offline"),
+            )
+            else {
+                panic!("service failure must return the exact output owner")
+            };
+            assert_eq!(owner.coordinator.high_water(), 1);
+            assert_eq!(owner.coordinator.records[&1].state, LifecycleState::Ready);
+            assert_eq!(owner.registry.registry().len(), 1);
+            let calls = Cell::new(0_u8);
+            assert!(matches!(
+                owner.settle_lifecycle_output_admission(pending, |observed, _ownership| {
+                    assert_eq!(observed, &effect);
+                    calls.set(calls.get().saturating_add(1));
+                    Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                        LifecycleOutputServiceDispositionV1::Accepted,
+                    )
+                }),
+                ProductionLifecycleOutputAdmissionSettlementV1::Completed
+            ));
+            assert_eq!(calls.get(), 1);
+            assert_eq!(owner.coordinator.high_water(), 1);
+            assert!(owner.registry.registry().is_empty());
+        });
+    }
+
+    #[test]
+    fn lifecycle_output_malformed_equivocation_fails_before_service_or_admission() {
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            let mut owner = fixture.production_owner(64);
+            let AdapterEffect::Broadcast(message) = fixture.effect(0xD8) else {
+                unreachable!("fixture output is one Vote broadcast")
+            };
+            let wire::ConsensusMessageV2Payload::Vote(vote) = message.payload else {
+                unreachable!("fixture output contains one Vote")
+            };
+            let effect = AdapterEffect::ReportEquivocation {
+                evidence: AdapterEquivocationEvidence::vote_for_test(vote.clone(), vote),
+            };
+            let AdapterEffect::ReportEquivocation { evidence } = &effect else {
+                unreachable!("fixture retains vote equivocation evidence")
+            };
+            assert!(evidence.validate_structure(&fixture.context).is_err());
+            let calls = Cell::new(0_u8);
+            let settlement = owner.settle_lifecycle_output_admission(
+                fixture.output_pending(effect, 0xD8),
+                |_effect, _ownership| {
+                    calls.set(calls.get().saturating_add(1));
+                    Ok::<LifecycleOutputServiceDispositionV1, ()>(
+                        LifecycleOutputServiceDispositionV1::Accepted,
+                    )
+                },
+            );
+            match settlement {
+                ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                    failure:
+                        ProductionLifecycleOutputAdmissionFailureV1::Projection(
+                            AdapterEffectAdmissionError::UnboundEffect,
+                        ),
+                    pending: _,
+                } => {}
+                other => {
+                    panic!("a non-conflicting pair must fail before output service: {other:?}")
+                }
+            };
+            assert_eq!(calls.get(), 0);
+            assert_eq!(owner.coordinator.high_water(), 0);
+            assert!(owner.coordinator.records.is_empty());
+            assert!(owner.registry.registry().is_empty());
+        });
+    }
+
+    #[test]
+    fn lifecycle_output_source_retained_retries_before_terminal_fsync() {
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            let mut owner = fixture.production_owner(64);
+            let ledger = TempDir::new().expect("temporary retained-output ledger");
+            owner
+                .coordinator
+                .attach_empty_test_ledger(ledger.path())
+                .expect("attach retained-output ledger");
+            let effect = fixture.effect(0xD9);
+            let calls = Cell::new(0_u8);
+            let ProductionLifecycleOutputAdmissionSettlementV1::Deferred(pending) = owner
+                .settle_lifecycle_output_admission(
+                    fixture.output_pending(effect.clone(), 0xD9),
+                    |observed, _ownership| {
+                        assert_eq!(observed, &effect);
+                        calls.set(calls.get().saturating_add(1));
+                        Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                            LifecycleOutputServiceDispositionV1::SourceRetained,
+                        )
+                    },
+                )
+            else {
+                panic!("source retention must return the exact Ready output owner")
+            };
+            assert_eq!(calls.get(), 1);
+            assert_eq!(owner.coordinator.high_water(), 1);
+            assert_eq!(owner.coordinator.records[&1].state, LifecycleState::Ready);
+            assert_eq!(owner.registry.registry().len(), 1);
+            assert!(matches!(
+                owner.settle_lifecycle_output_admission(pending, |observed, _ownership| {
+                    assert_eq!(observed, &effect);
+                    calls.set(calls.get().saturating_add(1));
+                    Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                        LifecycleOutputServiceDispositionV1::Accepted,
+                    )
+                }),
+                ProductionLifecycleOutputAdmissionSettlementV1::Completed
+            ));
+            assert_eq!(calls.get(), 2);
+            assert_eq!(
+                owner.coordinator.records[&1].state,
+                LifecycleState::Terminal(super::super::TerminalOutcome::Advanced)
+            );
+            assert!(owner.registry.registry().is_empty());
+        });
+    }
+
+    #[test]
+    fn lifecycle_output_settlement_terminal_fsync_failure_faults_closed() {
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            let root = TempDir::new().expect("temporary output durability ledger");
+            let mut owner = fixture.production_owner(64);
+            owner
+                .coordinator
+                .attach_empty_test_ledger(root.path())
+                .expect("attach output durability ledger");
+            let effect = fixture.effect(0xD5);
+            let ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                failure: ProductionLifecycleOutputAdmissionFailureV1::Service("park"),
+                pending,
+            } = owner.settle_lifecycle_output_admission(
+                fixture.output_pending(effect, 0xD5),
+                |_effect, _ownership| Err("park"),
+            )
+            else {
+                panic!("pre-service retry fixture must retain its admitted owner")
+            };
+            owner
+                .coordinator
+                .redirect_test_ledger_to_missing_parent(root.path());
+            let calls = Cell::new(0_u8);
+            let ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                failure: ProductionLifecycleOutputAdmissionFailureV1::Durability,
+                pending: _,
+            } = owner.settle_lifecycle_output_admission(pending, |_effect, _ownership| {
+                calls.set(calls.get().saturating_add(1));
+                Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                    LifecycleOutputServiceDispositionV1::Accepted,
+                )
+            })
+            else {
+                panic!("terminal LedgerV1 failure must enter restart-required state")
+            };
+            assert_eq!(calls.get(), 1);
+            assert_eq!(owner.coordinator.high_water(), 1);
+            assert_eq!(owner.coordinator.records[&1].state, LifecycleState::Ready);
+            assert_eq!(owner.registry.registry().len(), 1);
+            assert_eq!(
+                owner.coordinator.fault(),
+                Some(CoordinatorFault::DurabilityFailure)
+            );
+        });
+    }
+
+    #[test]
+    fn owner_settlement_projection_failure_returns_the_local_origin() {
+        let fixture = Fixture::new();
+        let mut owner = fixture.production_owner(64);
+        owner.coordinator.active_context = super::super::LifecycleContext::new(
+            LifecycleDigest::new([0xF1; 32]),
+            fixture.context.height,
+        );
+        let (pending, effect) =
+            fixture.pending_durable_validate(0xB4, DurableValidateOriginFixture::LocalBody);
+        let ProductionDurableValidateAdmissionSettlementV1::Failed {
+            failure:
+                ProductionDurableValidateAdmissionFailureV1::Projection(
+                    AdapterEffectAdmissionError::ForeignContext,
+                ),
+            pending,
+        } = owner.settle_durable_validate_admission(pending)
+        else {
+            panic!("foreign owner context must return the exact local-body owner")
+        };
+        assert!(pending.exactly_retains_for_test(&effect, false));
+        assert_eq!(owner.coordinator.high_water(), 0);
+        assert!(owner.coordinator.records.is_empty());
+        assert!(owner.registry.registry.is_empty());
+    }
+    #[test]
+    fn owner_settlement_durability_failure_returns_owner_and_faults_closed() {
+        let fixture = Fixture::new();
+        let root = TempDir::new().expect("temporary durable Validate admission ledger");
+        let mut owner = fixture.production_owner(64);
+        owner
+            .coordinator
+            .attach_empty_test_ledger(root.path())
+            .expect("attach empty durable Validate admission ledger");
+        owner
+            .coordinator
+            .redirect_test_ledger_to_missing_parent(root.path());
+        let (pending, effect) =
+            fixture.pending_durable_validate(0xB5, DurableValidateOriginFixture::LocalBody);
+        let ProductionDurableValidateAdmissionSettlementV1::Failed {
+            failure: ProductionDurableValidateAdmissionFailureV1::Durability,
+            pending,
+        } = owner.settle_durable_validate_admission(pending)
+        else {
+            panic!("failed LedgerV1 publication must return the exact local owner")
+        };
+        assert!(pending.exactly_retains_for_test(&effect, false));
+        assert_eq!(owner.coordinator.high_water(), 0);
+        assert!(owner.coordinator.records.is_empty());
+        assert!(owner.registry.registry.is_empty());
+        assert_eq!(
+            owner.coordinator.fault(),
+            Some(CoordinatorFault::DurabilityFailure)
+        );
+    }
+    #[test]
     fn occupied_address_returns_pair_and_leaves_coordinator_unchanged() {
         let fixture = Fixture::new();
         let effect = fixture.effect(1);
         let (incumbent_effect, incumbent_pending) = fixture.pair(effect.clone(), 90);
-        let incumbent = ConcreteLifecycleWork::from_exact(incumbent_effect, incumbent_pending)
-            .expect("construct exact incumbent");
+        let incumbent = ConcreteLifecycleWork::from_direct_signed_fixture_for_test(
+            incumbent_effect,
+            incumbent_pending,
+        )
+        .expect("construct exact incumbent");
         let digest = incumbent.digest();
         let owner = OwnerId::new(incumbent.causal_root(), 1);
         let address = ConcreteWorkAddress::new(owner, 1, consensus_slot())
@@ -1317,133 +2590,135 @@ mod tests {
     }
     #[test]
     fn exhaustive_live_registry_census_rejects_volatile_drift_and_one_missing_carrier() {
-        let fixture = Fixture::new();
-        let mut coordinator = fixture.coordinator(64);
-        let mut registry = LifecycleWorkRegistryHolder::empty();
-        for (marker, source_ordinal) in [(0x31, 91), (0x32, 92)] {
-            let (effect, pending) = fixture.pair(fixture.effect(marker), source_ordinal);
-            assert!(matches!(
-                fixture.admit(&mut coordinator, &mut registry, effect, pending),
-                AdapterEffectAdmissionTransaction::Admitted(AdmissionDecision::Admitted { .. })
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            let mut coordinator = fixture.coordinator(64);
+            let mut registry = LifecycleWorkRegistryHolder::empty();
+            for (marker, source_ordinal) in [(0x31, 91), (0x32, 92)] {
+                let (effect, pending) = fixture.pair(fixture.effect(marker), source_ordinal);
+                assert!(matches!(
+                    fixture.admit(&mut coordinator, &mut registry, effect, pending),
+                    AdapterEffectAdmissionTransaction::Admitted(AdmissionDecision::Admitted { .. })
+                ));
+            }
+            assert!(
+                registry
+                    .registry
+                    .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+            );
+
+            coordinator.ready_index.remove(&1);
+            coordinator
+                .records
+                .get_mut(&1)
+                .expect("first live row")
+                .state = LifecycleState::Waiting(WaitToken::new(
+                WaitSource::Capacity(super::super::CapacityClass::Consensus),
+                0,
             ));
-        }
-        assert!(
-            registry
-                .registry
-                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
-        );
+            assert!(
+                !registry
+                    .registry
+                    .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+            );
+            coordinator
+                .records
+                .get_mut(&1)
+                .expect("first live row")
+                .state = LifecycleState::Ready;
+            coordinator.ready_index.insert(1);
 
-        coordinator.ready_index.remove(&1);
-        coordinator
-            .records
-            .get_mut(&1)
-            .expect("first live row")
-            .state = LifecycleState::Waiting(WaitToken::new(
-            WaitSource::Capacity(super::super::CapacityClass::Consensus),
-            0,
-        ));
-        assert!(
-            !registry
-                .registry
-                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
-        );
-        coordinator
-            .records
-            .get_mut(&1)
-            .expect("first live row")
-            .state = LifecycleState::Ready;
-        coordinator.ready_index.insert(1);
+            let recovery_source = WaitSource::Recovery(LifecycleDigest::new([0x33; 32]));
+            coordinator.ready_index.remove(&1);
+            coordinator
+                .records
+                .get_mut(&1)
+                .expect("first live row")
+                .state = LifecycleState::Waiting(WaitToken::new(recovery_source, 1));
+            assert!(
+                !registry
+                    .registry
+                    .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+            );
+            coordinator.observed_generation.insert(recovery_source, 1);
+            assert!(
+                registry
+                    .registry
+                    .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+            );
+            coordinator
+                .records
+                .get_mut(&1)
+                .expect("first live row")
+                .state = LifecycleState::Waiting(WaitToken::new(recovery_source, u64::MAX));
+            coordinator
+                .observed_generation
+                .insert(recovery_source, u64::MAX);
+            assert!(
+                !registry
+                    .registry
+                    .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+            );
+            coordinator.observed_generation.remove(&recovery_source);
+            coordinator
+                .records
+                .get_mut(&1)
+                .expect("first live row")
+                .state = LifecycleState::Ready;
+            coordinator.ready_index.insert(1);
 
-        let recovery_source = WaitSource::Recovery(LifecycleDigest::new([0x33; 32]));
-        coordinator.ready_index.remove(&1);
-        coordinator
-            .records
-            .get_mut(&1)
-            .expect("first live row")
-            .state = LifecycleState::Waiting(WaitToken::new(recovery_source, 1));
-        assert!(
-            !registry
-                .registry
-                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
-        );
-        coordinator.observed_generation.insert(recovery_source, 1);
-        assert!(
-            registry
-                .registry
-                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
-        );
-        coordinator
-            .records
-            .get_mut(&1)
-            .expect("first live row")
-            .state = LifecycleState::Waiting(WaitToken::new(recovery_source, u64::MAX));
-        coordinator
-            .observed_generation
-            .insert(recovery_source, u64::MAX);
-        assert!(
-            !registry
-                .registry
-                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
-        );
-        coordinator.observed_generation.remove(&recovery_source);
-        coordinator
-            .records
-            .get_mut(&1)
-            .expect("first live row")
-            .state = LifecycleState::Ready;
-        coordinator.ready_index.insert(1);
+            let removed_generation = coordinator
+                .capacity_generation
+                .remove(&super::super::CapacityClass::Producer)
+                .expect("complete capacity generations");
+            assert!(
+                !registry
+                    .registry
+                    .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+            );
+            coordinator
+                .capacity_generation
+                .insert(super::super::CapacityClass::Producer, removed_generation);
 
-        let removed_generation = coordinator
-            .capacity_generation
-            .remove(&super::super::CapacityClass::Producer)
-            .expect("complete capacity generations");
-        assert!(
-            !registry
-                .registry
-                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
-        );
-        coordinator
-            .capacity_generation
-            .insert(super::super::CapacityClass::Producer, removed_generation);
+            coordinator
+                .records
+                .get_mut(&1)
+                .expect("first live row")
+                .episode
+                .frozen_predecessors
+                .insert(1);
+            assert!(
+                !registry
+                    .registry
+                    .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+            );
+            coordinator
+                .records
+                .get_mut(&1)
+                .expect("first live row")
+                .episode
+                .frozen_predecessors
+                .clear();
+            assert!(
+                registry
+                    .registry
+                    .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+            );
 
-        coordinator
-            .records
-            .get_mut(&1)
-            .expect("first live row")
-            .episode
-            .frozen_predecessors
-            .insert(1);
-        assert!(
-            !registry
-                .registry
-                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
-        );
-        coordinator
-            .records
-            .get_mut(&1)
-            .expect("first live row")
-            .episode
-            .frozen_predecessors
-            .clear();
-        assert!(
-            registry
-                .registry
-                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
-        );
-
-        let record = &coordinator.records[&1];
-        let (&slot, _) = record
-            .physical_slots
-            .first_key_value()
-            .expect("admitted concrete work retains one physical slot");
-        let address = ConcreteWorkAddress::new(record.owner, record.ordinal, slot)
-            .expect("admitted concrete work retains a valid address");
-        assert!(registry.registry.remove_exact_for_test(address));
-        assert!(
-            !registry
-                .registry
-                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
-        );
+            let record = &coordinator.records[&1];
+            let (&slot, _) = record
+                .physical_slots
+                .first_key_value()
+                .expect("admitted concrete work retains one physical slot");
+            let address = ConcreteWorkAddress::new(record.owner, record.ordinal, slot)
+                .expect("admitted concrete work retains a valid address");
+            assert!(registry.registry.remove_exact_for_test(address));
+            assert!(
+                !registry
+                    .registry
+                    .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+            );
+        });
     }
 
     #[test]
@@ -1451,7 +2726,8 @@ mod tests {
         let fixture = Fixture::new();
         let effect = fixture.effect(4);
         let (effect, pending) = fixture.pair(effect, 94);
-        let work = ConcreteLifecycleWork::from_exact(effect, pending).expect("exact work");
+        let work = ConcreteLifecycleWork::from_direct_signed_fixture_for_test(effect, pending)
+            .expect("exact work");
         let wrong_owner = OwnerId::new(
             super::super::CausalRoot::new(LifecycleDigest::new([0xF4; 32])),
             1,
@@ -1475,7 +2751,8 @@ mod tests {
         let (effect, pending) = work.into_pair();
         assert!(pending.exactly_binds_adapter_effect(&effect));
         assert!(registry.registry.is_empty());
-        let work = ConcreteLifecycleWork::from_exact(effect, pending).expect("returned exact work");
+        let work = ConcreteLifecycleWork::from_direct_signed_fixture_for_test(effect, pending)
+            .expect("returned exact work");
         let owner = OwnerId::new(work.causal_root(), 1);
         let address =
             ConcreteWorkAddress::new(owner, 1, consensus_slot()).expect("valid exact address");
@@ -1745,11 +3022,11 @@ mod tests {
         let foreign_owner = OwnerId::new(foreign_candidate.causal_root, 1);
         let address = ConcreteWorkAddress::new(foreign_owner, 1, consensus_slot())
             .expect("foreign owner still has a structurally valid address");
-        let PreparedLifecycleAdmissionOwnerV1::Bound(bound) = prepared.into_owner() else {
-            unreachable!("direct signed admission retains a bound adapter owner")
-        };
         let published = Cell::new(false);
         let mut registry = LifecycleWorkRegistryHolder::empty();
+        let PreparedLifecycleAdmissionOwnerV1::DirectSigned(bound) = prepared.into_owner() else {
+            panic!("direct signed preparation must retain its bound owner")
+        };
         let error = registry
             .registry
             .install_bound_before_publication(
@@ -1775,7 +3052,12 @@ mod tests {
     }
     #[test]
     fn prepared_admission_and_bound_effect_have_no_optional_or_clone_surface() {
-        let source = include_str!("v2_lifecycle_work_registry.rs");
+        let source = [
+            include_str!("v2_lifecycle_work_registry.rs"),
+            include_str!("v2_lifecycle_work_registry_pre_admission.rs"),
+            include_str!("v2_lifecycle_work_registry_live_validate_children.rs"),
+        ]
+        .concat();
         let bound = source
             .split_once("pub(super) struct BoundAdapterEffectV1 {")
             .expect("bound adapter effect has one declaration")
@@ -1792,27 +3074,43 @@ mod tests {
         }
         assert!(!bound.contains("Option<"));
         let prepared = source
-            .split_once("pub(super) struct PreparedLifecycleAdmissionV1 {")
+            .split_once("pub(in crate::sumeragi) struct PreparedLifecycleAdmissionV1 {")
             .expect("prepared lifecycle admission has one declaration")
             .1
             .split_once('}')
             .expect("prepared declaration is bounded")
             .0;
-        assert!(prepared.contains("bound: BoundAdapterEffectV1"));
+        assert!(prepared.contains("owner: PreparedLifecycleAdmissionOwnerV1"));
         assert!(prepared.contains("candidate: CandidateAdmission"));
         assert!(!prepared.contains("Option<"));
         for origin in [
-            "LiveWal(LifecycleReplayAuthorityV1)",
-            "LocalBody(LifecycleReplayAuthorityV1)",
-            "RemoteProposal(LifecycleReplayAuthorityV1)",
-            "InvalidBodyReport(LifecycleReplayAuthorityV1)",
-            "DirectSigned(LifecycleReplayAuthorityV1)",
+            "LiveWal(BoundAdapterEffectV1)",
+            "LocalBody(PreparedLocalBodyValidateReplayPreAdmission)",
+            "RemoteProposal(PreparedRemoteProposalValidateReplayPreAdmission)",
+            "InvalidBodyReport(BoundAdapterEffectV1)",
+            "DirectSigned(BoundAdapterEffectV1)",
         ] {
             assert!(source.contains(origin), "prepared owner omitted {origin}");
         }
         for declaration in [
+            "pub(in crate::sumeragi) struct PreparedLiveValidateReportRegistryWork {",
+            "pub(in crate::sumeragi) struct PreparedLiveValidateApplyRegistryWork {",
+            "pub(in crate::sumeragi) struct PreparedLiveValidateSignRegistryWork {",
+        ] {
+            let body = source
+                .split_once(declaration)
+                .expect("live publication wrapper has one declaration")
+                .1
+                .split_once('}')
+                .expect("live publication wrapper declaration is bounded")
+                .0;
+            assert!(body.contains("admission: PreparedLifecycleAdmissionV1"));
+            assert!(!body.contains("bound: BoundAdapterEffectV1"));
+            assert!(!body.contains("work: ConcreteLifecycleWork"));
+        }
+        for declaration in [
             "pub(super) struct BoundAdapterEffectV1",
-            "pub(super) struct PreparedLifecycleAdmissionV1",
+            "pub(in crate::sumeragi) struct PreparedLifecycleAdmissionV1",
         ] {
             let prefix = source
                 .split_once(declaration)

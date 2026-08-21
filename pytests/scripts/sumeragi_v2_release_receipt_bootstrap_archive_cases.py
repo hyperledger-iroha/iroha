@@ -262,7 +262,6 @@ def _fixture_receipt_for_validator(
             "formal_completion": path("--formal-completion"),
             "seed_matrix_completion": path("--seed-completion"),
             "chaos_completion": path("--chaos-completion"),
-            "taira_completion": path("--taira-completion"),
             "g4p_multilane": {"completion": path("--g4p-completion")},
             "g12_cross_dataspace": {
                 "seed_completion": path("--g12-seed-completion"),

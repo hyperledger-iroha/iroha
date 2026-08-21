@@ -26278,15 +26278,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func streamVerifyingKeyEvents(filter: ToriiVerifyingKeyEventFilter = ToriiVerifyingKeyEventFilter()) -> AsyncThrowingStream<ToriiVerifyingKeyEventMessage, Error> {
+    private func serverSentEventStream<Event: Sendable>(
+        request: @escaping @Sendable () throws -> URLRequest,
+        parse: @escaping @Sendable ([String]) throws -> Event?
+    ) -> AsyncThrowingStream<Event, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let queryItems = try filter.queryItems()
-                    let request = try makeRequest(path: "/v1/events/sse",
-                                                  queryItems: queryItems,
-                                                  headers: ["Accept": "text/event-stream"])
-                    let (bytes, response) = try await session.bytes(for: request)
+                    let (bytes, response) = try await session.bytes(for: request())
                     guard let httpResponse = response as? HTTPURLResponse else {
                         throw ToriiClientError.invalidResponse
                     }
@@ -26302,8 +26301,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                         if byte == UInt8(ascii: "\n") {
                             let rawLine = String(decoding: lineAccumulator, as: UTF8.self)
                             if rawLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                if let message = try parseVerifyingKeyEvent(from: buffer) {
-                                    continuation.yield(message)
+                                if let event = try parse(buffer) {
+                                    continuation.yield(event)
                                 }
                                 buffer.removeAll(keepingCapacity: true)
                             } else {
@@ -26319,8 +26318,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                         buffer.append(rawLine)
                     }
 
-                    if let message = try parseVerifyingKeyEvent(from: buffer) {
-                        continuation.yield(message)
+                    if let event = try parse(buffer) {
+                        continuation.yield(event)
                     }
 
                     continuation.finish()
@@ -26339,268 +26338,77 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 task.cancel()
             }
         }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func streamVerifyingKeyEvents(filter: ToriiVerifyingKeyEventFilter = ToriiVerifyingKeyEventFilter()) -> AsyncThrowingStream<ToriiVerifyingKeyEventMessage, Error> {
+        serverSentEventStream(
+            request: {
+                let queryItems = try filter.queryItems()
+                return try self.makeRequest(path: "/v1/events/sse",
+                                            queryItems: queryItems,
+                                            headers: ["Accept": "text/event-stream"])
+            },
+            parse: { try self.parseVerifyingKeyEvent(from: $0) }
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     public func streamTriggerEvents(filter: ToriiTriggerEventFilter = ToriiTriggerEventFilter()) -> AsyncThrowingStream<ToriiTriggerEventMessage, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    let queryItems = try filter.queryItems()
-                    let request = try makeRequest(path: "/v1/events/sse",
-                                                  queryItems: queryItems,
-                                                  headers: ["Accept": "text/event-stream"])
-                    let (bytes, response) = try await session.bytes(for: request)
-                    guard let httpResponse = response as? HTTPURLResponse else {
-                        throw ToriiClientError.invalidResponse
-                    }
-                    try ensureStatus(httpResponse, equals: 200)
-
-                    var buffer: [String] = []
-                    var lineAccumulator = Data()
-                    var iterator = bytes.makeAsyncIterator()
-                    while let byte = try await iterator.next() {
-                        if Task.isCancelled {
-                            break
-                        }
-                        if byte == UInt8(ascii: "\n") {
-                            let rawLine = String(decoding: lineAccumulator, as: UTF8.self)
-                            if rawLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                if let message = try parseTriggerEvent(from: buffer) {
-                                    continuation.yield(message)
-                                }
-                                buffer.removeAll(keepingCapacity: true)
-                            } else {
-                                buffer.append(rawLine)
-                            }
-                            lineAccumulator.removeAll(keepingCapacity: true)
-                        } else {
-                            lineAccumulator.append(byte)
-                        }
-                    }
-                    if !lineAccumulator.isEmpty {
-                        let rawLine = String(decoding: lineAccumulator, as: UTF8.self)
-                        buffer.append(rawLine)
-                    }
-
-                    if let message = try parseTriggerEvent(from: buffer) {
-                        continuation.yield(message)
-                    }
-
-                    continuation.finish()
-                } catch is CancellationError {
-                    continuation.finish()
-                } catch {
-                    if Task.isCancelled {
-                        continuation.finish()
-                    } else {
-                        continuation.finish(throwing: error)
-                    }
-                }
-            }
-
-            continuation.onTermination = { _ in
-                task.cancel()
-            }
-        }
+        serverSentEventStream(
+            request: {
+                let queryItems = try filter.queryItems()
+                return try self.makeRequest(path: "/v1/events/sse",
+                                            queryItems: queryItems,
+                                            headers: ["Accept": "text/event-stream"])
+            },
+            parse: { try self.parseTriggerEvent(from: $0) }
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     public func streamProofEvents(filter: ToriiProofEventFilter = ToriiProofEventFilter()) -> AsyncThrowingStream<ToriiProofEventMessage, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    let queryItems = try filter.queryItems()
-                    let request = try makeRequest(path: "/v1/events/sse",
-                                                  queryItems: queryItems,
-                                                  headers: ["Accept": "text/event-stream"])
-                    let (bytes, response) = try await session.bytes(for: request)
-                    guard let httpResponse = response as? HTTPURLResponse else {
-                        throw ToriiClientError.invalidResponse
-                    }
-                    try ensureStatus(httpResponse, equals: 200)
-
-                    var buffer: [String] = []
-                    var lineAccumulator = Data()
-                    var iterator = bytes.makeAsyncIterator()
-                    while let byte = try await iterator.next() {
-                        if Task.isCancelled {
-                            break
-                        }
-                        if byte == UInt8(ascii: "\n") {
-                            let rawLine = String(decoding: lineAccumulator, as: UTF8.self)
-                            if rawLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                if let message = try parseProofEvent(from: buffer) {
-                                    continuation.yield(message)
-                                }
-                                buffer.removeAll(keepingCapacity: true)
-                            } else {
-                                buffer.append(rawLine)
-                            }
-                            lineAccumulator.removeAll(keepingCapacity: true)
-                        } else {
-                            lineAccumulator.append(byte)
-                        }
-                    }
-                    if !lineAccumulator.isEmpty {
-                        let rawLine = String(decoding: lineAccumulator, as: UTF8.self)
-                        buffer.append(rawLine)
-                    }
-
-                    if let message = try parseProofEvent(from: buffer) {
-                        continuation.yield(message)
-                    }
-
-                    continuation.finish()
-                } catch is CancellationError {
-                    continuation.finish()
-                } catch {
-                    if Task.isCancelled {
-                        continuation.finish()
-                    } else {
-                        continuation.finish(throwing: error)
-                    }
-                }
-            }
-
-            continuation.onTermination = { _ in
-                task.cancel()
-            }
-        }
+        serverSentEventStream(
+            request: {
+                let queryItems = try filter.queryItems()
+                return try self.makeRequest(path: "/v1/events/sse",
+                                            queryItems: queryItems,
+                                            headers: ["Accept": "text/event-stream"])
+            },
+            parse: { try self.parseProofEvent(from: $0) }
+        )
     }
 
     /// Stream explorer transaction summaries via SSE as blocks commit.
     @available(iOS 15.0, macOS 12.0, *)
     public func streamExplorerTransactions(lastEventId: String? = nil) -> AsyncThrowingStream<ToriiExplorerTransactionItem, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    var headers = ["Accept": "text/event-stream"]
-                    if let lastEventId {
-                        headers["Last-Event-ID"] = lastEventId
-                    }
-                    let request = try makeRequest(path: "/v1/explorer/transactions/stream",
-                                                  headers: headers)
-                    let (bytes, response) = try await session.bytes(for: request)
-                    guard let httpResponse = response as? HTTPURLResponse else {
-                        throw ToriiClientError.invalidResponse
-                    }
-                    try ensureStatus(httpResponse, equals: 200)
-
-                    var buffer: [String] = []
-                    var lineAccumulator = Data()
-                    var iterator = bytes.makeAsyncIterator()
-                    while let byte = try await iterator.next() {
-                        if Task.isCancelled {
-                            break
-                        }
-                        if byte == UInt8(ascii: "\n") {
-                            let rawLine = String(decoding: lineAccumulator, as: UTF8.self)
-                            if rawLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                if let item = try parseExplorerTransactionEvent(from: buffer) {
-                                    continuation.yield(item)
-                                }
-                                buffer.removeAll(keepingCapacity: true)
-                            } else {
-                                buffer.append(rawLine)
-                            }
-                            lineAccumulator.removeAll(keepingCapacity: true)
-                        } else {
-                            lineAccumulator.append(byte)
-                        }
-                    }
-                    if !lineAccumulator.isEmpty {
-                        let rawLine = String(decoding: lineAccumulator, as: UTF8.self)
-                        buffer.append(rawLine)
-                    }
-
-                    if let item = try parseExplorerTransactionEvent(from: buffer) {
-                        continuation.yield(item)
-                    }
-
-                    continuation.finish()
-                } catch is CancellationError {
-                    continuation.finish()
-                } catch {
-                    if Task.isCancelled {
-                        continuation.finish()
-                    } else {
-                        continuation.finish(throwing: error)
-                    }
+        serverSentEventStream(
+            request: {
+                var headers = ["Accept": "text/event-stream"]
+                if let lastEventId {
+                    headers["Last-Event-ID"] = lastEventId
                 }
-            }
-
-            continuation.onTermination = { _ in
-                task.cancel()
-            }
-        }
+                return try self.makeRequest(path: "/v1/explorer/transactions/stream",
+                                            headers: headers)
+            },
+            parse: { try self.parseExplorerTransactionEvent(from: $0) }
+        )
     }
 
     /// Stream explorer instruction payloads via SSE as blocks commit.
     @available(iOS 15.0, macOS 12.0, *)
     public func streamExplorerInstructions(lastEventId: String? = nil) -> AsyncThrowingStream<ToriiExplorerInstructionItem, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    var headers = ["Accept": "text/event-stream"]
-                    if let lastEventId {
-                        headers["Last-Event-ID"] = lastEventId
-                    }
-                    let request = try makeRequest(path: "/v1/explorer/instructions/stream",
-                                                  headers: headers)
-                    let (bytes, response) = try await session.bytes(for: request)
-                    guard let httpResponse = response as? HTTPURLResponse else {
-                        throw ToriiClientError.invalidResponse
-                    }
-                    try ensureStatus(httpResponse, equals: 200)
-
-                    var buffer: [String] = []
-                    var lineAccumulator = Data()
-                    var iterator = bytes.makeAsyncIterator()
-                    while let byte = try await iterator.next() {
-                        if Task.isCancelled {
-                            break
-                        }
-                        if byte == UInt8(ascii: "\n") {
-                            let rawLine = String(decoding: lineAccumulator, as: UTF8.self)
-                            if rawLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                if let item = try parseExplorerInstructionEvent(from: buffer) {
-                                    continuation.yield(item)
-                                }
-                                buffer.removeAll(keepingCapacity: true)
-                            } else {
-                                buffer.append(rawLine)
-                            }
-                            lineAccumulator.removeAll(keepingCapacity: true)
-                        } else {
-                            lineAccumulator.append(byte)
-                        }
-                    }
-                    if !lineAccumulator.isEmpty {
-                        let rawLine = String(decoding: lineAccumulator, as: UTF8.self)
-                        buffer.append(rawLine)
-                    }
-
-                    if let item = try parseExplorerInstructionEvent(from: buffer) {
-                        continuation.yield(item)
-                    }
-
-                    continuation.finish()
-                } catch is CancellationError {
-                    continuation.finish()
-                } catch {
-                    if Task.isCancelled {
-                        continuation.finish()
-                    } else {
-                        continuation.finish(throwing: error)
-                    }
+        serverSentEventStream(
+            request: {
+                var headers = ["Accept": "text/event-stream"]
+                if let lastEventId {
+                    headers["Last-Event-ID"] = lastEventId
                 }
-            }
-
-            continuation.onTermination = { _ in
-                task.cancel()
-            }
-        }
+                return try self.makeRequest(path: "/v1/explorer/instructions/stream",
+                                            headers: headers)
+            },
+            parse: { try self.parseExplorerInstructionEvent(from: $0) }
+        )
     }
 
     /// Stream transfer records derived from the explorer instruction SSE feed.

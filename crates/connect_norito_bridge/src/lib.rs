@@ -1217,6 +1217,11 @@ macro_rules! define_ed25519_signed_transaction_wrapper {
         $default:ident => $with_algorithm:ident (
             $($argument:ident: $argument_type:ty,)*
         )
+        identifiers: ($algorithm_code:ident, $signed_bytes:ident, $hash_bytes:ident);
+        $(clear_outputs: $clear_outputs:ident;)?
+        {
+            $($body:tt)*
+        }
     ) => {
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $default(
@@ -1236,6 +1241,35 @@ macro_rules! define_ed25519_signed_transaction_wrapper {
                     out_hash_len,
                 )
             }
+        }
+
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $with_algorithm(
+            $($argument: $argument_type,)*
+            $algorithm_code: u8,
+            out_signed_ptr: *mut *mut c_uchar,
+            out_signed_len: *mut c_ulong,
+            out_hash_ptr: *mut c_uchar,
+            out_hash_len: c_ulong,
+        ) -> c_int {
+            $(
+                $clear_outputs(
+                    out_signed_ptr,
+                    out_signed_len,
+                    out_hash_ptr,
+                    out_hash_len,
+                );
+            )?
+            let result = (|| {
+                if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
+                    return Err(BridgeError::NullPtr);
+                }
+                $($body)*
+                write_hash(out_hash_ptr, out_hash_len, &$hash_bytes)?;
+                unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &$signed_bytes) }?;
+                Ok(())
+            })();
+            bridge_result_to_code(result)
         }
     };
 }
@@ -2710,6 +2744,45 @@ fn decode_envelope(bytes: &[u8]) -> Result<proto::EnvelopeV1, norito::core::Erro
 fn encode_envelope_framed(env: &proto::EnvelopeV1) -> Result<Vec<u8>, norito::core::Error> {
     proto::encode_connect_envelope_framed(env)
 }
+unsafe fn write_output_result<E>(
+    encoded: Result<Vec<u8>, E>,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+    encoding_error: c_int,
+    allocation_error: c_int,
+) -> c_int {
+    let bytes = match encoded {
+        Ok(bytes) => bytes,
+        Err(_) => return encoding_error,
+    };
+    let len = bytes.len();
+    let mem = unsafe { malloc(len) };
+    if mem.is_null() {
+        return allocation_error;
+    }
+    unsafe {
+        ptr::copy_nonoverlapping(bytes.as_ptr(), mem.cast::<u8>(), len);
+        *out_ptr = mem.cast::<u8>();
+        *out_len = len as c_ulong;
+    }
+    0
+}
+unsafe fn write_encoded_result(
+    encoded: Result<Vec<u8>, norito::core::Error>,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+    allocation_error: c_int,
+) -> c_int {
+    unsafe {
+        write_output_result(
+            encoded,
+            out_ptr,
+            out_len,
+            ERR_CONNECT_ENCODE,
+            allocation_error,
+        )
+    }
+}
 fn decode_signed_transaction(bytes: &[u8]) -> Result<SignedTransaction, norito::core::Error> {
     SignedTransaction::decode_all_versioned(bytes)
         .map_err(|err| norito::core::Error::Message(err.to_string()))
@@ -3463,27 +3536,17 @@ fn encode_asset_transaction_with_nonce_fee_payment_and_metadata<F>(
 where
     F: FnOnce() -> Executable,
 {
-    let ttl_duration = ttl_option.map(|ttl| Duration::from_millis(ttl.get()));
-    let mut builder = TransactionBuilder::new(network_id, authority, fee_payment)
-        .with_executable(build_executable());
-    if !metadata.is_empty() {
-        builder = builder.with_metadata(metadata);
-    }
-    builder = builder.with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
-    if let Some(ttl) = ttl_duration {
-        builder.set_ttl(ttl);
-    }
-    if let Some(nonce) = nonce_option {
-        builder.set_nonce(nonce);
-    }
-    builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let signed = builder
-        .try_sign(&private_key)
-        .map_err(|_| BridgeError::TransactionSign)?;
-    let signed_bytes = signed.encode_versioned();
-    let mut hash = [0u8; 32];
-    hash.copy_from_slice(signed.hash().as_ref());
-    Ok((signed_bytes, hash))
+    encode_asset_transaction_with_nonce_and_metadata(
+        network_id,
+        authority,
+        creation_time_ms,
+        ttl_option,
+        nonce_option,
+        fee_payment,
+        metadata,
+        private_key,
+        build_executable,
+    )
 }
 fn encode_instruction_transaction(
     network_id: NetworkId,
@@ -3715,19 +3778,7 @@ pub unsafe extern "C" fn connect_norito_encode_ciphertext_frame(
             seq,
             kind: proto::FrameKind::Ciphertext(ct),
         };
-        let buf = match encode_connect_frame(&frame) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        let len = buf.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -4;
-        }
-        ptr::copy_nonoverlapping(buf.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
+        write_encoded_result(encode_connect_frame(&frame), out_ptr, out_len, -4)
     }
 }
 fn read_32_bytes(ptr: *const c_uchar) -> Result<[u8; 32], c_int> {
@@ -3860,14 +3911,7 @@ pub unsafe extern "C" fn connect_norito_connect_encrypt_envelope(
         };
         let frame =
             connect_sdk::seal_envelope(&key, &sid, direction, envelope.seq, envelope.payload);
-        let buf = match encode_connect_frame(&frame) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        if let Err(code) = write_bytes(out_ptr, out_len, &buf) {
-            return code;
-        }
-        0
+        write_encoded_result(encode_connect_frame(&frame), out_ptr, out_len, ERR_ALLOC)
     }
 }
 #[unsafe(no_mangle)]
@@ -3895,14 +3939,12 @@ pub unsafe extern "C" fn connect_norito_connect_decrypt_ciphertext(
             Ok(env) => env,
             Err(_) => return -3,
         };
-        let buf = match encode_envelope_framed(&envelope) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        if let Err(code) = write_bytes(out_ptr, out_len, &buf) {
-            return code;
-        }
-        0
+        write_encoded_result(
+            encode_envelope_framed(&envelope),
+            out_ptr,
+            out_len,
+            ERR_ALLOC,
+        )
     }
 }
 // ---------------- Control frame decode helpers ----------------
@@ -4113,16 +4155,12 @@ pub unsafe extern "C" fn connect_norito_decode_control_approve_sig_alg(
             }
             _ => return -3,
         };
-        let bytes = alg_str.as_bytes();
-        let len = bytes.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -4;
-        }
-        ptr::copy_nonoverlapping(bytes.as_ptr(), mem as *mut u8, len);
-        *out_alg_ptr = mem as *mut c_char;
-        *out_alg_len = len as c_ulong;
-        0
+        write_bytes(
+            out_alg_ptr.cast::<*mut c_uchar>(),
+            out_alg_len,
+            alg_str.as_bytes(),
+        )
+        .map_or(-4, |()| 0)
     }
 }
 #[unsafe(no_mangle)]
@@ -4214,285 +4252,134 @@ pub unsafe extern "C" fn connect_norito_decode_control_reject(
         0
     }
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_decode_control_ping(
-    inp_ptr: *const c_uchar,
-    inp_len: c_ulong,
-    out_nonce: *mut u64,
-) -> c_int {
-    unsafe {
-        if inp_ptr.is_null() || out_nonce.is_null() {
-            return -1;
-        }
-        let inp = std::slice::from_raw_parts(inp_ptr, inp_len as usize);
-        let frame = match decode_connect_frame(inp) {
-            Ok(f) => f,
-            Err(_) => return -2,
-        };
-        let nonce = match frame.kind {
-            proto::FrameKind::Control(proto::ConnectControlV1::Ping { nonce }) => nonce,
-            _ => return -3,
-        };
-        *out_nonce = nonce;
-        0
-    }
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_decode_control_pong(
-    inp_ptr: *const c_uchar,
-    inp_len: c_ulong,
-    out_nonce: *mut u64,
-) -> c_int {
-    unsafe {
-        if inp_ptr.is_null() || out_nonce.is_null() {
-            return -1;
-        }
-        let inp = std::slice::from_raw_parts(inp_ptr, inp_len as usize);
-        let frame = match decode_connect_frame(inp) {
-            Ok(f) => f,
-            Err(_) => return -2,
-        };
-        let nonce = match frame.kind {
-            proto::FrameKind::Control(proto::ConnectControlV1::Pong { nonce }) => nonce,
-            _ => return -3,
-        };
-        *out_nonce = nonce;
-        0
-    }
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_decode_control_approve_account_json(
-    inp_ptr: *const c_uchar,
-    inp_len: c_ulong,
-    out_ptr: *mut *mut c_uchar,
-    out_len: *mut c_ulong,
-) -> c_int {
-    unsafe {
-        if inp_ptr.is_null() || out_ptr.is_null() || out_len.is_null() {
-            return -1;
-        }
-        let inp = std::slice::from_raw_parts(inp_ptr, inp_len as usize);
-        let frame = match decode_connect_frame(inp) {
-            Ok(f) => f,
-            Err(_) => return -2,
-        };
-        let acct = match frame.kind {
-            proto::FrameKind::Control(proto::ConnectControlV1::Approve {
-                ref account_id, ..
-            }) => account_id,
-            _ => return -3,
-        };
-        let payload = json_object([("account_id", ::norito::json!(acct.clone()))]);
-        let s = match norito::json::to_vec(&payload) {
-            Ok(v) => v,
-            Err(_) => return -4,
-        };
-        let len = s.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -5;
-        }
-        ptr::copy_nonoverlapping(s.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
-    }
-}
-// ---------------- Permissions/Proof JSON helpers ----------------
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_decode_control_open_app_metadata_json(
-    inp_ptr: *const c_uchar,
-    inp_len: c_ulong,
-    out_ptr: *mut *mut c_uchar,
-    out_len: *mut c_ulong,
-) -> c_int {
-    unsafe {
-        if inp_ptr.is_null() || out_ptr.is_null() || out_len.is_null() {
-            return -1;
-        }
-        let inp = std::slice::from_raw_parts(inp_ptr, inp_len as usize);
-        let frame = match decode_connect_frame(inp) {
-            Ok(f) => f,
-            Err(_) => return -2,
-        };
-        let app_meta = match frame.kind {
-            proto::FrameKind::Control(proto::ConnectControlV1::Open { ref app_meta, .. }) => {
-                app_meta
+macro_rules! define_control_nonce_decoder {
+    ($name:ident, $variant:ident) => {
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $name(
+            inp_ptr: *const c_uchar,
+            inp_len: c_ulong,
+            out_nonce: *mut u64,
+        ) -> c_int {
+            unsafe {
+                if inp_ptr.is_null() || out_nonce.is_null() {
+                    return -1;
+                }
+                let inp = std::slice::from_raw_parts(inp_ptr, inp_len as usize);
+                let frame = match decode_connect_frame(inp) {
+                    Ok(frame) => frame,
+                    Err(_) => return -2,
+                };
+                let nonce = match frame.kind {
+                    proto::FrameKind::Control(proto::ConnectControlV1::$variant { nonce }) => nonce,
+                    _ => return -3,
+                };
+                *out_nonce = nonce;
+                0
             }
-            _ => return -3,
-        };
-        let val = if let Some(meta) = app_meta {
-            let url = meta
-                .url
-                .as_ref()
-                .map(|value| JsonValue::from(value.as_str()))
-                .unwrap_or(JsonValue::Null);
-            let icon_hash = meta
-                .icon_hash
-                .as_ref()
-                .map(|value| JsonValue::from(value.as_str()))
-                .unwrap_or(JsonValue::Null);
-            json_object([
-                ("name", JsonValue::from(meta.name.as_str())),
-                ("url", url),
-                ("icon_hash", icon_hash),
-            ])
-        } else {
-            json_object([])
-        };
-        let s = match norito::json::to_vec(&val) {
-            Ok(v) => v,
-            Err(_) => return -4,
-        };
-        let len = s.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -5;
         }
-        ptr::copy_nonoverlapping(s.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
-    }
+    };
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_decode_control_open_permissions_json(
-    inp_ptr: *const c_uchar,
-    inp_len: c_ulong,
-    out_ptr: *mut *mut c_uchar,
-    out_len: *mut c_ulong,
-) -> c_int {
-    unsafe {
-        if inp_ptr.is_null() || out_ptr.is_null() || out_len.is_null() {
-            return -1;
+define_control_nonce_decoder!(connect_norito_decode_control_ping, Ping);
+define_control_nonce_decoder!(connect_norito_decode_control_pong, Pong);
+macro_rules! define_control_json_decoder {
+    (
+        $name:ident,
+        $variant:ident { $field:ident } => $value:expr $(,)?
+    ) => {
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $name(
+            inp_ptr: *const c_uchar,
+            inp_len: c_ulong,
+            out_ptr: *mut *mut c_uchar,
+            out_len: *mut c_ulong,
+        ) -> c_int {
+            unsafe {
+                if inp_ptr.is_null() || out_ptr.is_null() || out_len.is_null() {
+                    return -1;
+                }
+                let inp = std::slice::from_raw_parts(inp_ptr, inp_len as usize);
+                let frame = match decode_connect_frame(inp) {
+                    Ok(frame) => frame,
+                    Err(_) => return -2,
+                };
+                let $field = match frame.kind {
+                    proto::FrameKind::Control(proto::ConnectControlV1::$variant {
+                        ref $field,
+                        ..
+                    }) => $field,
+                    _ => return -3,
+                };
+                let value: JsonValue = $value;
+                write_output_result(norito::json::to_vec(&value), out_ptr, out_len, -4, -5)
+            }
         }
-        let inp = std::slice::from_raw_parts(inp_ptr, inp_len as usize);
-        let frame = match decode_connect_frame(inp) {
-            Ok(f) => f,
-            Err(_) => return -2,
-        };
-        let perms = match frame.kind {
-            proto::FrameKind::Control(proto::ConnectControlV1::Open {
-                ref permissions, ..
-            }) => permissions,
-            _ => return -3,
-        };
-        let val = if let Some(p) = perms {
-            json_object([
-                ("methods", json_string_array(&p.methods)),
-                ("events", json_string_array(&p.events)),
-                ("resources", json_option_string_array(&p.resources)),
-            ])
-        } else {
-            json_object([])
-        };
-        let s = match norito::json::to_vec(&val) {
-            Ok(v) => v,
-            Err(_) => return -4,
-        };
-        let len = s.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -5;
-        }
-        ptr::copy_nonoverlapping(s.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
-    }
+    };
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_decode_control_approve_permissions_json(
-    inp_ptr: *const c_uchar,
-    inp_len: c_ulong,
-    out_ptr: *mut *mut c_uchar,
-    out_len: *mut c_ulong,
-) -> c_int {
-    unsafe {
-        if inp_ptr.is_null() || out_ptr.is_null() || out_len.is_null() {
-            return -1;
-        }
-        let inp = std::slice::from_raw_parts(inp_ptr, inp_len as usize);
-        let frame = match decode_connect_frame(inp) {
-            Ok(f) => f,
-            Err(_) => return -2,
-        };
-        let perms = match frame.kind {
-            proto::FrameKind::Control(proto::ConnectControlV1::Approve {
-                ref permissions, ..
-            }) => permissions,
-            _ => return -3,
-        };
-        let val = if let Some(p) = perms {
-            json_object([
-                ("methods", json_string_array(&p.methods)),
-                ("events", json_string_array(&p.events)),
-                ("resources", json_option_string_array(&p.resources)),
-            ])
-        } else {
-            json_object([])
-        };
-        let s = match norito::json::to_vec(&val) {
-            Ok(v) => v,
-            Err(_) => return -4,
-        };
-        let len = s.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -5;
-        }
-        ptr::copy_nonoverlapping(s.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
-    }
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_decode_control_approve_proof_json(
-    inp_ptr: *const c_uchar,
-    inp_len: c_ulong,
-    out_ptr: *mut *mut c_uchar,
-    out_len: *mut c_ulong,
-) -> c_int {
-    unsafe {
-        if inp_ptr.is_null() || out_ptr.is_null() || out_len.is_null() {
-            return -1;
-        }
-        let inp = std::slice::from_raw_parts(inp_ptr, inp_len as usize);
-        let frame = match decode_connect_frame(inp) {
-            Ok(f) => f,
-            Err(_) => return -2,
-        };
-        let proof = match frame.kind {
-            proto::FrameKind::Control(proto::ConnectControlV1::Approve { ref proof, .. }) => proof,
-            _ => return -3,
-        };
-        let val = if let Some(p) = proof {
-            json_object([
-                ("domain", ::norito::json!(p.domain.clone())),
-                ("uri", ::norito::json!(p.uri.clone())),
-                ("statement", ::norito::json!(p.statement.clone())),
-                ("issued_at", ::norito::json!(p.issued_at.clone())),
-                ("nonce", ::norito::json!(p.nonce.clone())),
-            ])
-        } else {
-            json_object([])
-        };
-        let s = match norito::json::to_vec(&val) {
-            Ok(v) => v,
-            Err(_) => return -4,
-        };
-        let len = s.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -5;
-        }
-        ptr::copy_nonoverlapping(s.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
-    }
-}
+define_control_json_decoder!(
+    connect_norito_decode_control_approve_account_json,
+    Approve { account_id } => json_object([("account_id", ::norito::json!(account_id.clone()))]),
+);
+// ---------------- Permissions/Proof JSON helpers ----------------
+define_control_json_decoder!(
+    connect_norito_decode_control_open_app_metadata_json,
+    Open { app_meta } => if let Some(meta) = app_meta {
+        let url = meta
+            .url
+            .as_ref()
+            .map(|value| JsonValue::from(value.as_str()))
+            .unwrap_or(JsonValue::Null);
+        let icon_hash = meta
+            .icon_hash
+            .as_ref()
+            .map(|value| JsonValue::from(value.as_str()))
+            .unwrap_or(JsonValue::Null);
+        json_object([
+            ("name", JsonValue::from(meta.name.as_str())),
+            ("url", url),
+            ("icon_hash", icon_hash),
+        ])
+    } else {
+        json_object([])
+    },
+);
+define_control_json_decoder!(
+    connect_norito_decode_control_open_permissions_json,
+    Open { permissions } => if let Some(p) = permissions {
+        json_object([
+            ("methods", json_string_array(&p.methods)),
+            ("events", json_string_array(&p.events)),
+            ("resources", json_option_string_array(&p.resources)),
+        ])
+    } else {
+        json_object([])
+    },
+);
+define_control_json_decoder!(
+    connect_norito_decode_control_approve_permissions_json,
+    Approve { permissions } => if let Some(p) = permissions {
+        json_object([
+            ("methods", json_string_array(&p.methods)),
+            ("events", json_string_array(&p.events)),
+            ("resources", json_option_string_array(&p.resources)),
+        ])
+    } else {
+        json_object([])
+    },
+);
+define_control_json_decoder!(
+    connect_norito_decode_control_approve_proof_json,
+    Approve { proof } => if let Some(p) = proof {
+        json_object([
+            ("domain", ::norito::json!(p.domain.clone())),
+            ("uri", ::norito::json!(p.uri.clone())),
+            ("statement", ::norito::json!(p.statement.clone())),
+            ("issued_at", ::norito::json!(p.issued_at.clone())),
+            ("nonce", ::norito::json!(p.nonce.clone())),
+        ])
+    } else {
+        json_object([])
+    },
+);
 // ---------------- Extended control encoders ----------------
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_control_open_ext(
@@ -4564,19 +4451,7 @@ pub unsafe extern "C" fn connect_norito_encode_control_open_ext(
             seq,
             kind: proto::FrameKind::Control(ctrl),
         };
-        let buf = match encode_connect_frame(&frame) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        let len = buf.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -5;
-        }
-        ptr::copy_nonoverlapping(buf.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
+        write_encoded_result(encode_connect_frame(&frame), out_ptr, out_len, -5)
     }
 }
 #[unsafe(no_mangle)]
@@ -4652,19 +4527,7 @@ pub unsafe extern "C" fn connect_norito_encode_control_approve_ext(
             seq,
             kind: proto::FrameKind::Control(ctrl),
         };
-        let buf = match encode_connect_frame(&frame) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        let len = buf.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -5;
-        }
-        ptr::copy_nonoverlapping(buf.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
+        write_encoded_result(encode_connect_frame(&frame), out_ptr, out_len, -5)
     }
 }
 #[unsafe(no_mangle)]
@@ -4747,19 +4610,7 @@ pub unsafe extern "C" fn connect_norito_encode_control_approve_ext_with_alg(
             seq,
             kind: proto::FrameKind::Control(ctrl),
         };
-        let buf = match encode_connect_frame(&frame) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        let len = buf.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -5;
-        }
-        ptr::copy_nonoverlapping(buf.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
+        write_encoded_result(encode_connect_frame(&frame), out_ptr, out_len, -5)
     }
 }
 #[unsafe(no_mangle)]
@@ -4813,19 +4664,7 @@ pub unsafe extern "C" fn connect_norito_encode_control_reject(
             seq,
             kind: proto::FrameKind::Control(ctrl),
         };
-        let buf = match encode_connect_frame(&frame) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        let len = buf.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -5;
-        }
-        ptr::copy_nonoverlapping(buf.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
+        write_encoded_result(encode_connect_frame(&frame), out_ptr, out_len, -5)
     }
 }
 #[unsafe(no_mangle)]
@@ -4879,107 +4718,46 @@ pub unsafe extern "C" fn connect_norito_encode_control_close(
             seq,
             kind: proto::FrameKind::Control(ctrl),
         };
-        let buf = match encode_connect_frame(&frame) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        let len = buf.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -5;
-        }
-        ptr::copy_nonoverlapping(buf.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
+        write_encoded_result(encode_connect_frame(&frame), out_ptr, out_len, -5)
     }
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_control_ping(
-    sid_ptr: *const c_uchar,
-    dir: c_uchar,
-    seq: u64,
-    nonce: u64,
-    out_ptr: *mut *mut c_uchar,
-    out_len: *mut c_ulong,
-) -> c_int {
-    unsafe {
-        if sid_ptr.is_null() || out_ptr.is_null() || out_len.is_null() {
-            return -1;
+macro_rules! define_control_nonce_encoder {
+    ($name:ident, $variant:ident) => {
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $name(
+            sid_ptr: *const c_uchar,
+            dir: c_uchar,
+            seq: u64,
+            nonce: u64,
+            out_ptr: *mut *mut c_uchar,
+            out_len: *mut c_ulong,
+        ) -> c_int {
+            unsafe {
+                if sid_ptr.is_null() || out_ptr.is_null() || out_len.is_null() {
+                    return -1;
+                }
+                let sid = std::slice::from_raw_parts(sid_ptr, 32);
+                let mut sid_arr = [0u8; 32];
+                sid_arr.copy_from_slice(sid);
+                let dir = match dir {
+                    0 => proto::Dir::AppToWallet,
+                    1 => proto::Dir::WalletToApp,
+                    _ => return -2,
+                };
+                let ctrl = proto::ConnectControlV1::$variant { nonce };
+                let frame = proto::ConnectFrameV1 {
+                    sid: sid_arr,
+                    dir,
+                    seq,
+                    kind: proto::FrameKind::Control(ctrl),
+                };
+                write_encoded_result(encode_connect_frame(&frame), out_ptr, out_len, -3)
+            }
         }
-        let sid = std::slice::from_raw_parts(sid_ptr, 32);
-        let mut sid_arr = [0u8; 32];
-        sid_arr.copy_from_slice(sid);
-        let dir = match dir {
-            0 => proto::Dir::AppToWallet,
-            1 => proto::Dir::WalletToApp,
-            _ => return -2,
-        };
-        let ctrl = proto::ConnectControlV1::Ping { nonce };
-        let frame = proto::ConnectFrameV1 {
-            sid: sid_arr,
-            dir,
-            seq,
-            kind: proto::FrameKind::Control(ctrl),
-        };
-        let buf = match encode_connect_frame(&frame) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        let len = buf.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -3;
-        }
-        ptr::copy_nonoverlapping(buf.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
-    }
+    };
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_control_pong(
-    sid_ptr: *const c_uchar,
-    dir: c_uchar,
-    seq: u64,
-    nonce: u64,
-    out_ptr: *mut *mut c_uchar,
-    out_len: *mut c_ulong,
-) -> c_int {
-    unsafe {
-        if sid_ptr.is_null() || out_ptr.is_null() || out_len.is_null() {
-            return -1;
-        }
-        let sid = std::slice::from_raw_parts(sid_ptr, 32);
-        let mut sid_arr = [0u8; 32];
-        sid_arr.copy_from_slice(sid);
-        let dir = match dir {
-            0 => proto::Dir::AppToWallet,
-            1 => proto::Dir::WalletToApp,
-            _ => return -2,
-        };
-        let ctrl = proto::ConnectControlV1::Pong { nonce };
-        let frame = proto::ConnectFrameV1 {
-            sid: sid_arr,
-            dir,
-            seq,
-            kind: proto::FrameKind::Control(ctrl),
-        };
-        let buf = match encode_connect_frame(&frame) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        let len = buf.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -3;
-        }
-        ptr::copy_nonoverlapping(buf.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
-    }
-}
+define_control_nonce_encoder!(connect_norito_encode_control_ping, Ping);
+define_control_nonce_encoder!(connect_norito_encode_control_pong, Pong);
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_decode_ciphertext_frame(
     inp_ptr: *const c_uchar,
@@ -22138,45 +21916,7 @@ mod kagemusha_bridge_tests {
         assert!(rejected_ptr.is_null());
         assert_eq!(rejected_len, 0);
     }
-    #[test]
-    fn redemption_change_c_header_declares_secret_allocator_contract() {
-        let header = include_str!("../include/connect_norito_bridge.h");
-        for declaration in [
-            "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4(",
-            "connect_norito_kagemusha_secret_free_buffer(uint8_t* ptr)",
-            "KagemushaRecursiveSpendRedemptionChangePrepareRequestV4",
-            "KagemushaRecursiveSpendRedemptionChangePrepareResultV4",
-        ] {
-            assert!(
-                header.contains(declaration),
-                "missing C header contract: {declaration}"
-            );
-        }
-        let source = bridge_source();
-        let prepare = source
-            .split_once(
-                "pub unsafe extern \"C\" fn connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
-            )
-            .expect("prepare export")
-            .1
-            .split_once("pub unsafe extern \"C\" fn connect_norito_kagemusha_receiver_key_reference_v2")
-            .expect("end of prepare export")
-            .0;
-        assert!(prepare.contains("write_kagemusha_secret_archive!("));
-        assert!(!prepare.contains("write_kagemusha_archive_bridge"));
-        assert!(!prepare.contains("connect_norito_free"));
-        let secret_writer = source
-            .split_once("macro_rules! write_kagemusha_secret_archive")
-            .expect("secret Kagemusha archive writer")
-            .1
-            .split_once("unsafe fn write_kagemusha_archive_bridge")
-            .expect("end of secret Kagemusha archive writer")
-            .0;
-        assert!(secret_writer.contains("Zeroizing::new"));
-        assert!(secret_writer.contains("write_kagemusha_secret_bytes"));
-        assert!(!secret_writer.contains("write_kagemusha_archive_bridge"));
-        assert!(!secret_writer.contains("connect_norito_free"));
-    }
+    include!("kagemusha_secret_allocator_contract_tests.rs");
     #[test]
     fn redemption_change_preparation_jni_covers_both_sdk_namespaces() {
         let source = bridge_source();
@@ -22666,19 +22406,7 @@ pub unsafe extern "C" fn connect_norito_encode_envelope_sign_result_ok(
             seq,
             payload: proto::ConnectPayloadV1::SignResultOk { signature },
         };
-        let buf = match encode_envelope_framed(&env) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        let len = buf.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -3;
-        }
-        ptr::copy_nonoverlapping(buf.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
+        write_encoded_result(encode_envelope_framed(&env), out_ptr, out_len, -3)
     }
 }
 #[unsafe(no_mangle)]
@@ -22708,19 +22436,7 @@ pub unsafe extern "C" fn connect_norito_encode_envelope_sign_result_ok_with_alg(
             seq,
             payload: proto::ConnectPayloadV1::SignResultOk { signature },
         };
-        let buf = match encode_envelope_framed(&env) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        let len = buf.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -3;
-        }
-        ptr::copy_nonoverlapping(buf.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
+        write_encoded_result(encode_envelope_framed(&env), out_ptr, out_len, -3)
     }
 }
 #[unsafe(no_mangle)]
@@ -22754,19 +22470,7 @@ pub unsafe extern "C" fn connect_norito_encode_envelope_control_close(
             retryable: retryable != 0,
         });
         let env = proto::EnvelopeV1 { seq, payload };
-        let buf = match encode_envelope_framed(&env) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        let len = buf.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -4;
-        }
-        ptr::copy_nonoverlapping(buf.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
+        write_encoded_result(encode_envelope_framed(&env), out_ptr, out_len, -4)
     }
 }
 #[unsafe(no_mangle)]
@@ -22799,19 +22503,7 @@ pub unsafe extern "C" fn connect_norito_encode_envelope_control_reject(
             reason,
         });
         let env = proto::EnvelopeV1 { seq, payload };
-        let buf = match encode_envelope_framed(&env) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        let len = buf.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -3;
-        }
-        ptr::copy_nonoverlapping(buf.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
+        write_encoded_result(encode_envelope_framed(&env), out_ptr, out_len, -3)
     }
 }
 // ---------------- EnvelopeV1 decode helpers (selected variants) ----------------
@@ -22944,19 +22636,7 @@ pub unsafe extern "C" fn connect_norito_decode_envelope_json(
             )]),
         };
         let obj = json_object([("seq", ::norito::json!(env.seq)), ("payload", payload_json)]);
-        let s = match norito::json::to_vec(&obj) {
-            Ok(v) => v,
-            Err(_) => return -3,
-        };
-        let len = s.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -4;
-        }
-        ptr::copy_nonoverlapping(s.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
+        write_output_result(norito::json::to_vec(&obj), out_ptr, out_len, -3, -4)
     }
 }
 #[unsafe(no_mangle)]
@@ -22981,16 +22661,12 @@ pub unsafe extern "C" fn connect_norito_decode_envelope_sign_result_alg(
             }
             _ => return -3,
         };
-        let bytes = alg_str.as_bytes();
-        let len = bytes.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -4;
-        }
-        ptr::copy_nonoverlapping(bytes.as_ptr(), mem as *mut u8, len);
-        *out_alg_ptr = mem as *mut c_char;
-        *out_alg_len = len as c_ulong;
-        0
+        write_bytes(
+            out_alg_ptr.cast::<*mut c_uchar>(),
+            out_alg_len,
+            alg_str.as_bytes(),
+        )
+        .map_or(-4, |()| 0)
     }
 }
 // Additional envelope encoders for parity
@@ -23011,19 +22687,7 @@ pub unsafe extern "C" fn connect_norito_encode_envelope_sign_request_tx(
             seq,
             payload: proto::ConnectPayloadV1::SignRequestTx { tx_bytes: tx },
         };
-        let buf = match encode_envelope_framed(&env) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        let len = buf.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -3;
-        }
-        ptr::copy_nonoverlapping(buf.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
+        write_encoded_result(encode_envelope_framed(&env), out_ptr, out_len, -3)
     }
 }
 #[unsafe(no_mangle)]
@@ -23049,19 +22713,7 @@ pub unsafe extern "C" fn connect_norito_encode_envelope_sign_request_raw(
             seq,
             payload: proto::ConnectPayloadV1::SignRequestRaw { domain_tag, bytes },
         };
-        let buf = match encode_envelope_framed(&env) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        let len = buf.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -3;
-        }
-        ptr::copy_nonoverlapping(buf.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
+        write_encoded_result(encode_envelope_framed(&env), out_ptr, out_len, -3)
     }
 }
 #[unsafe(no_mangle)]
@@ -23090,19 +22742,7 @@ pub unsafe extern "C" fn connect_norito_encode_envelope_sign_result_err(
             seq,
             payload: proto::ConnectPayloadV1::SignResultErr { code, message },
         };
-        let buf = match encode_envelope_framed(&env) {
-            Ok(buf) => buf,
-            Err(_) => return ERR_CONNECT_ENCODE,
-        };
-        let len = buf.len();
-        let mem = malloc(len);
-        if mem.is_null() {
-            return -3;
-        }
-        ptr::copy_nonoverlapping(buf.as_ptr(), mem as *mut u8, len);
-        *out_ptr = mem as *mut u8;
-        *out_len = len as c_ulong;
-        0
+        write_encoded_result(encode_envelope_framed(&env), out_ptr, out_len, -3)
     }
 }
 define_ed25519_signed_transaction_wrapper! {
@@ -23128,38 +22768,8 @@ define_ed25519_signed_transaction_wrapper! {
             private_key_ptr: *const c_uchar,
             private_key_len: c_ulong,
         )
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    nonce: u32,
-    nonce_present: c_uchar,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    quantity_ptr: *const c_char,
-    quantity_len: c_ulong,
-    destination_ptr: *const c_char,
-    destination_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+    identifiers: (algorithm_code, signed_bytes, hash_bytes);
+    {
         let algorithm = parse_algorithm_code(algorithm_code)?;
         let inputs = unsafe {
             gather_asset_tx_inputs_with_parser(
@@ -23212,11 +22822,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
                     Executable::from([InstructionBox::from(transfer)])
                 },
             )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+    }
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_transfer_instruction_box(
@@ -23280,38 +22886,8 @@ define_ed25519_signed_transaction_wrapper! {
             private_key_ptr: *const c_uchar,
             private_key_len: c_ulong,
         )
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transaction_alg(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    vk_unshield_ptr: *const c_char,
-    vk_unshield_len: c_ulong,
-    vk_unshield_present: c_uchar,
-    vk_shield_ptr: *const c_char,
-    vk_shield_len: c_ulong,
-    vk_shield_present: c_uchar,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+    identifiers: (algorithm_code, signed_bytes, hash_bytes);
+    {
         if private_key_ptr.is_null() {
             return Err(BridgeError::NullPtr);
         }
@@ -23349,11 +22925,7 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
                 move || Executable::from([InstructionBox::from(register.clone())])
             },
         )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+    }
 }
 define_ed25519_signed_transaction_wrapper! {
     connect_norito_encode_set_key_value_signed_transaction =>
@@ -23377,37 +22949,8 @@ define_ed25519_signed_transaction_wrapper! {
             private_key_ptr: *const c_uchar,
             private_key_len: c_ulong,
         )
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction_alg(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    target_kind: u8,
-    object_ptr: *const c_char,
-    object_len: c_ulong,
-    key_ptr: *const c_char,
-    key_len: c_ulong,
-    value_ptr: *const c_uchar,
-    value_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+    identifiers: (algorithm_code, signed_bytes, hash_bytes);
+    {
         if private_key_ptr.is_null() || value_ptr.is_null() {
             return Err(BridgeError::NullPtr);
         }
@@ -23436,11 +22979,7 @@ pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction_
             private_key,
             instruction,
         )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+    }
 }
 define_ed25519_signed_transaction_wrapper! {
     connect_norito_encode_remove_key_value_signed_transaction =>
@@ -23462,35 +23001,8 @@ define_ed25519_signed_transaction_wrapper! {
             private_key_ptr: *const c_uchar,
             private_key_len: c_ulong,
         )
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transaction_alg(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    target_kind: u8,
-    object_ptr: *const c_char,
-    object_len: c_ulong,
-    key_ptr: *const c_char,
-    key_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+    identifiers: (algorithm_code, signed_bytes, hash_bytes);
+    {
         if private_key_ptr.is_null() {
             return Err(BridgeError::NullPtr);
         }
@@ -23517,11 +23029,7 @@ pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transacti
             private_key,
             instruction,
         )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+    }
 }
 define_ed25519_signed_transaction_wrapper! {
     connect_norito_encode_governance_propose_deploy_signed_transaction =>
@@ -23551,43 +23059,8 @@ define_ed25519_signed_transaction_wrapper! {
             private_key_ptr: *const c_uchar,
             private_key_len: c_ulong,
         )
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_transaction_alg(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    contract_address_ptr: *const c_char,
-    contract_address_len: c_ulong,
-    code_hash_ptr: *const c_char,
-    code_hash_len: c_ulong,
-    abi_hash_ptr: *const c_char,
-    abi_hash_len: c_ulong,
-    abi_version_ptr: *const c_char,
-    abi_version_len: c_ulong,
-    window_lower: u64,
-    window_upper: u64,
-    window_present: c_uchar,
-    mode_code: u8,
-    mode_present: c_uchar,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+    identifiers: (algorithm_code, signed_bytes, hash_bytes);
+    {
         if private_key_ptr.is_null() {
             return Err(BridgeError::NullPtr);
         }
@@ -23660,11 +23133,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
             private_key,
             InstructionBox::from(proposal),
         )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+    }
 }
 define_ed25519_signed_transaction_wrapper! {
     connect_norito_encode_governance_cast_plain_ballot_signed_transaction =>
@@ -23689,39 +23158,9 @@ define_ed25519_signed_transaction_wrapper! {
             private_key_ptr: *const c_uchar,
             private_key_len: c_ulong,
         )
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_signed_transaction_alg(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    referendum_id_ptr: *const c_char,
-    referendum_id_len: c_ulong,
-    owner_ptr: *const c_char,
-    owner_len: c_ulong,
-    amount_ptr: *const c_char,
-    amount_len: c_ulong,
-    duration_blocks: u64,
-    direction: u8,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    clear_signed_transaction_outputs(out_signed_ptr, out_signed_len, out_hash_ptr, out_hash_len);
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+    identifiers: (algorithm_code, signed_bytes, hash_bytes);
+    clear_outputs: clear_signed_transaction_outputs;
+    {
         if private_key_ptr.is_null() {
             return Err(BridgeError::NullPtr);
         }
@@ -23759,11 +23198,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
             private_key,
             InstructionBox::from(ballot),
         )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+    }
 }
 define_ed25519_signed_transaction_wrapper! {
     connect_norito_encode_governance_cast_zk_ballot_signed_transaction =>
@@ -23786,37 +23221,9 @@ define_ed25519_signed_transaction_wrapper! {
             private_key_ptr: *const c_uchar,
             private_key_len: c_ulong,
         )
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_transaction_alg(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    election_id_ptr: *const c_char,
-    election_id_len: c_ulong,
-    proof_b64_ptr: *const c_char,
-    proof_b64_len: c_ulong,
-    public_inputs_ptr: *const c_uchar,
-    public_inputs_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    clear_signed_transaction_outputs(out_signed_ptr, out_signed_len, out_hash_ptr, out_hash_len);
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+    identifiers: (algorithm_code, signed_bytes, hash_bytes);
+    clear_outputs: clear_signed_transaction_outputs;
+    {
         if private_key_ptr.is_null() || public_inputs_ptr.is_null() {
             return Err(BridgeError::NullPtr);
         }
@@ -23857,11 +23264,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
             private_key,
             InstructionBox::from(ballot),
         )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+    }
 }
 define_ed25519_signed_transaction_wrapper! {
     connect_norito_encode_governance_enact_referendum_signed_transaction =>
@@ -23884,36 +23287,8 @@ define_ed25519_signed_transaction_wrapper! {
             private_key_ptr: *const c_uchar,
             private_key_len: c_ulong,
         )
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signed_transaction_alg(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    referendum_id_ptr: *const c_char,
-    referendum_id_len: c_ulong,
-    preimage_hash_ptr: *const c_char,
-    preimage_hash_len: c_ulong,
-    window_lower: u64,
-    window_upper: u64,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+    identifiers: (algorithm_code, signed_bytes, hash_bytes);
+    {
         if private_key_ptr.is_null() {
             return Err(BridgeError::NullPtr);
         }
@@ -23948,11 +23323,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signe
             private_key,
             InstructionBox::from(enact),
         )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+    }
 }
 define_ed25519_signed_transaction_wrapper! {
     connect_norito_encode_governance_finalize_referendum_signed_transaction =>
@@ -23973,35 +23344,9 @@ define_ed25519_signed_transaction_wrapper! {
             private_key_ptr: *const c_uchar,
             private_key_len: c_ulong,
         )
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_signed_transaction_alg(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    referendum_id_ptr: *const c_char,
-    referendum_id_len: c_ulong,
-    proposal_id_ptr: *const c_char,
-    proposal_id_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    clear_signed_transaction_outputs(out_signed_ptr, out_signed_len, out_hash_ptr, out_hash_len);
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+    identifiers: (algorithm_code, signed_bytes, hash_bytes);
+    clear_outputs: clear_signed_transaction_outputs;
+    {
         if private_key_ptr.is_null() {
             return Err(BridgeError::NullPtr);
         }
@@ -24041,11 +23386,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
             private_key,
             InstructionBox::from(finalize),
         )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+    }
 }
 define_ed25519_signed_transaction_wrapper! {
     connect_norito_encode_governance_persist_council_signed_transaction =>
@@ -24065,33 +23406,8 @@ define_ed25519_signed_transaction_wrapper! {
             private_key_ptr: *const c_uchar,
             private_key_len: c_ulong,
         )
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed_transaction_alg(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    epoch: u64,
-    members_json_ptr: *const c_uchar,
-    members_json_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+    identifiers: (algorithm_code, signed_bytes, hash_bytes);
+    {
         if private_key_ptr.is_null() || members_json_ptr.is_null() {
             return Err(BridgeError::NullPtr);
         }
@@ -24121,11 +23437,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
             private_key,
             InstructionBox::from(persist),
         )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+    }
 }
 const SECP256K1_PRIVATE_LEN: usize = 32;
 const SECP256K1_PUBLIC_LEN: usize = 33;
@@ -24618,6 +23930,35 @@ mod accel_tests {
             );
         }
     }
+    macro_rules! call_signed_transaction_encoder_pair {
+        ($algorithm:expr, $default:path, $with_algorithm:path, ($($argument:expr,)*)) => {{
+            let algorithm = $algorithm;
+            let mut out_signed_ptr: *mut u8 = ptr::dangling_mut();
+            let mut out_signed_len: c_ulong = c_ulong::MAX;
+            let mut out_hash = [0xA5_u8; 32];
+            let result = unsafe {
+                if let Some(algorithm) = algorithm {
+                    $with_algorithm(
+                        $($argument,)*
+                        algorithm as u8,
+                        &mut out_signed_ptr,
+                        &mut out_signed_len,
+                        out_hash.as_mut_ptr(),
+                        out_hash.len() as c_ulong,
+                    )
+                } else {
+                    $default(
+                        $($argument,)*
+                        &mut out_signed_ptr,
+                        &mut out_signed_len,
+                        out_hash.as_mut_ptr(),
+                        out_hash.len() as c_ulong,
+                    )
+                }
+            };
+            (result, out_signed_ptr, out_signed_len, out_hash)
+        }};
+    }
     fn call_plain_ballot_encoder(
         referendum_id: &str,
         amount: &str,
@@ -24634,66 +23975,32 @@ mod accel_tests {
         } else {
             invalid_private.as_slice()
         };
-        let mut out_signed_ptr: *mut u8 = ptr::dangling_mut();
-        let mut out_signed_len: c_ulong = c_ulong::MAX;
-        let mut out_hash = [0xA5_u8; 32];
-        let result = unsafe {
-            if let Some(algorithm) = algorithm {
-                connect_norito_encode_governance_cast_plain_ballot_signed_transaction_alg(
-                    chain.as_ptr(),
-                    chain.as_bytes().len() as c_ulong,
-                    authority.as_ptr(),
-                    authority.as_bytes().len() as c_ulong,
-                    1,
-                    0,
-                    0,
-                    referendum_id.as_ptr().cast::<c_char>(),
-                    referendum_id.len() as c_ulong,
-                    owner.as_ptr(),
-                    owner.as_bytes().len() as c_ulong,
-                    amount.as_ptr(),
-                    amount.as_bytes().len() as c_ulong,
-                    42,
-                    1,
-                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                    private.as_ptr(),
-                    private.len() as c_ulong,
-                    algorithm as u8,
-                    &mut out_signed_ptr,
-                    &mut out_signed_len,
-                    out_hash.as_mut_ptr(),
-                    out_hash.len() as c_ulong,
-                )
-            } else {
-                connect_norito_encode_governance_cast_plain_ballot_signed_transaction(
-                    chain.as_ptr(),
-                    chain.as_bytes().len() as c_ulong,
-                    authority.as_ptr(),
-                    authority.as_bytes().len() as c_ulong,
-                    1,
-                    0,
-                    0,
-                    referendum_id.as_ptr().cast::<c_char>(),
-                    referendum_id.len() as c_ulong,
-                    owner.as_ptr(),
-                    owner.as_bytes().len() as c_ulong,
-                    amount.as_ptr(),
-                    amount.as_bytes().len() as c_ulong,
-                    42,
-                    1,
-                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                    private.as_ptr(),
-                    private.len() as c_ulong,
-                    &mut out_signed_ptr,
-                    &mut out_signed_len,
-                    out_hash.as_mut_ptr(),
-                    out_hash.len() as c_ulong,
-                )
-            }
-        };
-        (result, out_signed_ptr, out_signed_len, out_hash)
+        call_signed_transaction_encoder_pair!(
+            algorithm,
+            connect_norito_encode_governance_cast_plain_ballot_signed_transaction,
+            connect_norito_encode_governance_cast_plain_ballot_signed_transaction_alg,
+            (
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1,
+                0,
+                0,
+                referendum_id.as_ptr().cast::<c_char>(),
+                referendum_id.len() as c_ulong,
+                owner.as_ptr(),
+                owner.as_bytes().len() as c_ulong,
+                amount.as_ptr(),
+                amount.as_bytes().len() as c_ulong,
+                42,
+                1,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
+                private.as_ptr(),
+                private.len() as c_ulong,
+            )
+        )
     }
     fn own_signed_transaction_output(
         (status, ptr, len, hash): (c_int, *mut u8, c_ulong, [u8; 32]),
@@ -24764,62 +24071,30 @@ mod accel_tests {
         } else {
             invalid_private.as_slice()
         };
-        let mut out_signed_ptr: *mut u8 = ptr::dangling_mut();
-        let mut out_signed_len: c_ulong = c_ulong::MAX;
-        let mut out_hash = [0xA5_u8; 32];
-        let result = unsafe {
-            if let Some(algorithm) = algorithm {
-                connect_norito_encode_governance_cast_zk_ballot_signed_transaction_alg(
-                    chain.as_ptr(),
-                    chain.as_bytes().len() as c_ulong,
-                    authority.as_ptr(),
-                    authority.as_bytes().len() as c_ulong,
-                    1,
-                    0,
-                    0,
-                    election_id.as_ptr().cast::<c_char>(),
-                    election_id.len() as c_ulong,
-                    proof.as_ptr().cast::<c_char>(),
-                    proof.len() as c_ulong,
-                    public_inputs.as_ptr(),
-                    public_inputs.len() as c_ulong,
-                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                    private.as_ptr(),
-                    private.len() as c_ulong,
-                    algorithm as u8,
-                    &mut out_signed_ptr,
-                    &mut out_signed_len,
-                    out_hash.as_mut_ptr(),
-                    out_hash.len() as c_ulong,
-                )
-            } else {
-                connect_norito_encode_governance_cast_zk_ballot_signed_transaction(
-                    chain.as_ptr(),
-                    chain.as_bytes().len() as c_ulong,
-                    authority.as_ptr(),
-                    authority.as_bytes().len() as c_ulong,
-                    1,
-                    0,
-                    0,
-                    election_id.as_ptr().cast::<c_char>(),
-                    election_id.len() as c_ulong,
-                    proof.as_ptr().cast::<c_char>(),
-                    proof.len() as c_ulong,
-                    public_inputs.as_ptr(),
-                    public_inputs.len() as c_ulong,
-                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                    private.as_ptr(),
-                    private.len() as c_ulong,
-                    &mut out_signed_ptr,
-                    &mut out_signed_len,
-                    out_hash.as_mut_ptr(),
-                    out_hash.len() as c_ulong,
-                )
-            }
-        };
-        (result, out_signed_ptr, out_signed_len, out_hash)
+        call_signed_transaction_encoder_pair!(
+            algorithm,
+            connect_norito_encode_governance_cast_zk_ballot_signed_transaction,
+            connect_norito_encode_governance_cast_zk_ballot_signed_transaction_alg,
+            (
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1,
+                0,
+                0,
+                election_id.as_ptr().cast::<c_char>(),
+                election_id.len() as c_ulong,
+                proof.as_ptr().cast::<c_char>(),
+                proof.len() as c_ulong,
+                public_inputs.as_ptr(),
+                public_inputs.len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
+                private.as_ptr(),
+                private.len() as c_ulong,
+            )
+        )
     }
     fn call_finalize_referendum_encoder(
         referendum_id: &str,
@@ -24848,58 +24123,28 @@ mod accel_tests {
         } else {
             invalid_private.as_slice()
         };
-        let mut out_signed_ptr: *mut u8 = ptr::dangling_mut();
-        let mut out_signed_len: c_ulong = c_ulong::MAX;
-        let mut out_hash = [0xA5_u8; 32];
-        let result = unsafe {
-            if let Some(algorithm) = algorithm {
-                connect_norito_encode_governance_finalize_referendum_signed_transaction_alg(
-                    chain.as_ptr(),
-                    chain.as_bytes().len() as c_ulong,
-                    authority.as_ptr(),
-                    authority.as_bytes().len() as c_ulong,
-                    1,
-                    0,
-                    0,
-                    referendum_id.as_ptr().cast::<c_char>(),
-                    referendum_id.len() as c_ulong,
-                    proposal_id.as_ptr(),
-                    proposal_id.as_bytes().len() as c_ulong,
-                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                    private.as_ptr(),
-                    private.len() as c_ulong,
-                    algorithm as u8,
-                    &mut out_signed_ptr,
-                    &mut out_signed_len,
-                    out_hash.as_mut_ptr(),
-                    out_hash.len() as c_ulong,
-                )
-            } else {
-                connect_norito_encode_governance_finalize_referendum_signed_transaction(
-                    chain.as_ptr(),
-                    chain.as_bytes().len() as c_ulong,
-                    authority.as_ptr(),
-                    authority.as_bytes().len() as c_ulong,
-                    1,
-                    0,
-                    0,
-                    referendum_id.as_ptr().cast::<c_char>(),
-                    referendum_id.len() as c_ulong,
-                    proposal_id.as_ptr(),
-                    proposal_id.as_bytes().len() as c_ulong,
-                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                    private.as_ptr(),
-                    private.len() as c_ulong,
-                    &mut out_signed_ptr,
-                    &mut out_signed_len,
-                    out_hash.as_mut_ptr(),
-                    out_hash.len() as c_ulong,
-                )
-            }
-        };
-        (result, out_signed_ptr, out_signed_len, out_hash)
+        call_signed_transaction_encoder_pair!(
+            algorithm,
+            connect_norito_encode_governance_finalize_referendum_signed_transaction,
+            connect_norito_encode_governance_finalize_referendum_signed_transaction_alg,
+            (
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1,
+                0,
+                0,
+                referendum_id.as_ptr().cast::<c_char>(),
+                referendum_id.len() as c_ulong,
+                proposal_id.as_ptr(),
+                proposal_id.as_bytes().len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
+                private.as_ptr(),
+                private.len() as c_ulong,
+            )
+        )
     }
     type GovernanceSelectorEncoder =
         fn(&str, Option<Algorithm>, bool) -> (c_int, *mut u8, c_ulong, [u8; 32]);
@@ -25240,6 +24485,54 @@ mod accel_tests {
             worker.join().expect("chain-discriminant scope worker");
         }
     }
+    struct KeypairFromSeedOutput {
+        status: c_int,
+        private_ptr: *mut u8,
+        private_len: c_ulong,
+        public_ptr: *mut u8,
+        public_len: c_ulong,
+    }
+    impl KeypairFromSeedOutput {
+        fn private_bytes(&self) -> &[u8] {
+            unsafe { slice::from_raw_parts(self.private_ptr, self.private_len as usize) }
+        }
+        fn public_bytes(&self) -> &[u8] {
+            unsafe { slice::from_raw_parts(self.public_ptr, self.public_len as usize) }
+        }
+    }
+    impl Drop for KeypairFromSeedOutput {
+        fn drop(&mut self) {
+            unsafe {
+                if !self.private_ptr.is_null() {
+                    free(self.private_ptr.cast());
+                }
+                if !self.public_ptr.is_null() {
+                    free(self.public_ptr.cast());
+                }
+            }
+        }
+    }
+    fn call_keypair_from_seed(algorithm: Algorithm, seed: &[u8]) -> KeypairFromSeedOutput {
+        let mut output = KeypairFromSeedOutput {
+            status: 0,
+            private_ptr: ptr::null_mut(),
+            private_len: 0,
+            public_ptr: ptr::null_mut(),
+            public_len: 0,
+        };
+        output.status = unsafe {
+            connect_norito_keypair_from_seed(
+                algorithm as u8,
+                seed.as_ptr(),
+                seed.len() as c_ulong,
+                &mut output.private_ptr,
+                &mut output.private_len,
+                &mut output.public_ptr,
+                &mut output.public_len,
+            )
+        };
+        output
+    }
     #[test]
     fn keypair_from_seed_roundtrip() {
         let _guard = chain_guard();
@@ -25251,72 +24544,29 @@ mod accel_tests {
         let (_alg, expected_public_bytes) = expected_public
             .try_to_bytes()
             .expect("checked public bytes");
-        let mut out_private_ptr: *mut u8 = ptr::null_mut();
-        let mut out_private_len: c_ulong = 0;
-        let mut out_public_ptr: *mut u8 = ptr::null_mut();
-        let mut out_public_len: c_ulong = 0;
-        let result = unsafe {
-            connect_norito_keypair_from_seed(
-                Algorithm::Ed25519 as u8,
-                seed.as_ptr(),
-                seed.len() as c_ulong,
-                &mut out_private_ptr,
-                &mut out_private_len,
-                &mut out_public_ptr,
-                &mut out_public_len,
-            )
-        };
-        assert_eq!(result, 0, "expected success");
-        assert!(!out_private_ptr.is_null());
-        assert!(!out_public_ptr.is_null());
-        let private_bytes =
-            unsafe { slice::from_raw_parts(out_private_ptr, out_private_len as usize) };
-        let public_bytes =
-            unsafe { slice::from_raw_parts(out_public_ptr, out_public_len as usize) };
-        assert_eq!(private_bytes, expected_private_bytes.as_slice());
-        assert_eq!(public_bytes, expected_public_bytes);
-        unsafe {
-            free(out_private_ptr as *mut _);
-            free(out_public_ptr as *mut _);
-        }
+        let output = call_keypair_from_seed(Algorithm::Ed25519, &seed);
+        assert_eq!(output.status, 0, "expected success");
+        assert!(!output.private_ptr.is_null());
+        assert!(!output.public_ptr.is_null());
+        assert_eq!(output.private_bytes(), expected_private_bytes.as_slice());
+        assert_eq!(output.public_bytes(), expected_public_bytes);
     }
     #[test]
     fn keypair_from_seed_private_output_derives_public_key() {
         let _guard = chain_guard();
         let seed = [0x5C; 32];
-        let mut out_private_ptr: *mut u8 = ptr::null_mut();
-        let mut out_private_len: c_ulong = 0;
-        let mut out_public_ptr: *mut u8 = ptr::null_mut();
-        let mut out_public_len: c_ulong = 0;
-        let result = unsafe {
-            connect_norito_keypair_from_seed(
-                Algorithm::Ed25519 as u8,
-                seed.as_ptr(),
-                seed.len() as c_ulong,
-                &mut out_private_ptr,
-                &mut out_private_len,
-                &mut out_public_ptr,
-                &mut out_public_len,
-            )
-        };
-        assert_eq!(result, 0, "expected success");
-        assert!(!out_private_ptr.is_null());
-        assert!(!out_public_ptr.is_null());
-        let private_bytes =
-            unsafe { slice::from_raw_parts(out_private_ptr, out_private_len as usize) };
-        let public_bytes =
-            unsafe { slice::from_raw_parts(out_public_ptr, out_public_len as usize) };
+        let output = call_keypair_from_seed(Algorithm::Ed25519, &seed);
+        assert_eq!(output.status, 0, "expected success");
+        assert!(!output.private_ptr.is_null());
+        assert!(!output.public_ptr.is_null());
         let private_key =
-            parse_private_key_with_algorithm(private_bytes, Algorithm::Ed25519).expect("private");
+            parse_private_key_with_algorithm(output.private_bytes(), Algorithm::Ed25519)
+                .expect("private");
         let derived = KeyPair::from_private_key(private_key).expect("derive public key");
         let derived_public = checked_public_key_payload(derived.public_key())
             .expect("checked public bytes")
             .to_vec();
-        assert_eq!(derived_public.as_slice(), public_bytes);
-        unsafe {
-            free(out_private_ptr as *mut _);
-            free(out_public_ptr as *mut _);
-        }
+        assert_eq!(derived_public.as_slice(), output.public_bytes());
     }
     #[cfg(any(
         target_os = "android",
@@ -25347,30 +24597,10 @@ mod accel_tests {
         let expected_public =
             hex::decode("1f857fe980524a2ee4fe65e5d346f7aaadcb636a640f1d191d1c6e158607ba1e")
                 .expect("valid public key hex");
-        let mut out_private_ptr: *mut u8 = ptr::null_mut();
-        let mut out_private_len: c_ulong = 0;
-        let mut out_public_ptr: *mut u8 = ptr::null_mut();
-        let mut out_public_len: c_ulong = 0;
-        let result = unsafe {
-            connect_norito_keypair_from_seed(
-                Algorithm::Ed25519 as u8,
-                seed.as_ptr(),
-                seed.len() as c_ulong,
-                &mut out_private_ptr,
-                &mut out_private_len,
-                &mut out_public_ptr,
-                &mut out_public_len,
-            )
-        };
-        assert_eq!(result, 0, "expected success");
-        assert!(!out_public_ptr.is_null());
-        let public_bytes =
-            unsafe { slice::from_raw_parts(out_public_ptr, out_public_len as usize) };
-        assert_eq!(public_bytes, expected_public.as_slice());
-        unsafe {
-            free(out_private_ptr as *mut _);
-            free(out_public_ptr as *mut _);
-        }
+        let output = call_keypair_from_seed(Algorithm::Ed25519, &seed);
+        assert_eq!(output.status, 0, "expected success");
+        assert!(!output.public_ptr.is_null());
+        assert_eq!(output.public_bytes(), expected_public.as_slice());
     }
     #[test]
     fn keypair_from_seed_mldsa_roundtrip() {
@@ -25383,32 +24613,10 @@ mod accel_tests {
         let (_alg, expected_public_bytes) = expected_public
             .try_to_bytes()
             .expect("checked public bytes");
-        let mut out_private_ptr: *mut u8 = ptr::null_mut();
-        let mut out_private_len: c_ulong = 0;
-        let mut out_public_ptr: *mut u8 = ptr::null_mut();
-        let mut out_public_len: c_ulong = 0;
-        let result = unsafe {
-            connect_norito_keypair_from_seed(
-                Algorithm::MlDsa as u8,
-                seed.as_ptr(),
-                seed.len() as c_ulong,
-                &mut out_private_ptr,
-                &mut out_private_len,
-                &mut out_public_ptr,
-                &mut out_public_len,
-            )
-        };
-        assert_eq!(result, 0, "expected success");
-        let private_bytes =
-            unsafe { slice::from_raw_parts(out_private_ptr, out_private_len as usize) };
-        let public_bytes =
-            unsafe { slice::from_raw_parts(out_public_ptr, out_public_len as usize) };
-        assert_eq!(private_bytes, expected_private_bytes.as_slice());
-        assert_eq!(public_bytes, expected_public_bytes);
-        unsafe {
-            free(out_private_ptr as *mut _);
-            free(out_public_ptr as *mut _);
-        }
+        let output = call_keypair_from_seed(Algorithm::MlDsa, &seed);
+        assert_eq!(output.status, 0, "expected success");
+        assert_eq!(output.private_bytes(), expected_private_bytes.as_slice());
+        assert_eq!(output.public_bytes(), expected_public_bytes);
     }
     #[test]
     fn connect_open_app_metadata_roundtrip() {
@@ -25501,20 +24709,18 @@ mod accel_tests {
         }
     }
     include!("connect_approval_ffi_tests.rs");
-    fn fixture_private_key() -> Vec<u8> {
+    fn fixture_signing_key_pair() -> KeyPair {
         let seed = hex::decode("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032")
             .expect("fixture seed hex");
-        let keypair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
-            .expect("fixture seed must derive a valid keypair");
-        let (_alg, private_bytes) = keypair.private_key().to_bytes();
+        KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+    fn fixture_private_key() -> Vec<u8> {
+        let (_alg, private_bytes) = fixture_signing_key_pair().private_key().to_bytes();
         private_bytes
     }
     fn fixture_authority(_domain: &str) -> CString {
-        let seed = hex::decode("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032")
-            .expect("fixture seed hex");
-        let keypair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
-            .expect("fixture seed must derive a valid keypair");
-        let (public_key, _) = keypair.into_parts();
+        let (public_key, _) = fixture_signing_key_pair().into_parts();
         let account = AccountId::new(public_key);
         CString::new(account.to_string()).expect("valid cstring")
     }
@@ -25522,6 +24728,156 @@ mod accel_tests {
         let signed_bytes = unsafe { slice::from_raw_parts(signed_ptr, signed_len as usize) };
         let signed = decode_signed_transaction(signed_bytes).expect("decode signed transaction");
         assert_eq!(out_hash, *signed.hash().as_ref());
+    }
+    struct AssetSignedEncoderFixture {
+        chain: CString,
+        authority: CString,
+        asset_definition: CString,
+        quantity: CString,
+        destination: CString,
+        private_key: Vec<u8>,
+    }
+    impl AssetSignedEncoderFixture {
+        fn swift(test_case: &str, quantity: &str) -> Self {
+            let authority = fixture_authority("wonderland");
+            Self {
+                chain: network_id_cstring(test_case),
+                asset_definition: asset_definition_cstring("wonderland", "rose"),
+                quantity: cstring(quantity),
+                destination: authority.clone(),
+                private_key: fixture_private_key(),
+                authority,
+            }
+        }
+        fn bank(test_case: &str, authority_seed: u8, quantity: &str) -> Self {
+            let (authority, private_key) = sample_account("bank", authority_seed);
+            Self {
+                chain: network_id_cstring(test_case),
+                authority,
+                asset_definition: asset_definition_cstring("bank", "usd"),
+                quantity: cstring(quantity),
+                destination: sample_destination("bank", 1),
+                private_key,
+            }
+        }
+    }
+    macro_rules! call_asset_signed_encoder {
+        (
+            $encoder:path,
+            $fixture:expr,
+            creation_time_ms: $creation_time_ms:expr,
+            ttl_ms: $ttl_ms:expr,
+            ttl_present: $ttl_present:expr,
+            nonce: $nonce:expr,
+            nonce_present: $nonce_present:expr,
+            fee_payment: $fee_payment:expr
+            $(, algorithm: $algorithm:expr)?
+            $(,)?
+        ) => {{
+            let fixture = &$fixture;
+            let fee_payment: &[u8] = $fee_payment;
+            let mut out_signed_ptr: *mut u8 = ptr::null_mut();
+            let mut out_signed_len: c_ulong = 0;
+            let mut out_hash = [0u8; 32];
+            let result = unsafe {
+                $encoder(
+                    fixture.chain.as_ptr(),
+                    fixture.chain.as_bytes().len() as c_ulong,
+                    fixture.authority.as_ptr(),
+                    fixture.authority.as_bytes().len() as c_ulong,
+                    $creation_time_ms,
+                    $ttl_ms,
+                    $ttl_present,
+                    $nonce,
+                    $nonce_present,
+                    fixture.asset_definition.as_ptr(),
+                    fixture.asset_definition.as_bytes().len() as c_ulong,
+                    fixture.quantity.as_ptr(),
+                    fixture.quantity.as_bytes().len() as c_ulong,
+                    fixture.destination.as_ptr(),
+                    fixture.destination.as_bytes().len() as c_ulong,
+                    fee_payment.as_ptr(),
+                    fee_payment.len() as c_ulong,
+                    fixture.private_key.as_ptr(),
+                    fixture.private_key.len() as c_ulong,
+                    $($algorithm as u8,)?
+                    &mut out_signed_ptr,
+                    &mut out_signed_len,
+                    out_hash.as_mut_ptr(),
+                    out_hash.len() as c_ulong,
+                )
+            };
+            (result, out_signed_ptr, out_signed_len, out_hash)
+        }};
+    }
+    macro_rules! swift_parity_asset_encoder_test {
+        (
+            $name:ident,
+            $test_case:literal,
+            $encoder:path,
+            $quantity:literal,
+            $creation_time_ms:expr,
+            $ttl_ms:expr,
+            $nonce:expr,
+        ) => {
+            #[test]
+            fn $name() {
+                let _scope = super::test_support::ChainDiscriminantScope::enter(42);
+                let fixture = AssetSignedEncoderFixture::swift($test_case, $quantity);
+                let (result, out_signed_ptr, out_signed_len, out_hash) =
+                    call_asset_signed_encoder!(
+                        $encoder,
+                        fixture,
+                        creation_time_ms: $creation_time_ms,
+                        ttl_ms: $ttl_ms,
+                        ttl_present: 1,
+                        nonce: $nonce,
+                        nonce_present: 1,
+                        fee_payment: AUTHORITY_FEE_PAYMENT_JSON,
+                    );
+                assert_eq!(result, 0, "expected success");
+                assert_signed_hash_matches(out_hash, out_signed_ptr, out_signed_len);
+                unsafe { free(out_signed_ptr.cast()) };
+            }
+        };
+    }
+    macro_rules! asset_encoder_nonce_roundtrip_test {
+        (
+            $name:ident,
+            $test_case:literal,
+            $encoder:path,
+            $quantity:literal,
+            $nonce:expr
+            $(, algorithm: $algorithm:expr)?
+            $(, message: $message:literal)?
+            $(,)?
+        ) => {
+            #[test]
+            fn $name() {
+                let _guard = chain_guard();
+                let fixture = AssetSignedEncoderFixture::bank($test_case, 0, $quantity);
+                let (result, out_signed_ptr, out_signed_len, _out_hash) =
+                    call_asset_signed_encoder!(
+                        $encoder,
+                        fixture,
+                        creation_time_ms: 1,
+                        ttl_ms: 0,
+                        ttl_present: 0,
+                        nonce: $nonce,
+                        nonce_present: 1,
+                        fee_payment: AUTHORITY_FEE_PAYMENT_JSON
+                        $(, algorithm: $algorithm)?
+                    );
+                assert_eq!(result, 0, "expected success");
+                let signed = decode_signed(out_signed_ptr, out_signed_len);
+                assert_eq!(
+                    signed.payload().nonce,
+                    NonZeroU32::new($nonce)
+                    $(, $message)?
+                );
+                unsafe { free(out_signed_ptr.cast()) };
+            }
+        };
     }
     #[test]
     fn parse_asset_definition_rejects_noncanonical_textual_literal() {
@@ -25552,45 +24908,21 @@ mod accel_tests {
     #[test]
     fn encode_transfer_preserves_dataspace_balance_scope_suffix() {
         let _scope = super::test_support::ChainDiscriminantScope::enter(42);
-        let chain = network_id_cstring("swift-parity-transfer");
-        let authority = fixture_authority("wonderland");
-        let asset_definition = cstring(&format!(
+        let mut fixture = AssetSignedEncoderFixture::swift("swift-parity-transfer", "15.7500");
+        fixture.asset_definition = cstring(&format!(
             "{}#dataspace:10",
             asset_definition_literal("wonderland", "rose")
         ));
-        let quantity = cstring("15.75");
-        let destination = authority.clone();
-        let private_key = fixture_private_key();
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let result = unsafe {
-            connect_norito_encode_transfer_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1_736_000_000_000,
-                3_500,
-                1,
-                17,
-                1,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                quantity.as_ptr(),
-                quantity.as_bytes().len() as c_ulong,
-                destination.as_ptr(),
-                destination.as_bytes().len() as c_ulong,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private_key.as_ptr(),
-                private_key.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
+        let (result, out_signed_ptr, out_signed_len, _out_hash) = call_asset_signed_encoder!(
+            connect_norito_encode_transfer_signed_transaction,
+            fixture,
+            creation_time_ms: 1_736_000_000_000,
+            ttl_ms: 3_500,
+            ttl_present: 1,
+            nonce: 17,
+            nonce_present: 1,
+            fee_payment: AUTHORITY_FEE_PAYMENT_JSON,
+        );
         assert_eq!(result, 0, "expected success");
         let signed = decode_signed(out_signed_ptr, out_signed_len);
         match signed.instructions() {
@@ -25644,189 +24976,59 @@ mod accel_tests {
             Some(10)
         );
         connect_norito_free(out_json_ptr);
-        unsafe {
-            free(out_signed_ptr as *mut _);
-        }
+        unsafe { free(out_signed_ptr.cast()) };
     }
-    #[test]
-    fn swift_parity_transfer_hash_matches_fixture() {
-        let _scope = super::test_support::ChainDiscriminantScope::enter(42);
-        let chain = network_id_cstring("swift-parity-transfer");
-        let authority = fixture_authority("wonderland");
-        let asset_definition = asset_definition_cstring("wonderland", "rose");
-        let quantity = cstring("15.75");
-        let destination = authority.clone();
-        let private_key = fixture_private_key();
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let result = unsafe {
-            connect_norito_encode_transfer_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1_736_000_000_000,
-                3_500,
-                1,
-                17,
-                1,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                quantity.as_ptr(),
-                quantity.as_bytes().len() as c_ulong,
-                destination.as_ptr(),
-                destination.as_bytes().len() as c_ulong,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private_key.as_ptr(),
-                private_key.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, 0, "expected success");
-        assert_signed_hash_matches(out_hash, out_signed_ptr, out_signed_len);
-        unsafe {
-            free(out_signed_ptr as *mut _);
-        }
-    }
-    #[test]
-    fn swift_parity_mint_hash_matches_fixture() {
-        let _scope = super::test_support::ChainDiscriminantScope::enter(42);
-        let chain = network_id_cstring("swift-parity-mint");
-        let authority = fixture_authority("wonderland");
-        let asset_definition = asset_definition_cstring("wonderland", "rose");
-        let quantity = cstring("42.01");
-        let destination = authority.clone();
-        let private_key = fixture_private_key();
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let result = unsafe {
-            connect_norito_encode_mint_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1_736_001_000_000,
-                2_000,
-                1,
-                19,
-                1,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                quantity.as_ptr(),
-                quantity.as_bytes().len() as c_ulong,
-                destination.as_ptr(),
-                destination.as_bytes().len() as c_ulong,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private_key.as_ptr(),
-                private_key.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, 0, "expected success");
-        assert_signed_hash_matches(out_hash, out_signed_ptr, out_signed_len);
-        unsafe {
-            free(out_signed_ptr as *mut _);
-        }
-    }
-    #[test]
-    fn swift_parity_burn_hash_matches_fixture() {
-        let _scope = super::test_support::ChainDiscriminantScope::enter(42);
-        let chain = network_id_cstring("swift-parity-burn");
-        let authority = fixture_authority("wonderland");
-        let asset_definition = asset_definition_cstring("wonderland", "rose");
-        let quantity = cstring("5.25");
-        let destination = authority.clone();
-        let private_key = fixture_private_key();
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let result = unsafe {
-            connect_norito_encode_burn_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1_736_002_000_000,
-                1_800,
-                1,
-                23,
-                1,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                quantity.as_ptr(),
-                quantity.as_bytes().len() as c_ulong,
-                destination.as_ptr(),
-                destination.as_bytes().len() as c_ulong,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private_key.as_ptr(),
-                private_key.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, 0, "expected success");
-        assert_signed_hash_matches(out_hash, out_signed_ptr, out_signed_len);
-        unsafe {
-            free(out_signed_ptr as *mut _);
-        }
-    }
+    swift_parity_asset_encoder_test!(
+        swift_parity_transfer_hash_matches_fixture,
+        "swift-parity-transfer",
+        connect_norito_encode_transfer_signed_transaction,
+        "15.7500",
+        1_736_000_000_000,
+        3_500,
+        17,
+    );
+    swift_parity_asset_encoder_test!(
+        swift_parity_mint_hash_matches_fixture,
+        "swift-parity-mint",
+        connect_norito_encode_mint_signed_transaction,
+        "42.0100",
+        1_736_001_000_000,
+        2_000,
+        19,
+    );
+    swift_parity_asset_encoder_test!(
+        swift_parity_burn_hash_matches_fixture,
+        "swift-parity-burn",
+        connect_norito_encode_burn_signed_transaction,
+        "5.2500",
+        1_736_002_000_000,
+        1_800,
+        23,
+    );
     #[test]
     fn transfer_encoder_constructs_exact_network_domain_for_every_canonical_quantity() {
         let _guard = chain_guard();
-        let network_id = network_id_cstring("transfer-success");
+        let mut fixture = AssetSignedEncoderFixture::bank("transfer-success", 1, "10");
         let expected_network_id = unsafe {
-            read_network_id_bridge(network_id.as_ptr(), network_id.as_bytes().len() as c_ulong)
+            read_network_id_bridge(
+                fixture.chain.as_ptr(),
+                fixture.chain.as_bytes().len() as c_ulong,
+            )
         }
         .expect("canonical test NetworkId must parse");
-        let (authority, private) = sample_account("bank", 1);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let destination = sample_destination("bank", 1);
         let wide = "340282366920938463463374607431768211456.25";
         for amount in ["10", "1.25", wide] {
-            let quantity = cstring(amount);
-            let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-            let mut out_signed_len: c_ulong = 0;
-            let mut out_hash = [0u8; 32];
-            let result = unsafe {
-                connect_norito_encode_transfer_signed_transaction(
-                    network_id.as_ptr(),
-                    network_id.as_bytes().len() as c_ulong,
-                    authority.as_ptr(),
-                    authority.as_bytes().len() as c_ulong,
-                    1,
-                    0,
-                    0,
-                    0,
-                    0,
-                    asset_definition.as_ptr(),
-                    asset_definition.as_bytes().len() as c_ulong,
-                    quantity.as_ptr(),
-                    quantity.as_bytes().len() as c_ulong,
-                    destination.as_ptr(),
-                    destination.as_bytes().len() as c_ulong,
-                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                    private.as_ptr(),
-                    private.len() as c_ulong,
-                    &mut out_signed_ptr,
-                    &mut out_signed_len,
-                    out_hash.as_mut_ptr(),
-                    out_hash.len() as c_ulong,
-                )
-            };
+            fixture.quantity = cstring(amount);
+            let (result, out_signed_ptr, out_signed_len, out_hash) = call_asset_signed_encoder!(
+                connect_norito_encode_transfer_signed_transaction,
+                fixture,
+                creation_time_ms: 1,
+                ttl_ms: 0,
+                ttl_present: 0,
+                nonce: 0,
+                nonce_present: 0,
+                fee_payment: AUTHORITY_FEE_PAYMENT_JSON,
+            );
             assert_eq!(result, 0, "canonical Quantity {amount:?} must encode");
             assert!(!out_signed_ptr.is_null());
             assert!(out_signed_len > 0);
@@ -25846,7 +25048,7 @@ mod accel_tests {
             );
             assert_eq!(
                 domain.get("value").and_then(JsonValue::as_str),
-                Some(network_id.to_str().expect("NetworkId is UTF-8"))
+                Some(fixture.chain.to_str().expect("NetworkId is UTF-8"))
             );
             for retired_key in ["chain", "chain_id", "chainId"] {
                 assert!(
@@ -25854,197 +25056,63 @@ mod accel_tests {
                     "ordinary transaction JSON must not expose retired identity key {retired_key}"
                 );
             }
-            unsafe {
-                free(out_signed_ptr.cast());
-            }
+            unsafe { free(out_signed_ptr.cast()) };
         }
     }
-    #[test]
-    fn transfer_encoder_nonce_roundtrip() {
-        let _guard = chain_guard();
-        let chain = network_id_cstring("transfer-nonce");
-        let (authority, private) = sample_account("bank", 0);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let quantity = cstring("10");
-        let destination = sample_destination("bank", 1);
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let nonce_value: u32 = 17;
-        let result = unsafe {
-            connect_norito_encode_transfer_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                nonce_value,
-                1,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                quantity.as_ptr(),
-                quantity.as_bytes().len() as c_ulong,
-                destination.as_ptr(),
-                destination.as_bytes().len() as c_ulong,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, 0, "expected success");
-        let signed = decode_signed(out_signed_ptr, out_signed_len);
-        assert_eq!(
-            signed.payload().nonce,
-            NonZeroU32::new(nonce_value),
-            "nonce should be encoded"
-        );
-        unsafe {
-            free(out_signed_ptr as *mut _);
-        }
-    }
+    asset_encoder_nonce_roundtrip_test!(
+        transfer_encoder_nonce_roundtrip,
+        "transfer-nonce",
+        connect_norito_encode_transfer_signed_transaction,
+        "10",
+        17,
+        message: "nonce should be encoded",
+    );
     #[test]
     fn transfer_encoder_invalid_nonce() {
         let _guard = chain_guard();
-        let chain = network_id_cstring("transfer-invalid-nonce");
-        let (authority, private) = sample_account("bank", 0);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let quantity = cstring("10");
-        let destination = sample_destination("bank", 1);
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let result = unsafe {
-            connect_norito_encode_transfer_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                0,
-                1,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                quantity.as_ptr(),
-                quantity.as_bytes().len() as c_ulong,
-                destination.as_ptr(),
-                destination.as_bytes().len() as c_ulong,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
+        let fixture = AssetSignedEncoderFixture::bank("transfer-invalid-nonce", 0, "10");
+        let (result, out_signed_ptr, out_signed_len, _out_hash) = call_asset_signed_encoder!(
+            connect_norito_encode_transfer_signed_transaction,
+            fixture,
+            creation_time_ms: 1,
+            ttl_ms: 0,
+            ttl_present: 0,
+            nonce: 0,
+            nonce_present: 1,
+            fee_payment: AUTHORITY_FEE_PAYMENT_JSON,
+        );
         assert_eq!(result, ERR_INVALID_NONCE);
         assert!(out_signed_ptr.is_null());
         assert_eq!(out_signed_len, 0);
     }
-    #[test]
-    fn transfer_encoder_nonce_roundtrip_alg() {
-        let _guard = chain_guard();
-        let chain = network_id_cstring("transfer-nonce-alg");
-        let (authority, private) = sample_account("bank", 0);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let quantity = cstring("10");
-        let destination = sample_destination("bank", 1);
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let nonce_value: u32 = 9;
-        let result = unsafe {
-            connect_norito_encode_transfer_signed_transaction_alg(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                nonce_value,
-                1,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                quantity.as_ptr(),
-                quantity.as_bytes().len() as c_ulong,
-                destination.as_ptr(),
-                destination.as_bytes().len() as c_ulong,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-                Algorithm::Ed25519 as u8,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, 0, "expected success");
-        let signed = decode_signed(out_signed_ptr, out_signed_len);
-        assert_eq!(
-            signed.payload().nonce,
-            NonZeroU32::new(nonce_value),
-            "nonce should be encoded"
-        );
-        unsafe {
-            free(out_signed_ptr as *mut _);
-        }
-    }
+    asset_encoder_nonce_roundtrip_test!(
+        transfer_encoder_nonce_roundtrip_alg,
+        "transfer-nonce-alg",
+        connect_norito_encode_transfer_signed_transaction_alg,
+        "10",
+        9,
+        algorithm: Algorithm::Ed25519,
+        message: "nonce should be encoded",
+    );
     #[test]
     fn transfer_encoder_requires_typed_sponsor_payment() {
         let _guard = chain_guard();
-        let chain = network_id_cstring("transfer-sponsor-payment");
-        let (authority, private) = sample_account("bank", 0);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let quantity = cstring("10");
-        let destination = sample_destination("bank", 1);
+        let fixture = AssetSignedEncoderFixture::bank("transfer-sponsor-payment", 0, "10");
         let sponsor_account = sample_destination("paynet", 2);
         let sponsor_literal = sponsor_account.to_str().expect("utf8 sponsor account");
         let fee_payment = format!(
             r#"{{"payer":"sponsor","value":{{"program_id":{{"sponsor":"{sponsor_literal}","name":"wallet"}},"program_revision":3,"charge_limits":[],"gas_limit":null}}}}"#
         );
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let result = unsafe {
-            connect_norito_encode_transfer_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                0,
-                0,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                quantity.as_ptr(),
-                quantity.as_bytes().len() as c_ulong,
-                destination.as_ptr(),
-                destination.as_bytes().len() as c_ulong,
-                fee_payment.as_ptr(),
-                fee_payment.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
+        let (result, out_signed_ptr, out_signed_len, _out_hash) = call_asset_signed_encoder!(
+            connect_norito_encode_transfer_signed_transaction,
+            fixture,
+            creation_time_ms: 1,
+            ttl_ms: 0,
+            ttl_present: 0,
+            nonce: 0,
+            nonce_present: 0,
+            fee_payment: fee_payment.as_bytes(),
+        );
         assert_eq!(result, 0, "expected success");
         let signed = decode_signed(out_signed_ptr, out_signed_len);
         let (program_id, revision) = signed
@@ -26054,196 +25122,38 @@ mod accel_tests {
         assert_eq!(program_id.to_string(), format!("{sponsor_literal}/wallet"));
         assert_eq!(revision, 3);
         assert!(signed.metadata().is_empty());
-        unsafe {
-            free(out_signed_ptr as *mut _);
-        }
+        unsafe { free(out_signed_ptr.cast()) };
     }
-    #[test]
-    fn mint_encoder_nonce_roundtrip() {
-        let _guard = chain_guard();
-        let chain = network_id_cstring("mint-nonce");
-        let (authority, private) = sample_account("bank", 0);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let quantity = cstring("5");
-        let destination = sample_destination("bank", 1);
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let nonce_value: u32 = 21;
-        let result = unsafe {
-            connect_norito_encode_mint_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                nonce_value,
-                1,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                quantity.as_ptr(),
-                quantity.as_bytes().len() as c_ulong,
-                destination.as_ptr(),
-                destination.as_bytes().len() as c_ulong,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, 0, "expected success");
-        let signed = decode_signed(out_signed_ptr, out_signed_len);
-        assert_eq!(signed.payload().nonce, NonZeroU32::new(nonce_value));
-        unsafe {
-            free(out_signed_ptr as *mut _);
-        }
-    }
-    #[test]
-    fn mint_encoder_nonce_roundtrip_alg() {
-        let _guard = chain_guard();
-        let chain = network_id_cstring("mint-nonce-alg");
-        let (authority, private) = sample_account("bank", 0);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let quantity = cstring("5");
-        let destination = sample_destination("bank", 1);
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let nonce_value: u32 = 22;
-        let result = unsafe {
-            connect_norito_encode_mint_signed_transaction_alg(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                nonce_value,
-                1,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                quantity.as_ptr(),
-                quantity.as_bytes().len() as c_ulong,
-                destination.as_ptr(),
-                destination.as_bytes().len() as c_ulong,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-                Algorithm::Ed25519 as u8,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, 0, "expected success");
-        let signed = decode_signed(out_signed_ptr, out_signed_len);
-        assert_eq!(signed.payload().nonce, NonZeroU32::new(nonce_value));
-        unsafe {
-            free(out_signed_ptr as *mut _);
-        }
-    }
-    #[test]
-    fn burn_encoder_nonce_roundtrip() {
-        let _guard = chain_guard();
-        let chain = network_id_cstring("burn-nonce");
-        let (authority, private) = sample_account("bank", 0);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let quantity = cstring("3");
-        let destination = sample_destination("bank", 1);
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let nonce_value: u32 = 23;
-        let result = unsafe {
-            connect_norito_encode_burn_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                nonce_value,
-                1,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                quantity.as_ptr(),
-                quantity.as_bytes().len() as c_ulong,
-                destination.as_ptr(),
-                destination.as_bytes().len() as c_ulong,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, 0, "expected success");
-        let signed = decode_signed(out_signed_ptr, out_signed_len);
-        assert_eq!(signed.payload().nonce, NonZeroU32::new(nonce_value));
-        unsafe {
-            free(out_signed_ptr as *mut _);
-        }
-    }
-    #[test]
-    fn burn_encoder_nonce_roundtrip_alg() {
-        let _guard = chain_guard();
-        let chain = network_id_cstring("burn-nonce-alg");
-        let (authority, private) = sample_account("bank", 0);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let quantity = cstring("3");
-        let destination = sample_destination("bank", 1);
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let nonce_value: u32 = 24;
-        let result = unsafe {
-            connect_norito_encode_burn_signed_transaction_alg(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                nonce_value,
-                1,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                quantity.as_ptr(),
-                quantity.as_bytes().len() as c_ulong,
-                destination.as_ptr(),
-                destination.as_bytes().len() as c_ulong,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-                Algorithm::Ed25519 as u8,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, 0, "expected success");
-        let signed = decode_signed(out_signed_ptr, out_signed_len);
-        assert_eq!(signed.payload().nonce, NonZeroU32::new(nonce_value));
-        unsafe {
-            free(out_signed_ptr as *mut _);
-        }
-    }
+    asset_encoder_nonce_roundtrip_test!(
+        mint_encoder_nonce_roundtrip,
+        "mint-nonce",
+        connect_norito_encode_mint_signed_transaction,
+        "5",
+        21,
+    );
+    asset_encoder_nonce_roundtrip_test!(
+        mint_encoder_nonce_roundtrip_alg,
+        "mint-nonce-alg",
+        connect_norito_encode_mint_signed_transaction_alg,
+        "5",
+        22,
+        algorithm: Algorithm::Ed25519,
+    );
+    asset_encoder_nonce_roundtrip_test!(
+        burn_encoder_nonce_roundtrip,
+        "burn-nonce",
+        connect_norito_encode_burn_signed_transaction,
+        "3",
+        23,
+    );
+    asset_encoder_nonce_roundtrip_test!(
+        burn_encoder_nonce_roundtrip_alg,
+        "burn-nonce-alg",
+        connect_norito_encode_burn_signed_transaction_alg,
+        "3",
+        24,
+        algorithm: Algorithm::Ed25519,
+    );
     #[test]
     fn confidential_payload_encoder_accepts_valid_payload() {
         let (result, out_ptr, out_len) =
@@ -26375,47 +25285,24 @@ mod accel_tests {
     #[test]
     fn transfer_encoder_invalid_quantity() {
         let _guard = chain_guard();
-        let chain = network_id_cstring("transfer-invalid-quantity");
-        let (authority, private) = sample_account("bank", 0);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let destination = sample_destination("bank", 1);
+        let mut fixture = AssetSignedEncoderFixture::bank("transfer-invalid-quantity", 0, "NaN");
         let oversized = format!("1{}", "0".repeat(200));
         for amount in ["NaN", "-1", "01", "1.0", "+1", " 1", "1 ", "1e3"]
             .into_iter()
             .map(str::to_owned)
             .chain(core::iter::once(oversized))
         {
-            let quantity = cstring(&amount);
-            let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-            let mut out_signed_len: c_ulong = 0;
-            let mut out_hash = [0u8; 32];
-            let result = unsafe {
-                connect_norito_encode_transfer_signed_transaction(
-                    chain.as_ptr(),
-                    chain.as_bytes().len() as c_ulong,
-                    authority.as_ptr(),
-                    authority.as_bytes().len() as c_ulong,
-                    1,
-                    0,
-                    0,
-                    0,
-                    0,
-                    asset_definition.as_ptr(),
-                    asset_definition.as_bytes().len() as c_ulong,
-                    quantity.as_ptr(),
-                    quantity.as_bytes().len() as c_ulong,
-                    destination.as_ptr(),
-                    destination.as_bytes().len() as c_ulong,
-                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                    private.as_ptr(),
-                    private.len() as c_ulong,
-                    &mut out_signed_ptr,
-                    &mut out_signed_len,
-                    out_hash.as_mut_ptr(),
-                    out_hash.len() as c_ulong,
-                )
-            };
+            fixture.quantity = cstring(&amount);
+            let (result, out_signed_ptr, out_signed_len, out_hash) = call_asset_signed_encoder!(
+                connect_norito_encode_transfer_signed_transaction,
+                fixture,
+                creation_time_ms: 1,
+                ttl_ms: 0,
+                ttl_present: 0,
+                nonce: 0,
+                nonce_present: 0,
+                fee_payment: AUTHORITY_FEE_PAYMENT_JSON,
+            );
             assert_eq!(
                 result, ERR_QUANTITY_PARSE,
                 "invalid public Quantity {amount:?} must be rejected"
@@ -26592,38 +25479,8 @@ define_ed25519_signed_transaction_wrapper! {
             private_key_ptr: *const c_uchar,
             private_key_len: c_ulong,
         )
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    nonce: u32,
-    nonce_present: c_uchar,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    quantity_ptr: *const c_char,
-    quantity_len: c_ulong,
-    destination_ptr: *const c_char,
-    destination_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+    identifiers: (algorithm_code, signed_bytes, hash_bytes);
+    {
         let algorithm = parse_algorithm_code(algorithm_code)?;
         let inputs = unsafe {
             gather_asset_tx_inputs_with_parser(
@@ -26676,11 +25533,7 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
                 Executable::from([InstructionBox::from(mint)])
             },
         )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+    }
 }
 define_ed25519_signed_transaction_wrapper! {
     connect_norito_encode_multisig_register_signed_transaction =>
@@ -26701,34 +25554,8 @@ define_ed25519_signed_transaction_wrapper! {
             private_key_ptr: *const c_uchar,
             private_key_len: c_ulong,
         )
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transaction_alg(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    spec_ptr: *const c_char,
-    spec_len: c_ulong,
-    account_ptr: *const c_char,
-    account_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+    identifiers: (algorithm_code, signed_bytes, hash_bytes);
+    {
         if private_key_ptr.is_null() || account_ptr.is_null() {
             return Err(BridgeError::NullPtr);
         }
@@ -26764,11 +25591,7 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
                 }
             },
         )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+    }
 }
 define_ed25519_signed_transaction_wrapper! {
     connect_norito_encode_burn_signed_transaction =>
@@ -26793,116 +25616,8 @@ define_ed25519_signed_transaction_wrapper! {
             private_key_ptr: *const c_uchar,
             private_key_len: c_ulong,
         )
-}
-define_ed25519_signed_transaction_wrapper! {
-    connect_norito_encode_claim_identifier_signed_transaction =>
-        connect_norito_encode_claim_identifier_signed_transaction_alg(
-            network_id_ptr: *const c_char,
-            network_id_len: c_ulong,
-            authority_ptr: *const c_char,
-            authority_len: c_ulong,
-            creation_time_ms: u64,
-            ttl_ms: u64,
-            ttl_present: c_uchar,
-            account_ptr: *const c_char,
-            account_len: c_ulong,
-            receipt_ptr: *const c_char,
-            receipt_len: c_ulong,
-            fee_payment_json_ptr: *const c_uchar,
-            fee_payment_json_len: c_ulong,
-            private_key_ptr: *const c_uchar,
-            private_key_len: c_ulong,
-        )
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transaction_alg(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    account_ptr: *const c_char,
-    account_len: c_ulong,
-    receipt_ptr: *const c_char,
-    receipt_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        if private_key_ptr.is_null() || account_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let algorithm = parse_algorithm_code(algorithm_code)?;
-        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
-        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
-        let authority = parse_account_id(authority_str)?;
-        let account = parse_account_id(account_str)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
-        let receipt = parse_identifier_receipt_bytes(receipt_ptr, receipt_len)?;
-        validate_identifier_claim_account(&account, &receipt)?;
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            network_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            InstructionBox::from(ClaimIdentifier { account, receipt }),
-        )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction_alg(
-    network_id_ptr: *const c_char,
-    network_id_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    nonce: u32,
-    nonce_present: c_uchar,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    quantity_ptr: *const c_char,
-    quantity_len: c_ulong,
-    destination_ptr: *const c_char,
-    destination_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+    identifiers: (algorithm_code, signed_bytes, hash_bytes);
+    {
         let algorithm = parse_algorithm_code(algorithm_code)?;
         let inputs = unsafe {
             gather_asset_tx_inputs_with_parser(
@@ -26954,11 +25669,55 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction_alg(
                 Executable::from([InstructionBox::from(burn)])
             },
         )?;
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-    bridge_result_to_code(result)
+    }
+}
+define_ed25519_signed_transaction_wrapper! {
+    connect_norito_encode_claim_identifier_signed_transaction =>
+        connect_norito_encode_claim_identifier_signed_transaction_alg(
+            network_id_ptr: *const c_char,
+            network_id_len: c_ulong,
+            authority_ptr: *const c_char,
+            authority_len: c_ulong,
+            creation_time_ms: u64,
+            ttl_ms: u64,
+            ttl_present: c_uchar,
+            account_ptr: *const c_char,
+            account_len: c_ulong,
+            receipt_ptr: *const c_char,
+            receipt_len: c_ulong,
+            fee_payment_json_ptr: *const c_uchar,
+            fee_payment_json_len: c_ulong,
+            private_key_ptr: *const c_uchar,
+            private_key_len: c_ulong,
+        )
+    identifiers: (algorithm_code, signed_bytes, hash_bytes);
+    {
+        if private_key_ptr.is_null() || account_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        let algorithm = parse_algorithm_code(algorithm_code)?;
+        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
+        let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
+        let authority = parse_account_id(authority_str)?;
+        let account = parse_account_id(account_str)?;
+        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
+        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
+        let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
+        let receipt = parse_identifier_receipt_bytes(receipt_ptr, receipt_len)?;
+        validate_identifier_claim_account(&account, &receipt)?;
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
+        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
+            network_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            fee_payment,
+            private_key,
+            InstructionBox::from(ClaimIdentifier { account, receipt }),
+        )?;
+    }
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_decode_signed_transaction_json(
@@ -26986,14 +25745,13 @@ pub unsafe extern "C" fn connect_norito_decode_signed_transaction_json(
                 signed_transaction_bridge_debug_json(&tx),
             );
         }
-        let json_bytes = match norito::json::to_vec(&json_value) {
-            Ok(vec) => vec,
-            Err(_) => return -3,
-        };
-        if let Err(code) = write_bytes(out_json_ptr, out_json_len, &json_bytes) {
-            return code;
-        }
-        0
+        write_output_result(
+            norito::json::to_vec(&json_value),
+            out_json_ptr,
+            out_json_len,
+            -3,
+            ERR_ALLOC,
+        )
     }
 }
 /// Decode a canonical internal `AssetId` balance-bucket literal into readable JSON fields.
@@ -27059,14 +25817,13 @@ pub unsafe extern "C" fn connect_norito_decode_transaction_receipt_json(
             Ok(v) => v,
             Err(_) => return -2,
         };
-        let json_bytes = match norito::json::to_vec(&receipt) {
-            Ok(vec) => vec,
-            Err(_) => return -3,
-        };
-        if let Err(code) = write_bytes(out_json_ptr, out_json_len, &json_bytes) {
-            return code;
-        }
-        0
+        write_output_result(
+            norito::json::to_vec(&receipt),
+            out_json_ptr,
+            out_json_len,
+            -3,
+            ERR_ALLOC,
+        )
     }
 }
 #[repr(C)]
@@ -30937,6 +29694,16 @@ mod tests {
         assert_eq!(public.len(), 32);
         assert_eq!(signature.len(), 64);
     }
+    const SMALL_ORDER_R: [u8; 32] = [
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00,
+    ];
+    const NONCANONICAL_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
     #[test]
     fn ffi_verify_detached_rejects_all_zero_signature_material() {
         let private = [0x11; 32];
@@ -30977,16 +29744,6 @@ mod tests {
     }
     #[test]
     fn ffi_verify_detached_rejects_malformed_ed25519_signature_r() {
-        const SMALL_ORDER_R: [u8; 32] = [
-            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-        ];
-        const NONCANONICAL_R: [u8; 32] = [
-            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0x7f,
-        ];
         let private = vec![0x11; 32];
         let message = b"ffi-ed25519-malformed-r";
         let mut pk_ptr: *mut c_uchar = ptr::null_mut();
@@ -31240,16 +29997,6 @@ mod tests {
     }
     #[test]
     fn java_detached_verify_helper_rejects_malformed_ed25519_signature_r() {
-        const SMALL_ORDER_R: [u8; 32] = [
-            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-        ];
-        const NONCANONICAL_R: [u8; 32] = [
-            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0x7f,
-        ];
         let private = vec![0x21; 32];
         let message = b"java-helper-detached-malformed-r";
         let algorithm = Algorithm::Ed25519 as jni::sys::jint;
@@ -31311,16 +30058,6 @@ mod tests {
     }
     #[test]
     fn encode_control_approve_ext_with_alg_rejects_malformed_ed25519_signature_r() {
-        const SMALL_ORDER_R: [u8; 32] = [
-            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-        ];
-        const NONCANONICAL_R: [u8; 32] = [
-            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0x7f,
-        ];
         let sid = [0x11_u8; 32];
         let wallet_pk = [0x22_u8; 32];
         let account = b"wallet-account";
@@ -31394,16 +30131,6 @@ mod tests {
     }
     #[test]
     fn encode_envelope_sign_result_ok_with_alg_rejects_malformed_ed25519_signature_r() {
-        const SMALL_ORDER_R: [u8; 32] = [
-            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-        ];
-        const NONCANONICAL_R: [u8; 32] = [
-            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0x7f,
-        ];
         let algorithm = b"ed25519";
         let key_pair =
             KeyPair::try_from_seed(vec![0x63; 32], Algorithm::Ed25519).expect("fixture keypair");

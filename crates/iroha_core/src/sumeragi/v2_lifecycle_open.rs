@@ -166,22 +166,32 @@ pub(crate) struct AuthenticatedLifecycleRecoveryCut {
     authenticated_ledger: LifecycleLedgerV1,
     candidates: BTreeMap<LifecycleKey, CandidateAdmission>,
     validate_no_successor: BTreeMap<LifecycleKey, AuthenticatedValidateNoSuccessorRecovery>,
+    lifecycle_outputs: Option<PreparedLifecycleOutputRecoveryV1>,
     serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
 }
 impl AuthenticatedLifecycleRecoveryCut {
+    /// Detach the complete authenticated cold-output census exactly once.
+    pub(in crate::sumeragi) fn take_lifecycle_output_recovery(
+        &mut self,
+    ) -> Option<PreparedLifecycleOutputRecoveryV1> {
+        self.lifecycle_outputs.take()
+    }
+
     /// Consume the exact post-prune Serve payload census into its owner.
     pub(super) fn into_serve_payloads(self) -> AuthenticatedCertifiedServePayloadRecoveryCut {
+        debug_assert!(
+            self.lifecycle_outputs.is_none(),
+            "cold lifecycle outputs must enter their registry before recovery retirement"
+        );
         self.serve_payloads
     }
     /// Assemble an exact test fixture from already authenticated projections.
     ///
-    /// Production recovery must use the sealed storage-only factory matching
-    /// its durable inputs: [`Self::assemble_storage_only`],
-    /// [`Self::assemble_storage_only_with_body_validation_outcomes`],
-    /// [`Self::assemble_storage_only_with_recovered_wal_sign`], or
-    /// [`Self::assemble_storage_only_with_recovered_wal_sign_and_body_validation_outcomes`].
-    /// This raw candidate surface deliberately does not exist outside test
-    /// builds.
+    /// Production recovery uses the sealed body-pipeline factory matching its
+    /// authenticated startup authority, including
+    /// [`Self::assemble_storage_only_with_body_pipeline_startup`] and
+    /// [`Self::assemble_storage_only_with_recovered_wal_sign_and_body_pipeline_startup`].
+    /// This raw candidate surface deliberately does not exist outside test builds.
     #[cfg(test)]
     pub(super) fn from_authenticated_parts(
         authenticated_ledger: LifecycleLedgerV1,
@@ -235,68 +245,11 @@ impl AuthenticatedLifecycleRecoveryCut {
             authenticated_ledger,
             candidates: candidate_map,
             validate_no_successor: validate_no_successor_map,
+            lifecycle_outputs: None,
             serve_payloads,
         })
     }
     // STORAGE_ONLY_LIFECYCLE_RECOVERY_ASSEMBLER_BEGIN
-    /// Assemble the bounded storage-only recovery cut from one exact opened frame.
-    ///
-    /// This factory has no caller-supplied candidate surface. Certified-Serve
-    /// and its adjacent ProducerTurn are reconstructed exclusively through the
-    /// authenticated payload cut. Every other live row fails closed until a
-    /// typed durable replay authority exists. Classification borrows both
-    /// inputs; success moves them into the seal, while failure retains them in
-    /// [`LifecycleRecoveryAssemblyError`].
-    ///
-    /// # Errors
-    ///
-    /// Returns an owned typed failure when a live ordinary row lacks durable
-    /// replay authority, a terminal Validate/no-successor row lacks its body
-    /// outcome, or Certified-Serve storage does not cover the frame exactly.
-    #[allow(dead_code)]
-    #[allow(clippy::result_large_err)]
-    pub(super) fn assemble_storage_only(
-        ledger: LifecycleLedgerV1,
-        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
-    ) -> Result<Self, LifecycleRecoveryAssemblyError> {
-        if let Err(kind) = validate_storage_only_recovery(&ledger, &serve_payloads) {
-            return Err(LifecycleRecoveryAssemblyError {
-                kind,
-                _authenticated_ledger: ledger,
-                _serve_payloads: serve_payloads,
-            });
-        }
-        Ok(Self {
-            context: ledger.context(),
-            authenticated_ledger: ledger,
-            candidates: BTreeMap::new(),
-            validate_no_successor: BTreeMap::new(),
-            serve_payloads,
-        })
-    }
-    /// Assemble storage-only recovery while consuming exact terminal Validate outcomes.
-    ///
-    /// All ledger and Certified-Serve checks finish before the body-store
-    /// catalog is detached. The aggregate cut then selects every terminal
-    /// Validate/no-successor claim exactly once; any missing or ambiguous row
-    /// restores the complete catalog before this owned error is returned.
-    /// Unrelated validation outcomes are restored when the selected set is
-    /// committed, so recovered-WAL success authority is not consumed here.
-    #[allow(dead_code)]
-    #[allow(clippy::result_large_err)]
-    pub(super) fn assemble_storage_only_with_body_validation_outcomes(
-        ledger: LifecycleLedgerV1,
-        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
-        body_store: &mut V2BodyStore,
-    ) -> Result<Self, LifecycleRecoveryAssemblyError> {
-        Self::assemble_storage_only_with_terminal_validate_outcomes(
-            ledger,
-            serve_payloads,
-            body_store,
-            RecoveredWalStartupProjectionV1::None,
-            None,
-        )
-    }
     /// Assemble the sole ordinary body-pipeline production startup recovery cut.
     ///
     /// The opaque Fetch phase moves every logical candidate directly into this
@@ -320,75 +273,6 @@ impl AuthenticatedLifecycleRecoveryCut {
             Some(&mut body_pipeline),
         )?;
         Ok((recovery, body_pipeline))
-    }
-    /// Assemble one exact post-fsync recovered-WAL Sign crash cut.
-    ///
-    /// This remains a storage-only factory: its only additional input is the
-    /// opaque projection minted by the installed recovered-WAL registry row.
-    /// Exactly that projection's live Sign child may cross the ordinary-row
-    /// fail-closed classifier. A live Validate parent, a foreign Sign, or any
-    /// other live ordinary row is still rejected. The projection is borrowed,
-    /// so the installed registry authority remains with the caller; the exact
-    /// ledger frame and move-only Serve cut move into either the seal or the
-    /// owned failure.
-    ///
-    /// # Errors
-    ///
-    /// Returns an owned typed failure if the repaired frame does not contain
-    /// the exact installed live Sign child or otherwise fails the bounded
-    /// storage-only census.
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[allow(clippy::result_large_err)]
-    // TODO: Invoke this only inside the consuming installed-registry startup
-    // transaction; never expose its logical recovery cut as standalone
-    // production authority.
-    pub(super) fn assemble_storage_only_with_recovered_wal_sign(
-        ledger: LifecycleLedgerV1,
-        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
-        projection: &AuthenticatedRecoveredWalSignProjection,
-    ) -> Result<Self, LifecycleRecoveryAssemblyError> {
-        let candidates = match assemble_storage_only_recovered_wal_candidates(
-            &ledger,
-            &serve_payloads,
-            projection,
-        ) {
-            Ok(candidates) => candidates,
-            Err(kind) => {
-                return Err(LifecycleRecoveryAssemblyError {
-                    kind,
-                    _authenticated_ledger: ledger,
-                    _serve_payloads: serve_payloads,
-                });
-            }
-        };
-        Ok(Self {
-            context: ledger.context(),
-            authenticated_ledger: ledger,
-            candidates,
-            validate_no_successor: BTreeMap::new(),
-            serve_payloads,
-        })
-    }
-    /// Assemble a repaired-WAL Sign cut together with terminal Validate outcomes.
-    ///
-    /// The opaque installed Sign projection remains borrowed while the exact
-    /// repaired parent/child pair, every other durable row, Certified-Serve
-    /// coverage, and the aggregate body-outcome catalog are authenticated.
-    #[allow(dead_code)]
-    #[allow(clippy::result_large_err)]
-    pub(super) fn assemble_storage_only_with_recovered_wal_sign_and_body_validation_outcomes(
-        ledger: LifecycleLedgerV1,
-        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
-        body_store: &mut V2BodyStore,
-        projection: &AuthenticatedRecoveredWalSignProjection,
-    ) -> Result<Self, LifecycleRecoveryAssemblyError> {
-        Self::assemble_storage_only_with_terminal_validate_outcomes(
-            ledger,
-            serve_payloads,
-            body_store,
-            RecoveredWalStartupProjectionV1::PhaseVote(projection),
-            None,
-        )
     }
     /// Assemble the final repaired-WAL Sign, every ordinary durable body row, and
     /// all terminal Validate outcomes from one exact post-repair frame.
@@ -607,7 +491,7 @@ impl AuthenticatedLifecycleRecoveryCut {
         recovered_wal: RecoveredWalStartupProjectionV1<'_>,
         body_pipeline: Option<&mut PreparedDurableCertifiedBodyPipelineStartupV1>,
     ) -> Result<Self, LifecycleRecoveryAssemblyError> {
-        let (candidates, claims) =
+        let (candidates, claims, lifecycle_outputs) =
             match assemble_storage_only_candidates_and_terminal_validate_claims(
                 &ledger,
                 &serve_payloads,
@@ -623,12 +507,14 @@ impl AuthenticatedLifecycleRecoveryCut {
                     });
                 }
             };
-        if claims.is_empty() {
+        let needs_invalid_body_markers = lifecycle_outputs.invalid_body_reports().next().is_some();
+        if claims.is_empty() && !needs_invalid_body_markers {
             return Ok(Self {
                 context: ledger.context(),
                 authenticated_ledger: ledger,
                 candidates,
                 validate_no_successor: BTreeMap::new(),
+                lifecycle_outputs: (!lifecycle_outputs.is_empty()).then_some(lifecycle_outputs),
                 serve_payloads,
             });
         }
@@ -664,6 +550,19 @@ impl AuthenticatedLifecycleRecoveryCut {
                 });
             }
         }
+        for report in lifecycle_outputs.invalid_body_reports() {
+            if !catalog.select_exact_invalid_body_report(report) {
+                return Err(LifecycleRecoveryAssemblyError {
+                    kind: LifecycleRecoveryAssemblyErrorKind::InvalidLifecycleOutputRecovery {
+                        ordinal: report.ordinal(),
+                        work_class: report.candidate().work_class,
+                        stage: report.candidate().stage,
+                    },
+                    _authenticated_ledger: ledger,
+                    _serve_payloads: serve_payloads,
+                });
+            }
+        }
         let validate_no_successor = claims
             .into_values()
             .map(|claim| (claim.key, claim.into_authenticated()))
@@ -673,6 +572,7 @@ impl AuthenticatedLifecycleRecoveryCut {
             authenticated_ledger: ledger,
             candidates,
             validate_no_successor,
+            lifecycle_outputs: (!lifecycle_outputs.is_empty()).then_some(lifecycle_outputs),
             serve_payloads,
         };
         catalog.commit_selected();
@@ -898,6 +798,18 @@ pub(crate) enum LifecycleRecoveryAssemblyErrorKind {
         /// Exact immutable execution stage retained by LedgerV1.
         stage: LifecycleStage,
     },
+    /// One persisted output source, signature, predecessor, or marker did not authenticate.
+    #[error(
+        "live lifecycle output ordinal {ordinal} ({work_class:?}, {stage:?}) failed exact cold authentication"
+    )]
+    InvalidLifecycleOutputRecovery {
+        /// Immutable ledger ordinal of the rejected output row.
+        ordinal: u128,
+        /// Closed logical output class retained by LedgerV1.
+        work_class: LifecycleWorkClass,
+        /// Exact immutable execution stage retained by LedgerV1.
+        stage: LifecycleStage,
+    },
     /// A terminal Validate/no-child tombstone lost its consumed body outcome.
     #[error("terminal Validate ordinal {ordinal} ({stage:?}) has no authenticated body outcome")]
     MissingTerminalValidateOutcome {
@@ -1040,9 +952,22 @@ impl PreparedLifecycleCoordinatorOpen {
                 _prepared: self,
             });
         };
+        let Some(owner_held_outputs) =
+            recovery.exact_lifecycle_output_ordinals_for_registry_census(&self.coordinator)
+        else {
+            self.certified_serve_registry = Some(batch);
+            return Err(LifecycleOpenCommitError {
+                error: LifecycleOpenErrorKind::InvalidRecovery(
+                    "cold lifecycle output registry census is inconsistent",
+                )
+                .into(),
+                _prepared: self,
+            });
+        };
         let publication = registry.install_certified_serve_startup_batch_before_publication(
             batch,
             &self.coordinator,
+            &owner_held_outputs,
             || self.publish_durable_open(payload_store, recovery),
         );
         match publication {
@@ -2995,15 +2920,6 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn reconcile_complete_tip_serv
         _authenticated_payloads: recovered,
     })
 }
-fn validate_storage_only_recovery(
-    ledger: &LifecycleLedgerV1,
-    serve_payloads: &AuthenticatedCertifiedServePayloadRecoveryCut,
-) -> Result<(), LifecycleRecoveryAssemblyErrorKind> {
-    for record in ledger.records() {
-        classify_storage_only_record(record)?;
-    }
-    validate_storage_only_serve_recovery(ledger, serve_payloads)
-}
 fn terminal_validate_no_successor_claim(
     context: LifecycleContext,
     record: &LifecycleLedgerRecordV1,
@@ -3132,6 +3048,7 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
     (
         BTreeMap<LifecycleKey, CandidateAdmission>,
         BTreeMap<LifecycleKey, TerminalValidateNoSuccessorClaim>,
+        PreparedLifecycleOutputRecoveryV1,
     ),
     LifecycleRecoveryAssemblyErrorKind,
 > {
@@ -3251,6 +3168,12 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
         }
         _ => {}
     }
+    let lifecycle_outputs = match body_pipeline.as_ref() {
+        Some(pipeline) => PreparedLifecycleOutputRecoveryV1::assemble(ledger, pipeline.verified())?,
+        None => PreparedLifecycleOutputRecoveryV1 {
+            entries: BTreeMap::new(),
+        },
+    };
     let mut claims = BTreeMap::new();
     for record in ledger.records() {
         match classify_storage_only_record(record) {
@@ -3372,6 +3295,9 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
                 if admitted_recovered_wal {
                     continue;
                 }
+                if lifecycle_outputs.owns_record(record) {
+                    continue;
+                }
                 if matches!(
                     work_class,
                     LifecycleWorkClass::Fetch
@@ -3395,6 +3321,19 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
             LifecycleRecoveryAssemblyErrorKind::DurableCertifiedBodyPipeline(
                 "the frame-bound all-row census did not splice exactly once",
             ),
+        );
+    }
+    if !lifecycle_outputs.splice_candidates(&mut candidates) {
+        let (ordinal, output) = lifecycle_outputs
+            .entries
+            .first_key_value()
+            .expect("failed lifecycle output splice retains at least one entry");
+        return Err(
+            LifecycleRecoveryAssemblyErrorKind::InvalidLifecycleOutputRecovery {
+                ordinal: *ordinal,
+                work_class: output.candidate().work_class,
+                stage: output.candidate().stage,
+            },
         );
     }
     match recovered_wal {
@@ -3518,6 +3457,12 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
                             candidate.work_class,
                             LifecycleWorkClass::Store | LifecycleWorkClass::Validate
                         ))
+                    && !matches!(
+                        candidate.work_class,
+                        LifecycleWorkClass::Broadcast
+                            | LifecycleWorkClass::EquivocationReport
+                            | LifecycleWorkClass::InvalidBodyReport
+                    )
             }) {
                 return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
                     "storage-only assembly created non-body work without installed authority",
@@ -3526,7 +3471,7 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
         }
     }
     validate_storage_only_serve_recovery(ledger, serve_payloads)?;
-    Ok((candidates, claims))
+    Ok((candidates, claims, lifecycle_outputs))
 }
 fn recovered_decision_store_chain_records<'ledger>(
     ledger: &'ledger LifecycleLedgerV1,
@@ -3625,49 +3570,6 @@ fn splice_recovered_decision_apply_candidate(
             apply,
             candidates,
         )
-}
-fn assemble_storage_only_recovered_wal_candidates(
-    ledger: &LifecycleLedgerV1,
-    serve_payloads: &AuthenticatedCertifiedServePayloadRecoveryCut,
-    projection: &AuthenticatedRecoveredWalSignProjection,
-) -> Result<BTreeMap<LifecycleKey, CandidateAdmission>, LifecycleRecoveryAssemblyErrorKind> {
-    if !projection.belongs_to_context(ledger.context()) {
-        return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
-            "installed projection belongs to another lifecycle context",
-        ));
-    }
-    let mut candidates = BTreeMap::new();
-    for record in ledger.records() {
-        match classify_storage_only_record(record) {
-            Ok(()) => {}
-            Err(LifecycleRecoveryAssemblyErrorKind::MissingDurableRecoveryAuthority { .. })
-                if record.key() == Some(projection.child_key()) =>
-            {
-                if !projection.insert_repaired_child_from_record(
-                    ledger.context(),
-                    record,
-                    &mut candidates,
-                ) {
-                    return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
-                        "live Sign row changed installed owner, ordinal, or admission semantics",
-                    ));
-                }
-            }
-            Err(kind) => return Err(kind),
-        }
-    }
-    if !projection.owns_spliced_candidates(&candidates) {
-        return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
-            "repaired frame has no exact live installed Sign child",
-        ));
-    }
-    if !projection.repaired_pair_is_exact(ledger.context(), ledger.records()) {
-        return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
-            "repaired frame lost the exact terminal Validate parent or typed Sign edge",
-        ));
-    }
-    validate_storage_only_serve_recovery(ledger, serve_payloads)?;
-    Ok(candidates)
 }
 fn validate_storage_only_serve_recovery(
     ledger: &LifecycleLedgerV1,
@@ -3928,4 +3830,5 @@ fn validate_storage_only_serve_coverage(
     }
     Ok(())
 }
+include!("v2_lifecycle_open_output_recovery.rs");
 include!("v2_lifecycle_open_recovery_tests.rs");

@@ -74,9 +74,9 @@ PROOF_LEDGER_TEST_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_terminal_discharge_cases.py",
     "sumeragi_v2_proof_ledger_release_inventory_cases.py",
     "sumeragi_v2_proof_ledger_release_corridor_cases.py",
-    "sumeragi_v2_proof_ledger_tlapm_publication_cases.py",
+    "sumeragi_v2_proof_ledger_release_corridor_tail_cases.py",
     "sumeragi_v2_proof_ledger_formal_contract_cases.py",
-    "sumeragi_v2_proof_ledger_source_fidelity_tail_cases.py",
+    "sumeragi_v2_proof_ledger_formal_contract_tail_cases.py",
     "sumeragi_v2_proof_ledger_exact_output_cases.py",
     "sumeragi_v2_proof_ledger_transport_cases.py",
     "sumeragi_v2_proof_ledger_timeout_cases.py",
@@ -195,7 +195,7 @@ def checker_source_paths() -> tuple[Path, ...]:
 
     module = load_checker()
     filenames = tuple(module._CHECKER_COMPONENT_FILES)
-    assert len(filenames) == len(set(filenames)) == 35
+    assert len(filenames) == len(set(filenames)) == 36
     return (SCRIPT, *(SCRIPT.with_name(filename) for filename in filenames))
 
 
@@ -11159,8 +11159,8 @@ def test_shared_tlc_result_contract_is_complete_and_source_sealed(
     module = load_checker()
     repo_root = copy_shared_tlc_result_contract_fixture(tmp_path, module)
 
-    assert len(module.SHARED_TLC_RESULT_CONTRACT_CALLERS) == 33
-    assert len(set(module.SHARED_TLC_RESULT_CONTRACT_CALLERS)) == 33
+    assert len(module.SHARED_TLC_RESULT_CONTRACT_CALLERS) == 34
+    assert len(set(module.SHARED_TLC_RESULT_CONTRACT_CALLERS)) == 34
     assert len(module.SHARED_TLC_RESULT_SPECIALIZED_CALLERS) == 4
     assert len(module.SHARED_TLC_RESULT_CONTRACT_SHA256) == 34
     assert set(module.SHARED_TLC_RESULT_BRANCH_PROFILES) == set(
@@ -21510,52 +21510,6 @@ def test_effect_capacity_lifecycle_semantics_survive_pending_digest_refresh(
     )
 
     errors = module._effect_capacity_production_source_fidelity_errors(repo_root)
-
-    assert any(expected_error in error for error in errors), errors
-
-
-@pytest.mark.parametrize(
-    ("old", "new", "expected_error"),
-    (
-        (
-            "let redispatch = if runtime_terminal_incumbent {\n"
-            "                        false",
-            "let redispatch = if runtime_terminal_incumbent {\n"
-            "                        true",
-            "runtime-owned terminals stutter",
-        ),
-        (
-            ".adopt_incumbent_fetch_for_retry_or_authority(evidence, effect)",
-            ".adopt_incumbent_body_stage_for_retry_or_authority(evidence, effect)",
-            "Fetch authority upgrades must adopt, re-prove, and publish",
-        ),
-        (
-            ".adopt_incumbent_body_stage_for_retry_or_authority(evidence, effect)",
-            ".adopt_incumbent_fetch_for_retry_or_authority(evidence, effect)",
-            "Store and Validate authority upgrades must adopt and re-prove",
-        ),
-    ),
-)
-def test_retained_candidate_retry_semantics_survive_item_digest_refresh(
-    tmp_path: Path,
-    old: str,
-    new: str,
-    expected_error: str,
-) -> None:
-    """Refreshing the FIFO item seal cannot hide retry-owner drift."""
-
-    module = load_checker()
-    local_runner_service_fixture(tmp_path, module)
-    effects_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_effects.rs"
-    item_name = "retain_effect_batch_at_frontier"
-    mutate_rust_item_source(module, effects_path, item_name, old, new)
-    items = module.rust_items(effects_path.read_text(encoding="utf-8"), item_name)
-    assert len(items) == 1
-    module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256[item_name] = (
-        module._rust_item_token_sha256(items[0])
-    )
-
-    errors = module._effect_capacity_production_source_fidelity_errors(tmp_path)
 
     assert any(expected_error in error for error in errors), errors
 

@@ -3,7 +3,7 @@
 This directory is the first-release formal corridor for the production
 Sumeragi v2 consensus protocol. There is no legacy Sumeragi proof corridor.
 The model fixes protocol revision 4 and is parameterized over arbitrary finite
-frozen rosters; production separately enforces the release limit of 128
+frozen rosters; production separately enforces the release limit of 31
 validators. Mechanization status is recorded per obligation in the proof
 ledger. The first-release implementation likewise has one canonical decoder:
 an omitted `proposal_round` is invalid rather than interpreted as the vote or
@@ -360,7 +360,8 @@ height-context state are not migrated in place.
   reserve unavailable to ordinary traffic. Each validator additionally leaves a
   64 KiB timeout-vote reserve unavailable to ordinary traffic (in addition to body
   envelope headroom). That isolated region exceeds the conservative 4 KiB
-  maximum valid timeout-vote envelope, including a 128-signer PrepareQC. A
+  maximum valid timeout-vote envelope; the sizing envelope even covers a
+  128-signer PrepareQC, beyond the production cap of 31 validators. A
   validator lane owns at most one distinct queued TimeoutVote in that region;
   transport copies coalesce while that lane owns the exact envelope, and the
   authenticated delivery record continues coalescing while the corresponding
@@ -413,9 +414,10 @@ height-context state are not migrated in place.
   The production transport refinement uses exact checked canonical geometry at
   every layer. With `F(x)` denoting compact-length framing, the manifest bound
   is `F(8 + C * F(32)) + 228`; the proposal adds the maximal grouped TC,
-  separately carried highest PrepareQC, and signature. The recommended
-  128-validator proposal is 232,541 bare bytes, and the recommended maximum
-  transport completion is 16,811,581 bare bytes. `CertifiedBodyRequest`
+  separately carried highest PrepareQC, and signature. The conservative bound
+  sizes a 128-validator proposal at 232,541 bare bytes, beyond the production
+  cap of 31 validators, and the recommended maximum transport completion is
+  16,811,581 bare bytes. `CertifiedBodyRequest`
   carries a maximal PrepareQC, `CommitCertificateRequest` carries the actual
   frozen chain id, and `CommitCertificateResponse` carries a maximal CommitQC.
   Control takes the maximum of proposal and Commit-certificate response.
@@ -461,7 +463,7 @@ height-context state are not migrated in place.
   17 MiB global/consensus/block-sync settings, 2 MiB control, a 128 MiB
   high-priority byte queue, `H = 2`, and
   `5 * 31 + 3 * 2 = 161` outer-ingress entries.
-  Kagami and the Taira renderer reject rosters above 31 and preserve one
+  Kagami rejects rosters above 31 and preserves one
   source partition for every validator, every simultaneously materialized
   authenticated non-validator lane by scaling body bytes to at least
   `(N + H) * body_source_bytes`.
@@ -658,8 +660,9 @@ height-context state are not migrated in place.
   `SumeragiV2InFlightFirstRelease.tla` and its twenty-two mutation controls. Its
   three-validator TLA+ instance requires authenticated custody by its selected
   producer and uses the canonical 3-of-3 strict count quorum; it does not infer
-  all-peer preimage knowledge. The fixed-width Rust/Verus relation generalizes
-  that geometry to canonical committees of 1 through 128 validators and
+  all-peer preimage knowledge. The fixed-width Rust/Verus relation deliberately
+  generalizes beyond the production cap to canonical committees of 1 through
+  128 validators and
   covers the named QueuePlan, reservation, Kura/input/READY-QC, volatile body,
   lane-commit, WSV, per-key Commit/tombstone/ForgetCommit prefixes, and release
   actions, including snapshot stutter and the direct-release terminal. The
@@ -1458,7 +1461,7 @@ ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
 Before network startup, the executable wrapper inventories 864 named tests
-across 43 Rust modules. The preceding 298-name inventory was produced from the
+across 40 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
 historical/current applied-height rollover; 2 bind peer-writer flush and
@@ -1583,7 +1586,7 @@ record-backed autonomous predecessor-durability regressions, followed by the
 three producer-publication-fence race regressions, bring the current
 inventory to 864 tests across 43 modules.
 Together with the source-sealed command and tooling legs, the pre-network
-corridor contains 91 legs. The
+corridor contains 84 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor. The
 fence rows prove that an exact lifecycle dequeue serializes both same-wire and
 unrelated producers until publication, and that abandoning an unpublished
@@ -1659,7 +1662,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`c9972f55a17acbdcfacda42e3ca152d9705ec4e0f188a561f0c28990468ffe97`.
+`23325cb037bc930c7503986845dbb25891ef80af6f08092533b1e0e1d8233fad`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1696,7 +1699,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The four integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 91 legs, including the governance-
+the complete pre-network corridor now spans 84 legs, including the governance-
 unlock audit module, the autonomous lifecycle-recovery module, and separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, and source-sealed
@@ -1704,7 +1707,7 @@ command-success legs. Its finality, offline compact-QC,
 and height-context proposal-origin modules each use a dedicated
 `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
-geometry tests as part of those forty-three modules or ninety-one legs. The
+geometry tests as part of the 43 modules or 84 legs. The
 inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
@@ -1798,11 +1801,10 @@ unchanged; this source-fidelity boundary promotes no theorem, proof-ledger row,
 or evidence gate.
 The wrapper also runs exact mocked contracts for active Git operation
 rejection, detached source sealing, the 160-run matrix launcher, the
-source-bound 100,000-height chaos receipt, provisional Taira evidence
-promotion, and the aggregate release receipt. These execution contracts are
+source-bound 100,000-height chaos receipt, and the aggregate release receipt. These execution contracts are
 not deductive proof. A fresh pinned strict whole-module aggregate release TLAPS
 run, the complete clean source-sealed PR corridor, the source-bound chaos run,
-and the 24-hour Taira-profile soak remain pending.
+and aggregate receipt publication remain pending.
 
 The formal mutation gate also runs one source-sealed post-Decision model with
 nine configurations. The repaired trace completes with status 0. Eight
@@ -1855,7 +1857,7 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 91 pre-network legs and the exact
+binds original HEAD/tree/`Cargo.lock`, all 84 pre-network legs and the exact
 864-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
@@ -2042,22 +2044,34 @@ no deductive liveness proof, changes no proof-ledger status, and promotes no
 obligation.
 
 A separate source-sealed applied-phase admission runner covers one model and
-six configurations. Its TLA+ configuration ranges over the evidence-bearing
-`BodyStored` and `ValidationSucceeded` phases. Five mutants allocate a
-post-apply ordinal, retain a physical owner after apply, coalesce conflicting
-validation evidence, hide a malformed callback behind stale-tag coalescing, or
-admit a well-formed stale callback as current. The source seal binds the model
+six configurations. Its TLA+ configuration ranges over the surviving
+evidence-bearing `BodyStored` phase. Five mutants allocate a post-apply ordinal,
+retain a physical owner after apply, coalesce conflicting storage payload or
+owner evidence, hide a malformed callback behind stale-tag coalescing, or admit
+a well-formed stale callback as current. The source seal binds the model
 to `preflight_runtime_command_admission`,
-`command_admission_is_suppressed`, both serialized enqueue paths, and the exact
-Busy-owner regression for those two phases. Complete callback validation
-precedes stale-tag coalescing; conflicting validation evidence rejects; an
+both serialized enqueue paths, and the exact Busy-owner regression for
+`BodyStored`. Complete callback validation
+precedes stale-tag coalescing; conflicting storage evidence rejects; an
 exact applied retry stutters before tagged-command construction or ordinal
-allocation. The source seal separately pins the four-phase Rust exact-retry
-regression for `BodyAvailable`, `BodyStored`, `ValidationSucceeded`, and
-`SignatureCompleted`, without extending the TLA+ conflict/Busy claim to
-`BodyAvailable` or `SignatureCompleted`. Busy, unapplied callbacks in the two
-modeled phases retain one serviceable owner. This bounded matrix neither proves
+allocation. The source seal separately pins the two-phase Rust exact-retry
+regression for `BodyAvailable` and `BodyStored`, without extending the TLA+
+conflict/Busy claim to `BodyAvailable`. Busy, unapplied `BodyStored` callbacks
+retain one serviceable owner. This bounded matrix neither proves
 crash/restart refinement nor changes a proof-ledger status.
+
+A separate source-sealed durable Validate lifecycle runner covers one model and
+six configurations. The repaired configuration connects the scheduler's
+Ready-to-Waiting claim, the worker's exact guarded result, and the turn driver's
+completion join. It also retains an exact missing-sidecar wait on the same row
+and ordinal, pre-reserves rejected-result output, restores mandatory replay
+authority across restart for every modeled origin, and fail-stops on ambiguous
+post-fsync failure. Five mutants break those cuts one at a time and require
+their exact invariant and action-coverage diagnostics. The source seal binds
+the model to the production scheduler, worker, turn-driver, sidecar, recovery,
+replay-authority, and report-publication seams, and formal CI invokes it before
+the aggregate TLC suite. This is bounded mutation evidence, not an unbounded
+proof or a proof-ledger promotion.
 
 An exhaustive one-validator ownership configuration separately checks
 `AsyncTypeInvariant` and `AsyncProgressOwnershipInvariant` over 616,705

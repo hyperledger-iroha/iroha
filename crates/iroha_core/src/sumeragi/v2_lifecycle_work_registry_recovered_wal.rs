@@ -901,10 +901,10 @@ impl LiveValidateSignRegistryReservation<'_> {
     /// This is called only after exact LedgerV1 fsync. All validation and
     /// vacancy checks happened while the same exclusive registry borrow was
     /// retained, so the remaining map publication is structurally infallible.
-    fn install_live_sign(self, work: ConcreteLifecycleWork) {
+    fn install_live_sign(self, prepared: PreparedLiveValidateSignRegistryWork) {
         let Self {
             reservation,
-            _detached_parent: _,
+            _detached_parent: parent,
         } = self;
         let RecoveredWalValidateRegistryReservation {
             registry,
@@ -913,6 +913,21 @@ impl LiveValidateSignRegistryReservation<'_> {
         } = reservation;
         let (child_address, child_digest) =
             child.expect("pre-fsync live Sign reservation binds one exact child");
+        let PreparedLiveValidateSignRegistryWork { admission } = prepared;
+        let PreparedLifecycleAdmissionV1 { owner, candidate } = admission;
+        let PreparedLifecycleAdmissionOwnerV1::LiveWal(live) = owner else {
+            unreachable!("live Validate Sign retains its WAL admission")
+        };
+        let work = live
+            .into_live_sign_work(
+                candidate,
+                DurableLiveWalSignOriginV1::Validate {
+                    parent_address,
+                    parent: Box::new(parent),
+                },
+                child_address,
+            )
+            .unwrap_or_else(|_| panic!("prechecked live Validate Sign remains exact"));
         debug_assert_ne!(parent_address, child_address);
         debug_assert!(!registry.entries.contains_key(&parent_address));
         debug_assert!(!registry.entries.contains_key(&child_address));
@@ -2486,116 +2501,6 @@ impl AuthenticatedRecoveredWalSignProjection {
         !candidates.contains_key(&self.parent.key)
             && candidates.get(&self.child.key) == Some(&self.child)
     }
-    /// Build one closed repaired-pair fixture without exposing either raw
-    /// candidate to sibling lifecycle tests.
-    #[cfg(all(test, feature = "bls"))]
-    pub(super) fn repaired_ledger_fixture_for_test(
-        context: LifecycleContext,
-        marker: u8,
-    ) -> Option<(Self, super::ledger::LifecycleLedgerV1)> {
-        let root = super::CausalRoot::new(LifecycleDigest::new([marker.wrapping_add(3); 32]));
-        let parent_replay = super::replay_authority::exact_record_fixture(
-            context,
-            LifecycleStageKind::ValidateBody,
-            marker,
-        );
-        let child_replay = super::replay_authority::exact_record_fixture(
-            context,
-            LifecycleStageKind::SignPrepareVote,
-            marker,
-        );
-        let effect_slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
-        let parent = CandidateAdmission::new(
-            parent_replay.key,
-            root,
-            LifecycleWorkClass::Validate,
-            LifecycleStage::new(
-                LifecycleStageKind::ValidateBody,
-                PredecessorScope::Independent,
-            ),
-            InitialLifecycleState::Ready,
-            root.digest(),
-            parent_replay.payload,
-            parent_replay.authority,
-            super::PhysicalGeometry::new(
-                [PhysicalSlot::new(
-                    effect_slot,
-                    LifecycleDigest::new([marker.wrapping_add(4); 32]),
-                )],
-                [effect_slot],
-            ),
-            None,
-        );
-        let child = CandidateAdmission::new(
-            child_replay.key,
-            root,
-            LifecycleWorkClass::SignVote,
-            LifecycleStage::new(
-                LifecycleStageKind::SignPrepareVote,
-                PredecessorScope::Independent,
-            ),
-            InitialLifecycleState::Ready,
-            root.digest(),
-            DurablePayloadReference::None,
-            child_replay.authority,
-            super::PhysicalGeometry::new(
-                [PhysicalSlot::new(
-                    effect_slot,
-                    LifecycleDigest::new([marker.wrapping_add(5); 32]),
-                )],
-                [effect_slot],
-            ),
-            None,
-        );
-        let owner = OwnerId::new(root, 1);
-        let parent_address = ConcreteWorkAddress::new(owner, 1, effect_slot)?;
-        let child_address = ConcreteWorkAddress::new(owner, 2, effect_slot)?;
-        let parent_record = super::ledger::LifecycleLedgerRecordV1::new(
-            parent.key,
-            owner,
-            parent_address.ordinal,
-            parent.work_class,
-            parent.stage,
-            Some(super::TerminalOutcome::Advanced),
-            parent.reconstruction_source,
-            parent.payload,
-            parent.replay_authority.clone(),
-            super::schema::DurableContinuation::successor(
-                super::schema::DurableContinuationEdge::ValidateToSignPrepare,
-                child_address.ordinal,
-            ),
-        )
-        .ok()?;
-        let child_record = super::ledger::LifecycleLedgerRecordV1::new(
-            child.key,
-            owner,
-            child_address.ordinal,
-            child.work_class,
-            child.stage,
-            None,
-            child.reconstruction_source,
-            child.payload,
-            child.replay_authority.clone(),
-            super::schema::DurableContinuation::None,
-        )
-        .ok()?;
-        let ledger = super::ledger::LifecycleLedgerV1::new(
-            context,
-            child_address.ordinal,
-            vec![parent_record, child_record],
-            BTreeMap::new(),
-        )
-        .ok()?;
-        Some((
-            Self {
-                parent,
-                child,
-                parent_address,
-                child_address,
-            },
-            ledger,
-        ))
-    }
     /// Seed only the opaque projection's parent in a focused recovery fixture.
     #[cfg(test)]
     pub(super) fn seed_parent_candidate_for_test(
@@ -2661,6 +2566,8 @@ pub(crate) struct ProductionOpenedRecoveredWalSignLifecycleCut<'registry> {
 pub(crate) struct RecoveredWalProductionOwnerOpenV1 {
     pub(super) coordinator: LifecycleCoordinator,
     pub(super) verified: VerifiedHeightContext,
+    pub(super) recovered_lifecycle_outputs:
+        Option<super::open::PreparedLifecycleOutputRecoveryV1>,
     pub(super) serve_payloads:
         crate::sumeragi::v2_certified_serve_payload_store::AuthenticatedCertifiedServePayloadRecoveryCut,
     pub(super) registry_identity: ConcreteLifecycleWorkRegistryInstanceIdentity,
@@ -3957,7 +3864,7 @@ impl ProductionOpenedRecoveredWalSignLifecycleCut<'_> {
         }
         let OpenedRecoveredWalSignLifecycleCut {
             installed,
-            recovery,
+            mut recovery,
             coordinator,
         } = opened;
         let registry_identity = installed.registry.instance_identity();
@@ -3967,6 +3874,7 @@ impl ProductionOpenedRecoveredWalSignLifecycleCut<'_> {
             RecoveredWalProductionOwnerOpenV1 {
                 coordinator,
                 verified,
+                recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
                 serve_payloads: recovery.into_serve_payloads(),
                 registry_identity,
                 body_store_identity,
@@ -4365,6 +4273,12 @@ impl ConcreteLifecycleWorkRegistry {
             return Err(RecoveredLifecycleSignBroadcastPreparationErrorV1::InvalidSignCarrier);
         }
         let (projected_key, broadcast) = match &sign.kind {
+            ConcreteLifecycleWorkKind::DurableLiveWalSign(sign)
+                if sign.dispatch_key == Some(key)
+                    && sign.matches_claimed_record(sign_address, digest, coordinator, lease) =>
+            {
+                sign.project_authenticated_signed_broadcast(verified, projection_authority)
+            }
             ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign)
                 if sign.dispatch_key == Some(key)
                     && sign.matches_claimed_record(sign_address, digest, coordinator, lease) =>
@@ -4488,6 +4402,10 @@ impl ConcreteLifecycleWorkRegistry {
             );
         }
         let parent_is_exact = match &sign.kind {
+            ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => {
+                sign.dispatch_key == Some(key)
+                    && sign.matches_claimed_record(sign_address, digest, coordinator, lease)
+            }
             ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign) => {
                 sign.dispatch_key == Some(key)
                     && sign.matches_claimed_record(sign_address, digest, coordinator, lease)
@@ -4511,6 +4429,8 @@ impl ConcreteLifecycleWorkRegistry {
             |_| RecoveredLifecycleSignBroadcastAndSignPreparationErrorV1::InvalidCombinedProjection,
         )?;
         let (projected_key, successor) = match &sign.kind {
+            ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => sign
+                .project_authenticated_signed_broadcast_and_sign(verified, projection_authority),
             ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign) => sign
                 .repair
                 .project_authenticated_signed_broadcast_and_sign(verified, projection_authority),
@@ -4582,6 +4502,9 @@ impl<'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter> {
             .remove(&sign_address)
             .expect("published recovered Broadcast retains its exact Sign carrier");
         let parent = match sign.kind {
+            ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => {
+                DurableRecoveredLifecycleSignParentV1::Live(sign)
+            }
             ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign) => {
                 DurableRecoveredLifecycleSignParentV1::PhaseVote(sign)
             }
@@ -4737,6 +4660,9 @@ impl<'adapter> BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'_, 'adapter
             .remove(&sign_address)
             .expect("published combined successor retains its exact Sign parent");
         let parent = match sign.kind {
+            ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => {
+                DurableRecoveredLifecycleSignParentV1::Live(sign)
+            }
             ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign) => {
                 DurableRecoveredLifecycleSignParentV1::PhaseVote(sign)
             }

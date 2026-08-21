@@ -393,6 +393,11 @@ match (admission, candidate_semantic_identity) {
     (RuntimeCandidateAdmissionDisposition::CoalescedRetry, Some(_)) => {
         let redispatch = if runtime_terminal_incumbent {
             false
+        } else if matches!(
+            fetch_authority_relation,
+            Some(RuntimeFetchAuthorityRelation::Stale)
+        ) {
+            false
         } else {
             Self::candidate_retry_is_redispatched(effect).ok_or_else(|| {
                 EffectExecutorError::Contract(
@@ -412,7 +417,7 @@ match (admission, candidate_semantic_identity) {
         retain_effect.push(true);
     }
 """,
-        "candidate admission must project only 0-to-1, 1-to-1, and 0-to-0 dispositions while runtime-owned terminals stutter",
+        "candidate admission must project only 0-to-1, 1-to-1, and 0-to-0 dispositions while runtime-owned terminals stutter and stale Fetch authority stutters",
         errors,
     )
     _require_rust_token_sequence(
@@ -926,16 +931,14 @@ fn adopt_effect_ownership(
     incoming: &RuntimeEffectOwnership,
 ) -> Result<RuntimeEffectOwnership, String> {
     if !self.retained_owner.validate_exact()
-        || !incoming.validate_bound_exact()
+        || !incoming.validate_exact()
         || !incoming.exactly_binds_adapter_effect(effect)
     {
         return Err(
             "Sumeragi v2 body terminal retry omitted exact effect ownership".to_owned(),
         );
     }
-    let incoming_binding = incoming
-        .binding()
-        .expect("validated terminal retry has one positional binding");
+    let incoming_binding = incoming.binding();
     let retained_statement = self.effective_statement().ok_or_else(|| {
         "Sumeragi v2 body terminal retry omitted its retained authority statement".to_owned()
     })?;
@@ -952,28 +955,17 @@ fn adopt_effect_ownership(
                 .to_owned(),
         );
     }
-
-    let ownership = match incoming.causality() {
-        RuntimeEffectCausality::Inherit => {
-            RuntimeEffectOwnership::inherited(self.retained_owner.clone())
-        }
-        RuntimeEffectCausality::Fresh(kind) => {
-            RuntimeEffectOwnership::fresh(self.retained_owner.clone(), kind)
-        }
-    };
-    let parent = matches!(ownership.causality(), RuntimeEffectCausality::Inherit)
-        .then(|| self.retained_owner.clone());
-    ownership
-        .bind_runtime_effect(
-            parent.as_ref(),
-            production_adapter_effect_kind(effect),
-            &production_adapter_effect_semantic_identity(effect),
-            Some(&candidate),
-            incoming_binding.effect_position,
-            incoming_binding.effect_count,
-            incoming_binding.candidate_position,
-            incoming_binding.candidate_count,
-        )
+    RuntimeEffectOwnership::new_bound(
+        self.retained_owner.clone(),
+        incoming.causality(),
+        production_adapter_effect_kind(effect),
+        &production_adapter_effect_semantic_identity(effect),
+        Some(&candidate),
+        incoming_binding.effect_position,
+        incoming_binding.effect_count,
+        incoming_binding.candidate_position,
+        incoming_binding.candidate_count,
+    )
         .map_err(|_| {
             "Sumeragi v2 body terminal retry could not retain its incumbent owner".to_owned()
         })
@@ -986,7 +978,7 @@ fn adopt_effect_ownership(
             (
                 """
 if !self.retained_owner.validate_exact()
-    || !incoming.validate_bound_exact()
+    || !incoming.validate_exact()
     || !incoming.exactly_binds_adapter_effect(effect)
 {
     return Err(
@@ -994,7 +986,7 @@ if !self.retained_owner.validate_exact()
     );
 }
 """,
-                "body-terminal adoption must validate the incumbent and complete incoming effect binding",
+                "body-terminal adoption must validate the incumbent and mandatory incoming effect binding",
             ),
             (
                 """
@@ -1008,22 +1000,9 @@ let candidate =
             ),
             (
                 """
-let ownership = match incoming.causality() {
-    RuntimeEffectCausality::Inherit => {
-        RuntimeEffectOwnership::inherited(self.retained_owner.clone())
-    }
-    RuntimeEffectCausality::Fresh(kind) => {
-        RuntimeEffectOwnership::fresh(self.retained_owner.clone(), kind)
-    }
-};
-""",
-                "body-terminal adoption must retain the runtime terminal owner for every causality class",
-            ),
-            (
-                """
-ownership
-    .bind_runtime_effect(
-        parent.as_ref(),
+RuntimeEffectOwnership::new_bound(
+        self.retained_owner.clone(),
+        incoming.causality(),
         production_adapter_effect_kind(effect),
         &production_adapter_effect_semantic_identity(effect),
         Some(&candidate),
@@ -1033,7 +1012,7 @@ ownership
         incoming_binding.candidate_count,
     )
 """,
-                "body-terminal adoption must copy only the checked incoming batch positions under the incumbent owner",
+                "body-terminal adoption must atomically bind the checked incoming batch positions under the incumbent owner",
             ),
         ):
             _require_rust_token_sequence(
@@ -2576,9 +2555,7 @@ self.projection_hash
             ownership_statement,
             """
 fn candidate_semantic_statement(&self) -> Option<RuntimeCandidateSemanticStatement> {
-    self.binding
-        .as_ref()
-        .and_then(|binding| binding.candidate_statement)
+    self.binding.candidate_statement
 }
 """,
             "effect ownership must expose exactly the statement frozen in its validated binding",
@@ -2679,10 +2656,9 @@ self.driver.effect_candidate_semantic_binding(
             ),
             (
                 """
-let evidence = evidence.bind_runtime_effect(
-    matches!(causality, RuntimeEffectCausality::Inherit)
-        .then_some(parent)
-        .flatten(),
+let evidence = RuntimeEffectOwnership::new_bound(
+    owner,
+    causality,
     D::effect_refinement_kind(effect),
     &D::effect_semantic_identity(effect),
     candidate.as_ref(),

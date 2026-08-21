@@ -67,23 +67,17 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
         RuntimeStep::Advanced(ref effects)
             if matches!(effects.as_slice(), [AdapterEffect::ValidateBody { .. }])
     ));
-    runtime
-        .enqueue_validation_succeeded(
+    let validation_effects = runtime
+        .driver_mut_for_test()
+        .settle_ready_validate_succeeded_for_runtime_test(
             tag,
             manifest.round,
             manifest.subject,
-            ValidatedBodyReceipt::for_test(durable),
-        )
-        .expect("enqueue validated-body completion");
-    let validation_step = runtime
-        .step(before_timeout)
-        .expect("dispatch validated-body completion");
+            &ValidatedBodyReceipt::for_test(durable),
+        );
     runtime
-        .take_last_scheduler_ownership()
-        .expect("validation macro-step retains exact scheduler ownership");
-    let RuntimeStep::Advanced(validation_effects) = validation_step else {
-        panic!("validation dispatch unexpectedly idled")
-    };
+        .retain_external_lifecycle_effect_ownership_for_test(&validation_effects)
+        .expect("bind the lifecycle-owned Validate successor for runtime ordering");
     let prepare_effect_ownership = runtime
         .take_effect_ownership(validation_effects.len())
         .expect("Prepare signature request retains its lifecycle owner");

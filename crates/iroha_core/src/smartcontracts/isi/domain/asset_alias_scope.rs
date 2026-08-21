@@ -90,3 +90,39 @@ fn ensure_global_asset_definition_home_is_public_or_universal(
     }
     Ok(())
 }
+fn ensure_global_asset_definition_registered_on_authoritative_route(
+    state_transaction: &StateTransaction<'_, '_>,
+    definition: &AssetDefinition,
+) -> Result<(), InstructionExecutionError> {
+    if state_transaction.replay_compatibility {
+        return Ok(());
+    }
+    ensure_global_asset_definition_home_is_public_or_universal(state_transaction, definition)?;
+    let home_dataspace = asset_definition_home_dataspace(state_transaction, definition)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "asset definition {} owning domain has no active dataspace",
+                    definition.id()
+                )
+                .into(),
+            )
+        })?;
+    let route_dataspace = state_transaction
+        .current_dataspace_id
+        .or(state_transaction.world.current_dataspace_id);
+    if let Some(route_dataspace) = route_dataspace
+        && route_dataspace != home_dataspace
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "global asset definition {} must be registered on its authoritative dataspace {}; current route is {}",
+                definition.id(),
+                home_dataspace.as_u64(),
+                route_dataspace.as_u64()
+            )
+            .into(),
+        ));
+    }
+    Ok(())
+}

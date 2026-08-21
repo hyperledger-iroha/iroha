@@ -34,6 +34,7 @@ fn core_host_exports_axt_envelopes_to_state_block() {
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = signed_abi_handle(
         AssetHandle {
+            asset_definition_id: axt_test_asset_definition_id(),
             scope: vec!["transfer".into()],
             subject: HandleSubject {
                 account: authority.to_string(),
@@ -63,7 +64,10 @@ fn core_host_exports_axt_envelopes_to_state_block() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
-            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"),
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
@@ -390,6 +394,7 @@ fn core_host_records_multi_dataspace_envelope() {
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle_a = signed_abi_handle(
         AssetHandle {
+            asset_definition_id: axt_test_asset_definition_id(),
             scope: vec!["transfer".into()],
             subject: HandleSubject {
                 account: authority.to_string(),
@@ -417,6 +422,7 @@ fn core_host_records_multi_dataspace_envelope() {
     );
     let handle_b = signed_abi_handle(
         AssetHandle {
+            asset_definition_id: axt_test_asset_definition_id(),
             scope: vec!["transfer".into()],
             subject: HandleSubject {
                 account: authority.to_string(),
@@ -445,7 +451,10 @@ fn core_host_records_multi_dataspace_envelope() {
     let intent_a = RemoteSpendIntent {
         asset_dsid: dsid_a,
         op: SpendOp {
-            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"),
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
@@ -455,7 +464,10 @@ fn core_host_records_multi_dataspace_envelope() {
     let intent_b = RemoteSpendIntent {
         asset_dsid: dsid_b,
         op: SpendOp {
-            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"),
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_VENDOR_ACCOUNT_LITERAL.into(),
@@ -613,6 +625,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         }],
         handles: vec![ModelAxtHandleFragment {
             handle: ModelAssetHandle {
+                asset_definition_id: axt_test_asset_definition_id(),
                 scope: vec!["transfer".into()],
                 subject: ModelHandleSubject {
                     account: authority.to_string(),
@@ -639,7 +652,11 @@ fn axt_sub_nonce_floor_persists_across_restart() {
             intent: ModelRemoteSpendIntent {
                 asset_dsid: dsid,
                 op: ModelSpendOp {
-                    asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"),
+                    asset_definition_id:
+                        iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                        ])
+                        .expect("valid AXT fixture asset id"),
                     kind: "transfer".into(),
                     from: authority.to_string(),
                     to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
@@ -688,6 +705,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch");
     let stale_handle = AssetHandle {
+        asset_definition_id: axt_test_asset_definition_id(),
         scope: vec!["transfer".into()],
         subject: HandleSubject {
             account: authority.to_string(),
@@ -714,7 +732,10 @@ fn axt_sub_nonce_floor_persists_across_restart() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
-            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"),
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),

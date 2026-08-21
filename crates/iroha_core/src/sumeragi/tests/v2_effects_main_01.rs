@@ -145,144 +145,6 @@ fn manifest_for_payload(fixture: &Fixture, label: &'static [u8]) -> wire::Payloa
     };
     canonical_payload_manifest(&fixture.context, fixture.manifest.round, subject, &body)
 }
-fn pending_merge_validation(
-    fixture: &Fixture,
-) -> (
-    PendingValidation,
-    CertifiedMergeLedgerReference,
-    HashOf<MergeLedgerEntry>,
-) {
-    let parent_hash = HashOf::from_untyped_unchecked(Hash::new(b"merge carrier parent"));
-    let round = round(&fixture.context, 3);
-    let subject = wire::BlockSubject {
-        parent_block_hash: Some(parent_hash),
-        ..fixture.manifest.subject
-    };
-    let manifest = canonical_payload_manifest(&fixture.context, round, subject, &fixture.body);
-    let durable_receipt =
-        DurableBodyReceipt::for_test(fixture.context.id(), round, subject, HashOf::new(&manifest));
-    let task = BodyValidationTask::for_test(77, durable_receipt);
-    let ownership = task.ownership().clone();
-    let entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"certified merge entry"));
-    let reference = CertifiedMergeLedgerReference {
-        version: 1,
-        entry_hash,
-        encoded_len: 512,
-        epoch_id: 9,
-        execution_batch_hash: None,
-        entrypoint_count: None,
-        entrypoint_merkle_root: None,
-        result_merkle_root: None,
-        base_state_height: None,
-        base_state_hash: None,
-        merge_qc: MergeQuorumCertificate::new(
-            round.view,
-            9,
-            round.height,
-            parent_hash,
-            fixture.context.network_id,
-            1,
-            HashOf::new(&Vec::<PeerId>::new()),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Hash::new(b"merge certificate message"),
-        ),
-    };
-    (
-        PendingValidation {
-            task,
-            consumer: Some(ValidationConsumer::Reducer {
-                tag: tag(3),
-                ownership,
-            }),
-        },
-        reference,
-        entry_hash,
-    )
-}
-fn begin_reachable_merge_validation(
-    fixture: &Fixture,
-    executor: &mut V2EffectExecutor<FakeRuntime>,
-    services: &mut FakeServices,
-    round: wire::ConsensusRound,
-    subject: wire::BlockSubject,
-) -> BodyValidationTask {
-    let manifest = canonical_payload_manifest(&fixture.context, round, subject, &fixture.body);
-    let durable =
-        DurableBodyReceipt::for_test(fixture.context.id(), round, subject, HashOf::new(&manifest));
-    let key = (round, subject);
-    executor
-        .recovered_bodies
-        .insert(key, (manifest.clone(), durable.clone()));
-    executor.durable_bodies.insert(key, durable.clone());
-    executor
-        .bind_body_pipeline_owner(tag(round.view), &manifest)
-        .expect("bind the exact production validation owner");
-    executor
-        .begin_validation(
-            round,
-            subject,
-            durable,
-            ValidationConsumer::Reducer {
-                tag: tag(round.view),
-                ownership: RuntimeEffectOwnership::fresh_for_test(
-                    tag(round.view),
-                    u128::from(round.view),
-                ),
-            },
-            services,
-        )
-        .expect("start validation through the production admission path");
-    services
-        .validation_tasks
-        .last()
-        .expect("production validation task")
-        .clone()
-}
-fn complete_local_proposal_chain(
-    executor: &mut V2EffectExecutor<FakeRuntime>,
-    services: &mut FakeServices,
-) {
-    let store_id = services.store_tasks.last().expect("local store task").id();
-    let store_completion = services.execute_store(store_id);
-    executor
-        .complete_body_store(store_completion, services)
-        .expect("local durable store completion");
-    let validation_id = services
-        .validation_tasks
-        .last()
-        .expect("local validation task")
-        .id();
-    let validation_completion = services.execute_validation(validation_id);
-    executor
-        .complete_body_validation(validation_completion, services)
-        .expect("local validation completion");
-}
-fn persist_fsynced_validation_marker(
-    executor: &mut V2EffectExecutor<FakeRuntime>,
-    services: &mut FakeServices,
-    fixture: &Fixture,
-    manifest: wire::PayloadManifest,
-) {
-    executor
-        .admit_local_proposal(
-            tag(manifest.round.view),
-            manifest,
-            fixture.body.clone(),
-            services,
-        )
-        .expect("admit exact body before vote signing");
-    complete_local_proposal_chain(executor, services);
-    // The helper's purpose is only to cross the real body/marker fsync
-    // boundary. Keep each caller's assertions focused on the subsequent
-    // signature operation.
-    executor.runtime.completions.clear();
-    services.store_tasks.clear();
-    services.validation_tasks.clear();
-    services.statuses.clear();
-}
 #[test]
 fn queue_configuration_rejects_zero_and_pending_capacity_retains_causal_tail() {
     let fixture = Fixture::new();
@@ -299,7 +161,7 @@ fn queue_configuration_rejects_zero_and_pending_capacity_retains_causal_tail() {
     ));
     let mut executor = fixture.executor(EffectQueueConfig::new(1, 1, 1_048_576, 1));
     let mut services = fixture.services();
-    persist_fsynced_validation_marker(
+    install_fsynced_validation_fixture(
         &mut executor,
         &mut services,
         &fixture,
@@ -715,6 +577,300 @@ fn full_capacity_certified_fetch_retains_its_exact_owner_until_capacity_releases
     assert_eq!(admitted_b.task.ownership(), &retained_ownership);
     assert!(executor.retained_effect_batch.is_none());
     assert!(!executor.status().fail_closed);
+}
+#[test]
+#[allow(clippy::too_many_lines)]
+fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
+    let mut fixture = ProductionTransportFixture::new();
+    fixture.executor.config = EffectQueueConfig::new(2, 4, 1 << 20, 1);
+    fixture.executor.outstanding_requests =
+        OutstandingCertifiedBodyRequests::new(1).expect("one certified-request slot");
+    fixture.executor.recovered_bodies.clear();
+    let mut services = FakeServices {
+        requester_key: Some(fixture.requester_key.clone()),
+        ..FakeServices::default()
+    };
+    let prepare_a =
+        fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment);
+    let fetch_a = AdapterEffect::FetchBody {
+        tag: fixture.executor.current_tag(),
+        round: fixture.round,
+        subject: fixture.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: fixture.certified_sources(&prepare_a),
+        certificate: Some(prepare_a),
+    };
+    fixture
+        .executor
+        .consume_effects(vec![fetch_a], &mut services)
+        .expect("A occupies the sole certified-request slot");
+    let task_a = services.fetch_tasks[0].clone();
+    let request_hash_a = HashOf::new(
+        task_a
+            .certified_request()
+            .expect("A owns its exact signed request"),
+    );
+
+    let round_b = round(&fixture.context, 1);
+    let body_b = b"production-saturation deferred certified body B".to_vec();
+    let subject_b = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(
+            b"production-saturation deferred certified block B",
+        )),
+        payload_hash: Hash::new(&body_b),
+    };
+    let manifest_b = canonical_payload_manifest(&fixture.context, round_b, subject_b, &body_b);
+    let durable_b = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        round_b,
+        subject_b,
+        HashOf::new(&manifest_b),
+    );
+    let commitment_b = ValidatedBodyReceipt::for_test(durable_b).execution_commitment();
+    let prepare_b = fixture.quorum_certificate_for(
+        round_b,
+        subject_b,
+        wire::GlobalPhase::Prepare,
+        commitment_b,
+    );
+    let fetch_b = AdapterEffect::FetchBody {
+        tag: EventTag::new(
+            fixture.context.height,
+            round_b.view,
+            fixture.executor.current_tag().generation(),
+        ),
+        round: round_b,
+        subject: subject_b,
+        manifest: Some(manifest_b),
+        certified_sources: fixture.certified_sources(&prepare_b),
+        certificate: Some(prepare_b),
+    };
+    let next_work_id_before_b = fixture.executor.next_work_id;
+    assert_eq!(
+        fixture
+            .executor
+            .consume_effects(vec![fetch_b], &mut services)
+            .expect("request-saturated Fetch B retains its exact owner"),
+        0,
+    );
+    assert_eq!(fixture.executor.pending_fetches.len(), 1);
+    assert_eq!(fixture.executor.outstanding_requests.len(), 1);
+    assert!(
+        fixture
+            .executor
+            .certified_work
+            .contains_key(&request_hash_a)
+    );
+    assert!(fixture.executor.retained_effect_batch.is_some());
+    assert!(
+        !fixture
+            .executor
+            .body_pipeline_owners
+            .contains_key(&(round_b, subject_b)),
+        "B cannot gain partial pipeline ownership while its request is parked",
+    );
+
+    let initial_queues = fixture.executor.status().runtime_queues;
+    for ordinal in 0..initial_queues.normal.capacity {
+        let message = fixture
+            .signed_normal_proposal(u64::try_from(ordinal).expect("normal saturation ordinal"));
+        assert!(fixture.executor.can_admit_network_message(&message));
+        fixture
+            .executor
+            .enqueue_network(message)
+            .expect("admit production Normal ingress");
+    }
+    let progress_reserve = initial_queues
+        .progress
+        .capacity
+        .checked_sub(initial_queues.normal.capacity)
+        .expect("production Progress reserve");
+    for offset in 0..progress_reserve {
+        let view = 10_000_u64
+            .checked_add(u64::try_from(offset).expect("progress saturation offset"))
+            .expect("progress saturation view");
+        let message = fixture.signed_timeout_vote(view);
+        assert!(fixture.executor.can_admit_network_message(&message));
+        fixture
+            .executor
+            .enqueue_network(message)
+            .expect("admit production Progress ingress");
+    }
+    let saturated_status = fixture.executor.status();
+    assert_eq!(
+        saturated_status.runtime_queues.normal.depth,
+        initial_queues.normal.capacity,
+    );
+    assert_eq!(
+        saturated_status.runtime_queues.progress.depth,
+        progress_reserve,
+    );
+    assert_eq!(saturated_status.runtime_queues.completion.depth, 0);
+    let saturated_runtime_queues = saturated_status.runtime_queues;
+    let saturated_queued_commands = saturated_status.queued_runtime_completions;
+    let saturated_completion_capacity = fixture.executor.remaining_completion_capacity();
+
+    let mut response_a = wire::CertifiedBodyResponse {
+        request_hash: request_hash_a,
+        manifest: fixture.manifest.clone(),
+        body: fixture.body.clone(),
+        responder: 0,
+        signature: Vec::new(),
+    };
+    response_a.signature = Signature::new(
+        fixture.validator_keys[0].private_key(),
+        &response_a.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let ingress =
+        crate::sumeragi::FairV2Ingress::new(32, 5 * 512 * 1024, 512 * 1024, 0, 512 * 1024);
+    ingress
+        .configure_roster(
+            fixture
+                .context
+                .roster
+                .iter()
+                .map(|power| power.validator.clone()),
+        )
+        .expect("fixture roster fits the response ingress");
+    ingress.state.lock().leader_wire_context = Some((fixture.context.id(), fixture.context.height));
+    ingress.open().expect("open response ingress");
+    let response_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response_a),
+    ));
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            response_message,
+            fixture.context.roster[0].validator.clone(),
+        )),
+        Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let response_ordinal = ingress.state.lock().last_admission_ordinal;
+    let prepared = fixture
+        .executor
+        .prepare_lifecycle_ingress_selector(&ingress, response_ordinal)
+        .expect("the exact A response crosses authenticated selector capture");
+    let effect_a = task_a.adapter_effect();
+    let pending_a = task_a
+        .ownership()
+        .exact_pending_adapter_effect_binding(&effect_a)
+        .expect("A retains its exact ordinal-free Fetch binding");
+    let proofs = fixture
+        .validator_keys
+        .iter()
+        .map(|key| {
+            iroha_crypto::bls_normal_pop_prove(key.private_key())
+                .expect("validator proof of possession")
+        })
+        .collect::<Vec<_>>();
+    let verified = VerifiedHeightContext::genesis(fixture.context.clone(), proofs)
+        .expect("verified lifecycle owner context");
+    let owner_directory = TempDir::new().expect("temporary lifecycle owner storage");
+    let (mut owner, lifecycle_ordinal, lifecycle_source) =
+        crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::waiting_fetch_for_ingress_test(
+            verified,
+            &prepared,
+            effect_a,
+            pending_a,
+            &fixture.validator_keys[0],
+            owner_directory.path(),
+        );
+    let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
+    let mut planner_io = owner.bind_body_store_to_planner_io_for_test(
+        &mut production_services,
+        Arc::clone(&fixture.executor.output_guard),
+        1,
+    );
+    planner_io.install_output_guard_for_test(
+        &mut production_services,
+        Arc::clone(&fixture.executor.output_guard),
+    );
+    V2EffectServices::enqueue_body_fetch(&mut production_services, task_a.clone())
+        .expect("install A's exact certified-Fetch service owner");
+    let planned = owner.plan_ingress_turn_for_test(
+        &production_services,
+        &fixture.executor,
+        fixture.executor.lifecycle_mode_rank_snapshot(),
+        prepared,
+        crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context),
+    );
+    let queued = match planned {
+        Ok(ProductionIngressTurnPreparation::Queued(queued)) => queued,
+        Ok(ProductionIngressTurnPreparation::CapacityWait(_)) => {
+            panic!("completion capacity must not depend on saturated Normal/Progress lanes")
+        }
+        Err(_) => panic!("the exact A response must publish one Fetch persistence command"),
+    };
+    assert_eq!(queued.ordinal(), lifecycle_ordinal);
+    planner_io.execute_one_certified_fetch(Arc::clone(&fixture.executor.output_guard));
+    let completion = match production_services
+        .take_next_lifecycle_completion()
+        .expect("the persisted A response retains its physical completion owner")
+    {
+        crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::CertifiedFetch(completion) => {
+            completion
+        }
+        _ => panic!("the persisted A response must classify as CertifiedFetch"),
+    };
+    owner
+        .complete_certified_fetch_for_test(
+            &mut fixture.executor,
+            &mut production_services,
+            &ingress,
+            completion,
+        )
+        .unwrap_or_else(|_| panic!("A must publish Ready and retire its physical response"));
+    assert!(matches!(
+        owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
+        (Some(LifecycleState::Ready), Some(1), None, false)
+    ));
+    assert!(fixture.executor.pending_fetches.is_empty());
+    assert!(fixture.executor.certified_work.is_empty());
+    assert!(fixture.executor.outstanding_requests.is_empty());
+    assert_eq!(ingress.len(), 0);
+    let post_completion_status = fixture.executor.status();
+    assert_eq!(
+        post_completion_status.runtime_queues,
+        saturated_runtime_queues
+    );
+    assert_eq!(
+        post_completion_status.queued_runtime_completions,
+        saturated_queued_commands,
+    );
+    assert_eq!(
+        fixture.executor.remaining_completion_capacity(),
+        saturated_completion_capacity,
+        "lifecycle persistence must not mint a runtime BodyAvailable reservation",
+    );
+
+    assert_eq!(
+        fixture
+            .executor
+            .step(Instant::now(), &mut services)
+            .expect("released request capacity drains the retained Fetch B"),
+        EffectExecutorStep::Advanced { effects: 1 }
+    );
+    let task_b = services
+        .fetch_tasks
+        .last()
+        .expect("B acquires a Fetch owner");
+    assert_eq!(task_b.round, round_b);
+    assert_eq!(task_b.subject, subject_b);
+    assert_eq!(
+        fixture.executor.next_work_id,
+        next_work_id_before_b
+            .checked_add(1)
+            .expect("B advances the work ID exactly once"),
+    );
+    assert_eq!(fixture.executor.pending_fetches.len(), 1);
+    assert_eq!(fixture.executor.outstanding_requests.len(), 1);
+    assert_eq!(fixture.executor.certified_work.len(), 1);
+    assert!(fixture.executor.retained_effect_batch.is_none());
+    assert!(!fixture.executor.output_guard.restart_required());
+    assert!(!fixture.executor.status().fail_closed);
+    planner_io.detach(&mut production_services);
 }
 #[test]
 fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owner() {

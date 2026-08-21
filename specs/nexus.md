@@ -229,7 +229,7 @@ Smart Contracts and IVM Extensions
   - `amx_begin()` / `amx_commit()` demarcate an atomic multi‑DS transaction in the IVM host.
   - `amx_touch(dsid, key)` declares read/write intent for conflict detection against slot snapshot roots.
   - `verify_space_proof(dsid, proof, statement)` → bool
-  - `use_asset_handle(handle, op, amount)` → result (operation permitted only if policy allows and handle is valid)
+  - `use_asset_handle(handle, op, amount)` → result (operation permitted only when policy accepts the handle and the operation names the exact asset definition authenticated by the handle's issuer signature)
 - Asset Handles and Fees:
   - Asset operations are authorized by the DS’s ISI/role policies; fees are paid in the DS’s gas token. Optional capability tokens and richer policy (multi‑approver, rate‑limits, geofencing) can be added later without changing the atomic model.
 - Determinism: All syscalls are pure and deterministic given inputs and declared AMX read/write sets. No hidden time or environment effects.

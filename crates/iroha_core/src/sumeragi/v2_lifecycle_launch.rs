@@ -67,7 +67,9 @@ use crate::{
         serviced_candidate_store::{LeaderWireLifecycleRestore, LeaderWireLifecycleStoreGate},
         v2_apply::RecoveredDecisionApplyWorkerResultV1,
         v2_context::AuthenticatedGenesisBodyV1,
-        v2_effects::{EffectQueueConfig, PostFinalityCleanupOutcome, V2EffectExecutor},
+        v2_effects::{
+            EffectExecutorError, EffectQueueConfig, PostFinalityCleanupOutcome, V2EffectExecutor,
+        },
         v2_lane_work::{
             MergeSidecarDeferralDisposition, RetainedMergeSidecars, V2LaneWorkAdapter,
             V2LaneWorkError,
@@ -1535,6 +1537,37 @@ pub(in crate::sumeragi) enum ProductionLifecycleLaunchErrorV1 {
     #[error("launched lifecycle stack lost exact process ownership")]
     OwnershipMismatch,
 }
+
+/// Settle at most one owner-held cold output through the live guarded service.
+///
+/// A structural or LedgerV1 publication failure closes output admission for
+/// restart. Service failures are already closed by the executor bridge.
+pub(in crate::sumeragi) fn settle_one_recovered_lifecycle_output(
+    owner: &mut ProductionLifecycleOwnerV1,
+    executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+    services: &mut ProductionV2Services,
+) -> Result<super::RecoveredLifecycleOutputSettlementV1, EffectExecutorError> {
+    match owner.settle_next_recovered_lifecycle_output(|effect| {
+        executor.execute_recovered_lifecycle_output_service(effect, services)
+    }) {
+        Ok(settlement) => Ok(settlement),
+        Err(super::open::RecoveredLifecycleOutputSettlementErrorV1::Service(error)) => Err(error),
+        Err(super::open::RecoveredLifecycleOutputSettlementErrorV1::InvalidAuthority(reason)) => {
+            services
+                .lifecycle_output_guard()
+                .close_admission_for_restart();
+            Err(EffectExecutorError::Contract(reason.to_owned()))
+        }
+        Err(super::open::RecoveredLifecycleOutputSettlementErrorV1::Durability) => {
+            services
+                .lifecycle_output_guard()
+                .close_admission_for_restart();
+            Err(EffectExecutorError::Contract(
+                "recovered lifecycle output terminal publication failed".to_owned(),
+            ))
+        }
+    }
+}
 /// Fail-stop failure while crossing the one-shot live-height boundary.
 #[derive(Debug, Error)]
 #[must_use = "failed lifecycle activation requires process restart"]
@@ -1994,9 +2027,37 @@ impl LaunchedProductionLifecycleV1 {
             launched: self,
         })
     }
+
+    fn ready_for_finalized_rollover(&mut self) -> bool {
+        self.executor.ready_to_finish()
+            && !self.owner.has_recovered_lifecycle_outputs()
+            && self.pending_kura_apply_replay.is_none()
+            && self.recovered_local_proposal_attempt.is_none()
+            && self.pending_lifecycle_completion.is_none()
+            && self.pending_ingress_capacity.is_none()
+            && self.completion_observer_activation.is_none()
+            && self
+                .owner
+                .registry
+                .registry_mut()
+                .exactly_covers_finalization_work(&self.owner.coordinator)
+    }
 }
 
 impl ActivatedProductionLifecycleV1 {
+    /// Return whether every executor and lifecycle owner can cross final rollover now.
+    ///
+    /// Keeping this predicate shared with the consuming transition lets the
+    /// active runner stutter through another Completion turn while authenticated
+    /// lifecycle work remains schedulable, without weakening the finalizer's
+    /// fail-closed check.
+    pub(in crate::sumeragi) fn ready_for_finalized_rollover(
+        &mut self,
+        _runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+    ) -> bool {
+        self.launched.ready_for_finalized_rollover()
+    }
+
     /// Consume an active, possibly non-final height for orderly operator exit.
     ///
     /// Durable WAL, body, and lifecycle rows remain untouched for cold replay.
@@ -2034,19 +2095,7 @@ impl ActivatedProductionLifecycleV1 {
         _runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
     ) -> Result<FinalizedProductionLifecycleRolloverV1, ProductionLifecycleFinalizationErrorV1>
     {
-        if !self.launched.executor.ready_to_finish()
-            || self.launched.pending_kura_apply_replay.is_some()
-            || self.launched.recovered_local_proposal_attempt.is_some()
-            || self.launched.pending_lifecycle_completion.is_some()
-            || self.launched.pending_ingress_capacity.is_some()
-            || self.launched.completion_observer_activation.is_some()
-            || !self
-                .launched
-                .owner
-                .registry
-                .registry_mut()
-                .exactly_covers_finalization_work(&self.launched.owner.coordinator)
-        {
+        if !self.launched.ready_for_finalized_rollover() {
             return Err(ProductionLifecycleFinalizationErrorV1::NotReady);
         }
 
@@ -2297,6 +2346,7 @@ impl ProductionLifecyclePostOutputHandoffV1 {
             verified,
             coordinator,
             registry,
+            recovered_lifecycle_outputs,
             mut payload_store,
             serve_payloads,
             body_store,
@@ -2306,6 +2356,12 @@ impl ProductionLifecyclePostOutputHandoffV1 {
             adapter_startup,
             timeout_supersession_successor: _,
         } = owner;
+        debug_assert!(
+            recovered_lifecycle_outputs
+                .as_ref()
+                .is_none_or(super::open::PreparedLifecycleOutputRecoveryV1::is_empty)
+        );
+        drop(recovered_lifecycle_outputs);
         let kura_binding = kura_binding.ok_or_else(|| {
             ProductionLifecycleFinalizationErrorV1::RetirementCensus(
                 "finalized lifecycle owner lost its recovered Kura binding".to_owned(),
@@ -2432,11 +2488,20 @@ impl ProductionLifecycleOwnerV1 {
         {
             return Err(ProductionLifecycleLaunchErrorV1::InvalidOwner);
         }
+        let Some(owner_held_outputs) = self.exact_lifecycle_output_ordinals_for_registry_census()
+        else {
+            return Err(ProductionLifecycleLaunchErrorV1::InvalidOwner);
+        };
         if {
             let registry = self.registry.registry_mut();
-            !registry.exactly_covers_recovered_ready_work(&self.coordinator)
-                && !registry
-                    .exactly_covers_recovered_ready_work_and_wal_authority(&self.coordinator)
+            !registry.exactly_covers_recovered_ready_work_with_owner_held_outputs(
+                &self.coordinator,
+                &owner_held_outputs,
+            ) && !registry
+                .exactly_covers_recovered_ready_work_and_wal_authority_with_owner_held_outputs(
+                    &self.coordinator,
+                    &owner_held_outputs,
+                )
         } {
             return Err(ProductionLifecycleLaunchErrorV1::InvalidOwner);
         }
@@ -2525,7 +2590,7 @@ impl ProductionLifecycleOwnerV1 {
         .map_err(ProductionLifecycleLaunchErrorV1::Executor)?;
         if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref() {
             executor
-                .install_authenticated_genesis_body(authenticated_genesis.signed_block())
+                .install_authenticated_genesis_body(authenticated_genesis)
                 .map_err(ProductionLifecycleLaunchErrorV1::Executor)?;
         }
         if !body_store
@@ -2543,7 +2608,7 @@ impl ProductionLifecycleOwnerV1 {
                 )
             })?
             .decided_subject();
-        let services = ProductionV2Services::start_with_apply_service(
+        let mut services = ProductionV2Services::start_with_apply_service(
             super::ProductionLifecycleApplyServiceLaunchPermitV1 {
                 _seal: super::ProductionLifecycleApplyServiceLaunchPermitSealV1,
             },
@@ -2576,6 +2641,16 @@ impl ProductionLifecycleOwnerV1 {
             || !services.matches_lifecycle_payload_store(&payload_store_identity)
         {
             return Err(ProductionLifecycleLaunchErrorV1::OwnershipMismatch);
+        }
+        loop {
+            match settle_one_recovered_lifecycle_output(&mut self, &mut executor, &mut services)
+                .map_err(ProductionLifecycleLaunchErrorV1::Executor)?
+            {
+                super::RecoveredLifecycleOutputSettlementV1::Completed => {}
+                super::RecoveredLifecycleOutputSettlementV1::Empty
+                | super::RecoveredLifecycleOutputSettlementV1::Deferred
+                | super::RecoveredLifecycleOutputSettlementV1::SourceRetained => break,
+            }
         }
         self.body_store_identity = Some(body_store_identity);
         construction.complete();

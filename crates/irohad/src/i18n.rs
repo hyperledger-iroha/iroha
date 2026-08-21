@@ -1,5 +1,5 @@
-use std::sync::OnceLock;
 use iroha_i18n::{self, Bundle, Language, Localizer};
+use std::sync::OnceLock;
 static LOCALIZER: OnceLock<Localizer> = OnceLock::new();
 /// Detect the language, inspecting overrides and environment variables.
 pub fn detect_language(lang_override: Option<&str>) -> Language {

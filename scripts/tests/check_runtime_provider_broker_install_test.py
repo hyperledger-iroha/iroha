@@ -28,12 +28,6 @@ ASSET_ROOT = REPO_ROOT / "configs" / "sorafs" / "runtime_provider_broker"
 SYSTEMD_UNIT = (
     ASSET_ROOT / "systemd" / "iroha-runtime-provider-broker-v1.service"
 )
-TAIRA_DROP_IN = (
-    ASSET_ROOT
-    / "systemd"
-    / "taira-irohad.service.d"
-    / "20-runtime-provider-broker-v1.conf"
-)
 GOVERNANCE_DROP_IN = (
     ASSET_ROOT
     / "systemd"
@@ -387,7 +381,7 @@ class RuntimeProviderBrokerInstallCheckerTests(unittest.TestCase):
             self.validate(layout)
 
         layout = self.install_valid_layout("linux")
-        installed_asset, _ = layout.consumer_assets[1]
+        installed_asset, _ = layout.consumer_assets[0]
         installed = checker._under_root(self.install_root, installed_asset)
         installed.chmod(0o644)
         with self.assertRaisesRegex(checker.InstallCheckError, "unsafe mode bits"):
@@ -526,7 +520,6 @@ class RuntimeProviderBrokerSupervisorAssetTests(unittest.TestCase):
             "Group=iroha\n"
             "ReadOnlyPaths=/run/iroha-runtime-provider-broker-v1\n"
         )
-        self.assertEqual(TAIRA_DROP_IN.read_text(encoding="utf-8"), expected)
         self.assertEqual(GOVERNANCE_DROP_IN.read_text(encoding="utf-8"), expected)
 
     def test_launchd_plist_has_fixed_public_only_arguments(self) -> None:
@@ -562,7 +555,7 @@ class RuntimeProviderBrokerSupervisorAssetTests(unittest.TestCase):
         )
         self.assertIn("deployment-owned", docs)
         self.assertIn(
-            "Both checked-in Linux consumer dependencies are mandatory", docs
+            "The checked-in Linux Governance DAG consumer dependency is mandatory", docs
         )
         self.assertIn("externally verified signed release provenance", docs)
         self.assertIn("Windows has no V1 authenticated runtime-provider transport", docs)

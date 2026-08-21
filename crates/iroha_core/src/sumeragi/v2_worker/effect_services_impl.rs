@@ -83,7 +83,6 @@ impl V2EffectServices for ProductionV2Services {
         self.proposal_work_retired = true;
         self.locked_candidate_acquisition = None;
         self.prepared_candidates.clear();
-        self.validation_rejections.clear();
         self.merge_sidecar_deferrals.retain(|deferred| {
             deferred.round() == decision_round && deferred.subject() == decision_subject
         });
@@ -527,13 +526,6 @@ impl V2EffectServices for ProductionV2Services {
     fn cancel_body_store(&mut self, work_id: EffectWorkId) -> Result<bool, Self::Error> {
         self.io()?.cancel(work_id, V2IoCancellableKind::Store)
     }
-    fn enqueue_body_validation(&mut self, task: BodyValidationTask) -> Result<(), Self::Error> {
-        self.enqueue_fail_stop_io(V2IoCommand::Validate(task))
-    }
-    fn cancel_body_validation(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
-        self.io()?.cancel(work_id, V2IoCancellableKind::Validate)?;
-        Ok(())
-    }
     fn work_deferred_for_merge_sidecar(
         &mut self,
         work_id: EffectWorkId,
@@ -628,30 +620,6 @@ impl V2EffectServices for ProductionV2Services {
             "invalid body certified by Sumeragi v2 PrepareQC"
         );
         Ok(())
-    }
-    fn validation_rejected(
-        &mut self,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        reason: &str,
-    ) {
-        let output_guard = Arc::clone(&self.output_guard);
-        let Some(_permit) = output_guard.acquire() else {
-            return;
-        };
-        if self.validation_rejections.len() < self.max_orphan_chunks {
-            self.validation_rejections.push_back(RejectedCandidateBody {
-                round,
-                subject,
-                reason: reason.to_owned(),
-            });
-        }
-        iroha_logger::warn!(
-            ?round,
-            ?subject,
-            reason,
-            "Sumeragi v2 proposal validation rejected"
-        );
     }
     fn publish_effect_status(&mut self, status: &EffectExecutorStatus) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);

@@ -25,7 +25,7 @@ REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE = Path(
     "scripts/formal/sumeragi_v2_proof_ledger_source_seal_contracts.py"
 )
 REVIEWED_RUST_INCLUDE_MANIFEST_SHA256 = (
-    "efe1f1598aff2fe7d27c9f9149de36561ee0b686dba8b21118ff1031fe6a9f5d"
+    "57f78fbce0ece469dd6c7c821ebb727d5df0d14773dd497c2820452c335dd213"
 )
 API_AUTHORITY_SEPARATION_SOURCE_CHECKS = (
     (
@@ -154,7 +154,7 @@ FIXTURE_CANONICAL_OWNER_SOURCE_CHECKS = (
         "scripts/write_sumeragi_v2_release_receipt.py",
         (
             '"write_sumeragi_v2_release_receipt_gate_evidence.py": (',
-            "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5",
+            "0654dc5ac1f8235bc66df852947003054d4d17658703ffe72a38be3be352441b",
             '_SDK_SOURCE_CLOSURE_RESOLVER = "ci/'
             'resolve_sumeragi_v2_sdk_source_closure.py"',
             '_SDK_SOURCE_CLOSURE_MANIFEST = "ci/'
@@ -192,12 +192,9 @@ FIXTURE_CANONICAL_OWNER_SOURCE_CHECKS = (
             'bash "$grouped_parity_harness" --suite-source-manifest-sha256',
             'symbols["_sdk_suite_source_manifest"](',
             'symbols["_NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE"]',
-            '|| "$resolver_grouped_suite_source_manifest_sha256"',
-            '|| "$receipt_suite_source_manifest_sha256"',
             '!= "$grouped_suite_source_manifest_sha256"',
-            "grouped Native AMX V2 fixture/resolver/receipt source binding is invalid",
-            "must derive SDK suite-source digests at freeze/replay instead of "
-            "embedding mutable values",
+            "grouped Native AMX V2 fixture/suite source binding is invalid",
+            "grouped Native AMX V2 suite-source manifest SHA-256",
         ),
     ),
 )

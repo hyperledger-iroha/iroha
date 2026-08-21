@@ -53,7 +53,7 @@ const CREDENTIAL_FILE_MODE_V1: u32 = 0o400;
 const MAX_CREDENTIAL_PATH_COMPONENTS_V1: usize = 64;
 #[cfg(target_os = "linux")]
 const SYSTEMD_CREDENTIAL_DIRECTORY_V1: &str =
-    "/run/credentials/taira-bootle-lantern-broker.service";
+    "/run/credentials/iroha-privacy-runtime-broker.service";
 const PARAMETER_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.issuer-parameter-id.v1";
 const PRINCIPAL_DIGEST_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.stable-principal.v1";
 const BEARER_TOKEN_DIGEST_DOMAIN_V1: &[u8] =
@@ -1588,11 +1588,8 @@ mod tests {
         );
         let mut final_config = public_config_v1();
         final_config.network_id = network_id_v1(b"final-signed-genesis-header");
-        let final_network = backend_with_config_and_seed_v1(
-            final_config,
-            issuer_seed_v1(),
-            bearer_token_v1(),
-        );
+        let final_network =
+            backend_with_config_and_seed_v1(final_config, issuer_seed_v1(), bearer_token_v1());
 
         assert_eq!(
             staging.policy(),

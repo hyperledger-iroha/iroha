@@ -431,6 +431,14 @@ impl ConcreteLifecycleWorkRegistry {
             ));
         }
         let (carrier_matches, dispatch_key) = match (&work.kind, class) {
+            (ConcreteLifecycleWorkKind::DurableLiveWalSign(sign), class)
+                if sign.class() == Some(class) =>
+            {
+                (
+                    sign.matches_current_ready_record(address, digest, coordinator),
+                    sign.dispatch_key,
+                )
+            }
             (
                 ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign),
                 RecoveredLifecycleSignClassV1::PhaseVote,
@@ -537,6 +545,20 @@ impl ConcreteLifecycleWorkRegistry {
             class,
         );
         let (carrier, task) = match (&mut work.kind, class) {
+            (ConcreteLifecycleWorkKind::DurableLiveWalSign(sign), class)
+                if sign.class() == Some(class) =>
+            {
+                if !sign.matches_claimed_record(address, digest, coordinator, lease) {
+                    return Err(RecoveredLifecycleSignDispatchProjectionErrorV1::InvalidCarrier);
+                }
+                if sign.dispatch_key.is_some() {
+                    return Err(RecoveredLifecycleSignDispatchProjectionErrorV1::AlreadyDispatched);
+                }
+                let task = sign
+                    .project_task(identity)
+                    .ok_or(RecoveredLifecycleSignDispatchProjectionErrorV1::InvalidCarrier)?;
+                (PreparedRecoveredLifecycleSignCarrier::Live(sign), task)
+            }
             (
                 ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign),
                 RecoveredLifecycleSignClassV1::PhaseVote,
@@ -1757,9 +1779,10 @@ impl ConcreteLifecycleWorkRegistry {
         &mut self,
         batch: PreparedCertifiedServeRegistryBatchV1,
         coordinator: &LifecycleCoordinator,
+        owner_held_outputs: &std::collections::BTreeSet<u128>,
         publish: impl FnOnce() -> Result<T, E>,
     ) -> Result<T, CertifiedServeRegistryBatchPublicationError<E>> {
-        if !batch.preflights_startup_registry(self, coordinator) {
+        if !batch.preflights_startup_registry(self, coordinator, owner_held_outputs) {
             return Err(CertifiedServeRegistryBatchPublicationError::Preflight(
                 batch,
             ));
@@ -2223,15 +2246,31 @@ impl ConcreteLifecycleWorkRegistry {
         &self,
         coordinator: &LifecycleCoordinator,
     ) -> bool {
-        self.exactly_covers_recovered_ready_body_pipeline_with_extra(
+        let owner_held_outputs =
+            Self::owner_held_output_ordinals(coordinator, RecoveredWalRegistrySlotV1::None);
+        self.exactly_covers_recovered_ready_body_pipeline_with_extra_and_outputs(
             coordinator,
             RecoveredWalRegistrySlotV1::None,
+            &owner_held_outputs,
         )
     }
     fn exactly_covers_recovered_ready_body_pipeline_with_extra(
         &self,
         coordinator: &LifecycleCoordinator,
         extra: RecoveredWalRegistrySlotV1,
+    ) -> bool {
+        let owner_held_outputs = Self::owner_held_output_ordinals(coordinator, extra);
+        self.exactly_covers_recovered_ready_body_pipeline_with_extra_and_outputs(
+            coordinator,
+            extra,
+            &owner_held_outputs,
+        )
+    }
+    fn exactly_covers_recovered_ready_body_pipeline_with_extra_and_outputs(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        extra: RecoveredWalRegistrySlotV1,
+        owner_held_outputs: &std::collections::BTreeSet<u128>,
     ) -> bool {
         let live_body_pipeline = coordinator
             .records
@@ -2247,7 +2286,12 @@ impl ConcreteLifecycleWorkRegistry {
             })
             .collect::<Vec<_>>();
         self.entries.len() == live_body_pipeline.len() + extra.cardinality()
-            && self.exact_optional_recovered_wal_authority(coordinator, extra, false)
+            && self.exact_optional_recovered_wal_authority(
+                coordinator,
+                extra,
+                owner_held_outputs,
+                &std::collections::BTreeSet::new(),
+            )
             && live_body_pipeline.into_iter().all(|record| {
                 if record.state != super::LifecycleState::Ready || record.physical_slots.len() != 1
                 {
@@ -2335,9 +2379,24 @@ impl ConcreteLifecycleWorkRegistry {
         &self,
         coordinator: &LifecycleCoordinator,
     ) -> bool {
-        self.exactly_covers_recovered_ready_work_with_extra(
+        let owner_held_outputs =
+            Self::owner_held_output_ordinals(coordinator, RecoveredWalRegistrySlotV1::None);
+        self.exactly_covers_recovered_ready_work_with_extra_and_outputs(
             coordinator,
             RecoveredWalRegistrySlotV1::None,
+            &owner_held_outputs,
+        )
+    }
+    /// Verify startup coverage while authenticated cold outputs remain owner-held.
+    pub(super) fn exactly_covers_recovered_ready_work_with_owner_held_outputs(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        owner_held_outputs: &std::collections::BTreeSet<u128>,
+    ) -> bool {
+        self.exactly_covers_recovered_ready_work_with_extra_and_outputs(
+            coordinator,
+            RecoveredWalRegistrySlotV1::None,
+            owner_held_outputs,
         )
     }
     /// Verify exact startup coverage beside the one recovered-WAL authority.
@@ -2348,8 +2407,29 @@ impl ConcreteLifecycleWorkRegistry {
         let Some(sign) = self.exact_recovered_wal_registry_slot() else {
             return false;
         };
+        let owner_held_outputs = Self::owner_held_output_ordinals(coordinator, sign);
         !matches!(sign, RecoveredWalRegistrySlotV1::None)
-            && self.exactly_covers_recovered_ready_work_with_extra(coordinator, sign)
+            && self.exactly_covers_recovered_ready_work_with_extra_and_outputs(
+                coordinator,
+                sign,
+                &owner_held_outputs,
+            )
+    }
+    /// Verify WAL-authority startup coverage beside authenticated cold outputs.
+    pub(super) fn exactly_covers_recovered_ready_work_and_wal_authority_with_owner_held_outputs(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        owner_held_outputs: &std::collections::BTreeSet<u128>,
+    ) -> bool {
+        let Some(sign) = self.exact_recovered_wal_registry_slot() else {
+            return false;
+        };
+        !matches!(sign, RecoveredWalRegistrySlotV1::None)
+            && self.exactly_covers_recovered_ready_work_with_extra_and_outputs(
+                coordinator,
+                sign,
+                owner_held_outputs,
+            )
     }
 
     /// Verify a bijection between every nonterminal logical row and every
@@ -2885,6 +2965,11 @@ impl ConcreteLifecycleWorkRegistry {
                             .project_candidate(verified)
                             .is_ok_and(|candidate| candidate_core_matches(&candidate))
                 }
+                ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => {
+                    sign.dispatch_key.is_none()
+                        && sign.validates_in_ledger(&exact_ledger)
+                        && sign.matches_current_ready_record(address, digest, coordinator)
+                }
                 ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign) => {
                     sign.dispatch_key.is_none()
                         && sign.repair.validates_in_ledger(&exact_ledger)
@@ -2962,15 +3047,36 @@ impl ConcreteLifecycleWorkRegistry {
         coordinator: &LifecycleCoordinator,
         extra: RecoveredWalRegistrySlotV1,
     ) -> bool {
-        self.exactly_covers_ready_work_with_extra(coordinator, extra, None, false)
+        let owner_held_outputs = Self::owner_held_output_ordinals(coordinator, extra);
+        self.exactly_covers_recovered_ready_work_with_extra_and_outputs(
+            coordinator,
+            extra,
+            &owner_held_outputs,
+        )
+    }
+
+    fn exactly_covers_recovered_ready_work_with_extra_and_outputs(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        extra: RecoveredWalRegistrySlotV1,
+        owner_held_outputs: &std::collections::BTreeSet<u128>,
+    ) -> bool {
+        self.exactly_covers_ready_work_with_extra(
+            coordinator,
+            extra,
+            owner_held_outputs,
+            None,
+            &std::collections::BTreeSet::new(),
+        )
     }
 
     /// Verify the complete live registry immediately before final retirement.
     ///
-    /// This preserves every startup rule except for the one volatile state
-    /// created by durable signed-Broadcast refanout. That Broadcast may be
-    /// parked on its exact `Recovery(digest)` generation after output handoff;
-    /// no other Waiting or Claimed carrier is admitted here.
+    /// This preserves every startup rule except for the bounded set of volatile
+    /// states created by durable signed-Broadcast refanout. Every such
+    /// Broadcast must already be parked on its exact `Recovery(digest)`
+    /// generation after output handoff; Ready Broadcast and live next-Sign
+    /// carriers remain schedulable and cannot cross this boundary.
     pub(super) fn exactly_covers_finalization_work(
         &self,
         coordinator: &LifecycleCoordinator,
@@ -2978,17 +3084,40 @@ impl ConcreteLifecycleWorkRegistry {
         if coordinator.fault.is_some() || coordinator.active_lease.is_some() {
             return false;
         }
-        let Some(extra) = self.exact_recovered_wal_registry_slot() else {
-            return false;
+        let refanned_broadcasts = self
+            .entries
+            .iter()
+            .filter_map(|(address, work)| {
+                matches!(
+                    &work.kind,
+                    ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(_)
+                )
+                .then_some(address.ordinal)
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let extra = if refanned_broadcasts.is_empty() {
+            let Some(extra) = self.exact_recovered_wal_registry_slot() else {
+                return false;
+            };
+            extra
+        } else {
+            RecoveredWalRegistrySlotV1::None
         };
-        self.exactly_covers_ready_work_with_extra(coordinator, extra, None, true)
+        self.exactly_covers_ready_work_with_extra(
+            coordinator,
+            extra,
+            &std::collections::BTreeSet::new(),
+            None,
+            &refanned_broadcasts,
+        )
     }
     fn exactly_covers_ready_work_with_extra(
         &self,
         coordinator: &LifecycleCoordinator,
         extra: RecoveredWalRegistrySlotV1,
+        owner_held_outputs: &std::collections::BTreeSet<u128>,
         active_serve: Option<&TurnLease>,
-        allow_refanned_broadcast: bool,
+        refanned_broadcasts: &std::collections::BTreeSet<u128>,
     ) -> bool {
         let live = coordinator
             .records
@@ -3005,11 +3134,12 @@ impl ConcreteLifecycleWorkRegistry {
                     && !extra.contains_record(record)
             })
             .collect::<Vec<_>>();
-        self.entries.len() == live.len() + extra.cardinality()
+        self.entries.len() == live.len() + extra.cardinality() + refanned_broadcasts.len()
             && self.exact_optional_recovered_wal_authority(
                 coordinator,
                 extra,
-                allow_refanned_broadcast,
+                owner_held_outputs,
+                refanned_broadcasts,
             )
             && live.into_iter().all(|record| {
                 let is_active_serve = active_serve.is_some_and(|lease| {
@@ -3116,7 +3246,13 @@ impl ConcreteLifecycleWorkRegistry {
         let Some(sign) = self.exact_recovered_wal_registry_slot() else {
             return false;
         };
-        self.exactly_covers_ready_work_with_extra(coordinator, sign, Some(lease), false)
+        self.exactly_covers_ready_work_with_extra(
+            coordinator,
+            sign,
+            &std::collections::BTreeSet::new(),
+            Some(lease),
+            &std::collections::BTreeSet::new(),
+        )
     }
     /// Prove the complete private registry and exact active Serve lease without
     /// consulting caller-supplied request material.
@@ -3250,13 +3386,82 @@ impl ConcreteLifecycleWorkRegistry {
         &self,
         coordinator: &LifecycleCoordinator,
         extra: RecoveredWalRegistrySlotV1,
-        allow_refanned_broadcast: bool,
+        owner_held_outputs: &std::collections::BTreeSet<u128>,
+        refanned_broadcasts: &std::collections::BTreeSet<u128>,
     ) -> bool {
+        let exact_finalization_ledger = if refanned_broadcasts.is_empty() {
+            None
+        } else {
+            let Ok(ledger) = super::ledger::LifecycleLedgerV1::from_coordinator(coordinator) else {
+                return false;
+            };
+            Some(ledger)
+        };
+        if owner_held_outputs.iter().any(|ordinal| {
+            coordinator.records.get(ordinal).is_none_or(|record| {
+                !matches!(record.state, super::LifecycleState::Ready)
+                    || !matches!(
+                        record.work_class,
+                        LifecycleWorkClass::Broadcast
+                            | LifecycleWorkClass::EquivocationReport
+                            | LifecycleWorkClass::InvalidBodyReport
+                    )
+                    || extra.contains_record(record)
+            })
+        }) {
+            return false;
+        }
+        if !refanned_broadcasts.iter().all(|ordinal| {
+            let Some(record) = coordinator.records.get(ordinal) else {
+                return false;
+            };
+            if !matches!(record.state, super::LifecycleState::Waiting(_))
+                || record.work_class != LifecycleWorkClass::Broadcast
+                || owner_held_outputs.contains(ordinal)
+                || extra.contains_record(record)
+            {
+                return false;
+            }
+            let Some((slot, digest)) =
+                exact_single_record_slot(record, LifecycleWorkClass::Broadcast.capacity_class())
+            else {
+                return false;
+            };
+            let Some(address) = ConcreteWorkAddress::new(record.owner, *ordinal, slot) else {
+                return false;
+            };
+            let Some(exact_ledger) = exact_finalization_ledger.as_ref() else {
+                return false;
+            };
+            self.entries.get(&address).is_some_and(|work| {
+                work.digest == digest
+                    && work.validates_at(address)
+                    && matches!(
+                        &work.kind,
+                        ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(
+                            broadcast
+                        ) if broadcast.validates_in_ledger(exact_ledger)
+                            && broadcast.paired_next_sign_matches_terminal_record(
+                                coordinator,
+                                exact_ledger,
+                            )
+                            && broadcast.matches_current_finalization_record(
+                                address,
+                                digest,
+                                coordinator,
+                            )
+                    )
+            })
+        }) {
+            return false;
+        }
         let unsupported_live = coordinator
             .records
             .values()
             .filter(|record| {
                 !matches!(record.state, super::LifecycleState::Terminal(_))
+                    && !owner_held_outputs.contains(&record.ordinal)
+                    && !refanned_broadcasts.contains(&record.ordinal)
                     && !matches!(
                         record.work_class,
                         LifecycleWorkClass::Fetch
@@ -3319,19 +3524,11 @@ impl ConcreteLifecycleWorkRegistry {
                             broadcast
                         ) if record.physical_slots.get(&address.slot) == Some(&work.digest)
                             && broadcast.is_unpaired()
-                            && if allow_refanned_broadcast {
-                                broadcast.matches_current_finalization_record(
-                                    address,
-                                    work.digest,
-                                    coordinator,
-                                )
-                            } else {
-                                broadcast.matches_current_ready_record(
-                                    address,
-                                    work.digest,
-                                    coordinator,
-                                )
-                            }
+                            && broadcast.matches_current_ready_record(
+                                address,
+                                work.digest,
+                                coordinator,
+                            )
                     )
                 })
             }
@@ -3370,19 +3567,11 @@ impl ConcreteLifecycleWorkRegistry {
                         ) if broadcast_record.physical_slots.get(&broadcast.slot)
                             == Some(&work.digest)
                             && carrier.pairs_exact_next_sign(next_sign, next_sign_digest)
-                            && if allow_refanned_broadcast {
-                                carrier.matches_current_finalization_record(
-                                    broadcast,
-                                    work.digest,
-                                    coordinator,
-                                )
-                            } else {
-                                carrier.matches_current_ready_record(
-                                    broadcast,
-                                    work.digest,
-                                    coordinator,
-                                )
-                            }
+                            && carrier.matches_current_ready_record(
+                                broadcast,
+                                work.digest,
+                                coordinator,
+                            )
                     )
                 });
                 let next_sign_exact = self.entries.get(&next_sign).is_some_and(|work| {
@@ -3442,10 +3631,11 @@ impl ConcreteLifecycleWorkRegistry {
                 })
             }
             RecoveredWalRegistrySlotV1::DecisionStore(address) => {
-                let [record] = unsupported_live.as_slice() else {
+                let Some(record) = coordinator.records.get(&address.ordinal) else {
                     return false;
                 };
-                if record.ordinal != address.ordinal
+                if !unsupported_live.is_empty()
+                    || record.ordinal != address.ordinal
                     || record.owner != address.owner
                     || record.work_class != LifecycleWorkClass::Store
                     || record.state != super::LifecycleState::Ready
@@ -3611,6 +3801,130 @@ impl ConcreteLifecycleWorkRegistry {
                         replay_origin,
                     },
                 ))
+            }
+        }
+    }
+
+    /// Install one exact live-WAL owner while retaining any mandatory local
+    /// Proposal companion inside its typed Sign carrier.
+    pub(super) fn install_live_wal_before_publication<T, E>(
+        &mut self,
+        active_context: LifecycleContext,
+        candidate: &CandidateAdmission,
+        address: ConcreteWorkAddress,
+        expected_digest: LifecycleDigest,
+        live: PreparedLiveWalAdmissionV1,
+        publish: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, LiveWalRegistryPublicationErrorV1<E>> {
+        if !live.exactly_authorizes_candidate(active_context, candidate) {
+            return Err(LiveWalRegistryPublicationErrorV1::Install(
+                RegistryError::CorruptWork,
+                live,
+            ));
+        }
+        match &live.companion {
+            PreparedLiveWalCompanionV1::None => {
+                let PreparedLiveWalAdmissionV1 { bound, companion } = live;
+                let BoundAdapterEffectV1 {
+                    effect,
+                    pending,
+                    replay_origin,
+                } = bound;
+                let authority = replay_origin.authority().clone();
+                let work = match ConcreteLifecycleWork::from_authorized_exact(
+                    effect, pending, authority,
+                ) {
+                    Ok(work) => work,
+                    Err((error, effect, pending)) => {
+                        return Err(LiveWalRegistryPublicationErrorV1::Install(
+                            error,
+                            PreparedLiveWalAdmissionV1 {
+                                bound: BoundAdapterEffectV1 {
+                                    effect,
+                                    pending,
+                                    replay_origin,
+                                },
+                                companion,
+                            },
+                        ));
+                    }
+                };
+                match self.install_before_publication(address, expected_digest, work, publish) {
+                    Ok(published) => Ok(published),
+                    Err(RegistryPublicationError::Install(error, work)) => {
+                        let (effect, pending) = work.into_pair();
+                        Err(LiveWalRegistryPublicationErrorV1::Install(
+                            error,
+                            PreparedLiveWalAdmissionV1 {
+                                bound: BoundAdapterEffectV1 {
+                                    effect,
+                                    pending,
+                                    replay_origin,
+                                },
+                                companion,
+                            },
+                        ))
+                    }
+                    Err(RegistryPublicationError::Publication(error, work)) => {
+                        let (effect, pending) = work.into_pair();
+                        Err(LiveWalRegistryPublicationErrorV1::Publication(
+                            error,
+                            PreparedLiveWalAdmissionV1 {
+                                bound: BoundAdapterEffectV1 {
+                                    effect,
+                                    pending,
+                                    replay_origin,
+                                },
+                                companion,
+                            },
+                        ))
+                    }
+                }
+            }
+            PreparedLiveWalCompanionV1::LocalProposal(_) => {
+                let work = match live.into_live_sign_work(
+                    candidate.clone(),
+                    DurableLiveWalSignOriginV1::LocalProposal,
+                    address,
+                ) {
+                    Ok(work) => work,
+                    Err((live, _candidate, _origin)) => {
+                        return Err(LiveWalRegistryPublicationErrorV1::Install(
+                            RegistryError::CorruptWork,
+                            live,
+                        ));
+                    }
+                };
+                if work.digest != expected_digest {
+                    let ConcreteLifecycleWorkKind::DurableLiveWalSign(work) = work.kind else {
+                        unreachable!("local Proposal conversion retains live Sign work")
+                    };
+                    return Err(LiveWalRegistryPublicationErrorV1::Install(
+                        RegistryError::DigestMismatch,
+                        work.admission,
+                    ));
+                }
+                match self.install_before_publication(address, expected_digest, work, publish) {
+                    Ok(published) => Ok(published),
+                    Err(RegistryPublicationError::Install(error, work)) => {
+                        let ConcreteLifecycleWorkKind::DurableLiveWalSign(work) = work.kind else {
+                            unreachable!("local Proposal installation returns live Sign work")
+                        };
+                        Err(LiveWalRegistryPublicationErrorV1::Install(
+                            error,
+                            work.admission,
+                        ))
+                    }
+                    Err(RegistryPublicationError::Publication(error, work)) => {
+                        let ConcreteLifecycleWorkKind::DurableLiveWalSign(work) = work.kind else {
+                            unreachable!("local Proposal rollback returns live Sign work")
+                        };
+                        Err(LiveWalRegistryPublicationErrorV1::Publication(
+                            error,
+                            work.admission,
+                        ))
+                    }
+                }
             }
         }
     }
@@ -4168,6 +4482,7 @@ impl ConcreteLifecycleWorkRegistry {
             | ConcreteLifecycleWorkKind::DurableStoreBody(_)
             | ConcreteLifecycleWorkKind::DurableValidateBody(_)
             | ConcreteLifecycleWorkKind::DurableValidateCompletion(_)
+            | ConcreteLifecycleWorkKind::DurableLiveWalSign(_)
             | ConcreteLifecycleWorkKind::DurableRecoveredWalSign(_)
             | ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(_)
             | ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(_)
@@ -4617,11 +4932,24 @@ impl ConcreteLifecycleWorkRegistry {
         {
             return Err(ReadyDurableValidateExecutionError::InvalidProjection);
         }
+        let validated_catalog_authority = match outcome_kind {
+            ReadyDurableValidateOutcomeKind::Validated => {
+                Some(ReadyValidatedExecutorCatalogAuthorityV1 {
+                    validated: completion
+                        .outcome
+                        .validated_receipt()
+                        .expect("validated outcome retains one exact receipt")
+                        .clone(),
+                })
+            }
+            ReadyDurableValidateOutcomeKind::Rejected => None,
+        };
         Ok(PreparedReadyDurableValidateExecution {
             registry: self,
             address,
             outcome_kind,
             lease: lease.clone(),
+            validated_catalog_authority,
         })
     }
     /// Reattach one executed Validate outcome only if its original closed row
@@ -4719,267 +5047,7 @@ impl ConcreteLifecycleWorkRegistry {
             executed,
         })
     }
-    /// Reattach the complete executed dispatch and its exact wake authority.
-    ///
-    /// This is the sole registry entry to volatile Validate completion. Every
-    /// failure returns the original move-only dispatch and leaves the map
-    /// untouched; success retains the exclusive borrow in a sealed preflight.
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[allow(clippy::result_large_err)]
-    pub(super) fn prepare_executed_durable_validate_completion(
-        &mut self,
-        dispatch: ExecutedDurableValidateDispatch,
-    ) -> Result<
-        PreparedExecutedDurableValidateCompletion<'_>,
-        (
-            DurableValidateCompletionPublicationError,
-            ExecutedDurableValidateDispatch,
-        ),
-    > {
-        let ExecutedDurableValidateDispatch { executed, wake } = dispatch;
-        let prepared = match self.reattach_durable_validate_execution(executed) {
-            Ok(prepared) => prepared,
-            Err((error, executed)) => {
-                return Err((
-                    DurableValidateCompletionPublicationError::Registry(
-                        DurableValidateCompletionConversionError::Execution(error),
-                    ),
-                    ExecutedDurableValidateDispatch { executed, wake },
-                ));
-            }
-        };
-        let PreparedDurableValidateCompletion {
-            _registry: registry,
-            executed,
-        } = prepared;
-        let dispatch = ExecutedDurableValidateDispatch { executed, wake };
-        let request = &dispatch.executed.request;
-        let expected_source = durable_validation_wait_source_for_request(request);
-        if dispatch.wake.wait_token.source() != expected_source
-            || dispatch.wake.wait_token.observed_generation() == u64::MAX
-        {
-            return Err((
-                DurableValidateCompletionPublicationError::Registry(
-                    DurableValidateCompletionConversionError::InvalidWakeAuthority,
-                ),
-                dispatch,
-            ));
-        }
-        let Some(outcome_kind) = durable_validate_outcome_kind(dispatch.outcome()) else {
-            return Err((
-                DurableValidateCompletionPublicationError::Registry(
-                    DurableValidateCompletionConversionError::InvalidOutcome,
-                ),
-                dispatch,
-            ));
-        };
-        let replacement_digest = durable_validate_completion_digest(
-            request.incumbent_digest,
-            request.expected_manifest_hash,
-            dispatch.outcome(),
-        );
-        if matches!(
-            outcome_kind,
-            DurableValidateOutcomeKind::Validated | DurableValidateOutcomeKind::Rejected
-        ) && replacement_digest.is_none_or(|digest| digest == request.incumbent_digest)
-        {
-            return Err((
-                DurableValidateCompletionPublicationError::Registry(
-                    DurableValidateCompletionConversionError::InvalidReplacementDigest,
-                ),
-                dispatch,
-            ));
-        }
-        if outcome_kind == DurableValidateOutcomeKind::DeferredMergeSidecar
-            && replacement_digest.is_some()
-        {
-            return Err((
-                DurableValidateCompletionPublicationError::Registry(
-                    DurableValidateCompletionConversionError::InvalidOutcome,
-                ),
-                dispatch,
-            ));
-        }
-        let Some(payload) = durable_validate_body_payload(&request.durable_receipt) else {
-            return Err((
-                DurableValidateCompletionPublicationError::Registry(
-                    DurableValidateCompletionConversionError::InvalidOutcome,
-                ),
-                dispatch,
-            ));
-        };
-        if !super::body_pipeline_transition::durable_validate_payload_is_exact(
-            request.lifecycle_key,
-            payload,
-        ) {
-            return Err((
-                DurableValidateCompletionPublicationError::Registry(
-                    DurableValidateCompletionConversionError::InvalidOutcome,
-                ),
-                dispatch,
-            ));
-        }
-        let authority = DurableValidateCompletionAuthority {
-            address: request.address,
-            incumbent_digest: request.incumbent_digest,
-            replacement_digest,
-            wait_token: dispatch.wake.wait_token,
-            outcome_kind,
-            lifecycle_key: request.lifecycle_key,
-            lifecycle_stage: request.lifecycle_stage,
-            payload,
-        };
-        Ok(PreparedExecutedDurableValidateCompletion {
-            registry,
-            dispatch,
-            authority,
-        })
-    }
-    /// Borrow the still-pending adapter effect advertised by one lease slot.
-    /// Closed carriers fail rather than re-executing their retained effects.
-    pub(super) fn borrow_for_lease(
-        &self,
-        lease: &TurnLease,
-        slot: PhysicalSlotId,
-    ) -> Result<&AdapterEffect, RegistryError> {
-        let address = self.validated_lease_address(lease, slot)?;
-        let work = self
-            .entries
-            .get(&address)
-            .expect("validated lease address remains present");
-        if !work.is_pending_adapter() {
-            return Err(RegistryError::WrongWorkKind);
-        }
-        Ok(work.effect())
-    }
-    /// Consume the complete still-pending adapter work advertised by one lease slot once.
-    ///
-    /// Returning the sealed pending authority together with the effect is
-    /// essential: execution may report `Blocked` or `Replenished`, in which
-    /// case a later atomic settlement must be able to restore the incumbent
-    /// without reminting its causal binding. Closed-carrier consumption
-    /// remains unavailable until its typed executor lands.
-    pub(super) fn take_for_lease(
-        &mut self,
-        lease: &TurnLease,
-        slot: PhysicalSlotId,
-    ) -> Result<ConcreteLifecycleWork, RegistryError> {
-        let address = self.validated_lease_address(lease, slot)?;
-        if !self
-            .entries
-            .get(&address)
-            .expect("validated lease address remains present")
-            .is_pending_adapter()
-        {
-            return Err(RegistryError::WrongWorkKind);
-        }
-        Ok(self
-            .entries
-            .remove(&address)
-            .expect("validated lease address remains present"))
-    }
-    /// Remove only the exact digest installed by a failed outer transaction.
-    pub(super) fn rollback_exact(
-        &mut self,
-        address: ConcreteWorkAddress,
-        expected_digest: LifecycleDigest,
-    ) -> Result<ConcreteLifecycleWork, RegistryError> {
-        let work = self.entries.get(&address).ok_or(RegistryError::Missing)?;
-        if !work.validates_at(address) {
-            return Err(RegistryError::CorruptWork);
-        }
-        if address.owner.causal_root() != work.causal_root() {
-            return Err(RegistryError::CausalOwnerMismatch);
-        }
-        if work.digest != expected_digest {
-            return Err(RegistryError::DigestMismatch);
-        }
-        Ok(self
-            .entries
-            .remove(&address)
-            .expect("validated rollback address remains present"))
-    }
-    fn validated_lease_address(
-        &self,
-        lease: &TurnLease,
-        slot: PhysicalSlotId,
-    ) -> Result<ConcreteWorkAddress, RegistryError> {
-        let address = ConcreteWorkAddress::new(lease.owner, lease.ordinal, slot)
-            .ok_or(RegistryError::InvalidAddress)?;
-        let expected_digest = lease
-            .physical_slots
-            .get(&slot)
-            .ok_or(RegistryError::DigestMismatch)?;
-        let work = self.entries.get(&address).ok_or(RegistryError::Missing)?;
-        if !work.validates_at(address) {
-            return Err(RegistryError::CorruptWork);
-        }
-        if address.owner.causal_root() != work.causal_root() {
-            return Err(RegistryError::CausalOwnerMismatch);
-        }
-        if work.digest != *expected_digest {
-            return Err(RegistryError::DigestMismatch);
-        }
-        Ok(address)
-    }
-    #[cfg(test)]
-    pub(super) fn len(&self) -> usize {
-        self.entries.len()
-    }
-    #[cfg(test)]
-    pub(super) fn certified_serve_and_producer_carrier_counts(&self) -> (usize, usize) {
-        self.entries
-            .values()
-            .fold((0, 0), |counts, work| match &work.kind {
-                ConcreteLifecycleWorkKind::DurableCertifiedServe(_) => (counts.0 + 1, counts.1),
-                ConcreteLifecycleWorkKind::DurableProducerTurn(_) => (counts.0, counts.1 + 1),
-                _ => counts,
-            })
-    }
-    #[cfg(test)]
-    pub(super) fn one_certified_serve_pair_shares_replay_family(&self) -> bool {
-        let serves = self
-            .entries
-            .values()
-            .filter_map(|work| match &work.kind {
-                ConcreteLifecycleWorkKind::DurableCertifiedServe(serve) => Some(serve),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let producers = self
-            .entries
-            .values()
-            .filter_map(|work| match &work.kind {
-                ConcreteLifecycleWorkKind::DurableProducerTurn(producer) => Some(producer),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let ([serve], [producer]) = (serves.as_slice(), producers.as_slice()) else {
-            return false;
-        };
-        Arc::ptr_eq(&serve.replay_evidence, &producer.replay_evidence)
-    }
-    #[cfg(test)]
-    /// Remove one exact Serve carrier to exercise owner-private census faults.
-    pub(super) fn remove_one_certified_serve_carrier_for_test(&mut self) -> bool {
-        let address = self.entries.iter().find_map(|(address, work)| {
-            matches!(
-                &work.kind,
-                ConcreteLifecycleWorkKind::DurableCertifiedServe(_)
-            )
-            .then_some(*address)
-        });
-        address.is_some_and(|address| self.entries.remove(&address).is_some())
-    }
-    #[cfg(test)]
-    pub(super) fn exactly_contains(
-        &self,
-        address: ConcreteWorkAddress,
-        effect: &AdapterEffect,
-    ) -> bool {
-        self.entries
-            .get(&address)
-            .is_some_and(|work| work.validates_at(address) && work.effect() == effect)
-    }
 }
+include!("v2_lifecycle_work_registry_validate_completion_impl.rs");
+include!("v2_lifecycle_work_registry_access_impl.rs");
 include!("v2_lifecycle_work_registry_validate_recovery_execution_impl.rs");

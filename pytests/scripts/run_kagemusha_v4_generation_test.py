@@ -17,22 +17,11 @@ import pytest
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 RUNNER_PATH = ROOT_DIR / "scripts" / "run_kagemusha_v4_generation.py"
-TAIRA_README_PATH = ROOT_DIR / "configs" / "soranexus" / "taira" / "README.md"
 SPEC = importlib.util.spec_from_file_location("run_kagemusha_v4_generation", RUNNER_PATH)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
-
-
-def test_taira_runbook_describes_enforced_macos_physical_footprint() -> None:
-    """Keep the operator runbook aligned with the launcher's memory guard."""
-
-    source = TAIRA_README_PATH.read_text(encoding="utf-8")
-
-    assert "macOS footprint remains diagnostic only" not in source
-    assert "greater of process-tree RSS or physical footprint on macOS" in source
-    assert "direct child's kernel peak RSS" in source
 
 
 @pytest.fixture(autouse=True)

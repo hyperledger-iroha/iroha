@@ -403,9 +403,6 @@ def _validation_ack(
         "--chaos-completion": (
             "path", receipt_path("evidence", "chaos_completion")
         ),
-        "--taira-completion": (
-            "path", receipt_path("evidence", "taira_completion")
-        ),
         "--g4p-completion": (
             "path", receipt_path("evidence", "g4p_multilane", "completion")
         ),

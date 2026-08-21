@@ -280,8 +280,6 @@ fn lock_retirement_releases_busy_deferred_leader_wire_runtime_owner() {
             b"older-body-available-continuation",
         )
         .expect("reserve the older body continuation lifecycle");
-    let body_ownership =
-        RuntimeEffectOwnership::fresh(body_parent, RuntimeFreshRootKind::StartupRecovery);
     let dispatch_fixture = leader_wire_proposal_fixture(
         &dispatch_directory,
         &dispatch_context,
@@ -292,8 +290,7 @@ fn lock_retirement_releases_busy_deferred_leader_wire_runtime_owner() {
     let (busy_proposal, busy_ordinal) =
         bind_authenticated_deferred_proposal_for_test(&mut dispatch_runtime, &dispatch_fixture);
     assert!(
-        body_ownership.owner().lifecycle_ordinal()
-            < dispatch_fixture.receipt.owner().admission_ordinal(),
+        body_parent.lifecycle_ordinal() < dispatch_fixture.receipt.owner().admission_ordinal(),
         "the reconstructed body retains the frozen predecessor lifecycle"
     );
     let canonical_body = b"canonical body superseding Busy proposal".to_vec();
@@ -311,6 +308,24 @@ fn lock_retirement_releases_busy_deferred_leader_wire_runtime_owner() {
     )
     .expect("derive a structurally valid conflicting canonical manifest");
     assert_ne!(canonical_manifest, busy_proposal.manifest);
+    let fetch = AdapterEffect::FetchBody {
+        tag: dispatch_tag,
+        round: canonical_manifest.round,
+        subject: canonical_manifest.subject,
+        manifest: Some(canonical_manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let body_ownership = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&fetch),
+        vec![RuntimeEffectOwnerAssignment::fresh_root(
+            body_parent,
+            RuntimeFreshRootKind::StartupRecovery,
+        )],
+    )
+    .expect("bind the older Fetch predecessor")
+    .pop()
+    .expect("one older Fetch predecessor");
     let reservation = dispatch_runtime
         .reserve_body_available_with_owner(dispatch_tag, canonical_manifest, &body_ownership)
         .expect("reserve the older causal BodyAvailable owner");
@@ -386,8 +401,6 @@ fn lock_retirement_releases_busy_deferred_leader_wire_runtime_owner() {
             b"older-queued-body-available-continuation",
         )
         .expect("reserve the older queued body lifecycle");
-    let queued_body_ownership =
-        RuntimeEffectOwnership::fresh(queued_body_parent, RuntimeFreshRootKind::StartupRecovery);
     let queued_fixture = leader_wire_proposal_fixture(
         &queued_directory,
         &queued_context,
@@ -408,7 +421,7 @@ fn lock_retirement_releases_busy_deferred_leader_wire_runtime_owner() {
         .expect("enqueue the conflicting leader-wire proposal");
     let queued_receipt_ordinal = queued_fixture.receipt.owner().admission_ordinal();
     assert!(
-        queued_body_ownership.owner().lifecycle_ordinal() < queued_receipt_ordinal,
+        queued_body_parent.lifecycle_ordinal() < queued_receipt_ordinal,
         "the body completion retains the older causal lifecycle"
     );
     let queued_canonical_body = b"canonical body superseding queued proposal".to_vec();
@@ -428,6 +441,24 @@ fn lock_retirement_releases_busy_deferred_leader_wire_runtime_owner() {
     )
     .expect("derive a conflicting canonical manifest for the queued proposal");
     assert_ne!(queued_canonical_manifest, queued_proposal.manifest);
+    let queued_fetch = AdapterEffect::FetchBody {
+        tag: queued_tag,
+        round: queued_canonical_manifest.round,
+        subject: queued_canonical_manifest.subject,
+        manifest: Some(queued_canonical_manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let queued_body_ownership = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&queued_fetch),
+        vec![RuntimeEffectOwnerAssignment::fresh_root(
+            queued_body_parent,
+            RuntimeFreshRootKind::StartupRecovery,
+        )],
+    )
+    .expect("bind the queued Fetch predecessor")
+    .pop()
+    .expect("one queued Fetch predecessor");
     let queued_reservation = queued_runtime
         .reserve_body_available_with_owner(
             queued_tag,
@@ -731,7 +762,6 @@ fn decision_retires_proposal_owners_but_preserves_body_and_application_completio
         RetiredBodyPipelineCompletions {
             body_available: 1,
             body_stored: 1,
-            validation: 0,
             local_proposal: 1,
         }
     );
@@ -746,7 +776,6 @@ fn decision_retires_proposal_owners_but_preserves_body_and_application_completio
         RetiredBodyPipelineCompletions {
             body_available: 0,
             body_stored: 1,
-            validation: 0,
             local_proposal: 0,
         }
     );
@@ -904,7 +933,7 @@ fn decision_retires_stale_local_completion_for_durable_recovery() {
 }
 #[test]
 fn progress_cursor_decision_preserves_outer_ingress_completion_until_apply() {
-    const PHASE_INVENTORY: [&str; 2] = ["decided_local_proposal_ready", "application_completed"];
+    const PHASE_INVENTORY: [&str; 1] = ["application_completed"];
     let directory = TempDir::new().expect("temporary Decision-race directory");
     let (mut runtime, context, _keys) =
         authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
@@ -949,14 +978,6 @@ fn progress_cursor_decision_preserves_outer_ingress_completion_until_apply() {
             validated_receipt: validated.clone(),
         },
     );
-    runtime
-        .enqueue_local_proposal(
-            owner_tag,
-            manifest.clone(),
-            durable.clone(),
-            validated.clone(),
-        )
-        .expect("an exact trusted retry coalesces with its existing owner");
     assert_eq!(runtime.queued_commands(), 2);
     runtime.ingress.next_class = CommandClass::Progress;
     let now = Instant::now();
@@ -1002,13 +1023,6 @@ fn progress_cursor_decision_preserves_outer_ingress_completion_until_apply() {
     )));
     assert_eq!(runtime.queued_commands(), 0);
     let mut suppressed_phases = Vec::new();
-    let next_ordinal = runtime.ingress.next_admission_ordinal;
-    runtime
-        .enqueue_local_proposal(owner_tag, manifest.clone(), durable, validated)
-        .expect("the decided validated body suppresses a drained local completion retry");
-    assert_eq!(runtime.queued_commands(), 0);
-    assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
-    suppressed_phases.push("decided_local_proposal_ready");
     runtime
         .enqueue_application_completed(owner_tag, manifest.subject)
         .expect("enqueue exact Apply acknowledgement");
@@ -1127,7 +1141,7 @@ fn decision_commitment_mismatch_fails_closed_before_retirement() {
     ));
 }
 #[test]
-fn unbound_direct_prepare_and_commit_votes_are_recoverable_after_validation() {
+fn unbound_direct_prepare_and_commit_votes_are_recoverable_from_durable_validation() {
     for phase in [wire::GlobalPhase::Prepare, wire::GlobalPhase::Commit] {
         let directory = TempDir::new().expect("temporary unbound-vote directory");
         let (mut runtime, context, keys) =
@@ -1251,8 +1265,8 @@ fn unbound_direct_prepare_and_commit_votes_are_recoverable_after_validation() {
             .driver
             .body_state_for_test(manifest.round, manifest.subject);
         runtime
-            .bind_validated_body(&manifest, &validated)
-            .expect("live validation establishes canonical commitment authority");
+            .recover_validated_body(&manifest, &validated)
+            .expect("durable validation recovery establishes canonical commitment authority");
         assert_eq!(
             runtime.driver.current_tag(),
             reducer_tag_before_binding,

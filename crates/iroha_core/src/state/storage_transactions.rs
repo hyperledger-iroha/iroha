@@ -234,6 +234,10 @@ mod block {
         AutoscaleLaneLifecycle,
         /// Certified merge admission changed before the block could commit
         MergeAdmission,
+        /// Permanent AXT handle counter could not finalize its block transition
+        AxtCounterRatchet,
+        /// Live asset-definition incarnations are inconsistent with the registry
+        AxtAssetIncarnation,
     }
     /// Batched update to the storage that can be reverted later
     pub struct TransactionsBlock<'storage> {

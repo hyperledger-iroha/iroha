@@ -380,9 +380,9 @@ _OFFLINE_TOOLCHAIN_SDK_PLANS = (
         "operation:g-unit-production-864.v1",
     ),
     _planned(
-        "g-unit-focused-530",
+        "g-unit-focused-522",
         "release-runner",
-        "operation:g-unit-focused-530.v1",
+        "operation:g-unit-focused-522.v1",
     ),
     _planned(
         "offline-workspace-clippy",
@@ -726,11 +726,6 @@ _NETWORK_SCALE_SOAK_PLANS = (
         "network-chaos-100000-height",
         "bash",
         "scripts/run_sumeragi_v2_100k_chaos.sh",
-    ),
-    _planned(
-        "network-taira-24h-soak",
-        "bash",
-        "scripts/run_taira_v2_24h_soak.sh",
     ),
 )
 

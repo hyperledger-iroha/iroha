@@ -493,6 +493,184 @@ fn production_owner_opens_empty_and_two_fetch_storage_atomically() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn cold_broadcast_source_retention_preserves_ready_row_until_exact_acceptance() {
+    use crate::sumeragi::{
+        v2::AdapterEffect,
+        v2_lifecycle_coordinator::{
+            LifecycleOutputServiceDispositionV1, open::RecoveredLifecycleOutputSettlementV1,
+            work_registry::PreparedLifecycleAdmissionV1,
+        },
+        v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
+    };
+
+    let fixture = RecoveryFixture::new("source-retained-cold-broadcast", 0x23);
+    let context = fixture.verified.context();
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+            b"source-retained cold Broadcast block",
+        )),
+        payload_hash: Hash::new(b"source-retained cold Broadcast payload"),
+    };
+    let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new(b"source-retained cold Broadcast parent state"),
+        Hash::new(b"source-retained cold Broadcast post state"),
+        Hash::new(b"source-retained cold Broadcast writes"),
+        1,
+        Hash::new(b"source-retained cold Broadcast fee summary"),
+    );
+    let mut vote = wire::Vote {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Prepare,
+        subject,
+        execution_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    };
+    vote.signature = Signature::new(fixture.keys[0].private_key(), &vote.signature_preimage())
+        .payload()
+        .to_vec();
+    let effect = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::Vote(vote),
+    ));
+    let ordinal = 1;
+    let tag = EventTag::new(context.height, round.view, Generation::new(0x23));
+    let ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&effect),
+        vec![RuntimeEffectOwnership::fresh_for_test(tag, ordinal)],
+    )
+    .expect("bind cold Broadcast output")
+    .pop()
+    .expect("one cold Broadcast owner");
+    let pending = ownership
+        .exact_pending_adapter_effect_binding(&effect)
+        .expect("derive cold Broadcast pending owner");
+    let prepared = PreparedLifecycleAdmissionV1::direct_signed(
+        fixture.lifecycle_context(),
+        &fixture.verified,
+        effect.clone(),
+        pending,
+    )
+    .unwrap_or_else(|_| panic!("prepare authenticated cold Broadcast output"));
+    let candidate = prepared.candidate().clone();
+    let expected_owner = OwnerId::new(candidate.causal_root, ordinal);
+    let record = LifecycleLedgerRecordV1::new(
+        candidate.key,
+        expected_owner,
+        ordinal,
+        candidate.work_class,
+        candidate.stage,
+        None,
+        candidate.reconstruction_source,
+        candidate.payload,
+        candidate.replay_authority,
+        DurableContinuation::None,
+    )
+    .expect("construct authenticated cold Broadcast row");
+
+    let body_directory = TempDir::new().expect("temporary cold Broadcast body store");
+    let body_store = fixture.open_store(&body_directory);
+    let payload_directory = TempDir::new().expect("temporary cold Broadcast payload store");
+    let (payload_store, payloads) =
+        fixture.open_empty_serve_payloads(&payload_directory, &body_store);
+    let ledger = fixture.ledger(vec![record]);
+    let ledger_directory = TempDir::new().expect("temporary cold Broadcast ledger store");
+    let ledger_store = fixture.persist_ledger(&ledger_directory, &ledger);
+    let cut = ledger
+        .into_durable_certified_body_pipeline_storage_recovery_cut(
+            fixture.verified.clone(),
+            ledger_store,
+            body_store,
+        )
+        .expect("authenticate cold Broadcast storage cut");
+    let mut owner = cut
+        .open_owner_for_test(payload_store, payloads)
+        .expect("cold-open authenticated Broadcast owner");
+    assert!(owner.has_recovered_lifecycle_outputs());
+    assert_eq!(owner.coordinator.records[&ordinal].owner, expected_owner);
+    assert_eq!(
+        owner.coordinator.records[&ordinal].state,
+        LifecycleState::Ready
+    );
+    assert!(
+        owner
+            .exact_lifecycle_output_ordinals_for_registry_census()
+            .is_some_and(|ordinals| ordinals == [ordinal].into_iter().collect())
+    );
+    assert!(owner.coordinator.ready_index.remove(&ordinal));
+    assert!(
+        owner
+            .exact_lifecycle_output_ordinals_for_registry_census()
+            .is_none()
+    );
+    assert!(owner.coordinator.ready_index.insert(ordinal));
+
+    let calls = std::cell::Cell::new(0_u8);
+    assert!(matches!(
+        owner.settle_next_recovered_lifecycle_output(|observed| {
+            assert_eq!(observed, &effect);
+            calls.set(calls.get().saturating_add(1));
+            Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                LifecycleOutputServiceDispositionV1::SourceRetained,
+            )
+        }),
+        Ok(RecoveredLifecycleOutputSettlementV1::SourceRetained)
+    ));
+    assert_eq!(calls.get(), 1);
+    assert!(owner.has_recovered_lifecycle_outputs());
+    assert_eq!(owner.coordinator.records[&ordinal].owner, expected_owner);
+    assert_eq!(
+        owner.coordinator.records[&ordinal].state,
+        LifecycleState::Ready
+    );
+    let retained = owner
+        .coordinator
+        .ledger_store
+        .as_ref()
+        .expect("cold Broadcast owner retains its ledger store")
+        .load()
+        .expect("reload source-retained cold Broadcast row");
+    assert_eq!(retained.records()[0].owner(), expected_owner);
+    assert_eq!(retained.records()[0].terminal(), Some(None));
+
+    assert!(matches!(
+        owner.settle_next_recovered_lifecycle_output(|observed| {
+            assert_eq!(observed, &effect);
+            calls.set(calls.get().saturating_add(1));
+            Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                LifecycleOutputServiceDispositionV1::Accepted,
+            )
+        }),
+        Ok(RecoveredLifecycleOutputSettlementV1::Completed)
+    ));
+    assert_eq!(calls.get(), 2);
+    assert!(!owner.has_recovered_lifecycle_outputs());
+    assert_eq!(
+        owner.coordinator.records[&ordinal].state,
+        LifecycleState::Terminal(TerminalOutcome::Advanced)
+    );
+    let terminal = owner
+        .coordinator
+        .ledger_store
+        .as_ref()
+        .expect("accepted cold Broadcast retains its ledger store")
+        .load()
+        .expect("reload terminal cold Broadcast row");
+    assert_eq!(terminal.records()[0].owner(), expected_owner);
+    assert_eq!(
+        terminal.records()[0].terminal(),
+        Some(Some(TerminalOutcome::Advanced))
+    );
+}
+
+#[test]
 fn production_owner_cold_opens_exact_ready_store_crash_boundary() {
     let fixture = RecoveryFixture::new("ready-store-cold-open", 0x25);
     let body_directory = TempDir::new().expect("temporary Ready Store body store");
@@ -678,6 +856,9 @@ fn standalone_validate_cold_census_rejects_a_foreign_owner_root() {
         StandaloneValidateOriginFixture::LocalBody,
     );
     let foreign_owner = OwnerId::new(record.owner().causal_root(), 12);
+    let continuation = record
+        .continuation()
+        .expect("standalone Validate continuation");
     let foreign = LifecycleLedgerRecordV1::new(
         record.key().expect("standalone Validate key"),
         foreign_owner,
@@ -691,10 +872,8 @@ fn standalone_validate_cold_census_rejects_a_foreign_owner_root() {
         record
             .durable_payload()
             .expect("standalone Validate payload"),
-        record.replay_authority.clone(),
-        record
-            .continuation()
-            .expect("standalone Validate continuation"),
+        record.replay_authority,
+        continuation,
     )
     .expect("construct structurally valid foreign-owner Validate row");
     let owner_root = unrelated_live_record(
@@ -910,8 +1089,7 @@ fn fresh_certified_serve_publishes_exact_ledger_beside_fetch_and_broadcast() {
     .pop()
     .expect("one unrelated live Broadcast owner");
     let pending = ownership
-        .current_effect_producer(&broadcast)
-        .map(|producer| producer.mint_pending_binding())
+        .exact_pending_adapter_effect_binding(&broadcast)
         .expect("mint unrelated live Broadcast binding");
     let prepared = owner
         .coordinator

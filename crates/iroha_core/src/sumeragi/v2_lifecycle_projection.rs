@@ -25,8 +25,8 @@ use crate::sumeragi::v2_certified_serve_payload_store::{
 use crate::sumeragi::{
     v2::{AdapterEffect, SignRequest, VerifiedHeightContext},
     v2_body_store::{
-        BodyValidationRejectionIdentity, DurableBodyReceipt, DurableBodyValidationOutcome,
-        V2BodyStore, V2BodyStoreError,
+        AuthenticatedGenesisBodyStoreFrameV1, BodyValidationRejectionIdentity, DurableBodyReceipt,
+        DurableBodyValidationOutcome, V2BodyStore, V2BodyStoreError,
     },
     v2_certified_serve_payload_store::{
         AuthenticatedRecoveredCertifiedServePayload,
@@ -128,6 +128,7 @@ pub(super) struct AuthenticatedDurableBodyFrameRecovery {
     reference: DurableBodyFrameReference,
     manifest: wire::PayloadManifest,
     receipt: DurableBodyReceipt,
+    genesis_authority: Option<AuthenticatedGenesisBodyStoreFrameV1>,
 }
 impl AuthenticatedDurableBodyFrameRecovery {
     /// Consume this exact catalog seal only through its frame-bound Certified
@@ -145,8 +146,15 @@ impl AuthenticatedDurableBodyFrameRecovery {
         self,
         evidence: &RecoveredStandaloneValidateSourceV1,
     ) -> Option<DurableBodyReceipt> {
-        evidence
-            .exactly_matches_recovered_body_frame(&self.reference, &self.manifest, &self.receipt)
+        let exact_genesis_authority = self
+            .genesis_authority
+            .as_ref()
+            .is_some_and(|proof| proof.exactly_matches(&self.receipt));
+        (evidence.exactly_matches_recovered_body_frame(
+            &self.reference,
+            &self.manifest,
+            &self.receipt,
+        ) && (!evidence.requires_genesis_authority_body_store() || exact_genesis_authority))
             .then_some(self.receipt)
     }
 }
@@ -2528,11 +2536,13 @@ pub(super) fn authenticate_durable_body_frame_recovery(
     store: &V2BodyStore,
     expected: DurableBodyFrameReference,
 ) -> Result<AuthenticatedDurableBodyFrameRecovery, DurableBodyFrameRecoveryError> {
-    authenticate_durable_body_frame_catalog(
+    let mut recovered = authenticate_durable_body_frame_catalog(
         active_context,
         expected,
         store.recovery_catalog()?.into_values(),
-    )
+    )?;
+    recovered.genesis_authority = store.authenticate_genesis_authority_frame(&recovered.receipt);
+    Ok(recovered)
 }
 fn authenticate_durable_body_frame_catalog(
     active_context: LifecycleContext,
@@ -2555,6 +2565,7 @@ fn authenticate_durable_body_frame_catalog(
         reference: expected,
         manifest,
         receipt,
+        genesis_authority: None,
     })
 }
 fn lifecycle_key(

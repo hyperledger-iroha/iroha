@@ -43,7 +43,6 @@ use crate::sumeragi::v2_chunks::encode_payload;
 #[cfg(feature = "bls")]
 use crate::sumeragi::v2_core as reducer;
 use crate::sumeragi::{
-    v2::{ExactLiveWalPersistedContinuationCause, LiveWalFrameIdentity},
     v2_core::{EventTag, Generation},
     v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
 };
@@ -82,52 +81,6 @@ fn effect_at_generation(marker: u8, generation: u64) -> AdapterEffect {
 
 fn effect(marker: u8) -> AdapterEffect {
     effect_at_generation(marker, u64::from(marker))
-}
-
-fn direct_signed_pending(
-    effect: &AdapterEffect,
-    tag: EventTag,
-    ordinal: u128,
-) -> PendingRuntimeEffectBinding {
-    bind_adapter_effect_batch_ownership(
-        core::slice::from_ref(effect),
-        vec![RuntimeEffectOwnership::fresh_for_test(tag, ordinal)],
-    )
-    .expect("bind direct signed registry fixture")
-    .pop()
-    .expect("one direct signed registry fixture owner")
-    .current_effect_producer(effect)
-    .expect("seal direct signed producer")
-    .mint_pending_binding()
-}
-
-fn direct_signed_vote(marker: u8, subject_marker: u8) -> wire::Vote {
-    let context_id =
-        wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new([marker, 0xD1])));
-    let round = wire::ConsensusRound {
-        context_id,
-        height: 7,
-        view: 2,
-    };
-    wire::Vote {
-        round,
-        proposal_round: round,
-        phase: wire::GlobalPhase::Prepare,
-        subject: wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new([subject_marker, 0xD2])),
-            payload_hash: Hash::new([subject_marker, 0xD3]),
-        },
-        execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new([marker, 0xD4]),
-            Hash::new([marker, 0xD5]),
-            Hash::new([marker, 0xD6]),
-            1,
-            Hash::new([marker, 0xD7]),
-        ),
-        signer: 0,
-        signature: vec![subject_marker, 0xD8],
-    }
 }
 
 fn recovered_wal_projection_candidate(
@@ -213,9 +166,8 @@ fn concrete(effect: AdapterEffect, legacy_ordinal: u128) -> ConcreteLifecycleWor
     .pop()
     .expect("one registry fixture owner");
     let pending = ownership
-        .current_effect_producer(&effect)
-        .expect("seal registry fixture producer")
-        .mint_pending_binding();
+        .exact_pending_adapter_effect_binding(&effect)
+        .expect("mint pending registry fixture");
     ConcreteLifecycleWork::from_inert_fixture_for_test(effect, pending)
         .expect("construct exact concrete work")
 }
@@ -257,6 +209,7 @@ fn prospective_startup_census_rejects_extra_valid_carrier_before_publication() {
     let result = registry.install_certified_serve_startup_batch_before_publication(
         batch,
         &coordinator,
+        &std::collections::BTreeSet::new(),
         || {
             invoked.set(true);
             Ok::<(), ()>(())
@@ -294,6 +247,62 @@ fn complete_startup_census_rejects_live_store_without_a_carrier() {
 
     assert!(!registry.exactly_covers_recovered_ready_work(&coordinator));
     assert!(!registry.exactly_covers_recovered_ready_body_pipeline(&coordinator));
+}
+
+#[test]
+fn recovered_decision_store_census_reads_its_supported_store_row_directly() {
+    let candidate = recovered_wal_projection_candidate(
+        LifecyclePhase::Store,
+        LifecycleWorkClass::Store,
+        LifecycleStageKind::StoreBody,
+        0x64,
+    );
+    let context = LifecycleContext::new(candidate.key.context(), candidate.key.round().height());
+    let mut coordinator = LifecycleCoordinator::new(
+        context,
+        0,
+        super::super::schema::CapacityGeometry::new(
+            CapacityClass::ALL.into_iter().map(|class| (class, 8)),
+        ),
+    );
+    let super::super::AdmissionDecision::Admitted {
+        owner,
+        ordinal,
+        producer_turn_ordinal: None,
+    } = coordinator.reduce_admit(AdmissionRequest::Candidate(candidate))
+    else {
+        panic!("exact recovered Decision Store candidate must admit")
+    };
+    let slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
+    let address = ConcreteWorkAddress::new(owner, ordinal, slot)
+        .expect("exact recovered Decision Store address");
+    let unsupported_live = coordinator
+        .records
+        .values()
+        .filter(|record| {
+            !matches!(record.state, super::super::LifecycleState::Terminal(_))
+                && !matches!(
+                    record.work_class,
+                    LifecycleWorkClass::Fetch
+                        | LifecycleWorkClass::Store
+                        | LifecycleWorkClass::Validate
+                        | LifecycleWorkClass::CertifiedServe
+                        | LifecycleWorkClass::ProducerTurn
+                )
+        })
+        .collect::<Vec<_>>();
+
+    assert!(unsupported_live.is_empty());
+    assert!(
+        coordinator
+            .records
+            .get(&address.ordinal)
+            .is_some_and(|record| {
+                record.owner == address.owner
+                    && record.work_class == LifecycleWorkClass::Store
+                    && record.state == super::super::LifecycleState::Ready
+            })
+    );
 }
 
 fn key(seed: u8) -> super::super::LifecycleKey {
@@ -503,9 +512,8 @@ fn durable_store_fixture(marker: u8) -> DurableStoreFixture {
         .rebind_as_inherited_adapter_effect(&effect)
         .expect("carry certified Fetch authority into Store");
     let pending = ownership
-        .current_effect_producer(&effect)
-        .expect("seal durable Store producer")
-        .mint_pending_binding();
+        .exact_pending_adapter_effect_binding(&effect)
+        .expect("mint sealed durable Store binding");
     let validate_effect = AdapterEffect::ValidateBody {
         tag,
         round,
@@ -712,9 +720,8 @@ fn durable_validate_fixture_at_view_with_parent(
         .rebind_as_inherited_adapter_effect(&store_effect)
         .expect("carry certified Fetch authority into Validate parent Store");
     let store_pending = ownership
-        .current_effect_producer(&store_effect)
-        .expect("seal durable Validate parent producer")
-        .mint_pending_binding();
+        .exact_pending_adapter_effect_binding(&store_effect)
+        .expect("mint sealed durable Validate parent binding");
     let effect = AdapterEffect::ValidateBody {
         tag,
         round,
@@ -922,6 +929,122 @@ fn durable_validate_store_fixture_at_view_with_commitment(
 }
 
 #[cfg(feature = "bls")]
+fn durable_local_validate_store_fixture_at_view(
+    marker: u8,
+    view: wire::View,
+) -> (
+    DurableValidateFixture,
+    TempDir,
+    V2BodyStore,
+    DurableBodyReceipt,
+) {
+    let mut fixture = durable_validate_fixture_at_view(marker, view);
+    let directory = TempDir::new().expect("temporary local Validate body store");
+    let mut store = V2BodyStore::open(directory.path(), fixture.verified.context().clone())
+        .expect("open local Validate body store");
+    let durable = store
+        .store(fixture.manifest.clone(), fixture.canonical_wire.clone())
+        .expect("persist local Validate fixture body");
+    assert_eq!(durable.manifest_hash(), fixture.expected_manifest_hash);
+    let AdapterEffect::ValidateBody {
+        tag,
+        round,
+        subject,
+    } = fixture.effect.clone()
+    else {
+        unreachable!("local Validate fixture retains one Validate effect")
+    };
+    let store_effect = AdapterEffect::StoreBody {
+        tag,
+        round,
+        subject,
+    };
+    let ordinal = fixture.lease.ordinal();
+    let store_ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&store_effect),
+        vec![RuntimeEffectOwnership::fresh_for_test(tag, ordinal)],
+    )
+    .expect("bind local Validate Store owner")
+    .pop()
+    .expect("one local Validate Store owner");
+    let local_store = crate::sumeragi::v2_runtime::LocalProposalEffectOwnership::for_test(
+        store_ownership.clone(),
+        &store_effect,
+        &fixture.manifest,
+    )
+    .expect("seal local Validate Store replay authority");
+    let validate_ownership = store_ownership
+        .rebind_as_inherited_adapter_effect(&fixture.effect)
+        .expect("carry local Store authority into Validate");
+    let local_replay = local_store
+        .project_exact_validate(
+            &store_effect,
+            &fixture.manifest,
+            &durable,
+            &fixture.effect,
+            &validate_ownership,
+        )
+        .expect("project exact local Store-to-Validate replay");
+    let prepared = PreparedLocalBodyValidateReplayPreAdmission::seal_exact_validate(
+        fixture.effect.clone(),
+        validate_ownership,
+        durable.clone(),
+        local_replay,
+    )
+    .unwrap_or_else(|_| panic!("seal exact local Validate pre-admission"));
+    let context = fixture.verified.context();
+    let mut context_id = [0_u8; 32];
+    context_id.copy_from_slice(context.id().0.as_ref());
+    let active_context = LifecycleContext::new(LifecycleDigest::new(context_id), context.height);
+    let prepared = prepared
+        .prepare_lifecycle_admission(active_context, &fixture.verified)
+        .unwrap_or_else(|_| panic!("prepare exact local Validate admission"));
+    let candidate = prepared.candidate().clone();
+    let (physical_slots, slot_universe, consumed_slots) = candidate
+        .physical_geometry
+        .normalized()
+        .expect("normalize local Validate fixture geometry");
+    assert_eq!(slot_universe, consumed_slots);
+    assert_eq!(physical_slots.len(), 1);
+    let (&slot, &digest) = physical_slots
+        .first_key_value()
+        .expect("one local Validate fixture slot");
+    let owner = OwnerId::new(candidate.causal_root, ordinal);
+    let address = ConcreteWorkAddress::new(owner, ordinal, slot)
+        .expect("exact local Validate registry address");
+    let PreparedLifecycleAdmissionOwnerV1::LocalBody(prepared) = prepared.into_owner() else {
+        unreachable!("local Validate preparation retains its exact origin")
+    };
+    let (validate, carrier_digest) = prepared
+        .into_durable_validate_carrier(address)
+        .unwrap_or_else(|_| panic!("close exact local Validate carrier"));
+    assert_eq!(carrier_digest, digest);
+    let removed = fixture
+        .registry
+        .entries
+        .remove(&fixture.address)
+        .expect("replace synthetic Validate fixture with local carrier");
+    assert!(fixture.registry.entries.is_empty());
+    drop(removed);
+    let work = ConcreteLifecycleWork {
+        digest,
+        kind: ConcreteLifecycleWorkKind::DurableValidateBody(validate),
+    };
+    assert!(work.validate_exact());
+    assert!(work.validates_at(address));
+    assert!(fixture.registry.entries.insert(address, work).is_none());
+    fixture.address = address;
+    fixture.slot = slot;
+    fixture.lease.owner = owner;
+    fixture.lease.key = candidate.key;
+    fixture.lease.work_class = candidate.work_class;
+    fixture.lease.stage = candidate.stage;
+    fixture.lease.physical_slots = physical_slots;
+    fixture.store_ownership = store_ownership;
+    (fixture, directory, store, durable)
+}
+
+#[cfg(feature = "bls")]
 fn durable_validate_sidecar_store_fixture(
     marker: u8,
 ) -> (
@@ -990,8 +1113,7 @@ fn durable_validate_store_fixture_from_fixture(
         .rebind_as_inherited_adapter_effect(&store_effect)
         .expect("carry persisted Fetch authority into Validate parent Store");
     let store_pending = store_ownership
-        .current_effect_producer(&store_effect)
-        .map(|producer| producer.mint_pending_binding())
+        .exact_pending_adapter_effect_binding(&store_effect)
         .expect("mint persisted Validate parent binding");
     let pending = store_pending
         .project_store_validate_successor(&store_effect, &fixture.effect)
@@ -1204,9 +1326,32 @@ fn ready_durable_validate_fixture(
 }
 
 #[cfg(feature = "bls")]
+fn ready_local_durable_validate_fixture_at_view(
+    marker: u8,
+    view: wire::View,
+    outcome: ReadyDurableValidateFixtureOutcome,
+) -> ReadyDurableValidateFixture {
+    let waiting = waiting_durable_validate_fixture_from_store(
+        durable_local_validate_store_fixture_at_view(marker, view),
+    );
+    ready_durable_validate_fixture_from_waiting(waiting, outcome)
+}
+
+#[cfg(feature = "bls")]
 fn ready_durable_validate_fixture_at_view(
     marker: u8,
     view: wire::View,
+    outcome: ReadyDurableValidateFixtureOutcome,
+) -> ReadyDurableValidateFixture {
+    ready_durable_validate_fixture_from_waiting(
+        waiting_durable_validate_fixture_at_view(marker, view),
+        outcome,
+    )
+}
+
+#[cfg(feature = "bls")]
+fn ready_durable_validate_fixture_from_waiting(
+    waiting: WaitingDurableValidateFixture,
     outcome: ReadyDurableValidateFixtureOutcome,
 ) -> ReadyDurableValidateFixture {
     let WaitingDurableValidateFixture {
@@ -1217,7 +1362,7 @@ fn ready_durable_validate_fixture_at_view(
         mut coordinator,
         mut holder,
         dispatch,
-    } = waiting_durable_validate_fixture_at_view(marker, view);
+    } = waiting;
     let executed = match outcome {
         ReadyDurableValidateFixtureOutcome::Validated => {
             let commitment = ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment();

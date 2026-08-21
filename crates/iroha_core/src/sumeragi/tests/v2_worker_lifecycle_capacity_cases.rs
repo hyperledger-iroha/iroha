@@ -859,21 +859,23 @@ fn lifecycle_capacity_generation_exhaustion_never_wraps() {
 fn lifecycle_capacity_rejects_repeat_fetch_while_work_is_completion_pending() {
     let (mut service, keys) = fixture();
     allow_fixture_block_payload(&mut service.context);
-    let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+    let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let work_id = EffectWorkId::for_test(21);
-    let durable = DurableBodyReceipt::for_test(
-        service.context.id(),
-        proposal.round,
-        proposal.subject,
-        HashOf::new(&proposal.manifest),
+    let tag = EventTag::new(
+        service.context.height,
+        proposal.round.view,
+        Generation::new(service.context.height),
     );
     let (sender, receiver, admission) = test_io_command_channel(2);
     sender
-        .try_send(V2IoCommand::Validate(BodyValidationTask::for_test(
-            21, durable,
+        .try_send(V2IoCommand::Store(BodyStoreTask::for_test(
+            21,
+            tag,
+            payload.manifest().clone(),
+            body,
         )))
         .expect("install one exact in-flight work owner");
-    assert!(matches!(receiver.try_recv(), Ok(V2IoCommand::Validate(_))));
+    assert!(matches!(receiver.try_recv(), Ok(V2IoCommand::Store(_))));
     receiver.complete_work(work_id);
     assert_eq!(
         sender.queue.lock().work[&work_id].state,

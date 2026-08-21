@@ -72,8 +72,8 @@ On Linux, install the template once and explicitly enable only the approved
 instances on the corresponding service host, for example
 `systemctl enable --now sorafs-external-software-signer@governance-dag.service`.
 On macOS, install and bootstrap only the matching checked plist. Merely shipping
-these opt-in assets does not activate them. The Taira validator rollout enables
-exactly `proof-outcome`, `repair`, `reserve`, and `orderbook`;
+these opt-in assets does not activate them. On a Taira validator, explicitly
+enable only `proof-outcome`, `repair`, `reserve`, and `orderbook`;
 none of the seven typed roles is auto-launched on a validator.
 Promotion uses the same supported binary and receipt protocol, but must run on a
 separately administered L2 promotion host with its own inherited credential

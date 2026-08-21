@@ -1,3 +1,18 @@
+fn four_validator_npos_builder() -> NetworkBuilder {
+    const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
+
+    NetworkBuilder::new()
+        .with_peers(VALIDATOR_COUNT)
+        .with_auto_populated_trusted_peers()
+        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond().clone())
+        .with_config_layer(|layer| {
+            layer.write(
+                ["nexus", "storage", "local_budget_bytes"],
+                TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+            );
+        })
+}
+
 fn optional_timeout_view(object: &norito::json::Map, peer: &str) -> Result<Option<u64>> {
     let Some(certificate) = object
         .get("last_timeout_certificate")

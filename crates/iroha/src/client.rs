@@ -110,7 +110,10 @@ use iroha_torii_shared::{
 use iroha_version::codec::EncodeVersioned;
 use norito::{
     decode_from_bytes,
-    derive::{JsonDeserialize, JsonSerialize},
+    derive::{
+        Decode as NDec, Encode as NEnc, JsonDeserialize, JsonSerialize, NoritoDeserialize as NDe,
+        NoritoSerialize as NSer,
+    },
     json::{Map as JsonMap, Value as JsonValue},
     to_bytes,
 };
@@ -190,13 +193,11 @@ pub const CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1: usize = 3 * 1024 * 102
 /// Maximum canonical base64 bytes in one canonical V1 request-witness header.
 pub const CANONICAL_REQUEST_WITNESS_MAX_HEADER_BYTES_V1: usize = 1024 * 1024;
 pub(crate) const APPLICATION_NORITO: &str = "application/x-norito";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SorafsEndpointMethod {
     Get,
     Post,
 }
-
 impl SorafsEndpointMethod {
     fn http(self) -> HttpMethod {
         match self {
@@ -205,13 +206,11 @@ impl SorafsEndpointMethod {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SorafsEndpointAuth {
     Anonymous,
     Account,
 }
-
 /// Exact transport contract for one `SoraFS` HTTP endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SorafsEndpoint<'a> {
@@ -222,7 +221,6 @@ struct SorafsEndpoint<'a> {
     accept: &'static str,
     max_response_bytes: Option<usize>,
 }
-
 impl<'a> SorafsEndpoint<'a> {
     const fn anonymous_json_get(path: &'a str) -> Self {
         Self {
@@ -234,14 +232,12 @@ impl<'a> SorafsEndpoint<'a> {
             max_response_bytes: None,
         }
     }
-
     const fn account_json_get(path: &'a str) -> Self {
         Self {
             auth: SorafsEndpointAuth::Account,
             ..Self::anonymous_json_get(path)
         }
     }
-
     const fn account_json_post(path: &'a str) -> Self {
         Self {
             path,
@@ -458,16 +454,7 @@ macro_rules! sorafs_reserve_detail_methods {
         )+
     };
 }
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 struct ContractCodeBytesResponse {
     code_b64: String,
@@ -1000,16 +987,7 @@ pub fn decode_and_verify_alias_auto_renew_plan_for_request(
 pub const ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1: &[u8] =
     b"iroha:account-onboarding-plan-receipt:v1\0";
 /// Secret-free intent accepted by the sponsored account-onboarding planner.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::Encode,
-    norito::derive::Decode,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
 pub struct AccountOnboardingPlanRequestV1 {
     /// Request layout version. The only supported value is `1`.
@@ -1090,16 +1068,7 @@ impl AccountOnboardingPlanRequestV1 {
     }
 }
 /// Canonical body committed by a stateless sponsored-onboarding receipt.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::Encode,
-    norito::derive::Decode,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
 pub struct AccountOnboardingPlanBodyV1 {
     /// Receipt body layout version. The only supported value is `1`.
@@ -1141,16 +1110,7 @@ impl AccountOnboardingPlanBodyV1 {
     }
 }
 /// Stateless signed receipt returned by sponsored account-onboarding planning.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::Encode,
-    norito::derive::Decode,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
 pub struct AccountOnboardingPlanReceiptV1 {
     /// Canonical receipt body.
@@ -1488,16 +1448,7 @@ pub fn decode_and_verify_account_onboarding_plan_for_request(
     Ok(instructions)
 }
 /// Apply request containing exactly one previously issued onboarding receipt.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::Encode,
-    norito::derive::Decode,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
 pub struct AccountOnboardingApplyRequestV1 {
     /// Exact stateless receipt returned by the planning endpoint.
@@ -1911,16 +1862,7 @@ struct AccountOnboardingResponseWireV1 {
     status: String,
     disposition: AliasPlanDispositionV1,
 }
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Selector-explicit request for the Torii multisig authority-spec API.
 pub struct MultisigSpecRequest {
@@ -1931,16 +1873,7 @@ pub struct MultisigSpecRequest {
     #[norito(default)]
     pub multisig_account_alias: Option<String>,
 }
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Exact active multisig authority spec returned by Torii.
 pub struct MultisigSpecResponse {
@@ -1949,17 +1882,7 @@ pub struct MultisigSpecResponse {
     /// Native multisig authority policy bound to the resolved account.
     pub spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
 }
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Fixed SCCP V1 route-registry capacity limits.
 pub struct SccpRegistryLimits {
@@ -1979,17 +1902,7 @@ pub struct SccpRegistryLimits {
     #[norito(rename = "max_retained_native_trust_anchors_per_lane")]
     pub retained_native_trust_anchors_per_lane: u32,
 }
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Consensus-critical SCCP proof and verifier-work limits.
 pub struct SccpResourceLimits {
@@ -2063,16 +1976,7 @@ pub struct SccpResourceLimits {
     #[norito(rename = "max_bn254_pairing_checks_per_block")]
     pub bn254_pairing_checks_per_block: u32,
 }
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Public SCCP capability snapshot advertised by the node.
 pub struct SccpCapabilities {
@@ -2306,16 +2210,7 @@ fn validate_sccp_capabilities(capabilities: &SccpCapabilities) -> Result<()> {
     }
     Ok(())
 }
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Exact response returned by either SCCP bridge submit endpoint.
 pub struct SccpBridgeSubmitResponse {
@@ -2346,16 +2241,7 @@ pub struct SccpBridgeSubmitResponse {
     /// Exact 32-byte transaction signing prehash, present only during preparation.
     pub signing_message_b64: Option<String>,
 }
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Canonical readback and proof-request links for a recent SCCP message.
 pub struct SccpRecentMessageLinks {
@@ -2364,16 +2250,7 @@ pub struct SccpRecentMessageLinks {
     /// Query-free canonical Groth16 request lookup path.
     pub proof_request_path: String,
 }
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Compact newest-first SCCP outbound message discovery record.
 pub struct SccpRecentMessage {
@@ -2414,17 +2291,7 @@ pub struct SccpRecentMessage {
     /// Canonical bundle and proof-request links.
     pub links: SccpRecentMessageLinks,
 }
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Compound continuation returned by recent SCCP discovery.
 pub struct SccpRecentCursor {
@@ -2433,16 +2300,7 @@ pub struct SccpRecentCursor {
     /// Commitment index of the last returned item.
     pub after_index: u32,
 }
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Newest-first committed SCCP message discovery response.
 pub struct SccpRecentMessages {
@@ -3993,16 +3851,7 @@ fn decode_sccp_bridge_submit_response(
     }
     Ok(response)
 }
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Selector-explicit request for the Torii multisig proposals query API.
 pub struct MultisigProposalsQueryRequest {
@@ -4022,16 +3871,7 @@ pub struct MultisigProposalsQueryRequest {
     #[norito(default)]
     pub limit: Option<u64>,
 }
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Multisig proposal entry returned by the Torii multisig proposals API.
 pub struct MultisigProposalEntry {
@@ -4052,16 +3892,7 @@ pub struct MultisigProposalEntry {
     #[norito(default)]
     pub terminal_at_ms: Option<u64>,
 }
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Response payload returned by the Torii multisig proposals query API.
 pub struct MultisigProposalsQueryResponse {
@@ -4073,16 +3904,7 @@ pub struct MultisigProposalsQueryResponse {
     #[norito(default)]
     pub next_cursor: Option<String>,
 }
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Selector-explicit request for one multisig proposal.
 pub struct MultisigProposalsResolveRequest {
@@ -4099,16 +3921,7 @@ pub struct MultisigProposalsResolveRequest {
     #[norito(default)]
     pub instructions_hash: Option<String>,
 }
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Response payload returned by the Torii multisig proposal resolve API.
 pub struct MultisigProposalResolveResponse {
@@ -4131,16 +3944,7 @@ pub struct MultisigProposalResolveResponse {
     #[norito(default)]
     pub terminal_at_ms: Option<u64>,
 }
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 /// Request payload for proposing a generic multisig instruction batch.
 #[norito(deny_unknown_fields)]
 pub struct MultisigProposeRequest {
@@ -4169,16 +3973,7 @@ pub struct MultisigProposeRequest {
     /// Instruction batch to wrap inside the multisig proposal.
     pub instructions: Vec<iroha_data_model::isi::InstructionBox>,
 }
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 /// Response payload returned by multisig participation endpoints.
 pub struct MultisigResponse {
     /// Whether processing succeeded.
@@ -6962,6 +6757,43 @@ fn sumeragi_qc_json_payload(response: &SumeragiV2QcResponse) -> Result<norito::j
         .map_err(|error| eyre!("Failed to render Sumeragi v2 QC response as JSON: {error}"))
 }
 impl Client {
+    fn ensure_response_status(
+        response: &Response<Vec<u8>>,
+        expected_status: StatusCode,
+        context: &str,
+        body_separator: &str,
+    ) -> Result<()> {
+        if response.status() != expected_status {
+            return Err(eyre!(
+                "{context}: {}{body_separator}{}",
+                response.status(),
+                std::str::from_utf8(response.body()).unwrap_or("")
+            ));
+        }
+        Ok(())
+    }
+    fn decode_json_response<T: norito::json::JsonDeserialize>(
+        response: Response<Vec<u8>>,
+        expected_status: StatusCode,
+        context: &str,
+        body_separator: &str,
+    ) -> Result<T> {
+        Self::ensure_response_status(&response, expected_status, context, body_separator)?;
+        Ok(norito::json::from_slice(response.body())?)
+    }
+    fn decode_json_ok<T: norito::json::JsonDeserialize>(
+        response: Response<Vec<u8>>,
+        context: &str,
+    ) -> Result<T> {
+        Self::decode_json_response(response, StatusCode::OK, context, " ")
+    }
+    fn decode_json_http_status<T: norito::json::JsonDeserialize>(
+        response: Response<Vec<u8>>,
+        expected_status: StatusCode,
+        context: &str,
+    ) -> Result<T> {
+        Self::decode_json_response(response, expected_status, context, ". ")
+    }
     fn parse_json_ok_response(
         response: &Response<Vec<u8>>,
         context: &'static str,
@@ -7453,13 +7285,7 @@ impl Client {
             self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", ACCEPT_NORITO_PREFERRED),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi status: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(&resp, StatusCode::OK, "Failed to get sumeragi status", " ")?;
         let content_type = resp
             .headers()
             .get("content-type")
@@ -7491,13 +7317,7 @@ impl Client {
             self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi status: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(&resp, StatusCode::OK, "Failed to get sumeragi status", " ")?;
         let content_type = resp
             .headers()
             .get("content-type")
@@ -7532,13 +7352,12 @@ impl Client {
             self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", ACCEPT_NORITO_PREFERRED),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi diagnostics: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get sumeragi diagnostics",
+            " ",
+        )?;
         let content_type = resp
             .headers()
             .get("content-type")
@@ -7602,13 +7421,12 @@ impl Client {
         );
         let req = self.default_request(HttpMethod::GET, url);
         let resp = self.send_builder(req)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get public lane validators: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get public lane validators",
+            " ",
+        )?;
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
     /// GET `/v1/nexus/public-lanes/{lane}/stake` — bonded stake per validator/staker.
@@ -7632,13 +7450,12 @@ impl Client {
             req = req.param("validator", value);
         }
         let resp = self.send_builder(req)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get public lane stake: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get public lane stake",
+            " ",
+        )?;
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
     /// GET `/v1/nexus/public-lanes/{lane}/rewards/pending` — pending rewards for an account.
@@ -7665,13 +7482,12 @@ impl Client {
             req = req.param("upto_epoch", &epoch);
         }
         let resp = self.send_builder(req)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get public lane pending rewards: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get public lane pending rewards",
+            " ",
+        )?;
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
     /// GET `/v1/sumeragi/vrf/penalties/:epoch` — VRF penalties snapshot for the given epoch.
@@ -7745,13 +7561,7 @@ impl Client {
             self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_NORITO),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi qc: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(&resp, StatusCode::OK, "Failed to get sumeragi qc", " ")?;
         let content_type = resp
             .headers()
             .get("content-type")
@@ -8143,9 +7953,8 @@ mod status_tests {
         SumeragiConsensusStatus,
     };
     use norito::json::Value as JsonValue;
-    #[test]
-    fn decode_status_prefers_norito_bare() {
-        let s = Status {
+    fn status_fixture() -> Status {
+        Status {
             build: BuildStatus::default(),
             observed_at_ms: 0,
             peers: 1,
@@ -8184,7 +7993,11 @@ mod status_tests {
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),
-        };
+        }
+    }
+    #[test]
+    fn decode_status_prefers_norito_bare() {
+        let s = status_fixture();
         let body = norito::to_bytes(&s).expect("encode status");
         let resp = mk_response(StatusCode::OK, body, Some("application/x-norito"));
         let got = decode_status_response(&resp).expect("decode");
@@ -8200,46 +8013,20 @@ mod status_tests {
     }
     #[test]
     fn decode_status_falls_back_to_json() {
-        let s = Status {
-            build: BuildStatus::default(),
-            observed_at_ms: 0,
-            peers: 5,
-            blocks: 6,
-            blocks_non_empty: 4,
-            commit_time_ms: 200,
-            txs_approved: 10,
-            txs_rejected: 2,
-            last_rejection_at_ms: Some(75),
-            txs_rejected_recent_5m: 2,
-            uptime: Uptime(Duration::from_millis(5678)),
-            view_changes: 1,
-            queue_size: 9,
-            queue_queued: 0,
-            queue_inflight: 0,
-            last_block_committed_at_ms: 0,
-            last_non_empty_block_committed_at_ms: 0,
-            time_since_last_block_ms: 0,
-            time_since_last_non_empty_block_ms: 0,
-            da_reschedule_total: 0,
-            tx_gossip: TxGossipSnapshot::default(),
-            stack: StackStatus::default(),
-            crypto: CryptoStatus {
-                sm_helpers_available: false,
-                sm_openssl_preview_enabled: false,
-                halo2: Halo2Status::default(),
-            },
-            offline: None,
-            sumeragi: Some(SumeragiConsensusStatus::default()),
-            governance: GovernanceStatus::default(),
-            teu_lane_commit: Vec::new(),
-            teu_dataspace_backlog: Vec::new(),
-            dataspace_catalog: Vec::new(),
-            nexus: None,
-            sorafs_micropayments: Vec::new(),
-            taikai_ingest: Vec::new(),
-            taikai_alias_rotations: Vec::new(),
-            da_receipt_cursors: Vec::new(),
-        };
+        let mut s = status_fixture();
+        s.peers = 5;
+        s.blocks = 6;
+        s.blocks_non_empty = 4;
+        s.commit_time_ms = 200;
+        s.txs_approved = 10;
+        s.txs_rejected = 2;
+        s.last_rejection_at_ms = Some(75);
+        s.txs_rejected_recent_5m = 2;
+        s.uptime = Uptime(Duration::from_millis(5678));
+        s.view_changes = 1;
+        s.queue_size = 9;
+        s.crypto.sm_helpers_available = false;
+        s.crypto.sm_openssl_preview_enabled = false;
         let body = norito::json::to_vec(&s).unwrap();
         let resp = mk_response(StatusCode::OK, body, Some("application/json"));
         let got = decode_status_response(&resp).expect("json decode");
@@ -8248,47 +8035,20 @@ mod status_tests {
     }
     #[test]
     fn decode_status_json_defaults_missing_build_metadata() {
-        let mut value = norito::json::to_value(&Status {
-            build: BuildStatus::default(),
-            observed_at_ms: 0,
-            peers: 2,
-            blocks: 3,
-            blocks_non_empty: 2,
-            commit_time_ms: 40,
-            txs_approved: 8,
-            txs_rejected: 0,
-            last_rejection_at_ms: None,
-            txs_rejected_recent_5m: 0,
-            uptime: Uptime(Duration::from_millis(999)),
-            view_changes: 0,
-            queue_size: 1,
-            queue_queued: 0,
-            queue_inflight: 0,
-            last_block_committed_at_ms: 0,
-            last_non_empty_block_committed_at_ms: 0,
-            time_since_last_block_ms: 0,
-            time_since_last_non_empty_block_ms: 0,
-            da_reschedule_total: 0,
-            tx_gossip: TxGossipSnapshot::default(),
-            stack: StackStatus::default(),
-            crypto: CryptoStatus {
-                sm_helpers_available: false,
-                sm_openssl_preview_enabled: false,
-                halo2: Halo2Status::default(),
-            },
-            offline: None,
-            sumeragi: Some(SumeragiConsensusStatus::default()),
-            governance: GovernanceStatus::default(),
-            teu_lane_commit: Vec::new(),
-            teu_dataspace_backlog: Vec::new(),
-            dataspace_catalog: Vec::new(),
-            nexus: None,
-            sorafs_micropayments: Vec::new(),
-            taikai_ingest: Vec::new(),
-            taikai_alias_rotations: Vec::new(),
-            da_receipt_cursors: Vec::new(),
-        })
-        .expect("encode status to json value");
+        let mut status = status_fixture();
+        status.peers = 2;
+        status.blocks = 3;
+        status.blocks_non_empty = 2;
+        status.commit_time_ms = 40;
+        status.txs_approved = 8;
+        status.txs_rejected = 0;
+        status.last_rejection_at_ms = None;
+        status.txs_rejected_recent_5m = 0;
+        status.uptime = Uptime(Duration::from_millis(999));
+        status.queue_size = 1;
+        status.crypto.sm_helpers_available = false;
+        status.crypto.sm_openssl_preview_enabled = false;
+        let mut value = norito::json::to_value(&status).expect("encode status to json value");
         let JsonValue::Object(ref mut map) = value else {
             panic!("status should serialize as a JSON object");
         };
@@ -8422,35 +8182,25 @@ mod evidence_filter_tests {
 #[cfg(test)]
 mod evidence_response_tests {
     use super::*;
-    use http::Response as HttpResponse;
     use norito::json::Value;
     #[test]
     fn parse_json_ok_response_returns_decoded_value() {
         let mut payload = norito::json::Map::new();
         payload.insert("count".to_owned(), Value::from(42u64));
         let body = norito::json::to_vec(&Value::from(payload.clone())).unwrap();
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .body(body)
-            .unwrap();
+        let response = mk_response(StatusCode::OK, body, None);
         let json = Client::parse_json_ok_response(&response, "context")
             .expect("expected successful parse");
         assert_eq!(json.as_object(), Some(&payload));
     }
     #[test]
     fn parse_json_ok_response_errors_on_non_ok_status() {
-        let response = HttpResponse::builder()
-            .status(StatusCode::FORBIDDEN)
-            .body(b"denied".to_vec())
-            .unwrap();
+        let response = mk_response(StatusCode::FORBIDDEN, b"denied".to_vec(), None);
         assert!(Client::parse_json_ok_response(&response, "context").is_err());
     }
     #[test]
     fn parse_json_ok_response_non_ok_error_includes_status_context_and_body() {
-        let response = HttpResponse::builder()
-            .status(StatusCode::TOO_MANY_REQUESTS)
-            .body(b"slow down".to_vec())
-            .unwrap();
+        let response = mk_response(StatusCode::TOO_MANY_REQUESTS, b"slow down".to_vec(), None);
         let err = Client::parse_json_ok_response(&response, "context")
             .expect_err("non-OK response must fail");
         let message = err.to_string();
@@ -8460,10 +8210,7 @@ mod evidence_response_tests {
     }
     #[test]
     fn parse_json_ok_response_rejects_malformed_ok_payload() {
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .body(br#"{"count":"#.to_vec())
-            .unwrap();
+        let response = mk_response(StatusCode::OK, br#"{"count":"#.to_vec(), None);
         let err = Client::parse_json_ok_response(&response, "context")
             .expect_err("malformed JSON body must fail even with HTTP 200");
         let message = err.to_string();
@@ -8475,10 +8222,7 @@ mod evidence_response_tests {
     }
     #[test]
     fn parse_json_ok_response_rejects_duplicate_object_keys() {
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .body(br#"{"count":1,"count":2}"#.to_vec())
-            .unwrap();
+        let response = mk_response(StatusCode::OK, br#"{"count":1,"count":2}"#.to_vec(), None);
         let err = Client::parse_json_ok_response(&response, "context")
             .expect_err("duplicate JSON object keys must fail closed");
         let message = err.to_string();
@@ -8490,10 +8234,11 @@ mod evidence_response_tests {
     }
     #[test]
     fn parse_json_ok_response_rejects_trailing_payload_after_valid_json() {
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .body(br#"{"count":1}{"injected":true}"#.to_vec())
-            .unwrap();
+        let response = mk_response(
+            StatusCode::OK,
+            br#"{"count":1}{"injected":true}"#.to_vec(),
+            None,
+        );
         let err = Client::parse_json_ok_response(&response, "context")
             .expect_err("trailing JSON payload must fail closed");
         let message = err.to_string();
@@ -8624,27 +8369,20 @@ mod evidence_http_tests {
         Url::parse("http://mock.local/").expect("valid mock URL")
     }
     pub(super) fn json_response(status: StatusCode, body: &str) -> HttpResponse<Vec<u8>> {
-        HttpResponse::builder()
-            .status(status)
-            .header("content-type", "application/json")
-            .body(body.as_bytes().to_vec())
-            .expect("response build")
+        mk_response(status, body.as_bytes().to_vec(), Some(APPLICATION_JSON))
     }
     pub(super) fn empty_response(status: StatusCode) -> HttpResponse<Vec<u8>> {
-        HttpResponse::builder()
-            .status(status)
-            .body(Vec::new())
-            .expect("response build")
+        mk_response(status, Vec::new(), None)
     }
     fn norito_response<T: norito::core::NoritoSerialize>(
         status: StatusCode,
         value: &T,
     ) -> HttpResponse<Vec<u8>> {
-        HttpResponse::builder()
-            .status(status)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(value).expect("encode norito response"))
-            .expect("response build")
+        mk_response(
+            status,
+            norito::to_bytes(value).expect("encode norito response"),
+            Some(APPLICATION_NORITO),
+        )
     }
     fn hook_mutex() -> &'static Mutex<()> {
         static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
@@ -8665,6 +8403,26 @@ mod evidence_http_tests {
             store.lock().expect("lock snapshot store").push(snapshot);
             Ok(response.clone())
         }
+    }
+    pub(super) fn capture_requests<R>(
+        response: HttpResponse<Vec<u8>>,
+        request: impl FnOnce() -> R,
+    ) -> (R, Vec<RequestSnapshot>) {
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let result = with_mock_http(respond_with(&snapshots, response), request);
+        let snapshots = snapshots.lock().expect("lock snapshot store").clone();
+        (result, snapshots)
+    }
+    pub(super) fn capture_request<R>(
+        response: HttpResponse<Vec<u8>>,
+        request: impl FnOnce() -> R,
+    ) -> (R, RequestSnapshot) {
+        let (result, snapshots) = capture_requests(response, request);
+        assert_eq!(snapshots.len(), 1, "expected exactly one HTTP request");
+        (
+            result,
+            snapshots.into_iter().next().expect("request snapshot"),
+        )
     }
     pub(super) fn capability_gated_responder(
         store: &SnapshotStore,
@@ -8992,78 +8750,8 @@ mod evidence_http_tests {
             "Accept header missing"
         );
     }
-    #[test]
-    fn post_multisig_propose_propagates_server_rejection() {
+    fn multisig_propose_request(message: &str) -> (AccountId, MultisigProposeRequest) {
         use iroha_data_model::prelude as dm;
-        let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let multisig_account_id = AccountId::new(checked_random_keypair().public_key().clone());
-        let signer_account_id = AccountId::new(checked_random_keypair().public_key().clone());
-        let request = MultisigProposeRequest {
-            multisig_account_id: Some(multisig_account_id),
-            multisig_account_alias: None,
-            signer_account_id,
-            public_key_hex: None,
-            signature_b64: None,
-            creation_time_ms: Some(123),
-            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
-            memo: None,
-            instructions: vec![dm::Log::new(dm::Level::INFO, "reject me".to_owned()).into()],
-        };
-        let response = json_response(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "{\"error\":\"malformed native instruction frame\"}",
-        );
-        let err = with_mock_http(respond_with(&snapshots, response), || {
-            client
-                .post_multisig_propose(&request)
-                .expect_err("server rejection must be surfaced")
-        });
-        let message = err.to_string();
-        assert!(
-            message.contains("failed to propose multisig instruction batch"),
-            "unexpected error: {message}"
-        );
-        let store = snapshots.lock().expect("lock snapshot store");
-        assert_eq!(store.len(), 1);
-    }
-    #[test]
-    fn post_multisig_propose_rejects_malformed_success_response() {
-        use iroha_data_model::prelude as dm;
-        let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let multisig_account_id = AccountId::new(checked_random_keypair().public_key().clone());
-        let signer_account_id = AccountId::new(checked_random_keypair().public_key().clone());
-        let request = MultisigProposeRequest {
-            multisig_account_id: Some(multisig_account_id),
-            multisig_account_alias: None,
-            signer_account_id,
-            public_key_hex: None,
-            signature_b64: None,
-            creation_time_ms: Some(123),
-            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
-            memo: None,
-            instructions: vec![dm::Log::new(dm::Level::INFO, "bad response".to_owned()).into()],
-        };
-        let response = json_response(StatusCode::OK, "{\"ok\":true}");
-        let err = with_mock_http(respond_with(&snapshots, response), || {
-            client
-                .post_multisig_propose(&request)
-                .expect_err("malformed success response must be rejected")
-        });
-        let message = err.to_string();
-        assert!(
-            message.contains("failed to decode multisig propose response"),
-            "unexpected error: {message}"
-        );
-        let store = snapshots.lock().expect("lock snapshot store");
-        assert_eq!(store.len(), 1);
-    }
-    #[test]
-    fn post_multisig_propose_rejects_malformed_response_metadata() {
-        use iroha_data_model::prelude as dm;
-        let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let multisig_account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let signer_account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let request = MultisigProposeRequest {
@@ -9075,8 +8763,44 @@ mod evidence_http_tests {
             creation_time_ms: Some(123),
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             memo: None,
-            instructions: vec![dm::Log::new(dm::Level::INFO, "bad metadata".to_owned()).into()],
+            instructions: vec![dm::Log::new(dm::Level::INFO, message.to_owned()).into()],
         };
+        (multisig_account_id, request)
+    }
+    #[test]
+    fn post_multisig_propose_propagates_server_rejection() {
+        let client = client_with_base_url(base_url());
+        let (_, request) = multisig_propose_request("reject me");
+        let response = json_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{\"error\":\"malformed native instruction frame\"}",
+        );
+        let (result, _) = capture_request(response, || client.post_multisig_propose(&request));
+        let err = result.expect_err("server rejection must be surfaced");
+        let message = err.to_string();
+        assert!(
+            message.contains("failed to propose multisig instruction batch"),
+            "unexpected error: {message}"
+        );
+    }
+    #[test]
+    fn post_multisig_propose_rejects_malformed_success_response() {
+        let client = client_with_base_url(base_url());
+        let (_, request) = multisig_propose_request("bad response");
+        let response = json_response(StatusCode::OK, "{\"ok\":true}");
+        let (result, _) = capture_request(response, || client.post_multisig_propose(&request));
+        let err = result.expect_err("malformed success response must be rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("failed to decode multisig propose response"),
+            "unexpected error: {message}"
+        );
+    }
+    #[test]
+    fn post_multisig_propose_rejects_malformed_response_metadata() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let (multisig_account_id, request) = multisig_propose_request("bad metadata");
         let bad_hash_response = json_response(
             StatusCode::OK,
             &format!(
@@ -9145,7 +8869,6 @@ mod evidence_http_tests {
     #[test]
     fn post_zk_ivm_prove_json_builds_request() {
         let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\"}");
         let req = norito::json!({
             "vk_ref": { "backend": "halo2/ipa", "name": "vk_main" },
@@ -9158,15 +8881,9 @@ mod evidence_http_tests {
             "bytecode": { "placeholder": true },
             "proved": { "placeholder": true },
         });
-        with_mock_http(respond_with(&snapshots, response), || {
-            let resp = client
-                .post_zk_ivm_prove_json(&req)
-                .expect("post zk ivm prove json");
-            assert_eq!(resp["job_id"].as_str(), Some("abc"));
-        });
-        let store = snapshots.lock().expect("lock snapshot store");
-        assert_eq!(store.len(), 1);
-        let snapshot = &store[0];
+        let (resp, snapshot) = capture_request(response, || client.post_zk_ivm_prove_json(&req));
+        let resp = resp.expect("post zk ivm prove json");
+        assert_eq!(resp["job_id"].as_str(), Some("abc"));
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(snapshot.url.as_str(), "http://mock.local/v1/zk/ivm/prove");
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
@@ -9179,7 +8896,6 @@ mod evidence_http_tests {
     #[test]
     fn post_zk_ivm_derive_json_builds_request() {
         let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{\"proved\": {\"placeholder\": true}}");
         let req = norito::json!({
             "vk_ref": { "backend": "halo2/ipa", "name": "vk_main" },
@@ -9191,15 +8907,9 @@ mod evidence_http_tests {
             "metadata": {},
             "bytecode": { "placeholder": true },
         });
-        with_mock_http(respond_with(&snapshots, response), || {
-            let resp = client
-                .post_zk_ivm_derive_json(&req)
-                .expect("post zk ivm derive json");
-            assert!(resp.get("proved").is_some());
-        });
-        let store = snapshots.lock().expect("lock snapshot store");
-        assert_eq!(store.len(), 1);
-        let snapshot = &store[0];
+        let (resp, snapshot) = capture_request(response, || client.post_zk_ivm_derive_json(&req));
+        let resp = resp.expect("post zk ivm derive json");
+        assert!(resp.get("proved").is_some());
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(snapshot.url.as_str(), "http://mock.local/v1/zk/ivm/derive");
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
@@ -9422,17 +9132,12 @@ mod evidence_http_tests {
             StatusCode::OK,
             &norito::json::to_json(&response_body).expect("encode mismatched VK draft"),
         );
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let error = with_mock_http(respond_with(&snapshots, response), || {
-            client
-                .post_zk_vk_register(&request)
-                .expect_err("mismatched signing message must be rejected")
-        });
+        let (result, _) = capture_request(response, || client.post_zk_vk_register(&request));
+        let error = result.expect_err("mismatched signing message must be rejected");
         assert!(
             error.to_string().contains("does not match"),
             "unexpected draft validation error: {error}"
         );
-        assert_eq!(snapshots.lock().expect("lock snapshot store").len(), 1);
     }
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -9610,44 +9315,32 @@ mod evidence_http_tests {
     #[test]
     fn get_zk_ivm_prove_job_json_builds_request() {
         let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\",\"status\":\"done\"}");
-        with_mock_http(respond_with(&snapshots, response), || {
-            let resp = client
-                .get_zk_ivm_prove_job_json("abc")
-                .expect("get zk ivm prove job json");
-            assert_eq!(resp["status"].as_str(), Some("done"));
-        });
-        let store = snapshots.lock().expect("lock snapshot store");
-        assert_eq!(store.len(), 1);
-        let snapshot = &store[0];
+        let (resp, snapshot) =
+            capture_request(response, || client.get_zk_ivm_prove_job_json("abc"));
+        let resp = resp.expect("get zk ivm prove job json");
+        assert_eq!(resp["status"].as_str(), Some("done"));
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(
             snapshot.url.as_str(),
             "http://mock.local/v1/zk/ivm/prove/abc"
         );
-        super::tests::assert_canonical_account_signed_request(&client, snapshot);
+        super::tests::assert_canonical_account_signed_request(&client, &snapshot);
     }
     #[test]
     fn delete_zk_ivm_prove_job_json_builds_request() {
         let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\"}");
-        with_mock_http(respond_with(&snapshots, response), || {
-            let resp = client
-                .delete_zk_ivm_prove_job_json("abc")
-                .expect("delete zk ivm prove job json");
-            assert_eq!(resp["job_id"].as_str(), Some("abc"));
-        });
-        let store = snapshots.lock().expect("lock snapshot store");
-        assert_eq!(store.len(), 1);
-        let snapshot = &store[0];
+        let (resp, snapshot) =
+            capture_request(response, || client.delete_zk_ivm_prove_job_json("abc"));
+        let resp = resp.expect("delete zk ivm prove job json");
+        assert_eq!(resp["job_id"].as_str(), Some("abc"));
         assert_eq!(snapshot.method, HttpMethod::DELETE);
         assert_eq!(
             snapshot.url.as_str(),
             "http://mock.local/v1/zk/ivm/prove/abc"
         );
-        super::tests::assert_canonical_account_signed_request(&client, snapshot);
+        super::tests::assert_canonical_account_signed_request(&client, &snapshot);
     }
     type SorafsFetchHook = Arc<
         dyn Fn(
@@ -10086,15 +9779,21 @@ mod evidence_http_tests {
             .build()
             .expect("manifest build")
     }
+    fn captured_evidence_list(
+        filter: &SumeragiEvidenceListFilter<'_>,
+    ) -> (Result<Value>, RequestSnapshot) {
+        capture_request(json_response(StatusCode::OK, r#"{"items":[]}"#), || {
+            client_with_base_url(base_url()).get_sumeragi_evidence_list_json(filter)
+        })
+    }
     #[test]
     fn get_evidence_count_fetches_json() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
-        let json = with_mock_http(
-            respond_with(&snapshots, json_response(StatusCode::OK, r#"{"count":7}"#)),
-            || client.get_sumeragi_evidence_count_json(),
-        )
-        .expect("count request");
+        let (json, snapshot) =
+            capture_request(json_response(StatusCode::OK, r#"{"count":7}"#), || {
+                client.get_sumeragi_evidence_count_json()
+            });
+        let json = json.expect("count request");
         let count_value = json
             .as_object()
             .and_then(|map| map.get("count"))
@@ -10105,12 +9804,6 @@ mod evidence_http_tests {
             }
             other => panic!("unexpected count payload: {other:?}"),
         }
-        let snapshot = snapshots
-            .lock()
-            .expect("lock snapshots")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence/count");
         assert!(
@@ -10124,28 +9817,17 @@ mod evidence_http_tests {
     }
     #[test]
     fn get_evidence_list_includes_query_params() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let client = client_with_base_url(base_url());
         let filter = SumeragiEvidenceListFilter {
             limit: Some(5),
             offset: Some(2),
             kind: Some("SumeragiV2Equivocation"),
         };
-        let json = with_mock_http(
-            respond_with(&snapshots, json_response(StatusCode::OK, r#"{"items":[]}"#)),
-            || client.get_sumeragi_evidence_list_json(&filter),
-        )
-        .expect("list request");
+        let (json, snapshot) = captured_evidence_list(&filter);
+        let json = json.expect("list request");
         assert!(
             json.as_object().is_some(),
             "list response should decode as object"
         );
-        let snapshot = snapshots
-            .lock()
-            .expect("lock snapshots")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence");
         assert!(
@@ -10170,25 +9852,14 @@ mod evidence_http_tests {
     }
     #[test]
     fn get_evidence_list_percent_encodes_adversarial_kind_filter() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let client = client_with_base_url(base_url());
         let injected_kind = "SumeragiV2Equivocation&limit=999&offset=999";
         let filter = SumeragiEvidenceListFilter {
             limit: Some(5),
             offset: Some(2),
             kind: Some(injected_kind),
         };
-        with_mock_http(
-            respond_with(&snapshots, json_response(StatusCode::OK, r#"{"items":[]}"#)),
-            || client.get_sumeragi_evidence_list_json(&filter),
-        )
-        .expect("list request");
-        let snapshot = snapshots
-            .lock()
-            .expect("lock snapshots")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
+        let (result, snapshot) = captured_evidence_list(&filter);
+        result.expect("list request");
         let params: Vec<_> = snapshot
             .url
             .query_pairs()
@@ -10206,25 +9877,14 @@ mod evidence_http_tests {
     }
     #[test]
     fn get_evidence_list_percent_encodes_control_character_kind_filter() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let client = client_with_base_url(base_url());
         let injected_kind = "SumeragiV2Equivocation=1%0a\r\nX-Iroha-Injected: yes";
         let filter = SumeragiEvidenceListFilter {
             limit: Some(u32::MAX),
             offset: Some(u32::MAX - 1),
             kind: Some(injected_kind),
         };
-        with_mock_http(
-            respond_with(&snapshots, json_response(StatusCode::OK, r#"{"items":[]}"#)),
-            || client.get_sumeragi_evidence_list_json(&filter),
-        )
-        .expect("list request");
-        let snapshot = snapshots
-            .lock()
-            .expect("lock snapshots")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
+        let (result, snapshot) = captured_evidence_list(&filter);
+        result.expect("list request");
         let raw_query = snapshot.url.query().expect("query string");
         assert!(
             !raw_query.contains('\r') && !raw_query.contains('\n'),
@@ -10247,24 +9907,13 @@ mod evidence_http_tests {
     }
     #[test]
     fn get_evidence_list_preserves_zero_and_blank_filter_params() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let client = client_with_base_url(base_url());
         let filter = SumeragiEvidenceListFilter {
             limit: Some(0),
             offset: Some(0),
             kind: Some(""),
         };
-        with_mock_http(
-            respond_with(&snapshots, json_response(StatusCode::OK, r#"{"items":[]}"#)),
-            || client.get_sumeragi_evidence_list_json(&filter),
-        )
-        .expect("list request");
-        let snapshot = snapshots
-            .lock()
-            .expect("lock snapshots")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
+        let (result, snapshot) = captured_evidence_list(&filter);
+        result.expect("list request");
         let params: Vec<_> = snapshot
             .url
             .query_pairs()
@@ -10467,50 +10116,130 @@ mod evidence_http_tests {
             "unexpected error: {err}"
         );
     }
-    #[test]
-    fn pipeline_status_404_returns_none_without_committed_query() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: crate::http_default::RequestSnapshot| {
-                let path = snapshot.url.path().to_string();
-                store.lock().expect("lock snapshot store").push(snapshot);
-                match path.as_str() {
-                    "/v1/pipeline/transactions/status" => Ok(empty_response(StatusCode::NOT_FOUND)),
-                    path => Err(eyre::eyre!("unexpected request path: {path}")),
-                }
-            }
+    fn transaction_hash_pair(
+        seed: u8,
+    ) -> (HashOf<SignedTransaction>, HashOf<TransactionEntrypoint>) {
+        let hash = Hash::prehashed([seed; Hash::LENGTH]);
+        (
+            HashOf::from_untyped_unchecked(hash),
+            HashOf::from_untyped_unchecked(hash),
+        )
+    }
+    fn committed_transaction_fixture(
+        block_seed: u8,
+        outcome: core::result::Result<
+            iroha_data_model::transaction::DataTriggerSequence,
+            TransactionRejectionReason,
+        >,
+        sign_context: &str,
+    ) -> (
+        HashOf<SignedTransaction>,
+        HashOf<TransactionEntrypoint>,
+        iroha_data_model::query::CommittedTransaction,
+    ) {
+        use crate::crypto::{MerkleProof, PrivateKey, PublicKey};
+        let public_key: PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .unwrap();
+        let private_key: PrivateKey =
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .unwrap();
+        let tx = TransactionBuilder::new(
+            test_network_id(),
+            AccountId::new(public_key),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .try_sign(&private_key)
+        .expect(sign_context);
+        let hash = tx.hash();
+        let entry = TransactionEntrypoint::External(tx);
+        let entry_hash = entry.hash();
+        let result = iroha_data_model::transaction::TransactionResult::new(outcome);
+        let committed = iroha_data_model::query::CommittedTransaction {
+            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([block_seed; Hash::LENGTH])),
+            entrypoint_hash: entry_hash,
+            entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            entrypoint: entry,
+            result_hash: result.hash(),
+            result_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            result,
+            merge_inclusion: None,
         };
-        let result = with_mock_http(responder, || {
+        (hash, entry_hash, committed)
+    }
+    fn committed_query_response(
+        transactions: Vec<iroha_data_model::query::CommittedTransaction>,
+    ) -> HttpResponse<Vec<u8>> {
+        use iroha_data_model::query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
+        };
+        let response = QueryResponse::Iterable(QueryOutput {
+            batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::CommittedTransaction(
+                transactions,
+            )),
+            remaining_items: Some(0),
+            has_more: false,
+            continue_cursor: None,
+        });
+        norito_response(StatusCode::OK, &response)
+    }
+    fn captured_pipeline_status(
+        seed: u8,
+        response: HttpResponse<Vec<u8>>,
+        confirmation: bool,
+    ) -> (Result<Option<TxConfirmationStatus>>, Vec<RequestSnapshot>) {
+        capture_requests(response, || {
             let client = client_with_base_url(base_url());
             mark_data_model_compatible(&client);
-            let hash =
-                HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
-                    Hash::prehashed([0x11; Hash::LENGTH]),
-                );
-            let entry_hash: HashOf<crate::data_model::transaction::TransactionEntrypoint> =
-                HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
-            client.transaction_pipeline_status(hash, entry_hash)
+            let (hash, entry_hash) = transaction_hash_pair(seed);
+            if confirmation {
+                client.transaction_confirmation_status(hash, entry_hash)
+            } else {
+                client.transaction_pipeline_status(hash, entry_hash)
+            }
+        })
+    }
+    fn local_pipeline_response(status: Value, resolved_from: &str) -> HttpResponse<Vec<u8>> {
+        let payload = norito::json!({
+            "hash": "deadbeef",
+            "status": status,
+            "scope": "local",
+            "resolved_from": resolved_from,
         });
-        let status = result.expect("pipeline status query");
-        assert!(status.is_none());
-        let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 1);
-        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+        json_response(
+            StatusCode::OK,
+            &norito::json::to_string(&payload).expect("status payload"),
+        )
+    }
+    fn assert_request_paths(snapshots: &[RequestSnapshot], expected: &[&str]) {
+        assert_eq!(snapshots.len(), expected.len());
+        for (snapshot, path) in snapshots.iter().zip(expected) {
+            assert_eq!(snapshot.url.path(), *path);
+        }
+    }
+    fn assert_status_scope(snapshot: &RequestSnapshot, expected: &str) {
         assert_eq!(
-            snapshots[0]
+            snapshot
                 .url
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
+            Some(expected.to_owned())
         );
     }
     #[test]
+    fn pipeline_status_404_returns_none_without_committed_query() {
+        let (result, snapshots) =
+            captured_pipeline_status(0x11, empty_response(StatusCode::NOT_FOUND), false);
+        let status = result.expect("pipeline status query");
+        assert!(status.is_none());
+        assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
+        assert_status_scope(&snapshots[0], "local");
+    }
+    #[test]
     fn pipeline_status_empty_body_falls_back_to_committed_query() {
-        use iroha_data_model::query::{
-            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
-        };
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = {
             let store = Arc::clone(&store);
@@ -10519,17 +10248,7 @@ mod evidence_http_tests {
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
                     "/v1/pipeline/transactions/status" => Ok(empty_response(StatusCode::OK)),
-                    p if p == torii_uri::QUERY => {
-                        let response = QueryResponse::Iterable(QueryOutput {
-                            batch: QueryOutputBatchBoxTuple::from_batch(
-                                QueryOutputBatchBox::CommittedTransaction(Vec::new()),
-                            ),
-                            remaining_items: Some(0),
-                            has_more: false,
-                            continue_cursor: None,
-                        });
-                        Ok(norito_response(StatusCode::OK, &response))
-                    }
+                    p if p == torii_uri::QUERY => Ok(committed_query_response(Vec::new())),
                     path => Err(eyre::eyre!("unexpected request path: {path}")),
                 }
             }
@@ -10548,104 +10267,29 @@ mod evidence_http_tests {
         let status = result.expect("confirmation status query");
         assert!(status.is_none());
         let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 2);
-        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
-        assert_eq!(snapshots[1].url.path(), torii_uri::QUERY);
+        assert_request_paths(
+            &snapshots,
+            &["/v1/pipeline/transactions/status", torii_uri::QUERY],
+        );
     }
     #[test]
     fn pipeline_status_queued_stays_local_without_committed_query() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let payload = norito::json!({
-            "hash": "deadbeef",
-            "status": { "kind": "Queued" },
-            "scope": "local",
-            "resolved_from": "queue",
-        });
-        let status_body = norito::json::to_string(&payload).expect("status payload");
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: crate::http_default::RequestSnapshot| {
-                let path = snapshot.url.path().to_string();
-                store.lock().expect("lock snapshot store").push(snapshot);
-                match path.as_str() {
-                    "/v1/pipeline/transactions/status" => {
-                        Ok(json_response(StatusCode::OK, &status_body))
-                    }
-                    path => Err(eyre::eyre!("unexpected request path: {path}")),
-                }
-            }
-        };
-        let result = with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            mark_data_model_compatible(&client);
-            let hash =
-                HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
-                    Hash::prehashed([0x23; Hash::LENGTH]),
-                );
-            let entry_hash: HashOf<crate::data_model::transaction::TransactionEntrypoint> =
-                HashOf::from_untyped_unchecked(Hash::prehashed([0x23; Hash::LENGTH]));
-            client.transaction_confirmation_status(hash, entry_hash)
-        });
+        let response = local_pipeline_response(norito::json!({ "kind": "Queued" }), "queue");
+        let (result, snapshots) = captured_pipeline_status(0x23, response, true);
         assert_eq!(
             result.expect("confirmation status query"),
             Some(super::TxConfirmationStatus::Queued)
         );
-        let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 1);
-        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
-        assert_eq!(
-            snapshots[0]
-                .url
-                .query_pairs()
-                .find(|(key, _)| key == "scope")
-                .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
-        );
+        assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
+        assert_status_scope(&snapshots[0], "local");
     }
     #[test]
     fn pipeline_status_queued_does_not_preemptively_query_committed_state() {
-        use crate::{
-            crypto::{MerkleProof, PrivateKey, PublicKey},
-            data_model::{
-                prelude::{AccountId, TransactionBuilder},
-                query::CommittedTransaction,
-                transaction::{DataTriggerSequence, TransactionEntrypoint, TransactionResult},
-            },
-        };
-        use iroha_data_model::query::{
-            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
-        };
-        let network_id = test_network_id();
-        let public_key: PublicKey =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-                .parse()
-                .unwrap();
-        let authority = AccountId::new(public_key);
-        let private_key: PrivateKey =
-            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
-                .parse()
-                .unwrap();
-        let tx = TransactionBuilder::new(
-            network_id,
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .try_sign(&private_key)
-        .expect("queued status fixture transaction should sign");
-        let hash = tx.hash();
-        let entry = TransactionEntrypoint::External(tx);
-        let entry_hash = entry.hash();
-        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
-        let committed = CommittedTransaction {
-            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x25; Hash::LENGTH])),
-            entrypoint_hash: entry_hash,
-            entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
-            entrypoint: entry,
-            result_hash: result.hash(),
-            result_proof: MerkleProof::from_audit_path(0, Vec::new()),
-            result,
-            merge_inclusion: None,
-        };
+        let (hash, entry_hash, committed) = committed_transaction_fixture(
+            0x25,
+            Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
+            "queued status fixture transaction should sign",
+        );
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let payload = norito::json!({
             "hash": "deadbeef",
@@ -10664,15 +10308,7 @@ mod evidence_http_tests {
                         Ok(json_response(StatusCode::OK, &status_body))
                     }
                     p if p == torii_uri::QUERY => {
-                        let response = QueryResponse::Iterable(QueryOutput {
-                            batch: QueryOutputBatchBoxTuple::from_batch(
-                                QueryOutputBatchBox::CommittedTransaction(vec![committed.clone()]),
-                            ),
-                            remaining_items: Some(0),
-                            has_more: false,
-                            continue_cursor: None,
-                        });
-                        Ok(norito_response(StatusCode::OK, &response))
+                        Ok(committed_query_response(vec![committed.clone()]))
                     }
                     path => Err(eyre::eyre!("unexpected request path: {path}")),
                 }
@@ -10688,118 +10324,35 @@ mod evidence_http_tests {
             Some(super::TxConfirmationStatus::Queued)
         );
         let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 1);
-        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
-        assert_eq!(
-            snapshots[0]
-                .url
-                .query_pairs()
-                .find(|(key, _)| key == "scope")
-                .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
-        );
+        assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
+        assert_status_scope(&snapshots[0], "local");
     }
     #[test]
     fn pipeline_status_approved_with_height_stays_local() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let payload = norito::json!({
-            "hash": "deadbeef",
-            "status": { "kind": "Approved", "block_height": 9 },
-            "scope": "local",
-            "resolved_from": "state",
-        });
-        let status_body = norito::json::to_string(&payload).expect("status payload");
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let path = snapshot.url.path().to_string();
-                store.lock().expect("lock snapshot store").push(snapshot);
-                match path.as_str() {
-                    "/v1/pipeline/transactions/status" => {
-                        Ok(json_response(StatusCode::OK, &status_body))
-                    }
-                    path => Err(eyre::eyre!("unexpected request path: {path}")),
-                }
-            }
-        };
-        let result = with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            mark_data_model_compatible(&client);
-            let hash =
-                HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
-                    Hash::prehashed([0x24; Hash::LENGTH]),
-                );
-            let entry_hash: HashOf<crate::data_model::transaction::TransactionEntrypoint> =
-                HashOf::from_untyped_unchecked(Hash::prehashed([0x24; Hash::LENGTH]));
-            client.transaction_confirmation_status(hash, entry_hash)
-        });
+        let response = local_pipeline_response(
+            norito::json!({ "kind": "Approved", "block_height": 9 }),
+            "state",
+        );
+        let (result, snapshots) = captured_pipeline_status(0x24, response, true);
         assert_eq!(
             result.expect("confirmation status query"),
             Some(super::TxConfirmationStatus::Approved(
                 std::num::NonZeroU64::new(9)
             ))
         );
-        let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 1);
-        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
-        assert_eq!(
-            snapshots[0]
-                .url
-                .query_pairs()
-                .find(|(key, _)| key == "scope")
-                .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
-        );
+        assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
+        assert_status_scope(&snapshots[0], "local");
     }
     #[test]
     fn pipeline_status_approved_without_height_stays_local() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let payload = norito::json!({
-            "hash": "deadbeef",
-            "status": { "kind": "Approved" },
-            "scope": "local",
-            "resolved_from": "state",
-        });
-        let status_body = norito::json::to_string(&payload).expect("status payload");
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let path = snapshot.url.path().to_string();
-                store.lock().expect("lock snapshot store").push(snapshot);
-                match path.as_str() {
-                    "/v1/pipeline/transactions/status" => {
-                        Ok(json_response(StatusCode::OK, &status_body))
-                    }
-                    path => Err(eyre::eyre!("unexpected request path: {path}")),
-                }
-            }
-        };
-        let result = with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            mark_data_model_compatible(&client);
-            let hash =
-                HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
-                    Hash::prehashed([0x24; Hash::LENGTH]),
-                );
-            let entry_hash: HashOf<crate::data_model::transaction::TransactionEntrypoint> =
-                HashOf::from_untyped_unchecked(Hash::prehashed([0x24; Hash::LENGTH]));
-            client.transaction_confirmation_status(hash, entry_hash)
-        });
+        let response = local_pipeline_response(norito::json!({ "kind": "Approved" }), "state");
+        let (result, snapshots) = captured_pipeline_status(0x24, response, true);
         assert_eq!(
             result.expect("confirmation status query"),
             Some(super::TxConfirmationStatus::Approved(None))
         );
-        let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 1);
-        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
-        assert_eq!(
-            snapshots[0]
-                .url
-                .query_pairs()
-                .find(|(key, _)| key == "scope")
-                .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
-        );
+        assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
+        assert_status_scope(&snapshots[0], "local");
     }
     #[test]
     #[expect(
@@ -10807,54 +10360,14 @@ mod evidence_http_tests {
         reason = "the test keeps the rejected-status fallback and committed-query binding in one fail-closed protocol flow"
     )]
     fn pipeline_status_rejection_without_reason_uses_committed_query() {
-        use crate::{
-            crypto::{MerkleProof, PrivateKey, PublicKey},
-            data_model::{
-                ValidationFail,
-                prelude::{AccountId, TransactionBuilder},
-                query::CommittedTransaction,
-                transaction::{
-                    TransactionEntrypoint, TransactionResult, error::TransactionRejectionReason,
-                },
-            },
-        };
-        use iroha_data_model::query::{
-            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
-        };
-        let network_id = test_network_id();
-        let public_key: PublicKey =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-                .parse()
-                .unwrap();
-        let authority = AccountId::new(public_key);
-        let private_key: PrivateKey =
-            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
-                .parse()
-                .unwrap();
-        let tx = TransactionBuilder::new(
-            network_id,
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .try_sign(&private_key)
-        .expect("rejection status fixture transaction should sign");
-        let hash = tx.hash();
-        let entry = TransactionEntrypoint::External(tx);
-        let entry_hash = entry.hash();
         let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "nope".to_string(),
         ));
-        let result = TransactionResult::new(Err(reason.clone()));
-        let committed = CommittedTransaction {
-            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x33; Hash::LENGTH])),
-            entrypoint_hash: entry_hash,
-            entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
-            entrypoint: entry,
-            result_hash: result.hash(),
-            result_proof: MerkleProof::from_audit_path(0, Vec::new()),
-            result,
-            merge_inclusion: None,
-        };
+        let (hash, entry_hash, committed) = committed_transaction_fixture(
+            0x33,
+            Err(reason.clone()),
+            "rejection status fixture transaction should sign",
+        );
         let status_payload = norito::json!({
             "hash": "deadbeef",
             "status": { "kind": "Rejected" },
@@ -10873,15 +10386,7 @@ mod evidence_http_tests {
                         Ok(json_response(StatusCode::OK, &status_body))
                     }
                     p if p == torii_uri::QUERY => {
-                        let response = QueryResponse::Iterable(QueryOutput {
-                            batch: QueryOutputBatchBoxTuple::from_batch(
-                                QueryOutputBatchBox::CommittedTransaction(vec![committed.clone()]),
-                            ),
-                            remaining_items: Some(0),
-                            has_more: false,
-                            continue_cursor: None,
-                        });
-                        Ok(norito_response(StatusCode::OK, &response))
+                        Ok(committed_query_response(vec![committed.clone()]))
                     }
                     path => Err(eyre::eyre!("unexpected request path: {path}")),
                 }
@@ -10897,212 +10402,101 @@ mod evidence_http_tests {
             Some(super::TxConfirmationStatus::Rejected(Some(reason)))
         );
         let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 2);
-        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
-        assert_eq!(snapshots[1].url.path(), torii_uri::QUERY);
-        assert_eq!(
-            snapshots[0]
-                .url
-                .query_pairs()
-                .find(|(key, _)| key == "scope")
-                .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
+        assert_request_paths(
+            &snapshots,
+            &["/v1/pipeline/transactions/status", torii_uri::QUERY],
         );
+        assert_status_scope(&snapshots[0], "local");
+    }
+    fn wait_status_case(
+        seed: u8,
+        status: Value,
+        resolved_from: &str,
+        terminal_statuses: Vec<TransactionWaitTerminalStatus>,
+        expectation: &str,
+    ) -> (TransactionWaitOutcome, String, RequestSnapshot) {
+        let (hash, _) = transaction_hash_pair(seed);
+        let expected_hash = hash.to_string();
+        let payload = norito::json!({
+            "hash": expected_hash,
+            "status": status,
+            "scope": "local",
+            "resolved_from": resolved_from,
+        });
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_string(&payload).expect("status payload"),
+        );
+        let (outcome, snapshot) = capture_request(response, || {
+            client_with_base_url(base_url()).wait_for_transaction_terminal_status(
+                hash,
+                TransactionWaitOptions {
+                    timeout: Duration::from_millis(50),
+                    poll_interval: Duration::from_millis(1),
+                    terminal_statuses,
+                },
+            )
+        });
+        (outcome.expect(expectation), expected_hash, snapshot)
     }
     #[test]
     fn wait_for_transaction_terminal_status_returns_configured_rejection() {
-        let hash =
-            HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
-                Hash::prehashed([0x31; Hash::LENGTH]),
-            );
-        let expected_hash = hash.to_string();
-        let payload = norito::json!({
-            "hash": expected_hash,
-            "status": { "kind": "Rejected" },
-            "scope": "local",
-            "resolved_from": "state",
-        });
-        let body = norito::json::to_string(&payload).expect("status payload");
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let outcome = with_mock_http(
-            respond_with(&store, json_response(StatusCode::OK, &body)),
-            || {
-                let client = client_with_base_url(base_url());
-                client.wait_for_transaction_terminal_status(
-                    hash,
-                    TransactionWaitOptions {
-                        timeout: Duration::from_millis(50),
-                        poll_interval: Duration::from_millis(1),
-                        terminal_statuses: vec![TransactionWaitTerminalStatus::Rejected],
-                    },
-                )
-            },
-        )
-        .expect("configured rejection should be returned");
+        let (outcome, expected_hash, snapshot) = wait_status_case(
+            0x31,
+            norito::json!({ "kind": "Rejected" }),
+            "state",
+            vec![TransactionWaitTerminalStatus::Rejected],
+            "configured rejection should be returned",
+        );
         assert_eq!(outcome.hash, expected_hash);
         assert_eq!(outcome.terminal_kind, "Rejected");
         assert_eq!(outcome.attempts, 1);
-        let snapshot = store
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("status snapshot");
-        assert_eq!(
-            snapshot
-                .url
-                .query_pairs()
-                .find(|(key, _)| key == "scope")
-                .map(|(_, value)| value.to_string()),
-            Some("global".to_owned())
-        );
+        assert_status_scope(&snapshot, "global");
     }
     #[test]
     fn wait_for_transaction_terminal_status_returns_configured_expiry() {
-        let hash =
-            HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
-                Hash::prehashed([0x32; Hash::LENGTH]),
-            );
-        let expected_hash = hash.to_string();
-        let payload = norito::json!({
-            "hash": expected_hash,
-            "status": { "kind": "Expired" },
-            "scope": "local",
-            "resolved_from": "state",
-        });
-        let body = norito::json::to_string(&payload).expect("status payload");
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let outcome = with_mock_http(
-            respond_with(&store, json_response(StatusCode::OK, &body)),
-            || {
-                let client = client_with_base_url(base_url());
-                client.wait_for_transaction_terminal_status(
-                    hash,
-                    TransactionWaitOptions {
-                        timeout: Duration::from_millis(50),
-                        poll_interval: Duration::from_millis(1),
-                        terminal_statuses: vec![TransactionWaitTerminalStatus::Expired],
-                    },
-                )
-            },
-        )
-        .expect("configured expiry should be returned");
+        let (outcome, expected_hash, snapshot) = wait_status_case(
+            0x32,
+            norito::json!({ "kind": "Expired" }),
+            "state",
+            vec![TransactionWaitTerminalStatus::Expired],
+            "configured expiry should be returned",
+        );
         assert_eq!(outcome.hash, expected_hash);
         assert_eq!(outcome.terminal_kind, "Expired");
         assert_eq!(outcome.attempts, 1);
-        let snapshot = store
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("status snapshot");
-        assert_eq!(
-            snapshot
-                .url
-                .query_pairs()
-                .find(|(key, _)| key == "scope")
-                .map(|(_, value)| value.to_string()),
-            Some("global".to_owned())
-        );
+        assert_status_scope(&snapshot, "global");
     }
     #[test]
     fn wait_for_transaction_terminal_status_uses_local_scope_for_non_terminal_target() {
-        let hash =
-            HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
-                Hash::prehashed([0x33; Hash::LENGTH]),
-            );
-        let expected_hash = hash.to_string();
-        let payload = norito::json!({
-            "hash": expected_hash,
-            "status": { "kind": "Queued" },
-            "scope": "local",
-            "resolved_from": "queue",
-        });
-        let body = norito::json::to_string(&payload).expect("status payload");
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let outcome = with_mock_http(
-            respond_with(&store, json_response(StatusCode::OK, &body)),
-            || {
-                let client = client_with_base_url(base_url());
-                client.wait_for_transaction_terminal_status(
-                    hash,
-                    TransactionWaitOptions {
-                        timeout: Duration::from_millis(50),
-                        poll_interval: Duration::from_millis(1),
-                        terminal_statuses: vec![TransactionWaitTerminalStatus::Queued],
-                    },
-                )
-            },
-        )
-        .expect("configured queued status should be returned");
+        let (outcome, expected_hash, snapshot) = wait_status_case(
+            0x33,
+            norito::json!({ "kind": "Queued" }),
+            "queue",
+            vec![TransactionWaitTerminalStatus::Queued],
+            "configured queued status should be returned",
+        );
         assert_eq!(outcome.hash, expected_hash);
         assert_eq!(outcome.terminal_kind, "Queued");
         assert_eq!(outcome.attempts, 1);
-        let snapshot = store
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("status snapshot");
-        assert_eq!(
-            snapshot
-                .url
-                .query_pairs()
-                .find(|(key, _)| key == "scope")
-                .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
-        );
+        assert_status_scope(&snapshot, "local");
     }
     #[test]
     fn wait_for_transaction_terminal_status_uses_local_scope_for_mixed_targets() {
-        let hash =
-            HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
-                Hash::prehashed([0x34; Hash::LENGTH]),
-            );
-        let expected_hash = hash.to_string();
-        let payload = norito::json!({
-            "hash": expected_hash,
-            "status": { "kind": "Approved", "block_height": 7 },
-            "scope": "local",
-            "resolved_from": "cache",
-        });
-        let body = norito::json::to_string(&payload).expect("status payload");
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let outcome = with_mock_http(
-            respond_with(&store, json_response(StatusCode::OK, &body)),
-            || {
-                let client = client_with_base_url(base_url());
-                client.wait_for_transaction_terminal_status(
-                    hash,
-                    TransactionWaitOptions {
-                        timeout: Duration::from_millis(50),
-                        poll_interval: Duration::from_millis(1),
-                        terminal_statuses: vec![
-                            TransactionWaitTerminalStatus::Rejected,
-                            TransactionWaitTerminalStatus::Approved,
-                        ],
-                    },
-                )
-            },
-        )
-        .expect("mixed targets should stop on approved status");
+        let (outcome, expected_hash, snapshot) = wait_status_case(
+            0x34,
+            norito::json!({ "kind": "Approved", "block_height": 7 }),
+            "cache",
+            vec![
+                TransactionWaitTerminalStatus::Rejected,
+                TransactionWaitTerminalStatus::Approved,
+            ],
+            "mixed targets should stop on approved status",
+        );
         assert_eq!(outcome.hash, expected_hash);
         assert_eq!(outcome.terminal_kind, "Approved");
         assert_eq!(outcome.block_height, Some(7));
-        let snapshot = store
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("status snapshot");
-        assert_eq!(
-            snapshot
-                .url
-                .query_pairs()
-                .find(|(key, _)| key == "scope")
-                .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
-        );
+        assert_status_scope(&snapshot, "local");
     }
     #[test]
     fn wait_for_transaction_terminal_status_scope_is_global_for_terminal_only_targets() {
@@ -11126,41 +10520,61 @@ mod evidence_http_tests {
             "local"
         );
     }
-    #[test]
-    fn get_transaction_status_response_requests_json_and_decodes_typed_payload() {
+    #[derive(Clone, Copy)]
+    enum StatusResponseRequest {
+        Default,
+        Local,
+        Auto,
+    }
+    fn typed_status_response_snapshot(
+        seed: u8,
+        kind: &str,
+        block_height: Option<u64>,
+        scope: &str,
+        resolved_from: &str,
+        request: StatusResponseRequest,
+    ) -> RequestSnapshot {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
-        let hash =
-            HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
-                Hash::prehashed([0x44; Hash::LENGTH]),
-            );
+        let (hash, _) = transaction_hash_pair(seed);
         let payload = PipelineTransactionStatusResponse::new(
             hash.to_string(),
             PipelineTransactionStatus {
-                kind: "Queued".to_owned(),
-                block_height: None,
+                kind: kind.to_owned(),
+                block_height,
             },
-            "global".to_owned(),
-            "queue".to_owned(),
+            scope.to_owned(),
+            resolved_from.to_owned(),
         );
         let body = norito::json::to_string(
             &norito::json::to_value(&payload).expect("status payload value"),
         )
         .expect("status payload");
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, &body);
-        let decoded = with_mock_http(respond_with(&store, response), || {
+        let (decoded, snapshot) = capture_request(json_response(StatusCode::OK, &body), || {
             let client = client_with_base_url(base_url());
-            client.get_transaction_status_response(hash)
-        })
-        .expect("transaction status response")
-        .expect("status payload");
-        assert_eq!(decoded, payload);
-        let snapshot = store
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("status snapshot");
+            match request {
+                StatusResponseRequest::Default => client.get_transaction_status_response(hash),
+                StatusResponseRequest::Local => client.get_transaction_status_response_local(hash),
+                StatusResponseRequest::Auto => client.get_transaction_status_response_auto(hash),
+            }
+        });
+        assert_eq!(
+            decoded
+                .expect("transaction status response")
+                .expect("status payload"),
+            payload
+        );
+        snapshot
+    }
+    #[test]
+    fn get_transaction_status_response_requests_json_and_decodes_typed_payload() {
+        let snapshot = typed_status_response_snapshot(
+            0x44,
+            "Queued",
+            None,
+            "global",
+            "queue",
+            StatusResponseRequest::Default,
+        );
         assert_eq!(snapshot.url.path(), "/v1/pipeline/transactions/status");
         assert!(
             snapshot.headers.iter().any(|(name, value)| {
@@ -11175,91 +10589,27 @@ mod evidence_http_tests {
     }
     #[test]
     fn get_transaction_status_response_local_sets_local_scope() {
-        use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
-        let hash =
-            HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
-                Hash::prehashed([0x46; Hash::LENGTH]),
-            );
-        let payload = PipelineTransactionStatusResponse::new(
-            hash.to_string(),
-            PipelineTransactionStatus {
-                kind: "Committed".to_owned(),
-                block_height: Some(7),
-            },
-            "local".to_owned(),
-            "state".to_owned(),
+        let snapshot = typed_status_response_snapshot(
+            0x46,
+            "Committed",
+            Some(7),
+            "local",
+            "state",
+            StatusResponseRequest::Local,
         );
-        let body = norito::json::to_string(
-            &norito::json::to_value(&payload).expect("status payload value"),
-        )
-        .expect("status payload");
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, &body);
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_transaction_status_response_local(hash)
-        })
-        .expect("transaction status response")
-        .expect("status payload");
-        assert_eq!(decoded, payload);
-        let snapshot = store
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("status snapshot");
-        assert_eq!(
-            snapshot
-                .url
-                .query_pairs()
-                .find(|(key, _)| key == "scope")
-                .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
-        );
+        assert_status_scope(&snapshot, "local");
     }
     #[test]
     fn get_transaction_status_response_auto_sets_global_scope() {
-        use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
-        let hash =
-            HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
-                Hash::prehashed([0x45; Hash::LENGTH]),
-            );
-        let payload = PipelineTransactionStatusResponse::new(
-            hash.to_string(),
-            PipelineTransactionStatus {
-                kind: "Committed".to_owned(),
-                block_height: Some(7),
-            },
-            "global".to_owned(),
-            "state".to_owned(),
+        let snapshot = typed_status_response_snapshot(
+            0x45,
+            "Committed",
+            Some(7),
+            "global",
+            "state",
+            StatusResponseRequest::Auto,
         );
-        let body = norito::json::to_string(
-            &norito::json::to_value(&payload).expect("status payload value"),
-        )
-        .expect("status payload");
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, &body);
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_transaction_status_response_auto(hash)
-        })
-        .expect("transaction status response")
-        .expect("status payload");
-        assert_eq!(decoded, payload);
-        let snapshot = store
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("status snapshot");
-        assert_eq!(
-            snapshot
-                .url
-                .query_pairs()
-                .find(|(key, _)| key == "scope")
-                .map(|(_, value)| value.to_string()),
-            Some("global".to_owned())
-        );
+        assert_status_scope(&snapshot, "global");
     }
     #[test]
     fn get_account_read_requests_json_and_decodes_typed_payload() {
@@ -11303,13 +10653,7 @@ mod evidence_http_tests {
     }
     #[test]
     fn runtime_and_node_json_requests_set_accept_json() {
-        fn assert_json_accept(store: &SnapshotStore, expected_path: &str) {
-            let snapshot = store
-                .lock()
-                .expect("snapshot lock")
-                .first()
-                .cloned()
-                .expect("request snapshot");
+        fn assert_json_accept(snapshot: &RequestSnapshot, expected_path: &str) {
             assert_eq!(snapshot.url.path(), expected_path);
             assert!(
                 snapshot.headers.iter().any(|(name, value)| {
@@ -11318,106 +10662,56 @@ mod evidence_http_tests {
                 "request should set Accept: application/json"
             );
         }
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client
-                .get_runtime_abi_active_json()
-                .expect("runtime ABI active JSON")
+        type JsonRequest = fn(&Client) -> Result<Value>;
+        for (path, expectation, request) in [
+            (
+                "/v1/runtime/abi/active",
+                "runtime ABI active JSON",
+                Client::get_runtime_abi_active_json as JsonRequest,
+            ),
+            (
+                "/v1/runtime/abi/hash",
+                "runtime ABI hash JSON",
+                Client::get_runtime_abi_hash_json,
+            ),
+            (
+                "/v1/node/capabilities",
+                "node capabilities JSON",
+                Client::get_node_capabilities_json,
+            ),
+            (
+                "/v1/sumeragi/evidence/count",
+                "Sumeragi evidence count JSON",
+                Client::get_sumeragi_evidence_count_json,
+            ),
+        ] {
+            let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
+                request(&client_with_base_url(base_url()))
+            });
+            result.expect(expectation);
+            assert_json_accept(&snapshot, path);
+        }
+        let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
+            client_with_base_url(base_url()).get_node_capabilities_json_for_compatibility()
         });
-        assert_json_accept(&store, "/v1/runtime/abi/active");
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client
-                .get_runtime_abi_hash_json()
-                .expect("runtime ABI hash JSON")
-        });
-        assert_json_accept(&store, "/v1/runtime/abi/hash");
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client
-                .get_node_capabilities_json_for_compatibility()
-                .expect("compatibility node capabilities JSON")
-        });
-        assert_json_accept(&store, "/v1/node/capabilities");
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client
-                .get_node_capabilities_json()
-                .expect("node capabilities JSON")
-        });
-        assert_json_accept(&store, "/v1/node/capabilities");
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        with_mock_http(respond_with(&store, response), || {
-            client_with_base_url(base_url())
-                .get_sumeragi_evidence_count_json()
-                .expect("Sumeragi evidence count JSON")
-        });
-        assert_json_accept(&store, "/v1/sumeragi/evidence/count");
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        with_mock_http(respond_with(&store, response), || {
+        result.expect("compatibility node capabilities JSON");
+        assert_json_accept(&snapshot, "/v1/node/capabilities");
+        let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
             let filter = SumeragiEvidenceListFilter::default();
-            client_with_base_url(base_url())
-                .get_sumeragi_evidence_list_json(&filter)
-                .expect("Sumeragi evidence list JSON")
+            client_with_base_url(base_url()).get_sumeragi_evidence_list_json(&filter)
         });
-        assert_json_accept(&store, "/v1/sumeragi/evidence");
+        result.expect("Sumeragi evidence list JSON");
+        assert_json_accept(&snapshot, "/v1/sumeragi/evidence");
     }
     #[test]
     fn transaction_committed_limits_query_params() {
-        use crate::{
-            crypto::{MerkleProof, PrivateKey, PublicKey},
-            data_model::{
-                prelude::{AccountId, TransactionBuilder},
-                query::CommittedTransaction,
-                transaction::{DataTriggerSequence, TransactionEntrypoint, TransactionResult},
-            },
-        };
-        use iroha_data_model::query::{
-            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
-            QueryResponse, SignedQuery,
-        };
+        use iroha_data_model::query::{QueryRequest, SignedQuery};
         use iroha_version::codec::DecodeVersioned;
-        let network_id = test_network_id();
-        let public_key: PublicKey =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-                .parse()
-                .unwrap();
-        let authority = AccountId::new(public_key);
-        let private_key: PrivateKey =
-            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
-                .parse()
-                .unwrap();
-        let tx = TransactionBuilder::new(
-            network_id,
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .try_sign(&private_key)
-        .expect("committed transaction fixture should sign");
-        let hash = tx.hash();
-        let entry = TransactionEntrypoint::External(tx);
-        let entry_hash = entry.hash();
-        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
-        let committed = CommittedTransaction {
-            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH])),
-            entrypoint_hash: entry_hash,
-            entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
-            entrypoint: entry,
-            result_hash: result.hash(),
-            result_proof: MerkleProof::from_audit_path(0, Vec::new()),
-            result,
-            merge_inclusion: None,
-        };
+        let (hash, entry_hash, committed) = committed_transaction_fixture(
+            0x44,
+            Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
+            "committed transaction fixture should sign",
+        );
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = {
             let store = Arc::clone(&store);
@@ -11426,15 +10720,7 @@ mod evidence_http_tests {
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
                     p if p == torii_uri::QUERY => {
-                        let response = QueryResponse::Iterable(QueryOutput {
-                            batch: QueryOutputBatchBoxTuple::from_batch(
-                                QueryOutputBatchBox::CommittedTransaction(vec![committed.clone()]),
-                            ),
-                            remaining_items: Some(0),
-                            has_more: false,
-                            continue_cursor: None,
-                        });
-                        Ok(norito_response(StatusCode::OK, &response))
+                        Ok(committed_query_response(vec![committed.clone()]))
                     }
                     path => Err(eyre::eyre!("unexpected request path: {path}")),
                 }
@@ -11463,14 +10749,17 @@ mod evidence_http_tests {
             _ => panic!("expected start query"),
         }
     }
-    #[test]
-    fn transaction_confirmation_status_stops_on_connection_refused_pipeline_lookup() {
+    fn assert_connection_refused_confirmation(seed: u8, committed_fallback: bool) {
         use std::io::{Error, ErrorKind};
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = {
             let store = Arc::clone(&store);
             move |snapshot: RequestSnapshot| {
+                let pipeline = snapshot.url.path() == "/v1/pipeline/transactions/status";
                 store.lock().expect("lock snapshot store").push(snapshot);
+                if committed_fallback && pipeline {
+                    return Ok(empty_response(StatusCode::NOT_FOUND));
+                }
                 Err(eyre::Report::from(Error::new(
                     ErrorKind::ConnectionRefused,
                     "torii down",
@@ -11480,12 +10769,7 @@ mod evidence_http_tests {
         let result = with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
             mark_data_model_compatible(&client);
-            let hash =
-                HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
-                    Hash::prehashed([0x45; Hash::LENGTH]),
-                );
-            let entry_hash: HashOf<crate::data_model::transaction::TransactionEntrypoint> =
-                HashOf::from_untyped_unchecked(Hash::prehashed([0x45; Hash::LENGTH]));
+            let (hash, entry_hash) = transaction_hash_pair(seed);
             client.transaction_confirmation_status(hash, entry_hash)
         });
         let err = result.expect_err("connection refusal should fail fast");
@@ -11494,68 +10778,28 @@ mod evidence_http_tests {
             "unexpected error: {err:?}"
         );
         let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(
-            snapshots.len(),
-            1,
-            "should not fall back to committed query"
-        );
-        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
-        assert_eq!(
-            snapshots[0]
-                .url
-                .query_pairs()
-                .find(|(key, _)| key == "scope")
-                .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
-        );
+        if !committed_fallback {
+            assert_eq!(
+                snapshots.len(),
+                1,
+                "should not fall back to committed query"
+            );
+        }
+        let expected = if committed_fallback {
+            vec!["/v1/pipeline/transactions/status", torii_uri::QUERY]
+        } else {
+            vec!["/v1/pipeline/transactions/status"]
+        };
+        assert_request_paths(&snapshots, &expected);
+        assert_status_scope(&snapshots[0], "local");
+    }
+    #[test]
+    fn transaction_confirmation_status_stops_on_connection_refused_pipeline_lookup() {
+        assert_connection_refused_confirmation(0x45, false);
     }
     #[test]
     fn transaction_confirmation_status_stops_on_connection_refused_committed_fallback() {
-        use std::io::{Error, ErrorKind};
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let path = snapshot.url.path().to_string();
-                store.lock().expect("lock snapshot store").push(snapshot);
-                match path.as_str() {
-                    "/v1/pipeline/transactions/status" => Ok(empty_response(StatusCode::NOT_FOUND)),
-                    p if p == torii_uri::QUERY => Err(eyre::Report::from(Error::new(
-                        ErrorKind::ConnectionRefused,
-                        "torii down",
-                    ))),
-                    path => Err(eyre::eyre!("unexpected request path: {path}")),
-                }
-            }
-        };
-        let result = with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            mark_data_model_compatible(&client);
-            let hash =
-                HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
-                    Hash::prehashed([0x46; Hash::LENGTH]),
-                );
-            let entry_hash: HashOf<crate::data_model::transaction::TransactionEntrypoint> =
-                HashOf::from_untyped_unchecked(Hash::prehashed([0x46; Hash::LENGTH]));
-            client.transaction_confirmation_status(hash, entry_hash)
-        });
-        let err = result.expect_err("connection refusal should fail fast");
-        assert!(
-            err.to_string().contains("Torii is unreachable"),
-            "unexpected error: {err:?}"
-        );
-        let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 2);
-        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
-        assert_eq!(snapshots[1].url.path(), torii_uri::QUERY);
-        assert_eq!(
-            snapshots[0]
-                .url
-                .query_pairs()
-                .find(|(key, _)| key == "scope")
-                .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
-        );
+        assert_connection_refused_confirmation(0x46, true);
     }
 }
 /// Private structure to incapsulate error reporting for HTTP response.
@@ -13962,13 +13206,12 @@ impl Client {
             self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header(http::header::CONTENT_TYPE, APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get configuration with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or(""),
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get configuration with HTTP status",
+            ". ",
+        )?;
         let s = std::str::from_utf8(resp.body()).wrap_err("Invalid UTF-8")?;
         norito::json::from_json_fast_smart::<ConfigGetDTO>(s).map_err(|e| eyre!("{e}"))
     }
@@ -13997,13 +13240,12 @@ impl Client {
             self.operator_signed_request(HttpMethod::POST, url, body)?
                 .header(http::header::CONTENT_TYPE, APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::ACCEPTED {
-            return Err(eyre!(
-                "Failed to post configuration with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or(""),
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::ACCEPTED,
+            "Failed to post configuration with HTTP status",
+            ". ",
+        )?;
         Ok(())
     }
     /// Gets network status seen from the peer
@@ -14132,13 +13374,12 @@ impl Client {
             .header(http::header::ACCEPT, "text/plain")
             .build()?
             .send()?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get server version with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or(""),
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get server version with HTTP status",
+            ". ",
+        )?;
         let body = std::str::from_utf8(resp.body())
             .wrap_err("Server version response was not valid UTF-8")?
             .trim();
@@ -14164,14 +13405,11 @@ impl Client {
             self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", "application/json"),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get zk roots with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::OK,
+            "Failed to get zk roots with HTTP status",
+        )
     }
     /// Fetch current execution witness snapshot as JSON from `/v1/debug/witness`.
     ///
@@ -14180,14 +13418,11 @@ impl Client {
     pub fn get_debug_witness_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/debug/witness");
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get witness (json) with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::OK,
+            "Failed to get witness (json) with HTTP status",
+        )
     }
     /// Fetch current execution witness snapshot as Norito-encoded bytes.
     /// Prefers Accept-driven `/v1/debug/witness` and falls back to `.bin`.
@@ -14202,13 +13437,12 @@ impl Client {
                 .header("Accept", "application/x-norito")
                 .build()?,
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get witness (norito) with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get witness (norito) with HTTP status",
+            ". ",
+        )?;
         Ok(resp.into_body())
     }
     /// Canonical-account-signed POST `/v1/aliases/setup/plan`.
@@ -15127,13 +14361,12 @@ impl Client {
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to read multisig spec with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to read multisig spec with HTTP status",
+            ". ",
+        )?;
         let decoded: MultisigSpecResponse = norito::json::from_slice(resp.body())
             .map_err(|err| eyre!("failed to decode closed multisig spec response: {err}"))?;
         if request
@@ -15167,13 +14400,12 @@ impl Client {
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to query multisig proposals with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to query multisig proposals with HTTP status",
+            ". ",
+        )?;
         let decoded: MultisigProposalsQueryResponse = norito::json::from_slice(resp.body())
             .map_err(|err| {
                 eyre!("failed to decode closed multisig proposals query response: {err}")
@@ -15214,13 +14446,12 @@ impl Client {
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to resolve multisig proposal with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to resolve multisig proposal with HTTP status",
+            ". ",
+        )?;
         let decoded: MultisigProposalResolveResponse = norito::json::from_slice(resp.body())
             .map_err(|err| {
                 eyre!("failed to decode closed multisig proposal resolve response: {err}")
@@ -15340,14 +14571,12 @@ impl Client {
             .body(transaction.encode_versioned())
             .build()?;
         let resp = self.send_prepared_request(resp)?;
-        if resp.status() != StatusCode::ACCEPTED {
-            return Err(eyre!(
-                "Failed to register pin manifest: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_response(
+            resp,
+            StatusCode::ACCEPTED,
+            "Failed to register pin manifest",
+            " ",
+        )
     }
     /// Build a signed DA ingest request using the client's key pair.
     ///
@@ -15587,6 +14816,36 @@ impl Client {
         let summary = generate_da_proof_summary(&manifest, &payload, &applied)?;
         Ok((summary, applied))
     }
+    fn send_da_json_get(&self, path: &str) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, path);
+        Ok(self
+            .default_request(HttpMethod::GET, url)
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()?)
+    }
+    fn send_da_json_post(&self, path: &str, body: Vec<u8>) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, path);
+        Ok(self
+            .default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .header("Accept", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()?)
+    }
+    fn decode_da_json_response<T: norito::json::JsonDeserialize>(
+        response: &Response<Vec<u8>>,
+        status_message: &'static str,
+        decode_message: &'static str,
+    ) -> Result<T> {
+        if response.status() != StatusCode::OK {
+            return Err(ResponseReport::with_msg(status_message, response)
+                .unwrap_or_else(core::convert::identity)
+                .into());
+        }
+        norito::json::from_slice(response.body()).wrap_err(decode_message)
+    }
     /// Fetch the canonical DA manifest + chunk-plan bundle for a storage ticket.
     ///
     /// This is equivalent to running `iroha da get-blob --storage-ticket=...` and returns the
@@ -15599,21 +14858,12 @@ impl Client {
     pub fn get_da_manifest_bundle(&self, storage_ticket_hex: &str) -> Result<DaManifestBundle> {
         let normalized = normalize_storage_ticket_hex(storage_ticket_hex)?;
         let path = format!("v1/da/manifests/{normalized}");
-        let url = join_torii_url(&self.torii_url, &path);
-        let response = self
-            .default_request(HttpMethod::GET, url)
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()?;
-        if response.status() != StatusCode::OK {
-            return Err(
-                ResponseReport::with_msg("failed to fetch DA manifest bundle", &response)
-                    .unwrap_or_else(core::convert::identity)
-                    .into(),
-            );
-        }
-        let value: JsonValue = norito::json::from_slice(response.body())
-            .wrap_err("failed to parse DA manifest response")?;
+        let response = self.send_da_json_get(&path)?;
+        let value: JsonValue = Self::decode_da_json_response(
+            &response,
+            "failed to fetch DA manifest bundle",
+            "failed to parse DA manifest response",
+        )?;
         DaManifestBundle::from_json(&value)
     }
     /// Fetch the active DA commitment proof-policy bundle from `/v1/da/proof-policies`.
@@ -15622,21 +14872,12 @@ impl Client {
     ///
     /// Returns an error if the HTTP request fails or the response cannot be decoded.
     pub fn get_da_proof_policies(&self) -> Result<DaProofPolicyBundle> {
-        let url = join_torii_url(&self.torii_url, "v1/da/proof-policies");
-        let response = self
-            .default_request(HttpMethod::GET, url)
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()?;
-        if response.status() != StatusCode::OK {
-            return Err(
-                ResponseReport::with_msg("failed to fetch DA proof policies", &response)
-                    .unwrap_or_else(core::convert::identity)
-                    .into(),
-            );
-        }
-        norito::json::from_slice(response.body())
-            .wrap_err("failed to decode DA proof policies response")
+        let response = self.send_da_json_get("v1/da/proof-policies")?;
+        Self::decode_da_json_response(
+            &response,
+            "failed to fetch DA proof policies",
+            "failed to decode DA proof policies response",
+        )
     }
     /// Fetch a stable DA proof-policy snapshot from `/v1/da/proof-policies/snapshot`.
     ///
@@ -15644,22 +14885,12 @@ impl Client {
     ///
     /// Returns an error if the HTTP request fails or the response cannot be decoded.
     pub fn get_da_proof_policy_snapshot(&self) -> Result<DaProofPolicyBundle> {
-        let url = join_torii_url(&self.torii_url, "v1/da/proof-policies/snapshot");
-        let response = self
-            .default_request(HttpMethod::GET, url)
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()?;
-        if response.status() != StatusCode::OK {
-            return Err(ResponseReport::with_msg(
-                "failed to fetch DA proof policy snapshot",
-                &response,
-            )
-            .unwrap_or_else(core::convert::identity)
-            .into());
-        }
-        norito::json::from_slice(response.body())
-            .wrap_err("failed to decode DA proof policy snapshot response")
+        let response = self.send_da_json_get("v1/da/proof-policies/snapshot")?;
+        Self::decode_da_json_response(
+            &response,
+            "failed to fetch DA proof policy snapshot",
+            "failed to decode DA proof policy snapshot response",
+        )
     }
     /// Query commitment records from `/v1/da/commitments`.
     ///
@@ -15672,23 +14903,12 @@ impl Client {
     ) -> Result<DaCommitmentListResponse> {
         let body =
             norito::json::to_vec(request).wrap_err("failed to encode DA commitments request")?;
-        let url = join_torii_url(&self.torii_url, "v1/da/commitments");
-        let response = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        if response.status() != StatusCode::OK {
-            return Err(
-                ResponseReport::with_msg("failed to list DA commitments", &response)
-                    .unwrap_or_else(core::convert::identity)
-                    .into(),
-            );
-        }
-        norito::json::from_slice(response.body())
-            .wrap_err("failed to decode DA commitments response")
+        let response = self.send_da_json_post("v1/da/commitments", body)?;
+        Self::decode_da_json_response(
+            &response,
+            "failed to list DA commitments",
+            "failed to decode DA commitments response",
+        )
     }
     /// Build a commitment proof from `/v1/da/commitments/prove`.
     ///
@@ -15701,23 +14921,12 @@ impl Client {
     ) -> Result<Option<DaCommitmentProofResponse>> {
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode DA commitment proof request")?;
-        let url = join_torii_url(&self.torii_url, "v1/da/commitments/prove");
-        let response = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        if response.status() != StatusCode::OK {
-            return Err(
-                ResponseReport::with_msg("failed to prove DA commitment", &response)
-                    .unwrap_or_else(core::convert::identity)
-                    .into(),
-            );
-        }
-        norito::json::from_slice(response.body())
-            .wrap_err("failed to decode DA commitment proof response")
+        let response = self.send_da_json_post("v1/da/commitments/prove", body)?;
+        Self::decode_da_json_response(
+            &response,
+            "failed to prove DA commitment",
+            "failed to decode DA commitment proof response",
+        )
     }
     /// Verify a commitment proof against `/v1/da/commitments/verify`.
     ///
@@ -15729,24 +14938,12 @@ impl Client {
         proof: &DaCommitmentProof,
     ) -> Result<DaCommitmentVerifyResponse> {
         let body = norito::json::to_vec(proof).wrap_err("failed to encode DA commitment proof")?;
-        let url = join_torii_url(&self.torii_url, "v1/da/commitments/verify");
-        let response = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        if response.status() != StatusCode::OK {
-            return Err(ResponseReport::with_msg(
-                "failed to verify DA commitment proof",
-                &response,
-            )
-            .unwrap_or_else(core::convert::identity)
-            .into());
-        }
-        norito::json::from_slice(response.body())
-            .wrap_err("failed to decode DA commitment verify response")
+        let response = self.send_da_json_post("v1/da/commitments/verify", body)?;
+        Self::decode_da_json_response(
+            &response,
+            "failed to verify DA commitment proof",
+            "failed to decode DA commitment verify response",
+        )
     }
     /// Query pin intent records from `/v1/da/pin-intents`.
     ///
@@ -15759,23 +14956,12 @@ impl Client {
     ) -> Result<DaPinIntentListResponse> {
         let body =
             norito::json::to_vec(request).wrap_err("failed to encode DA pin intent request")?;
-        let url = join_torii_url(&self.torii_url, "v1/da/pin-intents");
-        let response = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        if response.status() != StatusCode::OK {
-            return Err(
-                ResponseReport::with_msg("failed to list DA pin intents", &response)
-                    .unwrap_or_else(core::convert::identity)
-                    .into(),
-            );
-        }
-        norito::json::from_slice(response.body())
-            .wrap_err("failed to decode DA pin intent list response")
+        let response = self.send_da_json_post("v1/da/pin-intents", body)?;
+        Self::decode_da_json_response(
+            &response,
+            "failed to list DA pin intents",
+            "failed to decode DA pin intent list response",
+        )
     }
     /// Build a pin intent proof from `/v1/da/pin-intents/prove`.
     ///
@@ -15788,23 +14974,12 @@ impl Client {
     ) -> Result<Option<DaPinIntentProof>> {
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode DA pin intent proof request")?;
-        let url = join_torii_url(&self.torii_url, "v1/da/pin-intents/prove");
-        let response = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        if response.status() != StatusCode::OK {
-            return Err(
-                ResponseReport::with_msg("failed to prove DA pin intent", &response)
-                    .unwrap_or_else(core::convert::identity)
-                    .into(),
-            );
-        }
-        norito::json::from_slice(response.body())
-            .wrap_err("failed to decode DA pin intent proof response")
+        let response = self.send_da_json_post("v1/da/pin-intents/prove", body)?;
+        Self::decode_da_json_response(
+            &response,
+            "failed to prove DA pin intent",
+            "failed to decode DA pin intent proof response",
+        )
     }
     /// Verify a pin intent proof against `/v1/da/pin-intents/verify`.
     ///
@@ -15816,24 +14991,12 @@ impl Client {
         proof: &DaPinIntentProof,
     ) -> Result<DaPinIntentVerifyResponse> {
         let body = norito::json::to_vec(proof).wrap_err("failed to encode DA pin intent proof")?;
-        let url = join_torii_url(&self.torii_url, "v1/da/pin-intents/verify");
-        let response = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        if response.status() != StatusCode::OK {
-            return Err(ResponseReport::with_msg(
-                "failed to verify DA pin intent proof",
-                &response,
-            )
-            .unwrap_or_else(core::convert::identity)
-            .into());
-        }
-        norito::json::from_slice(response.body())
-            .wrap_err("failed to decode DA pin intent verify response")
+        let response = self.send_da_json_post("v1/da/pin-intents/verify", body)?;
+        Self::decode_da_json_response(
+            &response,
+            "failed to verify DA pin intent proof",
+            "failed to decode DA pin intent verify response",
+        )
     }
     /// Fetch a DA manifest bundle and persist the artefacts to `output_dir`.
     ///
@@ -17007,14 +16170,11 @@ impl Client {
             self.account_signed_request(HttpMethod::POST, url, body.to_vec())?
                 .header("Content-Type", "application/x-norito"),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to verify-batch (norito) with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::OK,
+            "Failed to verify-batch (norito) with HTTP status",
+        )
     }
     /// Convenience: POST a ZK verify-batch request to `/v1/zk/verify-batch` with a
     /// JSON array of base64-encoded Norito `OpenVerifyEnvelope` items. Returns JSON `{ ok, statuses }`.
@@ -17031,14 +16191,11 @@ impl Client {
             self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to verify-batch (json) with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::OK,
+            "Failed to verify-batch (json) with HTTP status",
+        )
     }
     /// Convenience: POST `/v1/zk/ivm/derive` with a JSON DTO body.
     ///
@@ -17059,14 +16216,11 @@ impl Client {
             self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to derive ivm proved payload (json) with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::OK,
+            "Failed to derive ivm proved payload (json) with HTTP status",
+        )
     }
     /// Convenience: POST a ZK IVM prove job to `/v1/zk/ivm/prove` with a JSON DTO body.
     ///
@@ -17087,14 +16241,11 @@ impl Client {
             self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to submit ivm prove job (json) with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::OK,
+            "Failed to submit ivm prove job (json) with HTTP status",
+        )
     }
     /// Convenience: GET a ZK IVM prove job status from `/v1/zk/ivm/prove/{job_id}` (JSON).
     /// The configured client account signs the exact request and must own the job.
@@ -17105,14 +16256,11 @@ impl Client {
         let url = join_torii_url(&self.torii_url, &format!("v1/zk/ivm/prove/{job_id}"));
         let resp =
             self.send_builder(self.account_signed_request(HttpMethod::GET, url, Vec::new())?)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get ivm prove job (json) with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::OK,
+            "Failed to get ivm prove job (json) with HTTP status",
+        )
     }
     /// Convenience: DELETE a ZK IVM prove job from `/v1/zk/ivm/prove/{job_id}` (JSON).
     /// The configured client account signs the exact request and must own the job.
@@ -17123,14 +16271,11 @@ impl Client {
         let url = join_torii_url(&self.torii_url, &format!("v1/zk/ivm/prove/{job_id}"));
         let resp =
             self.send_builder(self.account_signed_request(HttpMethod::DELETE, url, Vec::new())?)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to delete ivm prove job (json) with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::OK,
+            "Failed to delete ivm prove job (json) with HTTP status",
+        )
     }
     /// Convenience: POST `/v1/zk/vote/tally` with a JSON DTO body `{ election_id }`.
     /// Returns JSON `{ finalized: bool, tally: [u64; N] }`.
@@ -17147,14 +16292,11 @@ impl Client {
             .header("Content-Type", APPLICATION_JSON)
             .build()?
             .send()?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get vote tally with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::OK,
+            "Failed to get vote tally with HTTP status",
+        )
     }
     /// Upload an attachment to `/v1/zk/attachments`; returns its JSON metadata.
     /// # Errors
@@ -17169,14 +16311,11 @@ impl Client {
             self.account_signed_request(HttpMethod::POST, url, body.to_vec())?
                 .header("Content-Type", content_type),
         )?;
-        if resp.status() != StatusCode::CREATED {
-            return Err(eyre!(
-                "Failed to upload attachment with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::CREATED,
+            "Failed to upload attachment with HTTP status",
+        )
     }
     /// POST `/v1/gov/proposals/deploy-contract` with a JSON DTO body.
     /// # Errors
@@ -17192,14 +16331,7 @@ impl Client {
             .header("Content-Type", APPLICATION_JSON)
             .build()?
             .send()?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to propose-deploy: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to propose-deploy")
     }
     /// POST `/v1/gov/proposals/sccp-route-governance` with one typed action.
     ///
@@ -17239,13 +16371,12 @@ impl Client {
                 .header("Accept", APPLICATION_JSON)
                 .max_response_bytes(SCCP_JSON_RESPONSE_MAX_BYTES),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to draft SCCP route governance: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to draft SCCP route governance",
+            " ",
+        )?;
         let content_type = Self::response_content_type(&resp);
         if !Self::is_sccp_json_content_type(content_type) {
             return Err(eyre!(
@@ -17617,14 +16748,7 @@ impl Client {
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to draft ZK V1 ballot: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to draft ZK V1 ballot")
     }
     /// Draft a PLAIN ballot instruction via `/v1/gov/ballots/plain`.
     ///
@@ -17651,14 +16775,7 @@ impl Client {
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to draft plain ballot: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to draft plain ballot")
     }
     /// POST `/v1/gov/protected-namespaces` with a JSON body `{ namespaces: [..] }` to apply directly.
     /// # Errors
@@ -17678,14 +16795,7 @@ impl Client {
             .body(body)
             .build()?
             .send()?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to apply protected namespaces: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to apply protected namespaces")
     }
     /// POST `/v1/gov/finalize` with a JSON DTO body.
     /// Expected body shape: `{ referendum_id: Hex64, proposal_id: Hex64 }`, where both fields
@@ -17716,14 +16826,7 @@ impl Client {
             .body(body)
             .build()?
             .send()?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to build finalize tx: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to build finalize tx")
     }
     /// POST `/v1/gov/enact` with a JSON DTO body.
     /// # Errors
@@ -17737,14 +16840,7 @@ impl Client {
             .header("Content-Type", APPLICATION_JSON)
             .build()?
             .send()?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to build enact tx: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to build enact tx")
     }
     /// GET `/v1/gov/proposals/{id}`
     /// # Errors
@@ -17754,14 +16850,7 @@ impl Client {
         let path = format!("v1/gov/proposals/{id_hex}");
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_account_signed_get(url)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get proposal: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to get proposal")
     }
     /// GET `/v1/gov/locks/{rid}`
     /// # Errors
@@ -17771,14 +16860,7 @@ impl Client {
         let path = format!("v1/gov/locks/{rid}");
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_account_signed_get(url)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get locks: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to get locks")
     }
     /// GET `/v1/gov/council/current`
     /// # Errors
@@ -17786,14 +16868,7 @@ impl Client {
     pub fn get_gov_council_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/gov/council/current");
         let resp = self.send_account_signed_get(url)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get council: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to get council")
     }
     /// GET `/v1/gov/citizens`
     /// # Errors
@@ -17801,14 +16876,7 @@ impl Client {
     pub fn get_gov_citizens_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/gov/citizens");
         let resp = self.send_account_signed_get(url)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get citizens: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to get citizens")
     }
     /// GET `/v1/gov/referenda/{id}`
     /// # Errors
@@ -17818,14 +16886,7 @@ impl Client {
         let path = format!("v1/gov/referenda/{id}");
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_account_signed_get(url)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get referendum: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to get referendum")
     }
     /// GET `/v1/gov/tally/{id}`
     ///
@@ -17836,14 +16897,7 @@ impl Client {
         let path = format!("v1/gov/tally/{id}");
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_account_signed_get(url)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get tally: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to get tally")
     }
     /// GET `/v1/gov/unlocks/stats` (operator/audit stats)
     ///
@@ -17852,14 +16906,7 @@ impl Client {
     pub fn get_gov_unlock_stats_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/gov/unlocks/stats");
         let resp = self.send_account_signed_get(url)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get unlock stats: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to get unlock stats")
     }
     /// GET `/v1/gov/protected-namespaces` (current protected namespaces list)
     ///
@@ -17868,14 +16915,7 @@ impl Client {
     pub fn get_gov_protected_namespaces_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/gov/protected-namespaces");
         let resp = self.send_account_signed_get(url)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get protected namespaces: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to get protected namespaces")
     }
     /// GET `/v1/gov/contracts/{contract_address}`
     ///
@@ -17886,14 +16926,7 @@ impl Client {
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
     ) -> Result<norito::json::Value> {
         let resp = self.get_gov_contract_response(contract_address)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get governed contract: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to get governed contract")
     }
     /// GET `/v1/gov/contracts/{contract_address}` and retain the exact response bytes.
     ///
@@ -17938,13 +16971,7 @@ impl Client {
                 .header("Accept", APPLICATION_JSON)
                 .max_response_bytes(CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get code bytes: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(&resp, StatusCode::OK, "Failed to get code bytes", " ")?;
         if resp.body().len() > CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES {
             return Err(eyre!(
                 "contract code response exceeds the first-release artifact limit"
@@ -17976,14 +17003,7 @@ impl Client {
         let path = format!("v1/contracts/code/{code_hash_hex}");
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get contract manifest: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to get contract manifest")
     }
     /// POST `/v1/contracts/call` with a JSON body.
     ///
@@ -18472,14 +17492,7 @@ impl Client {
             self.account_signed_get_request(url)?
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get runtime ABI active: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to get runtime ABI active")
     }
     /// POST `/v1/contracts/call/simulate` with a JSON body.
     ///
@@ -18523,14 +17536,7 @@ impl Client {
             .body(body)
             .build()?
             .send()?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to simulate contract call: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to simulate contract call")
     }
     /// GET `/v1/runtime/abi/hash`
     /// Returns `{ policy: "V1", abi_hash_hex: "<64-hex>" }`.
@@ -18542,14 +17548,7 @@ impl Client {
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get runtime ABI hash: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to get runtime ABI hash")
     }
     /// GET `/v1/node/capabilities`
     /// Returns `{ abi_version: n, data_model_version: n, signed_transaction_schema_hash_hex: "...", crypto: { ... } }`.
@@ -18583,13 +17582,12 @@ impl Client {
             warn!("node capabilities probe returned 404; deferring compatibility check");
             return Ok(None);
         }
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get node capabilities: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get node capabilities",
+            " ",
+        )?;
         Ok(Some(
             norito::json::from_slice(resp.body())
                 .wrap_err("failed to decode node capabilities JSON")?,
@@ -18605,13 +17603,12 @@ impl Client {
             self.account_signed_get_request(url)?
                 .header(http::header::ACCEPT, APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get node capabilities: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get node capabilities",
+            " ",
+        )?;
         norito::json::from_slice(resp.body()).wrap_err("failed to decode node capabilities JSON")
     }
     /// GET `/v1/privacy/capabilities`.
@@ -18631,13 +17628,12 @@ impl Client {
                 .header("Accept", APPLICATION_JSON)
                 .max_response_bytes(PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get privacy capabilities: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get privacy capabilities",
+            " ",
+        )?;
         let content_type = Self::response_content_type(&resp);
         if !Self::is_exact_json_content_type(content_type) {
             return Err(eyre!(
@@ -18669,13 +17665,12 @@ impl Client {
                 .header("Accept", APPLICATION_NORITO)
                 .max_response_bytes(PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get privacy capabilities: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get privacy capabilities",
+            " ",
+        )?;
         let content_type = Self::response_content_type(&resp);
         if !Self::is_norito_content_type(content_type) {
             return Err(eyre!(
@@ -18709,13 +17704,12 @@ impl Client {
                 .header("Accept", APPLICATION_JSON)
                 .max_response_bytes(SCCP_CAPABILITIES_RESPONSE_MAX_BYTES),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get SCCP capabilities: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get SCCP capabilities",
+            " ",
+        )?;
         let content_type = Self::response_content_type(&resp);
         if !Self::is_sccp_json_content_type(content_type) {
             return Err(eyre!(
@@ -18741,13 +17735,12 @@ impl Client {
                 .header("Accept", APPLICATION_NORITO)
                 .max_response_bytes(SCCP_CAPABILITIES_RESPONSE_MAX_BYTES),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get SCCP capabilities: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get SCCP capabilities",
+            " ",
+        )?;
         let content_type = Self::response_content_type(&resp);
         if !Self::is_norito_content_type(content_type) {
             return Err(eyre!(
@@ -18778,13 +17771,7 @@ impl Client {
                 .header("Accept", APPLICATION_JSON)
                 .max_response_bytes(SCCP_JSON_RESPONSE_MAX_BYTES),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get SCCP registry: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(&resp, StatusCode::OK, "Failed to get SCCP registry", " ")?;
         let content_type = Self::response_content_type(&resp);
         if !Self::is_sccp_json_content_type(content_type) {
             return Err(eyre!(
@@ -18812,13 +17799,7 @@ impl Client {
                 .header("Accept", APPLICATION_NORITO)
                 .max_response_bytes(SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get SCCP registry: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(&resp, StatusCode::OK, "Failed to get SCCP registry", " ")?;
         let content_type = Self::response_content_type(&resp);
         if !Self::is_norito_content_type(content_type) {
             return Err(eyre!(
@@ -18862,13 +17843,12 @@ impl Client {
                 .header("Accept", APPLICATION_JSON)
                 .max_response_bytes(SCCP_RECENT_RESPONSE_MAX_BYTES),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get recent SCCP messages: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get recent SCCP messages",
+            " ",
+        )?;
         let content_type = Self::response_content_type(&resp);
         if !Self::is_sccp_json_content_type(content_type) {
             return Err(eyre!(
@@ -18904,13 +17884,12 @@ impl Client {
                 .header("Accept", APPLICATION_NORITO)
                 .max_response_bytes(SCCP_RECENT_RESPONSE_MAX_BYTES),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get recent SCCP messages: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get recent SCCP messages",
+            " ",
+        )?;
         let content_type = Self::response_content_type(&resp);
         if !Self::is_norito_content_type(content_type) {
             return Err(eyre!(
@@ -18949,13 +17928,12 @@ impl Client {
                 .header("Accept", APPLICATION_JSON)
                 .max_response_bytes(SCCP_JSON_RESPONSE_MAX_BYTES),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get SCCP message bundle: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get SCCP message bundle",
+            " ",
+        )?;
         let content_type = Self::response_content_type(&resp);
         if !Self::is_sccp_json_content_type(content_type) {
             return Err(eyre!(
@@ -18987,13 +17965,12 @@ impl Client {
                 .header("Accept", APPLICATION_NORITO)
                 .max_response_bytes(SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get SCCP message bundle: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get SCCP message bundle",
+            " ",
+        )?;
         let content_type = Self::response_content_type(&resp);
         if !Self::is_norito_content_type(content_type) {
             return Err(eyre!(
@@ -19024,13 +18001,12 @@ impl Client {
                 .header("Accept", APPLICATION_JSON)
                 .max_response_bytes(SCCP_JSON_RESPONSE_MAX_BYTES),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get SCCP Groth16 proof request: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get SCCP Groth16 proof request",
+            " ",
+        )?;
         let content_type = Self::response_content_type(&resp);
         if !Self::is_sccp_json_content_type(content_type) {
             return Err(eyre!(
@@ -19063,13 +18039,12 @@ impl Client {
                 .header("Accept", APPLICATION_NORITO)
                 .max_response_bytes(SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get SCCP Groth16 proof request: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get SCCP Groth16 proof request",
+            " ",
+        )?;
         let content_type = Self::response_content_type(&resp);
         if !Self::is_norito_content_type(content_type) {
             return Err(eyre!(
@@ -19119,13 +18094,12 @@ impl Client {
                 .max_response_bytes(SCCP_JSON_RESPONSE_MAX_BYTES)
                 .body(body),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to submit SCCP destination proof: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to submit SCCP destination proof",
+            " ",
+        )?;
         let content_type = Self::response_content_type(&resp);
         if !Self::is_sccp_json_content_type(content_type) {
             return Err(eyre!(
@@ -19200,13 +18174,12 @@ impl Client {
                 .max_response_bytes(SCCP_JSON_RESPONSE_MAX_BYTES)
                 .body(body),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to submit SCCP native message: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to submit SCCP native message",
+            " ",
+        )?;
         let content_type = Self::response_content_type(&resp);
         if !Self::is_sccp_json_content_type(content_type) {
             return Err(eyre!(
@@ -19230,14 +18203,7 @@ impl Client {
     pub fn get_runtime_metrics_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/runtime/metrics");
         let resp = self.send_account_signed_get(url)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get runtime metrics: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to get runtime metrics")
     }
     /// GET `/v1/runtime/upgrades`
     /// # Errors
@@ -19248,14 +18214,7 @@ impl Client {
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get runtime upgrades: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to get runtime upgrades")
     }
     /// GET `/v1/accounts/{account_id}` — canonical account materialization read.
     ///
@@ -19393,14 +18352,7 @@ impl Client {
             .body(body)
             .build()?
             .send()?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to propose runtime upgrade: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to propose runtime upgrade")
     }
     /// POST `/v1/runtime/upgrades/activate/:id` (id hex in path)
     ///
@@ -19414,14 +18366,7 @@ impl Client {
                 .header("Content-Type", APPLICATION_JSON)
                 .body(Vec::new()),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to activate runtime upgrade: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to activate runtime upgrade")
     }
     /// POST `/v1/runtime/upgrades/cancel/:id` (id hex in path)
     ///
@@ -19435,14 +18380,7 @@ impl Client {
                 .header("Content-Type", APPLICATION_JSON)
                 .body(Vec::new()),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to cancel runtime upgrade: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_ok(resp, "Failed to cancel runtime upgrade")
     }
     /// List attachments via `/v1/zk/attachments`. Returns JSON array of metadata objects.
     /// # Errors
@@ -19451,14 +18389,11 @@ impl Client {
         let url = join_torii_url(&self.torii_url, "v1/zk/attachments");
         let resp =
             self.send_builder(self.account_signed_request(HttpMethod::GET, url, Vec::new())?)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to list attachments with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::OK,
+            "Failed to list attachments with HTTP status",
+        )
     }
     /// List proof records via `/v1/zk/proofs` with optional filters.
     /// # Errors
@@ -19472,14 +18407,11 @@ impl Client {
         let mut req = self.default_request(HttpMethod::GET, url);
         req = filter.apply(req);
         let resp = self.send_builder(req)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to list proofs with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::OK,
+            "Failed to list proofs with HTTP status",
+        )
     }
     /// Count proof records via `/v1/zk/proofs/count` with optional filters.
     /// # Errors
@@ -19490,13 +18422,12 @@ impl Client {
         let mut req = self.default_request(HttpMethod::GET, url);
         req = filter.apply(req);
         let resp = self.send_builder(req)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to count proofs with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to count proofs with HTTP status",
+            ". ",
+        )?;
         let v: norito::json::Value = norito::json::from_slice(resp.body())?;
         v.get("count")
             .and_then(norito::json::Value::as_u64)
@@ -19514,14 +18445,11 @@ impl Client {
             &[backend, hash_hex.as_str()],
         );
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to fetch proof with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::OK,
+            "Failed to fetch proof with HTTP status",
+        )
     }
     /// Inspect node-local proof retention configuration and live counters as an authenticated
     /// operator via `/v1/proofs/retention`.
@@ -19534,14 +18462,11 @@ impl Client {
         );
         let resp =
             self.send_builder(self.operator_signed_request(HttpMethod::GET, url, Vec::new())?)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to fetch proof retention status with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::OK,
+            "Failed to fetch proof retention status with HTTP status",
+        )
     }
     /// List prover reports via `/v1/zk/prover/reports` with optional server-side filters.
     /// If a filter field is `None`, it is omitted.
@@ -19556,14 +18481,11 @@ impl Client {
         let mut req = self.default_request(HttpMethod::GET, url);
         req = filter.apply(req);
         let resp = self.send_builder(req)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to list prover reports with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::OK,
+            "Failed to list prover reports with HTTP status",
+        )
     }
     /// Get count of prover reports via `/v1/zk/prover/reports/count` with optional filters.
     ///
@@ -19574,13 +18496,12 @@ impl Client {
         let mut req = self.default_request(HttpMethod::GET, url);
         req = filter.apply(req);
         let resp = self.send_builder(req)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get prover reports count with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to get prover reports count with HTTP status",
+            ". ",
+        )?;
         let v: norito::json::Value = norito::json::from_slice(resp.body())?;
         v.get("count")
             .and_then(norito::json::Value::as_u64)
@@ -19594,13 +18515,12 @@ impl Client {
         let url = join_torii_url(&self.torii_url, &format!("v1/zk/attachments/{id}"));
         let resp =
             self.send_builder(self.account_signed_request(HttpMethod::GET, url, Vec::new())?)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to fetch attachment with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to fetch attachment with HTTP status",
+            ". ",
+        )?;
         let ct = resp
             .headers()
             .get("content-type")
@@ -19614,13 +18534,12 @@ impl Client {
         let url = join_torii_url(&self.torii_url, &format!("v1/zk/attachments/{id}"));
         let resp =
             self.send_builder(self.account_signed_request(HttpMethod::DELETE, url, Vec::new())?)?;
-        if resp.status() != StatusCode::NO_CONTENT {
-            return Err(eyre!(
-                "Failed to delete attachment with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::NO_CONTENT,
+            "Failed to delete attachment with HTTP status",
+            ". ",
+        )?;
         Ok(())
     }
     /// List prover reports via `/v1/zk/prover/reports`. Returns a JSON array of reports.
@@ -19630,14 +18549,11 @@ impl Client {
     pub fn get_zk_prover_reports_list(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/zk/prover/reports");
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to list prover reports with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::OK,
+            "Failed to list prover reports with HTTP status",
+        )
     }
     /// Fetch a single prover report JSON by id via `/v1/zk/prover/reports/{id}`.
     /// Returns a JSON object describing the report.
@@ -19646,14 +18562,11 @@ impl Client {
     pub fn get_zk_prover_report_json(&self, id: &str) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, &format!("v1/zk/prover/reports/{id}"));
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get prover report with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(
+            resp,
+            StatusCode::OK,
+            "Failed to get prover report with HTTP status",
+        )
     }
     /// Delete a prover report by id via `/v1/zk/prover/reports/{id}`.
     /// # Errors
@@ -19661,13 +18574,12 @@ impl Client {
     pub fn delete_zk_prover_report(&self, id: &str) -> Result<()> {
         let url = join_torii_url(&self.torii_url, &format!("v1/zk/prover/reports/{id}"));
         let resp = self.send_builder(self.default_request(HttpMethod::DELETE, url))?;
-        if resp.status() != StatusCode::NO_CONTENT {
-            return Err(eyre!(
-                "Failed to delete prover report with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::NO_CONTENT,
+            "Failed to delete prover report with HTTP status",
+            ". ",
+        )?;
         Ok(())
     }
     /// Bulk delete prover reports via `/v1/zk/prover/reports` with filters.
@@ -19680,13 +18592,12 @@ impl Client {
         let mut req = self.default_request(HttpMethod::DELETE, url);
         req = filter.apply(req);
         let resp = self.send_builder(req)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to bulk delete prover reports with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to bulk delete prover reports with HTTP status",
+            ". ",
+        )?;
         let v: norito::json::Value = norito::json::from_slice(resp.body())?;
         v.get("deleted")
             .and_then(norito::json::Value::as_u64)
@@ -19711,13 +18622,12 @@ impl Client {
             .body(body)
             .build()?;
         let resp = self.send_prepared_request(resp)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to prepare VK registration with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to prepare VK registration with HTTP status",
+            ". ",
+        )?;
         decode_zk_vk_transaction_draft(
             resp.body(),
             value,
@@ -19744,13 +18654,12 @@ impl Client {
             .body(body)
             .build()?;
         let resp = self.send_prepared_request(resp)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to prepare VK update with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
+        Self::ensure_response_status(
+            &resp,
+            StatusCode::OK,
+            "Failed to prepare VK update with HTTP status",
+            ". ",
+        )?;
         decode_zk_vk_transaction_draft(
             resp.body(),
             value,
@@ -19765,14 +18674,7 @@ impl Client {
     pub fn get_zk_vk_list_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/zk/vk");
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to list VKs with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(resp, StatusCode::OK, "Failed to list VKs with HTTP status")
     }
     /// Convenience: GET `/v1/zk/vk/{backend}/{name}` as JSON Value.
     ///
@@ -19784,14 +18686,7 @@ impl Client {
         let name = require_non_empty_path_segment(name, "zk verifying key name")?;
         let url = join_torii_url_with_path_segments(&self.torii_url, "v1/zk/vk", &[backend, name]);
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get VK with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::decode_json_http_status(resp, StatusCode::OK, "Failed to get VK with HTTP status")
     }
 }
 fn tx_confirmation_status_from_pipeline_response(
@@ -20702,6 +19597,39 @@ mod tx_confirmation_stream_tests {
     use std::{future, time::Duration};
     use tokio::sync::{mpsc, oneshot};
     use tokio_stream::wrappers::UnboundedReceiverStream;
+    fn block_event(height: std::num::NonZeroU64, status: BlockStatus) -> EventBox {
+        EventBox::Pipeline(PipelineEventBox::Block(BlockEvent {
+            header: BlockHeader {
+                height,
+                prev_block_hash: None,
+                merkle_root: None,
+                result_merkle_root: None,
+                da_proof_policies_hash: None,
+                da_commitments_hash: None,
+                da_pin_intents_hash: None,
+                npos_effects_hash: None,
+                sccp_commitment_root: None,
+                execution_context_hash: None,
+                creation_time_ms: 0,
+                view_change_index: 0,
+                confidential_features: None,
+            },
+            status,
+        }))
+    }
+    fn transaction_event(
+        hash: HashOf<SignedTransaction>,
+        block_height: Option<std::num::NonZeroU64>,
+        status: TransactionStatus,
+    ) -> EventBox {
+        EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
+            hash,
+            block_height,
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            status,
+        }))
+    }
     #[tokio::test]
     async fn close_tx_confirmation_stream_timeout_is_bounded() {
         let closed = super::Client::close_tx_confirmation_stream_with_timeout(
@@ -20724,13 +19652,7 @@ mod tx_confirmation_stream_tests {
     async fn queued_timeout_honors_max_duration() {
         let hash: HashOf<SignedTransaction> =
             HashOf::from_untyped_unchecked(Hash::prehashed([7_u8; Hash::LENGTH]));
-        let queued_event = EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
-            hash,
-            block_height: None,
-            lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::UNIVERSAL,
-            status: TransactionStatus::Queued,
-        }));
+        let queued_event = transaction_event(hash, None, TransactionStatus::Queued);
         let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
         let mut events = UnboundedReceiverStream::new(rx);
         tokio::spawn(async move {
@@ -20801,42 +19723,8 @@ mod tx_confirmation_stream_tests {
         let hash: HashOf<SignedTransaction> =
             HashOf::from_untyped_unchecked(Hash::prehashed([14_u8; Hash::LENGTH]));
         let height = std::num::NonZeroU64::new(15).expect("nonzero height");
-        let committed_event = EventBox::Pipeline(PipelineEventBox::Block(BlockEvent {
-            header: BlockHeader {
-                height,
-                prev_block_hash: None,
-                merkle_root: None,
-                result_merkle_root: None,
-                da_proof_policies_hash: None,
-                da_commitments_hash: None,
-                da_pin_intents_hash: None,
-                npos_effects_hash: None,
-                sccp_commitment_root: None,
-                execution_context_hash: None,
-                creation_time_ms: 0,
-                view_change_index: 0,
-                confidential_features: None,
-            },
-            status: BlockStatus::Committed,
-        }));
-        let applied_event = EventBox::Pipeline(PipelineEventBox::Block(BlockEvent {
-            header: BlockHeader {
-                height,
-                prev_block_hash: None,
-                merkle_root: None,
-                result_merkle_root: None,
-                da_proof_policies_hash: None,
-                da_commitments_hash: None,
-                da_pin_intents_hash: None,
-                npos_effects_hash: None,
-                sccp_commitment_root: None,
-                execution_context_hash: None,
-                creation_time_ms: 0,
-                view_change_index: 0,
-                confidential_features: None,
-            },
-            status: BlockStatus::Applied,
-        }));
+        let committed_event = block_event(height, BlockStatus::Committed);
+        let applied_event = block_event(height, BlockStatus::Applied);
         let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
         let mut events = UnboundedReceiverStream::new(rx);
         let status_is_applied = Arc::new(AtomicBool::new(false));
@@ -20889,42 +19777,13 @@ mod tx_confirmation_stream_tests {
             HashOf::from_untyped_unchecked(Hash::prehashed([15_u8; Hash::LENGTH]));
         let height = std::num::NonZeroU64::new(16).expect("nonzero height");
         let events = vec![
-            Ok::<_, eyre::Report>(EventBox::Pipeline(PipelineEventBox::Transaction(
-                TransactionEvent {
-                    hash,
-                    block_height: None,
-                    lane_id: LaneId::SINGLE,
-                    dataspace_id: DataSpaceId::UNIVERSAL,
-                    status: TransactionStatus::Queued,
-                },
-            ))),
-            Ok(EventBox::Pipeline(PipelineEventBox::Transaction(
-                TransactionEvent {
-                    hash,
-                    block_height: Some(height),
-                    lane_id: LaneId::SINGLE,
-                    dataspace_id: DataSpaceId::UNIVERSAL,
-                    status: TransactionStatus::Approved,
-                },
-            ))),
-            Ok(EventBox::Pipeline(PipelineEventBox::Block(BlockEvent {
-                header: BlockHeader {
-                    height,
-                    prev_block_hash: None,
-                    merkle_root: None,
-                    result_merkle_root: None,
-                    da_proof_policies_hash: None,
-                    da_commitments_hash: None,
-                    da_pin_intents_hash: None,
-                    npos_effects_hash: None,
-                    sccp_commitment_root: None,
-                    execution_context_hash: None,
-                    creation_time_ms: 0,
-                    view_change_index: 0,
-                    confidential_features: None,
-                },
-                status: BlockStatus::Committed,
-            }))),
+            Ok::<_, eyre::Report>(transaction_event(hash, None, TransactionStatus::Queued)),
+            Ok(transaction_event(
+                hash,
+                Some(height),
+                TransactionStatus::Approved,
+            )),
+            Ok(block_event(height, BlockStatus::Committed)),
         ];
         let mut stream = stream::iter(events);
         let result =
@@ -20936,24 +19795,7 @@ mod tx_confirmation_stream_tests {
         let hash: HashOf<SignedTransaction> =
             HashOf::from_untyped_unchecked(Hash::prehashed([10_u8; Hash::LENGTH]));
         let height = std::num::NonZeroU64::new(12).expect("nonzero height");
-        let block_event = EventBox::Pipeline(PipelineEventBox::Block(BlockEvent {
-            header: BlockHeader {
-                height,
-                prev_block_hash: None,
-                merkle_root: None,
-                result_merkle_root: None,
-                da_proof_policies_hash: None,
-                da_commitments_hash: None,
-                da_pin_intents_hash: None,
-                npos_effects_hash: None,
-                sccp_commitment_root: None,
-                execution_context_hash: None,
-                creation_time_ms: 0,
-                view_change_index: 0,
-                confidential_features: None,
-            },
-            status: BlockStatus::Applied,
-        }));
+        let block_event = block_event(height, BlockStatus::Applied);
         let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
         let mut events = UnboundedReceiverStream::new(rx);
         tokio::spawn(async move {
@@ -20985,24 +19827,7 @@ mod tx_confirmation_stream_tests {
         let hash: HashOf<SignedTransaction> =
             HashOf::from_untyped_unchecked(Hash::prehashed([10_u8; Hash::LENGTH]));
         let height = std::num::NonZeroU64::new(12).expect("nonzero height");
-        let block_event = EventBox::Pipeline(PipelineEventBox::Block(BlockEvent {
-            header: BlockHeader {
-                height,
-                prev_block_hash: None,
-                merkle_root: None,
-                result_merkle_root: None,
-                da_proof_policies_hash: None,
-                da_commitments_hash: None,
-                da_pin_intents_hash: None,
-                npos_effects_hash: None,
-                sccp_commitment_root: None,
-                execution_context_hash: None,
-                creation_time_ms: 0,
-                view_change_index: 0,
-                confidential_features: None,
-            },
-            status: BlockStatus::Applied,
-        }));
+        let block_event = block_event(height, BlockStatus::Applied);
         let rejection = TransactionRejectionReason::Validation(ValidationFail::InternalError(
             "rejected".to_string(),
         ));
@@ -21700,9 +20525,9 @@ mod tests {
         default_alias_policy,
         evidence_http_tests::{
             SnapshotStore, assert_signed_headers, assert_signed_json_headers,
-            assert_single_accept_header, base_url, capability_gated_responder,
-            client_with_base_url, empty_response, json_response, respond_with, with_mock_http,
-            with_mock_sorafs_fetch,
+            assert_single_accept_header, base_url, capability_gated_responder, capture_request,
+            capture_requests, client_with_base_url, empty_response, json_response, respond_with,
+            with_mock_http, with_mock_sorafs_fetch,
         },
         *,
     };
@@ -22710,227 +21535,146 @@ mod tests {
         assert!(message.contains("signed request nonce OS RNG failed"));
         assert!(message.contains("failing client RNG"));
     }
-    #[test]
-    fn account_alias_resolve_unsigned_omits_canonical_account_headers() {
+    #[derive(Clone, Copy)]
+    enum AliasReadFixture {
+        Alias,
+        Index,
+        Account,
+    }
+    fn assert_alias_read_request(fixture: AliasReadFixture, authenticated: bool) {
         let client = client_with_static_canonical_auth_headers();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let alias = "bright-brook-5859@ubl.sbp"
             .parse::<AccountAliasName>()
             .expect("canonical alias");
-        let response = json_response(
-            StatusCode::OK,
-            &norito::json::to_json(&AccountAliasResolutionWireV1 {
+        let account_id = parse_canonical_i105_account_id(TEST_WORKER_I105, "fixture account")
+            .expect("canonical fixture account");
+        let by_account =
+            AccountAliasesByAccountRequestV1::try_new(&account_id, Some("sbp"), Some("ubl"))
+                .expect("canonical by-account request");
+        let response_body = match fixture {
+            AliasReadFixture::Alias => norito::json::to_json(&AccountAliasResolutionWireV1 {
                 alias: alias.to_string(),
                 account_id: TEST_WORKER_I105.to_owned(),
-                index: Some(7),
+                index: (!authenticated).then_some(7),
                 source: Some("active_sns".to_owned()),
             })
             .expect("encode alias resolution"),
-        );
-        let resolved = with_mock_http(respond_with(&store, response), || {
-            client
-                .resolve_account_alias_unsigned(&alias)
-                .expect("unsigned alias resolve request")
-                .expect("alias exists")
-        });
-        assert_eq!(resolved.alias(), &alias);
-        assert_eq!(resolved.index(), Some(AliasIndex(7)));
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
+            AliasReadFixture::Index => norito::json::to_json(&AccountAliasIndexResolutionWireV1 {
+                index: 42,
+                alias: alias.to_string(),
+                account_id: TEST_WORKER_I105.to_owned(),
+                source: Some("active_sns".to_owned()),
+            })
+            .expect("encode alias-index resolution"),
+            AliasReadFixture::Account => norito::json::to_json(&AccountAliasesByAccountWireV1 {
+                account_id: TEST_WORKER_I105.to_owned(),
+                total: 1,
+                items: vec![AccountAliasListItemWireV1 {
+                    alias: alias.to_string(),
+                    dataspace: "sbp".to_owned(),
+                    domain: Some("ubl".to_owned()),
+                    is_primary: true,
+                }],
+                source: Some("on_chain".to_owned()),
+            })
+            .expect("encode aliases-by-account response"),
+        };
+        let (_, snapshot) =
+            capture_request(json_response(StatusCode::OK, &response_body), || {
+                match (fixture, authenticated) {
+                    (AliasReadFixture::Alias, false) => {
+                        let resolved = client
+                            .resolve_account_alias_unsigned(&alias)
+                            .expect("unsigned alias resolve request")
+                            .expect("alias exists");
+                        assert_eq!(resolved.alias(), &alias);
+                        assert_eq!(resolved.index(), Some(AliasIndex(7)));
+                    }
+                    (AliasReadFixture::Alias, true) => {
+                        client
+                            .resolve_account_alias_authenticated(&alias)
+                            .expect("signed alias resolve request")
+                            .expect("alias exists");
+                    }
+                    (AliasReadFixture::Index, false) => {
+                        client
+                            .resolve_account_alias_index_unsigned(AliasIndex(42))
+                            .expect("unsigned alias-index resolve request")
+                            .expect("index exists");
+                    }
+                    (AliasReadFixture::Index, true) => {
+                        client
+                            .resolve_account_alias_index_authenticated(AliasIndex(42))
+                            .expect("signed alias-index resolve request")
+                            .expect("index exists");
+                    }
+                    (AliasReadFixture::Account, false) => {
+                        client
+                            .list_account_aliases_unsigned(&by_account)
+                            .expect("unsigned alias-by-account request")
+                            .expect("account aliases exist");
+                    }
+                    (AliasReadFixture::Account, true) => {
+                        client
+                            .list_account_aliases_authenticated(&by_account)
+                            .expect("signed alias-by-account request")
+                            .expect("account aliases exist");
+                    }
+                }
+            });
+        let (path, body) = match fixture {
+            AliasReadFixture::Alias => (
+                "/v1/aliases/resolve",
+                norito::json!({ "alias": "bright-brook-5859@ubl.sbp" }),
+            ),
+            AliasReadFixture::Index => (
+                "/v1/aliases/resolve-index",
+                norito::json!({ "index": 42_u64 }),
+            ),
+            AliasReadFixture::Account => (
+                "/v1/aliases/by-account",
+                norito::json!({
+                    "account_id": TEST_WORKER_I105,
+                    "dataspace": "sbp",
+                    "domain": "ubl",
+                }),
+            ),
+        };
         assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/aliases/resolve");
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode alias resolve body");
+        assert_eq!(snapshot.url.path(), path);
         assert_eq!(
+            norito::json::from_slice::<JsonValue>(&snapshot.body).expect("decode alias read body"),
             body,
-            norito::json!({ "alias": "bright-brook-5859@ubl.sbp" }),
         );
-        assert_unsigned_json_request(snapshot);
+        if authenticated {
+            assert_canonical_account_signed_json_request(&client, &snapshot);
+        } else {
+            assert_unsigned_json_request(&snapshot);
+        }
+    }
+    #[test]
+    fn account_alias_resolve_unsigned_omits_canonical_account_headers() {
+        assert_alias_read_request(AliasReadFixture::Alias, false);
     }
     #[test]
     fn account_alias_resolve_authenticated_sends_canonical_account_headers() {
-        let client = client_with_static_canonical_auth_headers();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let alias = "bright-brook-5859@ubl.sbp"
-            .parse::<AccountAliasName>()
-            .expect("canonical alias");
-        let response = json_response(
-            StatusCode::OK,
-            &norito::json::to_json(&AccountAliasResolutionWireV1 {
-                alias: alias.to_string(),
-                account_id: TEST_WORKER_I105.to_owned(),
-                index: None,
-                source: Some("active_sns".to_owned()),
-            })
-            .expect("encode alias resolution"),
-        );
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .resolve_account_alias_authenticated(&alias)
-                .expect("signed alias resolve request")
-                .expect("alias exists");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/aliases/resolve");
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode alias resolve body");
-        assert_eq!(
-            body,
-            norito::json!({ "alias": "bright-brook-5859@ubl.sbp" }),
-        );
-        assert_canonical_account_signed_json_request(&client, snapshot);
+        assert_alias_read_request(AliasReadFixture::Alias, true);
     }
     #[test]
     fn account_alias_resolve_index_unsigned_omits_canonical_account_headers() {
-        let client = client_with_static_canonical_auth_headers();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(
-            StatusCode::OK,
-            &norito::json::to_json(&AccountAliasIndexResolutionWireV1 {
-                index: 42,
-                alias: "bright-brook-5859@ubl.sbp".to_owned(),
-                account_id: TEST_WORKER_I105.to_owned(),
-                source: Some("active_sns".to_owned()),
-            })
-            .expect("encode alias-index resolution"),
-        );
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .resolve_account_alias_index_unsigned(AliasIndex(42))
-                .expect("unsigned alias-index resolve request")
-                .expect("index exists");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/aliases/resolve-index");
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode alias-index resolve body");
-        assert_eq!(body, norito::json!({ "index": 42_u64 }));
-        assert_unsigned_json_request(snapshot);
+        assert_alias_read_request(AliasReadFixture::Index, false);
     }
     #[test]
     fn account_alias_resolve_index_authenticated_sends_canonical_account_headers() {
-        let client = client_with_static_canonical_auth_headers();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(
-            StatusCode::OK,
-            &norito::json::to_json(&AccountAliasIndexResolutionWireV1 {
-                index: 42,
-                alias: "bright-brook-5859@ubl.sbp".to_owned(),
-                account_id: TEST_WORKER_I105.to_owned(),
-                source: Some("active_sns".to_owned()),
-            })
-            .expect("encode alias-index resolution"),
-        );
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .resolve_account_alias_index_authenticated(AliasIndex(42))
-                .expect("signed alias-index resolve request")
-                .expect("index exists");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/aliases/resolve-index");
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode alias-index resolve body");
-        assert_eq!(body, norito::json!({ "index": 42_u64 }));
-        assert_canonical_account_signed_json_request(&client, snapshot);
+        assert_alias_read_request(AliasReadFixture::Index, true);
     }
     #[test]
     fn account_alias_by_account_unsigned_omits_canonical_account_headers() {
-        let client = client_with_static_canonical_auth_headers();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let account_id = parse_canonical_i105_account_id(TEST_WORKER_I105, "fixture account")
-            .expect("canonical fixture account");
-        let request =
-            AccountAliasesByAccountRequestV1::try_new(&account_id, Some("sbp"), Some("ubl"))
-                .expect("canonical by-account request");
-        let response = json_response(
-            StatusCode::OK,
-            &norito::json::to_json(&AccountAliasesByAccountWireV1 {
-                account_id: TEST_WORKER_I105.to_owned(),
-                total: 1,
-                items: vec![AccountAliasListItemWireV1 {
-                    alias: "bright-brook-5859@ubl.sbp".to_owned(),
-                    dataspace: "sbp".to_owned(),
-                    domain: Some("ubl".to_owned()),
-                    is_primary: true,
-                }],
-                source: Some("on_chain".to_owned()),
-            })
-            .expect("encode aliases-by-account response"),
-        );
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .list_account_aliases_unsigned(&request)
-                .expect("unsigned alias-by-account request")
-                .expect("account aliases exist");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/aliases/by-account");
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode alias-by-account body");
-        assert_eq!(
-            body,
-            norito::json!({
-                "account_id": TEST_WORKER_I105,
-                "dataspace": "sbp",
-                "domain": "ubl",
-            }),
-        );
-        assert_unsigned_json_request(snapshot);
+        assert_alias_read_request(AliasReadFixture::Account, false);
     }
     #[test]
     fn account_alias_by_account_authenticated_sends_canonical_account_headers() {
-        let client = client_with_static_canonical_auth_headers();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let account_id = parse_canonical_i105_account_id(TEST_WORKER_I105, "fixture account")
-            .expect("canonical fixture account");
-        let request =
-            AccountAliasesByAccountRequestV1::try_new(&account_id, Some("sbp"), Some("ubl"))
-                .expect("canonical by-account request");
-        let response = json_response(
-            StatusCode::OK,
-            &norito::json::to_json(&AccountAliasesByAccountWireV1 {
-                account_id: TEST_WORKER_I105.to_owned(),
-                total: 1,
-                items: vec![AccountAliasListItemWireV1 {
-                    alias: "bright-brook-5859@ubl.sbp".to_owned(),
-                    dataspace: "sbp".to_owned(),
-                    domain: Some("ubl".to_owned()),
-                    is_primary: true,
-                }],
-                source: Some("on_chain".to_owned()),
-            })
-            .expect("encode aliases-by-account response"),
-        );
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .list_account_aliases_authenticated(&request)
-                .expect("signed alias-by-account request")
-                .expect("account aliases exist");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/aliases/by-account");
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode alias-by-account body");
-        assert_eq!(
-            body,
-            norito::json!({
-                "account_id": TEST_WORKER_I105,
-                "dataspace": "sbp",
-                "domain": "ubl",
-            }),
-        );
-        assert_canonical_account_signed_json_request(&client, snapshot);
+        assert_alias_read_request(AliasReadFixture::Account, true);
     }
     #[test]
     fn typed_account_alias_reads_map_not_found_to_none() {
@@ -24275,6 +23019,42 @@ mod tests {
         };
         (status, relay_envelope)
     }
+    fn encoded_sumeragi_diagnostics_response(
+        status: &SumeragiDiagnosticsStatus,
+        content_type: &'static str,
+        context: &'static str,
+    ) -> HttpResponse<Vec<u8>> {
+        let body = if content_type == APPLICATION_JSON {
+            norito::json::to_vec(status).expect(context)
+        } else {
+            norito::to_bytes(status).expect(context)
+        };
+        mk_response(StatusCode::OK, body, Some(content_type))
+    }
+    fn request_sumeragi_diagnostics(
+        status: &SumeragiDiagnosticsStatus,
+        content_type: &'static str,
+        context: &'static str,
+    ) -> Result<SumeragiDiagnosticsStatus> {
+        let client = client_with_base_url(base_url());
+        capture_request(
+            encoded_sumeragi_diagnostics_response(status, content_type, context),
+            || client.get_sumeragi_diagnostics(),
+        )
+        .0
+    }
+    fn request_cross_lane_transfer_proofs(
+        status: &SumeragiDiagnosticsStatus,
+        content_type: &'static str,
+        context: &'static str,
+    ) -> Result<Vec<CrossLaneTransferProof>> {
+        let client = client_with_base_url(base_url());
+        capture_request(
+            encoded_sumeragi_diagnostics_response(status, content_type, context),
+            || client.get_cross_lane_transfer_proofs(),
+        )
+        .0
+    }
     fn make_lane_relay_for_status(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -24974,30 +23754,12 @@ mod tests {
     }
     #[test]
     fn prove_da_availability_to_dir_persists_artifacts() {
-        use base64::Engine as _;
         let (mut bundle, payload) = sample_da_manifest_bundle();
         let response = manifest_bundle_response(&mut bundle);
         let client = client_with_base_url(base_url());
         let dir = tempdir().expect("tempdir");
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let gateway_config = SorafsGatewayFetchConfig {
-            manifest_id_hex: bundle.storage_ticket_hex.clone(),
-            chunker_handle: "sorafs.sf1@1.0.0".into(),
-            manifest_envelope_b64: None,
-            client_id: Some("sdk-tests".into()),
-            expected_manifest_cid_hex: None,
-            blinded_cid_b64: None,
-            salt_epoch: None,
-            expected_cache_version: None,
-        };
-        let providers = vec![SorafsGatewayProviderInput {
-            name: "provider-1".into(),
-            provider_id_hex: hex::encode([0x11u8; 32]),
-            gateway_public_key_hex: hex::encode([0x22u8; 32]),
-            base_url: "https://gateway.test".into(),
-            stream_token_b64: base64::engine::general_purpose::STANDARD.encode(b"stream-token"),
-            privacy_events_url: None,
-        }];
+        let (gateway_config, providers, _) = sample_gateway_fetch_inputs(&bundle);
         let proof_config = DaProofConfig {
             sample_count: 2,
             sample_seed: 99,
@@ -25054,30 +23816,12 @@ mod tests {
     }
     #[test]
     fn prove_da_availability_to_dir_honours_existing_scoreboard_path() {
-        use base64::Engine as _;
         let (mut bundle, payload) = sample_da_manifest_bundle();
         let response = manifest_bundle_response(&mut bundle);
         let client = client_with_base_url(base_url());
         let dir = tempdir().expect("tempdir");
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let gateway_config = SorafsGatewayFetchConfig {
-            manifest_id_hex: bundle.storage_ticket_hex.clone(),
-            chunker_handle: "sorafs.sf1@1.0.0".into(),
-            manifest_envelope_b64: None,
-            client_id: Some("sdk-tests".into()),
-            expected_manifest_cid_hex: None,
-            blinded_cid_b64: None,
-            salt_epoch: None,
-            expected_cache_version: None,
-        };
-        let providers = vec![SorafsGatewayProviderInput {
-            name: "provider-1".into(),
-            provider_id_hex: hex::encode([0x11u8; 32]),
-            gateway_public_key_hex: hex::encode([0x22u8; 32]),
-            base_url: "https://gateway.test".into(),
-            stream_token_b64: base64::engine::general_purpose::STANDARD.encode(b"stream-token"),
-            privacy_events_url: None,
-        }];
+        let (gateway_config, providers, _) = sample_gateway_fetch_inputs(&bundle);
         let scoreboard_override = dir.path().join("custom_scoreboard.json");
         let fetch_options = SorafsGatewayFetchOptions {
             scoreboard: Some(SorafsGatewayScoreboardOptions {
@@ -25162,47 +23906,30 @@ mod tests {
     #[test]
     fn get_da_proof_policies_fetches_bundle() {
         let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let expected = sample_da_proof_policy_bundle();
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&expected).expect("encode proof policies"))
-            .expect("response build");
-        let actual = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_da_proof_policies()
-        })
-        .expect("fetch proof policies");
+        let (actual, snapshot) =
+            capture_request(json_ok_response(&expected, "encode proof policies"), || {
+                client.get_da_proof_policies()
+            });
+        let actual = actual.expect("fetch proof policies");
         assert_eq!(actual, expected);
-        let store = snapshots.lock().expect("lock snapshots");
-        assert_eq!(store.len(), 1);
-        assert_eq!(store[0].method, HttpMethod::GET);
-        assert_eq!(store[0].url.path(), "/v1/da/proof-policies");
+        assert_request(&snapshot, HttpMethod::GET, "/v1/da/proof-policies");
     }
     #[test]
     fn get_da_proof_policy_snapshot_fetches_bundle() {
         let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let expected = sample_da_proof_policy_bundle();
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&expected).expect("encode proof policy snapshot"))
-            .expect("response build");
-        let actual = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_da_proof_policy_snapshot()
-        })
-        .expect("fetch proof policy snapshot");
+        let (actual, snapshot) = capture_request(
+            json_ok_response(&expected, "encode proof policy snapshot"),
+            || client.get_da_proof_policy_snapshot(),
+        );
+        let actual = actual.expect("fetch proof policy snapshot");
         assert_eq!(actual, expected);
-        let store = snapshots.lock().expect("lock snapshots");
-        assert_eq!(store.len(), 1);
-        assert_eq!(store[0].method, HttpMethod::GET);
-        assert_eq!(store[0].url.path(), "/v1/da/proof-policies/snapshot");
+        assert_request(&snapshot, HttpMethod::GET, "/v1/da/proof-policies/snapshot");
     }
     #[test]
     fn list_da_commitments_posts_query() {
         let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let request = DaCommitmentListRequest {
             limit: std::num::NonZeroU64::new(3),
             cursor: None,
@@ -25212,28 +23939,20 @@ mod tests {
             commitments: vec![sample_da_commitment_with_location()],
             next_cursor: None,
         };
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&expected).expect("encode list response"))
-            .expect("response build");
-        let actual = with_mock_http(respond_with(&snapshots, response), || {
-            client.list_da_commitments(&request)
-        })
-        .expect("list commitments");
+        let (actual, snapshot) =
+            capture_request(json_ok_response(&expected, "encode list response"), || {
+                client.list_da_commitments(&request)
+            });
+        let actual = actual.expect("list commitments");
         assert_eq!(actual, expected);
-        let store = snapshots.lock().expect("lock snapshots");
-        assert_eq!(store.len(), 1);
-        assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/commitments");
+        assert_request(&snapshot, HttpMethod::POST, "/v1/da/commitments");
         let posted: DaCommitmentListRequest =
-            norito::json::from_slice(&store[0].body).expect("decode posted request");
+            norito::json::from_slice(&snapshot.body).expect("decode posted request");
         assert_eq!(posted, request);
     }
     #[test]
     fn prove_da_commitment_posts_query() {
         let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let request = DaCommitmentProofRequest {
             manifest_hash: Some(ManifestDigest::new([0x20; 32])),
             lane_id: None,
@@ -25244,53 +23963,37 @@ mod tests {
             policies: sample_da_proof_policy_bundle(),
             proof: sample_da_commitment_proof(),
         });
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&expected).expect("encode prove response"))
-            .expect("response build");
-        let actual = with_mock_http(respond_with(&snapshots, response), || {
-            client.prove_da_commitment(&request)
-        })
-        .expect("prove commitment");
+        let (actual, snapshot) =
+            capture_request(json_ok_response(&expected, "encode prove response"), || {
+                client.prove_da_commitment(&request)
+            });
+        let actual = actual.expect("prove commitment");
         assert_eq!(actual, expected);
-        let store = snapshots.lock().expect("lock snapshots");
-        assert_eq!(store.len(), 1);
-        assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/commitments/prove");
+        assert_request(&snapshot, HttpMethod::POST, "/v1/da/commitments/prove");
     }
     #[test]
     fn verify_da_commitment_posts_proof() {
         let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let proof = sample_da_commitment_proof();
         let expected = DaCommitmentVerifyResponse {
             valid: true,
             error: None,
         };
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&expected).expect("encode verify response"))
-            .expect("response build");
-        let actual = with_mock_http(respond_with(&snapshots, response), || {
-            client.verify_da_commitment(&proof)
-        })
-        .expect("verify commitment");
+        let (actual, snapshot) = capture_request(
+            json_ok_response(&expected, "encode verify response"),
+            || client.verify_da_commitment(&proof),
+        );
+        let actual = actual.expect("verify commitment");
         assert!(actual.valid);
         assert!(actual.error.is_none());
-        let store = snapshots.lock().expect("lock snapshots");
-        assert_eq!(store.len(), 1);
-        assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/commitments/verify");
+        assert_request(&snapshot, HttpMethod::POST, "/v1/da/commitments/verify");
         let posted: DaCommitmentProof =
-            norito::json::from_slice(&store[0].body).expect("decode posted proof");
+            norito::json::from_slice(&snapshot.body).expect("decode posted proof");
         assert_eq!(posted, proof);
     }
     #[test]
     fn list_da_pin_intents_posts_query() {
         let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let request = DaPinIntentListRequest {
             limit: std::num::NonZeroU64::new(5),
             cursor: None,
@@ -25299,28 +24002,20 @@ mod tests {
             intents: vec![sample_da_pin_intent_with_location()],
             next_cursor: None,
         };
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&expected).expect("encode pin intent list"))
-            .expect("response build");
-        let actual = with_mock_http(respond_with(&snapshots, response), || {
-            client.list_da_pin_intents(&request)
-        })
-        .expect("list pin intents");
+        let (actual, snapshot) = capture_request(
+            json_ok_response(&expected, "encode pin intent list"),
+            || client.list_da_pin_intents(&request),
+        );
+        let actual = actual.expect("list pin intents");
         assert_eq!(actual, expected);
-        let store = snapshots.lock().expect("lock snapshots");
-        assert_eq!(store.len(), 1);
-        assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/pin-intents");
+        assert_request(&snapshot, HttpMethod::POST, "/v1/da/pin-intents");
         let posted: DaPinIntentListRequest =
-            norito::json::from_slice(&store[0].body).expect("decode posted pin query");
+            norito::json::from_slice(&snapshot.body).expect("decode posted pin query");
         assert_eq!(posted, request);
     }
     #[test]
     fn prove_da_pin_intent_posts_query() {
         let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let request = DaPinIntentQueryRequest {
             manifest_hash: None,
             storage_ticket: Some(StorageTicketId::new([0x42; 32])),
@@ -25330,46 +24025,31 @@ mod tests {
             sequence: None,
         };
         let expected = Some(sample_da_pin_intent_proof());
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&expected).expect("encode prove pin intent"))
-            .expect("response build");
-        let actual = with_mock_http(respond_with(&snapshots, response), || {
-            client.prove_da_pin_intent(&request)
-        })
-        .expect("prove pin intent");
+        let (actual, snapshot) = capture_request(
+            json_ok_response(&expected, "encode prove pin intent"),
+            || client.prove_da_pin_intent(&request),
+        );
+        let actual = actual.expect("prove pin intent");
         assert_eq!(actual, expected);
-        let store = snapshots.lock().expect("lock snapshots");
-        assert_eq!(store.len(), 1);
-        assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/pin-intents/prove");
+        assert_request(&snapshot, HttpMethod::POST, "/v1/da/pin-intents/prove");
     }
     #[test]
     fn verify_da_pin_intent_posts_proof() {
         let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let proof = sample_da_pin_intent_proof();
         let expected = DaPinIntentVerifyResponse {
             valid: true,
             error: None,
         };
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&expected).expect("encode verify pin response"))
-            .expect("response build");
-        let actual = with_mock_http(respond_with(&snapshots, response), || {
-            client.verify_da_pin_intent(&proof)
-        })
-        .expect("verify pin intent");
+        let (actual, snapshot) = capture_request(
+            json_ok_response(&expected, "encode verify pin response"),
+            || client.verify_da_pin_intent(&proof),
+        );
+        let actual = actual.expect("verify pin intent");
         assert!(actual.valid);
-        let store = snapshots.lock().expect("lock snapshots");
-        assert_eq!(store.len(), 1);
-        assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/pin-intents/verify");
+        assert_request(&snapshot, HttpMethod::POST, "/v1/da/pin-intents/verify");
         let posted: DaPinIntentProof =
-            norito::json::from_slice(&store[0].body).expect("decode posted pin proof");
+            norito::json::from_slice(&snapshot.body).expect("decode posted pin proof");
         assert_eq!(posted, proof);
     }
     #[test]
@@ -25643,7 +24323,6 @@ mod tests {
     }
     #[test]
     fn get_uaid_portfolio_parses_payload() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let uaid_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let payload = format!(
@@ -25672,11 +24351,10 @@ mod tests {
 }}"#
         );
         let uaid_upper = uaid_hex.to_uppercase();
-        let response = json_response(StatusCode::OK, &payload);
-        let result = with_mock_http(respond_with(&snapshots, response), || {
+        let (result, snapshot) = capture_request(json_response(StatusCode::OK, &payload), || {
             client.get_uaid_portfolio(&format!("UAID:{uaid_upper}"))
-        })
-        .expect("portfolio call succeeds");
+        });
+        let result = result.expect("portfolio call succeeds");
         assert_eq!(result.uaid, format!("uaid:{uaid_hex}"));
         assert_eq!(result.totals.accounts, 2);
         assert_eq!(result.totals.positions, 3);
@@ -25695,12 +24373,6 @@ mod tests {
             "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
         );
         assert_eq!(dataspace.accounts[0].assets[0].quantity, "500");
-        let snapshot = snapshots
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(
             snapshot.url.path(),
@@ -25717,7 +24389,6 @@ mod tests {
     }
     #[test]
     fn get_uaid_portfolio_with_query_encodes_asset_id_filter() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let uaid_hex = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543211";
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::parse_address_literal(
@@ -25734,22 +24405,15 @@ mod tests {
   "dataspaces":[]
 }}"#
         );
-        let response = json_response(StatusCode::OK, &payload);
-        with_mock_http(respond_with(&snapshots, response), || {
+        let (result, snapshot) = capture_request(json_response(StatusCode::OK, &payload), || {
             client.get_uaid_portfolio_with_query(
                 &format!("uaid:{uaid_hex}"),
                 Some(UaidPortfolioQuery {
                     asset_id: Some(asset_id.clone()),
                 }),
             )
-        })
-        .expect("portfolio call succeeds");
-        let snapshot = snapshots
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
+        });
+        result.expect("portfolio call succeeds");
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert!(
             snapshot
@@ -25760,7 +24424,6 @@ mod tests {
     }
     #[test]
     fn get_uaid_bindings_parses_payload() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let uaid_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab";
         let payload = format!(
@@ -25783,19 +24446,12 @@ mod tests {
   ]
 }}"#
         );
-        let response = json_response(StatusCode::OK, &payload);
-        let result = with_mock_http(respond_with(&snapshots, response), || {
+        let (result, snapshot) = capture_request(json_response(StatusCode::OK, &payload), || {
             client.get_uaid_bindings(&format!("uaid:{uaid_hex}"))
-        })
-        .expect("bindings call succeeds");
+        });
+        let result = result.expect("bindings call succeeds");
         assert_eq!(result.dataspaces.len(), 2);
         assert_eq!(result.dataspaces[1].accounts.len(), 2);
-        let snapshot = snapshots
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
         assert_eq!(
             snapshot.url.path(),
             format!("/v1/space-directory/uaids/uaid:{uaid_hex}")
@@ -25803,7 +24459,6 @@ mod tests {
     }
     #[test]
     fn get_uaid_manifests_supports_query_and_parsing() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let uaid_hex = "0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11";
         let manifest_hash = "b1".repeat(32);
@@ -25830,17 +24485,16 @@ mod tests {
             uaid = uaid_hex,
             hash = manifest_hash.as_str()
         );
-        let response = json_response(StatusCode::OK, &payload);
         let query = UaidManifestQuery {
             dataspace_id: Some(11),
             status: Some(UaidManifestStatusFilter::Inactive),
             limit: Some(5),
             offset: Some(2),
         };
-        let result = with_mock_http(respond_with(&snapshots, response), || {
+        let (result, snapshot) = capture_request(json_response(StatusCode::OK, &payload), || {
             client.get_uaid_manifests(&format!("uaid:{uaid_hex}"), Some(query))
-        })
-        .expect("manifests call succeeds");
+        });
+        let result = result.expect("manifests call succeeds");
         assert_eq!(result.total, Some(1));
         assert_eq!(result.manifests.len(), 1);
         let record = &result.manifests[0];
@@ -25848,12 +24502,6 @@ mod tests {
         assert_eq!(record.manifest.entries.len(), 2);
         assert_eq!(record.lifecycle.activated_epoch, Some(4097));
         assert_eq!(record.manifest_hash, manifest_hash);
-        let snapshot = snapshots
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
         assert_eq!(
             snapshot.url.path(),
             format!("/v1/space-directory/uaids/uaid:{uaid_hex}/manifests")
@@ -25865,43 +24513,26 @@ mod tests {
     }
     #[test]
     fn get_public_lane_validators_omits_query_params() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let response = json_response(StatusCode::OK, r#"{"lane_id":7,"total":0,"items":[]}"#);
-        let snapshot_store = Arc::clone(&snapshots);
-        let payload = with_mock_http(respond_with(&snapshot_store, response), || {
+        let (payload, snapshot) = capture_request(response, || {
             client.get_public_lane_validators(LaneId::new(7))
-        })
-        .expect("request succeeds");
+        });
+        let payload = payload.expect("request succeeds");
         assert_eq!(payload["lane_id"].as_u64(), Some(7));
-        let snapshot = snapshots
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
         assert_eq!(snapshot.url.path(), "/v1/nexus/public-lanes/7/validators");
         assert_eq!(snapshot.url.query(), None);
     }
     #[test]
     fn get_lane_lifecycle_status_requests_typed_negotiated_snapshot() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let expected = lifecycle_status_fixture();
         let body = norito::json::to_string(&expected).expect("lifecycle status JSON");
-        let response = json_response(StatusCode::OK, &body);
-        let snapshot_store = Arc::clone(&snapshots);
-        let actual = with_mock_http(respond_with(&snapshot_store, response), || {
+        let (actual, snapshot) = capture_request(json_response(StatusCode::OK, &body), || {
             client.get_lane_lifecycle_status()
-        })
-        .expect("lifecycle status request succeeds");
+        });
+        let actual = actual.expect("lifecycle status request succeeds");
         assert_eq!(actual, expected);
-        let snapshot = snapshots
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
         assert_eq!(snapshot.url.path(), torii_uri::NEXUS_LANE_LIFECYCLE);
         assert!(snapshot.headers.iter().any(|(name, value)| {
             name.eq_ignore_ascii_case("accept")
@@ -25910,24 +24541,16 @@ mod tests {
     }
     #[test]
     fn get_public_lane_stake_filters_validator() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let response = json_response(StatusCode::OK, r#"{"lane_id":1,"total":0,"items":[]}"#);
-        let snapshot_store = Arc::clone(&snapshots);
-        let payload = with_mock_http(respond_with(&snapshot_store, response), || {
+        let (payload, snapshot) = capture_request(response, || {
             client.get_public_lane_stake(
                 LaneId::new(1),
                 Some("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"),
             )
-        })
-        .expect("request succeeds");
+        });
+        let payload = payload.expect("request succeeds");
         assert_eq!(payload["total"].as_u64(), Some(0));
-        let snapshot = snapshots
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
         assert_eq!(snapshot.url.path(), "/v1/nexus/public-lanes/1/stake");
         assert!(snapshot.url.query_pairs().any(|pair| pair
             == (
@@ -25937,25 +24560,17 @@ mod tests {
     }
     #[test]
     fn get_public_lane_pending_rewards_sets_filters() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let response = json_response(StatusCode::OK, r#"{"lane_id":0,"total":0,"items":[]}"#);
-        let snapshot_store = Arc::clone(&snapshots);
-        let payload = with_mock_http(respond_with(&snapshot_store, response), || {
+        let (payload, snapshot) = capture_request(response, || {
             client.get_public_lane_pending_rewards(
                 LaneId::new(0),
                 "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
                 Some(5),
             )
-        })
-        .expect("request succeeds");
+        });
+        let payload = payload.expect("request succeeds");
         assert_eq!(payload["total"].as_u64(), Some(0));
-        let snapshot = snapshots
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
         assert_eq!(
             snapshot.url.path(),
             "/v1/nexus/public-lanes/0/rewards/pending"
@@ -25972,7 +24587,6 @@ mod tests {
         let account_id = ALICE_ID.to_string();
         let address = AccountAddress::from_account_id(&ALICE_ID).expect("address from account");
         let i105_literal = address.to_i105().expect("i105 literal");
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let payload = format!(
             r#"{{
@@ -25985,24 +24599,16 @@ mod tests {
   "svg":"<svg i105 />"
 }}"#
         );
-        let response = json_response(StatusCode::OK, &payload);
-        let snapshot_store = Arc::clone(&snapshots);
-        let qr = with_mock_http(respond_with(&snapshot_store, response), || {
+        let (qr, snapshot) = capture_request(json_response(StatusCode::OK, &payload), || {
             client.get_explorer_account_qr(&account_id)
-        })
-        .expect("explorer QR request succeeds");
+        });
+        let qr = qr.expect("explorer QR request succeeds");
         assert_eq!(qr.canonical_id, account_id);
         assert_eq!(qr.literal, i105_literal);
         assert_eq!(qr.network_prefix, 73);
         assert_eq!(qr.modules, 192);
         assert_eq!(qr.qr_version, 5);
         assert_eq!(qr.error_correction, "M");
-        let snapshot = snapshots
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
         let expected_url = join_torii_url(
             &client.torii_url,
             &format!("v1/explorer/accounts/{account_id}/qr"),
@@ -26257,369 +24863,194 @@ mod tests {
             .expect("transaction request body must be a versioned SignedTransaction");
         assert_eq!(submitted.hash(), expected_hash);
     }
+    fn empty_transaction(client: &Client) -> SignedTransaction {
+        client.build_transaction(
+            Vec::<InstructionBox>::new(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        )
+    }
+    fn rejected_transaction_submission(capabilities_body: &str) -> eyre::Report {
+        let (result, snapshots) =
+            capture_requests(json_response(StatusCode::OK, capabilities_body), || {
+                let client = client_with_base_url(base_url());
+                client.submit_transaction(&empty_transaction(&client))
+            });
+        assert_eq!(
+            snapshots.len(),
+            1,
+            "only node capabilities should be fetched"
+        );
+        assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
+        result.expect_err("transaction submission should fail")
+    }
+    fn assert_transient_capability_probe(
+        status: StatusCode,
+        response_body: &'static [u8],
+        submit_message: &str,
+        cache_message: &str,
+    ) {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let capabilities = snapshot.url.path() == "/v1/node/capabilities";
+                store.lock().expect("snapshot lock").push(snapshot);
+                Ok(if capabilities {
+                    HttpResponse::builder()
+                        .status(status)
+                        .body(response_body.to_vec())
+                        .expect("response build")
+                } else {
+                    empty_response(StatusCode::OK)
+                })
+            }
+        };
+        with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            client
+                .submit_transaction(&empty_transaction(&client))
+                .expect(submit_message);
+            let cached = client
+                .data_model_compatibility
+                .lock()
+                .expect("data model compatibility lock")
+                .clone();
+            assert!(
+                matches!(cached, DataModelCompatibility::Unchecked),
+                "{cache_message}"
+            );
+        });
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(
+            snapshots.len(),
+            2,
+            "expected node capabilities + transaction requests"
+        );
+        assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
+        assert_eq!(snapshots[1].url.path(), torii_uri::TRANSACTION);
+    }
     #[test]
     fn submit_transaction_rejects_mismatched_data_model_version() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let mismatched = DATA_MODEL_VERSION + 1;
-        let capabilities_body = capabilities_body_with(
+        let body = capabilities_body_with(
             Some(mismatched),
             Some(&signed_transaction_schema_hash_hex()),
         );
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot| {
-                store.lock().expect("snapshot lock").push(snapshot);
-                Ok(json_response(StatusCode::OK, &capabilities_body))
-            }
-        };
-        with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            let tx = client.build_transaction(
-                Vec::<InstructionBox>::new(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
-            let err = client
-                .submit_transaction(&tx)
-                .expect_err("transaction submission should fail");
-            let err = err
-                .downcast_ref::<DataModelCompatibilityError>()
-                .expect("compatibility error");
-            assert!(
-                matches!(
-                    err,
-                    DataModelCompatibilityError::Mismatch {
-                        expected: DATA_MODEL_VERSION,
-                        actual,
-                    } if *actual == mismatched
-                ),
-                "unexpected error: {err:?}"
-            );
-        });
-        let store_guard = store.lock().expect("snapshot lock");
-        assert_eq!(
-            store_guard.len(),
-            1,
-            "only node capabilities should be fetched"
+        let error = rejected_transaction_submission(&body);
+        let error = error
+            .downcast_ref::<DataModelCompatibilityError>()
+            .expect("compatibility error");
+        assert!(
+            matches!(
+                error,
+                DataModelCompatibilityError::Mismatch {
+                    expected: DATA_MODEL_VERSION,
+                    actual,
+                } if *actual == mismatched
+            ),
+            "unexpected error: {error:?}"
         );
-        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
     }
     #[test]
     fn submit_transaction_rejects_missing_data_model_version() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let responder = respond_with(&store, json_response(StatusCode::OK, "{}"));
-        with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            let tx = client.build_transaction(
-                Vec::<InstructionBox>::new(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
-            let err = client
-                .submit_transaction(&tx)
-                .expect_err("transaction submission should fail");
-            let err = err
-                .downcast_ref::<DataModelCompatibilityError>()
-                .expect("compatibility error");
-            assert!(
-                matches!(
-                    err,
-                    DataModelCompatibilityError::Missing {
-                        expected: DATA_MODEL_VERSION
-                    }
-                ),
-                "unexpected error: {err:?}"
-            );
-        });
-        let store_guard = store.lock().expect("snapshot lock");
-        assert_eq!(
-            store_guard.len(),
-            1,
-            "only node capabilities should be fetched"
+        let error = rejected_transaction_submission("{}");
+        let error = error
+            .downcast_ref::<DataModelCompatibilityError>()
+            .expect("compatibility error");
+        assert!(
+            matches!(
+                error,
+                DataModelCompatibilityError::Missing {
+                    expected: DATA_MODEL_VERSION
+                }
+            ),
+            "unexpected error: {error:?}"
         );
-        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
     }
     #[test]
     fn submit_transaction_rejects_missing_signed_transaction_schema_hash() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let responder = respond_with(
-            &store,
-            json_response(
-                StatusCode::OK,
-                &capabilities_body_with(Some(DATA_MODEL_VERSION), None),
+        let body = capabilities_body_with(Some(DATA_MODEL_VERSION), None);
+        let error = rejected_transaction_submission(&body);
+        let error = error
+            .downcast_ref::<TransactionSchemaCompatibilityError>()
+            .expect("schema compatibility error");
+        assert!(
+            matches!(
+                error,
+                TransactionSchemaCompatibilityError::Missing { expected }
+                if *expected == signed_transaction_schema_hash_hex()
             ),
+            "unexpected error: {error:?}"
         );
-        with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            let tx = client.build_transaction(
-                Vec::<InstructionBox>::new(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
-            let err = client
-                .submit_transaction(&tx)
-                .expect_err("transaction submission should fail");
-            let err = err
-                .downcast_ref::<TransactionSchemaCompatibilityError>()
-                .expect("schema compatibility error");
-            assert!(
-                matches!(
-                    err,
-                    TransactionSchemaCompatibilityError::Missing { expected }
-                    if *expected == signed_transaction_schema_hash_hex()
-                ),
-                "unexpected error: {err:?}"
-            );
-        });
-        let store_guard = store.lock().expect("snapshot lock");
-        assert_eq!(
-            store_guard.len(),
-            1,
-            "only node capabilities should be fetched"
-        );
-        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
     }
     #[test]
     fn submit_transaction_rejects_invalid_signed_transaction_schema_hash() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let responder = respond_with(
-            &store,
-            json_response(
-                StatusCode::OK,
-                &capabilities_body_with(Some(DATA_MODEL_VERSION), Some("ABC123")),
+        let body = capabilities_body_with(Some(DATA_MODEL_VERSION), Some("ABC123"));
+        let error = rejected_transaction_submission(&body);
+        let error = error
+            .downcast_ref::<TransactionSchemaCompatibilityError>()
+            .expect("schema compatibility error");
+        assert!(
+            matches!(
+                error,
+                TransactionSchemaCompatibilityError::Invalid {
+                    expected,
+                    actual,
+                    details,
+                } if *expected == signed_transaction_schema_hash_hex()
+                    && actual.as_deref() == Some("ABC123")
+                    && details.contains("32 lowercase hex chars")
             ),
+            "unexpected error: {error:?}"
         );
-        with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            let tx = client.build_transaction(
-                Vec::<InstructionBox>::new(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
-            let err = client
-                .submit_transaction(&tx)
-                .expect_err("transaction submission should fail");
-            let err = err
-                .downcast_ref::<TransactionSchemaCompatibilityError>()
-                .expect("schema compatibility error");
-            assert!(
-                matches!(
-                    err,
-                    TransactionSchemaCompatibilityError::Invalid {
-                        expected,
-                        actual,
-                        details,
-                    } if *expected == signed_transaction_schema_hash_hex()
-                        && actual.as_deref() == Some("ABC123")
-                        && details.contains("32 lowercase hex chars")
-                ),
-                "unexpected error: {err:?}"
-            );
-        });
-        let store_guard = store.lock().expect("snapshot lock");
-        assert_eq!(
-            store_guard.len(),
-            1,
-            "only node capabilities should be fetched"
-        );
-        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
     }
     #[test]
     fn submit_transaction_rejects_mismatched_signed_transaction_schema_hash() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let responder = respond_with(
-            &store,
-            json_response(
-                StatusCode::OK,
-                &capabilities_body_with(
-                    Some(DATA_MODEL_VERSION),
-                    Some("00000000000000000000000000000000"),
-                ),
+        let body = capabilities_body_with(
+            Some(DATA_MODEL_VERSION),
+            Some("00000000000000000000000000000000"),
+        );
+        let error = rejected_transaction_submission(&body);
+        let error = error
+            .downcast_ref::<TransactionSchemaCompatibilityError>()
+            .expect("schema compatibility error");
+        assert!(
+            matches!(
+                error,
+                TransactionSchemaCompatibilityError::Mismatch { expected, actual }
+                if *expected == signed_transaction_schema_hash_hex()
+                    && actual == "00000000000000000000000000000000"
             ),
+            "unexpected error: {error:?}"
         );
-        with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            let tx = client.build_transaction(
-                Vec::<InstructionBox>::new(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
-            let err = client
-                .submit_transaction(&tx)
-                .expect_err("transaction submission should fail");
-            let err = err
-                .downcast_ref::<TransactionSchemaCompatibilityError>()
-                .expect("schema compatibility error");
-            assert!(
-                matches!(
-                    err,
-                    TransactionSchemaCompatibilityError::Mismatch { expected, actual }
-                    if *expected == signed_transaction_schema_hash_hex()
-                        && actual == "00000000000000000000000000000000"
-                ),
-                "unexpected error: {err:?}"
-            );
-        });
-        let store_guard = store.lock().expect("snapshot lock");
-        assert_eq!(
-            store_guard.len(),
-            1,
-            "only node capabilities should be fetched"
-        );
-        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
     }
     #[test]
     fn submit_transaction_tolerates_rate_limited_capabilities_probe() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let path = snapshot.url.path().to_string();
-                store.lock().expect("snapshot lock").push(snapshot);
-                let response = if path == "/v1/node/capabilities" {
-                    HttpResponse::builder()
-                        .status(StatusCode::TOO_MANY_REQUESTS)
-                        .body(b"rate limited".to_vec())
-                        .expect("response build")
-                } else {
-                    HttpResponse::builder()
-                        .status(StatusCode::OK)
-                        .body(Vec::new())
-                        .expect("response build")
-                };
-                Ok(response)
-            }
-        };
-        with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            let tx = client.build_transaction(
-                Vec::<InstructionBox>::new(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
-            client.submit_transaction(&tx).expect(
-                "transaction submission should proceed despite transient capability throttling",
-            );
-            let cached = client
-                .data_model_compatibility
-                .lock()
-                .expect("data model compatibility lock")
-                .clone();
-            assert!(
-                matches!(cached, DataModelCompatibility::Unchecked),
-                "rate-limited probe must not mark compatibility state as checked"
-            );
-        });
-        let store_guard = store.lock().expect("snapshot lock");
-        assert_eq!(
-            store_guard.len(),
-            2,
-            "expected node capabilities + transaction requests"
+        assert_transient_capability_probe(
+            StatusCode::TOO_MANY_REQUESTS,
+            b"rate limited",
+            "transaction submission should proceed despite transient capability throttling",
+            "rate-limited probe must not mark compatibility state as checked",
         );
-        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
-        assert_eq!(store_guard[1].url.path(), torii_uri::TRANSACTION);
     }
     #[test]
     fn submit_transaction_tolerates_missing_capabilities_probe() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let path = snapshot.url.path().to_string();
-                store.lock().expect("snapshot lock").push(snapshot);
-                let response = if path == "/v1/node/capabilities" {
-                    HttpResponse::builder()
-                        .status(StatusCode::NOT_FOUND)
-                        .body(b"not found".to_vec())
-                        .expect("response build")
-                } else {
-                    HttpResponse::builder()
-                        .status(StatusCode::OK)
-                        .body(Vec::new())
-                        .expect("response build")
-                };
-                Ok(response)
-            }
-        };
-        with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            let tx = client.build_transaction(
-                Vec::<InstructionBox>::new(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
-            client.submit_transaction(&tx).expect(
-                "transaction submission should proceed when the capability advert is unavailable",
-            );
-            let cached = client
-                .data_model_compatibility
-                .lock()
-                .expect("data model compatibility lock")
-                .clone();
-            assert!(
-                matches!(cached, DataModelCompatibility::Unchecked),
-                "404 probe must not mark compatibility state as checked"
-            );
-        });
-        let store_guard = store.lock().expect("snapshot lock");
-        assert_eq!(
-            store_guard.len(),
-            2,
-            "expected node capabilities + transaction requests"
+        assert_transient_capability_probe(
+            StatusCode::NOT_FOUND,
+            b"not found",
+            "transaction submission should proceed when the capability advert is unavailable",
+            "404 probe must not mark compatibility state as checked",
         );
-        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
-        assert_eq!(store_guard[1].url.path(), torii_uri::TRANSACTION);
     }
     #[test]
     fn submit_transaction_tolerates_server_error_capabilities_probe() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let path = snapshot.url.path().to_string();
-                store.lock().expect("snapshot lock").push(snapshot);
-                let response = if path == "/v1/node/capabilities" {
-                    HttpResponse::builder()
-                        .status(StatusCode::BAD_GATEWAY)
-                        .body(b"bad gateway".to_vec())
-                        .expect("response build")
-                } else {
-                    HttpResponse::builder()
-                        .status(StatusCode::OK)
-                        .body(Vec::new())
-                        .expect("response build")
-                };
-                Ok(response)
-            }
-        };
-        with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            let tx = client.build_transaction(
-                Vec::<InstructionBox>::new(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
-            client.submit_transaction(&tx).expect(
-                "transaction submission should proceed despite transient capability server errors",
-            );
-            let cached = client
-                .data_model_compatibility
-                .lock()
-                .expect("data model compatibility lock")
-                .clone();
-            assert!(
-                matches!(cached, DataModelCompatibility::Unchecked),
-                "server-error probe must not mark compatibility state as checked"
-            );
-        });
-        let store_guard = store.lock().expect("snapshot lock");
-        assert_eq!(
-            store_guard.len(),
-            2,
-            "expected node capabilities + transaction requests"
+        assert_transient_capability_probe(
+            StatusCode::BAD_GATEWAY,
+            b"bad gateway",
+            "transaction submission should proceed despite transient capability server errors",
+            "server-error probe must not mark compatibility state as checked",
         );
-        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
-        assert_eq!(store_guard[1].url.path(), torii_uri::TRANSACTION);
     }
     #[test]
     fn submit_transaction_blocking_returns_submit_rejection_without_waiting_for_timeout() {
@@ -26772,65 +25203,80 @@ mod tests {
         assert_eq!(value, &expected_value);
     }
     include!("client/canonical_request_auth_tests.rs");
+    fn assert_operator_signature_headers(snapshot: &RequestSnapshot) {
+        for (header, description) in [
+            (HEADER_OPERATOR_PUBLIC_KEY, "public key"),
+            (HEADER_OPERATOR_TIMESTAMP_MS, "timestamp"),
+            (HEADER_OPERATOR_NONCE, "nonce"),
+            (HEADER_OPERATOR_SIGNATURE, "signature"),
+        ] {
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(header)),
+                "missing operator {description} header"
+            );
+        }
+    }
+    fn assert_request(snapshot: &RequestSnapshot, method: HttpMethod, path: &str) {
+        assert_eq!(snapshot.method, method);
+        assert_eq!(snapshot.url.path(), path);
+    }
+    fn json_ok_response<T: norito::json::JsonSerialize>(
+        value: &T,
+        context: &str,
+    ) -> HttpResponse<Vec<u8>> {
+        mk_response(
+            StatusCode::OK,
+            norito::json::to_vec(value).expect(context),
+            Some(APPLICATION_JSON),
+        )
+    }
+    fn assert_sumeragi_json_request(snapshot: &RequestSnapshot, path: &str) {
+        assert_request(snapshot, HttpMethod::GET, path);
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
+                    && value == APPLICATION_JSON),
+            "{path} JSON helper must request JSON"
+        );
+    }
+    fn assert_endpoint_error(
+        error: &eyre::Report,
+        path: &str,
+        context: &str,
+        status: &str,
+        body: &str,
+    ) {
+        let message = error.to_string();
+        for (needle, missing) in [
+            (context, "context"),
+            (status, "status"),
+            (body, "response body"),
+        ] {
+            assert!(
+                message.contains(needle),
+                "{path} missing {missing}: {message}"
+            );
+        }
+    }
     #[test]
     fn get_config_includes_operator_signature_headers_when_key_configured() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let mut client = client_with_base_url(base_url());
         client.set_operator_key_pair(checked_random_keypair());
-        with_mock_http(
-            respond_with(
-                &snapshots,
-                Response::builder()
-                    .status(StatusCode::UNAUTHORIZED)
-                    .body(Vec::new())
-                    .expect("response build"),
-            ),
-            || {
-                let _err = client
-                    .get_config()
-                    .expect_err("mocked unauthorized response should fail");
-            },
-        );
-        let snapshot = snapshots
-            .lock()
-            .expect("lock snapshots")
-            .first()
-            .cloned()
-            .expect("request snapshot");
+        let (result, snapshot) = capture_request(empty_response(StatusCode::UNAUTHORIZED), || {
+            client.get_config()
+        });
+        result.expect_err("mocked unauthorized response should fail");
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), torii_uri::CONFIGURATION);
-        assert!(
-            snapshot
-                .headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_PUBLIC_KEY)),
-            "missing operator public key header"
-        );
-        assert!(
-            snapshot
-                .headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_TIMESTAMP_MS)),
-            "missing operator timestamp header"
-        );
-        assert!(
-            snapshot
-                .headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_NONCE)),
-            "missing operator nonce header"
-        );
-        assert!(
-            snapshot
-                .headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_SIGNATURE)),
-            "missing operator signature header"
-        );
+        assert_operator_signature_headers(&snapshot);
     }
     #[test]
     fn set_config_includes_operator_signature_headers_when_key_configured() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let mut client = client_with_base_url(base_url());
         client.set_operator_key_pair(checked_random_keypair());
         let update = ConfigUpdateDTO {
@@ -26844,56 +25290,13 @@ mod tests {
             transport: None,
             compute_pricing: None,
         };
-        with_mock_http(
-            respond_with(
-                &snapshots,
-                Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Vec::new())
-                    .expect("response build"),
-            ),
-            || {
-                let _err = client
-                    .set_config(&update)
-                    .expect_err("mocked bad request response should fail");
-            },
-        );
-        let snapshot = snapshots
-            .lock()
-            .expect("lock snapshots")
-            .first()
-            .cloned()
-            .expect("request snapshot");
+        let (result, snapshot) = capture_request(empty_response(StatusCode::BAD_REQUEST), || {
+            client.set_config(&update)
+        });
+        result.expect_err("mocked bad request response should fail");
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(snapshot.url.path(), torii_uri::CONFIGURATION);
-        assert!(
-            snapshot
-                .headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_PUBLIC_KEY)),
-            "missing operator public key header"
-        );
-        assert!(
-            snapshot
-                .headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_TIMESTAMP_MS)),
-            "missing operator timestamp header"
-        );
-        assert!(
-            snapshot
-                .headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_NONCE)),
-            "missing operator nonce header"
-        );
-        assert!(
-            snapshot
-                .headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_SIGNATURE)),
-            "missing operator signature header"
-        );
+        assert_operator_signature_headers(&snapshot);
     }
     #[test]
     #[expect(
@@ -26907,73 +25310,16 @@ mod tests {
             Client::get_sumeragi_pacemaker_json,
         )];
         for (path, request) in cases {
-            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
             let mut client = client_with_base_url(base_url());
             let operator_key_pair = checked_random_keypair();
             client.set_operator_key_pair(operator_key_pair.clone());
-            with_mock_http(
-                respond_with(
-                    &snapshots,
-                    Response::builder()
-                        .status(StatusCode::UNAUTHORIZED)
-                        .body(Vec::new())
-                        .expect("response build"),
-                ),
-                || {
-                    let _err =
-                        request(&client).expect_err("mocked unauthorized response should fail");
-                },
-            );
-            let snapshot = snapshots
-                .lock()
-                .expect("lock snapshots")
-                .first()
-                .cloned()
-                .expect("request snapshot");
-            assert_eq!(snapshot.method, HttpMethod::GET);
-            assert_eq!(snapshot.url.path(), path);
-            assert!(
-                snapshot.headers.iter().any(|(name, value)| {
-                    name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
-                }),
-                "request should set Accept: application/json"
-            );
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_PUBLIC_KEY)),
-                "missing operator public key header"
-            );
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_TIMESTAMP_MS)),
-                "missing operator timestamp header"
-            );
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_NONCE)),
-                "missing operator nonce header"
-            );
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_SIGNATURE)),
-                "missing operator signature header"
-            );
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
-                        && value == APPLICATION_JSON),
-                "{path} JSON helper must request JSON"
-            );
+            let (result, snapshot) =
+                capture_request(empty_response(StatusCode::UNAUTHORIZED), || {
+                    request(&client)
+                });
+            result.expect_err("mocked unauthorized response should fail");
+            assert_sumeragi_json_request(&snapshot, path);
+            assert_operator_signature_headers(&snapshot);
             let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
             let timestamp_ms = headers[HEADER_OPERATOR_TIMESTAMP_MS]
                 .parse::<u64>()
@@ -27025,28 +25371,11 @@ mod tests {
             ("/v1/sumeragi/params", Client::get_sumeragi_params_json),
         ];
         for (path, request) in cases {
-            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-            with_mock_http(
-                respond_with(&snapshots, json_response(StatusCode::OK, "{}")),
-                || request(&client_with_base_url(base_url())),
-            )
-            .expect("JSON endpoint request should decode mocked payload");
-            let snapshot = snapshots
-                .lock()
-                .expect("lock snapshots")
-                .first()
-                .cloned()
-                .expect("request snapshot");
-            assert_eq!(snapshot.method, HttpMethod::GET);
-            assert_eq!(snapshot.url.path(), path);
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
-                        && value == APPLICATION_JSON),
-                "{path} JSON helper must request JSON"
-            );
+            let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
+                request(&client_with_base_url(base_url()))
+            });
+            result.expect("JSON endpoint request should decode mocked payload");
+            assert_sumeragi_json_request(&snapshot, path);
         }
     }
     #[test]
@@ -27057,32 +25386,16 @@ mod tests {
             ("/v1/sumeragi/params", Client::get_sumeragi_params_json),
         ];
         for (path, request) in cases {
-            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-            let err = with_mock_http(
-                respond_with(&snapshots, json_response(StatusCode::OK, r#"{"broken":"#)),
-                || request(&client_with_base_url(base_url())),
-            )
-            .expect_err("malformed successful JSON payload should fail");
+            let (result, snapshot) =
+                capture_request(json_response(StatusCode::OK, r#"{"broken":"#), || {
+                    request(&client_with_base_url(base_url()))
+                });
+            let err = result.expect_err("malformed successful JSON payload should fail");
             assert!(
                 err.to_string().contains("failed to decode JSON payload"),
                 "{path} returned unexpected error: {err}"
             );
-            let snapshot = snapshots
-                .lock()
-                .expect("lock snapshots")
-                .first()
-                .cloned()
-                .expect("request snapshot");
-            assert_eq!(snapshot.method, HttpMethod::GET);
-            assert_eq!(snapshot.url.path(), path);
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
-                        && value == APPLICATION_JSON),
-                "{path} JSON helper must request JSON"
-            );
+            assert_sumeragi_json_request(&snapshot, path);
         }
     }
     #[test]
@@ -27105,41 +25418,13 @@ mod tests {
             ),
         ];
         for (path, context, request) in cases {
-            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-            let err = with_mock_http(
-                respond_with(
-                    &snapshots,
-                    json_response(StatusCode::TOO_MANY_REQUESTS, "rate limited"),
-                ),
+            let (result, snapshot) = capture_request(
+                json_response(StatusCode::TOO_MANY_REQUESTS, "rate limited"),
                 || request(&client_with_base_url(base_url())),
-            )
-            .expect_err("non-OK JSON endpoint response should fail");
-            let message = err.to_string();
-            assert!(
-                message.contains(context),
-                "{path} missing context: {message}"
             );
-            assert!(message.contains("429"), "{path} missing status: {message}");
-            assert!(
-                message.contains("rate limited"),
-                "{path} missing response body: {message}"
-            );
-            let snapshot = snapshots
-                .lock()
-                .expect("lock snapshots")
-                .first()
-                .cloned()
-                .expect("request snapshot");
-            assert_eq!(snapshot.method, HttpMethod::GET);
-            assert_eq!(snapshot.url.path(), path);
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
-                        && value == APPLICATION_JSON),
-                "{path} JSON helper must request JSON"
-            );
+            let err = result.expect_err("non-OK JSON endpoint response should fail");
+            assert_endpoint_error(&err, path, context, "429", "rate limited");
+            assert_sumeragi_json_request(&snapshot, path);
         }
     }
     #[test]
@@ -27156,37 +25441,16 @@ mod tests {
             ("/v1/sumeragi/vrf/epoch/7", epoch),
         ];
         for (path, request) in cases {
-            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-            with_mock_http(
-                respond_with(&snapshots, json_response(StatusCode::OK, "{}")),
-                || request(&client_with_base_url(base_url())),
-            )
-            .expect("VRF JSON endpoint should decode mocked payload");
-            let snapshot = snapshots
-                .lock()
-                .expect("lock snapshots")
-                .first()
-                .cloned()
-                .expect("request snapshot");
-            assert_eq!(snapshot.method, HttpMethod::GET);
-            assert_eq!(snapshot.url.path(), path);
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
-                        && value == APPLICATION_JSON),
-                "{path} JSON helper must request JSON"
-            );
-            let malformed_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-            let err = with_mock_http(
-                respond_with(
-                    &malformed_snapshots,
-                    json_response(StatusCode::OK, r#"{"broken":"#),
-                ),
-                || request(&client_with_base_url(base_url())),
-            )
-            .expect_err("malformed successful VRF JSON payload should fail");
+            let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
+                request(&client_with_base_url(base_url()))
+            });
+            result.expect("VRF JSON endpoint should decode mocked payload");
+            assert_sumeragi_json_request(&snapshot, path);
+            let (result, _) =
+                capture_request(json_response(StatusCode::OK, r#"{"broken":"#), || {
+                    request(&client_with_base_url(base_url()))
+                });
+            let err = result.expect_err("malformed successful VRF JSON payload should fail");
             assert!(
                 err.to_string().contains("failed to decode JSON payload"),
                 "{path} returned unexpected error: {err}"
@@ -27219,44 +25483,22 @@ mod tests {
             ),
         ];
         for (path, context, request) in cases {
-            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-            let err = with_mock_http(
-                respond_with(
-                    &snapshots,
-                    json_response(
-                        StatusCode::BAD_GATEWAY,
-                        "upstream consensus snapshot failed",
-                    ),
+            let (result, snapshot) = capture_request(
+                json_response(
+                    StatusCode::BAD_GATEWAY,
+                    "upstream consensus snapshot failed",
                 ),
                 || request(&client_with_base_url(base_url())),
-            )
-            .expect_err("non-OK VRF JSON endpoint response should fail");
-            let message = err.to_string();
-            assert!(
-                message.contains(context),
-                "{path} missing context: {message}"
             );
-            assert!(message.contains("502"), "{path} missing status: {message}");
-            assert!(
-                message.contains("upstream consensus snapshot failed"),
-                "{path} missing response body: {message}"
+            let err = result.expect_err("non-OK VRF JSON endpoint response should fail");
+            assert_endpoint_error(
+                &err,
+                path,
+                context,
+                "502",
+                "upstream consensus snapshot failed",
             );
-            let snapshot = snapshots
-                .lock()
-                .expect("lock snapshots")
-                .first()
-                .cloned()
-                .expect("request snapshot");
-            assert_eq!(snapshot.method, HttpMethod::GET);
-            assert_eq!(snapshot.url.path(), path);
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
-                        && value == APPLICATION_JSON),
-                "{path} JSON helper must request JSON"
-            );
+            assert_sumeragi_json_request(&snapshot, path);
         }
     }
     #[test]
@@ -27267,65 +25509,19 @@ mod tests {
             Client::get_sumeragi_pacemaker_json,
         )];
         for (path, request) in cases {
-            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
             let mut client = client_with_base_url(base_url());
             client.set_operator_key_pair(checked_random_keypair());
-            let err = with_mock_http(
-                respond_with(
-                    &snapshots,
-                    json_response(StatusCode::OK, r#"{"dup":1,"dup":2}"#),
-                ),
+            let (result, snapshot) = capture_request(
+                json_response(StatusCode::OK, r#"{"dup":1,"dup":2}"#),
                 || request(&client),
-            )
-            .expect_err("duplicate-key successful JSON payload should fail");
+            );
+            let err = result.expect_err("duplicate-key successful JSON payload should fail");
             assert!(
                 err.to_string().contains("failed to decode JSON payload"),
                 "{path} returned unexpected error: {err}"
             );
-            let snapshot = snapshots
-                .lock()
-                .expect("lock snapshots")
-                .first()
-                .cloned()
-                .expect("request snapshot");
-            assert_eq!(snapshot.method, HttpMethod::GET);
-            assert_eq!(snapshot.url.path(), path);
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_PUBLIC_KEY)),
-                "missing operator public key header"
-            );
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_TIMESTAMP_MS)),
-                "missing operator timestamp header"
-            );
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_NONCE)),
-                "missing operator nonce header"
-            );
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_SIGNATURE)),
-                "missing operator signature header"
-            );
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
-                        && value == APPLICATION_JSON),
-                "{path} JSON helper must request JSON"
-            );
+            assert_sumeragi_json_request(&snapshot, path);
+            assert_operator_signature_headers(&snapshot);
         }
     }
     #[test]
@@ -27341,100 +25537,43 @@ mod tests {
             Client::get_sumeragi_pacemaker_json,
         )];
         for (path, context, request) in cases {
-            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
             let mut client = client_with_base_url(base_url());
             client.set_operator_key_pair(checked_random_keypair());
-            let err = with_mock_http(
-                respond_with(
-                    &snapshots,
-                    json_response(StatusCode::FORBIDDEN, "operator key rejected"),
-                ),
+            let (result, snapshot) = capture_request(
+                json_response(StatusCode::FORBIDDEN, "operator key rejected"),
                 || request(&client),
-            )
-            .expect_err("non-OK operator JSON endpoint response should fail");
-            let message = err.to_string();
-            assert!(
-                message.contains(context),
-                "{path} missing context: {message}"
             );
-            assert!(message.contains("403"), "{path} missing status: {message}");
-            assert!(
-                message.contains("operator key rejected"),
-                "{path} missing response body: {message}"
-            );
-            let snapshot = snapshots
-                .lock()
-                .expect("lock snapshots")
-                .first()
-                .cloned()
-                .expect("request snapshot");
-            assert_eq!(snapshot.method, HttpMethod::GET);
-            assert_eq!(snapshot.url.path(), path);
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_PUBLIC_KEY)),
-                "missing operator public key header"
-            );
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_SIGNATURE)),
-                "missing operator signature header"
-            );
-            assert!(
-                snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
-                        && value == APPLICATION_JSON),
-                "{path} JSON helper must request JSON"
-            );
+            let err = result.expect_err("non-OK operator JSON endpoint response should fail");
+            assert_endpoint_error(&err, path, context, "403", "operator key rejected");
+            assert_sumeragi_json_request(&snapshot, path);
+            assert_operator_signature_headers(&snapshot);
         }
     }
     #[test]
     fn transaction_response_handler_returns_err_on_bad_request() {
-        let response = Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Vec::new())
-            .unwrap();
+        let response = mk_response(StatusCode::BAD_REQUEST, Vec::new(), None);
         assert!(TransactionResponseHandler::handle(&response).is_err());
     }
     #[test]
     fn transaction_response_handler_accepts_accepted() {
-        let response = Response::builder()
-            .status(StatusCode::ACCEPTED)
-            .body(Vec::new())
-            .unwrap();
+        let response = mk_response(StatusCode::ACCEPTED, Vec::new(), None);
         assert!(TransactionResponseHandler::handle(&response).is_ok());
     }
     #[test]
     fn decode_status_response_returns_err_on_internal_server_error() {
-        let response = Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Vec::new())
-            .expect("Failed to build response");
+        let response = mk_response(StatusCode::INTERNAL_SERVER_ERROR, Vec::new(), None);
         assert!(Client::decode_status_for_test(&response).is_err());
     }
     #[test]
     fn decode_parameters_response_returns_err_on_bad_status() {
-        let response = Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Vec::new())
-            .expect("Failed to build response");
+        let response = mk_response(StatusCode::BAD_REQUEST, Vec::new(), None);
         assert!(decode_parameters_for_test(&response).is_err());
     }
     #[test]
     fn decode_parameters_response_parses_json_payload() {
         let params = iroha_data_model::parameter::Parameters::default();
         let body = norito::json::to_vec(&params).expect("serialize parameters");
-        let response = Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", "application/json")
-            .body(body)
-            .expect("build response");
+        let response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
         let decoded = decode_parameters_for_test(&response).expect("decode parameters");
         assert_eq!(decoded, params);
     }
@@ -27479,11 +25618,7 @@ mod tests {
             da_receipt_cursors: Vec::new(),
         })
         .unwrap();
-        let response = Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", "application/json")
-            .body(body)
-            .unwrap();
+        let response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
         let decoded = Client::decode_status_for_test(&response).expect("json fallback should work");
         assert_eq!(decoded.peers, 0);
     }
@@ -27496,11 +25631,7 @@ mod tests {
             ..S::default()
         };
         let body = norito::to_bytes(&status).expect("serialize status");
-        let response = Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(body)
-            .unwrap();
+        let response = mk_response(StatusCode::OK, body, Some(APPLICATION_NORITO));
         let decoded = Client::decode_status_for_test(&response).expect("framed decode should work");
         assert_eq!(decoded.peers, status.peers);
         assert_eq!(decoded.blocks, status.blocks);
@@ -27514,11 +25645,7 @@ mod tests {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let norito_body = norito::to_bytes(&status).expect("serialize status");
-        let norito_response = Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito_body)
-            .unwrap();
+        let norito_response = mk_response(StatusCode::OK, norito_body, Some(APPLICATION_NORITO));
         let decoded = with_mock_http(respond_with(&snapshots, norito_response), || {
             client.get_sumeragi_status()
         })
@@ -27536,11 +25663,7 @@ mod tests {
         let json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let json_body =
             norito::json::to_vec(&status).expect("serialize sumeragi status to JSON payload");
-        let json_response = Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(json_body)
-            .unwrap();
+        let json_response = mk_response(StatusCode::OK, json_body, Some(APPLICATION_JSON));
         let decoded_json = with_mock_http(respond_with(&json_snapshots, json_response), || {
             client.get_sumeragi_status()
         })
@@ -27575,11 +25698,11 @@ mod tests {
         let client = client_with_base_url(base_url());
         let mut wrong_protocol = sample_sumeragi_status();
         wrong_protocol.protocol_version += 1;
-        let response = Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&wrong_protocol).expect("serialize invalid status"))
-            .unwrap();
+        let response = mk_response(
+            StatusCode::OK,
+            norito::to_bytes(&wrong_protocol).expect("serialize invalid status"),
+            Some(APPLICATION_NORITO),
+        );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client.get_sumeragi_status(),
@@ -27589,22 +25712,22 @@ mod tests {
         let mut impossible_phase = sample_sumeragi_status();
         impossible_phase.phase = SumeragiV2StatusPhase::PendingApply;
         impossible_phase.body_state = SumeragiV2BodyState::Applied;
-        let response = Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&impossible_phase).expect("serialize invalid status"))
-            .unwrap();
+        let response = mk_response(
+            StatusCode::OK,
+            norito::json::to_vec(&impossible_phase).expect("serialize invalid status"),
+            Some(APPLICATION_JSON),
+        );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client.get_sumeragi_status(),
         )
         .expect_err("inconsistent commit frontier must be rejected after JSON decode");
         assert!(error.to_string().contains("Invalid Sumeragi v2 status"));
-        let response = Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&wrong_protocol).expect("serialize invalid status"))
-            .unwrap();
+        let response = mk_response(
+            StatusCode::OK,
+            norito::json::to_vec(&wrong_protocol).expect("serialize invalid status"),
+            Some(APPLICATION_JSON),
+        );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client.get_sumeragi_status_json(),
@@ -27625,11 +25748,7 @@ mod tests {
         let json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let json_body =
             norito::json::to_vec(&status).expect("serialize sumeragi status endpoint JSON payload");
-        let json_response = Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(json_body)
-            .unwrap();
+        let json_response = mk_response(StatusCode::OK, json_body, Some(APPLICATION_JSON));
         let decoded_json = with_mock_http(respond_with(&json_snapshots, json_response), || {
             client_with_base_url(base_url()).get_sumeragi_status_json()
         })
@@ -27669,41 +25788,23 @@ mod tests {
     }
     #[test]
     fn get_sumeragi_diagnostics_verifies_lane_relay_envelopes() {
-        let client = client_with_base_url(base_url());
         let (status, relay_envelope) = sample_sumeragi_status_with_relay();
         assert_eq!(status.lane_relay_envelopes, vec![relay_envelope]);
-        let body = norito::to_bytes(&status).expect("encode status payload");
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(body)
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let decoded = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_sumeragi_diagnostics()
-        })
-        .expect("decode sumeragi status");
+        let decoded =
+            request_sumeragi_diagnostics(&status, APPLICATION_NORITO, "encode status payload")
+                .expect("decode sumeragi status");
         assert_eq!(decoded.lane_settlement_commitments.len(), 1);
         assert_eq!(decoded.lane_relay_envelopes.len(), 1);
     }
     #[test]
     fn get_sumeragi_diagnostics_rejects_invalid_lane_relay_hash() {
-        let client = client_with_base_url(base_url());
         let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
         let mut tampered = relay_envelope;
         tampered.settlement_hash =
             HashOf::from_untyped_unchecked(Hash::prehashed([0xFF; Hash::LENGTH]));
         status.lane_relay_envelopes = vec![tampered];
-        let body = norito::to_bytes(&status).expect("encode status payload");
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(body)
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let result = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_sumeragi_diagnostics()
-        });
+        let result =
+            request_sumeragi_diagnostics(&status, APPLICATION_NORITO, "encode status payload");
         assert!(result.is_err(), "tampered relay should be rejected");
     }
     #[test]
@@ -27735,15 +25836,11 @@ mod tests {
                 SumeragiAutonomousLaneExecutionStuckReason::AwaitingExecutablePayload,
             ),
         }];
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&status).expect("encode malformed autonomous diagnostics"))
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let error = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_sumeragi_diagnostics()
-        })
+        let error = request_sumeragi_diagnostics(
+            &status,
+            APPLICATION_NORITO,
+            "encode malformed autonomous diagnostics",
+        )
         .expect_err("malformed autonomous execution must fail closed");
         assert!(
             error
@@ -27783,15 +25880,11 @@ mod tests {
         row.validate()
             .expect("Queue-only client fixture must honestly omit proposal view and final hashes");
         status.autonomous_lane_executions = vec![row, row];
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&status).expect("encode duplicate autonomous diagnostics"))
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let error = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_sumeragi_diagnostics()
-        })
+        let error = request_sumeragi_diagnostics(
+            &status,
+            APPLICATION_NORITO,
+            "encode duplicate autonomous diagnostics",
+        )
         .expect_err("duplicate autonomous execution identity must fail closed");
         assert!(
             error
@@ -27801,7 +25894,6 @@ mod tests {
     }
     #[test]
     fn get_sumeragi_diagnostics_rejects_malformed_native_amx_receipts_in_every_container() {
-        let client = client_with_base_url(base_url());
         let malformed_receipt = |settlement: &LaneBlockCommitment| NativeAmxReceipt {
             version: 2,
             source_id: [0xA5; Hash::LENGTH],
@@ -27821,15 +25913,11 @@ mod tests {
         direct.lane_settlement_commitments[0]
             .native_amx_receipts
             .push(receipt);
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&direct).expect("encode malformed direct settlement"))
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let error = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_sumeragi_diagnostics()
-        })
+        let error = request_sumeragi_diagnostics(
+            &direct,
+            APPLICATION_NORITO,
+            "encode malformed direct settlement",
+        )
         .expect_err("malformed direct Native AMX receipt must fail closed");
         assert!(
             error
@@ -27842,15 +25930,11 @@ mod tests {
             .settlement_commitment
             .native_amx_receipts
             .push(receipt);
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&relayed).expect("encode malformed relay settlement"))
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let error = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_sumeragi_diagnostics()
-        })
+        let error = request_sumeragi_diagnostics(
+            &relayed,
+            APPLICATION_NORITO,
+            "encode malformed relay settlement",
+        )
         .expect_err("malformed relayed Native AMX receipt must fail closed");
         assert!(
             error
@@ -27861,15 +25945,14 @@ mod tests {
     #[test]
     fn get_sumeragi_diagnostics_rejects_malformed_json_payload() {
         let client = client_with_base_url(base_url());
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(br#"{"lane_relay_envelopes":["#.to_vec())
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let result = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_sumeragi_diagnostics()
-        });
+        let (result, _) = capture_request(
+            mk_response(
+                StatusCode::OK,
+                br#"{"lane_relay_envelopes":["#.to_vec(),
+                Some(APPLICATION_JSON),
+            ),
+            || client.get_sumeragi_diagnostics(),
+        );
         assert!(result.is_err(), "malformed json should be rejected");
     }
     #[test]
@@ -27882,15 +25965,14 @@ mod tests {
             .and_then(norito::json::Value::as_object_mut)
             .expect("diagnostics fixture contains nested settlement commitment")
             .insert("canonical".to_owned(), norito::json::Value::Null);
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&value).expect("encode adversarial diagnostics JSON"))
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let result = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_sumeragi_diagnostics()
-        });
+        let (result, _) = capture_request(
+            mk_response(
+                StatusCode::OK,
+                norito::json::to_vec(&value).expect("encode adversarial diagnostics JSON"),
+                Some(APPLICATION_JSON),
+            ),
+            || client.get_sumeragi_diagnostics(),
+        );
         assert!(result.is_err(), "unknown nested fields must be rejected");
     }
     #[test]
@@ -27911,15 +25993,11 @@ mod tests {
                 vrf_late_reveals_total: 0,
             },
         );
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&status).expect("encode invalid diagnostics JSON"))
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let error = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_sumeragi_diagnostics()
-        })
+        let error = request_sumeragi_diagnostics(
+            &status,
+            APPLICATION_JSON,
+            "encode invalid diagnostics JSON",
+        )
         .expect_err("zero NPoS seed must be rejected");
         assert!(error.to_string().contains("epoch seed must be non-zero"));
     }
@@ -27928,16 +26006,11 @@ mod tests {
         let client = client_with_base_url(base_url());
         let (status, relay_envelope) = sample_sumeragi_status_with_relay();
         let body = norito::json::to_vec(&status).expect("encode status payload as json");
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(body.clone())
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let decoded = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_sumeragi_diagnostics()
-        })
-        .expect("decode declared current diagnostics JSON");
+        let (decoded, _) = capture_request(
+            mk_response(StatusCode::OK, body.clone(), Some(APPLICATION_JSON)),
+            || client.get_sumeragi_diagnostics(),
+        );
+        let decoded = decoded.expect("decode declared current diagnostics JSON");
         assert_eq!(decoded.lane_relay_envelopes, vec![relay_envelope]);
         for content_type in [
             None,
@@ -27960,73 +26033,49 @@ mod tests {
     }
     #[test]
     fn get_cross_lane_transfer_proofs_returns_verified_envelopes() {
-        let client = client_with_base_url(base_url());
         let (status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let body = norito::to_bytes(&status).expect("encode status payload");
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(body)
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let proofs = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_cross_lane_transfer_proofs()
-        })
+        let proofs = request_cross_lane_transfer_proofs(
+            &status,
+            APPLICATION_NORITO,
+            "encode status payload",
+        )
         .expect("decode lane relays");
         assert_eq!(proofs.len(), 1);
         assert_eq!(proofs[0].envelope(), &relay_envelope);
     }
     #[test]
     fn get_cross_lane_transfer_proofs_accepts_json_status_payload() {
-        let client = client_with_base_url(base_url());
         let (status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let body = norito::json::to_vec(&status).expect("encode status payload as json");
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(body)
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let proofs = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_cross_lane_transfer_proofs()
-        })
+        let proofs = request_cross_lane_transfer_proofs(
+            &status,
+            APPLICATION_JSON,
+            "encode status payload as json",
+        )
         .expect("decode lane relays from json payload");
         assert_eq!(proofs.len(), 1);
         assert_eq!(proofs[0].envelope(), &relay_envelope);
     }
     #[test]
     fn get_cross_lane_transfer_proofs_returns_empty_for_empty_envelopes() {
-        let client = client_with_base_url(base_url());
         let (mut status, _) = sample_sumeragi_status_with_relay();
         status.lane_relay_envelopes = Vec::new();
-        let body = norito::to_bytes(&status).expect("encode status payload");
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(body)
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let proofs = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_cross_lane_transfer_proofs()
-        })
+        let proofs = request_cross_lane_transfer_proofs(
+            &status,
+            APPLICATION_NORITO,
+            "encode status payload",
+        )
         .expect("empty relay list should decode");
         assert!(proofs.is_empty(), "expected no cross-lane proofs");
     }
     #[test]
     fn get_cross_lane_transfer_proofs_rejects_duplicate_keys() {
-        let client = client_with_base_url(base_url());
         let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
         status.lane_relay_envelopes = vec![relay_envelope.clone(), relay_envelope];
-        let body = norito::to_bytes(&status).expect("encode status payload");
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(body)
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let err = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_cross_lane_transfer_proofs()
-        })
+        let err = request_cross_lane_transfer_proofs(
+            &status,
+            APPLICATION_NORITO,
+            "encode status payload",
+        )
         .expect_err("duplicates should be rejected");
         assert!(
             err.to_string().contains("duplicate relay envelope"),
@@ -28035,19 +26084,13 @@ mod tests {
     }
     #[test]
     fn get_cross_lane_transfer_proofs_rejects_duplicate_keys_from_json_payload() {
-        let client = client_with_base_url(base_url());
         let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
         status.lane_relay_envelopes = vec![relay_envelope.clone(), relay_envelope];
-        let body = norito::json::to_vec(&status).expect("encode status payload as json");
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(body)
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let err = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_cross_lane_transfer_proofs()
-        })
+        let err = request_cross_lane_transfer_proofs(
+            &status,
+            APPLICATION_JSON,
+            "encode status payload as json",
+        )
         .expect_err("duplicate json relay tuples should be rejected");
         assert!(
             err.to_string().contains("duplicate relay envelope"),
@@ -28056,7 +26099,6 @@ mod tests {
     }
     #[test]
     fn get_cross_lane_transfer_proofs_accepts_distinct_dataspaces_on_same_lane_and_height() {
-        let client = client_with_base_url(base_url());
         let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
         let second = make_lane_relay_for_status(
             relay_envelope.lane_id,
@@ -28065,16 +26107,11 @@ mod tests {
             1_700_000_100_000,
         );
         status.lane_relay_envelopes = vec![relay_envelope.clone(), second.clone()];
-        let body = norito::to_bytes(&status).expect("encode status payload");
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(body)
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let proofs = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_cross_lane_transfer_proofs()
-        })
+        let proofs = request_cross_lane_transfer_proofs(
+            &status,
+            APPLICATION_NORITO,
+            "encode status payload",
+        )
         .expect("decode lane relays");
         assert_eq!(proofs.len(), 2);
         assert!(
@@ -28086,7 +26123,6 @@ mod tests {
     }
     #[test]
     fn get_cross_lane_transfer_proofs_accepts_distinct_lanes_on_same_dataspace_and_height() {
-        let client = client_with_base_url(base_url());
         let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
         let second = make_lane_relay_for_status(
             LaneId::new(relay_envelope.lane_id.as_u32() + 1),
@@ -28095,16 +26131,11 @@ mod tests {
             1_700_000_105_000,
         );
         status.lane_relay_envelopes = vec![relay_envelope.clone(), second.clone()];
-        let body = norito::to_bytes(&status).expect("encode status payload");
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(body)
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let proofs = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_cross_lane_transfer_proofs()
-        })
+        let proofs = request_cross_lane_transfer_proofs(
+            &status,
+            APPLICATION_NORITO,
+            "encode status payload",
+        )
         .expect("decode lane relays");
         assert_eq!(proofs.len(), 2);
         assert!(
@@ -28116,7 +26147,6 @@ mod tests {
     }
     #[test]
     fn get_cross_lane_transfer_proofs_preserves_envelope_order() {
-        let client = client_with_base_url(base_url());
         let (mut status, first) = sample_sumeragi_status_with_relay();
         let second = make_lane_relay_for_status(
             LaneId::new(first.lane_id.as_u32() + 2),
@@ -28125,16 +26155,11 @@ mod tests {
             1_700_000_115_000,
         );
         status.lane_relay_envelopes = vec![second.clone(), first.clone()];
-        let body = norito::to_bytes(&status).expect("encode status payload");
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(body)
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let proofs = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_cross_lane_transfer_proofs()
-        })
+        let proofs = request_cross_lane_transfer_proofs(
+            &status,
+            APPLICATION_NORITO,
+            "encode status payload",
+        )
         .expect("decode ordered lane relays");
         assert_eq!(proofs.len(), 2);
         assert_eq!(proofs[0].envelope(), &second, "first proof order mismatch");
@@ -28142,7 +26167,6 @@ mod tests {
     }
     #[test]
     fn get_cross_lane_transfer_proofs_accepts_same_lane_dataspace_across_heights() {
-        let client = client_with_base_url(base_url());
         let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
         let second = make_lane_relay_for_status(
             relay_envelope.lane_id,
@@ -28151,16 +26175,11 @@ mod tests {
             1_700_000_110_000,
         );
         status.lane_relay_envelopes = vec![relay_envelope.clone(), second.clone()];
-        let body = norito::to_bytes(&status).expect("encode status payload");
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(body)
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let proofs = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_cross_lane_transfer_proofs()
-        })
+        let proofs = request_cross_lane_transfer_proofs(
+            &status,
+            APPLICATION_NORITO,
+            "encode status payload",
+        )
         .expect("decode lane relays");
         assert_eq!(proofs.len(), 2);
         assert!(
@@ -28172,22 +26191,16 @@ mod tests {
     }
     #[test]
     fn get_cross_lane_transfer_proofs_reports_invalid_relay_before_duplicate_error() {
-        let client = client_with_base_url(base_url());
         let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
         let mut tampered_duplicate = relay_envelope.clone();
         tampered_duplicate.settlement_hash =
             HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
         status.lane_relay_envelopes = vec![relay_envelope, tampered_duplicate];
-        let body = norito::to_bytes(&status).expect("encode status payload");
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(body)
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let err = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_cross_lane_transfer_proofs()
-        })
+        let err = request_cross_lane_transfer_proofs(
+            &status,
+            APPLICATION_NORITO,
+            "encode status payload",
+        )
         .expect_err("invalid relay must be rejected");
         let message = err.to_string();
         assert!(
@@ -28202,22 +26215,16 @@ mod tests {
     #[test]
     fn get_cross_lane_transfer_proofs_reports_invalid_relay_before_duplicate_error_from_json_payload()
      {
-        let client = client_with_base_url(base_url());
         let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
         let mut tampered_duplicate = relay_envelope.clone();
         tampered_duplicate.settlement_hash =
             HashOf::from_untyped_unchecked(Hash::prehashed([0xAC; Hash::LENGTH]));
         status.lane_relay_envelopes = vec![relay_envelope, tampered_duplicate];
-        let body = norito::json::to_vec(&status).expect("encode status payload as json");
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(body)
-            .unwrap();
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let err = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_cross_lane_transfer_proofs()
-        })
+        let err = request_cross_lane_transfer_proofs(
+            &status,
+            APPLICATION_JSON,
+            "encode status payload as json",
+        )
         .expect_err("invalid json relay must be rejected");
         let message = err.to_string();
         assert!(
@@ -29714,11 +27721,11 @@ mod tests {
     fn get_privacy_capabilities_decodes_one_canonical_typed_manifest() {
         let payload = sample_privacy_capabilities();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode privacy capabilities"))
-            .expect("response build");
+        let response = mk_response(
+            StatusCode::OK,
+            norito::to_bytes(&payload).expect("encode privacy capabilities"),
+            Some(APPLICATION_NORITO),
+        );
         let decoded = with_mock_http(respond_with(&store, response), || {
             client_with_base_url(base_url()).get_privacy_capabilities()
         })
@@ -29811,11 +27818,11 @@ mod tests {
                 .contains("decode typed privacy capabilities"),
             "{error}"
         );
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", "application/problem+json")
-            .body(norito::json::to_vec(&valid).expect("privacy capability JSON"))
-            .expect("response build");
+        let response = mk_response(
+            StatusCode::OK,
+            norito::json::to_vec(&valid).expect("privacy capability JSON"),
+            Some("application/problem+json"),
+        );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).get_privacy_capabilities_json(),
@@ -29827,11 +27834,7 @@ mod tests {
         );
         let mut trailing = norito::to_bytes(&valid).expect("privacy capability Norito");
         trailing.push(0xA5);
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(trailing)
-            .expect("response build");
+        let response = mk_response(StatusCode::OK, trailing, Some(APPLICATION_NORITO));
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).get_privacy_capabilities(),
@@ -29849,11 +27852,11 @@ mod tests {
     fn get_sccp_capabilities_decodes_the_closed_surface() {
         let payload = sample_sccp_capabilities();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode capabilities"))
-            .expect("response build");
+        let response = mk_response(
+            StatusCode::OK,
+            norito::to_bytes(&payload).expect("encode capabilities"),
+            Some(APPLICATION_NORITO),
+        );
         let decoded = with_mock_http(respond_with(&store, response), || {
             client_with_base_url(base_url()).get_sccp_capabilities()
         })
@@ -30176,11 +28179,11 @@ mod tests {
         )
         .expect_err("unsupported capability version must reject");
         assert!(error.to_string().contains("invalid SCCP capabilities"));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", "application/octet-stream")
-            .body(payload_json.into_bytes())
-            .expect("response build");
+        let response = mk_response(
+            StatusCode::OK,
+            payload_json.into_bytes(),
+            Some("application/octet-stream"),
+        );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).get_sccp_capabilities_json(),
@@ -30328,11 +28331,11 @@ mod tests {
     fn get_sccp_registry_decodes_and_validates_the_typed_registry() {
         let registry = iroha_data_model::bridge::SccpRegistryV1::default();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&registry).expect("encode registry"))
-            .expect("response build");
+        let response = mk_response(
+            StatusCode::OK,
+            norito::to_bytes(&registry).expect("encode registry"),
+            Some(APPLICATION_NORITO),
+        );
         let decoded = with_mock_http(respond_with(&store, response), || {
             client_with_base_url(base_url()).get_sccp_registry()
         })
@@ -30352,11 +28355,11 @@ mod tests {
             version: 2,
             lanes: Vec::new(),
         };
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&invalid).expect("encode invalid registry"))
-            .expect("response build");
+        let response = mk_response(
+            StatusCode::OK,
+            norito::to_bytes(&invalid).expect("encode invalid registry"),
+            Some(APPLICATION_NORITO),
+        );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).get_sccp_registry(),
@@ -30368,11 +28371,11 @@ mod tests {
     fn get_sccp_recent_messages_uses_only_canonical_window_fields() {
         let payload = sample_sccp_recent_messages();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode recent messages"))
-            .expect("response build");
+        let response = mk_response(
+            StatusCode::OK,
+            norito::to_bytes(&payload).expect("encode recent messages"),
+            Some(APPLICATION_NORITO),
+        );
         let decoded = with_mock_http(respond_with(&store, response), || {
             client_with_base_url(base_url()).get_sccp_recent_messages_with_query(
                 SccpRecentMessagesQuery {
@@ -30667,11 +28670,7 @@ mod tests {
             hex::encode(fixture.bundle.commitment.message_id)
         );
         let bundle_bytes = norito::to_bytes(&fixture.bundle).expect("encode shared SCCP bundle");
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(bundle_bytes)
-            .expect("response build");
+        let response = mk_response(StatusCode::OK, bundle_bytes, Some(APPLICATION_NORITO));
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).get_sccp_message_bundle(&different_message_id),
@@ -30682,11 +28681,7 @@ mod tests {
             iroha_sccp::encode_canonical_sccp_groth16_bn254_proof_request_v1(&fixture.request)
                 .expect("canonical shared SCCP proof request");
         request_bytes.push(0);
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(request_bytes)
-            .expect("response build");
+        let response = mk_response(StatusCode::OK, request_bytes, Some(APPLICATION_NORITO));
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || {
@@ -30730,11 +28725,11 @@ mod tests {
         ];
         candidates.push(oversized_merkle);
         for candidate in candidates {
-            let response = HttpResponse::builder()
-                .status(StatusCode::OK)
-                .header("content-type", APPLICATION_NORITO)
-                .body(norito::to_bytes(&candidate).expect("encode adversarial SCCP bundle"))
-                .expect("response build");
+            let response = mk_response(
+                StatusCode::OK,
+                norito::to_bytes(&candidate).expect("encode adversarial SCCP bundle"),
+                Some(APPLICATION_NORITO),
+            );
             let _ = with_mock_http(
                 respond_with(&Arc::new(Mutex::new(Vec::new())), response),
                 || client_with_base_url(base_url()).get_sccp_message_bundle(&message_id),
@@ -30743,11 +28738,7 @@ mod tests {
         }
         let mut trailing = norito::to_bytes(&fixture.bundle).expect("encode shared SCCP bundle");
         trailing.push(0);
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(trailing)
-            .expect("response build");
+        let response = mk_response(StatusCode::OK, trailing, Some(APPLICATION_NORITO));
         let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).get_sccp_message_bundle(&message_id),

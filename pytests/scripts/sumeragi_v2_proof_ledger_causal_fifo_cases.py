@@ -1393,7 +1393,7 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
     )
     exact_match = canonical_adapter[match_start:match_end]
     commit_witness_start = canonical_adapter.index(
-        "        let validation = adapter", match_end
+        "        let validation = settle_ready_validate_succeeded_for_test(", match_end
     )
     tc_test_end = canonical_adapter.index(
         "\n    }\n\n    #[test]", commit_witness_start
@@ -1489,11 +1489,11 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         ),
         (
             mutate_tc(
-                ".validation_succeeded(fetch_tag, round, subject, &validated)",
-                ".validation_succeeded(fetch_tag, round, subject, &other)",
+                "            &validated,\n        );",
+                "            &other,\n        );",
             ),
             "strengthened TC regression must contain exactly one "
-            "adapter.validation_succeeded(fetch_tag, round, subject, &validated)",
+            "settle_ready_validate_succeeded_for_test exact validation receipt",
         ),
         (
             mutate_tc(

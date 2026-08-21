@@ -8,11 +8,11 @@ root-custodied executable, and pin its SHA-256 in the release-controller trust
 record. A checkout path or an unreviewed locally rebuilt binary is not a
 production trust root.
 
-The production execution surface is `run-v1` with the exact option set emitted
-by the Kagemusha readiness gate and Taira reset composer. `qualify-host-v1`
-accepts no arguments and runs the controller's built-in hostile host suite;
-`qualification-probe-v1` is its internal adversarial payload and must not be
-granted as a standalone privileged sudo command. Unknown, duplicate,
+The production execution surface is `run-v1`. The Kagemusha readiness gate is
+its sole current caller and emits the exact admitted option set.
+`qualify-host-v1` accepts no arguments and runs the controller's built-in
+hostile host suite. Its internal adversarial payload, `qualification-probe-v1`,
+must not be granted as a standalone privileged sudo command. Unknown, duplicate,
 inapplicable, missing, non-canonical, or oversized inputs fail with status
 `125`. Policy limits fail with status `124`; otherwise the tool's status and
 separate stdout/stderr byte streams are forwarded exactly. Tool stdin is
@@ -20,10 +20,10 @@ always a fresh `/dev/null`, never an inherited caller data channel.
 
 The request protocol intentionally does not carry an expected tool digest.
 The trusted caller must authenticate the digest and provide a private snapshot,
-as both current callers do. The controller then validates the complete
-runtime/root-custodied parent chain and proves that snapshot's identity and
-SHA-256 remain unchanged across execution. This divides trust without letting
-an untrusted request choose its own supposedly expected digest.
+as the current Kagemusha readiness gate does. The controller then validates the
+complete runtime/root-custodied parent chain and proves that snapshot's identity
+and SHA-256 remain unchanged across execution. This divides trust without
+letting an untrusted request choose its own supposedly expected digest.
 The request does carry the launcher's attested numeric UID and GID; the
 controller requires exact equality with both the real and effective runtime
 credentials before it creates the job.
@@ -88,20 +88,21 @@ another group, while the kernel-level fork denial prevents an untracked descenda
 Normal return requires the leader reaped, the original group empty, and the
 watchdog reaped.
 
-The external Taira genesis signer protocol intentionally writes the exact
-three staged outputs directly. Before Seatbelt starts, the controller securely
-pre-creates every absent allowlisted output as a private regular file; the
-profile then grants data writes but denies all file creation. The signer must
-truncate/write those files and must not require create-new or temporary
-rename/unlink publication. Its peer configuration is the only separate
-readable file; the bound-manifest candidate is already an explicitly writable
-and therefore readable output. The reset composer performs authenticated
-atomic publication after validation. The production Kagami caller grants its
+`run-v1` retains a generic direct-output isolation contract for a future trusted
+caller. Before Seatbelt starts, the controller securely pre-creates every absent
+allowlisted output as a private regular file; the profile then grants data
+writes but denies all file creation. An isolated tool must truncate/write those
+files and must not require create-new or temporary rename/unlink publication.
+The caller remains responsible for validating the results and performing any
+authenticated atomic publication after the controller returns. No current
+first-release production caller uses this writable-output mode.
+
+The current Kagemusha readiness caller instead denies all writes and grants its
 one pinned policy, the exact fixed release inventory, and the exact release
-directory entry only; a digest-pinned but compromised verifier cannot read
-root SSH or signing secrets and reflect them through stdout. Kagemusha's macOS
-memory guard uses native `sysctlbyname` and `proc_pid_rusage` queries so the
-verifier does not need a helper process.
+directory entry only; a digest-pinned but compromised verifier cannot read root
+SSH or signing secrets and reflect them through stdout. Kagemusha's macOS memory
+guard uses native `sysctlbyname` and `proc_pid_rusage` queries so the verifier
+does not need a helper process.
 
 ## Linux backend
 
@@ -129,20 +130,32 @@ create-new signer semantics; network, spawn, fork, `setsid`, ambient write, unli
 rename, hard-link, symlink and FIFO denial; output and wall-time bounds; and watchdog cleanup
 after forced controller death. They also force both the cumulative writable-file
 quota and the complete live write-root quota past their limits and require an
-exact status-`124` refusal. The protected Taira qualification and deploy
-jobs authenticate the source-built image, install that exact byte string as
-root mode `0555`, verify its post-install identity/digest/byte equality, and run
-`qualify-host-v1` on the actual protected kernel before reset composition.
-Read access is intentional: the sealed runtime-identity composer must hash and
-copy the root-owned image into its owner-private execution snapshot. No
-non-root identity can modify the installed image or its parent chain.
+exact status-`124` refusal. The protected Kagemusha qualification job
+authenticates the source-built image, installs that exact byte string as root
+mode `0555`, verifies its post-install identity/digest/byte equality, and runs
+`qualify-host-v1` on the actual protected kernel before readiness validation.
+Read access is intentional: the readiness gate must hash and copy the root-owned
+image into its owner-private execution snapshot. A non-root identity cannot
+modify the installed image or its parent chain.
 
-`.github/workflows/promote_kagemusha_v4.yml` is the repository-owned production
-entry point. Its untrusted job builds an inert controller image. Its separately
-protected macOS job checks that image against the independent digest pin,
-installs and qualifies it, authenticates the root-custodied readiness gate and
-Python interpreter, then invokes the gate in `promotion` mode under `env -i`
-with every policy, catalog, Kagami, source-authority, and physical-iOS trust
-pin. Missing paths, pins, sudo grants, or host capabilities stop the workflow;
-the workflow does not create operator trust records or claim external signer
-compatibility.
+`.github/workflows/promote_kagemusha_v4.yml` is the repository-owned protected
+readiness verifier; it is not yet a publisher or activation workflow. Its
+untrusted job builds an inert controller image. Its separately protected macOS
+job checks out the exact GitHub workflow SHA, binds that SHA and canonical
+workflow identity to the root-custodied reviewed-source checkout, checks the
+image against the independent digest pin, and installs it only at
+`/Library/SORA/Kagemusha/bin/iroha_authenticated_tool_controller`. It then
+qualifies the image, authenticates the root-custodied readiness gate and Python
+interpreter/runtime tree, and invokes the gate in strict `promotion`-validation
+mode under `env -i` with every policy, catalog, Kagami, source-authority,
+sealed-build-report, and physical-iOS trust pin. Missing identities, paths,
+pins, exact sudo grants, or host capabilities stop the workflow. Verification
+of a pre-existing promotion record does not publish a release, qualify a
+validator catalog, submit an activation, or create operator trust records.
+The workflow derives a domain-separated promotion id from the immutable GitHub
+repository, workflow ref/SHA, run id, and run attempt, and admits the current
+catalog revalidation receipt only at
+`/Library/SORA/Kagemusha/catalog-revalidation/<promotion-id>.json`. An
+independent authority must create that root-custodied receipt after dispatch
+and before protected-environment approval; authority signing material and
+DeviceCheck credentials never enter this verification workflow.

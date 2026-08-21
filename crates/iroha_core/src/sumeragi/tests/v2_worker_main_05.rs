@@ -1972,13 +1972,6 @@ fn decision_retires_candidate_and_outbound_work_but_keeps_exact_sidecar_deferral
             tag: service.active_tag,
             subject: decision_subject,
         });
-    service
-        .validation_rejections
-        .push_back(RejectedCandidateBody {
-            round: decision_round,
-            subject: losing_subject,
-            reason: "losing validation".to_owned(),
-        });
     let reference = merge_sidecar_reference(b"decided merge sidecar");
     service
         .merge_sidecar_deferrals
@@ -2010,7 +2003,6 @@ fn decision_retires_candidate_and_outbound_work_but_keeps_exact_sidecar_deferral
     assert!(service.outbound_chunks.is_empty());
     assert!(service.locked_candidate_acquisition.is_none());
     assert!(service.prepared_candidates.is_empty());
-    assert!(service.validation_rejections.is_empty());
     assert!(matches!(
         service.merge_sidecar_deferrals.as_slices(),
         ([deferred], [])

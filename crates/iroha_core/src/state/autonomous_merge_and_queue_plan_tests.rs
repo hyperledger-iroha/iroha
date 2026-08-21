@@ -203,14 +203,18 @@ fn autonomous_execution_defers_expired_axt_replay_pruning() {
 fn autonomous_execution_rejects_post_stage_axt_replay_drift() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
-    state_block.world.axt_replay_ledger.insert(
-        AxtHandleReplayKey::from_parts(DataSpaceId::UNIVERSAL, [0xD2; 32], 1, 2, LaneId::SINGLE),
-        AxtReplayRecord {
-            dataspace: DataSpaceId::UNIVERSAL,
-            used_slot: 0,
-            retain_until_slot: 0,
-        },
+    let replay_key = AxtHandleReplayKey::from_parts(
+        DataSpaceId::UNIVERSAL,
+        axt_replay_incarnation_for_test(0xD2),
+        [0xD2; 32],
+        1,
+        2,
+        LaneId::SINGLE,
     );
+    state_block
+        .world
+        .axt_replay_ledger
+        .insert(replay_key, axt_replay_record_for_key(&replay_key, 0, 0));
     assert!(matches!(
         commit_staged_autonomous_for_test(state_block),
         Err(TransactionsBlockError::MergeAdmission)
@@ -221,14 +225,18 @@ fn autonomous_execution_rejects_post_stage_axt_replay_drift() {
 fn autonomous_execution_stage_rejects_preexisting_axt_replay_overlay() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = state.lane_application_block(carrier.header().clone());
-    state_block.world.axt_replay_ledger.insert(
-        AxtHandleReplayKey::from_parts(DataSpaceId::UNIVERSAL, [0xD3; 32], 1, 3, LaneId::SINGLE),
-        AxtReplayRecord {
-            dataspace: DataSpaceId::UNIVERSAL,
-            used_slot: 0,
-            retain_until_slot: 0,
-        },
+    let replay_key = AxtHandleReplayKey::from_parts(
+        DataSpaceId::UNIVERSAL,
+        axt_replay_incarnation_for_test(0xD3),
+        [0xD3; 32],
+        1,
+        3,
+        LaneId::SINGLE,
     );
+    state_block
+        .world
+        .axt_replay_ledger
+        .insert(replay_key, axt_replay_record_for_key(&replay_key, 0, 0));
     assert!(matches!(
         state_block.stage_certified_merge_entry(&entry),
         Err(MergeLedgerCommitError::ExecutionStageNotPristine)

@@ -438,6 +438,44 @@ try:
             os.close(descriptor)
 except (OSError, ValueError) as error:
     errors.append(f'production custody self-test failed unexpectedly: {error}')
+real_fstat = os.fstat
+real_require_no_macos_extended_acl = require_no_macos_extended_acl
+try:
+    root_custodied_metadata = types.SimpleNamespace(
+        st_uid=PRODUCTION_TRUSTED_UID,
+        st_mode=stat.S_IFDIR | 0o755,
+    )
+    os.fstat = lambda _descriptor: root_custodied_metadata
+    require_no_macos_extended_acl = lambda _descriptor, _label: None
+    try:
+        require_production_root_custody(-1, 'self-test root-custodied ancestor')
+    except (OSError, ValueError) as error:
+        errors.append(
+            f'self-test rejected a legitimate root-custodied production ancestor: {error}'
+        )
+    non_root_metadata = types.SimpleNamespace(
+        st_uid=PRODUCTION_TRUSTED_UID + 1,
+        st_mode=stat.S_IFDIR | 0o755,
+    )
+    os.fstat = lambda _descriptor: non_root_metadata
+    expect_value_error(
+        lambda: require_production_root_custody(-1, 'self-test non-root ancestor'),
+        'self-test failed to reject a non-root production ancestor',
+        'must be owned by root',
+    )
+    writable_metadata = types.SimpleNamespace(
+        st_uid=PRODUCTION_TRUSTED_UID,
+        st_mode=stat.S_IFDIR | 0o775,
+    )
+    os.fstat = lambda _descriptor: writable_metadata
+    expect_value_error(
+        lambda: require_production_root_custody(-1, 'self-test writable ancestor'),
+        'self-test failed to reject a group-writable production ancestor',
+        'must not be group/world writable',
+    )
+finally:
+    os.fstat = real_fstat
+    require_no_macos_extended_acl = real_require_no_macos_extended_acl
 if sys.platform == 'darwin':
     try:
         with tempfile.TemporaryDirectory(prefix='kagemusha-acl-custody-self-test-') as temporary:
@@ -626,6 +664,10 @@ static_mutations = (
         'reject removal of online App Attest freshness validation', ('def _validate_online_freshness_receipt(',)),
     (PRODUCTION_IOS_EVIDENCE_MODULE, 'def build_production_signed_evidence(\n', 'def build_unchecked_production_signed_evidence(\n',
         'reject removal of production App Attest envelope construction', ('def build_production_signed_evidence(',)),
+    (PRODUCTION_IOS_EVIDENCE_MODULE, '        require_current_freshness_receipt=True,\n',
+        '        require_current_freshness_receipt=False,\n',
+        'reject stale receipts in ordinary production evidence validation',
+        ('separate current and historical freshness validator wrappers',)),
     (MODEL, 'KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 22',
         'KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 21', 'reject ABI-21 substitution'),
     (MODEL_COMPONENT, 'pub enum KagemushaPastaCycleArtifactKindV4', 'pub enum DetachedKagemushaPastaCycleArtifactKindV4', 'authenticate the split model component'),
@@ -817,6 +859,10 @@ if (controlled_values('--readable-directory') != ['/release']
 pinned_ios_diagnostic = 'same pinned evidence, trusted key, and production policy snapshots'
 readiness_mutations = (('        str(verifier),\n        "kagemusha",', '        "cargo",\n        "run",',
     'reject a PATH-resolved Cargo verifier', ('promotion verifier command',)),
+    ('    ios_root, key_id, _, _, freshness_key_id, _, _, _ = ios_configuration',
+    '    ios_root, key_id, _, _, freshness_key_id, _ = ios_configuration',
+    'reject a truncated physical-iOS configuration unpack',
+    ('exact eight-field physical-iOS configuration unpack',)),
     ('                verified = run_authenticated_verifier(command, tool_controller_exec)',
     '                verified = subprocess.run(command, capture_output=True)',
     'reject a Kagami verifier outside the authenticated isolation controller',
@@ -853,6 +899,18 @@ readiness_mutations = (('        str(verifier),\n        "kagemusha",', '       
     ('production_module.__dict__.get(\n            "validate_production_signed_evidence"\n        )',
     'production_module.__dict__.get("validate_signed_evidence")',
     'reject the testnet-only iOS validator in promotion', ('production-only iOS evidence validator entrypoint',)),
+    ('            "validate_historical_production_evidence_for_catalog_revalidation"',
+    '            "validate_production_signed_evidence"',
+    'reject treating historical consumption as current catalog status',
+    ('historical consumption plus separate current catalog validator boundary',)),
+    ('            "validate_catalog_revalidation_receipt"',
+    '            "validate_catalog_without_fresh_status"',
+    'reject removing current catalog revalidation',
+    ('historical consumption plus separate current catalog validator boundary',)),
+    ('                ios_catalog_bindings.append(ios_catalog_binding)',
+    '                # exact catalog binding removed',
+    'reject an unbound multi-release App Attest status receipt',
+    ('current promotion-scoped exact-catalog App Attest revalidation',)),
     ('                        require_production_root_custody(descriptor, label)',
     '                        # production root custody removed', 'reject a missing production custody check',
     ('root-custody the complete production path-component set',)), ('            != trusted_python_sha256',
@@ -877,6 +935,14 @@ readiness_mutations = (('        str(verifier),\n        "kagemusha",', '       
     ('root-custodied gate bootstrap', 'promotion_assert_root_custody')),
     ('  if [[ "${OBSERVED_GATE_SHA256}" != "${GATE_SHA256}" ]]; then', '  if false; then',
     'reject a bypassed reviewed gate digest', ('root-custodied gate bootstrap',)),
+    ('        if sealed_build_report is not None:\n            production_roots.append(sealed_build_report.parent)',
+    '        # sealed-build-report ancestor custody removed',
+    'reject a sealed-build report below an uncustodied ancestor',
+    ('sealed-build-report ancestor root custody',)),
+    ('    if stat.S_IMODE(metadata.st_mode) & 0o022:',
+    '    if stat.S_IMODE(metadata.st_mode) & 0o002:',
+    'reject group-writable production custody',
+    ('root-owned non-group/world-writable production custody',)),
     ('SCRIPT_DIRECTORY_LEXICAL="${SCRIPT_PATH_LEXICAL%/*}"', 'SCRIPT_DIRECTORY_LEXICAL="$(dirname "${SCRIPT_PATH_LEXICAL}")"',
     'reject PATH-resolved root derivation', ('promotion shell bootstrap',)))
 for mutation in readiness_mutations:

@@ -959,24 +959,18 @@ def read_reviewed_model(errors: list[str], overrides: dict[str, str]) -> str:
         else read(MODEL_VERIFIER_COMPONENT, errors)
     )
     if parent.count(MODEL_INCLUDE) != 1:
-        errors.append(
-            f"{MODEL}: expected exactly one reviewed {Path(MODEL_COMPONENT).name} include"
-        )
+        errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_COMPONENT).name} include")
         return parent
     parent = parent.replace(MODEL_INCLUDE, component, 1)
     if parent.count(MODEL_VERIFIER_MODULE) != 1:
-        errors.append(
-            f"{MODEL}: expected exactly one reviewed {Path(MODEL_VERIFIER_COMPONENT).name} module"
-        )
+        errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_VERIFIER_COMPONENT).name} module")
         return parent
     for marker in (
         "const VERIFIER_IDENTITY_SCHEMA_V4",
         "pub fn kagemusha_recursive_spend_verifier_key_id_v4",
     ):
         if verifier.count(marker) != 1:
-            errors.append(
-                f"{MODEL_VERIFIER_COMPONENT}: expected exactly one {marker!r}"
-            )
+            errors.append(f"{MODEL_VERIFIER_COMPONENT}: expected exactly one {marker!r}")
     return parent.replace(
         MODEL_VERIFIER_MODULE,
         "mod kagemusha_release_verifier {\n" + verifier + "\n}",
@@ -993,9 +987,7 @@ def read_reviewed_catalog(errors: list[str], overrides: dict[str, str]) -> str:
         else read(CATALOG_COMPONENT, errors)
     )
     if parent.count(CATALOG_INCLUDE) != 1:
-        errors.append(
-            f"{CATALOG}: expected exactly one reviewed {Path(CATALOG_COMPONENT).name} include"
-        )
+        errors.append(f"{CATALOG}: expected exactly one reviewed {Path(CATALOG_COMPONENT).name} include")
         return parent
     return parent.replace(CATALOG_INCLUDE, component, 1)
 def pin_regular_metadata(
@@ -2752,7 +2744,7 @@ def validate_kagami_verification_report(
         raise ValueError("Kagami report artifact inventory differs from the manifest")
 def ios_evidence_configuration(
     errors: list[str],
-) -> tuple[Path, str, Path, Path, str, Path] | None:
+) -> tuple[Path, str, Path, Path, str, Path, str, Path] | None:
     """Return the complete opt-in physical-iOS evidence configuration."""
     root_text = os.environ.get("KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT", "")
     key_id = os.environ.get("KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID", "")
@@ -2768,6 +2760,10 @@ def ios_evidence_configuration(
     freshness_public_key_text = os.environ.get(
         "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY", ""
     )
+    promotion_id = os.environ.get("KAGEMUSHA_V4_PROMOTION_ID", "")
+    catalog_revalidation_receipt_text = os.environ.get(
+        "KAGEMUSHA_IOS_DEVICE_EVIDENCE_CATALOG_REVALIDATION_RECEIPT", ""
+    )
     present = tuple(
         bool(value)
         for value in (
@@ -2777,6 +2773,8 @@ def ios_evidence_configuration(
             production_policy_text,
             freshness_key_id,
             freshness_public_key_text,
+            promotion_id,
+            catalog_revalidation_receipt_text,
         )
     )
     if not any(present):
@@ -2792,13 +2790,16 @@ def ios_evidence_configuration(
             "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY, and "
             "KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY, "
             "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID, and "
-            "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY together"
+            "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY, "
+            "KAGEMUSHA_V4_PROMOTION_ID, and "
+            "KAGEMUSHA_IOS_DEVICE_EVIDENCE_CATALOG_REVALIDATION_RECEIPT together"
         )
         return None
     ios_root = Path(root_text)
     public_key = Path(public_key_text)
     production_policy = Path(production_policy_text)
     freshness_public_key = Path(freshness_public_key_text)
+    catalog_revalidation_receipt = Path(catalog_revalidation_receipt_text)
     if (
         not ios_root.is_absolute()
         or ios_root.resolve(strict=False) != ios_root
@@ -2806,6 +2807,34 @@ def ios_evidence_configuration(
         or ios_root.is_symlink()
     ):
         errors.append("physical-iOS evidence root must be a canonical absolute real directory")
+        return None
+    try:
+        catalog_revalidation_receipt.resolve(strict=False).relative_to(ios_root)
+    except ValueError:
+        pass
+    else:
+        errors.append(
+            "physical-iOS catalog revalidation receipt must stay outside the "
+            "immutable evidence root"
+        )
+        return None
+    if (
+        re.fullmatch(r"[0-9a-f]{64}", promotion_id) is None
+        or promotion_id == "0" * 64
+        or not catalog_revalidation_receipt.is_absolute()
+        or catalog_revalidation_receipt.resolve(strict=False)
+        != catalog_revalidation_receipt
+        or not catalog_revalidation_receipt.is_file()
+        or catalog_revalidation_receipt.is_symlink()
+        or catalog_revalidation_receipt.stat().st_size == 0
+        or catalog_revalidation_receipt.stat().st_size > 256 * 1024
+        or catalog_revalidation_receipt
+        in {public_key, production_policy, freshness_public_key}
+    ):
+        errors.append(
+            "physical-iOS catalog revalidation requires a unique nonzero promotion "
+            "id and a distinct canonical absolute bounded receipt file"
+        )
         return None
     if (
         not public_key.is_absolute()
@@ -2847,13 +2876,15 @@ def ios_evidence_configuration(
         production_policy,
         freshness_key_id,
         freshness_public_key,
+        promotion_id,
+        catalog_revalidation_receipt,
     )
 def load_ios_evidence_validator(
     candidate_module_bytes: bytes,
     candidate_module_path: Path,
     production_module_bytes: bytes,
     production_module_path: Path,
-) -> Callable[[Path, Path, str, Path, Path, Path, str, Path], list[str]]:
+) -> tuple[Callable[..., list[str]], Callable[..., list[str]]]:
     """Load both reviewed validators from already pinned source bytes."""
     module_name = "_iroha_pinned_kagemusha_candidate_ios_evidence"
     module = types.ModuleType(module_name)
@@ -2887,6 +2918,20 @@ def load_ios_evidence_validator(
             raise ValueError(
                 "pinned production physical-iOS validator has no maintained entrypoint"
             )
+        historical_validator = production_module.__dict__.get(
+            "validate_historical_production_evidence_for_catalog_revalidation"
+        )
+        if not callable(historical_validator):
+            raise ValueError(
+                "pinned production physical-iOS validator has no historical catalog entrypoint"
+            )
+        catalog_validator = production_module.__dict__.get(
+            "validate_catalog_revalidation_receipt"
+        )
+        if not callable(catalog_validator):
+            raise ValueError(
+                "pinned production physical-iOS validator has no catalog revalidation entrypoint"
+            )
         def validate(
             evidence_path: Path,
             artifact_root: Path,
@@ -2897,7 +2942,7 @@ def load_ios_evidence_validator(
             trusted_freshness_key_id: str,
             trusted_freshness_public_key_path: Path,
         ) -> list[str]:
-            return production_validator(
+            return historical_validator(
                 evidence_path,
                 artifact_root,
                 trusted_key_id,
@@ -2908,14 +2953,33 @@ def load_ios_evidence_validator(
                 trusted_freshness_key_id=trusted_freshness_key_id,
                 trusted_freshness_public_key_path=trusted_freshness_public_key_path,
             )
-        return validate
+        def validate_catalog(
+            receipt_path: Path,
+            trusted_key_id: str,
+            trusted_public_key_path: Path,
+            expected_promotion_id: str,
+            expected_bindings: list[dict[str, str]],
+            lab_signer_key_id: str,
+            lab_signer_public_key_path: Path,
+        ) -> list[str]:
+            return catalog_validator(
+                receipt_path,
+                trusted_key_id,
+                trusted_public_key_path,
+                expected_promotion_id,
+                expected_bindings,
+                lab_signer_key_id,
+                lab_signer_public_key_path,
+                module,
+            )
+        return validate, validate_catalog
     except BaseException:
         sys.modules.pop(module_name, None)
         sys.modules.pop(production_name, None)
         raise
 def verify_ios_evidence(
     directory: Path,
-    ios_configuration: tuple[Path, str, Path, Path, str, Path],
+    ios_configuration: tuple[Path, str, Path, Path, str, Path, str, Path],
     validator: Callable[[Path, Path, str, Path, Path, Path, str, Path], list[str]],
     evidence_bytes: bytes,
     trusted_public_key_snapshot: Path,
@@ -2924,9 +2988,9 @@ def verify_ios_evidence(
     directory_pins: list[tuple[Path, int, tuple[int, ...], str]],
     file_pins: list[tuple[Path, int, tuple[int, ...], str]],
     staging_parent: Path,
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, dict[str, str] | None, str | None]:
     """Verify one signed raw slot from the exact bytes used for its candidate digest."""
-    ios_root, key_id, _, _, freshness_key_id, _ = ios_configuration
+    ios_root, key_id, _, _, freshness_key_id, _, _, _ = ios_configuration
     release_root = ios_root / directory.name
     raw_root = release_root / "raw"
     freshness_receipt = (
@@ -2938,7 +3002,7 @@ def verify_ios_evidence(
         or not raw_root.is_dir()
         or raw_root.is_symlink()
     ):
-        return None, (
+        return None, None, (
             f"{directory.name}: physical-iOS evidence must use "
             f"{ios_root}/<manifest-sha256>/raw"
         )
@@ -2998,7 +3062,7 @@ def verify_ios_evidence(
         finally:
             freshness_snapshot.cleanup()
         if validation_errors:
-            return None, (
+            return None, None, (
                 f"{directory.name}: physical-iOS evidence verification failed: "
                 f"{validation_errors[-1]}"
             )
@@ -3024,8 +3088,17 @@ def verify_ios_evidence(
                 "production iOS evidence release manifest digest does not match catalog"
             )
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
-        return None, f"{directory.name}: invalid signed physical-iOS evidence: {error}"
-    return candidate_sha256, None
+        return None, None, (
+            f"{directory.name}: invalid signed physical-iOS evidence: {error}"
+        )
+    binding = {
+        "release_manifest_sha256": directory.name,
+        "evidence_sha256": hashlib.sha256(evidence_bytes).hexdigest(),
+        "consumption_receipt_sha256": hashlib.sha256(
+            freshness_receipt_bytes
+        ).hexdigest(),
+    }
+    return candidate_sha256, binding, None
 def promotion_errors() -> list[str]:
     global authenticated_readiness_source_contract_bytes
     global authenticated_readiness_self_test_bytes
@@ -3264,6 +3337,7 @@ def promotion_errors() -> list[str]:
     ios_validator: Callable[
         [Path, Path, str, Path, Path, Path, str, Path], list[str]
     ] | None = None
+    ios_catalog_validator: Callable[..., list[str]] | None = None
     ios_validator_path = root / IOS_EVIDENCE_MODULE
     production_ios_validator_path = root / PRODUCTION_IOS_EVIDENCE_MODULE
     source_helper_path = root / SOURCE_TREE_SEAL
@@ -3273,6 +3347,7 @@ def promotion_errors() -> list[str]:
     tool_controller_snapshot: tempfile.TemporaryDirectory[str] | None = None
     public_key_snapshot: tempfile.TemporaryDirectory[str] | None = None
     freshness_public_key_snapshot: tempfile.TemporaryDirectory[str] | None = None
+    catalog_revalidation_receipt_snapshot: tempfile.TemporaryDirectory[str] | None = None
     ios_policy_snapshot: tempfile.TemporaryDirectory[str] | None = None
     closure_snapshot: tempfile.TemporaryDirectory[str] | None = None
     source_projection_snapshot: tempfile.TemporaryDirectory[str] | None = None
@@ -3289,6 +3364,7 @@ def promotion_errors() -> list[str]:
     production_ios_validator_snapshot: tempfile.TemporaryDirectory[str] | None = None
     trusted_public_key_snapshot: Path | None = None
     trusted_freshness_public_key_snapshot: Path | None = None
+    trusted_catalog_revalidation_receipt_snapshot: Path | None = None
     trusted_ios_policy_snapshot: Path | None = None
     trusted_closure_snapshot: Path | None = None
     trusted_source_projection_snapshot: Path | None = None
@@ -3324,6 +3400,8 @@ def promotion_errors() -> list[str]:
             public_key_snapshot.cleanup()
         if freshness_public_key_snapshot is not None:
             freshness_public_key_snapshot.cleanup()
+        if catalog_revalidation_receipt_snapshot is not None:
+            catalog_revalidation_receipt_snapshot.cleanup()
         if ios_policy_snapshot is not None:
             ios_policy_snapshot.cleanup()
         if verifier_snapshot is not None:
@@ -3368,6 +3446,8 @@ def promotion_errors() -> list[str]:
         ]
         if reviewed_closure is not None:
             production_roots.append(reviewed_closure.parent)
+        if sealed_build_report is not None:
+            production_roots.append(sealed_build_report.parent)
         if source_projection is not None:
             production_roots.append(source_projection.parent)
         if allowed_signers is not None:
@@ -3385,6 +3465,7 @@ def promotion_errors() -> list[str]:
                     ios_configuration[2].parent,
                     ios_configuration[3].parent,
                     ios_configuration[5].parent,
+                    ios_configuration[7].parent,
                 ]
             )
         production_directory_paths = {
@@ -4262,6 +4343,39 @@ def promotion_errors() -> list[str]:
                 "physical-iOS online freshness authority public key",
                 PROMOTION_STAGING_PARENT,
             )
+            catalog_revalidation_receipt = ios_configuration[7]
+            label = (
+                "physical-iOS catalog revalidation receipt "
+                f"{catalog_revalidation_receipt}"
+            )
+            descriptor, fingerprint = pin_regular_metadata(
+                catalog_revalidation_receipt, label
+            )
+            try:
+                require_production_root_custody(descriptor, label)
+            except BaseException:
+                os.close(descriptor)
+                raise
+            catalog_revalidation_receipt_bytes = read_pinned_descriptor(
+                descriptor, fingerprint, 256 * 1024, label
+            )
+            trusted_file_pins.append(
+                (
+                    catalog_revalidation_receipt,
+                    descriptor,
+                    fingerprint,
+                    label,
+                )
+            )
+            (
+                catalog_revalidation_receipt_snapshot,
+                trusted_catalog_revalidation_receipt_snapshot,
+            ) = snapshot_private_bytes(
+                catalog_revalidation_receipt_bytes,
+                "catalog-revalidation-receipt-v1.json",
+                "physical-iOS catalog revalidation receipt",
+                PROMOTION_STAGING_PARENT,
+            )
             production_ios_policy = ios_configuration[3]
             label = f"physical-iOS production policy {production_ios_policy}"
             descriptor, fingerprint = pin_regular_metadata(
@@ -4344,7 +4458,7 @@ def promotion_errors() -> list[str]:
                 "reviewed production physical-iOS evidence validator",
                 PROMOTION_STAGING_PARENT,
             )
-            ios_validator = load_ios_evidence_validator(
+            ios_validator, ios_catalog_validator = load_ios_evidence_validator(
                 validator_bytes,
                 trusted_ios_validator_snapshot,
                 production_validator_bytes,
@@ -4413,6 +4527,7 @@ def promotion_errors() -> list[str]:
     expected_inventory = set(ARTIFACTS + FINAL_METADATA)
     catalog_aggregate_bytes = 0
     catalog_pins = trusted_file_pins
+    ios_catalog_bindings: list[dict[str, str]] = []
     for directory in directories:
         directory_error_count = len(errors)
         ios_candidate_sha256: str | None = None
@@ -4663,7 +4778,11 @@ def promotion_errors() -> list[str]:
             and trusted_ios_policy_snapshot is not None
             and len(errors) == directory_error_count
         ):
-            ios_candidate_sha256, ios_error = verify_ios_evidence(
+            (
+                ios_candidate_sha256,
+                ios_catalog_binding,
+                ios_error,
+            ) = verify_ios_evidence(
                 directory,
                 ios_configuration,
                 ios_validator,
@@ -4677,6 +4796,12 @@ def promotion_errors() -> list[str]:
             )
             if ios_error is not None:
                 errors.append(ios_error)
+            elif ios_catalog_binding is None:
+                errors.append(
+                    f"{directory.name}: physical-iOS catalog binding is unavailable"
+                )
+            else:
+                ios_catalog_bindings.append(ios_catalog_binding)
         if authenticated_verification_allowed and len(errors) == directory_error_count:
             if (
                 ios_candidate_sha256 is None
@@ -4719,6 +4844,31 @@ def promotion_errors() -> list[str]:
                     errors.append(
                         f"{directory.name}: authenticated verifier report is invalid: {error}"
                     )
+    if ios_configuration is not None:
+        if (
+            ios_catalog_validator is None
+            or trusted_catalog_revalidation_receipt_snapshot is None
+            or trusted_freshness_public_key_snapshot is None
+            or trusted_public_key_snapshot is None
+        ):
+            errors.append(
+                "physical-iOS catalog revalidation inputs are incomplete"
+            )
+        else:
+            catalog_revalidation_errors = ios_catalog_validator(
+                trusted_catalog_revalidation_receipt_snapshot,
+                ios_configuration[4],
+                trusted_freshness_public_key_snapshot,
+                ios_configuration[6],
+                ios_catalog_bindings,
+                ios_configuration[1],
+                trusted_public_key_snapshot,
+            )
+            if catalog_revalidation_errors:
+                errors.append(
+                    "physical-iOS catalog revalidation failed: "
+                    f"{catalog_revalidation_errors[-1]}"
+                )
     for path, descriptor, fingerprint, label in catalog_pins:
         try:
             revalidate_pinned_metadata(path, descriptor, fingerprint, label)

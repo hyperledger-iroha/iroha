@@ -84,9 +84,9 @@ use iroha_data_model::{
     isi::{InstructionBox, RemoveKeyValueBox, SetKeyValueBox, transfer::TransferBox},
     merge::{MAX_MERGE_EXECUTION_BATCH_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS, MergeLaneBinding},
     nexus::{
-        AssetHandle, AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey,
-        AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason, DataSpaceCatalog, DataSpaceId,
-        LaneConfig, LaneId, LaneRelayEnvelope, LaneSettlementBufferPolicy, ProofBlob,
+        AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyEntry,
+        AxtProofEnvelope, AxtRejectReason, DataSpaceCatalog, DataSpaceId, LaneConfig, LaneId,
+        LaneRelayEnvelope, LaneSettlementBufferPolicy, ProofBlob,
     },
     peer::PeerId,
     transaction::{
@@ -3993,15 +3993,12 @@ pub(crate) mod valid {
     use commit::CommittedBlock;
     #[cfg(test)]
     use iroha_data_model::ChainId;
+    use iroha_data_model::events::pipeline::PipelineEventBox;
     use iroha_data_model::nexus::AxtPolicySnapshot;
     #[cfg(test)]
     use iroha_data_model::soracloud::{
         SoraRuntimeReceiptV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
         SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
-    };
-    use iroha_data_model::{
-        events::pipeline::PipelineEventBox,
-        nexus::{GroupBinding, HandleBudget, HandleSubject},
     };
     use iroha_logger::warn;
     use iroha_primitives::time::TimeSource;
@@ -4722,21 +4719,21 @@ pub(crate) mod valid {
             const { std::cell::Cell::new(0) };
     }
     #[cfg(all(test, feature = "app_api"))]
-    fn reset_axt_fastpq_proof_verification_count() {
+    pub(super) fn reset_axt_fastpq_proof_verification_count() {
         AXT_FASTPQ_PROOF_VERIFICATION_COUNT.with(|count| count.set(0));
         AXT_CANONICAL_PROOF_DECODE_COUNT.with(|count| count.set(0));
         AXT_PROOF_AMOUNT_FACT_RESOLUTION_COUNT.with(|count| count.set(0));
     }
     #[cfg(all(test, feature = "app_api"))]
-    fn axt_fastpq_proof_verification_count() -> usize {
+    pub(super) fn axt_fastpq_proof_verification_count() -> usize {
         AXT_FASTPQ_PROOF_VERIFICATION_COUNT.with(std::cell::Cell::get)
     }
     #[cfg(all(test, feature = "app_api"))]
-    fn axt_canonical_proof_decode_count() -> usize {
+    pub(super) fn axt_canonical_proof_decode_count() -> usize {
         AXT_CANONICAL_PROOF_DECODE_COUNT.with(std::cell::Cell::get)
     }
     #[cfg(all(test, feature = "app_api"))]
-    fn axt_proof_amount_fact_resolution_count() -> usize {
+    pub(super) fn axt_proof_amount_fact_resolution_count() -> usize {
         AXT_PROOF_AMOUNT_FACT_RESOLUTION_COUNT.with(std::cell::Cell::get)
     }
     #[allow(clippy::too_many_lines)]
@@ -4755,6 +4752,18 @@ pub(crate) mod valid {
                 next_handle_counter: None,
             })
         })?;
+        let advertised_transitioned_dataspaces =
+            block.axt_transitioned_dataspaces().ok_or_else(|| {
+                BlockValidationError::AxtEnvelopeValidationFailed(AxtEnvelopeValidationDetails {
+                    message: "block result is missing its required AXT transition set".to_owned(),
+                    reason: AxtRejectReason::PolicyDenied,
+                    snapshot_version: Some(advertised_snapshot.version),
+                    dataspace: None,
+                    lane: None,
+                    active_handle_era: None,
+                    next_handle_counter: None,
+                })
+            })?;
         let snapshot_version = advertised_snapshot.version;
         let make_axt_error_with =
             |reason: AxtRejectReason,
@@ -4821,56 +4830,6 @@ pub(crate) mod valid {
             .collect();
         let network_id = state_block.network_id;
         if let Some(envelopes) = block.axt_envelopes() {
-            #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-            struct HandleBudgetKey {
-                asset_dsid: DataSpaceId,
-                binding: [u8; 32],
-                handle_era: u64,
-                target_lane: LaneId,
-                manifest_root: [u8; 32],
-                scope: Vec<String>,
-                subject: HandleSubject,
-                group_binding: GroupBinding,
-                expiry_slot: u64,
-                budget: HandleBudget,
-                max_clock_skew_ms: Option<u32>,
-            }
-            struct HandleAccumulator {
-                total: Quantity,
-                per_dsid: BTreeMap<DataSpaceId, Quantity>,
-            }
-            impl HandleAccumulator {
-                fn new() -> Self {
-                    Self {
-                        total: Quantity::zero(),
-                        per_dsid: BTreeMap::new(),
-                    }
-                }
-                fn apply(
-                    &mut self,
-                    dsid: DataSpaceId,
-                    amount: &Quantity,
-                    budget: &HandleBudget,
-                ) -> Result<(), String> {
-                    self.total = self
-                        .total
-                        .checked_add(amount)
-                        .map_err(|error| format!("handle budget overflow: {error}"))?;
-                    let entry = self.per_dsid.entry(dsid).or_insert_with(Quantity::zero);
-                    *entry = entry
-                        .checked_add(amount)
-                        .map_err(|error| format!("per-dataspace budget overflow: {error}"))?;
-                    if &self.total > &budget.remaining {
-                        return Err("handle budget exceeded".to_owned());
-                    }
-                    if let Some(per_use) = budget.per_use.as_ref()
-                        && &*entry > per_use
-                    {
-                        return Err("per-use budget exceeded".to_owned());
-                    }
-                    Ok(())
-                }
-            }
             let validate_proof_expiry = |proof: &ProofBlob,
                                          dsid: DataSpaceId,
                                          policy: &AxtPolicyEntry,
@@ -4934,6 +4893,14 @@ pub(crate) mod valid {
             let mut block_consumed_by_proof = BTreeMap::<usize, Vec<[u8; 32]>>::new();
             let mut resolved_proof_amounts =
                 BTreeMap::<(usize, Option<Quantity>), ivm::axt::ResolvedHandleAmount>::new();
+            // A signed budget belongs to its normalized handle family, not to
+            // one envelope. Hydrate only families touched by this block from
+            // the immutable parent WSV, then retain their working records at
+            // block scope so sequential sub-nonces cannot reset them.
+            let mut handle_budget_records = BTreeMap::<
+                iroha_data_model::nexus::AxtHandleBudgetKey,
+                iroha_data_model::nexus::AxtHandleBudgetRecord,
+            >::new();
             let validate_proof = |verified_proofs: &mut Vec<VerifiedProof<'block>>,
                                   verified_proof_buckets: &mut VerifiedProofBuckets,
                                   proof: &'block ProofBlob,
@@ -5060,35 +5027,6 @@ pub(crate) mod valid {
                     .push(index);
                 Ok(index)
             };
-            let handle_budget_key = |asset_dsid: DataSpaceId,
-                                     handle: &AssetHandle|
-             -> Result<HandleBudgetKey, BlockValidationError> {
-                if handle.manifest_view_root.len() != 32 {
-                    return Err(make_axt_error_with(
-                        AxtRejectReason::Manifest,
-                        "handle manifest root must be 32 bytes",
-                        None,
-                        None,
-                        None,
-                        None,
-                    ));
-                }
-                let mut manifest_root = [0u8; 32];
-                manifest_root.copy_from_slice(&handle.manifest_view_root);
-                Ok(HandleBudgetKey {
-                    asset_dsid,
-                    binding: *handle.axt_binding.as_bytes(),
-                    handle_era: handle.handle_era,
-                    target_lane: handle.target_lane,
-                    manifest_root,
-                    scope: handle.scope.clone(),
-                    subject: handle.subject.clone(),
-                    group_binding: handle.group_binding.clone(),
-                    expiry_slot: handle.expiry_slot,
-                    budget: handle.budget.clone(),
-                    max_clock_skew_ms: handle.max_clock_skew_ms,
-                })
-            };
             let make_env_error =
                 |lane: LaneId,
                  reason: AxtRejectReason,
@@ -5142,6 +5080,39 @@ pub(crate) mod valid {
                             Some(policy.next_handle_counter),
                         ));
                     }
+                    if fragment.handle.asset_definition_id != fragment.intent.op.asset_definition_id
+                    {
+                        return Err(make_env_error(
+                            envelope.lane,
+                            AxtRejectReason::PolicyDenied,
+                            "issuer-signed handle asset does not match remote spend intent asset",
+                            Some(dsid),
+                            Some(policy.active_handle_era),
+                            Some(policy.next_handle_counter),
+                        ));
+                    }
+                    let current_asset_incarnation = state_block
+                        .world
+                        .axt_asset_incarnations
+                        .get(&fragment.handle.asset_definition_id)
+                        .copied();
+                    let block_start_asset_incarnation = state_block
+                        .axt_asset_incarnation_at_block_start(&fragment.handle.asset_definition_id)
+                        .copied();
+                    if current_asset_incarnation.is_none()
+                        || current_asset_incarnation != block_start_asset_incarnation
+                        || current_asset_incarnation
+                            != Some(fragment.handle.issuer_context.asset_definition_incarnation)
+                    {
+                        return Err(make_env_error(
+                            envelope.lane,
+                            AxtRejectReason::PolicyDenied,
+                            "issuer-signed handle does not match the stable block-start asset incarnation",
+                            Some(dsid),
+                            Some(policy.active_handle_era),
+                            Some(policy.next_handle_counter),
+                        ));
+                    }
                     if ivm::axt::validate_model_asset_handle(&fragment.handle).is_err() {
                         return Err(make_env_error(
                             envelope.lane,
@@ -5166,6 +5137,8 @@ pub(crate) mod valid {
                     let issuer_context = AxtHandleIssuerContextV1 {
                         network_id,
                         asset_dsid: dsid,
+                        asset_definition_incarnation: current_asset_incarnation
+                            .expect("checked above"),
                         issuer: issuer.issuer,
                         issuer_manifest_root: policy.manifest_root,
                         code_root: carried_context.code_root,
@@ -5191,7 +5164,7 @@ pub(crate) mod valid {
                     } else {
                         snapshot_slot
                     };
-                    if let Some(entry) = block_start.replay_record(&replay_key)
+                    if let Some(entry) = state_block.axt_replay_record_at_block_start(&replay_key)
                         && !entry.is_expired(record_slot, retention_slots)
                     {
                         return Err(make_env_error(
@@ -5467,8 +5440,6 @@ pub(crate) mod valid {
                     .collect::<BTreeMap<usize, (DataSpaceId, Vec<[u8; 32]>)>>();
                 let mut dataspace_proofs_present: BTreeSet<DataSpaceId> =
                     proofs_by_ds.keys().copied().collect();
-                let mut accumulators: BTreeMap<HandleBudgetKey, HandleAccumulator> =
-                    BTreeMap::new();
                 if envelope.handles.windows(2).any(|pair| {
                     let key = |fragment: &AxtHandleFragment| {
                         (
@@ -5605,6 +5576,17 @@ pub(crate) mod valid {
                             None,
                         ));
                     }
+                    if fragment.handle.asset_definition_id != fragment.intent.op.asset_definition_id
+                    {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::PolicyDenied,
+                            "issuer-signed handle asset does not match remote spend intent asset",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        ));
+                    }
                     if fragment
                         .handle
                         .group_binding
@@ -5735,6 +5717,28 @@ pub(crate) mod valid {
                             None,
                         ));
                     }
+                    let current_asset_incarnation = state_block
+                        .world
+                        .axt_asset_incarnations
+                        .get(&fragment.handle.asset_definition_id)
+                        .copied();
+                    let block_start_asset_incarnation = state_block
+                        .axt_asset_incarnation_at_block_start(&fragment.handle.asset_definition_id)
+                        .copied();
+                    if current_asset_incarnation.is_none()
+                        || current_asset_incarnation != block_start_asset_incarnation
+                        || current_asset_incarnation
+                            != Some(fragment.handle.issuer_context.asset_definition_incarnation)
+                    {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::PolicyDenied,
+                            "issuer-signed handle does not match the stable block-start asset incarnation",
+                            Some(fragment.intent.asset_dsid),
+                            Some(policy.active_handle_era),
+                            Some(expected_sub_nonce),
+                        ));
+                    }
                     let issuer = block_start
                         .issuer_binding(fragment.intent.asset_dsid)
                         .map_err(|error| {
@@ -5751,6 +5755,8 @@ pub(crate) mod valid {
                     let issuer_context = AxtHandleIssuerContextV1 {
                         network_id,
                         asset_dsid: fragment.intent.asset_dsid,
+                        asset_definition_incarnation: current_asset_incarnation
+                            .expect("checked above"),
                         issuer: issuer.issuer,
                         issuer_manifest_root: policy.manifest_root,
                         code_root: carried_context.code_root,
@@ -5774,7 +5780,7 @@ pub(crate) mod valid {
                         fragment.intent.asset_dsid,
                         &fragment.handle,
                     );
-                    if let Some(entry) = block_start.replay_record(&replay_key)
+                    if let Some(entry) = state_block.axt_replay_record_at_block_start(&replay_key)
                         && !entry.is_expired(record_slot, retention_slots)
                     {
                         return Err(make_env_error(
@@ -5919,45 +5925,64 @@ pub(crate) mod valid {
                         ));
                     }
                     let budget_key =
-                        handle_budget_key(fragment.intent.asset_dsid, &fragment.handle)?;
-                    match accumulators.entry(budget_key) {
-                        std::collections::btree_map::Entry::Occupied(mut entry) => {
-                            let budget = entry.key().budget.clone();
-                            let accumulator = entry.get_mut();
-                            accumulator
-                                .apply(fragment.intent.asset_dsid, &resolved_amount.amount, &budget)
-                                .map_err(|msg| {
-                                    make_env_error(
-                                        envelope_lane,
-                                        AxtRejectReason::Budget,
-                                        &msg,
-                                        Some(fragment.intent.asset_dsid),
-                                        None,
-                                        None,
-                                    )
-                                })?;
-                        }
-                        std::collections::btree_map::Entry::Vacant(slot) => {
-                            let key_ref = slot.key();
-                            let mut acc = HandleAccumulator::new();
-                            acc.apply(
-                                fragment.intent.asset_dsid,
-                                &resolved_amount.amount,
-                                &key_ref.budget,
-                            )
-                            .map_err(|msg| {
-                                make_env_error(
-                                    envelope_lane,
-                                    AxtRejectReason::Budget,
-                                    &msg,
-                                    Some(fragment.intent.asset_dsid),
-                                    None,
-                                    None,
-                                )
-                            })?;
-                            slot.insert(acc);
-                        }
+                        iroha_data_model::nexus::AxtHandleBudgetKey::from_handle(&fragment.handle);
+                    if budget_key.asset_dsid() != fragment.intent.asset_dsid {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::PolicyDenied,
+                            "handle budget identity does not match the intent dataspace",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        ));
                     }
+                    let retain_until_slot = crate::state::retain_until_slot_for_handle(
+                        fragment,
+                        &state_block.nexus,
+                        policy_slot,
+                    );
+                    let budget_record = match handle_budget_records.entry(budget_key.clone()) {
+                        std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            let parent_record = state_block
+                                .axt_handle_budget_record_at_block_start(entry.key())
+                                .cloned()
+                                .unwrap_or_else(
+                                    iroha_data_model::nexus::AxtHandleBudgetRecord::empty,
+                                );
+                            entry.insert(parent_record)
+                        }
+                    };
+                    budget_record
+                        .try_consume(
+                            &budget_key,
+                            &resolved_amount.amount,
+                            retain_until_slot,
+                        )
+                        .map_err(|error| {
+                            let (reason, message) = match error {
+                                iroha_data_model::nexus::AxtHandleBudgetConsumeError::InvalidAssetIncarnation(_) => (
+                                    AxtRejectReason::PolicyDenied,
+                                    "handle budget identity contains an invalid asset-definition incarnation",
+                                ),
+                                iroha_data_model::nexus::AxtHandleBudgetConsumeError::RemainingExceeded =>
+                                    (AxtRejectReason::Budget, "shared handle budget exceeded across blocks or AXT envelopes"),
+                                iroha_data_model::nexus::AxtHandleBudgetConsumeError::PerUseExceeded =>
+                                    (AxtRejectReason::Budget, "per-use handle budget exceeded across blocks or AXT envelopes"),
+                                iroha_data_model::nexus::AxtHandleBudgetConsumeError::ZeroAmount =>
+                                    (AxtRejectReason::Budget, "handle budget consumption amount is zero"),
+                                iroha_data_model::nexus::AxtHandleBudgetConsumeError::Arithmetic(_) =>
+                                    (AxtRejectReason::Budget, "handle budget arithmetic overflow"),
+                            };
+                            make_env_error(
+                                envelope_lane,
+                                reason,
+                                message,
+                                Some(fragment.intent.asset_dsid),
+                                None,
+                                None,
+                            )
+                        })?;
                     if ivm::axt::validate_model_remote_spend_intent(&fragment.intent).is_err() {
                         return Err(make_env_error(
                             envelope_lane,
@@ -6109,25 +6134,121 @@ pub(crate) mod valid {
                         )
                     })?;
             }
-            for (dsid, policy) in &policies {
-                let reconstructed = next_sub_nonces
-                    .get(dsid)
-                    .copied()
-                    .expect("every block-start AXT policy has a reconstructed counter");
-                let Some(advertised_policy) = advertised_policies.get(dsid) else {
-                    continue;
-                };
-                let same_policy_identity = advertised_policy.manifest_root == policy.manifest_root
-                    && advertised_policy.target_lane == policy.target_lane
-                    && advertised_policy.active_handle_era == policy.active_handle_era;
-                if same_policy_identity && reconstructed != advertised_policy.next_handle_counter {
+        }
+        let ratchet_dataspaces: BTreeSet<_> = advertised_policies
+            .keys()
+            .chain(policies.keys())
+            .chain(advertised_transitioned_dataspaces.iter())
+            .copied()
+            .collect();
+        for dsid in ratchet_dataspaces {
+            let advertised_policy = advertised_policies.get(&dsid);
+            let previous_policy = policies.get(&dsid);
+            let counter_before_block = state_block.axt_handle_counter_at_block_start(&dsid);
+            let reconstructed_next = next_sub_nonces
+                .get(&dsid)
+                .copied()
+                .or_else(|| {
+                    counter_before_block.map(iroha_data_model::nexus::AxtHandleCounterRecord::next)
+                })
+                .unwrap_or(0);
+            let candidate_policy = state_block.world.axt_policies.get(&dsid);
+            let error_lane = advertised_policy
+                .or(candidate_policy)
+                .or(previous_policy)
+                .map(|policy| policy.target_lane);
+            let minimum_generation = crate::state::axt_policy_generation_minimum(
+                &state_block.world,
+                dsid,
+                candidate_policy,
+            );
+            let base_generation = counter_before_block
+                .map(iroha_data_model::nexus::AxtHandleCounterRecord::authorization_generation)
+                .or_else(|| previous_policy.map(|policy| policy.active_handle_era))
+                .unwrap_or(minimum_generation);
+            let current_counter = if reconstructed_next == 0 {
+                None
+            } else {
+                Some(
+                    iroha_data_model::nexus::AxtHandleCounterRecord::try_from_parts(
+                        reconstructed_next,
+                        base_generation,
+                    )
+                    .map_err(|_| {
+                        make_axt_error_with(
+                            AxtRejectReason::SubNonce,
+                            "invalid reconstructed AXT permanent counter",
+                            Some(dsid),
+                            error_lane,
+                            Some(base_generation),
+                            Some(reconstructed_next),
+                        )
+                    })?,
+                )
+            };
+            let authorization_identity_changed = advertised_transitioned_dataspaces.contains(&dsid)
+                || block_start.authorization_identity_changed(
+                    &state_block.world,
+                    &state_block.lane_incarnations,
+                    dsid,
+                    candidate_policy,
+                );
+            let reconstructed = crate::state::axt_counter_after_block_boundary(
+                previous_policy,
+                candidate_policy,
+                minimum_generation,
+                authorization_identity_changed,
+                counter_before_block.copied(),
+                current_counter,
+            )
+            .map_err(|_| {
+                make_axt_error_with(
+                    AxtRejectReason::SubNonce,
+                    "AXT permanent counter is exhausted during policy revocation",
+                    Some(dsid),
+                    error_lane,
+                    Some(base_generation),
+                    Some(reconstructed_next),
+                )
+            })?;
+            let expected_next = reconstructed
+                .as_ref()
+                .map_or(0, iroha_data_model::nexus::AxtHandleCounterRecord::next);
+            let expected_generation = reconstructed.as_ref().map_or(
+                0,
+                iroha_data_model::nexus::AxtHandleCounterRecord::authorization_generation,
+            );
+            if let Some(advertised_policy) = advertised_policy {
+                if expected_next != advertised_policy.next_handle_counter
+                    || expected_generation != advertised_policy.active_handle_era
+                {
                     return Err(make_axt_error_with(
                         AxtRejectReason::SubNonce,
-                        "authenticated AXT execution does not equal the committed post-state counter",
-                        Some(*dsid),
-                        Some(policy.target_lane),
-                        Some(policy.active_handle_era),
-                        Some(reconstructed),
+                        "authenticated AXT execution does not equal the committed permanent authorization-generation ratchet",
+                        Some(dsid),
+                        Some(advertised_policy.target_lane),
+                        Some(expected_generation),
+                        Some(expected_next),
+                    ));
+                }
+            }
+            match (
+                state_block.world.axt_handle_counters.get(&dsid),
+                reconstructed.as_ref(),
+            ) {
+                (Some(final_ratchet), Some(expected))
+                    if final_ratchet.next() == expected_next
+                        && final_ratchet.authorization_generation() == expected_generation
+                        && final_ratchet == expected => {}
+                (None, None) => {}
+                _ => {
+                    return Err(make_axt_error_with(
+                        AxtRejectReason::SubNonce,
+                        "authenticated AXT execution does not equal the committed authorization-generation ratchet",
+                        Some(dsid),
+                        error_lane,
+                        Some(expected_generation),
+                        Some(expected_next),
                     ));
                 }
             }
@@ -6241,6 +6362,30 @@ pub(crate) mod valid {
                         .to_owned(),
                     reason: AxtRejectReason::PolicyDenied,
                     snapshot_version: Some(advertised.version),
+                    dataspace: None,
+                    lane: None,
+                    active_handle_era: None,
+                    next_handle_counter: None,
+                },
+            ))
+        }
+        fn validate_advertised_axt_transitions(
+            advertised: Option<&BTreeSet<DataSpaceId>>,
+            computed: &BTreeSet<DataSpaceId>,
+            snapshot_version: u64,
+        ) -> Result<(), BlockValidationError> {
+            let Some(advertised) = advertised else {
+                return Ok(());
+            };
+            if advertised == computed {
+                return Ok(());
+            }
+            Err(BlockValidationError::AxtEnvelopeValidationFailed(
+                AxtEnvelopeValidationDetails {
+                    message: "advertised AXT transition set does not match deterministic execution"
+                        .to_owned(),
+                    reason: AxtRejectReason::PolicyDenied,
+                    snapshot_version: Some(snapshot_version),
                     dataspace: None,
                     lane: None,
                     active_handle_era: None,
@@ -10994,6 +11139,8 @@ pub(crate) mod valid {
             sccp_root_validation: SccpRootValidation,
         ) -> Result<(), BlockValidationError> {
             let advertised_axt_policy_snapshot = block.axt_policy_snapshot().cloned();
+            let advertised_axt_transitioned_dataspaces =
+                block.axt_transitioned_dataspaces().cloned();
             let to_ms = |duration: Duration| -> u64 {
                 u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
             };
@@ -11154,10 +11301,41 @@ pub(crate) mod valid {
                 state_block.drain_transfer_transcripts_with_pending(fastpq_digest_batch);
             let axt_envelopes = state_block.drain_axt_envelopes();
             let batch_transfer_outcomes = state_block.drain_batch_transfer_outcomes();
+            let committed_fragment_count = Self::validated_committed_fragment_count(
+                state_block,
+                advertised_committed_fragments,
+            )?;
+            state_block
+                .finalize_axt_asset_incarnations()
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "failed to finalize AXT asset incarnations: {error}"
+                    ))
+                })?;
+            state_block
+                .evaluate_nexus_autoscale(block, committed_fragment_count)
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "failed to evaluate Nexus autoscale: {error}"
+                    ))
+                })?;
+            state_block
+                .finalize_axt_policy_transition_ratchets()
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "failed to finalize the AXT policy counter ratchet: {error}"
+                    ))
+                })?;
             let axt_policy_snapshot = state_block.axt_policy_snapshot();
             Self::validate_advertised_axt_post_state(
                 advertised_axt_policy_snapshot.as_ref(),
                 &axt_policy_snapshot,
+            )?;
+            let axt_transitioned_dataspaces = state_block.axt_authorization_transitioned().clone();
+            Self::validate_advertised_axt_transitions(
+                advertised_axt_transitioned_dataspaces.as_ref(),
+                &axt_transitioned_dataspaces,
+                axt_policy_snapshot.version,
             )?;
             let trigger_completions = state_block.world.trigger_completions();
             block
@@ -11170,15 +11348,14 @@ pub(crate) mod valid {
                     axt_policy_snapshot,
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
+            block
+                .set_axt_transitioned_dataspaces(axt_transitioned_dataspaces)
+                .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
             block.set_trigger_completions(trigger_completions);
             block
                 .set_batch_transfer_outcomes(batch_transfer_outcomes)
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
-            Self::finalize_committed_fragment_count(
-                block,
-                state_block,
-                advertised_committed_fragments,
-            )?;
+            block.set_committed_fragment_count(committed_fragment_count);
             let lane_finality_statements = Self::finalize_lane_settlement_evidence(
                 block,
                 state_block,
@@ -11266,11 +11443,10 @@ pub(crate) mod valid {
                 true,
             )
         }
-        fn finalize_committed_fragment_count(
-            block: &mut SignedBlock,
+        fn validated_committed_fragment_count(
             state_block: &StateBlock<'_>,
             advertised_committed_fragments: Option<u64>,
-        ) -> Result<(), BlockValidationError> {
+        ) -> Result<u64, BlockValidationError> {
             let ordinary = u64::try_from(state_block.committed_fragment_count()).map_err(|_| {
                 Self::execution_context_error(
                     "ordinary committed fragment count exceeds the canonical u64 range",
@@ -11285,8 +11461,7 @@ pub(crate) mod valid {
                     actual,
                 });
             }
-            block.set_committed_fragment_count(expected);
-            Ok(())
+            Ok(expected)
         }
         #[allow(
             clippy::too_many_lines,
@@ -11322,6 +11497,8 @@ pub(crate) mod valid {
             let mut timings = timings;
             let advertised_committed_fragments = block.committed_fragment_count();
             let advertised_axt_policy_snapshot = block.axt_policy_snapshot().cloned();
+            let advertised_axt_transitioned_dataspaces =
+                block.axt_transitioned_dataspaces().cloned();
             if block.has_results() {
                 let snapshot = advertised_axt_policy_snapshot.as_ref().ok_or_else(|| {
                     BlockValidationError::AxtEnvelopeValidationFailed(
@@ -15071,10 +15248,41 @@ pub(crate) mod valid {
             let axt_start = timings.as_ref().map(|_| Instant::now());
             let axt_envelopes = state_block.drain_axt_envelopes();
             let batch_transfer_outcomes = state_block.drain_batch_transfer_outcomes();
+            let committed_fragment_count = Self::validated_committed_fragment_count(
+                state_block,
+                advertised_committed_fragments,
+            )?;
+            state_block
+                .finalize_axt_asset_incarnations()
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "failed to finalize AXT asset incarnations: {error}"
+                    ))
+                })?;
+            state_block
+                .evaluate_nexus_autoscale(block, committed_fragment_count)
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "failed to evaluate Nexus autoscale: {error}"
+                    ))
+                })?;
+            state_block
+                .finalize_axt_policy_transition_ratchets()
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "failed to finalize the AXT policy counter ratchet: {error}"
+                    ))
+                })?;
             let axt_policy_snapshot = state_block.axt_policy_snapshot();
             Self::validate_advertised_axt_post_state(
                 advertised_axt_policy_snapshot.as_ref(),
                 &axt_policy_snapshot,
+            )?;
+            let axt_transitioned_dataspaces = state_block.axt_authorization_transitioned().clone();
+            Self::validate_advertised_axt_transitions(
+                advertised_axt_transitioned_dataspaces.as_ref(),
+                &axt_transitioned_dataspaces,
+                axt_policy_snapshot.version,
             )?;
             let trigger_completions = state_block.world.trigger_completions();
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), axt_start) {
@@ -15091,15 +15299,14 @@ pub(crate) mod valid {
                     axt_policy_snapshot,
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
+            block
+                .set_axt_transitioned_dataspaces(axt_transitioned_dataspaces)
+                .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
             block.set_trigger_completions(trigger_completions);
             block
                 .set_batch_transfer_outcomes(batch_transfer_outcomes)
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
-            Self::finalize_committed_fragment_count(
-                block,
-                state_block,
-                advertised_committed_fragments,
-            )?;
+            block.set_committed_fragment_count(committed_fragment_count);
             let lane_finality_statements = Self::finalize_lane_settlement_evidence(
                 block,
                 state_block,
@@ -16819,980 +17026,7 @@ pub(crate) mod valid {
                 ed25519_key.public_key()
             ));
         }
-        #[derive(Clone, Default)]
-        struct CountingSoracloudRuntime {
-            ordered_mailbox_calls: Arc<parking_lot::Mutex<Vec<Hash>>>,
-            state_mutations: Vec<SoracloudDeterministicStateMutation>,
-        }
-        impl CountingSoracloudRuntime {
-            fn ordered_mailbox_call_count(&self) -> usize {
-                self.ordered_mailbox_calls.lock().len()
-            }
-            fn with_state_mutations(
-                state_mutations: Vec<SoracloudDeterministicStateMutation>,
-            ) -> Self {
-                Self {
-                    ordered_mailbox_calls: Arc::default(),
-                    state_mutations,
-                }
-            }
-        }
-        impl SoracloudRuntimeReadHandle for CountingSoracloudRuntime {
-            fn snapshot(&self) -> SoracloudRuntimeSnapshot {
-                SoracloudRuntimeSnapshot::default()
-            }
-            fn state_dir(&self) -> PathBuf {
-                PathBuf::from("/tmp/iroha-soracloud-runtime-test")
-            }
-        }
-        impl SoracloudRuntime for CountingSoracloudRuntime {
-            fn execute_local_read(
-                &self,
-                _request: SoracloudLocalReadRequest,
-            ) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
-                Err(SoracloudRuntimeExecutionError::new(
-                    SoracloudRuntimeExecutionErrorKind::Unavailable,
-                    "local reads are not used in this test runtime",
-                ))
-            }
-            fn execute_ordered_mailbox(
-                &self,
-                request: SoracloudOrderedMailboxExecutionRequest,
-            ) -> Result<SoracloudOrderedMailboxExecutionResult, SoracloudRuntimeExecutionError>
-            {
-                self.ordered_mailbox_calls
-                    .lock()
-                    .push(request.mailbox_message.message_id);
-                Ok(SoracloudOrderedMailboxExecutionResult {
-                    state_mutations: self.state_mutations.clone(),
-                    outbound_mailbox_messages: Vec::new(),
-                    response_bytes: Vec::new(),
-                    content_type: None,
-                    runtime_state: Some(SoraServiceRuntimeStateV1 {
-                        schema_version:
-                            iroha_data_model::soracloud::SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
-                        service_name: request.deployment.service_name.clone(),
-                        active_service_version: request.deployment.current_service_version.clone(),
-                        health_status: SoraServiceHealthStatusV1::Healthy,
-                        load_factor_bps: 111,
-                        materialized_bundle_hash: request.bundle.container.bundle_hash,
-                        rollout_handle: request
-                            .deployment
-                            .active_rollout
-                            .as_ref()
-                            .map(|rollout| rollout.rollout_handle.clone()),
-                        pending_mailbox_message_count: request
-                            .authoritative_pending_mailbox_messages
-                            .saturating_sub(1),
-                        last_receipt_id: None,
-                    }),
-                    runtime_receipt: SoraRuntimeReceiptV1 {
-                        schema_version:
-                            iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
-                        receipt_id: Hash::new(
-                            format!(
-                                "test-receipt:{}:{}",
-                                request.deployment.service_name, request.mailbox_message.message_id
-                            )
-                            .as_bytes(),
-                        ),
-                        service_name: request.deployment.service_name,
-                        service_version: request.deployment.current_service_version,
-                        handler_name: request.mailbox_message.to_handler.clone(),
-                        handler_class: request
-                            .handler
-                            .as_ref()
-                            .map(|handler| handler.class)
-                            .unwrap_or(SoraServiceHandlerClassV1::Update),
-                        request_commitment: request.mailbox_message.payload_commitment,
-                        result_commitment: Hash::new(
-                            format!("test-result:{}", request.mailbox_message.message_id)
-                                .as_bytes(),
-                        ),
-                        certified_by: SoraCertifiedResponsePolicyV1::None,
-                        emitted_sequence: request.execution_sequence,
-                        mailbox_message_id: Some(request.mailbox_message.message_id),
-                        journal_artifact_hash: None,
-                        checkpoint_artifact_hash: None,
-                        placement_id: None,
-                        selected_validator_account_id: None,
-                        selected_peer_id: None,
-                    },
-                })
-            }
-            fn execute_apartment(
-                &self,
-                _request: SoracloudApartmentExecutionRequest,
-            ) -> Result<SoracloudApartmentExecutionResult, SoracloudRuntimeExecutionError>
-            {
-                Err(SoracloudRuntimeExecutionError::new(
-                    SoracloudRuntimeExecutionErrorKind::Unavailable,
-                    "apartments are not used in this test runtime",
-                ))
-            }
-        }
-        fn seed_soracloud_mailbox_fixture(
-            world: &mut World,
-            state_bindings: Vec<SoraStateBindingV1>,
-        ) -> (iroha_data_model::name::Name, Hash) {
-            let service_name: iroha_data_model::name::Name =
-                "portal".parse().expect("valid service name");
-            let service_version = "2026.1".to_string();
-            let bundle_hash = Hash::new(b"bundle:portal:2026.1");
-            let bundle = SoraDeploymentBundleV1 {
-                schema_version: iroha_data_model::soracloud::SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-                container: SoraContainerManifestV1 {
-                    schema_version: iroha_data_model::soracloud::SORA_CONTAINER_MANIFEST_VERSION_V1,
-                    runtime: SoraContainerRuntimeV1::Ivm,
-                    bundle_hash,
-                    bundle_path: "/bundles/portal.ivm".to_string(),
-                    entrypoint: "main".to_string(),
-                    args: Vec::new(),
-                    env: std::collections::BTreeMap::new(),
-                    inrou: None,
-                    required_config_names: Vec::new(),
-                    required_secret_names: Vec::new(),
-                    config_exports: Vec::new(),
-                    capabilities: SoraCapabilityPolicyV1 {
-                        network: SoraNetworkPolicyV1::Isolated,
-                        allow_wallet_signing: false,
-                        allow_state_writes: false,
-                        allow_model_inference: false,
-                        allow_model_training: false,
-                    },
-                    resources: SoraResourceLimitsV1 {
-                        cpu_millis: NonZeroU32::new(500).expect("nonzero cpu"),
-                        memory_bytes: NonZeroU64::new(16 * 1024 * 1024).expect("nonzero memory"),
-                        ephemeral_storage_bytes: NonZeroU64::new(16 * 1024 * 1024)
-                            .expect("nonzero storage"),
-                        max_open_files: NonZeroU32::new(256).expect("nonzero files"),
-                        max_tasks: NonZeroU16::new(16).expect("nonzero tasks"),
-                    },
-                    lifecycle: SoraLifecycleHooksV1 {
-                        start_grace_secs: NonZeroU32::new(5).expect("nonzero start grace"),
-                        stop_grace_secs: NonZeroU32::new(5).expect("nonzero stop grace"),
-                        healthcheck_path: Some("/health".to_string()),
-                    },
-                },
-                service: SoraServiceManifestV1 {
-                    schema_version: iroha_data_model::soracloud::SORA_SERVICE_MANIFEST_VERSION_V1,
-                    service_name: service_name.clone(),
-                    service_version: service_version.clone(),
-                    execution_plane:
-                        iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::DeterministicService,
-                    container: SoraContainerManifestRefV1 {
-                        manifest_hash: Hash::new(b"container-manifest:portal"),
-                        expected_schema_version:
-                            iroha_data_model::soracloud::SORA_CONTAINER_MANIFEST_VERSION_V1,
-                    },
-                    replicas: NonZeroU16::new(1).expect("nonzero replicas"),
-                    route: None,
-                    rollout: SoraRolloutPolicyV1 {
-                        canary_percent: 0,
-                        max_unavailable_replicas: 0,
-                        health_window_secs: NonZeroU32::new(30).expect("nonzero health window"),
-                        automatic_rollback_failures: NonZeroU32::new(1).expect("nonzero rollback"),
-                    },
-                    economics: iroha_data_model::soracloud::SoraHttpServiceEconomicsV1::default(),
-                    state_bindings,
-                    lease_volumes: Vec::new(),
-                    handlers: vec![SoraServiceHandlerV1 {
-                        handler_name: "update".parse().expect("valid handler name"),
-                        class: SoraServiceHandlerClassV1::Update,
-                        entrypoint: "apply_update".to_string(),
-                        route_path: Some("/update".to_string()),
-                        certified_response: SoraCertifiedResponsePolicyV1::None,
-                        mailbox: Some(SoraMailboxContractV1 {
-                            queue_name: "updates".parse().expect("valid queue name"),
-                            max_pending_messages: NonZeroU32::new(1_024)
-                                .expect("nonzero pending limit"),
-                            max_message_bytes: NonZeroU64::new(65_536)
-                                .expect("nonzero message limit"),
-                            retention_blocks: NonZeroU32::new(1_440).expect("nonzero retention"),
-                        }),
-                    }],
-                    artifacts: Vec::new(),
-                },
-            };
-            world.soracloud_service_revisions_mut_for_testing().insert(
-                (service_name.as_ref().to_owned(), service_version.clone()),
-                bundle.clone(),
-            );
-            world
-                .soracloud_service_deployments_mut_for_testing()
-                .insert(
-                    service_name.clone(),
-                    SoraServiceDeploymentStateV1 {
-                        schema_version:
-                            iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                        service_name: service_name.clone(),
-                        current_service_version: service_version.clone(),
-                        current_service_manifest_hash: Hash::new(b"service-manifest:portal"),
-                        current_container_manifest_hash: Hash::new(b"container-manifest:portal"),
-                        revision_count: 1,
-                        process_generation: 1,
-                        process_started_sequence: 1,
-                        active_rollout: None,
-                        last_rollout: None,
-                        config_generation: 0,
-                        secret_generation: 0,
-                        service_configs: BTreeMap::new(),
-                        service_secrets: BTreeMap::new(),
-                        fhe_policy_records: BTreeMap::new(),
-                        service_lease: None,
-                        lease_volume_states: Vec::new(),
-                    },
-                );
-            world.soracloud_service_runtime_mut_for_testing().insert(
-                service_name.clone(),
-                SoraServiceRuntimeStateV1 {
-                    schema_version:
-                        iroha_data_model::soracloud::SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
-                    service_name: service_name.clone(),
-                    active_service_version: service_version,
-                    health_status: SoraServiceHealthStatusV1::Healthy,
-                    load_factor_bps: 77,
-                    materialized_bundle_hash: bundle_hash,
-                    rollout_handle: None,
-                    pending_mailbox_message_count: 1,
-                    last_receipt_id: None,
-                },
-            );
-            let message_id = Hash::new(b"portal-mailbox-message");
-            world.soracloud_mailbox_messages_mut_for_testing().insert(
-                message_id,
-                SoraServiceMailboxMessageV1 {
-                    schema_version:
-                        iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
-                    message_id,
-                    from_service: service_name.clone(),
-                    from_handler: "update".parse().expect("valid from handler"),
-                    to_service: service_name.clone(),
-                    to_handler: "update".parse().expect("valid to handler"),
-                    payload_bytes: b"portal-mailbox-payload".to_vec(),
-                    payload_commitment: Hash::new(b"portal-mailbox-payload"),
-                    enqueue_sequence: 1,
-                    available_after_sequence: 1,
-                    expires_at_sequence: Some(16),
-                },
-            );
-            (service_name, message_id)
-        }
-        #[test]
-        fn try_sign_adds_verifiable_signature_and_clears_verified_flag() {
-            let key_pairs = core::iter::repeat_with(|| {
-                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
-            })
-            .take(2)
-            .collect::<Vec<_>>();
-            let topology = test_topology_with_keys(&key_pairs);
-            let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
-            block.mark_signatures_verified();
-            assert!(block.signatures_verified_for_tests());
-            block
-                .try_sign(&key_pairs[1], &topology)
-                .expect("checked valid-block signing succeeds");
-            let signature = block
-                .as_ref()
-                .signatures()
-                .find(|signature| signature.index() == 1)
-                .expect("signature for requested validator is present");
-            signature
-                .signature()
-                .verify_hash(key_pairs[1].public_key(), block.as_ref().hash())
-                .expect("checked valid-block signature verifies");
-            assert!(!block.signatures_verified_for_tests());
-        }
-        fn sccp_transfer_payload() -> iroha_sccp::SccpPayloadV1 {
-            iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-                version: 1,
-                source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-                nonce: 1,
-                route_revision: 1,
-                asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-                asset_id: b"xor".to_vec(),
-                amount: 10,
-                sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-                sender: b"bridge@sora".to_vec(),
-                recipient_codec: iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
-                recipient: vec![0x22; 20],
-                route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-                route_id: b"nexus:eth:xor".to_vec(),
-            })
-        }
-        fn sccp_chain_id() -> ChainId {
-            "00000000-0000-0000-0000-000000000000"
-                .parse()
-                .expect("valid chain id")
-        }
-        fn sccp_state_with_account(account_id: &AccountId) -> State {
-            let domain_id = DomainId::try_new("sccp", "universal").expect("domain id");
-            let domain = Domain::new(domain_id).build(account_id);
-            let account = Account::new(account_id.clone()).build(account_id);
-            let world = World::with([domain], [account], []);
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            State::new_with_chain(world, kura, query_handle, sccp_chain_id())
-        }
-        fn sccp_accepted_transaction_with_record_count(
-            account_id: AccountId,
-            keypair: &KeyPair,
-            record_count: usize,
-        ) -> AcceptedTransaction<'static> {
-            let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&sccp_transfer_payload())
-                .expect("valid SCCP block fixture payload encodes");
-            let overlay = core::iter::repeat_with(|| {
-                InstructionBox::from(crate::bridge::test_record_sccp_message(
-                    payload_bytes.clone(),
-                ))
-            })
-            .take(record_count)
-            .collect::<Vec<_>>();
-            sccp_accepted_transaction_with_overlay(account_id, keypair, overlay)
-        }
-        fn sccp_accepted_transaction_with_overlay(
-            account_id: AccountId,
-            keypair: &KeyPair,
-            overlay: Vec<InstructionBox>,
-        ) -> AcceptedTransaction<'static> {
-            let mut bytecode = ivm::ProgramMetadata {
-                version_major: 1,
-                version_minor: 0,
-                mode: ivm::ivm_mode::ZK,
-                vector_length: 0,
-                max_cycles: 1,
-                abi_version: 1,
-            }
-            .encode();
-            bytecode.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-            let tx = TransactionBuilder::new(
-                deterministic_test_network_id(0x04),
-                account_id,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode: IvmBytecode::from_compiled(bytecode),
-                overlay: overlay.into(),
-                events_commitment: Hash::new(b"events"),
-                gas_policy_commitment: Hash::new(b"gas"),
-            }))
-            .sign(keypair.private_key());
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx))
-        }
-        fn sccp_accepted_transaction() -> AcceptedTransaction<'static> {
-            let (account_id, keypair) = gen_account_in("sccp");
-            sccp_accepted_transaction_with_record_count(account_id, &keypair, 1)
-        }
-        fn signed_sccp_block(root: Option<[u8; 32]>) -> SignedBlock {
-            let leader = crate::block::checked_keypair();
-            BlockBuilder::new(vec![sccp_accepted_transaction()])
-                .chain(0, None)
-                .with_sccp_commitment_root(root)
-                .sign(leader.private_key())
-                .unpack(|_| {})
-                .into()
-        }
-        fn set_single_sccp_transaction_result(
-            block: &mut SignedBlock,
-            result: iroha_data_model::transaction::TransactionResultInner,
-        ) {
-            let hashes = block
-                .external_transactions()
-                .map(|transaction| transaction.hash_as_entrypoint())
-                .collect::<Vec<_>>();
-            block
-                .set_transaction_results_with_transcripts(
-                    Vec::new(),
-                    &hashes,
-                    vec![result],
-                    std::collections::BTreeMap::new(),
-                    Vec::new(),
-                    AxtPolicySnapshot::default(),
-                )
-                .expect("SCCP test block entrypoint hashes should match");
-        }
-        #[test]
-        fn sccp_commitment_root_validation_accepts_matching_root() {
-            let mut block = signed_sccp_block(None);
-            set_single_sccp_transaction_result(
-                &mut block,
-                Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
-            );
-            let messages = crate::bridge::collect_sccp_messages_from_signed_block(&block);
-            let root = crate::bridge::sccp_commitment_root_from_messages(&messages);
-            block.set_sccp_commitment_root(root);
-            ValidBlock::validate_sccp_commitment_root(&block)
-                .expect("matching SCCP commitment root should validate");
-        }
-        #[test]
-        fn sccp_commitment_root_validation_rejects_wrong_root() {
-            let mut block = signed_sccp_block(Some([0xAA; 32]));
-            set_single_sccp_transaction_result(
-                &mut block,
-                Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
-            );
-            let err = ValidBlock::validate_sccp_commitment_root(&block)
-                .expect_err("wrong SCCP commitment root should reject");
-            assert!(matches!(
-                err,
-                BlockValidationError::SccpCommitmentRootMismatch {
-                    actual: Some(_),
-                    ..
-                }
-            ));
-        }
-        #[test]
-        fn sccp_commitment_root_validation_rejects_resultless_root() {
-            let block = signed_sccp_block(Some([0xAA; 32]));
-            let err = ValidBlock::validate_sccp_commitment_root(&block)
-                .expect_err("SCCP commitment root without committed results should reject");
-            assert!(matches!(
-                err,
-                BlockValidationError::SccpCommitmentRootMismatch {
-                    expected: None,
-                    actual: Some(_),
-                }
-            ));
-        }
-        #[test]
-        fn sccp_commitment_root_validation_rejects_short_result_vector() {
-            let (plain_account, plain_keypair) = gen_account_in("sccp");
-            let plain_tx = TransactionBuilder::new(
-                deterministic_test_network_id(0x04),
-                plain_account,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .sign(plain_keypair.private_key());
-            let plain_hash = plain_tx.hash_as_entrypoint();
-            let sccp_entrypoint = sccp_accepted_transaction().entrypoint().clone();
-            let accepted_plain = AcceptedTransaction::new_unchecked(Cow::Owned(plain_tx.clone()));
-            let leader = crate::block::checked_keypair();
-            let mut block: SignedBlock = BlockBuilder::new(vec![accepted_plain])
-                .chain(0, None)
-                .sign(leader.private_key())
-                .unpack(|_| {})
-                .into();
-            block
-                .set_transaction_results(
-                    Vec::new(),
-                    &[plain_hash],
-                    vec![Ok(
-                        iroha_data_model::transaction::DataTriggerSequence::default(),
-                    )],
-                )
-                .expect("single plain transaction result should attach");
-            block.set_external_entrypoints(vec![
-                iroha_data_model::transaction::TransactionEntrypoint::External(plain_tx),
-                sccp_entrypoint,
-            ]);
-            let err = ValidBlock::validate_sccp_commitment_root(&block).expect_err(
-                "SCCP validation must reject external SCCP entrypoints without committed results",
-            );
-            assert!(matches!(
-                err,
-                BlockValidationError::SccpTransactionResultCountMismatch {
-                    external_entrypoints: 2,
-                    results: 1,
-                }
-            ));
-        }
-        #[test]
-        fn sccp_commitment_root_validation_rejects_invalid_successful_record_payload() {
-            let (account_id, keypair) = gen_account_in("sccp");
-            let accepted = sccp_accepted_transaction_with_overlay(
-                account_id,
-                &keypair,
-                vec![InstructionBox::from(
-                    crate::bridge::test_record_sccp_message(
-                        b"not a canonical SCCP payload".to_vec(),
-                    ),
-                )],
-            );
-            let leader = crate::block::checked_keypair();
-            let mut block: SignedBlock = BlockBuilder::new(vec![accepted])
-                .chain(0, None)
-                .sign(leader.private_key())
-                .unpack(|_| {})
-                .into();
-            set_single_sccp_transaction_result(
-                &mut block,
-                Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
-            );
-            let err = ValidBlock::validate_sccp_commitment_root(&block).expect_err(
-                "successful invalid SCCP record payload must not be hidden by an empty root",
-            );
-            assert!(matches!(
-                err,
-                BlockValidationError::SccpInvalidOutboundRecord {
-                    tx_index: 0,
-                    instruction_index: 0,
-                    reason
-                } if reason.contains("payload is invalid")
-            ));
-        }
-        #[test]
-        fn sccp_commitment_root_validation_rejects_root_without_messages() {
-            let leader = crate::block::checked_keypair();
-            let mut block: SignedBlock =
-                BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
-                    .chain(0, None)
-                    .with_sccp_commitment_root(Some([0xBB; 32]))
-                    .sign(leader.private_key())
-                    .unpack(|_| {})
-                    .into();
-            block
-                .set_transaction_results(Vec::new(), &[], Vec::new())
-                .expect("empty block result fixture should be valid");
-            let err = ValidBlock::validate_sccp_commitment_root(&block)
-                .expect_err("root without SCCP messages should reject");
-            assert!(matches!(
-                err,
-                BlockValidationError::SccpCommitmentRootMismatch {
-                    expected: None,
-                    actual: Some(_),
-                }
-            ));
-        }
-        #[test]
-        fn sccp_commitment_root_validation_rejects_missing_root_after_successful_result() {
-            let mut block = signed_sccp_block(None);
-            set_single_sccp_transaction_result(
-                &mut block,
-                Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
-            );
-            let err = ValidBlock::validate_sccp_commitment_root(&block)
-                .expect_err("successful SCCP result must be signed with the matching root");
-            assert!(matches!(
-                err,
-                BlockValidationError::SccpCommitmentRootMismatch {
-                    expected: Some(_),
-                    actual: None,
-                }
-            ));
-        }
-        #[test]
-        fn sccp_commitment_root_change_invalidates_block_signature() {
-            let leader = crate::block::checked_keypair();
-            let mut block: SignedBlock = BlockBuilder::new(vec![sccp_accepted_transaction()])
-                .chain(0, None)
-                .sign(leader.private_key())
-                .unpack(|_| {})
-                .into();
-            let signed_hash = block.hash();
-            block
-                .signatures()
-                .next()
-                .expect("signed SCCP test block should have a leader signature")
-                .signature()
-                .verify_hash(leader.public_key(), signed_hash)
-                .expect("leader signature should verify before SCCP root change");
-            set_single_sccp_transaction_result(
-                &mut block,
-                Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
-            );
-            let messages = crate::bridge::collect_sccp_messages_from_signed_block(&block);
-            let root = crate::bridge::sccp_commitment_root_from_messages(&messages)
-                .expect("successful SCCP result should have a commitment root");
-            block.set_sccp_commitment_root(Some(root));
-            assert!(block.header().sccp_commitment_root().is_some());
-            assert_ne!(
-                signed_hash,
-                block.hash(),
-                "SCCP root changes must change the signed block hash"
-            );
-            assert!(
-                block
-                    .signatures()
-                    .next()
-                    .expect("signed SCCP test block should retain its leader signature")
-                    .signature()
-                    .verify_hash(leader.public_key(), block.hash())
-                    .is_err(),
-                "leader signature must not verify after the SCCP root changes"
-            );
-        }
-        #[test]
-        fn sccp_commitment_root_validation_rejects_root_after_failed_result() {
-            let mut block = signed_sccp_block(Some([0xAA; 32]));
-            set_single_sccp_transaction_result(
-                &mut block,
-                Err(
-                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                        iroha_data_model::ValidationFail::NotPermitted(
-                            "failed SCCP transaction fixture".to_owned(),
-                        ),
-                    ),
-                ),
-            );
-            let err = ValidBlock::validate_sccp_commitment_root(&block)
-                .expect_err("failed SCCP result must not keep a signed commitment root");
-            assert!(matches!(
-                err,
-                BlockValidationError::SccpCommitmentRootMismatch {
-                    expected: None,
-                    actual: Some(_),
-                }
-            ));
-        }
-        #[test]
-        fn sccp_commitment_root_validation_rejects_deduped_root_for_successful_duplicates() {
-            let (account_id, keypair) = gen_account_in("sccp");
-            let accepted = sccp_accepted_transaction_with_record_count(account_id, &keypair, 2);
-            let candidate_messages =
-                crate::bridge::collect_sccp_messages_from_accepted_transactions(
-                    &[accepted.clone()],
-                );
-            assert_eq!(
-                candidate_messages.len(),
-                1,
-                "proposal SCCP collection deduplicates outbound replay keys"
-            );
-            let deduplicated_root =
-                crate::bridge::sccp_commitment_root_from_messages(&candidate_messages)
-                    .expect("deduplicated candidate root");
-            let leader = crate::block::checked_keypair();
-            let mut block: SignedBlock = BlockBuilder::new(vec![accepted])
-                .chain(0, None)
-                .with_sccp_commitment_root(Some(deduplicated_root))
-                .sign(leader.private_key())
-                .unpack(|_| {})
-                .into();
-            set_single_sccp_transaction_result(
-                &mut block,
-                Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
-            );
-            let err = ValidBlock::validate_sccp_commitment_root(&block).expect_err(
-                "successful duplicate SCCP records must not validate with a deduplicated root",
-            );
-            assert!(matches!(
-                err,
-                BlockValidationError::SccpDuplicateOutboundMessage { .. }
-            ));
-        }
-        #[test]
-        fn sccp_commitment_root_validation_rejects_duplicate_inclusive_root() {
-            let (account_id, keypair) = gen_account_in("sccp");
-            let accepted = sccp_accepted_transaction_with_record_count(account_id, &keypair, 2);
-            let leader = crate::block::checked_keypair();
-            let duplicate_commitment =
-                crate::bridge::test_sccp_hub_commitment(&sccp_transfer_payload());
-            let duplicate_inclusive_root = iroha_sccp::commitment_merkle_root(&[
-                duplicate_commitment.clone(),
-                duplicate_commitment,
-            ])
-            .expect("duplicate-inclusive candidate root");
-            let mut block: SignedBlock = BlockBuilder::new(vec![accepted])
-                .chain(0, None)
-                .with_sccp_commitment_root(Some(duplicate_inclusive_root))
-                .sign(leader.private_key())
-                .unpack(|_| {})
-                .into();
-            set_single_sccp_transaction_result(
-                &mut block,
-                Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
-            );
-            let err = ValidBlock::validate_sccp_commitment_root(&block).expect_err(
-                "successful duplicate SCCP records must not validate with a duplicate-inclusive root",
-            );
-            assert!(matches!(
-                err,
-                BlockValidationError::SccpDuplicateOutboundMessage { .. }
-            ));
-        }
-        #[test]
-        fn validate_and_record_transactions_rejects_sccp_root_after_rejected_record_tx() {
-            let (account_id, keypair) = gen_account_in("sccp");
-            let state = sccp_state_with_account(&account_id);
-            let accepted = sccp_accepted_transaction_with_record_count(account_id, &keypair, 1);
-            let candidate_messages =
-                crate::bridge::collect_sccp_messages_from_accepted_transactions(
-                    &[accepted.clone()],
-                );
-            let candidate_root =
-                crate::bridge::sccp_commitment_root_from_messages(&candidate_messages)
-                    .expect("candidate SCCP root");
-            let key = crate::bridge::test_sccp_outbound_message_key(&sccp_transfer_payload());
-            let leader = crate::block::checked_keypair();
-            let new_block = BlockBuilder::new(vec![accepted])
-                .chain(0, None)
-                .with_sccp_commitment_root(Some(candidate_root))
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            assert_eq!(
-                new_block.header().sccp_commitment_root(),
-                Some(candidate_root)
-            );
-            let mut state_block = state.block(new_block.header());
-            let mut signed_block: SignedBlock = new_block.into();
-            let err = ValidBlock::validate_and_record_transactions(
-                &mut signed_block,
-                &mut state_block,
-                None,
-                false,
-            )
-            .expect_err("failed SCCP record must reject the signed root instead of rewriting it");
-            assert!(
-                signed_block.error(0).is_some(),
-                "invalid SCCP proved record should reject the transaction"
-            );
-            assert_eq!(
-                signed_block.header().sccp_commitment_root(),
-                Some(candidate_root)
-            );
-            assert!(
-                state_block
-                    .world
-                    .sccp_outbound_pending_messages
-                    .get(&key)
-                    .is_none()
-            );
-            assert!(matches!(
-                err,
-                BlockValidationError::SccpCommitmentRootMismatch {
-                    expected: None,
-                    actual: Some(_),
-                }
-            ));
-        }
-        #[test]
-        fn sccp_commitment_root_after_execution_omits_rejected_record_tx() {
-            let (account_id, keypair) = gen_account_in("sccp");
-            let state = sccp_state_with_account(&account_id);
-            let accepted = sccp_accepted_transaction_with_record_count(account_id, &keypair, 1);
-            let candidate_messages =
-                crate::bridge::collect_sccp_messages_from_accepted_transactions(
-                    &[accepted.clone()],
-                );
-            assert!(
-                crate::bridge::sccp_commitment_root_from_messages(&candidate_messages).is_some(),
-                "the pre-execution candidate includes the SCCP record"
-            );
-            let key = crate::bridge::test_sccp_outbound_message_key(&sccp_transfer_payload());
-            let leader = crate::block::checked_keypair();
-            let new_block = BlockBuilder::new(vec![accepted])
-                .chain(0, None)
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            let mut state_block = state.block(new_block.header());
-            let signed_block: SignedBlock = new_block.into();
-            let root =
-                ValidBlock::sccp_commitment_root_after_execution(signed_block, &mut state_block)
-                    .expect("failed SCCP record should still derive a post-execution root");
-            assert_eq!(
-                root, None,
-                "rejected SCCP records must be omitted from the signed root"
-            );
-            assert!(
-                state_block
-                    .world
-                    .sccp_outbound_pending_messages
-                    .get(&key)
-                    .is_none(),
-                "rejected SCCP records must not persist outbound messages"
-            );
-        }
-        #[test]
-        fn validate_and_record_transactions_rejects_sccp_root_after_duplicate_overlay_records() {
-            let (account_id, keypair) = gen_account_in("sccp");
-            let state = sccp_state_with_account(&account_id);
-            let accepted = sccp_accepted_transaction_with_record_count(account_id, &keypair, 2);
-            let candidate_messages =
-                crate::bridge::collect_sccp_messages_from_accepted_transactions(
-                    &[accepted.clone()],
-                );
-            assert_eq!(
-                candidate_messages.len(),
-                1,
-                "pre-execution SCCP root collection deduplicates outbound keys"
-            );
-            let candidate_root =
-                crate::bridge::sccp_commitment_root_from_messages(&candidate_messages)
-                    .expect("candidate SCCP root");
-            let key = crate::bridge::test_sccp_outbound_message_key(&sccp_transfer_payload());
-            let leader = crate::block::checked_keypair();
-            let new_block = BlockBuilder::new(vec![accepted])
-                .chain(0, None)
-                .with_sccp_commitment_root(Some(candidate_root))
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            let mut state_block = state.block(new_block.header());
-            let mut signed_block: SignedBlock = new_block.into();
-            let err = ValidBlock::validate_and_record_transactions(
-                &mut signed_block,
-                &mut state_block,
-                None,
-                false,
-            )
-            .expect_err(
-                "duplicate SCCP overlay records must reject the transaction and signed root",
-            );
-            assert!(
-                signed_block.error(0).is_some(),
-                "duplicate SCCP proved records should reject the transaction"
-            );
-            assert_eq!(
-                signed_block.header().sccp_commitment_root(),
-                Some(candidate_root)
-            );
-            assert!(
-                state_block
-                    .world
-                    .sccp_outbound_pending_messages
-                    .get(&key)
-                    .is_none()
-            );
-            assert!(matches!(
-                err,
-                BlockValidationError::SccpCommitmentRootMismatch {
-                    expected: None,
-                    actual: Some(_),
-                }
-            ));
-        }
-        #[test]
-        fn validate_and_record_transactions_executes_soracloud_mailbox_runtime_once() {
-            let mut world = World::new();
-            let (service_name, message_id) = seed_soracloud_mailbox_fixture(&mut world, Vec::new());
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(world, kura, query_handle);
-            let runtime = CountingSoracloudRuntime::default();
-            state.set_soracloud_runtime(Some(Arc::new(runtime.clone())));
-            let leader = crate::block::checked_keypair();
-            let block = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
-                .chain(0, None)
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            let mut state_block = state.block(block.header);
-            let _valid = block.validate_and_record_transactions(&mut state_block);
-            state_block.commit().expect("commit first mailbox block");
-            {
-                let view = state.view();
-                let world = view.world();
-                let runtime_state = world
-                    .soracloud_service_runtime()
-                    .get(&service_name)
-                    .expect("runtime state after execution");
-                let receipt = world
-                    .soracloud_runtime_receipts()
-                    .iter()
-                    .next()
-                    .map(|(_receipt_id, receipt)| receipt.clone())
-                    .expect("runtime receipt recorded");
-                assert_eq!(runtime.ordered_mailbox_call_count(), 1);
-                assert_eq!(runtime_state.pending_mailbox_message_count, 0);
-                assert_eq!(runtime_state.last_receipt_id, Some(receipt.receipt_id));
-                assert_eq!(receipt.mailbox_message_id, Some(message_id));
-            }
-            let follow_up_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-            let mut follow_up_state_block = state.block(follow_up_header);
-            let follow_up_transaction = follow_up_state_block.transaction();
-            assert!(
-                collect_ready_soracloud_mailbox_messages(&follow_up_transaction).is_empty(),
-                "mailbox receipts must suppress re-delivery on later blocks"
-            );
-            let view = state.view();
-            let world = view.world();
-            assert_eq!(runtime.ordered_mailbox_call_count(), 1);
-            assert_eq!(world.soracloud_runtime_receipts().iter().count(), 1);
-        }
-        #[test]
-        fn validate_and_record_transactions_persists_soracloud_mailbox_state_mutations() {
-            let mut world = World::new();
-            let binding_name: iroha_data_model::name::Name =
-                "vault".parse().expect("valid binding name");
-            let state_key = "/state/private/patient-1".to_string();
-            let payload = b"portal-runtime-state-payload".to_vec();
-            let payload_commitment = Hash::new(&payload);
-            let (service_name, message_id) = seed_soracloud_mailbox_fixture(
-                &mut world,
-                vec![SoraStateBindingV1 {
-                    schema_version: SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: binding_name.clone(),
-                    scope: iroha_data_model::soracloud::SoraStateScopeV1::ServiceState,
-                    mutability: SoraStateMutabilityV1::ReadWrite,
-                    encryption: SoraStateEncryptionV1::Plaintext,
-                    key_prefix: "/state/private".to_string(),
-                    max_item_bytes: NonZeroU64::new(512).expect("nonzero item bytes"),
-                    max_total_bytes: NonZeroU64::new(2_048).expect("nonzero total bytes"),
-                }],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(world, kura, query_handle);
-            let runtime = CountingSoracloudRuntime::with_state_mutations(vec![
-                SoracloudDeterministicStateMutation {
-                    binding_name: binding_name.to_string(),
-                    state_key: state_key.clone(),
-                    operation: SoraStateMutationOperationV1::Upsert,
-                    encryption: SoraStateEncryptionV1::Plaintext,
-                    payload_bytes: Some(u64::try_from(payload.len()).expect("payload length")),
-                    payload: Some(payload),
-                    payload_commitment: Some(payload_commitment),
-                },
-            ]);
-            state.set_soracloud_runtime(Some(Arc::new(runtime.clone())));
-            let leader = crate::block::checked_keypair();
-            let block = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
-                .chain(0, None)
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            let mut state_block = state.block(block.header);
-            let _valid = block.validate_and_record_transactions(&mut state_block);
-            state_block.commit().expect("commit mailbox state block");
-            let receipt = {
-                let view = state.view();
-                let world = view.world();
-                let runtime_state = world
-                    .soracloud_service_runtime()
-                    .get(&service_name)
-                    .expect("runtime state after state mutation execution");
-                let receipt = world
-                    .soracloud_runtime_receipts()
-                    .iter()
-                    .next()
-                    .map(|(_receipt_id, receipt)| receipt.clone())
-                    .expect("runtime receipt recorded");
-                let entry = world
-                    .soracloud_service_state_entries()
-                    .get(&(
-                        service_name.as_ref().to_owned(),
-                        binding_name.as_ref().to_owned(),
-                        state_key.clone(),
-                    ))
-                    .expect("mailbox-driven service state entry");
-                assert_eq!(runtime.ordered_mailbox_call_count(), 1);
-                assert_eq!(runtime_state.pending_mailbox_message_count, 0);
-                assert_eq!(runtime_state.last_receipt_id, Some(receipt.receipt_id));
-                assert_eq!(receipt.mailbox_message_id, Some(message_id));
-                assert_eq!(entry.encryption, SoraStateEncryptionV1::Plaintext);
-                assert_eq!(entry.payload_bytes.get(), 28);
-                assert_eq!(entry.payload_commitment, payload_commitment);
-                assert_eq!(entry.governance_tx_hash, receipt.receipt_id);
-                assert_eq!(entry.last_update_sequence, receipt.emitted_sequence);
-                assert_eq!(
-                    entry.source_action,
-                    SoraServiceLifecycleActionV1::StateMutation
-                );
-                receipt
-            };
-            let follow_up_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-            let mut follow_up_state_block = state.block(follow_up_header);
-            let follow_up_transaction = follow_up_state_block.transaction();
-            assert_eq!(
-                crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
-                    &follow_up_transaction
-                ),
-                receipt.emitted_sequence.saturating_add(1),
-                "runtime receipts must advance the shared Soracloud execution sequence"
-            );
-            assert!(
-                collect_ready_soracloud_mailbox_messages(&follow_up_transaction).is_empty(),
-                "mailbox receipts must suppress re-delivery after state mutation write-back"
-            );
-        }
+        include!("block/sccp_soracloud_validation_tests.rs");
         fn commit_block_at_height(
             state: &State,
             kura: &Arc<Kura>,
@@ -24729,7 +23963,11 @@ mod commit {
     mod axt_validation_tests {
         use super::*;
         use crate::{
-            block::valid::validate_axt_envelopes,
+            block::valid::{
+                axt_canonical_proof_decode_count, axt_fastpq_proof_verification_count,
+                axt_proof_amount_fact_resolution_count, reset_axt_fastpq_proof_verification_count,
+                validate_axt_envelopes,
+            },
             kura::Kura,
             query::store::LiveQueryStore,
             state::{State, World},
@@ -24742,10 +23980,11 @@ mod commit {
             AssetHandle, AssetPermissionManifest, AxtBinding, AxtDescriptor, AxtEffectBinding,
             AxtEnvelopeRecord, AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey,
             AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtProofEnvelope,
-            AxtProofFragment, AxtRemoteSpendClaimV1, AxtTouchFragment, AxtTouchSpec, GroupBinding,
-            HandleBudget, HandleSubject, ManifestVersion, ProofBlob, RemoteSpendIntent, SpendOp,
-            TouchManifest, UniversalAccountId,
+            AxtProofFragment, AxtRemoteSpendClaimV1, AxtReplayRecord, AxtTouchFragment,
+            AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject, ManifestVersion, ProofBlob,
+            RemoteSpendIntent, SpendOp, TouchManifest, UniversalAccountId,
         };
+        use iroha_data_model::{DomainId, Registrable};
         use iroha_primitives::time::TimeSource;
         use std::{collections::BTreeMap, time::Duration};
         const ACCOUNT_FROM_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
@@ -24768,6 +24007,7 @@ mod commit {
         ) -> AxtHandleFragment {
             AxtHandleFragment {
                 handle: AssetHandle {
+                    asset_definition_id: sample_asset_definition_id(),
                     scope: vec!["transfer".to_owned()],
                     subject: HandleSubject {
                         account: ACCOUNT_FROM_LITERAL.to_owned(),
@@ -24950,10 +24190,12 @@ mod commit {
             } else {
                 let batch_hash = source_tx_commitment;
                 let mut transcripts = if remote_spend_claims.is_empty() {
-                    let from =
-                        AccountId::parse_encoded(ACCOUNT_FROM_LITERAL).expect("canonical sender");
-                    let to =
-                        AccountId::parse_encoded(ACCOUNT_TO_LITERAL).expect("canonical receiver");
+                    let from = AccountId::parse_encoded(ACCOUNT_FROM_LITERAL)
+                        .expect("canonical sender")
+                        .into_account_id();
+                    let to = AccountId::parse_encoded(ACCOUNT_TO_LITERAL)
+                        .expect("canonical receiver")
+                        .into_account_id();
                     vec![TransferTranscript {
                         batch_hash,
                         deltas: vec![TransferDeltaTranscript {
@@ -24975,10 +24217,12 @@ mod commit {
                     remote_spend_claims
                         .iter()
                         .map(|claim| {
-                            let from =
-                                AccountId::parse_encoded(&claim.from).expect("canonical sender");
-                            let to =
-                                AccountId::parse_encoded(&claim.to).expect("canonical receiver");
+                            let from = AccountId::parse_encoded(&claim.from)
+                                .expect("canonical sender")
+                                .into_account_id();
+                            let to = AccountId::parse_encoded(&claim.to)
+                                .expect("canonical receiver")
+                                .into_account_id();
                             let amount = iroha_data_model::fastpq::normalized_numeric_to_u64(
                                 claim.effective_amount.as_numeric(),
                                 0,
@@ -25101,6 +24345,26 @@ mod commit {
                 effective_amount.clone(),
             )
         }
+        fn install_test_asset_incarnation(
+            state: &mut State,
+            asset_definition_id: &AssetDefinitionId,
+        ) -> iroha_data_model::nexus::AxtAssetIncarnationV1 {
+            let registration_header = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"iroha:block:axt-test-asset-registration",
+            ));
+            let execution_identity = Hash::new(b"iroha:block:axt-test-asset-execution");
+            let incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
+                &state.network_id,
+                asset_definition_id,
+                &registration_header,
+                &execution_identity,
+                0,
+            );
+            let mut incarnations = state.world.axt_asset_incarnations.block();
+            incarnations.insert(asset_definition_id.clone(), incarnation);
+            incarnations.commit();
+            incarnation
+        }
         fn authenticated_axt_validation_state_for(
             entries: &[(DataSpaceId, LaneId, u8)],
         ) -> (
@@ -25135,17 +24399,19 @@ mod commit {
             let issuer_account = iroha_data_model::account::Account::new(issuer_account_id.clone())
                 .with_uaid(Some(issuer_uaid))
                 .build(&issuer_account_id);
+            let asset_domain_id =
+                DomainId::try_new("axt-fixture", "universal").expect("valid AXT fixture domain");
+            let asset_domain = iroha_data_model::domain::Domain::new(asset_domain_id.clone())
+                .build(&issuer_account_id);
             let asset_definition = iroha_data_model::asset::AssetDefinition::numeric(
                 sample_asset_definition_id(),
                 "AXT fixture asset",
                 asset_policy,
                 None,
             )
+            .with_owning_domain(Some(asset_domain_id))
             .build(&issuer_account_id);
-            let mut world = World::with([], [issuer_account], [asset_definition]);
-            world
-                .rebuild_uaid_account_index()
-                .expect("seed canonical AXT issuer index");
+            let mut world = World::with([asset_domain], [issuer_account], [asset_definition]);
             let mut manifest_set =
                 crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
             let mut manifest_roots = BTreeMap::new();
@@ -25181,6 +24447,7 @@ mod commit {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let mut state = State::new_for_testing(world, kura, query);
+            install_test_asset_incarnation(&mut state, &sample_asset_definition_id());
             for (dsid, lane, _) in entries {
                 state.set_axt_policy(
                     *dsid,
@@ -25205,16 +24472,41 @@ mod commit {
             (state, issuer, issuer_uaid, manifest_roots[&dsid])
         }
         fn sign_axt_validation_handle(
-            mut fragment: AxtHandleFragment,
+            fragment: AxtHandleFragment,
             state: &State,
             issuer: &KeyPair,
             issuer_uaid: UniversalAccountId,
             manifest_root: [u8; 32],
         ) -> AxtHandleFragment {
+            let asset_definition_incarnation = state
+                .world
+                .axt_asset_incarnations
+                .view()
+                .get(&fragment.handle.asset_definition_id)
+                .copied()
+                .expect("authenticated AXT fixture asset incarnation");
+            sign_axt_validation_handle_with_incarnation(
+                fragment,
+                state,
+                issuer,
+                issuer_uaid,
+                manifest_root,
+                asset_definition_incarnation,
+            )
+        }
+        fn sign_axt_validation_handle_with_incarnation(
+            mut fragment: AxtHandleFragment,
+            state: &State,
+            issuer: &KeyPair,
+            issuer_uaid: UniversalAccountId,
+            manifest_root: [u8; 32],
+            asset_definition_incarnation: iroha_data_model::nexus::AxtAssetIncarnationV1,
+        ) -> AxtHandleFragment {
             let dsid = fragment.intent.asset_dsid;
             let context = AxtHandleIssuerContextV1 {
                 network_id: state.network_id,
                 asset_dsid: dsid,
+                asset_definition_incarnation,
                 issuer: issuer_uaid,
                 issuer_manifest_root: manifest_root,
                 code_root: [0xC1; 32],
@@ -25338,7 +24630,20 @@ mod commit {
             envelope: AxtEnvelopeRecord,
             snapshot: AxtPolicySnapshot,
         ) -> SignedBlock {
-            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(0));
+            build_block_with_envelope_records(vec![envelope], snapshot)
+        }
+        fn build_block_with_envelope_records(
+            envelopes: Vec<AxtEnvelopeRecord>,
+            snapshot: AxtPolicySnapshot,
+        ) -> SignedBlock {
+            build_block_with_envelope_records_at_ms(envelopes, snapshot, 0)
+        }
+        fn build_block_with_envelope_records_at_ms(
+            envelopes: Vec<AxtEnvelopeRecord>,
+            snapshot: AxtPolicySnapshot,
+            timestamp_ms: u64,
+        ) -> SignedBlock {
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(timestamp_ms));
             let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source);
             let signer = crate::block::checked_keypair();
             let mut block: SignedBlock = builder
@@ -25354,7 +24659,7 @@ mod commit {
                     &entry_hashes,
                     results,
                     BTreeMap::new(),
-                    vec![envelope],
+                    envelopes,
                     snapshot,
                 )
                 .expect("empty test block should attach AXT envelope results");
@@ -25471,11 +24776,22 @@ mod commit {
                 }
             }
 
-            fn canonical_proof_blob(&self) -> ProofBlob {
+            fn canonical_proof_blob(
+                &self,
+                remote_spend_claims: Vec<AxtRemoteSpendClaimV1>,
+            ) -> ProofBlob {
                 let (seed, expiry_slot) = self
                     .canonical_proof
                     .expect("case must declare its canonical proof");
-                proof_blob_for(self.dsid, self.policy.manifest_root, seed, expiry_slot)
+                proof_blob_for_with_amount(
+                    self.dsid,
+                    self.policy.manifest_root,
+                    seed,
+                    expiry_slot,
+                    None,
+                    None,
+                    remote_spend_claims,
+                )
             }
         }
         impl AxtSinglePolicyRejectionCase {
@@ -25636,7 +24952,7 @@ mod commit {
                         Some(5),
                         Some((b"handle-era", 10)),
                         HandleEra,
-                        "handle era differs from the exact active policy era",
+                        "authenticated handle does not use the committed manifest era",
                     ),
                     Self::ZeroHandleExpirySlot => AxtSinglePolicyRejectionSpec::new(
                         9,
@@ -25646,8 +24962,8 @@ mod commit {
                         0,
                         Some(0),
                         Some((b"zero-handle-expiry", 10)),
-                        Expiry,
-                        "expiry slot is zero",
+                        AxtRejectReason::PolicyDenied,
+                        "handle fields are not canonical, authenticated, or usable",
                     ),
                     Self::ZeroManifestRoot => AxtSinglePolicyRejectionSpec::new(
                         10,
@@ -25669,7 +24985,7 @@ mod commit {
                         Some(5),
                         None,
                         Manifest,
-                        "manifest root is zeroed",
+                        "authenticated handle does not match its committed policy scope",
                     ),
                     Self::ZeroManifestRootInHandle => AxtSinglePolicyRejectionSpec::new(
                         11,
@@ -25680,7 +24996,7 @@ mod commit {
                         Some(5),
                         Some((b"zero-root-handle", 8)),
                         Manifest,
-                        "manifest root is zeroed",
+                        "authenticated handle does not match its committed policy scope",
                     ),
                 }
             }
@@ -25732,8 +25048,28 @@ mod commit {
         }
         #[allow(clippy::too_many_lines)]
         fn run_axt_single_policy_rejection(case: AxtSinglePolicyRejectionCase) {
-            let spec = case.spec();
-            let mut state = axt_validation_state();
+            let mut spec = case.spec();
+            let (mut state, issuer, issuer_uaid, manifest_root) =
+                authenticated_axt_validation_state(spec.dsid, spec.policy.target_lane, 0xA5);
+            if spec.policy.manifest_root != [0; 32] {
+                spec.policy.manifest_root = manifest_root;
+            }
+            if matches!(
+                case,
+                AxtSinglePolicyRejectionCase::BudgetOverspendAcrossSubNonces
+            ) {
+                let mut counters = state.world.axt_handle_counters.block();
+                counters.insert(
+                    spec.dsid,
+                    iroha_data_model::nexus::AxtHandleCounterRecord::try_from_parts(
+                        3,
+                        spec.policy.active_handle_era,
+                    )
+                    .expect("budget fixture counter is canonical"),
+                );
+                counters.commit();
+                spec.policy.next_handle_counter = 3;
+            }
             match case {
                 AxtSinglePolicyRejectionCase::ExpiredProof => {
                     state.nexus.get_mut().axt.max_clock_skew_ms = 0;
@@ -25769,27 +25105,15 @@ mod commit {
                 )],
                 None => Vec::new(),
             };
-            let embedded_proof = matches!(
-                case,
-                AxtSinglePolicyRejectionCase::HandleClockSkew
-                    | AxtSinglePolicyRejectionCase::ProofExpiryBeforeHandleWithSkew
-            );
-            let mut proofs = match spec.canonical_proof {
-                Some(_) if !embedded_proof => vec![AxtProofFragment {
-                    dsid: spec.dsid,
-                    proof: spec.canonical_proof_blob(),
-                }],
-                _ => Vec::new(),
-            };
             match case {
                 AxtSinglePolicyRejectionCase::HandleClockSkew => {
                     let handle = &mut handles[0];
                     handle.handle.max_clock_skew_ms = Some(1_000);
-                    handle.proof = Some(spec.canonical_proof_blob());
                 }
                 AxtSinglePolicyRejectionCase::DuplicateHandleFragmentKey => {
-                    let duplicate = handles[0].clone();
-                    handles.push(duplicate);
+                    let mut earlier = handles[0].clone();
+                    earlier.handle.sub_nonce = 2;
+                    handles.insert(0, earlier);
                 }
                 AxtSinglePolicyRejectionCase::HandleAmountMismatch => {
                     handles[0].amount = Some("4".parse().expect("canonical fragment quantity"));
@@ -25806,19 +25130,66 @@ mod commit {
                     second.amount = Some("7".parse().expect("canonical fragment quantity"));
                     handles.push(second);
                 }
-                AxtSinglePolicyRejectionCase::ProofExpiryBeforeHandleWithSkew => {
-                    handles[0].proof = Some(spec.canonical_proof_blob());
-                }
                 AxtSinglePolicyRejectionCase::BudgetOverspendInBlock => {
                     let first = &mut handles[0];
                     first.intent.op.amount = Some("7".parse().expect("canonical spend quantity"));
                     first.amount = Some("7".parse().expect("canonical fragment quantity"));
                     let mut second = first.clone();
+                    second.handle.sub_nonce = 2;
                     second.amount = Some("7".parse().expect("canonical fragment quantity"));
                     handles.push(second);
                 }
                 AxtSinglePolicyRejectionCase::ZeroManifestRoot => {
+                    handles.clear();
+                }
+                AxtSinglePolicyRejectionCase::ZeroManifestRootInPolicy => {
+                    handles[0].handle.manifest_view_root = [0x55; 32];
+                }
+                AxtSinglePolicyRejectionCase::ZeroManifestRootInHandle => {
                     handles[0].handle.manifest_view_root = [0; 32];
+                }
+                _ => {}
+            }
+            for handle in &mut handles {
+                *handle = sign_axt_validation_handle(
+                    handle.clone(),
+                    &state,
+                    &issuer,
+                    issuer_uaid,
+                    spec.policy.manifest_root,
+                );
+            }
+            let remote_spend_claims = handles
+                .iter()
+                .map(|handle| {
+                    let amount = handle
+                        .intent
+                        .op
+                        .amount
+                        .as_ref()
+                        .expect("table fixture uses a cleartext spend amount");
+                    remote_spend_claim(handle, amount)
+                })
+                .collect();
+            let embedded_proof = matches!(
+                case,
+                AxtSinglePolicyRejectionCase::HandleClockSkew
+                    | AxtSinglePolicyRejectionCase::ProofExpiryBeforeHandleWithSkew
+            );
+            let mut proofs = Vec::new();
+            if spec.canonical_proof.is_some() {
+                let proof = spec.canonical_proof_blob(remote_spend_claims);
+                if embedded_proof {
+                    handles[0].proof = Some(proof);
+                } else {
+                    proofs.push(AxtProofFragment {
+                        dsid: spec.dsid,
+                        proof,
+                    });
+                }
+            }
+            match case {
+                AxtSinglePolicyRejectionCase::ZeroManifestRoot => {
                     proofs.push(AxtProofFragment {
                         dsid: spec.dsid,
                         proof: ProofBlob {
@@ -25828,7 +25199,6 @@ mod commit {
                     });
                 }
                 AxtSinglePolicyRejectionCase::ZeroManifestRootInPolicy => {
-                    handles[0].handle.manifest_view_root = [0x55; 32];
                     proofs.push(AxtProofFragment {
                         dsid: spec.dsid,
                         proof: ProofBlob {
@@ -25836,9 +25206,6 @@ mod commit {
                             expiry_slot: Some(9),
                         },
                     });
-                }
-                AxtSinglePolicyRejectionCase::ZeroManifestRootInHandle => {
-                    handles[0].handle.manifest_view_root = [0; 32];
                 }
                 _ => {}
             }
@@ -25851,7 +25218,22 @@ mod commit {
                 handles,
                 commit_height: 1,
             };
-            expect_axt_envelope_error(&state, envelope, spec.reason, spec.needle);
+            if matches!(case, AxtSinglePolicyRejectionCase::ExpiredProof) {
+                let (_, expiry_slot) = spec
+                    .canonical_proof
+                    .expect("expired-proof case declares its proof expiry");
+                let timestamp_ms = expiry_slot
+                    .saturating_add(1)
+                    .saturating_mul(state.nexus.read().axt.slot_length_ms.get());
+                let snapshot = axt_policy_snapshot_for_validation_test(&state);
+                let block =
+                    build_block_with_envelope_records_at_ms(vec![envelope], snapshot, timestamp_ms);
+                let state_block = state.block(block.header());
+                let error = validate_axt_envelopes(&block, &state_block).unwrap_err();
+                expect_axt_error(error, spec.reason, spec.needle);
+            } else {
+                expect_axt_envelope_error(&state, envelope, spec.reason, spec.needle);
+            }
         }
         macro_rules! axt_single_policy_rejection_tests {
             ($($name:ident => $case:ident),+ $(,)?) => {
@@ -26090,8 +25472,16 @@ mod commit {
                 AxtRejectReason::Duplicate,
                 "handle fragments are not strictly ordered by producer key",
             );
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
+            drop(reversed_state_block);
+            let block = build_block_with_envelopes(envelope.clone(), snapshot);
+            let mut state_block = state.block(block.header());
+            {
+                let mut executed = state_block.transaction();
+                executed
+                    .record_axt_envelope(envelope)
+                    .expect("cross-lane control must execute");
+                executed.apply();
+            }
             let result = validate_axt_envelopes(&block, &state_block);
             assert!(result.is_ok(), "unexpected validation error: {result:?}");
         }
@@ -26168,8 +25558,15 @@ mod commit {
             let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
             snapshot.entries[0].policy.next_handle_counter = 3;
             snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-            let block = build_block_with_envelopes(envelope, snapshot.clone());
-            let state_block = state.block(block.header());
+            let block = build_block_with_envelopes(envelope.clone(), snapshot.clone());
+            let mut state_block = state.block(block.header());
+            {
+                let mut executed = state_block.transaction();
+                executed
+                    .record_axt_envelope(envelope)
+                    .expect("two-claim fallback control must execute");
+                executed.apply();
+            }
             reset_axt_fastpq_proof_verification_count();
             validate_axt_envelopes(&block, &state_block)
                 .expect("one proof may authorize two exact same-dataspace intents");
@@ -26188,9 +25585,16 @@ mod commit {
                 1,
                 "two same-amount fallback uses must derive the variable commitment once"
             );
-
-            let attached_block = build_block_with_envelopes(attached_envelope, snapshot);
-            let attached_state_block = state.block(attached_block.header());
+            drop(state_block);
+            let attached_block = build_block_with_envelopes(attached_envelope.clone(), snapshot);
+            let mut attached_state_block = state.block(attached_block.header());
+            {
+                let mut executed = attached_state_block.transaction();
+                executed
+                    .record_axt_envelope(attached_envelope)
+                    .expect("two-claim attached control must execute");
+                executed.apply();
+            }
             reset_axt_fastpq_proof_verification_count();
             validate_axt_envelopes(&attached_block, &attached_state_block)
                 .expect("two exact attached proof values may authorize their bound intents");
@@ -26210,109 +25614,16 @@ mod commit {
                 "two same-amount attached uses must derive the variable commitment once"
             );
         }
+        include!("block/axt_shared_budget_across_envelopes_test.rs");
         #[test]
-        fn axt_validation_accepts_authenticated_hidden_amount() {
-            let (state, envelope) = hidden_amount_fixture(17, 0x31, b"authenticated-hidden-amount");
-            let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
-            snapshot.entries[0].policy.next_handle_counter = 2;
-            snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            validate_axt_envelopes(&block, &state_block)
-                .expect("authenticated hidden amount must pass block admission");
-        }
-
-        #[test]
-        fn axt_validation_rejects_opaque_authorization_carrier_at_generic_boundary() {
-            let dsid = DataSpaceId::new(117);
-            let lane = LaneId::new(1);
-            let (state, _, _, manifest_root) = authenticated_axt_validation_state(dsid, lane, 0x75);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: Vec::new(),
-            };
-            let envelope = AxtEnvelopeRecord {
-                binding: binding_for_descriptor(&descriptor),
-                lane,
-                descriptor,
-                touches: Vec::new(),
-                proofs: vec![AxtProofFragment {
-                    dsid,
-                    proof: opaque_proof_blob_for(
-                        dsid,
-                        manifest_root,
-                        b"opaque-generic-block-attack",
-                        12,
-                    ),
-                }],
-                handles: Vec::new(),
-                commit_height: 1,
-            };
-            expect_axt_envelope_error(
-                &state,
-                envelope,
-                AxtRejectReason::Proof,
-                "requires a witnessed transfer claim",
-            );
-        }
-
-        #[test]
-        fn axt_validation_enforces_registered_asset_balance_policy() {
-            let (restricted_state, restricted_envelope) =
-                hidden_amount_fixture(118, 0x76, b"restricted-private-dataspace-control");
-            let mut restricted_snapshot =
-                axt_policy_snapshot_for_validation_test(&restricted_state);
-            restricted_snapshot.entries[0].policy.next_handle_counter = 2;
-            restricted_snapshot.version =
-                AxtPolicySnapshot::compute_version(&restricted_snapshot.entries);
-            let restricted_block =
-                build_block_with_envelopes(restricted_envelope.clone(), restricted_snapshot);
-            validate_axt_envelopes(
-                &restricted_block,
-                &restricted_state.block(restricted_block.header()),
-            )
-            .expect("a registered restricted asset may use its exact signed intent dataspace");
-
-            let (global_state, global_envelope) = hidden_amount_fixture_with_asset_policy(
-                118,
-                0x76,
-                b"restricted-private-dataspace-control",
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-            );
-            expect_axt_envelope_error(
-                &global_state,
-                global_envelope,
-                AxtRejectReason::PolicyDenied,
-                "does not belong to the intent dataspace",
-            );
-
-            let mut missing_state = restricted_state;
-            let mut world = missing_state.world.block();
-            assert!(
-                world
-                    .asset_definitions
-                    .remove(sample_asset_definition_id())
-                    .is_some(),
-                "fixture asset definition must be present before removal"
-            );
-            world.commit();
-            expect_axt_envelope_error(
-                &missing_state,
-                restricted_envelope,
-                AxtRejectReason::PolicyDenied,
-                "asset definition is not registered",
-            );
-        }
-
-        #[test]
-        fn axt_validation_rejects_duplicate_use_of_one_proof_claim() {
+        fn axt_validation_rejects_duplicate_authenticated_handle_usage() {
             let (state, mut envelope) = hidden_amount_fixture(119, 0x77, b"duplicate-proof-claim");
             envelope.handles.push(envelope.handles[0].clone());
             expect_axt_envelope_error(
                 &state,
                 envelope,
-                AxtRejectReason::Duplicate,
-                "handle fragments are not strictly ordered",
+                AxtRejectReason::ReplayCache,
+                "duplicate authenticated handle usage in block",
             );
         }
 
@@ -26356,6 +25667,293 @@ mod commit {
                 AxtRejectReason::Descriptor,
                 "origin dataspace is not declared",
             );
+        }
+        #[test]
+        fn axt_validation_rejects_correctly_signed_handle_for_another_asset() {
+            let dsid = DataSpaceId::new(121);
+            let lane = LaneId::new(1);
+            let (mut state, issuer, issuer_uaid, manifest_root) =
+                authenticated_axt_validation_state(dsid, lane, 0x79);
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: Vec::new(),
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let mut handle = sample_handle(binding, lane, dsid, 12, manifest_root);
+            handle.handle.asset_definition_id = AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 2,
+            ])
+            .expect("valid alternate AXT fixture asset id");
+            install_test_asset_incarnation(&mut state, &handle.handle.asset_definition_id);
+            let handle =
+                sign_axt_validation_handle(handle, &state, &issuer, issuer_uaid, manifest_root);
+            let amount = Quantity::from(5_u64);
+            let proof = proof_blob_for_with_amount(
+                dsid,
+                manifest_root,
+                b"signed-other-asset",
+                12,
+                None,
+                None,
+                vec![remote_spend_claim(&handle, &amount)],
+            );
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs: vec![AxtProofFragment { dsid, proof }],
+                handles: vec![handle],
+                commit_height: 1,
+            };
+            expect_axt_envelope_error(
+                &state,
+                envelope,
+                AxtRejectReason::PolicyDenied,
+                "handle asset does not match remote spend intent asset",
+            );
+        }
+        #[test]
+        fn axt_validation_enforces_exact_block_start_asset_incarnation() {
+            let dsid = DataSpaceId::new(122);
+            let lane = LaneId::new(1);
+            let (state, issuer, issuer_uaid, manifest_root) =
+                authenticated_axt_validation_state(dsid, lane, 0x7A);
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: Vec::new(),
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let amount = Quantity::from(5_u64);
+            let current_handle = sign_axt_validation_handle(
+                sample_handle(binding, lane, dsid, 12, manifest_root),
+                &state,
+                &issuer,
+                issuer_uaid,
+                manifest_root,
+            );
+            let current_proof = proof_blob_for_with_amount(
+                dsid,
+                manifest_root,
+                b"block-current-asset-incarnation",
+                12,
+                None,
+                None,
+                vec![remote_spend_claim(&current_handle, &amount)],
+            );
+            let current_envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor: descriptor.clone(),
+                touches: Vec::new(),
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: current_proof,
+                }],
+                handles: vec![current_handle],
+                commit_height: 1,
+            };
+            let mut control_snapshot = axt_policy_snapshot_for_validation_test(&state);
+            let control_policy = control_snapshot
+                .entries
+                .iter_mut()
+                .find(|binding| binding.dsid == dsid)
+                .expect("fixture policy");
+            control_policy.policy.next_handle_counter = 2;
+            control_snapshot.version =
+                AxtPolicySnapshot::compute_version(&control_snapshot.entries);
+            let current_block =
+                build_block_with_envelopes(current_envelope.clone(), control_snapshot);
+            let mut current_state_block = state.block(current_block.header());
+            {
+                let mut executed = current_state_block.transaction();
+                executed
+                    .record_axt_envelope(current_envelope.clone())
+                    .expect("current-incarnation control must execute");
+                executed.apply();
+            }
+            validate_axt_envelopes(&current_block, &current_state_block)
+                .expect("an exact current, block-start, and signed incarnation must validate");
+            drop(current_state_block);
+
+            let stale_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
+                &state.network_id,
+                &sample_asset_definition_id(),
+                &HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                    b"axt-block-stale-asset-registration",
+                )),
+                &Hash::new(b"axt-block-stale-asset-execution"),
+                7,
+            );
+            assert_ne!(
+                stale_incarnation,
+                state
+                    .world
+                    .axt_asset_incarnations
+                    .view()
+                    .get(&sample_asset_definition_id())
+                    .copied()
+                    .expect("fixture current incarnation")
+            );
+
+            let stale_handle = sign_axt_validation_handle_with_incarnation(
+                sample_handle(binding, lane, dsid, 12, manifest_root),
+                &state,
+                &issuer,
+                issuer_uaid,
+                manifest_root,
+                stale_incarnation,
+            );
+            let stale_proof = proof_blob_for_with_amount(
+                dsid,
+                manifest_root,
+                b"block-stale-signed-asset-incarnation",
+                12,
+                None,
+                None,
+                vec![remote_spend_claim(&stale_handle, &amount)],
+            );
+            expect_axt_envelope_error(
+                &state,
+                AxtEnvelopeRecord {
+                    binding,
+                    lane,
+                    descriptor,
+                    touches: Vec::new(),
+                    proofs: vec![AxtProofFragment {
+                        dsid,
+                        proof: stale_proof,
+                    }],
+                    handles: vec![stale_handle],
+                    commit_height: 1,
+                },
+                AxtRejectReason::PolicyDenied,
+                "stable block-start asset incarnation",
+            );
+
+            let mut changed_state_block = state.block(current_block.header());
+            changed_state_block
+                .world
+                .axt_asset_incarnations
+                .insert(sample_asset_definition_id(), stale_incarnation);
+            let error = validate_axt_envelopes(&current_block, &changed_state_block)
+                .expect_err("a same-block asset reincarnation must invalidate AXT admission");
+            expect_axt_error(
+                error,
+                AxtRejectReason::PolicyDenied,
+                "stable block-start asset incarnation",
+            );
+        }
+        #[test]
+        fn axt_validation_rejects_historical_incarnation_proof_for_current_handle() {
+            let dsid = DataSpaceId::new(123);
+            let lane = LaneId::new(1);
+            let (state, issuer, issuer_uaid, manifest_root) =
+                authenticated_axt_validation_state(dsid, lane, 0x7B);
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: Vec::new(),
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let amount = Quantity::from(5_u64);
+            let current_handle = sign_axt_validation_handle(
+                sample_handle(binding, lane, dsid, 12, manifest_root),
+                &state,
+                &issuer,
+                issuer_uaid,
+                manifest_root,
+            );
+            let historical_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
+                &state.network_id,
+                &sample_asset_definition_id(),
+                &HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                    b"axt-block-historical-proof-registration",
+                )),
+                &Hash::new(b"axt-block-historical-proof-execution"),
+                9,
+            );
+            assert_ne!(
+                historical_incarnation,
+                current_handle
+                    .handle
+                    .issuer_context
+                    .asset_definition_incarnation
+            );
+            let historical_handle = sign_axt_validation_handle_with_incarnation(
+                sample_handle(binding, lane, dsid, 12, manifest_root),
+                &state,
+                &issuer,
+                issuer_uaid,
+                manifest_root,
+                historical_incarnation,
+            );
+            let historical_proof = proof_blob_for_with_amount(
+                dsid,
+                manifest_root,
+                b"block-historical-incarnation-proof",
+                12,
+                None,
+                None,
+                vec![remote_spend_claim(&historical_handle, &amount)],
+            );
+            expect_axt_envelope_error(
+                &state,
+                AxtEnvelopeRecord {
+                    binding,
+                    lane,
+                    descriptor: descriptor.clone(),
+                    touches: Vec::new(),
+                    proofs: vec![AxtProofFragment {
+                        dsid,
+                        proof: historical_proof,
+                    }],
+                    handles: vec![current_handle.clone()],
+                    commit_height: 1,
+                },
+                AxtRejectReason::Proof,
+                "FASTPQ proof does not commit to the exact remote spend intent",
+            );
+
+            let current_proof = proof_blob_for_with_amount(
+                dsid,
+                manifest_root,
+                b"block-current-incarnation-proof",
+                12,
+                None,
+                None,
+                vec![remote_spend_claim(&current_handle, &amount)],
+            );
+            let current_envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: current_proof,
+                }],
+                handles: vec![current_handle],
+                commit_height: 1,
+            };
+            let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
+            let policy = snapshot
+                .entries
+                .iter_mut()
+                .find(|binding| binding.dsid == dsid)
+                .expect("fixture policy");
+            policy.policy.next_handle_counter = 2;
+            snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
+            let block = build_block_with_envelopes(current_envelope.clone(), snapshot);
+            let mut state_block = state.block(block.header());
+            {
+                let mut executed = state_block.transaction();
+                executed
+                    .record_axt_envelope(current_envelope)
+                    .expect("current-incarnation proof control must execute");
+                executed.apply();
+            }
+            validate_axt_envelopes(&block, &state_block)
+                .expect("proof and handle from the exact current incarnation must validate");
         }
         #[test]
         fn axt_validation_rejects_proof_reused_for_another_remote_spend_recipient() {
@@ -26438,10 +26036,19 @@ mod commit {
             let issuer_account = iroha_data_model::account::Account::new(issuer_account_id.clone())
                 .with_uaid(Some(issuer_uaid))
                 .build(&issuer_account_id);
-            let mut world = World::with([], [issuer_account], []);
-            world
-                .rebuild_uaid_account_index()
-                .expect("seed canonical AXT issuer index");
+            let asset_domain_id =
+                DomainId::try_new("axt-scope", "universal").expect("valid fixture domain");
+            let asset_domain = iroha_data_model::domain::Domain::new(asset_domain_id.clone())
+                .build(&issuer_account_id);
+            let asset_definition = iroha_data_model::asset::AssetDefinition::numeric(
+                sample_asset_definition_id(),
+                "AXT scope fixture asset",
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                None,
+            )
+            .with_owning_domain(Some(asset_domain_id))
+            .build(&issuer_account_id);
+            let mut world = World::with([asset_domain], [issuer_account], [asset_definition]);
             let manifest_for = |dataspace| AssetPermissionManifest {
                 version: ManifestVersion::default(),
                 uaid: issuer_uaid,
@@ -26480,6 +26087,8 @@ mod commit {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let mut state = State::new_for_testing(world, kura, query);
+            let asset_definition_incarnation =
+                install_test_asset_incarnation(&mut state, &sample_asset_definition_id());
             for (dsid, manifest_root) in [(dsid_a, manifest_root_a), (dsid_b, manifest_root_b)] {
                 state.set_axt_policy(
                     dsid,
@@ -26505,6 +26114,7 @@ mod commit {
                 let context = AxtHandleIssuerContextV1 {
                     network_id: state.network_id,
                     asset_dsid: dsid,
+                    asset_definition_incarnation,
                     issuer: issuer_uaid,
                     issuer_manifest_root: manifest_root,
                     code_root: [0xC1; 32],
@@ -26573,8 +26183,15 @@ mod commit {
                 binding.policy.next_handle_counter = 2;
             }
             advertised.version = AxtPolicySnapshot::compute_version(&advertised.entries);
-            let block = build_block_with_envelopes(envelope, advertised);
-            let state_block = state.block(block.header());
+            let block = build_block_with_envelopes(envelope.clone(), advertised);
+            let mut state_block = state.block(block.header());
+            {
+                let mut executed = state_block.transaction();
+                executed
+                    .record_axt_envelope(envelope)
+                    .expect("cross-dataspace replay-scope control must execute");
+                executed.apply();
+            }
             validate_axt_envelopes(&block, &state_block)
                 .expect("distinct dataspaces must scope identical replay tuples independently");
         }
@@ -26724,23 +26341,22 @@ mod commit {
         }
         #[test]
         fn axt_validation_rejects_manifest_mismatch_in_proof() {
-            let mut state = axt_validation_state();
             let dsid = DataSpaceId::new(23);
             let lane = LaneId::new(10);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x77; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 3,
-            };
-            state.set_axt_policy(dsid, policy);
+            let (state, issuer, issuer_uaid, manifest_root) =
+                authenticated_axt_validation_state(dsid, lane, 0x77);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
             let binding = binding_for_descriptor(&descriptor);
-            let handle = sample_handle(binding, lane, dsid, 8, policy.manifest_root);
+            let handle = sign_axt_validation_handle(
+                sample_handle(binding, lane, dsid, 8, manifest_root),
+                &state,
+                &issuer,
+                issuer_uaid,
+                manifest_root,
+            );
             let mismatched_envelope = AxtProofEnvelope {
                 dsid,
                 manifest_root: [0x99; 32],
@@ -26770,26 +26386,25 @@ mod commit {
         }
         #[test]
         fn axt_validation_rejects_proof_dsid_mismatch() {
-            let mut state = axt_validation_state();
             let dsid = DataSpaceId::new(24);
             let lane = LaneId::new(11);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x78; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 4,
-            };
-            state.set_axt_policy(dsid, policy);
+            let (state, issuer, issuer_uaid, manifest_root) =
+                authenticated_axt_validation_state(dsid, lane, 0x78);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
             let binding = binding_for_descriptor(&descriptor);
-            let handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
+            let handle = sign_axt_validation_handle(
+                sample_handle(binding, lane, dsid, 9, manifest_root),
+                &state,
+                &issuer,
+                issuer_uaid,
+                manifest_root,
+            );
             let wrong_envelope = iroha_data_model::nexus::AxtProofEnvelope {
                 dsid: DataSpaceId::new(dsid.as_u64() + 1),
-                manifest_root: policy.manifest_root,
+                manifest_root,
                 da_commitment: None,
                 proof: vec![0xAA],
                 fastpq_binding: None,
@@ -26863,8 +26478,15 @@ mod commit {
             let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
             snapshot.entries[0].policy.next_handle_counter = 2;
             snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
+            let block = build_block_with_envelopes(envelope.clone(), snapshot);
+            let mut state_block = state.block(block.header());
+            {
+                let mut executed = state_block.transaction();
+                executed
+                    .record_axt_envelope(envelope)
+                    .expect("authenticated block-snapshot control must execute");
+                executed.apply();
+            }
             assert!(validate_axt_envelopes(&block, &state_block).is_ok());
         }
         #[test]
@@ -26935,8 +26557,15 @@ mod commit {
                 .policy
                 .next_handle_counter = 2;
             snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
+            let block = build_block_with_envelopes(envelope.clone(), snapshot);
+            let mut state_block = state.block(block.header());
+            {
+                let mut executed = state_block.transaction();
+                executed
+                    .record_axt_envelope(envelope)
+                    .expect("per-dataspace policy-slot control must execute");
+                executed.apply();
+            }
             let result = validate_axt_envelopes(&block, &state_block);
             assert!(result.is_ok(), "unexpected validation error: {result:?}");
         }
@@ -26999,28 +26628,27 @@ mod commit {
             expect_axt_error(
                 err,
                 AxtRejectReason::MissingPolicy,
-                "no policy for dataspace",
+                "no block-start policy for dataspace",
             );
         }
         #[test]
         fn axt_validation_rejects_zero_manifest_root_from_snapshot() {
-            let state = axt_validation_state();
+            let mut state = axt_validation_state();
             let dsid = DataSpaceId::new(14);
             let lane = LaneId::new(7);
             let policy = AxtPolicyEntry {
                 manifest_root: [0; 32],
                 target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
+                active_handle_era: 0,
+                next_handle_counter: 0,
                 current_slot: 2,
             };
+            state.set_axt_policy(dsid, policy);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
             let binding = binding_for_descriptor(&descriptor);
-            let mut handle = sample_handle(binding, lane, dsid, 11, policy.manifest_root);
-            handle.handle.manifest_view_root = [0xFF; 32];
             let envelope = AxtEnvelopeRecord {
                 binding,
                 lane,
@@ -27033,19 +26661,12 @@ mod commit {
                         expiry_slot: Some(12),
                     },
                 }],
-                handles: vec![handle],
+                handles: Vec::new(),
                 commit_height: 1,
             };
-            let entries = vec![AxtPolicyBinding { dsid, policy }];
-            let snapshot = AxtPolicySnapshot {
-                version: AxtPolicySnapshot::compute_version(&entries),
-                entries,
-            };
-            let block = build_block_with_envelopes(envelope, snapshot.clone());
-            let mut state_block = state.block(block.header());
-            state_block
-                .install_axt_policy_snapshot(&snapshot)
-                .expect("test policy snapshot must be canonical");
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
             expect_axt_error(
                 err,
@@ -27059,18 +26680,26 @@ mod commit {
             let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
             snapshot.entries[0].policy.next_handle_counter = 2;
             snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
+            let block = build_block_with_envelopes(envelope.clone(), snapshot);
+            let mut state_block = state.block(block.header());
+            {
+                let mut executed = state_block.transaction();
+                executed
+                    .record_axt_envelope(envelope)
+                    .expect("hidden-amount commitment control must execute");
+                executed.apply();
+            }
             let result = validate_axt_envelopes(&block, &state_block);
             assert!(result.is_ok(), "unexpected validation error: {result:?}");
         }
         #[test]
         fn axt_validation_rejects_hidden_amount_commitment_mismatch() {
-            let mut state = axt_validation_state();
             let dsid = DataSpaceId::new(62);
             let lane = LaneId::new(9);
+            let (mut state, issuer, issuer_uaid, manifest_root) =
+                authenticated_axt_validation_state(dsid, lane, 0x62);
             let policy = AxtPolicyEntry {
-                manifest_root: [0x62; 32],
+                manifest_root,
                 target_lane: lane,
                 active_handle_era: 1,
                 next_handle_counter: 1,
@@ -27099,6 +26728,8 @@ mod commit {
             handle.intent.op.amount = None;
             handle.amount = None;
             handle.amount_commitment = Some([0xFF; 32]);
+            let handle =
+                sign_axt_validation_handle(handle, &state, &issuer, issuer_uaid, manifest_root);
             let envelope = AxtEnvelopeRecord {
                 binding,
                 lane,
@@ -27870,7 +27501,6 @@ mod dsu_tests {
         let b0 = ids(&["B"], &[]);
         let b1 = ids(&[], &["B"]);
         let access = [a0, a1, b0, b1];
-        // Intern
         let (key_count, access_ids) = intern_access(&access);
         let mut dsu = DisjointSet::new(access_ids.len());
         {
@@ -27968,614 +27598,7 @@ mod tests {
             "the only staged-reference path without the voting gate must remain the test-only SCCP root probe"
         );
     }
-    #[test]
-    fn da_proof_policy_sidecar_hash_mismatch_reports_both_hashes() {
-        let expected = Some(HashOf::<DaProofPolicyBundle>::from_untyped_unchecked(
-            Hash::prehashed([0x11; Hash::LENGTH]),
-        ));
-        let actual = Some(HashOf::<DaProofPolicyBundle>::from_untyped_unchecked(
-            Hash::prehashed([0x22; Hash::LENGTH]),
-        ));
-        let message =
-            BlockValidationError::DaProofPolicySidecarHashMismatch { expected, actual }.to_string();
-        assert!(message.contains(&format!("{expected:?}")));
-        assert!(message.contains(&format!("{actual:?}")));
-    }
-    fn install_test_lane_manifests(state: &State) {
-        let statuses = state
-            .nexus_snapshot()
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| {
-                let status = LaneManifestStatus {
-                    lane: lane.id,
-                    alias: lane.alias.clone(),
-                    dataspace: lane.dataspace_id,
-                    visibility: lane.visibility,
-                    storage: lane.storage,
-                    governance: None,
-                    manifest_path: None,
-                    governance_rules: None,
-                    privacy_commitments: Vec::new(),
-                };
-                (lane.id, status)
-            })
-            .collect();
-        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
-    }
-    fn test_confidential_features(state: &State, height: u64) -> Option<ConfidentialFeatureDigest> {
-        let view = state.query_view();
-        let digest = compute_confidential_feature_digest(
-            view.world(),
-            view.zk(),
-            view.sccp_registry(),
-            height,
-        );
-        (!digest.is_empty()).then_some(digest)
-    }
-    fn test_world_with_assets<D, A, Ad, As, N>(
-        domains: D,
-        accounts: A,
-        asset_definitions: Ad,
-        assets: As,
-        nfts: N,
-    ) -> World
-    where
-        D: IntoIterator<Item = Domain>,
-        A: IntoIterator<Item = Account>,
-        Ad: IntoIterator<Item = AssetDefinition>,
-        As: IntoIterator<Item = Asset>,
-        N: IntoIterator<Item = Nft>,
-    {
-        let mut asset_definitions = asset_definitions.into_iter().collect::<Vec<_>>();
-        let assets = assets.into_iter().collect::<Vec<_>>();
-        let mut totals = BTreeMap::<AssetDefinitionId, Quantity>::new();
-        for asset in &assets {
-            let total = totals
-                .entry(asset.id.definition().clone())
-                .or_insert_with(Quantity::zero);
-            *total = total
-                .checked_add(&asset.value)
-                .expect("test asset total must remain in the quantity domain");
-        }
-        for definition in &mut asset_definitions {
-            definition.total_quantity = totals
-                .remove(definition.id())
-                .unwrap_or_else(Quantity::zero);
-        }
-        World::with_assets(domains, accounts, asset_definitions, assets, nfts)
-    }
-    fn accept_transaction_at_mock_time(
-        transaction: SignedTransaction,
-        network_id: &NetworkId,
-        max_clock_drift: Duration,
-        limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
-        now: Duration,
-    ) -> Result<AcceptedTransaction<'static>, crate::tx::AcceptTransactionFail> {
-        let (_time_handle, time_source) = TimeSource::new_mock(now);
-        AcceptedTransaction::accept_with_time_source(
-            transaction,
-            network_id,
-            max_clock_drift,
-            limits,
-            crypto,
-            &time_source,
-        )
-    }
-    fn decode_stored_state_int(stored: &[u8]) -> i64 {
-        let record: ivm::state_value::StateValueRecordV1 =
-            norito::decode_from_bytes(stored).expect("decode canonical durable-state record");
-        assert_eq!(
-            norito::to_bytes(&record).expect("re-encode durable-state record"),
-            stored,
-            "durable-state records must use canonical Norito encoding"
-        );
-        let [ivm::state_value::StateValueAtomV1::Pointer(envelope)] = record.atoms.as_slice()
-        else {
-            panic!("stored Int state must contain one pointer atom");
-        };
-        let tlv = ivm::pointer_abi::validate_tlv_bytes(envelope)
-            .expect("stored Int atom uses a canonical pointer-ABI envelope");
-        assert_eq!(tlv.type_id, ivm::PointerType::Int);
-        iroha_primitives::numeric_abi::IntValueV1::decode_frame(tlv.payload)
-            .expect("decode persisted Int atom")
-            .into_int()
-            .try_to_i64()
-            .expect("stored Int fits i64")
-    }
-    fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
-        let (account_id, keypair) = gen_account_in("dummy");
-        let mut builder = TransactionBuilder::new(
-            deterministic_test_network_id(0x07),
-            account_id,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        );
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
-            .sign(keypair.private_key());
-        AcceptedTransaction::new_unchecked(Cow::Owned(tx))
-    }
-    fn signed_transaction_with_quarantine_marker(marker: Json) -> SignedTransaction {
-        let (account_id, keypair) = gen_account_in("quarantine");
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            QUARANTINE_METADATA_KEY
-                .parse()
-                .expect("canonical quarantine metadata key"),
-            marker,
-        );
-        TransactionBuilder::new(
-            deterministic_test_network_id(0x08),
-            account_id,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(Level::INFO, "quarantine marker".to_owned())])
-        .with_metadata(metadata)
-        .sign(keypair.private_key())
-    }
-    #[test]
-    fn quarantine_classifier_accepts_only_exact_signed_boolean_true() {
-        assert!(is_quarantine_transaction(
-            &signed_transaction_with_quarantine_marker(Json::new(true))
-        ));
-        assert!(!is_quarantine_transaction(
-            &signed_transaction_with_quarantine_marker(Json::new(false))
-        ));
-        assert!(!is_quarantine_transaction(
-            &signed_transaction_with_quarantine_marker(Json::new("true"))
-        ));
-        assert!(!is_quarantine_transaction(
-            &signed_transaction_with_quarantine_marker(Json::new(1_u64))
-        ));
-    }
-    #[test]
-    fn legacy_taira_confidential_policy_hash_is_rejected() {
-        let historical_policy_hash = [
-            6, 56, 47, 173, 129, 176, 103, 189, 91, 113, 130, 211, 80, 254, 226, 208, 22, 148, 210,
-            194, 47, 87, 152, 25, 162, 34, 156, 2, 45, 189, 111, 213,
-        ];
-        let expected = ConfidentialFeatureDigest::new(
-            Some([0x3A; 32]),
-            Some(1),
-            Some(2),
-            Some(1),
-            Some([0x7F; 32]),
-        );
-        let actual = ConfidentialFeatureDigest::new(
-            expected.vk_set_hash,
-            expected.poseidon_params_id,
-            expected.pedersen_params_id,
-            expected.conf_rules_version,
-            Some(historical_policy_hash),
-        );
-        assert!(matches!(
-            ensure_confidential_features_match(Some(expected), Some(actual)),
-            Err(BlockValidationError::ConfidentialFeaturesMismatch {
-                expected: Some(reported_expected),
-                actual: Some(reported_actual),
-            }) if reported_expected == expected && reported_actual == actual
-        ));
-        assert!(ensure_confidential_features_match(Some(expected), Some(expected)).is_ok());
-    }
-    #[test]
-    fn confidential_feature_presence_is_exact() {
-        let digest =
-            ConfidentialFeatureDigest::new(Some([0x01; 32]), None, None, Some(1), Some([0x02; 32]));
-        assert!(ensure_confidential_features_match(None, None).is_ok());
-        assert!(matches!(
-            ensure_confidential_features_match(Some(digest), None),
-            Err(BlockValidationError::ConfidentialFeaturesMismatch {
-                expected: Some(reported),
-                actual: None,
-            }) if reported == digest
-        ));
-        assert!(matches!(
-            ensure_confidential_features_match(None, Some(digest)),
-            Err(BlockValidationError::ConfidentialFeaturesMismatch {
-                expected: None,
-                actual: Some(reported),
-            }) if reported == digest
-        ));
-    }
-    fn native_amx_test_catalog(
-        paynet: DataSpaceId,
-        cbuae: DataSpaceId,
-    ) -> iroha_data_model::nexus::DataSpaceCatalog {
-        iroha_data_model::nexus::DataSpaceCatalog::new(vec![
-            iroha_data_model::nexus::DataSpaceMetadata::default(),
-            iroha_data_model::nexus::DataSpaceMetadata {
-                id: paynet,
-                alias: "paynet".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-            iroha_data_model::nexus::DataSpaceMetadata {
-                id: cbuae,
-                alias: "cbuae".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("dataspace catalog")
-    }
-    fn native_amx_test_network_id() -> iroha_data_model::NetworkId {
-        crate::sumeragi::synthetic_network_id("native-amx-test-genesis")
-    }
-    fn native_amx_test_world_with_keys() -> (World, Vec<KeyPair>) {
-        let world = World::new();
-        let keypairs = (0..4)
-            .map(|_| {
-                crate::block::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
-            })
-            .collect::<Vec<_>>();
-        let mut world_block = world.block();
-        {
-            let mut peers = world_block.peers_mut_for_testing().transaction();
-            for keypair in &keypairs {
-                peers.push(PeerId::new(keypair.public_key().clone()));
-            }
-            peers.apply();
-        }
-        for keypair in &keypairs {
-            let pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
-                .expect("generate BLS proof-of-possession");
-            let id = crate::state::derive_validator_key_id(keypair.public_key());
-            let record = iroha_data_model::consensus::ConsensusKeyRecord {
-                id: id.clone(),
-                public_key: keypair.public_key().clone(),
-                pop: Some(pop),
-                activation_height: 0,
-                expiry_height: None,
-                hsm: None,
-                replaces: None,
-                status: iroha_data_model::consensus::ConsensusKeyStatus::Active,
-            };
-            world_block
-                .consensus_keys
-                .insert(id.clone(), record.clone());
-            let pk = record.public_key.to_string();
-            let mut by_pk = world_block
-                .consensus_keys_by_pk
-                .get(&pk)
-                .cloned()
-                .unwrap_or_default();
-            if !by_pk.contains(&id) {
-                by_pk.push(id);
-            }
-            world_block.consensus_keys_by_pk.insert(pk, by_pk);
-        }
-        world_block.commit();
-        (world, keypairs)
-    }
-    struct NativeAmxTestAuthority {
-        world: World,
-        committee: Vec<PeerId>,
-    }
-    impl NativeAmxAuthorityContext for NativeAmxTestAuthority {
-        fn route_active_at_height(
-            &self,
-            lane_id: LaneId,
-            dataspace_id: DataSpaceId,
-            height: u64,
-        ) -> bool {
-            height == 42 && matches!((lane_id.as_u32(), dataspace_id.as_u64()), (1, 7) | (2, 8))
-        }
-        fn lane_incarnation_at_height(&self, lane_id: LaneId, height: u64) -> Option<Hash> {
-            (height == 42).then(|| Hash::new(lane_id.as_u32().to_be_bytes()))
-        }
-        fn resolve_lane_committee_at_height(
-            &self,
-            route: crate::state::LaneAuthorityRoute,
-            height: u64,
-        ) -> Result<Vec<PeerId>, crate::state::LaneAuthorityError> {
-            if height == 42
-                && self.route_active_at_height(route.lane_id(), route.dataspace_id(), height)
-            {
-                return Ok(self.committee.clone());
-            }
-            Err(crate::state::LaneAuthorityError::InactiveRoute {
-                lane_id: route.lane_id(),
-                dataspace_id: route.dataspace_id(),
-                authority_height: height,
-            })
-        }
-        fn consensus_pop_matches_authority(
-            &self,
-            _lane_id: LaneId,
-            peer: &PeerId,
-            height: u64,
-            presented_pop: &[u8],
-        ) -> bool {
-            crate::state::live_consensus_key_pop_for_peer(&self.world.view(), peer, height)
-                .is_none_or(|live_pop| live_pop == presented_pop)
-        }
-        fn native_amx_participant_predecessor_is_current(
-            &self,
-            proposal: &LaneBlockProposalV1,
-        ) -> bool {
-            let descriptor = &proposal.descriptor;
-            descriptor.previous_lane_block_height.checked_add(1)
-                == Some(descriptor.lane_block_height)
-                && (descriptor.previous_lane_block_height == 0)
-                    == descriptor.previous_lane_block_descriptor_hash.is_none()
-        }
-    }
-    struct NativeAmxStalePredecessorTestAuthority<'a> {
-        inner: &'a NativeAmxTestAuthority,
-        stale_lane_id: LaneId,
-    }
-    impl NativeAmxAuthorityContext for NativeAmxStalePredecessorTestAuthority<'_> {
-        fn route_active_at_height(
-            &self,
-            lane_id: LaneId,
-            dataspace_id: DataSpaceId,
-            height: u64,
-        ) -> bool {
-            self.inner
-                .route_active_at_height(lane_id, dataspace_id, height)
-        }
-        fn lane_incarnation_at_height(&self, lane_id: LaneId, height: u64) -> Option<Hash> {
-            self.inner.lane_incarnation_at_height(lane_id, height)
-        }
-        fn resolve_lane_committee_at_height(
-            &self,
-            route: crate::state::LaneAuthorityRoute,
-            height: u64,
-        ) -> Result<Vec<PeerId>, crate::state::LaneAuthorityError> {
-            self.inner.resolve_lane_committee_at_height(route, height)
-        }
-        fn consensus_pop_matches_authority(
-            &self,
-            lane_id: LaneId,
-            peer: &PeerId,
-            height: u64,
-            presented_pop: &[u8],
-        ) -> bool {
-            self.inner
-                .consensus_pop_matches_authority(lane_id, peer, height, presented_pop)
-        }
-        fn native_amx_participant_predecessor_is_current(
-            &self,
-            proposal: &LaneBlockProposalV1,
-        ) -> bool {
-            proposal.descriptor.lane_id != self.stale_lane_id
-                && self
-                    .inner
-                    .native_amx_participant_predecessor_is_current(proposal)
-        }
-    }
-    struct NativeAmxDriftedParticipantTestAuthority<'a> {
-        inner: &'a NativeAmxTestAuthority,
-        participant_lane_id: LaneId,
-        participant_incarnation: Option<Hash>,
-        participant_predecessor_is_current: bool,
-    }
-    impl NativeAmxAuthorityContext for NativeAmxDriftedParticipantTestAuthority<'_> {
-        fn route_active_at_height(
-            &self,
-            lane_id: LaneId,
-            dataspace_id: DataSpaceId,
-            height: u64,
-        ) -> bool {
-            if lane_id == self.participant_lane_id {
-                height == 42
-                    && dataspace_id == DataSpaceId::new(8)
-                    && self.participant_incarnation.is_some()
-            } else {
-                self.inner
-                    .route_active_at_height(lane_id, dataspace_id, height)
-            }
-        }
-        fn lane_incarnation_at_height(&self, lane_id: LaneId, height: u64) -> Option<Hash> {
-            if lane_id == self.participant_lane_id && height == 42 {
-                self.participant_incarnation
-            } else {
-                self.inner.lane_incarnation_at_height(lane_id, height)
-            }
-        }
-        fn resolve_lane_committee_at_height(
-            &self,
-            route: crate::state::LaneAuthorityRoute,
-            height: u64,
-        ) -> Result<Vec<PeerId>, crate::state::LaneAuthorityError> {
-            self.inner.resolve_lane_committee_at_height(route, height)
-        }
-        fn consensus_pop_matches_authority(
-            &self,
-            lane_id: LaneId,
-            peer: &PeerId,
-            height: u64,
-            presented_pop: &[u8],
-        ) -> bool {
-            self.inner
-                .consensus_pop_matches_authority(lane_id, peer, height, presented_pop)
-        }
-        fn native_amx_participant_predecessor_is_current(
-            &self,
-            proposal: &LaneBlockProposalV1,
-        ) -> bool {
-            if proposal.descriptor.lane_id == self.participant_lane_id {
-                self.participant_predecessor_is_current
-            } else {
-                self.inner
-                    .native_amx_participant_predecessor_is_current(proposal)
-            }
-        }
-    }
-    fn native_amx_test_authority(world: World, keypairs: &[KeyPair]) -> NativeAmxTestAuthority {
-        let mut committee = keypairs
-            .iter()
-            .map(|keypair| PeerId::new(keypair.public_key().clone()))
-            .collect::<Vec<_>>();
-        committee.sort();
-        committee.dedup();
-        NativeAmxTestAuthority { world, committee }
-    }
-    fn historical_native_amx_test_active_lanes(
-        coordinator_proposal: &LaneBlockProposalV1,
-        receipt: &NativeAmxReceipt,
-    ) -> Vec<MergeLaneBinding> {
-        let mut routes = BTreeMap::new();
-        let coordinator = &coordinator_proposal.descriptor;
-        routes.insert(
-            coordinator.lane_id,
-            (
-                coordinator.dataspace_id,
-                coordinator.lane_incarnation,
-                coordinator.proposal_height,
-            ),
-        );
-        for leg in &receipt.legs {
-            let descriptor = &leg.participant_proposal.descriptor;
-            routes.insert(
-                descriptor.lane_id,
-                (
-                    descriptor.dataspace_id,
-                    descriptor.lane_incarnation,
-                    descriptor.proposal_height,
-                ),
-            );
-        }
-        routes
-            .into_iter()
-            .map(
-                |(lane_id, (dataspace_id, incarnation, proposal_height))| MergeLaneBinding {
-                    lane_id,
-                    dataspace_id,
-                    lane_config_hash: Hash::new(
-                        format!("historical-native-amx-lane-{}", lane_id.as_u32()).as_bytes(),
-                    ),
-                    incarnation,
-                    activation_height: proposal_height.saturating_sub(1),
-                },
-            )
-            .collect()
-    }
-    fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
-        Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
-    }
-    fn expected_native_amx_test_context(block_height: u64) -> ExpectedNativeAmxV2Context {
-        ExpectedNativeAmxV2Context {
-            round: iroha_data_model::block::consensus_v2::ConsensusRound {
-                context_id: iroha_data_model::block::consensus_v2::HeightContextId(
-                    HashOf::from_untyped_unchecked(Hash::new(b"native-amx-block-test-context")),
-                ),
-                height: block_height,
-                view: 0,
-            },
-            epoch: 0,
-        }
-    }
-    fn native_amx_test_validator_set(keypairs: &[KeyPair]) -> Vec<PeerId> {
-        let mut validators = keypairs
-            .iter()
-            .map(|keypair| PeerId::new(keypair.public_key().clone()))
-            .collect::<Vec<_>>();
-        validators.sort();
-        validators
-    }
-    fn native_amx_test_coordinator_proposal(
-        coordinator: crate::queue::RoutingDecision,
-        tx_entrypoint_hash: HashOf<TransactionEntrypoint>,
-        authority_context_height: u64,
-        keypairs: &[KeyPair],
-    ) -> iroha_data_model::block::consensus::LaneBlockProposalV1 {
-        native_amx_test_coordinator_proposal_at_view(
-            coordinator,
-            tx_entrypoint_hash,
-            authority_context_height,
-            2,
-            keypairs,
-        )
-    }
-    fn native_amx_test_coordinator_proposal_at_view(
-        coordinator: crate::queue::RoutingDecision,
-        tx_entrypoint_hash: HashOf<TransactionEntrypoint>,
-        authority_context_height: u64,
-        lane_block_view: u64,
-        keypairs: &[KeyPair],
-    ) -> iroha_data_model::block::consensus::LaneBlockProposalV1 {
-        let validator_set = native_amx_test_validator_set(keypairs);
-        let mut descriptor = iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
-            lane_id: coordinator.lane_id,
-            dataspace_id: coordinator.dataspace_id,
-            lane_incarnation: Hash::new(coordinator.lane_id.as_u32().to_be_bytes()),
-            proposal_height: authority_context_height,
-            previous_lane_block_height: 6,
-            previous_lane_block_descriptor_hash: Some(Hash::new(b"native-amx-test-previous")),
-            lane_block_height: 7,
-            lane_block_view,
-            subject_hash: Hash::new(b"native-amx-test-subject"),
-            payload_ownership_hash: Hash::new(b"native-amx-test-ownership"),
-            rbc_instance_hash: Hash::new(b"native-amx-test-rbc"),
-            accepted_candidate_indices: vec![0],
-            accepted_transaction_hashes: vec![Hash::from(tx_entrypoint_hash)],
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_count: u32::try_from(validator_set.len()).expect("fixture validator count"),
-            min_quorum: u32::try_from(
-                crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len())
-                    .max(1),
-            )
-            .expect("fixture quorum"),
-            validator_set,
-            qc_mode_tag: "native-amx:test-coordinator".to_owned(),
-            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
-        };
-        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
-        let mut proposal = iroha_data_model::block::consensus::LaneBlockProposalV1 {
-            descriptor,
-            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-            payload_block_hint: None,
-        };
-        proposal.proposal_hash = proposal.computed_proposal_hash();
-        proposal
-    }
-    fn native_amx_test_participant_proposal(
-        body: &NativeAmxAttestationBodyV2,
-        validator_set: Vec<PeerId>,
-        coordinator_proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
-    ) -> iroha_data_model::block::consensus::LaneBlockProposalV1 {
-        if body.participant_lane_id == body.coordinator_lane_id
-            && body.participant_dataspace_id == body.coordinator_dataspace_id
-            && body.participant_lane_incarnation == body.coordinator_lane_incarnation
-        {
-            return coordinator_proposal.clone();
-        }
-        let mut descriptor = iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
-            lane_id: body.participant_lane_id,
-            dataspace_id: body.participant_dataspace_id,
-            lane_incarnation: body.participant_lane_incarnation,
-            proposal_height: body.authority_context_height,
-            previous_lane_block_height: body.participant_previous_block_height,
-            previous_lane_block_descriptor_hash: body.participant_previous_block_descriptor_hash,
-            lane_block_height: body.participant_lane_block_height,
-            lane_block_view: body.participant_lane_block_view,
-            subject_hash: Hash::new(b"native-amx-test-participant-subject"),
-            payload_ownership_hash: Hash::new(b"native-amx-test-participant-ownership"),
-            rbc_instance_hash: Hash::new(b"native-amx-test-participant-rbc"),
-            accepted_candidate_indices: vec![0],
-            accepted_transaction_hashes: vec![Hash::from(body.tx_entrypoint_hash)],
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_count: body.participant_validator_count,
-            min_quorum: body.participant_min_quorum,
-            validator_set,
-            qc_mode_tag: "native-amx:test-participant".to_owned(),
-            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
-        };
-        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
-        let mut proposal = iroha_data_model::block::consensus::LaneBlockProposalV1 {
-            descriptor,
-            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-            payload_block_hint: None,
-        };
-        proposal.proposal_hash = proposal.computed_proposal_hash();
-        proposal
-    }
+    include!("block/validation_native_amx_test_support.rs");
     fn signed_native_amx_attestation_qc_with_signer_count(
         phase: NativeAmxPhase,
         source_id: [u8; iroha_crypto::Hash::LENGTH],

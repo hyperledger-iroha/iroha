@@ -17,8 +17,7 @@ fn pending_binding_with_distinct_root(
     .expect("bind replay fixture with a distinct semantic root")
     .pop()
     .expect("one distinct-root replay fixture owner")
-    .current_effect_producer(effect)
-    .map(|producer| producer.mint_pending_binding())
+    .exact_pending_adapter_effect_binding(effect)
     .expect("mint exact distinct-root pending binding")
 }
 #[test]
@@ -1116,9 +1115,8 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
     .pop()
     .expect("one local Store owner");
     let store_pending = store_ownership
-        .current_effect_producer(&store_effect)
-        .expect("local Store owner retains one producer")
-        .mint_pending_binding();
+        .exact_pending_adapter_effect_binding(&store_effect)
+        .expect("local Store owner projects one pending seal");
     let validate_effect = AdapterEffect::ValidateBody {
         tag,
         round: manifest.round,
@@ -1194,13 +1192,19 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
         )
         .expect("exact local durability joins Validate replay evidence");
     assert!(validate.exactly_matches_validate(&validate_effect, &receipt));
-    validate.family.body_frame.frame[0] ^= 1;
+    validate
+        .family
+        .assembled_body_frame_mut_for_test()
+        .frame[0] ^= 1;
     assert!(!validate.exactly_matches_validate(&validate_effect, &receipt));
-    validate.family.body_frame.frame = [0; 32];
+    validate
+        .family
+        .assembled_body_frame_mut_for_test()
+        .frame = [0; 32];
     assert!(
         validate
             .family
-            .is_exact_for_stage(LifecycleStageKind::ValidateBody),
+            .is_exact_for_stage_for_test(LifecycleStageKind::ValidateBody),
         "zero-valued digest bytes remain structurally valid rather than sentinel values"
     );
     assert!(!validate.exactly_matches_validate(&store_effect, &receipt));
@@ -1208,13 +1212,11 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
         .rebind_as_inherited_adapter_effect(&validate_effect)
         .expect("local Store root rebinds to its exact Validate effect");
     let second_store_pending = store_ownership
-        .current_effect_producer(&store_effect)
-        .expect("local Store root retains its exact producer")
-        .mint_pending_binding();
+        .exact_pending_adapter_effect_binding(&store_effect)
+        .expect("local Store root retains its exact pending projection");
     let second_validate_pending = validate_ownership
-        .current_effect_producer(&validate_effect)
-        .expect("local Validate root retains its exact producer")
-        .mint_pending_binding();
+        .exact_pending_adapter_effect_binding(&validate_effect)
+        .expect("local Validate root retains its exact pending projection");
     let exact_validate =
         LocalBodyPreIntentReplaySealV1::for_test(&store_effect, second_store_pending, &manifest)
             .expect("remint an independent test-only local seal")
@@ -1227,12 +1229,12 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
             )
             .expect("exact local Store evidence advances to Validate");
     let validated_receipt = ValidatedBodyReceipt::for_test(receipt.clone());
-    let command_identity = LocalProposalReadyCommandIdentity::from_exact_handoff(
+    let command_identity = LocalProposalReadyCommandIdentity::from_exact_pending_handoff(
         tag,
         &manifest,
         &receipt,
         &validated_receipt,
-        &validate_ownership,
+        &second_validate_pending,
     )
     .expect("exact Validate completion has one inert command identity");
     let ready = exact_validate
@@ -1541,6 +1543,23 @@ fn remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint() 
             "remote Proposal replay wrapper omitted {required}"
         );
     }
+    assert!(
+        production.contains("fn remote_proposal_origin_matches_fetch("),
+        "later Proposal stages omitted the single authenticated Fetch-origin oracle"
+    );
+    assert_eq!(
+        production
+            .matches("fn exactly_matches_origin_fetch(")
+            .count(),
+        3,
+        "Store, Stored, and the retained family must all recheck one exact Fetch origin"
+    );
+    assert!(
+        production.contains("remote_proposal_fetch_effect(source).as_ref() == Some(effect)")
+            && production
+                .contains("exact_remote_proposal_fetch(authenticated, ingress, effect).is_some()",),
+        "Proposal Fetch rediscovery must re-authenticate both projected effect and signed ingress"
+    );
     for wrapper in [
         "RemoteProposalFetchReplayEvidenceV1",
         "RemoteProposalStoreReplayEvidenceV1",
@@ -1604,8 +1623,12 @@ fn remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint() 
             "runtime remote Proposal transport omitted {required}"
         );
     }
+    let ledger = reviewed_lifecycle_ledger_source_for_test()
+        .split("\n#[cfg(test)]\n/// Ledger-local behavior and source-surface regressions.")
+        .next()
+        .expect("ledger production prefix is bounded");
     for outside in [
-        reviewed_lifecycle_ledger_source_for_test(),
+        ledger,
         include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
     ] {
@@ -1771,7 +1794,7 @@ fn invalid_body_runtime_evidence_is_nondecodable_exact_and_fixed_join_only() {
 }
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     #[allow(clippy::too_many_lines)]
-    live_wal_replay_seal_is_linear_nondecodable_and_has_four_closed_production_mints
+    live_wal_replay_seal_is_linear_nondecodable_and_has_only_specialized_production_mints
 );
 #[test]
 fn record_matching_rejects_substitution_of_every_external_coordinate() {

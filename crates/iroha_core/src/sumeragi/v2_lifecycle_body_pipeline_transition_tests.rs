@@ -281,8 +281,7 @@ mod tests {
         .pop()
         .expect("one certified Fetch owner");
         let fetch_pending = fetch_owner
-            .current_effect_producer(&fetch_effect)
-            .map(|producer| producer.mint_pending_binding())
+            .exact_pending_adapter_effect_binding(&fetch_effect)
             .expect("mint sealed certified Fetch binding");
         let fetch_digest = digest_from_hash(fetch_pending.exact_effect_identity());
         let store_pending = fetch_pending
@@ -454,8 +453,7 @@ mod tests {
                     )
                 );
                 let fetch_pending = fetch_owner
-                    .current_effect_producer(&fetch_effect)
-                    .map(|producer| producer.mint_pending_binding())
+                    .exact_pending_adapter_effect_binding(&fetch_effect)
                     .expect("mint sealed remote-Proposal Fetch binding");
                 let fetch_replay = fetch_owner
                     .exact_remote_proposal_fetch_replay(&fetch_effect)
@@ -1210,8 +1208,7 @@ mod tests {
         .pop()
         .expect("one foreign Store owner");
         let foreign_store_pending = foreign_store_owner
-            .current_effect_producer(&store_effect)
-            .map(|producer| producer.mint_pending_binding())
+            .exact_pending_adapter_effect_binding(&store_effect)
             .expect("mint foreign Store pending binding");
         let foreign_validate_pending = foreign_store_pending
             .project_store_validate_successor(&store_effect, &validate_effect)

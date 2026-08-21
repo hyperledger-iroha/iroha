@@ -27,6 +27,10 @@ and non-membership design remains future work.
   canonical outer `AxtFastpqBinding` is authenticated and exactly matched. The
   opaque profile accepts MetaSet carrier rows only; its public roots are
   externally authenticated statement context, not proven state updates.
+- Handle-bound transfer proofs carry canonical remote-spend claim preimages.
+  Verification reconstructs their commitments and requires an exact one-to-one
+  match with real transfer transcripts across the signed handle identity,
+  dataspace, asset, accounts, amount, and cardinality.
 - Test/dev-tools raw-statement helpers check cryptographic transcript and byte
   determinism only. They make no state-validity claim and are absent from normal
   production builds.
@@ -273,8 +277,11 @@ Monte Carlo soundness harness remains the explicit Appendix A TODO.
 Generic deletion and absent-key/non-membership proofs are not implemented in
 the release profile.
 
-`FastpqTransitionBatch.public_inputs` is the canonical carrier for `dsid`, `slot`, and root commitments;
-batch metadata is reserved for entry hash/transcript count bookkeeping.
+`FastpqTransitionBatch.public_inputs` is the canonical carrier for `dsid`,
+`slot`, and root commitments. Proof-bound metadata carries the canonical AXT
+binding mirrors, transfer transcripts, remote-spend claim preimages,
+amount/expiry/manifest/DA mirrors, and the batch seal. Metadata never selects a
+proof semantics profile.
 
 ## Encoding Hashes
 - Ordering hash: Poseidon2 (tag `fastpq:v1:ordering`).

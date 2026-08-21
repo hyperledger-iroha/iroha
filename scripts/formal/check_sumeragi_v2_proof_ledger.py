@@ -77,6 +77,7 @@ _CHECKER_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_proof_token_contracts.py",
     "sumeragi_v2_proof_ledger_reviewed_rust_source_loader_contracts.py",
     "sumeragi_v2_proof_ledger_source_seal_contracts.py",
+    "sumeragi_v2_proof_ledger_network_source_seal_contracts.py",
     "sumeragi_v2_proof_ledger_ingress_source_seal_contracts.py",
     "sumeragi_v2_proof_ledger_production_trace_contracts.py",
     "sumeragi_v2_proof_ledger_serviced_candidate_contracts.py",
@@ -135,6 +136,10 @@ APPLIED_PHASE_ADMISSION_MUTATION_RUNNER = _ADMISSION_MUTATION_CONTRACTS.APPLIED_
 APPLIED_PHASE_ADMISSION_MUTATION_SHA256 = _ADMISSION_MUTATION_CONTRACTS.APPLIED_PHASE_ADMISSION_MUTATION_SHA256
 APPLIED_PHASE_ADMISSION_MUTATION_FORMAL_GLOBS = _ADMISSION_MUTATION_CONTRACTS.APPLIED_PHASE_ADMISSION_MUTATION_FORMAL_GLOBS
 _APPLIED_PHASE_ADMISSION_RUST_ITEM_SHA256 = _ADMISSION_MUTATION_CONTRACTS._APPLIED_PHASE_ADMISSION_RUST_ITEM_SHA256
+DURABLE_VALIDATE_LIFECYCLE_MUTATION_FORMAL_ARTIFACTS = _ADMISSION_MUTATION_CONTRACTS.DURABLE_VALIDATE_LIFECYCLE_MUTATION_FORMAL_ARTIFACTS
+DURABLE_VALIDATE_LIFECYCLE_MUTATION_RUNNER = _ADMISSION_MUTATION_CONTRACTS.DURABLE_VALIDATE_LIFECYCLE_MUTATION_RUNNER
+DURABLE_VALIDATE_LIFECYCLE_MUTATION_SHA256 = _ADMISSION_MUTATION_CONTRACTS.DURABLE_VALIDATE_LIFECYCLE_MUTATION_SHA256
+DURABLE_VALIDATE_LIFECYCLE_MUTATION_FORMAL_GLOBS = _ADMISSION_MUTATION_CONTRACTS.DURABLE_VALIDATE_LIFECYCLE_MUTATION_FORMAL_GLOBS
 POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS = _ADMISSION_MUTATION_CONTRACTS.POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS
 POST_DECISION_TIMEOUT_MUTATION_RUNNER = _ADMISSION_MUTATION_CONTRACTS.POST_DECISION_TIMEOUT_MUTATION_RUNNER
 POST_DECISION_TIMEOUT_MUTATION_SHA256 = _ADMISSION_MUTATION_CONTRACTS.POST_DECISION_TIMEOUT_MUTATION_SHA256
@@ -396,7 +401,7 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal(
         "crates/iroha_core/src/sumeragi/v2_runtime.rs",
         "RuntimeEffectCandidateBinding",
-        "6fb5952ef09d4bb30eb3d9c5e1ad2a18df203961e3b825a41249326238615fd6",
+        "fd07a4143cd84e1cf6443e49e2938137877fb7baf6561fbcc14afd9ed22ff587",
         "struct",
     ),
     CrossToolSourceItemSeal(
@@ -408,7 +413,7 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal(
         "crates/iroha_core/src/sumeragi/v2_runtime.rs",
         "RuntimeEffectOwnership",
-        "067d73c41e68b3452f63d40153b1ac75815d13b48dac240d425c590082442144",
+        "cb27adc8b4a115e63bebac399905e5d6f97e5c6a4bab4cd1b6411a8b9de42c79",
         "struct",
     ),
     *(
@@ -441,7 +446,7 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
             ),
             (
                 "new",
-                "283fefeefdc1875b8710bb3d9fbfbb70ea01c4d9afe66d47d3205e30e568a0ea",
+                "3b85cb1ce8fefa88d2e7be7ad46ebd93c1cc5e1123cc939ed3c5be4acb0ae4aa",
                 (("impl", "RuntimeEffectCandidateBinding"),),
             ),
             (
@@ -451,7 +456,7 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
             ),
             (
                 "validate_exact",
-                "87b9ba93bd1ff7cad22335b77d4c76320969b897597bba6fcc91c80c4664ce4e",
+                "c73aba19d8b2f743a440a3cbaba2646dad6450a8e099ff4cadd279c124d18456",
                 (("impl", "RuntimeEffectCandidateBinding"),),
             ),
             (
@@ -461,17 +466,17 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
             ),
             (
                 "production_adapter_effect_semantic_identity",
-                "89ed8da214803440d6dc7c893e371586a5b9f3f66d422c4c6a586efaec0feb80",
+                "2a783666a38a97e74555e8e755099186d342a42d8fcd344c7e636ebceb42f60f",
                 (),
             ),
             (
                 "production_adapter_effect_candidate_semantic_identity",
-                "15cb0d17cef4d5012bc3cd30551dba0ccf350f82e98e2761f1d035317deb8fe9",
+                "ba2a60b557f0aa27ddec56930c9f8570026325c8e9d0212c79d55ded7a75ce6d",
                 (),
             ),
             (
                 "runtime_identity_projection",
-                "efc93171971e222e0ed699ea21822c98364a7132c78885007c8202c38ad8bd92",
+                "556380d84be487056777d5fa81429f16931727cca3d302ee69cb5f2327419577",
                 (),
             ),
             (
@@ -481,7 +486,7 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
             ),
             (
                 "bind_adapter_effect_batch_ownership",
-                "476b676f09bf74a625763bb9d42c80fd26d342f7cc44bcb90e41ad6a85b5d793",
+                "10eb1924dbb1d0417210a5eaa6072d4e67442f86f849a1eec97c4e7f77ecb76a",
                 (),
             ),
             (
@@ -491,32 +496,32 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
             ),
             (
                 "validate_exact",
-                "cfdf58c67aeeca6a1f7f948d5a559e25adb340b3613526f47de25a1b60007638",
+                "2ec074d66312f7b0f2416bcf6b014c21e7180872eca1be425f5759a7c34892e1",
                 (("impl", "RuntimeEffectOwnership"),),
             ),
             (
-                "validate_bound_exact",
-                "2b27b985ad5b1a8e04fac4bb4ff33ffa6a9319e29dcac6ce7702c43576c77e14",
+                "new_bound",
+                "c546dc440db950873bc33e7161a04b908d96e86807899b94ec6effd028d6fb03",
                 (("impl", "RuntimeEffectOwnership"),),
             ),
             (
-                "bind_runtime_effect",
-                "14bb57b820cf99eff65d587576bb6d651b7e3fc1e7d3926befb74ab402a8fc8e",
+                "exact_pending_adapter_effect_binding",
+                "663ad5881a27399a5afbc812b1c4756e6fb6d8252bb0b6bbdb7e2fffd9dd4353",
                 (("impl", "RuntimeEffectOwnership"),),
             ),
             (
                 "candidate_identity",
-                "84faf06f2e7a9a2d4fdc914f67fbc8c11095b32638f6dad0cdb921b993feb6b7",
+                "67eeafa01734ebfa87a1b9082b83f3677f7d4bbcb1d48c96288d99b485a98d82",
                 (("impl", "RuntimeEffectOwnership"),),
             ),
             (
                 "rebind_as_inherited_adapter_effect",
-                "19532dbdacd6d552c366d53a66cdccd94fe8a6197e1a61eb3c96ccdb81af01b9",
+                "250586927fbdad720f174f3d8c7ec67dc941caa62ef78a21dda5018bce9c64fc",
                 (("impl", "RuntimeEffectOwnership"),),
             ),
             (
                 "rebind_same_adapter_effect",
-                "381d23d7958885dfadf46aca24e85c79eb28bc144e09fa58a03f10fbd7f4fd79",
+                "4d18fc65b87ed4df0d6b1331dd31e5a4b03125455f96dea307ebf85b80beb8d2",
                 (("impl", "RuntimeEffectOwnership"),),
             ),
             (
@@ -526,12 +531,12 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
             ),
             (
                 "adopt_effect_ownership",
-                "03d9de88dcdb510052e797791d5f370165f9952bbaad534c95cc716d91ee1597",
+                "f9d317b300609f3248aa7d744858d7058cd0c09a05109edc46a0e2bcf4e8877c",
                 (("impl", "RuntimeBodyCompletionOwnershipPlan"),),
             ),
             (
                 "resolve_body_pipeline_completion_owner",
-                "47191f99f15b1ea3bdbc648b8884f023f02d295f9e57b33190fbfe94944dcb33",
+                "ee5d029fdce1e171ed6f98b287d662a014d3fb7b698a545a0a8617e311640554",
                 (
                     ("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),
                 ),
@@ -578,12 +583,12 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
             ),
             (
                 "production_adapter_effect_candidate_trace_projection",
-                "a078274abccf56c9f8bdddc9b43cef842deffb7ad4c5faa27c6d292925a7d8c2",
+                "a32aa0a7a4f1e82cb43c49ef52e96146cb2ac7f891d540cef6e5a1fbb533967f",
                 (),
             ),
             (
                 "retain_effect_ownership",
-                "37ff981ed5ee5c51160c5301f4584486751a0fd3be20fb2872194c4cecd75741",
+                "c7ac9e015759f48b938e2f367021efbaab7551a064fca13050b86db2b32974e8",
                 (
                     (
                         "impl",
@@ -601,7 +606,7 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
             ),
             (
                 "take_effect_ownership",
-                "ba71a932428394b6f0dd70fa4f338e0aaee01acf1b0d613c44107ce46521c16c",
+                "d52c5a1254a40354444256e48a82a78b198361db35956d3ec17aa5ca1b4e1934",
                 (
                     (
                         "impl",
@@ -640,7 +645,7 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal(
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
         "retained_candidate_owners",
-        "196ae8bdf35f4ebf32e978e6c528ae08226bb24ea2e65fcfde590dcc450615ea",
+        "d315561c2b93bd28b09ce652bed557902f2f35480fec87fefa02c40136d2f27c",
         brace_context=(("impl", "<", "R", ":", "EffectRuntime", ">", "V2EffectExecutor", "<", "R", ">"),),
     ),
     CrossToolSourceItemSeal(
@@ -722,7 +727,7 @@ _LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal(
         "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
         "LeaderWireLifecycleState",
-        "92eb2b3c27b28527e46082f1c17479206cc71301d8bb18cc5fdeea19c06b19d2",
+        "86be8a8754719d00a7749205dd3315ddaae306f9021091a4d47b9dc754026d7b",
         "struct",
     ),
     CrossToolSourceItemSeal(
@@ -846,8 +851,8 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     "ingress_atomic_commit": "6842895a159090efa2c4da65863b2e1f83f3afbb2bab05e55e8cfbfb0092d640",
     "lifecycle_ordinal_source_commit": "ededc4d64c8d76d3458b7bcf2f7e9812fe7303673b9d314686968a2369d7c4f6",
     "body_available_commit": "d2f24737c0a9ed5fddc579101ab48ea8a1820ef83508319b9942f6381a65109b",
-    "effect_candidate_retain": "52ae798c947752e8fb49147e152ffaeb8df5bbc09fffe49aff36cd3460d5f92f",
-    "relay_retry": "f668e5ce645905c1e717c47f35512de6102d0d64f71da6b8508ce454209015f6",
+    "effect_candidate_retain": "2ddf84d44bb686dab2766b7367b9731318e01ddbdf0aa693de069c7238661920",
+    "relay_retry": "052e90cc19d9416a0546c0938c57592da456a5bf98d9c9d64939dc4469d258ac",
     # Refresh after atomic-reservation work stops touching v2_worker.rs.
     "worker_poll_reply_flushes": "eae8ee4dc4996b077b9d0e3315e96e8c35a18b0189f2add40e898e60a4167749",
     "flush_bind": "7e277f9b3f4f147ef93cc5bdc97ef36c1f60296492a3f3339fc498b30cfc3b92",
@@ -860,7 +865,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     # Refresh after atomic-reservation work stops touching v2_runner.rs.
     "successor_retry": "a99d3aec22c01501fabb4e6b90526ae066b6728ab78043301476653432fac5fd",
     "historical_certificate": "9028b1db75d71c3ab5e72573e5c3e7b46d92c0ffe4a1cd1805ebfde379fbdbfa",
-    "historical_body": "61abf0bd81035ebb5776a4a8893fd955249d6b2dfc2dcb23904749e75e71de79",
+    "historical_body": "0a7c5d29372bc8970f88d82f74f36e1e7a06635f51a12ff7475e63b221577851",
     "terminal_application": "18c9adfc440c9e4302dd5e1b78c71beec18927bc30170ad1db8b4953d40df2b2",
 }
 
@@ -1212,31 +1217,28 @@ def _total_gate_call_sites(
         ),
         "ProductionHistoricalBodyPipelineTraceRefinesIndexedAsync": (
             CrossToolProductionCallContract(
-                "crates/iroha_core/src/sumeragi/v2_effects.rs",
-                "accept_certified_body_response_inner",
-                "prospective_trace",
+                "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+                "complete_certified_fetch_body_persistence",
+                "historical_trace",
                 """
                     check_production_historical_body_pipeline_transition(
-                        prospective_trace
+                        historical_trace
                     )
                 """,
-                ((
-                    "impl",
-                    "<",
-                    "R",
-                    ":",
-                    "EffectRuntime",
-                    ">",
-                    "V2EffectExecutor",
-                    "<",
-                    "R",
-                    ">",
-                ),),
+                (("impl", "LifecycleCoordinator"),),
                 hashes["historical_body"],
-                token_consumptions=(
-                    "let prospective_trace = checked_transition.into_projection();",
+                token_consumptions=("let _authorized_historical_pipeline = checked_transition.into_projection();",),
+                mutation_boundaries=(
+                    "output_guard.begin_fail_stop_operation()",
+                    "ready_mutation.persist_exact_staged_successor()",
+                    "exact_dequeue.commit(ingress)",
+                    "durable_registry.commit_after_exact_dequeue(dequeued)",
+                    "ready.commit()",
+                    "executor.commit_lifecycle_certified_fetch_completion(executor_prepared, &authenticated)",
+                    "service_prepared.commit(operation.permit())",
+                    "work_ack.commit()",
                 ),
-                mutation_boundaries=("self.plan_fetch_completion(",),
+                projection_bindings=("let historical_trace = ProductionHistoricalBodyPipelineTraceProjection {",),
             ),
         ),
         "ProductionTerminalApplicationWithoutSuccessorActivationTraceRefinesIndexedTerminal": (
@@ -2201,6 +2203,7 @@ _TLA_TOKEN_RE = re.compile(
 
 _execute_checker_component("sumeragi_v2_proof_ledger_reviewed_rust_source_loader_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_source_seal_contracts.py")
+_execute_checker_component("sumeragi_v2_proof_ledger_network_source_seal_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_ingress_source_seal_contracts.py")
 
 @lru_cache(maxsize=512)
@@ -5745,6 +5748,7 @@ def _cross_tool_source_item_seal_payload(
         *(kernel.verified_kernel_source for kernel in claim.supplemental_kernels),
     }
     payload: list[dict[str, Any]] = []
+    reviewed_sources: dict[str, tuple[Path, str]] = {}
     for seal in claim.source_item_seals:
         if seal.source not in allowed_sources:
             raise ValueError(
@@ -5775,10 +5779,9 @@ def _cross_tool_source_item_seal_payload(
                 f"cross-tool source seal {seal.source}!{seal.item} repeats a "
                 "normalized required expression"
             )
-        path = root_dir / seal.source
-        if not path.is_file() or path.is_symlink():
-            raise ValueError(f"cross-tool source seal is not a regular file: {path}")
-        source = path.read_text(encoding="utf-8")
+        path, source = _read_cross_tool_source_item_seal_source(
+            root_dir, seal.source, reviewed_sources
+        )
         if seal.kind == "const":
             if seal.brace_context:
                 raise ValueError(
@@ -6876,9 +6879,12 @@ def _cross_tool_total_call_site_payload(
     item = items[0]
     allowed_attributes = {("#", "[", "must_use", "]")}
     if call_site.item == "run_lifecycle_active_height":
-        allowed_attributes.add(tuple(rust_code_tokens(
-            "#[allow(clippy::too_many_arguments, clippy::too_many_lines)]"
-        )))
+        allowed_attributes.add(tuple(rust_code_tokens("#[allow(clippy::too_many_arguments, clippy::too_many_lines)]")))
+    if (call_site.source, call_site.item) == (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "complete_certified_fetch_body_persistence",
+    ):
+        allowed_attributes.add(tuple(rust_code_tokens("#[allow(clippy::too_many_arguments, clippy::result_large_err)]")))
     unexpected_attributes = tuple(
         attribute
         for attribute in item.attributes
@@ -28173,7 +28179,6 @@ def _transport_geometry_production_source_fidelity_errors(
         "kagami_localnet": (
             repo_root / "crates" / "iroha_kagami" / "src" / "localnet.rs"
         ),
-        "taira_renderer": repo_root / "scripts" / "render_taira_validator_bundle.py",
         "kagami_profiles": repo_root / "xtask" / "src" / "kagami_profiles.rs",
         "taira_default": (
             repo_root / "defaults" / "kagami" / "iroha3-taira" / "config.toml"
@@ -28190,9 +28195,6 @@ def _transport_geometry_production_source_fidelity_errors(
             / "kagami"
             / "iroha3-taira"
             / "genesis.json"
-        ),
-        "taira_readme": (
-            repo_root / "configs" / "soranexus" / "taira" / "README.md"
         ),
     }
     sources: dict[str, str] = {}
@@ -30580,13 +30582,6 @@ queues.insert(
 
     deployment_fragments = (
         (
-            "taira_renderer",
-            'authenticated_non_validator_sources = _require_positive_integer(\n'
-            '        queues, "authenticated_non_validator_sources", context\n'
-            '    )',
-            "Taira renderer validates the public H key",
-        ),
-        (
             "taira_default",
             "max_transactions = 96\n"
             "max_payload_bytes = 16777216\n"
@@ -30638,45 +30633,14 @@ queues.insert(
             '"max_tx_bytes": 10485760',
             "default Taira genesis admits one maximum privacy transaction",
         ),
-        (
-            "taira_readme",
-            "(validator_count + authenticated_non_validator_sources) *\n"
-            "     body_source_bytes",
-            "Taira operator documentation states N+H byte scaling",
-        ),
-        (
-            "taira_readme",
-            "`[network] max_frame_bytes_tx_gossip = 13631488` (13 MiB plaintext),\n"
-            "     `[network] max_frame_bytes_block_sync = 23068672` (22 MiB plaintext) and\n"
-            "     `max_frame_bytes = 23068700` (the same ceiling plus 28 AEAD bytes)",
-            "Taira operator documentation pins the derived privacy transport corridor",
-        ),
     )
     for role, fragment, description in deployment_fragments:
         observed = sources[role].count(fragment)
-        if observed != (expected_count := 2 if description == "Taira renderer validates the public H key" else 1):
+        if observed != 1:
             errors.append(
-                f"{paths[role]}: {description} must occur exactly {expected_count} time(s); "
+                f"{paths[role]}: {description} must occur exactly 1 time(s); "
                 f"found {observed}"
             )
-    renderer_functions = renderer_minimum = ()
-    try:
-        renderer_functions = tuple(
-            node for node in ast.parse(sources["taira_renderer"]).body
-            if isinstance(node, ast.FunctionDef) and node.name == "_scaled_sumeragi_body_bytes"
-        )
-        renderer_minimum = tuple(
-            node.value for function in renderer_functions for node in function.body
-            if isinstance(node, ast.Assign)
-            and any(isinstance(target, ast.Name) and target.id == "minimum" for target in node.targets)
-        )
-    except SyntaxError:
-        pass
-    expected_minimum = ast.parse("source_count * source_bytes", mode="eval").body
-    if len(renderer_functions) != 1 or len(renderer_minimum) != 1 or ast.dump(
-        renderer_minimum[0], include_attributes=False
-    ) != ast.dump(expected_minimum, include_attributes=False):
-        errors.append(f'{paths["taira_renderer"]}: Taira renderer scales aggregate bytes by N+H')
     for role, label in (("taira_genesis", "production"), ("taira_default_genesis", "default")):
         try:
             genesis = json.loads(sources[role], object_pairs_hook=_unique_object)
@@ -40478,6 +40442,9 @@ _ADMISSION_MUTATION_CONTRACTS.bind_checker(globals())
 _applied_phase_admission_mutation_runner_errors = _ADMISSION_MUTATION_CONTRACTS._applied_phase_admission_mutation_runner_errors
 _applied_phase_admission_production_source_fidelity_errors = _ADMISSION_MUTATION_CONTRACTS._applied_phase_admission_production_source_fidelity_errors
 _applied_phase_admission_mutation_source_fidelity_errors = _ADMISSION_MUTATION_CONTRACTS._applied_phase_admission_mutation_source_fidelity_errors
+_durable_validate_lifecycle_mutation_runner_errors = _ADMISSION_MUTATION_CONTRACTS._durable_validate_lifecycle_mutation_runner_errors
+_durable_validate_lifecycle_production_source_fidelity_errors = _ADMISSION_MUTATION_CONTRACTS._durable_validate_lifecycle_production_source_fidelity_errors
+_durable_validate_lifecycle_mutation_source_fidelity_errors = _ADMISSION_MUTATION_CONTRACTS._durable_validate_lifecycle_mutation_source_fidelity_errors
 _post_decision_timeout_mutation_source_fidelity_errors = _ADMISSION_MUTATION_CONTRACTS._post_decision_timeout_mutation_source_fidelity_errors
 
 
@@ -41689,9 +41656,9 @@ let post_snapshot_source = context.roster[2].validator.clone();
         (
             """
 assert!(matches!(
-    leader_wire_ingress.try_push(InboundBlockMessage::new(
+    leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
         BlockMessage::V2(message.clone()),
-        Some(post_snapshot_source),
+        post_snapshot_source,
     )),
     Ok(super::super::FairV2IngressPushDisposition::Enqueued)
 ));
@@ -42467,10 +42434,13 @@ assert!(matches!(
             errors,
         )
         exact_tc_commit_witness = r"""
-let validation = adapter
-    .validation_succeeded(fetch_tag, round, subject, &validated)
-    .expect("validate the TC-protected body without relabelling its origin")
-    .into_effects();
+let validation = settle_ready_validate_succeeded_for_test(
+    &mut adapter,
+    fetch_tag,
+    round,
+    subject,
+    &validated,
+);
 let current_round = wire::ConsensusRound {
     view: fetch_tag.view(),
     ..round
@@ -42518,7 +42488,7 @@ assert!(status.liveness.outbound_intents.iter().all(|intent| {
         tc_pipeline = (
             "adapter.body_available(fetch_tag, manifest)",
             "adapter.body_stored(fetch_tag, round, subject, &durable)",
-            "adapter.validation_succeeded(fetch_tag, round, subject, &validated)",
+            "settle_ready_validate_succeeded_for_test(&mut adapter, fetch_tag, round, subject, &validated,)",
         )
         tc_tokens = () if tc_test is None else rust_code_tokens(tc_test.source)
         tc_positions: list[int] = []
@@ -42750,8 +42720,6 @@ match command {
     AdapterCommand::LocalProposalReady { .. }
     | AdapterCommand::BodyAvailable { .. }
     | AdapterCommand::BodyStored { .. }
-    | AdapterCommand::ValidationSucceeded { .. }
-    | AdapterCommand::ValidationFailed { .. }
     | AdapterCommand::SignatureCompleted(_)
     | AdapterCommand::ApplicationCompleted(_) => false,
 }
@@ -55282,7 +55250,7 @@ def _transport_hardening_production_source_fidelity_errors(
     runner_source = sources[runner_path]
     lifecycle_runner_source = sources[lifecycle_runner_path]
     pending_runner_source = sources[pending_runner_path]
-    worker_source = sources[worker_path]
+    worker_path, worker_source = _read_reviewed_rust_source(repo_root, "crates/iroha_core/src/sumeragi/v2_worker.rs", errors, "certified-sidecar worker source")
     daemon_source = sources[daemon_path]
 
     raw_topic = _require_rust_item(
@@ -69250,6 +69218,11 @@ def validate_ledger(
     )
     errors.extend(
         _applied_phase_admission_mutation_source_fidelity_errors(
+            formal_dir, ROOT_DIR
+        )
+    )
+    errors.extend(
+        _durable_validate_lifecycle_mutation_source_fidelity_errors(
             formal_dir, ROOT_DIR
         )
     )

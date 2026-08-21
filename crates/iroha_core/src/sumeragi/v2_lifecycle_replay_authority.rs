@@ -1,9 +1,10 @@
-//! Closed, codec-only authority envelope for future lifecycle replay.
+//! Closed, codec-only authority envelope for lifecycle replay.
 //!
 //! This module deliberately performs structural matching only. Decoding this
 //! envelope does not authenticate its consensus artifacts or make executable
-//! work. A future admission transaction must first reauthenticate the retained
-//! source against the verified height context and its owning durable store.
+//! work. The origin-specific cold-open transaction reauthenticates the retained
+//! source against the verified height context and its owning durable store
+//! before reconstructing executable authority.
 use super::ledger::{
     DurableCertifiedBodyPipelineLedgerCensusPermit, DurableCertifiedFetchLedgerJoinPermit,
     DurableStandaloneValidateLedgerJoinPermit, LifecycleLedgerRecordV1,
@@ -44,7 +45,10 @@ use crate::sumeragi::{
         RecoveredLifecycleNextWalVoteSealPermitV1, RecoveredWalFrameIdentity,
         RegisteredPrepareInvalidBodyReportCapability, SignRequest, VerifiedHeightContext,
     },
-    v2_body_store::{DurableBodyReceipt, DurableCertifiedFetchBodyReceipt, ValidatedBodyReceipt},
+    v2_body_store::{
+        DurableBodyReceipt, DurableBodyValidationOutcome, DurableCertifiedFetchBodyReceipt,
+        ValidatedBodyReceipt,
+    },
     v2_certified_serve_payload_store::{
         AuthenticatedRecoveredCertifiedServePayload,
         AuthenticatedRecoveredCertifiedServePayloadState, CertifiedServePayloadNegativeOutcome,
@@ -53,10 +57,11 @@ use crate::sumeragi::{
     },
     v2_core::EventTag,
     v2_runtime::{
-        CurrentRuntimeEffectProducer, LocalBodyReplayMintPermit, LocalProposalReadyCommandIdentity,
-        PendingRuntimeEffectBinding, RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1,
+        LocalBodyReplayMintPermit, LocalProposalReadyCommandIdentity, PendingRuntimeEffectBinding,
+        RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1,
         RecoveredWalCandidateProjectionPermit, RecoveredWalDecisionFetchPendingMintPermit,
         RemoteProposalReplayMintPermit, RuntimeEffectOwnership, RuntimeIngressOwnershipEvidence,
+        SerializedV2Runtime,
     },
     v2_transport::AuthenticatedCertifiedBodyRequest,
 };
@@ -69,6 +74,7 @@ const MAX_REPLAY_AUTHORITY_BYTES: usize = 4 * 1024 * 1024;
 const EQUIVOCATION_SUBJECT_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:equivocation-subject:v1";
 const PRODUCER_TURN_PHYSICAL_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:lifecycle:producer-turn-physical:v1";
+
 /// Version-one replay envelope retained beside one lifecycle ledger row.
 ///
 /// The fields are private so neither decoded wire values nor an arbitrary
@@ -193,7 +199,7 @@ impl LifecycleReplayAuthorityV1 {
                 })
         .then_some(CertifiedFetchReplayEvidenceV1 { family })
     }
-    /// Recover only a standalone local-body or signed-Proposal Validate source.
+    /// Recover only a closed standalone Validate source.
     fn recover_durable_standalone_validate(
         &self,
         active_context: LifecycleContext,
@@ -228,7 +234,9 @@ impl LifecycleReplayAuthorityV1 {
         };
         if !matches!(
             &source.origin,
-            BodyPipelineOriginV1::LocalBody(_) | BodyPipelineOriginV1::Proposal(_)
+            BodyPipelineOriginV1::LocalBody(_)
+                | BodyPipelineOriginV1::Proposal(_)
+                | BodyPipelineOriginV1::Certified { .. }
         ) || body_frame.durable_reference()
             != match payload {
                 DurablePayloadReference::BodyFrame(reference) => reference,
@@ -2933,6 +2941,77 @@ impl RemoteProposalFetchReplayEvidenceV1 {
             && self.source == candidate.source
             && self.fetch_pending == candidate.fetch_pending
     }
+    /// Retag one unchanged ordinary Proposal Fetch to its strictly later
+    /// reducer consumer without changing the authenticated replay family.
+    ///
+    /// The pending-binding projection proves that the causal root, candidate
+    /// statement, and every concrete Fetch coordinate except `EventTag` are
+    /// unchanged. Certified Fetches cannot enter this Proposal-only seam.
+    pub(in crate::sumeragi) fn rebind_exact_consumer(
+        &self,
+        previous_effect: &AdapterEffect,
+        previous_pending: &PendingRuntimeEffectBinding,
+        rebound_effect: &AdapterEffect,
+        rebound_pending: PendingRuntimeEffectBinding,
+    ) -> Option<Self> {
+        if !self.exactly_matches_fetch_pending(previous_effect, previous_pending)
+            || previous_pending
+                .project_fetch_consumer_rebind(previous_effect, rebound_effect)
+                .as_ref()
+                != Some(&rebound_pending)
+        {
+            return None;
+        }
+        let (
+            AdapterEffect::FetchBody {
+                tag: previous_tag,
+                round: previous_round,
+                subject: previous_subject,
+                manifest: Some(previous_manifest),
+                certified_sources: previous_sources,
+                certificate: None,
+            },
+            AdapterEffect::FetchBody {
+                tag: rebound_tag,
+                round: rebound_round,
+                subject: rebound_subject,
+                manifest: Some(rebound_manifest),
+                certified_sources: rebound_sources,
+                certificate: None,
+            },
+        ) = (previous_effect, rebound_effect)
+        else {
+            return None;
+        };
+        if !rebound_tag.strictly_advances(*previous_tag)
+            || previous_round != rebound_round
+            || previous_subject != rebound_subject
+            || previous_manifest != rebound_manifest
+            || !previous_sources.is_empty()
+            || previous_sources != rebound_sources
+        {
+            return None;
+        }
+        let proposal =
+            exact_remote_proposal_fetch(&self.authenticated, &self.ingress, rebound_effect)?;
+        let source = BodyPipelineReplaySourceV1 {
+            tag: ReplayEventTagV1::new(
+                rebound_tag.height(),
+                rebound_tag.view(),
+                rebound_tag.generation().get(),
+            ),
+            origin: BodyPipelineOriginV1::Proposal(proposal.clone()),
+        };
+        let rebound = Self {
+            authenticated: self.authenticated.clone(),
+            ingress: self.ingress.clone(),
+            source,
+            fetch_pending: Arc::new(rebound_pending),
+        };
+        rebound
+            .exactly_matches_fetch(rebound_effect)
+            .then_some(rebound)
+    }
     /// Preflight the only accepted Fetch-to-Store causal projection.
     pub(in crate::sumeragi) fn exactly_projects_store(
         &self,
@@ -3082,7 +3161,11 @@ impl RemoteProposalStoredReplayEvidenceV1 {
             )
             || self
                 .store_pending
-                .project_store_validate_successor(store_effect, validate_effect)
+                .project_store_validate_successor_with_authority_refinement(
+                    store_effect,
+                    validate_effect,
+                    validate_pending,
+                )
                 .as_ref()
                 != Some(validate_pending)
         {
@@ -3090,8 +3173,55 @@ impl RemoteProposalStoredReplayEvidenceV1 {
         }
         let projected = self
             .store_pending
-            .project_store_validate_successor(store_effect, validate_effect)
-            .expect("an exact remote Proposal Store has one Validate successor");
+            .project_store_validate_successor_with_authority_refinement(
+                store_effect,
+                validate_effect,
+                validate_pending,
+            )
+            .expect("an exact remote Proposal Store has one authority-refined Validate successor");
+        debug_assert_eq!(&projected, validate_pending);
+        Ok(RemoteProposalValidateReplayEvidenceV1 {
+            family: self.family,
+            validate_pending: Arc::new(projected),
+        })
+    }
+    /// Consume ordinary Proposal Store evidence through the exact
+    /// Commit-refined Validate owner selected by a durable Decision.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn project_exact_validate_after_durable_decision(
+        self,
+        store_effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+    ) -> Result<RemoteProposalValidateReplayEvidenceV1, Self> {
+        if !self.exactly_matches_store(store_effect, receipt)
+            || !remote_proposal_body_stage_matches(
+                &self.family,
+                validate_effect,
+                receipt,
+                LifecycleStageKind::ValidateBody,
+            )
+            || self
+                .store_pending
+                .project_store_validate_successor_with_commit_refinement(
+                    store_effect,
+                    validate_effect,
+                    validate_pending,
+                )
+                .as_ref()
+                != Some(validate_pending)
+        {
+            return Err(self);
+        }
+        let projected = self
+            .store_pending
+            .project_store_validate_successor_with_commit_refinement(
+                store_effect,
+                validate_effect,
+                validate_pending,
+            )
+            .expect("an exact ordinary Proposal Store has one Commit-refined Validate successor");
         debug_assert_eq!(&projected, validate_pending);
         Ok(RemoteProposalValidateReplayEvidenceV1 {
             family: self.family,
@@ -3268,8 +3398,16 @@ fn remote_proposal_body_stage_matches(
                 round,
                 subject,
             },
-        )
-        | (
+        ) => {
+            let BodyPipelineOriginV1::Proposal(proposal) = &family.source.origin else {
+                return false;
+            };
+            family.source.tag
+                == ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get())
+                && *round == proposal.round
+                && *subject == proposal.subject
+        }
+        (
             LifecycleStageKind::ValidateBody,
             AdapterEffect::ValidateBody {
                 tag,
@@ -3280,8 +3418,13 @@ fn remote_proposal_body_stage_matches(
             let BodyPipelineOriginV1::Proposal(proposal) = &family.source.origin else {
                 return false;
             };
-            family.source.tag
-                == ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get())
+            let source_tag = EventTag::new(
+                family.source.tag.height,
+                family.source.tag.view,
+                crate::sumeragi::v2_core::Generation::new(family.source.tag.generation),
+            );
+            tag.height() == source_tag.height()
+                && (*tag == source_tag || tag.strictly_advances(source_tag))
                 && *round == proposal.round
                 && *subject == proposal.subject
         }
@@ -3319,8 +3462,29 @@ pub(in crate::sumeragi) struct LocalBodyPreIntentReplaySealV1 {
 #[derive(Clone, Debug)]
 #[must_use = "local Validate replay evidence must remain attached through completion"]
 pub(in crate::sumeragi) struct LocalValidateReplayEvidenceV1 {
-    family: LocalBodyPipelineReplayFamilyV1,
+    family: LocalValidateReplayFamilyV1,
     validate_pending: Arc<PendingRuntimeEffectBinding>,
+}
+/// Closed local-proposal command handoff projected from one Ready lifecycle Validate.
+///
+/// The command payload, immutable coordinator ordinal, pending binding, and
+/// replay family remain inseparable until the serialized runtime admits the
+/// exact `LocalProposalReady` successor.
+#[must_use = "a lifecycle local-proposal handoff must be published or returned intact"]
+pub(in crate::sumeragi) struct PreparedLifecycleLocalProposalReadyV1 {
+    effect: AdapterEffect,
+    manifest: wire::PayloadManifest,
+    validated_receipt: ValidatedBodyReceipt,
+    lifecycle_ordinal: u128,
+    replay: LocalValidateReplayEvidenceV1,
+}
+/// Published local-proposal command plus the replay authority retained beside it.
+#[must_use = "published local-proposal replay authority must enter executor retention"]
+pub(in crate::sumeragi) struct PublishedLifecycleLocalProposalReadyV1 {
+    tag: EventTag,
+    manifest: wire::PayloadManifest,
+    command_identity: LocalProposalReadyCommandIdentity,
+    replay: LocalProposalReadyReplayEvidenceV1,
 }
 /// Inert replay evidence retained beside one exact queued `LocalProposalReady` owner.
 ///
@@ -3346,6 +3510,214 @@ pub(in crate::sumeragi) struct LocalProposalIntentReplayEvidenceV1 {
     ready: LocalProposalReadyReplayEvidenceV1,
     effect: AdapterEffect,
     pending: PendingRuntimeEffectBinding,
+}
+
+impl PreparedLifecycleLocalProposalReadyV1 {
+    /// Seal one exact Ready/validated local body without exposing handoff parts.
+    pub(in crate::sumeragi) fn new(
+        effect: AdapterEffect,
+        manifest: wire::PayloadManifest,
+        validated_receipt: ValidatedBodyReceipt,
+        lifecycle_ordinal: u128,
+        replay: LocalValidateReplayEvidenceV1,
+    ) -> Option<Self> {
+        let AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } = &effect
+        else {
+            return None;
+        };
+        let durable = validated_receipt.durable();
+        if lifecycle_ordinal == 0
+            || *round != manifest.round
+            || *subject != manifest.subject
+            || tag.height() != round.height
+            || tag.view() < round.view
+            || durable.round() != *round
+            || durable.subject() != *subject
+            || durable.manifest_hash() != HashOf::new(&manifest)
+            || !replay.exactly_matches_validate_pending(
+                &effect,
+                durable,
+                replay.validate_pending.as_ref(),
+            )
+        {
+            return None;
+        }
+        Some(Self {
+            effect,
+            manifest,
+            validated_receipt,
+            lifecycle_ordinal,
+            replay,
+        })
+    }
+
+    /// Derive the exact queued-command identity without publishing runtime state.
+    pub(in crate::sumeragi) fn command_identity(
+        &self,
+    ) -> Option<LocalProposalReadyCommandIdentity> {
+        let AdapterEffect::ValidateBody { tag, .. } = self.effect else {
+            return None;
+        };
+        LocalProposalReadyCommandIdentity::from_exact_pending_handoff(
+            tag,
+            &self.manifest,
+            self.validated_receipt.durable(),
+            &self.validated_receipt,
+            self.replay.validate_pending.as_ref(),
+        )
+    }
+
+    /// Return the immutable actor-global lifecycle ordinal carried by the handoff.
+    pub(in crate::sumeragi) const fn lifecycle_ordinal(&self) -> u128 {
+        self.lifecycle_ordinal
+    }
+
+    /// Publish the exact runtime successor while retaining replay authority.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn publish_into_runtime(
+        self,
+        runtime: &mut SerializedV2Runtime,
+    ) -> Result<PublishedLifecycleLocalProposalReadyV1, Self> {
+        let Self {
+            effect,
+            manifest,
+            validated_receipt,
+            lifecycle_ordinal,
+            replay,
+        } = self;
+        let AdapterEffect::ValidateBody { tag, .. } = effect else {
+            unreachable!("prepared local handoff retains one Validate effect")
+        };
+        let Some(expected_identity) = LocalProposalReadyCommandIdentity::from_exact_pending_handoff(
+            tag,
+            &manifest,
+            validated_receipt.durable(),
+            &validated_receipt,
+            replay.validate_pending.as_ref(),
+        ) else {
+            return Err(Self {
+                effect: AdapterEffect::ValidateBody {
+                    tag,
+                    round: manifest.round,
+                    subject: manifest.subject,
+                },
+                manifest,
+                validated_receipt,
+                lifecycle_ordinal,
+                replay,
+            });
+        };
+        if !replay.exactly_matches_validate(
+            &AdapterEffect::ValidateBody {
+                tag,
+                round: manifest.round,
+                subject: manifest.subject,
+            },
+            validated_receipt.durable(),
+        ) || !expected_identity.exactly_matches_handoff(
+            tag,
+            &manifest,
+            validated_receipt.durable(),
+            &validated_receipt,
+            replay.validate_pending.as_ref(),
+        ) {
+            return Err(Self {
+                effect: AdapterEffect::ValidateBody {
+                    tag,
+                    round: manifest.round,
+                    subject: manifest.subject,
+                },
+                manifest,
+                validated_receipt,
+                lifecycle_ordinal,
+                replay,
+            });
+        }
+        let command_identity = match runtime.enqueue_local_proposal_with_lifecycle_pending(
+            tag,
+            manifest.clone(),
+            validated_receipt.durable().clone(),
+            validated_receipt.clone(),
+            replay.validate_pending.as_ref(),
+            lifecycle_ordinal,
+        ) {
+            Ok(identity) => identity,
+            Err(_) => {
+                return Err(Self {
+                    effect: AdapterEffect::ValidateBody {
+                        tag,
+                        round: manifest.round,
+                        subject: manifest.subject,
+                    },
+                    manifest,
+                    validated_receipt,
+                    lifecycle_ordinal,
+                    replay,
+                });
+            }
+        };
+        if command_identity != expected_identity {
+            unreachable!("preflighted local-proposal publication changed command identity");
+        }
+        let effect = AdapterEffect::ValidateBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        match replay.complete_local_proposal(
+            &effect,
+            &manifest,
+            validated_receipt.clone(),
+            command_identity,
+        ) {
+            Ok(replay) => Ok(PublishedLifecycleLocalProposalReadyV1 {
+                tag,
+                manifest,
+                command_identity,
+                replay,
+            }),
+            Err(_) => unreachable!(
+                "preflighted local-proposal publication lost its exact replay authority"
+            ),
+        }
+    }
+}
+
+impl PublishedLifecycleLocalProposalReadyV1 {
+    /// Return whether an existing retained authority is the exact idempotent retry.
+    pub(in crate::sumeragi) fn exactly_matches_incumbent(
+        &self,
+        incumbent: &LocalProposalReadyReplayEvidenceV1,
+    ) -> bool {
+        incumbent.exactly_matches_retry(self.command_identity, self.tag, &self.manifest)
+    }
+
+    /// Return whether the command has already advanced into the exact ProposalIntent replay.
+    pub(in crate::sumeragi) fn exactly_matches_intent_incumbent(
+        &self,
+        incumbent: &LocalProposalIntentReplayEvidenceV1,
+    ) -> bool {
+        incumbent.exactly_matches_retry(self.command_identity, self.tag, &self.manifest)
+    }
+
+    /// Consume the published bundle into the executor's replay index entry.
+    pub(in crate::sumeragi) fn into_entry(
+        self,
+    ) -> (
+        LocalProposalReadyCommandIdentity,
+        LocalProposalReadyReplayEvidenceV1,
+    ) {
+        (self.command_identity, self.replay)
+    }
+
+    /// Borrow the inert command identity for exact duplicate lookup.
+    pub(in crate::sumeragi) const fn command_identity(&self) -> LocalProposalReadyCommandIdentity {
+        self.command_identity
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LocalBodyPipelineReplayFamilyV1 {
@@ -3473,7 +3845,7 @@ impl LocalBodyPreIntentReplaySealV1 {
             .expect("an exact local Store owner has one Validate successor");
         debug_assert_eq!(&projected, validate_pending);
         Ok(LocalValidateReplayEvidenceV1 {
-            family,
+            family: LocalValidateReplayFamilyV1::Assembled(family),
             validate_pending: Arc::new(projected),
         })
     }
@@ -3486,12 +3858,7 @@ impl LocalValidateReplayEvidenceV1 {
         receipt: &DurableBodyReceipt,
     ) -> bool {
         self.validate_pending.exactly_binds_adapter_effect(effect)
-            && local_body_stage_matches(
-                &self.family,
-                effect,
-                receipt,
-                LifecycleStageKind::ValidateBody,
-            )
+            && self.family.exactly_matches_validate(effect, receipt)
     }
     /// Compare this canonical family with the exact pending owner retained by
     /// a durable lifecycle Validate carrier.
@@ -3505,25 +3872,7 @@ impl LocalValidateReplayEvidenceV1 {
     }
     /// Revalidate the closed local family against its retained durable frame.
     pub(super) fn exactly_matches_durable_body(&self, receipt: &DurableBodyReceipt) -> bool {
-        exact_local_body_pipeline_family(&self.family.source, receipt)
-            .is_some_and(|expected| expected == self.family)
-            && self
-                .family
-                .is_exact_for_stage(LifecycleStageKind::ValidateBody)
-    }
-    /// Compare one installed Validate task without exposing its pending owner.
-    pub(in crate::sumeragi) fn exactly_matches_validate_task(
-        &self,
-        effect: &AdapterEffect,
-        receipt: &DurableBodyReceipt,
-        ownership: &RuntimeEffectOwnership,
-    ) -> bool {
-        self.exactly_matches_validate(effect, receipt)
-            && ownership
-                .current_effect_producer(effect)
-                .map(CurrentRuntimeEffectProducer::mint_pending_binding)
-                .as_ref()
-                == Some(self.validate_pending.as_ref())
+        self.family.exactly_matches_durable_body(receipt)
     }
     /// Consume successful validation into an exact local-proposal handoff.
     #[allow(clippy::result_large_err)]
@@ -3539,7 +3888,7 @@ impl LocalValidateReplayEvidenceV1 {
         };
         if validated_receipt.durable().manifest_hash() != HashOf::new(manifest)
             || !self.exactly_matches_validate(effect, validated_receipt.durable())
-            || !local_body_family_manifest_matches(&self.family, manifest)
+            || self.family.assembled_manifest() != Some(manifest)
             || !command_identity.exactly_matches_handoff(
                 *tag,
                 manifest,
@@ -3550,8 +3899,14 @@ impl LocalValidateReplayEvidenceV1 {
         {
             return Err(self);
         }
+        let family = match self.family {
+            LocalValidateReplayFamilyV1::Assembled(family) => family,
+            LocalValidateReplayFamilyV1::AuthenticatedGenesis(_) => {
+                unreachable!("authenticated genesis cannot project LocalProposalReady")
+            }
+        };
         Ok(LocalProposalReadyReplayEvidenceV1 {
-            family: self.family,
+            family,
             validate_pending: self.validate_pending,
             validated_receipt,
             command_identity,
@@ -3645,10 +4000,9 @@ impl LocalProposalReadyReplayEvidenceV1 {
         if !self.exactly_matches_proposal_intent(command_identity, effect, ownership) {
             return Err(self);
         }
-        let Some(producer) = ownership.current_effect_producer(effect) else {
+        let Ok(pending) = ownership.exact_pending_adapter_effect_binding(effect) else {
             return Err(self);
         };
-        let pending = producer.mint_pending_binding();
         Ok(LocalProposalIntentReplayEvidenceV1 {
             ready: self,
             effect: effect.clone(),
@@ -3657,6 +4011,34 @@ impl LocalProposalReadyReplayEvidenceV1 {
     }
 }
 impl LocalProposalIntentReplayEvidenceV1 {
+    /// Rejoin the consumed local-body lineage to the exact standalone
+    /// Proposal Sign emitted by its fsynced `ProposalIntent` WAL record.
+    ///
+    /// The returned lifecycle row deliberately uses the WAL-derived pending
+    /// owner, not this inherited local pending. This oracle proves only that
+    /// both owners name the same immutable unsigned Proposal while retaining
+    /// the local lineage as companion provenance.
+    pub(in crate::sumeragi) fn exactly_matches_live_wal_sign_effect(
+        &self,
+        effect: &AdapterEffect,
+    ) -> bool {
+        matches!(
+            effect,
+            AdapterEffect::Sign {
+                request: SignRequest::Proposal(_),
+                ..
+            }
+        ) && self.effect == *effect
+            && self.pending.exactly_binds_adapter_effect(&self.effect)
+            && self
+                .ready
+                .exactly_matches_proposal_intent_effect(self.ready.command_identity, effect)
+            && self
+                .ready
+                .family
+                .is_exact_for_stage(LifecycleStageKind::ValidateBody)
+    }
+
     /// Match an idempotent local-build retry after ProposalIntent was emitted.
     pub(in crate::sumeragi) fn exactly_matches_retry(
         &self,
@@ -3691,10 +4073,9 @@ impl LocalProposalIntentReplayEvidenceV1 {
             .exactly_matches_proposal_intent(command_identity, effect, ownership)
             && &self.effect == effect
             && ownership
-                .current_effect_producer(effect)
-                .map(CurrentRuntimeEffectProducer::mint_pending_binding)
+                .exact_pending_adapter_effect_binding(effect)
                 .as_ref()
-                == Some(&self.pending)
+                == Ok(&self.pending)
     }
     /// Identify a duplicate or foreign-owner emission of this exact ProposalIntent.
     pub(in crate::sumeragi) fn exactly_matches_proposal_intent_effect(
@@ -3894,6 +4275,7 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredD
 /// One consuming startup phase for the complete recovered body-pipeline census.
 #[must_use = "prepared durable body-pipeline startup authority must be installed atomically"]
 pub(super) struct PreparedDurableCertifiedBodyPipelineStartupV1 {
+    verified: VerifiedHeightContext,
     ledger_frame_identity: LifecycleDigest,
     live_ordinals: std::collections::BTreeSet<u128>,
     entries: Vec<PreparedDurableCertifiedBodyPipelineStartupEntryV1>,
@@ -4183,8 +4565,12 @@ impl AuthenticatedRecoveredDurableCertifiedBodyPipelineCensusV1 {
     pub(super) fn into_startup(
         self,
         ledger: &super::ledger::LifecycleLedgerV1,
+        verified: &VerifiedHeightContext,
     ) -> Option<PreparedDurableCertifiedBodyPipelineStartupV1> {
-        if !self.exactly_matches_opened_ledger(ledger) || !self.is_exact() {
+        if !self.exactly_matches_opened_ledger(ledger)
+            || !self.is_exact()
+            || super::projection::lifecycle_context(verified.context()) != ledger.context()
+        {
             return None;
         }
         let mut replay_steps = Vec::new();
@@ -4201,6 +4587,7 @@ impl AuthenticatedRecoveredDurableCertifiedBodyPipelineCensusV1 {
             return None;
         }
         Some(PreparedDurableCertifiedBodyPipelineStartupV1 {
+            verified: verified.clone(),
             ledger_frame_identity: self.ledger_frame_identity,
             live_ordinals: self.live_ordinals,
             entries,
@@ -4357,6 +4744,11 @@ impl PreparedDurableCertifiedBodyPipelineWorkV1 {
     }
 }
 impl PreparedDurableCertifiedBodyPipelineStartupV1 {
+    /// Borrow the frozen height which authenticated this complete startup census.
+    pub(super) const fn verified(&self) -> &VerifiedHeightContext {
+        &self.verified
+    }
+
     /// Return whether this exact census selected the live ordinary row.
     pub(super) fn contains_live_ordinal(&self, ordinal: u128) -> bool {
         self.live_ordinals.contains(&ordinal)
@@ -4523,6 +4915,22 @@ pub(in crate::sumeragi) struct DurableCertifiedFetchPendingMintPermit {
 pub(in crate::sumeragi) struct DurableStandaloneValidatePendingMintPermit {
     _linearity: DurableStandaloneValidatePendingMintLinearity,
 }
+/// One-shot proof that a cold output pending owner is reconstructed only
+/// while its signed/rejection replay source remains authenticated.
+pub(in crate::sumeragi) struct DurableLifecycleOutputPendingMintPermit {
+    _linearity: DurableLifecycleOutputPendingMintLinearity,
+}
+struct DurableLifecycleOutputPendingMintLinearity;
+impl Drop for DurableLifecycleOutputPendingMintLinearity {
+    fn drop(&mut self) {}
+}
+impl DurableLifecycleOutputPendingMintPermit {
+    fn new() -> Self {
+        Self {
+            _linearity: DurableLifecycleOutputPendingMintLinearity,
+        }
+    }
+}
 struct DurableStandaloneValidatePendingMintLinearity;
 impl Drop for DurableStandaloneValidatePendingMintLinearity {
     fn drop(&mut self) {}
@@ -4618,6 +5026,7 @@ impl InvalidBodyReportBoundEffectPermit {
 include!("v2_lifecycle_replay_authority_certified_serve.rs");
 include!("v2_lifecycle_replay_authority_certified_body.rs");
 include!("v2_lifecycle_replay_authority_payload_projection.rs");
+include!("v2_lifecycle_replay_authority_output_recovery.rs");
 #[cfg(test)]
 mod tests {
     include!("tests/v2_lifecycle_replay_authority_fixtures.rs");

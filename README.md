@@ -239,14 +239,11 @@ python3 "${CODEX_HOME:-$HOME/.codex}"/skills/.system/skill-installer/scripts/ins
 Restart Codex after installation so the selected skill appears in the Skills
 tab.
 
-If you are operating the public Taira deployment itself, render per-validator
-configs from `configs/soranexus/taira/validator_roster.example.toml` plus
-`configs/soranexus/taira/validator_secrets.example.toml` with
-`python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ... --output-dir ...`
-instead of cloning the checked-in peer-1 `config.toml` by hand. The secrets
-template now also carries the shared onboarding/faucet authority and streaming
-identity material, so the checked-in Taira config remains a template rather
-than a secret-bearing runtime profile.
+Start a disposable four-validator Taira network with
+`python3 scripts/taira_devnet.py up`; inspect it with `check` and stop it with
+`down`. The command delegates config/genesis generation to the current Kagami
+binary and transaction/API checks to the current daemon and CLI. See
+[`configs/soranexus/taira/README.md`](./configs/soranexus/taira/README.md).
 
 ## Core Crates
 

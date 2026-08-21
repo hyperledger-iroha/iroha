@@ -236,7 +236,7 @@ def _borrow_bound_outer_ingress_order_errors(
         "match current_turn.target()",
         "LifecycleRunnerRankTarget::Completion =>",
         "LifecycleRunnerRankTarget::Runtime =>",
-        "advance_executor(receiver, executor, services, 1)?",
+        "advance_executor(receiver, owner, executor, services, 1)?",
         "LifecycleRunnerRankTarget::Ingress =>",
         "activated.drive_ingress_turn(current_turn)",
     )
@@ -262,15 +262,33 @@ _REMOTE_PROPOSAL_REPLAY_ITEM_SHA256 = {
     "origin_new": "31a61793dfe490059e20eb77f75b9438f95386adc4a618c9eecc695eb9f3f4d7",
     "origin_rebind": "03b2c047f695feded9b1585a5f0bfa4cee5279f11c169b47bf2a9589631a9e9e",
     "origin_merge": "47cbedbb2fcd3da2122459143e65ed6196d14b7779e29d12d135d3fd7e7157f7",
+    "origin_exact_proposal": "fbd6758c3525703a5745b3b40eeb927a96ec367e308e58bb0c8a8c8c6453ed02",
+    "origin_same_proposal": "6c4d46c6586299b736f4478e826d73b0f38cce7a14baa660b2c13b661d474e12",
     "origin_bind_fetch": "546e2a076aeccc4577fc4fcd31898a0cb645fcf2b086cf2a9ca825d7085c4a8b",
-    "driver_default_bind": "8a0e749888af5c64b474d89b3048fcb1d91344776319e61c67415f4eeb894bcd",
-    "driver_bind": "8117b5b9453be5494bc46f3ed9d164a1472411e6ed712067afcc554f32b6a1e3",
-    "ownership_fetch_replay": "fec923e08dd4c0c33198a53369d808298c2a62d8a9abb2ef2aff6ac0c54ba182",
+    "driver_default_bind": "cf110b00fc4ad92d34d38ffb0eea34978c86c26da90eb84a024fb7b3ad12b39a",
+    "driver_default_dormant": "0605b8ac38c3bca1ee626c34fa85fa58d119ce0838efffbc9c4cbfb68a4197d6",
+    "driver_bind": "70439d768373a918a782110cda58f8c0313c4cbab376aadab1a5d2eb194e086e",
+    "driver_dormant": "ac4c86088f8913b976b7419c06bfc49dc5276bf6f4c403e3bd99cf86348808d4",
+    "adapter_dormant": "54d8f963420cde8fcfda352272364ab660b0cb23b8e4eedf77f96ff295cc9b90",
+    "reducer_dormant": "f4c5c9082a99cdb25570683a7fcf18d672ee408c83a59f4aa21853393e0a4fc8",
+    "runtime_reconcile_dormant": "9daa974de6152a5652ba1543555f7b39c483aff9ea6146abe23ce553cab5b648",
+    "runtime_retain_dormant": "7cafc6b25ac53ab494768e72b2b562f3110c4318d8fd36eae4f49a15d61cbca9",
+    "runtime_bind_or_retain": "2162d953f76cb34cb9ee5246d7731e9543cc980676ad64367ba0989ca260e93e",
+    "runtime_retain_effect": "dbf5d0d4fca1ff40aa9b62fed25847bd0f0cca5516b05c3e8e7dca17050c1d96",
+    "candidate_retry_adopt": "ecda2cc6f6dc290bdf930ec16f943645f65a40fe8c11033ff29f3e4d181b1f33",
+    "fetch_consumer_rebind": "fae6445791cb8e360adab46ae142cc4d3e291ddd40ed55393eeb67d369e61b18",
+    "fetch_authority_adopt": "e846fda5841a09586c8baded336d1723f2cc2d625a1078ff21e8185913cb38b1",
+    "body_fetch_rebind": "eba1c4dbbc4292774bfb50861995e9fb212643576d8522e318a91efa7cec6399",
+    "executor_retain": "2ddf84d44bb686dab2766b7367b9731318e01ddbdf0aa693de069c7238661920",
+    "executor_ready": "59e180ef368a513541a4f8d12a8a0f60a3a08e3f718580e42ad658b5145a7683",
+    "ownership_fetch_replay": "1ac9ff4ff448a03d9348faab7796bc1c986cd0600f64d3feb27b4f0abee657c1",
     "authority_mint": "ea8680ad00ae88245688355cc371724b4a133b112be43c3d46fe50f9cc4785e3",
     "authority_match": "fffb59ff81f0cdf5b0f8c1c222693c0fb586af021b2c68746ca5e846bf0ba8e5",
     "authority_pending": "cbea73229aa28cb8524d08e36bc0e89dabfe803f16791dfb1ea9519376082b82",
     "authority_fetch": "95992baebcab3fd7ecce16e4530609d27197b10e58b222764d0abc3e3acc3aae",
-    "runtime_regression": "46c5d09beb1f80e9d5c7b2c83a8bf2d8dbfefa56705d915a8899f928a177d398",
+    "runtime_regression": "68f986966b3caad71b570b0ebdff5e2aafdf08e8594c2a70b294cc2edb5c3a2b",
+    "set_b_regression": "ab363d30b5f8743b4b26b2bb5e52d7db9bbfb61aa43bcac2a8452a16c091a231",
+    "protected_rebind_regression": "779d05e40b2afedee904dcf6d7396de85ce1a8d4e33c2e168e2d9b2fb07e3144",
 }
 
 
@@ -290,6 +308,27 @@ def _remote_proposal_replay_source_fidelity_errors(
         authority_path.relative_to(repo_root).as_posix(),
         errors,
         "remote Proposal replay authority source",
+    )
+    adapter_path = runtime_path.with_name("v2.rs")
+    _path, adapter_source = _read_reviewed_rust_source(
+        repo_root,
+        adapter_path.relative_to(repo_root).as_posix(),
+        errors,
+        "remote Proposal dormant-candidate adapter source",
+    )
+    reducer_path = runtime_path.with_name("v2_core") / "reducer.rs"
+    _path, reducer_source = _read_reviewed_rust_source(
+        repo_root,
+        reducer_path.relative_to(repo_root).as_posix(),
+        errors,
+        "remote Proposal dormant-candidate reducer source",
+    )
+    effects_path = runtime_path.with_name("v2_effects.rs")
+    _path, effects_source = _read_reviewed_rust_source(
+        repo_root,
+        effects_path.relative_to(repo_root).as_posix(),
+        errors,
+        "remote Proposal dormant-candidate executor source",
     )
 
     def one_item(
@@ -364,6 +403,10 @@ def _remote_proposal_replay_source_fidelity_errors(
             "pending_remote_proposal_replay: Option<AuthenticatedRemoteProposalDispatchOrigin>",
             "serialized runtime must retain one immediate Proposal binding slot",
         ),
+        (
+            "dormant_remote_proposal_replay: Option<AuthenticatedRemoteProposalDispatchOrigin>",
+            "serialized runtime must retain one bounded dormant Proposal binding slot",
+        ),
     ):
         count = _token_sequence_count(runtime_tokens, rust_code_tokens(declaration))
         if count != 1:
@@ -393,6 +436,22 @@ def _remote_proposal_replay_source_fidelity_errors(
         origin_context,
         "origin_merge",
         "authenticated remote Proposal deferred merge",
+    )
+    origin_exact_proposal = one_item(
+        runtime_path,
+        runtime_source,
+        "exact_proposal",
+        origin_context,
+        "origin_exact_proposal",
+        "authenticated remote Proposal exact-envelope accessor",
+    )
+    origin_same_proposal = one_item(
+        runtime_path,
+        runtime_source,
+        "same_authenticated_proposal",
+        origin_context,
+        "origin_same_proposal",
+        "authenticated remote Proposal duplicate matcher",
     )
     origin_bind = one_item(
         runtime_path,
@@ -443,6 +502,20 @@ Some(Self {
     )
     _require_rust_token_sequence(
         runtime_path,
+        origin_exact_proposal,
+        "self.ingress.exactly_matches_authenticated(&self.authenticated).then_some(proposal)",
+        "dormant Proposal access must reauthenticate the frozen ingress envelope",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        origin_same_proposal,
+        "self.exact_proposal().is_some() && other.exact_proposal().is_some() && self.authenticated.same_wire_envelope(&other.authenticated)",
+        "dormant Proposal coalescence must preserve the complete authenticated envelope",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
         origin_bind,
         """
 RemoteProposalFetchReplayEvidenceV1::from_exact_authenticated_proposal(
@@ -469,8 +542,23 @@ RemoteProposalFetchReplayEvidenceV1::from_exact_authenticated_proposal(
     _require_rust_token_sequence(
         runtime_path,
         default_bind,
-        "Result<(), ()> { Err(()) }",
+        "Result<Option<AuthenticatedRemoteProposalDispatchOrigin>, ()> { Err(()) }",
         "synthetic runtime drivers must not mint remote Proposal replay authority",
+        errors,
+    )
+    default_dormant = one_item(
+        runtime_path,
+        runtime_source,
+        "remote_proposal_fetch_replay_is_dormant",
+        trait_context,
+        "driver_default_dormant",
+        "closed synthetic dormant remote Proposal classifier",
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        default_dormant,
+        "false",
+        "synthetic runtime drivers must reject dormant Proposal authority by default",
         errors,
     )
     production_context = (("impl", "RuntimeDriver", "for", "SumeragiV2Adapter"),)
@@ -482,6 +570,14 @@ RemoteProposalFetchReplayEvidenceV1::from_exact_authenticated_proposal(
         "driver_bind",
         "production remote Proposal replay binder",
     )
+    production_dormant = one_item(
+        runtime_path,
+        runtime_source,
+        "remote_proposal_fetch_replay_is_dormant",
+        production_context,
+        "driver_dormant",
+        "production dormant remote Proposal classifier",
+    )
     require_order(
         runtime_path,
         production_bind,
@@ -489,13 +585,68 @@ RemoteProposalFetchReplayEvidenceV1::from_exact_authenticated_proposal(
             "if effects.len() != ownership.len()",
             "AdapterEffect::FetchBody { certificate: None, .. }",
             "let Some((index, effect)) = fetches.next() else",
+            "self.remote_proposal_fetch_replay_is_dormant(&origin)",
             "if fetches.next().is_some() || ownership[index].remote_proposal_fetch_replay.is_some()",
-            "ownership[index].pending_adapter_effect_binding(effect)",
+            "ownership[index].exact_pending_adapter_effect_binding(effect)",
             "origin.bind_exact_fetch(effect, pending)",
             "ownership[index].remote_proposal_fetch_replay = Some(replay);",
+            "Ok(None)",
         ),
         "ordinary Proposal replay must bind at most one exact uncertified Fetch",
     )
+    _require_rust_token_sequence(
+        runtime_path,
+        production_dormant,
+        "origin.exact_proposal().is_some_and(|proposal| self.retains_dormant_remote_proposal_fetch(proposal))",
+        "production dormant replay must require the exact authenticated Proposal and closed adapter candidate",
+        errors,
+    )
+
+    adapter_dormant = one_item(
+        adapter_path,
+        adapter_source,
+        "retains_dormant_remote_proposal_fetch",
+        (("impl", "SumeragiV2Adapter"),),
+        "adapter_dormant",
+        "adapter dormant remote Proposal candidate matcher",
+    )
+    require_order(
+        adapter_path,
+        adapter_dormant,
+        (
+            "self.reducer.dormant_set_b_proposal_fetch_candidate()",
+            "self.registry.clone()",
+            "signed_proposal_to_wire(candidate, self.aggregator.as_ref())",
+            "candidate == *proposal",
+        ),
+        "adapter dormant replay must compare the complete reconstructed signed Proposal",
+    )
+    reducer_dormant = one_item(
+        reducer_path,
+        reducer_source,
+        "dormant_set_b_proposal_fetch_candidate",
+        (("impl", "Reducer"),),
+        "reducer_dormant",
+        "closed Set-B dormant Proposal candidate classifier",
+        attributes=("#[must_use]",),
+    )
+    for sequence, diagnostic in (
+        ("self.durable.decision().is_none()", "a Decision must retire dormant Proposal authority"),
+        ("self.pending_persistence.is_none()", "pending persistence must exclude dormant Proposal authority"),
+        ("self.durable.timeout_intent(round).is_none()", "timeout intent must exclude dormant Proposal authority"),
+        ("round == Round::new(self.context.height(), self.durable.current_view())", "dormant Proposal authority must be current-round only"),
+        ("self.local_committee_role() == Some(CommitteeRole::SetBValidator)", "only Set B may retain dormant Proposal authority"),
+        ("!self.fallback_active", "activated fallback is no longer dormant"),
+        ("self.body_state(round, subject) == BodyState::Missing", "dormant Proposal authority requires missing body work"),
+        ("!self.pending_prepare.contains_key(&certificate)", "Prepare authority must retire dormant Proposal authority"),
+    ):
+        _require_rust_token_sequence(
+            reducer_path,
+            reducer_dormant,
+            sequence,
+            diagnostic,
+            errors,
+        )
     dispatch = next(
         (
             item
@@ -589,41 +740,92 @@ RemoteProposalFetchReplayEvidenceV1::from_exact_authenticated_proposal(
         ),
         "deferred Proposal replay must rebind the selected ProposalReceived ingress before effect ownership",
     )
-    retain = next(
-        (
-            item
-            for item in rust_items(runtime_source, "retain_effect_ownership")
-            if item.brace_context == generic_context
-        ),
-        None,
+    reconcile_dormant = one_item(
+        runtime_path,
+        runtime_source,
+        "reconcile_dormant_remote_proposal_replay",
+        generic_context,
+        "runtime_reconcile_dormant",
+        "serialized dormant Proposal reconciliation",
     )
-    if retain is None:
-        errors.append(f"{runtime_path}: require exactly one runtime effect ownership retainer")
-    else:
-        _require_rust_token_sequence(
-            runtime_path,
-            retain,
+    retain_dormant = one_item(
+        runtime_path,
+        runtime_source,
+        "retain_dormant_remote_proposal_replay",
+        generic_context,
+        "runtime_retain_dormant",
+        "serialized dormant Proposal retention",
+    )
+    bind_or_retain = one_item(
+        runtime_path,
+        runtime_source,
+        "bind_or_retain_remote_proposal_replay",
+        generic_context,
+        "runtime_bind_or_retain",
+        "serialized Proposal bind-or-retain handoff",
+    )
+    retain = one_item(
+        runtime_path,
+        runtime_source,
+        "retain_effect_ownership",
+        generic_context,
+        "runtime_retain_effect",
+        "serialized runtime effect ownership retainer",
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        reconcile_dormant,
+        "self.driver.remote_proposal_fetch_replay_is_dormant(origin)",
+        "dormant Proposal reconciliation must retain only the exact still-latent candidate",
+        errors,
+    )
+    require_order(
+        runtime_path,
+        retain_dormant,
+        (
+            "self.driver.remote_proposal_fetch_replay_is_dormant(&origin)",
+            "self.dormant_remote_proposal_replay.take()",
+            "self.driver.remote_proposal_fetch_replay_is_dormant(&incumbent)",
+            "incumbent.same_authenticated_proposal(&origin)",
+            "self.dormant_remote_proposal_replay = Some(retained);",
+        ),
+        "the one dormant slot must preserve an exact authenticated duplicate and reject replacement",
+    )
+    require_order(
+        runtime_path,
+        bind_or_retain,
+        (
+            "self.driver.bind_remote_proposal_fetch_replay(origin, effects, ownership)",
+            "if let Some(dormant) = dormant",
+            "self.retain_dormant_remote_proposal_replay(dormant)?;",
+        ),
+        "Proposal binding must either consume the origin or retain its closed dormant successor",
+    )
+    require_order(
+        runtime_path,
+        retain,
+        (
+            "let dormant_retransmit = if source == RuntimeEffectSource::Retransmit",
+            "self.dormant_remote_proposal_replay.take()",
+            "self.reconcile_dormant_remote_proposal_replay();",
+            "if self.pending_remote_proposal_replay.is_some() && dormant_retransmit.is_some()",
+            "if effects.is_empty()",
+            ".or(dormant_retransmit)",
+            "let mut ownership = Vec::with_capacity(effects.len());",
             """
-if effects.is_empty() {
-    if let Some(origin) = self.pending_remote_proposal_replay.take() {
-        self.driver.bind_remote_proposal_fetch_replay(origin, effects, &mut [])
-""",
-            "effect ownership must consume an empty pending Proposal replay through the closed binder",
-            errors,
-        )
-        require_order(
-            runtime_path,
-            retain,
-            (
-                "let mut ownership = Vec::with_capacity(effects.len());",
-                """
 if let Some(origin) = self.pending_remote_proposal_replay.take() {
-    self.driver.bind_remote_proposal_fetch_replay(origin, effects, &mut ownership)
+    self.bind_or_retain_remote_proposal_replay(origin, effects, &mut ownership)?;
+}
 """,
-                "self.pending_effect_ownership = Some(ownership);",
-            ),
-            "effect ownership must consume the pending Proposal replay before batch publication",
-        )
+            """
+if let Some(origin) = dormant_retransmit {
+    self.bind_or_retain_remote_proposal_replay(origin, effects, &mut ownership)?;
+}
+""",
+            "self.pending_effect_ownership = Some(ownership);",
+        ),
+        "only Retransmit may consume dormant Proposal authority, after exact direct-origin exclusion and before batch publication",
+    )
 
     ownership_context = (("impl", "RuntimeEffectOwnership"),)
     accessor = one_item(
@@ -639,11 +841,130 @@ if let Some(origin) = self.pending_remote_proposal_replay.take() {
         accessor,
         """
 let replay = self.remote_proposal_fetch_replay.as_ref()?;
-let pending = self.pending_adapter_effect_binding(effect)?;
+let pending = self.exact_pending_adapter_effect_binding(effect).ok()?;
 replay.exactly_matches_fetch_pending(effect, &pending).then(|| replay.clone())
 """,
         "remote Proposal replay accessor must require the exact Fetch pending binding",
         errors,
+    )
+    fetch_adopt = one_item(
+        runtime_path,
+        runtime_source,
+        "adopt_incumbent_fetch_for_retry_or_authority",
+        ownership_context,
+        "fetch_authority_adopt",
+        "incumbent Fetch authority adoption",
+    )
+    require_order(
+        runtime_path,
+        fetch_adopt,
+        (
+            "incumbent_statement.fetch_authority_relation_to(incoming_statement)",
+            "RuntimeEffectOwnership::new_bound(",
+            "relation == RuntimeFetchAuthorityRelation::Same",
+            "self.exact_remote_proposal_fetch_replay(effect)",
+            "replay.exactly_matches_fetch_pending(effect, &pending)",
+            "adopted.remote_proposal_fetch_replay = Some(replay);",
+        ),
+        "same-authority Fetch adoption must preserve the exact authenticated Proposal replay while upgrades remain replay-neutral",
+    )
+    candidate_retry_adopt = one_item(
+        runtime_path,
+        runtime_source,
+        "adopt_incumbent_candidate_for_semantic_retry",
+        ownership_context,
+        "candidate_retry_adopt",
+        "incumbent candidate retry adoption",
+    )
+    require_order(
+        runtime_path,
+        candidate_retry_adopt,
+        (
+            "RuntimeEffectOwnership::new_bound(",
+            "self.exact_remote_proposal_fetch_replay(effect)",
+            "replay.exactly_matches_fetch_pending(effect, &pending)",
+            "adopted.remote_proposal_fetch_replay = Some(replay);",
+        ),
+        "exact candidate retry adoption must preserve an authenticated ordinary Fetch replay owner",
+    )
+    fetch_consumer_rebind = one_item(
+        runtime_path,
+        runtime_source,
+        "rebind_fetch_consumer",
+        ownership_context,
+        "fetch_consumer_rebind",
+        "authenticated ordinary Fetch consumer rebind",
+    )
+    require_order(
+        runtime_path,
+        fetch_consumer_rebind,
+        (
+            "previous_pending.project_fetch_consumer_rebind(previous_effect, rebound_effect)",
+            "RuntimeEffectOwnership::new_bound(",
+            "replay.rebind_exact_consumer(",
+            "rebound.remote_proposal_fetch_replay = Some(replay);",
+        ),
+        "ordinary Fetch consumer rebind must project both pending ownership and authenticated replay",
+    )
+
+    body_fetch_rebind = one_item(
+        effects_path,
+        effects_source,
+        "rebind_consumer",
+        (("impl", "BodyFetchTask"),),
+        "body_fetch_rebind",
+        "executor body-Fetch consumer rebind",
+    )
+    require_order(
+        effects_path,
+        body_fetch_rebind,
+        (
+            "let previous_effect = self.adapter_effect();",
+            "exact_remote_proposal_fetch_replay(&previous_effect)",
+            "rebind_fetch_consumer(&previous_effect, &rebound_effect)",
+            "rebind_same_adapter_effect(&rebound_effect)",
+        ),
+        "executor body-Fetch rebind must use the Proposal-only proof exactly when replay authority is present",
+    )
+
+    executor_ready = one_item(
+        effects_path,
+        effects_source,
+        "ready_to_finish",
+        (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),),
+        "executor_ready",
+        "executor terminal readiness fence",
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        executor_ready,
+        "&& !self.runtime.has_dormant_remote_proposal_replay()",
+        "height finalization must not discard one live dormant Proposal replay origin",
+        errors,
+    )
+    executor_retain = one_item(
+        effects_path,
+        effects_source,
+        "retain_effect_batch_at_frontier",
+        (("impl", "<", "R", ":", "EffectRuntime", ">", "V2EffectExecutor", "<", "R", ">"),),
+        "executor_retain",
+        "executor retained-effect frontier",
+    )
+    require_order(
+        effects_path,
+        executor_retain,
+        (
+            "let effective_tag = entering_view",
+            "let effective_ownership = if effective_tag == pending.task.tag",
+            "pending.task.rebind_consumer(effective_tag)",
+            "effective_ownership.candidate_semantic_identity()",
+            "retained_candidate_owners.get_mut(&candidate_identity)",
+            "if *candidate_owner != effective_ownership",
+            "*candidate_owner = effective_ownership.clone();",
+            "retained_fetch_lineages.insert(key, effective_ownership.clone())",
+            "incumbent.adopt_incumbent_fetch_for_retry_or_authority(evidence, effect)",
+        ),
+        "post-EnterView lineage indexing must simulate the exact protected Fetch ownership rebind before Same/Upgrade adoption",
     )
 
     authority_context = (("impl", "RemoteProposalFetchReplayEvidenceV1"),)
@@ -750,5 +1071,79 @@ ingress.exactly_matches_authenticated(authenticated)
         ),
     ):
         _require_rust_token_sequence(runtime_path, regression, sequence, diagnostic, errors)
+
+    set_b_regression = one_item(
+        runtime_path,
+        runtime_source,
+        "set_b_proposal_replay_waits_for_and_authenticates_periodic_fallback_fetch",
+        test_context,
+        "set_b_regression",
+        "Set-B dormant Proposal replay regression",
+        attributes=("#[test]",),
+    )
+    for sequence, diagnostic in (
+        (
+            "committee.role(*index) == Ok(crate::sumeragi::v2_core::CommitteeRole::SetBValidator)",
+            "Set-B replay regression must derive rather than assume the local committee role",
+        ),
+        (
+            "initial_effects.is_empty()",
+            "Set-B replay regression must exercise the original Applied([]) transition",
+        ),
+        (
+            "assert!(runtime.has_dormant_remote_proposal_replay());",
+            "Set-B replay regression must observe the bounded dormant origin",
+        ),
+        (
+            "RuntimeSelectedOwnerKind::PeriodicTimer",
+            "Set-B replay regression must consume the origin only through periodic fallback",
+        ),
+        (
+            "ownership[fetch_position].exact_remote_proposal_fetch_replay(&effects[fetch_position]).is_some()",
+            "Set-B periodic Fetch must carry the exact authenticated Proposal owner",
+        ),
+        (
+            "!runtime.has_dormant_remote_proposal_replay()",
+            "Set-B periodic Fetch must consume the one dormant slot",
+        ),
+    ):
+        _require_rust_token_sequence(
+            runtime_path,
+            set_b_regression,
+            sequence,
+            diagnostic,
+            errors,
+        )
+
+    protected_rebind_regression = one_item(
+        effects_path,
+        effects_source,
+        "enter_view_and_ordinary_fetch_retry_preserve_authenticated_replay_owner",
+        test_context,
+        "protected_rebind_regression",
+        "post-EnterView ordinary Fetch replay regression",
+        attributes=("#[test]",),
+    )
+    for sequence, diagnostic in (
+        (
+            "authenticated_proposal_fetch_ownership(&fixture, &ordinary, 9_024)",
+            "post-EnterView regression must begin with genuine authenticated Proposal authority",
+        ),
+        (
+            "AdapterEffect::EnterView",
+            "post-EnterView regression must execute the protected prefix",
+        ),
+        (
+            "pending.task.ownership().exact_remote_proposal_fetch_replay(&retry).is_some()",
+            "post-EnterView Same retry must retain the authenticated Proposal envelope",
+        ),
+    ):
+        _require_rust_token_sequence(
+            effects_path,
+            protected_rebind_regression,
+            sequence,
+            diagnostic,
+            errors,
+        )
 
     return errors

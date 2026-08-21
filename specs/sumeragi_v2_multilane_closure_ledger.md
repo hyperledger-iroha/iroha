@@ -50,18 +50,16 @@ statements in this document describe the mutable development checkout. They are
 inventories and source-consistency observations, not immutable-candidate
 execution or release receipts.
 
-Mutable documentation does not embed SDK suite-source digests: the executable resolver derives them during immutable-candidate freeze/replay, and the release receipt binds the result.
-
 ## 2026-08-19 mutable-development closure snapshot
 
 - The checkout remains an unsigned, dirty mutable-development tree. Its
   volatile index/worktree counts are deliberately not treated as release
   identity; only a later signed, detached, source-sealed candidate may supply
   that evidence.
-- The bound static inventory contains exactly 91 corridor legs, 864/864
+- The bound static inventory contains exactly 84 corridor legs, 864/864
   production tests across 43 modules, 522/522 G-UNIT rows, and four mandatory
   G-4P gates. The grouped fixture pin validates. The recursive SDK resolver
-  enumerates 1,400 grouped and 1,402 diagnostics paths at the exact hashes in
+  enumerates 1,399 grouped and 1,401 diagnostics paths at the exact hashes in
   the owning corpus and `G-SDK` rows below. These are source inventories, not
   execution receipts.
 - The reviewed closure has no remaining explicit in-scope multilane TODO. The
@@ -263,9 +261,6 @@ The execution-input persistence boundary separately reconstructs the exact
 producer-authenticated payload and complete input, binds its canonical
 reservation group and authenticated writer witness, and consumes a checked
 `PersistExecutionInput` projection before the indexed Kura append.
-Its durable source is a single disjoint Norito V1 value: either the exact
-globally committed lane artifact or the autonomous network/epoch/payload hash.
-No partial optional binding and no synthetic global block anchor are admitted.
 The READY-QC persistence boundary separately binds the exact certificate,
 payload, chain/epoch, producer, committee bitmap, and shared reservation group
 into a move-only authority, consumes it, and checks `PersistReadyQc` before the
@@ -1644,7 +1639,7 @@ status/diagnostics payload negative. The development resolver
 `ci/resolve_sumeragi_v2_sdk_source_closure.py` and manifest
 `ci/sumeragi_v2_sdk_source_closure.json` cover transitive production sources
 and Kotlin/Java Native model dependencies. The current mutable-tree inventory
-  is exactly 1,400 grouped and 1,402 diagnostics records. Their canonical hashes
+  is exactly 1,399 grouped and 1,401 diagnostics records. Their canonical hashes
 are
 recorded once in the owning corpus row and once in the release gate. The
 release receipt must reproduce those values from its immutable candidate;
@@ -1735,9 +1730,13 @@ corpus includes
 `coherent_over_quorum_requirement` controls; `bounds.validators_max` is 128.
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 63, JavaScript 61, Swift
-4, Kotlin 6, and Java 5 tests. The current recursive mutable-tree closure
-contains exactly 1,400 grouped and 1,402 diagnostics records. The executable
-resolver derives both suite-source SHA-256 values from the frozen candidate.
+5, Kotlin 7, and Java 6 tests. The current recursive mutable-tree closure
+  contains exactly 1,399 grouped and 1,401 diagnostics records. Its grouped and
+diagnostics
+suite-source SHA-256 values are
+  `1779c5ccb601b35849953ff62bfb49dc49aa405232cbc6aa1025c772c3d3bc15`
+and
+  `973022b1bfa2aa35e988cefda749abfcaeaeb2e2795fb2fe31732ab07af8b7f8`.
 The checked-in grouped fixture has SHA-256
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
 The diagnostics closure directly includes the 48-line wire fixture whose
@@ -1809,8 +1808,9 @@ regression rejects a legacy merge-share version while leaving the signing guard
 unauthorized. It replaced one required release-corridor selector without changing
 the then-current count; the autonomous-retirement regression added here raised
 that checkpoint to 857 tests. The retired-attempt, mixed-carrier, and two-link
-cold-restart rows plus the two predecessor-durability handoff rows bring the
-current production inventory to 864 tests while
+cold-restart rows plus the two predecessor-durability handoff rows, followed by
+retirement of the dormant generic persisted-continuation regression, leave the
+current production inventory at 864 tests while
 the G-UNIT inventory contains 522 tests. Source binding is not an execution receipt.
 The finalized predecessor remains active while the shared ordinary/PendingKura
 preflight rehydrates late canonical lane ownership, services bounded
@@ -1883,7 +1883,7 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The mutable source inventory is internally count-consistent. The production
-inventory contains exactly 864 tests across 43 modules, including 445
+inventory contains exactly 864 tests across 43 modules, including 446
 source-sealed ownership/regression names. The duplicate inline V2 core network
 simulations are retired; the standalone `iroha_sumeragi_core` harness remains. The three Kura recovery
 regressions and governance-unlock audit are retained beside the prior source-bound closure.
@@ -2041,9 +2041,11 @@ browser JavaScript distribution, SoraFS orderbook JavaScript implementation
 and types, the standalone Python orderbook module, Kotlin/Java Native models,
 grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The current
-mutable-tree closure contains exactly 1,400 grouped and 1,402 diagnostics
-records; its suite-source digests are intentionally derived only during
-immutable-candidate freeze and receipt replay.
+  mutable-tree closure contains exactly 1,399 grouped and 1,401 diagnostics
+records, with grouped and diagnostics suite-source SHA-256 values
+  `1779c5ccb601b35849953ff62bfb49dc49aa405232cbc6aa1025c772c3d3bc15`
+and
+  `973022b1bfa2aa35e988cefda749abfcaeaeb2e2795fb2fe31732ab07af8b7f8`.
 The current grouped JSON and wire TSV SHA-256 values are
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`
 and
@@ -2253,10 +2255,10 @@ remain required by the mapped rows.
   Linux/macOS crash-safe storage contract. This is a declared platform
   restriction mapped to `ML-LIFE-01`, `ML-LIFE-04`, and `G-FINAL`; it must not
   be silently bypassed.
-- The first-release config schema has no top-level Nexus availability switch;
-  lane catalogs, dataspaces, and routing policy are always authoritative. That
-  preserves the configuration-only production boundary in `ML-LIFE-01`; it is
-  not an environment-controlled autonomous-execution toggle.
+- `ConfigError::NexusMultilaneDisabled` rejects lane catalogs, dataspaces, or
+  routing overrides when `nexus.enabled` is false. That preserves the
+  configuration-only production boundary in `ML-LIFE-01`; it is not an
+  environment-controlled autonomous-execution toggle.
 - Queue durability ambiguity disables admission/selection until bounded
   restart recovery, and Kura retirement rejects obsolete, unexpected,
   malformed, temporary, hardlinked, or symlinked evidence. Those rejections

@@ -421,6 +421,107 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
             .ok()?;
         Some(ordinal)
     }
+    /// Add one exact unpaired recovered signed-Broadcast to a scheduler fixture.
+    ///
+    /// This mirrors the durable Sign-to-Broadcast child cut while retaining all
+    /// message, signature, pending-binding, and WAL authority inside the closed
+    /// registry. Only the child ordinal leaves the helper.
+    pub(super) fn add_recovered_broadcast_scheduler_fixture_for_test(
+        &mut self,
+        coordinator: &mut LifecycleCoordinator,
+        verified: &VerifiedHeightContext,
+        local_signer: &iroha_crypto::KeyPair,
+        marker: u8,
+    ) -> Option<u128> {
+        let (parent, parent_vote) =
+            recovered_next_vote_projection_for_scheduler_fixture(verified, marker);
+        let mut signed_vote = parent_vote.clone();
+        signed_vote.signature = iroha_crypto::Signature::new(
+            local_signer.private_key(),
+            &SignRequest::Vote(parent_vote).signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let broadcast =
+            RecoveredLifecycleSignedBroadcastProjectionV1::from_next_wal_vote_for_scheduler_fixture(
+                &parent,
+                verified,
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Vote(signed_vote),
+                )),
+            )?;
+        let (parent_owner, parent_ordinal) =
+            parent.admit_into_scheduler_fixture(verified, coordinator)?;
+        let (broadcast_owner, broadcast_ordinal) =
+            match coordinator.admit(AdmissionRequest::Candidate(broadcast.candidate().clone())) {
+                super::AdmissionDecision::Admitted {
+                    owner,
+                    ordinal,
+                    producer_turn_ordinal: None,
+                } => (owner, ordinal),
+                _ => return None,
+            };
+        if broadcast_owner != parent_owner
+            || parent_ordinal.checked_add(1) != Some(broadcast_ordinal)
+        {
+            return None;
+        }
+        coordinator
+            .finish_terminal(parent_ordinal, super::TerminalOutcome::Advanced)
+            .ok()?;
+        coordinator
+            .durable_records
+            .get_mut(&parent_ordinal)?
+            .continuation = super::schema::DurableContinuation::successor(
+            super::schema::DurableContinuationEdge::SignPrepareToBroadcast,
+            broadcast_ordinal,
+        );
+        let parent_record = coordinator.records.get(&parent_ordinal)?;
+        let (parent_slot, parent_digest) =
+            exact_single_record_slot(parent_record, LifecycleWorkClass::SignVote.capacity_class())?;
+        let parent_address = ConcreteWorkAddress::new(parent_owner, parent_ordinal, parent_slot)?;
+        let broadcast_record = coordinator.records.get(&broadcast_ordinal)?;
+        let (broadcast_slot, broadcast_digest) = exact_single_record_slot(
+            broadcast_record,
+            LifecycleWorkClass::Broadcast.capacity_class(),
+        )?;
+        let broadcast_address =
+            ConcreteWorkAddress::new(broadcast_owner, broadcast_ordinal, broadcast_slot)?;
+        if parent.digest() != parent_digest || broadcast.digest() != broadcast_digest {
+            return None;
+        }
+        let parent = DurableRecoveredLifecycleNextWalVoteSignWork {
+            projection: parent,
+            verified: verified.clone(),
+            address: parent_address,
+            dispatch_key: None,
+        };
+        let work = ConcreteLifecycleWork {
+            digest: broadcast_digest,
+            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(
+                DurableRecoveredLifecycleSignedBroadcastWork {
+                    parent: DurableRecoveredLifecycleSignParentV1::NextWalVote(parent),
+                    broadcast,
+                    verified: verified.clone(),
+                    address: broadcast_address,
+                    paired_next_sign: None,
+                },
+            ),
+        };
+        if !work.validates_at(broadcast_address)
+            || self
+                .registry_for_test_mut()
+                .entries
+                .insert(broadcast_address, work)
+                .is_some()
+        {
+            return None;
+        }
+        self.registry_for_test()
+            .attest_ready_recovered_lifecycle_signed_broadcast(coordinator, broadcast_ordinal)
+            .ok()?;
+        Some(broadcast_ordinal)
+    }
     /// Install one exact recovered Broadcast pair plus an unrelated Ready Sign.
     ///
     /// Only logical ordinals leave this helper. Every effect, WAL identity,
@@ -711,9 +812,8 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
                 .bind_authenticated_remote_proposal_replay_for_test(proposal, &fetch_effect,)
         );
         let fetch_pending = fetch_ownership
-            .current_effect_producer(&fetch_effect)
-            .expect("remote-Proposal Fetch retains one producer")
-            .mint_pending_binding();
+            .exact_pending_adapter_effect_binding(&fetch_effect)
+            .expect("remote-Proposal Fetch retains one pending binding");
         let fetch_replay = fetch_ownership
             .exact_remote_proposal_fetch_replay(&fetch_effect)
             .expect("authenticated Proposal retains exact Fetch replay evidence");

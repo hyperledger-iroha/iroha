@@ -137,7 +137,12 @@ fn certified_view_churn_cancels_stale_signing_and_releases_capacity() {
     let mut stale_ids = Vec::new();
     for view in 0..6 {
         let manifest = manifest_at_view(&fixture, view);
-        persist_fsynced_validation_marker(&mut executor, &mut services, &fixture, manifest.clone());
+        install_fsynced_validation_fixture(
+            &mut executor,
+            &mut services,
+            &fixture,
+            manifest.clone(),
+        );
         executor
             .consume_effects(
                 vec![AdapterEffect::Sign {
@@ -220,98 +225,6 @@ fn certified_sources_must_exactly_match_canonical_frozen_roster() {
     }
 }
 #[test]
-fn reopened_durable_receipt_satisfies_fetch_without_network() {
-    let fixture = Fixture::new();
-    let directory = TempDir::new().expect("recovery directory");
-    let mut store = V2BodyStore::open_with_policy(
-        directory.path(),
-        fixture.context.clone(),
-        BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
-    )
-    .expect("open body store");
-    let task = BodyStoreTask::for_test(91, tag(0), fixture.manifest.clone(), fixture.body.clone());
-    let durable = store
-        .execute_store_task(&task)
-        .expect("persist body before crash");
-    let receipt = durable.receipt().clone();
-    drop(store);
-    let reopened = V2BodyStore::open_with_policy(
-        directory.path(),
-        fixture.context.clone(),
-        BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
-    )
-    .expect("reopen body store");
-    let catalog = reopened.recovery_catalog().expect("recovery catalog");
-    let mut executor = V2EffectExecutor::with_runtime(
-        FakeRuntime::default(),
-        catalog,
-        fixture.context.clone(),
-        PeerId::new(fixture.requester_key.public_key().clone()),
-        Some(0),
-        EffectQueueConfig::default(),
-    )
-    .expect("recovered executor");
-    let mut services = FakeServices {
-        _body_directory: Some(directory),
-        body_store: Some(reopened),
-        requester_key: Some(fixture.requester_key.clone()),
-        ..FakeServices::default()
-    };
-    let recovered_fetch = AdapterEffect::FetchBody {
-        tag: tag(0),
-        round: fixture.manifest.round,
-        subject: fixture.manifest.subject,
-        manifest: Some(fixture.manifest.clone()),
-        certified_sources: Vec::new(),
-        certificate: None,
-    };
-    executor
-        .consume_effects(vec![recovered_fetch.clone()], &mut services)
-        .expect("recover local durable body");
-    assert!(services.fetch_tasks.is_empty());
-    assert_eq!(executor.runtime.queued_commands(), 1);
-    assert!(matches!(
-        executor.runtime.completions.last(),
-        Some(RuntimeCompletion::BodyAvailable(completion_tag, manifest))
-            if *completion_tag == tag(0) && manifest == &fixture.manifest
-    ));
-    executor
-        .consume_effects(vec![recovered_fetch], &mut services)
-        .expect("retransmitted recovery fetch remains idempotent");
-    assert_eq!(executor.runtime.queued_commands(), 1);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::StoreBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-            }],
-            &mut services,
-        )
-        .expect("acknowledge recovered durability");
-    assert_eq!(
-        executor
-            .durable_bodies
-            .get(&(fixture.manifest.round, fixture.manifest.subject)),
-        Some(&receipt)
-    );
-    executor
-        .consume_effects(
-            vec![AdapterEffect::ValidateBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-            }],
-            &mut services,
-        )
-        .expect("queue recovered validation");
-    let validation_id = services.validation_tasks[0].id();
-    let completion = services.execute_validation(validation_id);
-    executor
-        .complete_body_validation(completion, &mut services)
-        .expect("validate reopened exact body");
-}
-#[test]
 fn delayed_pending_tip_recovery_allows_only_local_apply_pipeline() {
     let fixture = Fixture::new();
     let directory = TempDir::new().expect("recovery directory");
@@ -337,7 +250,14 @@ fn delayed_pending_tip_recovery_allows_only_local_apply_pipeline() {
     )
     .expect("reopen recovery body store");
     let recovered = reopened.recovery_catalog().expect("recovery catalog");
-    let recovered_validations = reopened.validated_recovery_catalog();
+    // Reopened markers intentionally remain quarantined until the production
+    // lifecycle startup factory performs semantic replay. This executor-only
+    // fixture retains the exact marker minted above as that factory's output;
+    // cold-open revalidation itself has dedicated owner-level coverage.
+    let recovered_validations = BTreeMap::from([(
+        (fixture.manifest.round, fixture.manifest.subject),
+        validated_receipt.clone(),
+    )]);
     let commit = fixture.qc(wire::GlobalPhase::Commit);
     let expected = PendingKuraApply::for_test(
         fixture.context.id(),
@@ -364,6 +284,7 @@ fn delayed_pending_tip_recovery_allows_only_local_apply_pipeline() {
     .expect("authenticate delayed pending-tip recovery evidence");
     let mut runtime = FakeRuntime {
         round_tag: Some(tag(0)),
+        next_lifecycle_ordinal: 1,
         ..FakeRuntime::default()
     };
     runtime
@@ -414,14 +335,40 @@ fn delayed_pending_tip_recovery_allows_only_local_apply_pipeline() {
         requester_key: Some(fixture.requester_key.clone()),
         ..FakeServices::default()
     };
-    for _ in 0..4 {
-        assert!(matches!(
-            executor
-                .step_pending_tip_recovery(Instant::now(), &mut services)
-                .expect("advance local-only recovery"),
-            EffectExecutorStep::Advanced { effects: 1 }
-        ));
+    for stage in 0..2 {
+        let step = executor
+            .step_pending_tip_recovery(Instant::now(), &mut services)
+            .unwrap_or_else(|error| panic!("advance local-only recovery stage {stage}: {error:?}"));
+        assert!(matches!(step, EffectExecutorStep::Advanced { effects: 1 }));
     }
+    assert!(
+        services.store_tasks.is_empty(),
+        "the recovered durable Store must use its exact local receipt"
+    );
+    assert!(matches!(
+        executor
+            .step_pending_tip_recovery(Instant::now(), &mut services)
+            .expect("advance local-only recovery stage 2"),
+        EffectExecutorStep::Advanced { effects: 1 }
+    ));
+    let validate_key = (fixture.manifest.round, fixture.manifest.subject);
+    assert_eq!(executor.pending_tip_recovery_attempts(), 3);
+    assert_eq!(
+        executor.status().pending_tip_recovery_stage,
+        Some(PendingKuraApplyRecoveryStage::Apply)
+    );
+    assert!(executor.pending_durable_validate_admissions.is_empty());
+    assert!(
+        !executor
+            .durable_validate_retry_seals
+            .contains_key(&validate_key)
+    );
+    assert!(matches!(
+        executor
+            .step_pending_tip_recovery(Instant::now(), &mut services)
+            .expect("advance settled local-only Apply"),
+        EffectExecutorStep::Advanced { effects: 1 }
+    ));
     assert_eq!(executor.pending_tip_recovery_attempts(), 4);
     assert_eq!(
         executor.status().pending_tip_recovery_stage,
@@ -475,7 +422,7 @@ fn delayed_pending_tip_recovery_allows_only_local_apply_pipeline() {
     assert!(matches!(
         executor.step_pending_tip_recovery(Instant::now(), &mut services),
         Err(EffectExecutorError::Contract(reason))
-            if reason.contains("non-local consensus effect")
+            if reason.contains("must not emit another effect")
     ));
     assert!(services.broadcasts.is_empty());
 }
@@ -507,16 +454,14 @@ fn runtime_step_dispatches_entire_effect_batch_before_returning() {
     assert_eq!(
         executor
             .step(Instant::now(), &mut services)
-            .expect("dispatch complete effect batch"),
+            .expect("transfer the complete effect batch"),
         EffectExecutorStep::Advanced { effects: 3 }
     );
-    assert_eq!(
-        services.effect_service_order,
-        vec!["broadcast", "equivocation", "invalid-body"]
-    );
-    assert_eq!(services.broadcasts, vec![message]);
-    assert_eq!(services.equivocations.len(), 1);
-    assert_eq!(services.invalid_bodies, vec![fixture.manifest.subject]);
+    assert!(services.effect_service_order.is_empty());
+    assert!(services.broadcasts.is_empty());
+    assert!(services.equivocations.is_empty());
+    assert!(services.invalid_bodies.is_empty());
+    assert_eq!(executor.pending_lifecycle_output_admissions.len(), 3);
     assert!(
         executor.runtime.steps.is_empty(),
         "the emitted effect batch must have no pending tail"
@@ -534,7 +479,7 @@ fn runtime_step_consumes_effect_batch_and_idle_publishes_status() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
-    persist_fsynced_validation_marker(
+    install_fsynced_validation_fixture(
         &mut executor,
         &mut services,
         &fixture,
@@ -574,6 +519,60 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
         )
         .expect("arm the production serialized runtime");
     let mut services = FakeServices::default();
+    // The recovered receipt can skip body I/O, but it cannot synthesize the
+    // signed-Proposal authority that owns the ordinary Store -> Validate edge.
+    let proposer = fixture.context.leader(fixture.round.view);
+    let mut proposal = wire::Proposal {
+        round: fixture.round,
+        proposer,
+        subject: fixture.subject,
+        manifest: fixture.manifest.clone(),
+        justification: wire::ProposalJustification::ParentCommit(wire::ParentCommitJustification {
+            certificate: None,
+        }),
+        signature: Vec::new(),
+    };
+    proposal.signature = Signature::new(
+        fixture.validator_keys[usize::try_from(proposer).expect("small proposer index")]
+            .private_key(),
+        &proposal.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    fixture
+        .executor
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Proposal(proposal),
+        ))
+        .expect("authenticate the canonical Proposal replay origin");
+    let canonical_key = (fixture.round, fixture.subject);
+    fixture
+        .executor
+        .step(started, &mut services)
+        .expect("retain the Set-B Proposal replay origin");
+    assert!(
+        fixture
+            .executor
+            .runtime
+            .has_dormant_remote_proposal_replay()
+    );
+    let fallback_at = started + fixture.executor.runtime.retransmit_interval();
+    for _ in 0..8 {
+        fixture
+            .executor
+            .step(fallback_at, &mut services)
+            .expect("drive the canonical Proposal through recovered durable Store");
+        if matches!(
+            fixture.executor.remote_proposal_replay.get(&canonical_key),
+            Some(RemoteProposalReplayStageV1::Stored { .. })
+        ) {
+            break;
+        }
+    }
+    assert!(matches!(
+        fixture.executor.remote_proposal_replay.get(&canonical_key),
+        Some(RemoteProposalReplayStageV1::Stored { .. })
+    ));
     let conflicting_body = b"delayed-GST equivocation payload".to_vec();
     let conflicting_subject = wire::BlockSubject {
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"delayed-GST equivocation block")),
@@ -597,8 +596,38 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
     fixture
         .executor
         .runtime
-        .bind_validated_body(&conflicting_manifest, &conflicting_validated)
+        .recover_validated_body(&conflicting_manifest, &conflicting_validated)
         .expect("bind a second locally validated equivocation subject");
+    let mut settled_output_owners = Vec::new();
+    let mut settled_validate_owners = Vec::new();
+    let mut model_output_settlement = |executor: &mut V2EffectExecutor| {
+        while let Some(key) = executor
+            .pending_lifecycle_output_admissions
+            .keys()
+            .next()
+            .copied()
+        {
+            settled_output_owners.push(
+                executor
+                    .pending_lifecycle_output_admissions
+                    .remove(&key)
+                    .expect("transfer the exact output owner to lifecycle settlement"),
+            );
+        }
+        while let Some(key) = executor
+            .pending_durable_validate_admissions
+            .keys()
+            .next()
+            .copied()
+        {
+            settled_validate_owners.push(
+                executor
+                    .pending_durable_validate_admissions
+                    .remove(&key)
+                    .expect("transfer the exact Validate owner to lifecycle settlement"),
+            );
+        }
+    };
     let signed_vote = |subject: wire::BlockSubject,
                        execution_commitment: wire::ExecutionCommitment,
                        signer: wire::ValidatorIndex| {
@@ -621,15 +650,7 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote))
     };
     let canonical_share = signed_vote(fixture.subject, fixture.canonical_commitment, 3);
-    let wire::ConsensusMessageV2Payload::Vote(expected_first) = canonical_share.payload.clone()
-    else {
-        unreachable!("phase-vote fixture")
-    };
     let conflicting_share = signed_vote(conflicting_subject, conflicting_vote_commitment, 3);
-    let wire::ConsensusMessageV2Payload::Vote(expected_second) = conflicting_share.payload.clone()
-    else {
-        unreachable!("phase-vote fixture")
-    };
     fixture
         .executor
         .enqueue_network(canonical_share.clone())
@@ -653,13 +674,12 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
             break;
         }
     }
-    assert_eq!(services.equivocations.len(), 1);
-    let wire::SumeragiV2Equivocation::PhaseVote { first, second } = &services.equivocations[0]
-    else {
-        panic!("expected exact phase-vote equivocation evidence")
-    };
-    assert_eq!(first, &expected_first);
-    assert_eq!(second, &expected_second);
+    assert_eq!(
+        fixture.executor.pending_lifecycle_output_admissions.len(),
+        1
+    );
+    assert!(services.equivocations.is_empty());
+    model_output_settlement(&mut fixture.executor);
     assert!(
         fixture
             .executor
@@ -757,13 +777,12 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
         .enqueue_network(prepare_message)
         .expect("the exact PrepareQC duplicate coalesces");
     for _ in 0..16 {
-        if matches!(
-            fixture
-                .executor
-                .step(started, &mut services)
-                .expect("drain the responsive PrepareQC"),
-            EffectExecutorStep::Idle
-        ) {
+        let step = fixture
+            .executor
+            .step(started, &mut services)
+            .expect("drain the responsive PrepareQC");
+        model_output_settlement(&mut fixture.executor);
+        if matches!(step, EffectExecutorStep::Idle) {
             break;
         }
     }
@@ -790,10 +809,11 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
         .enqueue_network(commit_message)
         .expect("the exact CommitQC duplicate coalesces");
     for _ in 0..32 {
-        let _ = fixture
+        let _step = fixture
             .executor
             .step(started, &mut services)
             .expect("drive the 3-of-4 CommitQC to durable finality");
+        model_output_settlement(&mut fixture.executor);
         if fixture
             .executor
             .runtime
@@ -818,13 +838,12 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
         ))
     );
     for _ in 0..16 {
-        if matches!(
-            fixture
-                .executor
-                .step(started, &mut services)
-                .expect("drain post-decision effects without duplicate application"),
-            EffectExecutorStep::Idle
-        ) {
+        let step = fixture
+            .executor
+            .step(started, &mut services)
+            .expect("drain post-decision effects without duplicate application");
+        model_output_settlement(&mut fixture.executor);
+        if matches!(step, EffectExecutorStep::Idle) {
             break;
         }
     }
@@ -838,6 +857,8 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
             .iter()
             .all(|task| task.subject() == fixture.subject)
     );
+    assert!(!settled_output_owners.is_empty());
+    assert!(!settled_validate_owners.is_empty());
     assert!(!fixture.executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }

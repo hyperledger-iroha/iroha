@@ -5,20 +5,6 @@ use super::{
     da_common::DaManifestFetcher,
 };
 mod hedging_billing_response;
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
-    convert::TryFrom,
-    fmt::{self, Write as _},
-    fs,
-    io::{self, Read, Write},
-    net::{TcpListener, TcpStream},
-    num::{NonZeroU64, NonZeroUsize},
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::Arc,
-    thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
 use crate::{CliOutputFormat, Run, RunContext, cli_output::print_with_optional_text};
 use base64::{
     Engine,
@@ -63,57 +49,6 @@ use iroha_crypto::{
     },
 };
 use iroha_data_model::sorafs::pin_registry::PinStatusKindV1;
-use iroha_torii_shared::sorafs_hedging_billing_api::BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1 as SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1;
-use norito::json::{Map, Number, Value};
-use rand::{
-    CryptoRng, RngCore, SeedableRng,
-    rand_core::{TryCryptoRng, TryRngCore},
-    rngs::{OsRng, StdRng},
-};
-use reqwest::blocking::Client as BlockingHttpClient;
-use sorafs_car::{
-    CarBuildPlan, CarChunk, CarWriteStats, CarWriter, ChunkStore, FilePlan, PorMerkleTree,
-    fetch_plan::{
-        TOOLKIT_PACK_REPORT_SCHEMA_V1, chunk_fetch_plan_from_json, parse_digest_hex,
-        try_chunk_fetch_specs_to_json,
-    },
-};
-use sorafs_chunker::ChunkProfile;
-use sorafs_manifest::chunker_registry;
-use sorafs_manifest::deal::XorQuantity;
-use sorafs_manifest::repair::{REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairSlashProposalV1, RepairTicketId};
-use sorafs_manifest::{
-    ChunkingProfileV1, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy,
-    StorageClass as ManifestStorageClass,
-    hosts::{DirectCarLocator, HostMappingInput, HostMappingSummary},
-    hybrid_envelope::{
-        HYBRID_PAYLOAD_ENVELOPE_VERSION_V1, HybridPayloadEnvelopeV1, encrypt_payload,
-    },
-    manifest_capabilities::{
-        ChunkProfileSummary, ManifestCapabilitySummary, detect_manifest_capabilities,
-    },
-    provider_admission::ProviderAdmissionEnvelopeV1,
-    provider_advert::{CapabilityType, ProviderCapabilityRangeV1},
-};
-use sorafs_orchestrator::{
-    AnonymityPolicy, PolicyOverride, TransportPolicy, WriteModeHint,
-    incentives::{RelayRewardEngine, RewardConfig},
-    prelude::{
-        GatewayFetchConfig, GatewayProviderInput, GuardCacheKey, GuardRetention, GuardSelector,
-        GuardSet, PayoutServiceError, RelayDirectory, RewardLedgerError,
-    },
-    treasury::{
-        AdjustmentKind, AdjustmentRequest, DisputeId, DisputeResolution, DisputeStatus,
-        EarningsDashboard, EarningsRow, LedgerAmountArithmeticError, LedgerAmountSource,
-        LedgerReconciliationReport, LedgerTransferMismatch, LedgerTransferRecord, MismatchReason,
-        PayoutInput, QuantityToNanosError, RelayPayoutService, ResolutionKind, RewardDispute,
-        RewardLedgerSnapshot, TransferKind,
-    },
-};
-use soranet_pq::MlDsaSuite;
-use time::{Duration as TimeDelta, OffsetDateTime, format_description::well_known::Rfc3339};
-use tiny_keccak::{Hasher as _, Sha3};
-use tokio::runtime::Runtime;
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
@@ -151,13 +86,165 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, SignedTransaction},
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_torii_shared::sorafs_hedging_billing_api::BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1 as SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1;
+use norito::json::{Map, Number, Value};
 use norito::{NoritoSerialize, decode_from_bytes};
+use rand::{
+    CryptoRng, RngCore, SeedableRng,
+    rand_core::{TryCryptoRng, TryRngCore},
+    rngs::{OsRng, StdRng},
+};
+use reqwest::blocking::Client as BlockingHttpClient;
+use sorafs_car::{
+    CarBuildPlan, CarChunk, CarWriteStats, CarWriter, ChunkStore, FilePlan, PorMerkleTree,
+    fetch_plan::{
+        TOOLKIT_PACK_REPORT_SCHEMA_V1, chunk_fetch_plan_from_json, parse_digest_hex,
+        try_chunk_fetch_specs_to_json,
+    },
+};
+use sorafs_chunker::ChunkProfile;
+use sorafs_manifest::chunker_registry;
+use sorafs_manifest::deal::XorQuantity;
+use sorafs_manifest::repair::{
+    REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairSlashProposalV1, RepairTicketId,
+};
+use sorafs_manifest::{
+    ChunkingProfileV1, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy,
+    StorageClass as ManifestStorageClass,
+    hosts::{DirectCarLocator, HostMappingInput, HostMappingSummary},
+    hybrid_envelope::{
+        HYBRID_PAYLOAD_ENVELOPE_VERSION_V1, HybridPayloadEnvelopeV1, encrypt_payload,
+    },
+    manifest_capabilities::{
+        ChunkProfileSummary, ManifestCapabilitySummary, detect_manifest_capabilities,
+    },
+    provider_admission::ProviderAdmissionEnvelopeV1,
+    provider_advert::{CapabilityType, ProviderCapabilityRangeV1},
+};
+use sorafs_orchestrator::{
+    AnonymityPolicy, PolicyOverride, TransportPolicy, WriteModeHint,
+    incentives::{RelayRewardEngine, RewardConfig},
+    prelude::{
+        GatewayFetchConfig, GatewayProviderInput, GuardCacheKey, GuardRetention, GuardSelector,
+        GuardSet, PayoutServiceError, RelayDirectory, RewardLedgerError,
+    },
+    treasury::{
+        AdjustmentKind, AdjustmentRequest, DisputeId, DisputeResolution, DisputeStatus,
+        EarningsDashboard, EarningsRow, LedgerAmountArithmeticError, LedgerAmountSource,
+        LedgerReconciliationReport, LedgerTransferMismatch, LedgerTransferRecord, MismatchReason,
+        PayoutInput, QuantityToNanosError, RelayPayoutService, ResolutionKind, RewardDispute,
+        RewardLedgerSnapshot, TransferKind,
+    },
+};
+use soranet_pq::MlDsaSuite;
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    convert::TryFrom,
+    fmt::{self, Write as _},
+    fs,
+    io::{self, Read, Write},
+    net::{TcpListener, TcpStream},
+    num::{NonZeroU64, NonZeroUsize},
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use time::{Duration as TimeDelta, OffsetDateTime, format_description::well_known::Rfc3339};
+use tiny_keccak::{Hasher as _, Sha3};
+use tokio::runtime::Runtime;
 
 macro_rules! impl_run_with_client_methods {
     ($args:ty, $($method:path),+ $(,)?) => {
         impl Run for $args {
             fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
                 self.run_with(context, $($method),+)
+            }
+        }
+    };
+}
+
+macro_rules! impl_run_for_subcommand {
+    ($(#[$attribute:meta])* $command:ident => $($variant:ident),+ $(,)?) => {
+        impl Run for $command {
+            $(#[$attribute])*
+            fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+                match self {
+                    $(Self::$variant(args) => args.run(context)),+
+                }
+            }
+        }
+    };
+}
+
+macro_rules! impl_json_limit_run_with {
+    ($args:ident => $filter:ident) => {
+        impl $args {
+            fn run_with<C, F>(&self, context: &mut C, request: F) -> Result<()>
+            where
+                C: RunContext,
+                F: FnOnce(&Client, $filter) -> Result<Response<Vec<u8>>>,
+            {
+                let filter = $filter { limit: self.limit };
+                let client = context.client_from_config();
+                let response = request(&client, filter)?;
+                render_json_response(context, response)
+            }
+        }
+    };
+}
+
+macro_rules! impl_appeal_finance_submit_run_with {
+    ($args:ident => $label:literal, $status:expr) => {
+        impl $args {
+            fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+            where
+                C: RunContext,
+                F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+            {
+                run_appeal_finance_json_submit(context, &self.input, $label, submit, $status)
+            }
+        }
+    };
+}
+
+macro_rules! impl_json_payload_run_with {
+    ($args:ident.$field:ident => $label:literal, $render:path) => {
+        impl $args {
+            fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+            where
+                C: RunContext,
+                F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+            {
+                let payload = load_sorafs_json_payload(&self.$field, $label)?;
+                let client = context.client_from_config();
+                let response = submit(&client, &payload)?;
+                $render(context, response)
+            }
+        }
+    };
+}
+
+macro_rules! impl_moderation_operator_derived_response {
+    ($name:ident => $builder:path, $output:ident, $error:literal) => {
+        fn $name(
+            &self,
+            quarantine_id_hex: &str,
+            limit: Option<u32>,
+        ) -> ModerationOperatorHttpResponse {
+            let body = match self.operator_panel_body(quarantine_id_hex, limit) {
+                Ok(body) => body,
+                Err(response) => return response,
+            };
+            match moderation_operator_payload_free_panel_json(&body)
+                .and_then(|panel| $builder(quarantine_id_hex, &panel))
+            {
+                Ok($output) => moderation_operator_json_response(StatusCode::OK, &$output),
+                Err(err) => moderation_operator_json_error(
+                    StatusCode::BAD_GATEWAY,
+                    format!($error, err = err),
+                ),
             }
         }
     };
@@ -173,6 +260,31 @@ macro_rules! assert_eq_compact {
 macro_rules! assert_compact {
     ($condition:expr $(; $($arg:tt)*)?) => {
         assert!($condition $(, $($arg)*)?)
+    };
+}
+
+#[cfg(test)]
+macro_rules! json_response_fixture {
+    ($status:expr, $body:expr) => {
+        Ok(Response::builder()
+            .status($status)
+            .header("Content-Type", "application/json")
+            .body(norito::json::to_vec($body)?)
+            .unwrap())
+    };
+    ($status:expr, $body:expr, $message:expr) => {
+        Ok(Response::builder()
+            .status($status)
+            .header("Content-Type", "application/json")
+            .body(norito::json::to_vec($body)?)
+            .expect($message))
+    };
+}
+
+#[cfg(test)]
+macro_rules! test_items {
+    ($($item:item)*) => {
+        $(#[test] $item)*
     };
 }
 
@@ -449,15 +561,7 @@ pub enum ReserveCommand {
     /// Project reserve lifecycle stage and automatic credit draw state.
     Lifecycle(ReserveLifecycleArgs),
 }
-impl Run for ReserveCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::Quote(args) => args.run(context),
-            Self::Ledger(args) => args.run(context),
-            Self::Lifecycle(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(ReserveCommand => Quote, Ledger, Lifecycle);
 const SORAFS_HEDGING_BILLING_MAX_PAGE_ITEMS_V1: u16 = 100;
 fn required_nonzero_lower_hex32(value: &str, flag: &str) -> Result<String> {
     if value.len() != 64
@@ -496,17 +600,7 @@ pub enum BillingCommand {
     /// Fetch payload-free delivery reconciliation status.
     Reconciliation(BillingReconciliationArgs),
 }
-impl Run for BillingCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::Status(args) => args.run(context),
-            Self::Statements(args) => args.run(context),
-            Self::Statement(args) => args.run(context),
-            Self::Acknowledge(args) => args.run(context),
-            Self::Reconciliation(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(BillingCommand => Status, Statements, Statement, Acknowledge, Reconciliation);
 /// Fetch supervised billing projector status.
 #[derive(clap::Args, Debug, Default)]
 pub struct BillingStatusArgs {}
@@ -1028,14 +1122,7 @@ pub enum AppealsCommand {
     #[command(subcommand)]
     Finance(AppealsFinanceCommand),
 }
-impl Run for AppealsCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::Pricing(cmd) => cmd.run(context),
-            Self::Finance(cmd) => cmd.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(AppealsCommand => Pricing, Finance);
 #[derive(clap::Subcommand, Debug)]
 pub enum AppealsPricingCommand {
     /// Print the active local appeal pricing config.
@@ -1045,15 +1132,7 @@ pub enum AppealsPricingCommand {
     /// Quote a deposit from a Torii pricing quote JSON payload.
     Quote(AppealsPricingQuoteArgs),
 }
-impl Run for AppealsPricingCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::Config(args) => args.run(context),
-            Self::Status(args) => args.run(context),
-            Self::Quote(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(AppealsPricingCommand => Config, Status, Quote);
 #[derive(clap::Args, Debug)]
 pub struct AppealsPricingConfigArgs;
 impl Run for AppealsPricingConfigArgs {
@@ -1080,18 +1159,7 @@ impl_run_with_client_methods!(
     AppealsPricingQuoteArgs,
     Client::post_sorafs_appeal_pricing_quote_json,
 );
-impl AppealsPricingQuoteArgs {
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        let payload = load_sorafs_json_payload(&self.input, "appeal pricing quote")?;
-        let client = context.client_from_config();
-        let response = submit(&client, &payload)?;
-        render_json_response(context, response)
-    }
-}
+impl_json_payload_run_with!(AppealsPricingQuoteArgs.input => "appeal pricing quote", render_json_response);
 #[derive(clap::Subcommand, Debug)]
 pub enum AppealsFinanceCommand {
     /// Runtime asset-lock deposit helpers.
@@ -1104,16 +1172,7 @@ pub enum AppealsFinanceCommand {
     /// List published appeal finance settlement receipts.
     SettlementReceipts(AppealsFinanceSettlementReceiptsArgs),
 }
-impl Run for AppealsFinanceCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::Deposits(cmd) => cmd.run(context),
-            Self::Reports(args) => args.run(context),
-            Self::WeeklyRollups(args) => args.run(context),
-            Self::SettlementReceipts(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(AppealsFinanceCommand => Deposits, Reports, WeeklyRollups, SettlementReceipts);
 #[derive(clap::Subcommand, Debug)]
 pub enum AppealsFinanceDepositsCommand {
     /// Build a runtime asset-lock deposit transaction request.
@@ -1129,18 +1188,7 @@ pub enum AppealsFinanceDepositsCommand {
     /// Submit the next settlement transaction step.
     SubmitSettlement(AppealsFinanceDepositSubmitSettlementArgs),
 }
-impl Run for AppealsFinanceDepositsCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::Create(args) => args.run(context),
-            Self::Confirm(args) => args.run(context),
-            Self::Get(args) => args.run(context),
-            Self::Settle(args) => args.run(context),
-            Self::Reconcile(args) => args.run(context),
-            Self::SubmitSettlement(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(AppealsFinanceDepositsCommand => Create, Confirm, Get, Settle, Reconcile, SubmitSettlement);
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceDepositCreateArgs {
     /// JSON deposit request payload path.
@@ -1151,21 +1199,7 @@ impl_run_with_client_methods!(
     AppealsFinanceDepositCreateArgs,
     Client::post_sorafs_appeal_finance_deposit_json,
 );
-impl AppealsFinanceDepositCreateArgs {
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        run_appeal_finance_json_submit(
-            context,
-            &self.input,
-            "appeal finance deposit",
-            submit,
-            StatusCode::OK,
-        )
-    }
-}
+impl_appeal_finance_submit_run_with!(AppealsFinanceDepositCreateArgs => "appeal finance deposit", StatusCode::OK);
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceDepositConfirmArgs {
     /// JSON deposit confirmation payload path.
@@ -1176,21 +1210,7 @@ impl_run_with_client_methods!(
     AppealsFinanceDepositConfirmArgs,
     Client::post_sorafs_appeal_finance_deposit_confirm_json,
 );
-impl AppealsFinanceDepositConfirmArgs {
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        run_appeal_finance_json_submit(
-            context,
-            &self.input,
-            "appeal finance deposit confirmation",
-            submit,
-            StatusCode::OK,
-        )
-    }
-}
+impl_appeal_finance_submit_run_with!(AppealsFinanceDepositConfirmArgs => "appeal finance deposit confirmation", StatusCode::OK);
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceDepositGetArgs {
     /// Hex-encoded asset-lock escrow id.
@@ -1223,21 +1243,7 @@ impl_run_with_client_methods!(
     AppealsFinanceDepositSettleArgs,
     Client::post_sorafs_appeal_finance_deposit_settle_json,
 );
-impl AppealsFinanceDepositSettleArgs {
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        run_appeal_finance_json_submit(
-            context,
-            &self.input,
-            "appeal finance deposit settlement",
-            submit,
-            StatusCode::OK,
-        )
-    }
-}
+impl_appeal_finance_submit_run_with!(AppealsFinanceDepositSettleArgs => "appeal finance deposit settlement", StatusCode::OK);
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceDepositReconcileArgs {
     /// JSON deposit settlement reconciliation payload path.
@@ -1248,21 +1254,7 @@ impl_run_with_client_methods!(
     AppealsFinanceDepositReconcileArgs,
     Client::post_sorafs_appeal_finance_deposit_reconcile_json,
 );
-impl AppealsFinanceDepositReconcileArgs {
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        run_appeal_finance_json_submit(
-            context,
-            &self.input,
-            "appeal finance deposit settlement reconciliation",
-            submit,
-            StatusCode::OK,
-        )
-    }
-}
+impl_appeal_finance_submit_run_with!(AppealsFinanceDepositReconcileArgs => "appeal finance deposit settlement reconciliation", StatusCode::OK);
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceDepositSubmitSettlementArgs {
     /// JSON deposit settlement submission payload path.
@@ -1273,40 +1265,18 @@ impl_run_with_client_methods!(
     AppealsFinanceDepositSubmitSettlementArgs,
     Client::post_sorafs_appeal_finance_deposit_submit_settlement_json,
 );
-impl AppealsFinanceDepositSubmitSettlementArgs {
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        run_appeal_finance_json_submit(
-            context,
-            &self.input,
-            "appeal finance deposit settlement submission",
-            submit,
-            StatusCode::ACCEPTED,
-        )
-    }
-}
+impl_appeal_finance_submit_run_with!(AppealsFinanceDepositSubmitSettlementArgs => "appeal finance deposit settlement submission", StatusCode::ACCEPTED);
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceReportsArgs {
     /// Maximum number of report entries to return.
     #[arg(long)]
     limit: Option<u32>,
 }
-impl_run_with_client_methods!(AppealsFinanceReportsArgs, Client::get_sorafs_appeal_finance_reports);
-impl AppealsFinanceReportsArgs {
-    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
-    {
-        let filter = SorafsAppealFinanceReadbackFilter { limit: self.limit };
-        let client = context.client_from_config();
-        let response = list(&client, filter)?;
-        render_json_response(context, response)
-    }
-}
+impl_run_with_client_methods!(
+    AppealsFinanceReportsArgs,
+    Client::get_sorafs_appeal_finance_reports
+);
+impl_json_limit_run_with!(AppealsFinanceReportsArgs => SorafsAppealFinanceReadbackFilter);
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceWeeklyRollupsArgs {
     /// Maximum number of rollup entries to return.
@@ -1317,18 +1287,7 @@ impl_run_with_client_methods!(
     AppealsFinanceWeeklyRollupsArgs,
     Client::get_sorafs_appeal_finance_weekly_rollups,
 );
-impl AppealsFinanceWeeklyRollupsArgs {
-    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
-    {
-        let filter = SorafsAppealFinanceReadbackFilter { limit: self.limit };
-        let client = context.client_from_config();
-        let response = list(&client, filter)?;
-        render_json_response(context, response)
-    }
-}
+impl_json_limit_run_with!(AppealsFinanceWeeklyRollupsArgs => SorafsAppealFinanceReadbackFilter);
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceSettlementReceiptsArgs {
     /// Maximum number of settlement receipt entries to return.
@@ -1339,18 +1298,7 @@ impl_run_with_client_methods!(
     AppealsFinanceSettlementReceiptsArgs,
     Client::get_sorafs_appeal_finance_settlement_receipts,
 );
-impl AppealsFinanceSettlementReceiptsArgs {
-    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
-    {
-        let filter = SorafsAppealFinanceReadbackFilter { limit: self.limit };
-        let client = context.client_from_config();
-        let response = list(&client, filter)?;
-        render_json_response(context, response)
-    }
-}
+impl_json_limit_run_with!(AppealsFinanceSettlementReceiptsArgs => SorafsAppealFinanceReadbackFilter);
 fn run_appeal_finance_json_submit<C, F>(
     context: &mut C,
     input: &Path,
@@ -1378,13 +1326,7 @@ pub enum GarCommand {
     /// Render a GAR enforcement receipt artefact (JSON + optional Norito bytes).
     Receipt(GarReceiptArgs),
 }
-impl Run for GarCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::Receipt(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(GarCommand => Receipt);
 #[derive(clap::Subcommand, Debug)]
 pub enum TransparencyCommand {
     /// Inspect published transparency cycles and entry proofs.
@@ -1405,19 +1347,7 @@ pub enum TransparencyCommand {
     #[command(subcommand)]
     PrivacyAggregate(TransparencyPrivacyAggregateCommand),
 }
-impl Run for TransparencyCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::Cycles(cmd) => cmd.run(context),
-            Self::Explorer(args) => args.run(context),
-            Self::ExplorerCanary(args) => args.run(context),
-            Self::PublicationCanary(args) => args.run(context),
-            Self::Tokens(args) => args.run(context),
-            Self::TokenIssuance(cmd) => cmd.run(context),
-            Self::PrivacyAggregate(cmd) => cmd.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(TransparencyCommand => Cycles, Explorer, ExplorerCanary, PublicationCanary, Tokens, TokenIssuance, PrivacyAggregate);
 #[derive(clap::Subcommand, Debug)]
 pub enum TransparencyCyclesCommand {
     /// List locally published transparency cycle summaries.
@@ -1427,15 +1357,7 @@ pub enum TransparencyCyclesCommand {
     /// Fetch and verify one published transparency entry proof.
     Entry(TransparencyCyclesEntryArgs),
 }
-impl Run for TransparencyCyclesCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::List(args) => args.run(context),
-            Self::Get(args) => args.run(context),
-            Self::Entry(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(TransparencyCyclesCommand => List, Get, Entry);
 #[derive(clap::Args, Debug)]
 pub struct TransparencyCyclesListArgs {
     /// Maximum number of cycle summaries to return.
@@ -1446,18 +1368,7 @@ impl_run_with_client_methods!(
     TransparencyCyclesListArgs,
     Client::get_sorafs_transparency_cycles,
 );
-impl TransparencyCyclesListArgs {
-    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
-    {
-        let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
-        let client = context.client_from_config();
-        let response = list(&client, filter)?;
-        render_json_response(context, response)
-    }
-}
+impl_json_limit_run_with!(TransparencyCyclesListArgs => SorafsTransparencyReadbackFilter);
 #[derive(clap::Args, Debug)]
 pub struct TransparencyCyclesGetArgs {
     /// 16-byte cycle id encoded as hexadecimal.
@@ -1520,18 +1431,7 @@ impl_run_with_client_methods!(
     TransparencyExplorerArgs,
     Client::get_sorafs_transparency_explorer,
 );
-impl TransparencyExplorerArgs {
-    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
-    {
-        let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
-        let client = context.client_from_config();
-        let response = get(&client, filter)?;
-        render_json_response(context, response)
-    }
-}
+impl_json_limit_run_with!(TransparencyExplorerArgs => SorafsTransparencyReadbackFilter);
 #[derive(clap::Args, Debug)]
 pub struct TransparencyExplorerCanaryArgs {
     /// Base URL of the deployed Torii or public explorer gateway.
@@ -1659,18 +1559,7 @@ impl_run_with_client_methods!(
     TransparencyTokensArgs,
     Client::get_sorafs_transparency_token_issuances,
 );
-impl TransparencyTokensArgs {
-    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
-    {
-        let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
-        let client = context.client_from_config();
-        let response = get(&client, filter)?;
-        render_json_response(context, response)
-    }
-}
+impl_json_limit_run_with!(TransparencyTokensArgs => SorafsTransparencyReadbackFilter);
 #[derive(clap::Subcommand, Debug)]
 pub enum TransparencyTokenIssuanceCommand {
     /// Submit one proof-token issuance JSON payload.
@@ -1678,14 +1567,7 @@ pub enum TransparencyTokenIssuanceCommand {
     /// Probe deployed proof-token issuance producer feed routes.
     Canary(TransparencyTokenIssuanceCanaryArgs),
 }
-impl Run for TransparencyTokenIssuanceCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::Submit(args) => args.run(context),
-            Self::Canary(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(TransparencyTokenIssuanceCommand => Submit, Canary);
 #[derive(clap::Args, Debug)]
 pub struct TransparencyTokenIssuanceSubmitArgs {
     /// JSON proof-token issuance payload path.
@@ -1696,18 +1578,7 @@ impl_run_with_client_methods!(
     TransparencyTokenIssuanceSubmitArgs,
     Client::post_sorafs_transparency_token_issuance_json,
 );
-impl TransparencyTokenIssuanceSubmitArgs {
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        let payload = load_sorafs_json_payload(&self.payload, "transparency proof-token issuance")?;
-        let client = context.client_from_config();
-        let response = submit(&client, &payload)?;
-        render_json_response_ok_or_accepted(context, response)
-    }
-}
+impl_json_payload_run_with!(TransparencyTokenIssuanceSubmitArgs.payload => "transparency proof-token issuance", render_json_response_ok_or_accepted);
 #[derive(clap::Args, Debug)]
 pub struct TransparencyTokenIssuanceCanaryArgs {
     /// Proof-token issuance JSON payload path to submit.
@@ -1800,15 +1671,7 @@ pub enum TransparencyPrivacyAggregateCommand {
     /// Probe deployed privacy aggregate producer/scheduler routes.
     Canary(TransparencyPrivacyAggregateCanaryArgs),
 }
-impl Run for TransparencyPrivacyAggregateCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::SourceEvent(args) => args.run(context),
-            Self::PublishDue(args) => args.run(context),
-            Self::Canary(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(TransparencyPrivacyAggregateCommand => SourceEvent, PublishDue, Canary);
 #[derive(clap::Args, Debug)]
 pub struct TransparencyPrivacyAggregateSourceEventArgs {
     /// JSON payload path.
@@ -1819,19 +1682,7 @@ impl_run_with_client_methods!(
     TransparencyPrivacyAggregateSourceEventArgs,
     Client::post_sorafs_transparency_privacy_aggregate_source_event_json,
 );
-impl TransparencyPrivacyAggregateSourceEventArgs {
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        let payload =
-            load_sorafs_json_payload(&self.payload, "transparency privacy aggregate source-event")?;
-        let client = context.client_from_config();
-        let response = submit(&client, &payload)?;
-        render_json_response_ok_or_accepted(context, response)
-    }
-}
+impl_json_payload_run_with!(TransparencyPrivacyAggregateSourceEventArgs.payload => "transparency privacy aggregate source-event", render_json_response_ok_or_accepted);
 #[derive(clap::Args, Debug)]
 pub struct TransparencyPrivacyAggregatePublishDueArgs {
     /// JSON payload path.
@@ -1842,19 +1693,7 @@ impl_run_with_client_methods!(
     TransparencyPrivacyAggregatePublishDueArgs,
     Client::post_sorafs_transparency_privacy_aggregate_publish_due_json,
 );
-impl TransparencyPrivacyAggregatePublishDueArgs {
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        let payload =
-            load_sorafs_json_payload(&self.payload, "transparency privacy aggregate publish-due")?;
-        let client = context.client_from_config();
-        let response = submit(&client, &payload)?;
-        render_json_response(context, response)
-    }
-}
+impl_json_payload_run_with!(TransparencyPrivacyAggregatePublishDueArgs.payload => "transparency privacy aggregate publish-due", render_json_response);
 #[derive(clap::Args, Debug)]
 pub struct TransparencyPrivacyAggregateCanaryArgs {
     /// Privacy aggregate source-event JSON payload path to submit.
@@ -1986,16 +1825,7 @@ pub enum ModerationCommand {
     #[command(subcommand)]
     Quarantine(ModerationQuarantineCommand),
 }
-impl Run for ModerationCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::Ballots(cmd) => cmd.run(context),
-            Self::Registry(cmd) => cmd.run(context),
-            Self::Screening(cmd) => cmd.run(context),
-            Self::Quarantine(cmd) => cmd.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(ModerationCommand => Ballots, Registry, Screening, Quarantine);
 #[derive(clap::Subcommand, Debug)]
 pub enum ModerationBallotsCommand {
     /// List finalized chain-authoritative moderation case projections.
@@ -2020,22 +1850,7 @@ pub enum ModerationBallotsCommand {
     /// Verify a deployed commit/reveal executor bundle and captured run summary.
     ExecutorCanary(ModerationBallotsExecutorCanaryArgs),
 }
-impl Run for ModerationBallotsCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::List(args) => args.run(context),
-            Self::Get(args) => args.run(context),
-            Self::NoShowPlan(args) => args.run(context),
-            Self::Events(args) => args.run(context),
-            Self::Commit(args) => args.run(context),
-            Self::Reveal(args) => args.run(context),
-            Self::Tally(args) => args.run(context),
-            Self::Execute(args) => args.run(context),
-            Self::ExecutorBundle(args) => args.run(context),
-            Self::ExecutorCanary(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(ModerationBallotsCommand => List, Get, NoShowPlan, Events, Commit, Reveal, Tally, Execute, ExecutorBundle, ExecutorCanary);
 #[derive(clap::Args, Debug)]
 pub struct ModerationBallotsListArgs {
     /// Maximum number of ballots, commits, and reveals to return.
@@ -2046,18 +1861,7 @@ impl_run_with_client_methods!(
     ModerationBallotsListArgs,
     Client::get_sorafs_moderation_ballots,
 );
-impl ModerationBallotsListArgs {
-    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, SorafsModerationBallotsFilter) -> Result<Response<Vec<u8>>>,
-    {
-        let filter = SorafsModerationBallotsFilter { limit: self.limit };
-        let client = context.client_from_config();
-        let response = list(&client, filter)?;
-        render_json_response(context, response)
-    }
-}
+impl_json_limit_run_with!(ModerationBallotsListArgs => SorafsModerationBallotsFilter);
 #[derive(clap::Args, Debug)]
 pub struct ModerationBallotsGetArgs {
     /// Moderation or appeal case identifier.
@@ -2446,15 +2250,7 @@ pub enum ModerationRegistryCommand {
     /// Admit an adversarial corpus manifest.
     SubmitCorpus(ModerationRegistrySubmitCorpusArgs),
 }
-impl Run for ModerationRegistryCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::List(args) => args.run(context),
-            Self::SubmitRepro(args) => args.run(context),
-            Self::SubmitCorpus(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(ModerationRegistryCommand => List, SubmitRepro, SubmitCorpus);
 #[derive(clap::Args, Debug)]
 pub struct ModerationRegistryListArgs {
     /// Maximum number of records to return from each registry section.
@@ -2465,18 +2261,7 @@ impl_run_with_client_methods!(
     ModerationRegistryListArgs,
     Client::get_sorafs_moderation_model_registry,
 );
-impl ModerationRegistryListArgs {
-    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, SorafsModerationModelRegistryFilter) -> Result<Response<Vec<u8>>>,
-    {
-        let filter = SorafsModerationModelRegistryFilter { limit: self.limit };
-        let client = context.client_from_config();
-        let response = list(&client, filter)?;
-        render_json_response(context, response)
-    }
-}
+impl_json_limit_run_with!(ModerationRegistryListArgs => SorafsModerationModelRegistryFilter);
 #[derive(clap::Args, Debug)]
 pub struct ModerationRegistrySubmitReproArgs {
     /// Reproducibility manifest path.
@@ -2536,14 +2321,7 @@ pub enum ModerationScreeningCommand {
     /// Submit one deterministic local screening result JSON file.
     Submit(ModerationScreeningSubmitArgs),
 }
-impl Run for ModerationScreeningCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::List(args) => args.run(context),
-            Self::Submit(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(ModerationScreeningCommand => List, Submit);
 #[derive(clap::Args, Debug)]
 pub struct ModerationScreeningListArgs {
     /// Maximum number of screening records to return.
@@ -2554,18 +2332,7 @@ impl_run_with_client_methods!(
     ModerationScreeningListArgs,
     Client::get_sorafs_moderation_screening_results,
 );
-impl ModerationScreeningListArgs {
-    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, SorafsModerationScreeningResultsFilter) -> Result<Response<Vec<u8>>>,
-    {
-        let filter = SorafsModerationScreeningResultsFilter { limit: self.limit };
-        let client = context.client_from_config();
-        let response = list(&client, filter)?;
-        render_json_response(context, response)
-    }
-}
+impl_json_limit_run_with!(ModerationScreeningListArgs => SorafsModerationScreeningResultsFilter);
 #[derive(clap::Args, Debug)]
 pub struct ModerationScreeningSubmitArgs {
     /// JSON request containing canonical signed-result or committee authority.
@@ -2634,22 +2401,7 @@ pub enum ModerationQuarantineCommand {
     /// Probe a deployed operator workflow service and emit payload-free evidence.
     OperatorCanary(ModerationQuarantineOperatorCanaryArgs),
 }
-impl Run for ModerationQuarantineCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::List(args) => args.run(context),
-            Self::Object(cmd) => cmd.run(context),
-            Self::Notifications(cmd) => cmd.run(context),
-            Self::Review(args) => args.run(context),
-            Self::Release(args) => args.run(context),
-            Self::AppealHandoff(args) => args.run(context),
-            Self::OperatorPanel(args) => args.run(context),
-            Self::BridgePlan(args) => args.run(context),
-            Self::OperatorServe(args) => args.run(context),
-            Self::OperatorCanary(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(ModerationQuarantineCommand => List, Object, Notifications, Review, Release, AppealHandoff, OperatorPanel, BridgePlan, OperatorServe, OperatorCanary);
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineListArgs {
     /// Maximum number of quarantine records to return.
@@ -2660,18 +2412,7 @@ impl_run_with_client_methods!(
     ModerationQuarantineListArgs,
     Client::get_sorafs_moderation_quarantine,
 );
-impl ModerationQuarantineListArgs {
-    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, SorafsModerationQuarantineFilter) -> Result<Response<Vec<u8>>>,
-    {
-        let filter = SorafsModerationQuarantineFilter { limit: self.limit };
-        let client = context.client_from_config();
-        let response = list(&client, filter)?;
-        render_json_response(context, response)
-    }
-}
+impl_json_limit_run_with!(ModerationQuarantineListArgs => SorafsModerationQuarantineFilter);
 #[derive(clap::Subcommand, Debug)]
 pub enum ModerationQuarantineObjectCommand {
     /// Seal payload bytes into the local encrypted quarantine object store.
@@ -2679,14 +2420,7 @@ pub enum ModerationQuarantineObjectCommand {
     /// Read and verify one local encrypted quarantine object.
     Read(ModerationQuarantineObjectReadArgs),
 }
-impl Run for ModerationQuarantineObjectCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::Store(args) => args.run(context),
-            Self::Read(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(ModerationQuarantineObjectCommand => Store, Read);
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineObjectStoreArgs {
     /// 16-byte local quarantine id encoded as hexadecimal.
@@ -2775,14 +2509,7 @@ pub enum ModerationQuarantineNotificationsCommand {
     /// Probe a deployed juror notification transport and emit payload-free evidence.
     Canary(ModerationQuarantineNotificationsCanaryArgs),
 }
-impl Run for ModerationQuarantineNotificationsCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::Deliver(args) => args.run(context),
-            Self::Canary(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(ModerationQuarantineNotificationsCommand => Deliver, Canary);
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineNotificationsDeliverArgs {
     /// Payload-free juror notification manifest JSON.
@@ -3340,18 +3067,7 @@ pub enum RepairCommand {
     /// Atomically escalate a repair task into a terminal slash proposal.
     Escalate(RepairEscalateArgs),
 }
-impl Run for RepairCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            RepairCommand::List(args) => args.run(context),
-            RepairCommand::Claim(args) => args.run(context),
-            RepairCommand::Renew(args) => args.run(context),
-            RepairCommand::Complete(args) => args.run(context),
-            RepairCommand::Fail(args) => args.run(context),
-            RepairCommand::Escalate(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(RepairCommand => List, Claim, Renew, Complete, Fail, Escalate);
 #[derive(clap::Args, Debug)]
 pub struct RepairListArgs {
     /// Fetch one canonical repair ticket instead of a page.
@@ -3711,14 +3427,7 @@ pub enum GcCommand {
     /// Report which manifests would be evicted by GC (dry-run only).
     DryRun(GcDryRunArgs),
 }
-impl Run for GcCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            GcCommand::Inspect(args) => args.run(context),
-            GcCommand::DryRun(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(GcCommand => Inspect, DryRun);
 #[derive(clap::Args, Debug)]
 pub struct GcInspectArgs {
     /// Root directory for SoraFS storage data (defaults to the node config default).
@@ -5584,32 +5293,7 @@ fn anonymity_policy_label(policy: AnonymityPolicy) -> &'static str {
         AnonymityPolicy::StrictPq => "anon-strict-pq",
     }
 }
-impl Run for Command {
-    #[allow(clippy::too_many_lines)]
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Command::Pin(cmd) => cmd.run(context),
-            Command::Alias(cmd) => cmd.run(context),
-            Command::Replication(cmd) => cmd.run(context),
-            Command::Storage(cmd) => cmd.run(context),
-            Command::Gateway(cmd) => cmd.run(context),
-            Command::Incentives(cmd) => cmd.run(context),
-            Command::Handshake(cmd) => cmd.run(context),
-            Command::Toolkit(cmd) => cmd.run(context),
-            Command::GuardDirectory(cmd) => cmd.run(context),
-            Command::Reserve(cmd) => cmd.run(context),
-            Command::Appeals(cmd) => cmd.run(context),
-            Command::Gar(cmd) => cmd.run(context),
-            Command::Transparency(cmd) => cmd.run(context),
-            Command::Moderation(cmd) => cmd.run(context),
-            Command::Repair(cmd) => cmd.run(context),
-            Command::Billing(cmd) => cmd.run(context),
-            Command::Hedging(cmd) => cmd.run(context),
-            Command::Gc(cmd) => cmd.run(context),
-            Command::Fetch(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(#[allow(clippy::too_many_lines)] Command => Pin, Alias, Replication, Storage, Gateway, Incentives, Handshake, Toolkit, GuardDirectory, Reserve, Appeals, Gar, Transparency, Moderation, Repair, Billing, Hedging, Gc, Fetch);
 #[derive(clap::Subcommand, Debug)]
 pub enum IncentivesCommand {
     /// Compute a relay reward instruction from metrics and bond state.
@@ -5622,16 +5306,7 @@ pub enum IncentivesCommand {
     #[command(subcommand)]
     Service(IncentivesServiceCommand),
 }
-impl Run for IncentivesCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            IncentivesCommand::Compute(args) => args.run(context),
-            IncentivesCommand::OpenDispute(args) => args.run(context),
-            IncentivesCommand::Dashboard(args) => args.run(context),
-            IncentivesCommand::Service(cmd) => cmd.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(IncentivesCommand => Compute, OpenDispute, Dashboard, Service);
 #[derive(clap::Args, Debug)]
 pub struct IncentivesComputeArgs {
     /// Path to the reward configuration JSON.
@@ -5795,21 +5470,7 @@ pub enum IncentivesServiceCommand {
     /// Run the treasury daemon against a metrics spool.
     Daemon(IncentivesServiceDaemonArgs),
 }
-impl Run for IncentivesServiceCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            IncentivesServiceCommand::Init(args) => args.run(context),
-            IncentivesServiceCommand::Process(args) => args.run(context),
-            IncentivesServiceCommand::Record(args) => args.run(context),
-            IncentivesServiceCommand::Dispute(cmd) => cmd.run(context),
-            IncentivesServiceCommand::Dashboard(args) => args.run(context),
-            IncentivesServiceCommand::Audit(args) => args.run(context),
-            IncentivesServiceCommand::ShadowRun(args) => args.run(context),
-            IncentivesServiceCommand::Reconcile(args) => args.run(context),
-            IncentivesServiceCommand::Daemon(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(IncentivesServiceCommand => Init, Process, Record, Dispute, Dashboard, Audit, ShadowRun, Reconcile, Daemon);
 #[derive(clap::Args, Debug)]
 pub struct IncentivesServiceInitArgs {
     /// Path where the incentives state JSON will be stored.
@@ -6043,15 +5704,7 @@ pub enum IncentivesServiceDisputeCommand {
     /// Reject a dispute without altering the ledger.
     Reject(IncentivesServiceDisputeRejectArgs),
 }
-impl Run for IncentivesServiceDisputeCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            IncentivesServiceDisputeCommand::File(args) => args.run(context),
-            IncentivesServiceDisputeCommand::Resolve(args) => args.run(context),
-            IncentivesServiceDisputeCommand::Reject(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(IncentivesServiceDisputeCommand => File, Resolve, Reject);
 #[derive(clap::Args, Debug)]
 pub struct IncentivesServiceDisputeFileArgs {
     /// Path to the persisted incentives state JSON.
@@ -10648,15 +10301,7 @@ pub enum HandshakeTokenCommand {
     /// Compute the issuer fingerprint from an ML-DSA public key.
     Fingerprint(HandshakeTokenFingerprintArgs),
 }
-impl Run for HandshakeTokenCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            HandshakeTokenCommand::Issue(args) => args.run(context),
-            HandshakeTokenCommand::Id(args) => args.run(context),
-            HandshakeTokenCommand::Fingerprint(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(HandshakeTokenCommand => Issue, Id, Fingerprint);
 #[derive(clap::Args, Debug)]
 pub struct HandshakeTokenIssueArgs {
     /// ML-DSA suite used to sign the token (mldsa44, mldsa65, mldsa87).
@@ -11500,29 +11145,13 @@ pub enum GatewayCommand {
     #[command(subcommand)]
     DirectMode(GatewayDirectModeCommand),
 }
-impl Run for GatewayCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            GatewayCommand::TemplateConfig(args) => args.run(context),
-            GatewayCommand::GenerateHosts(args) => args.run(context),
-            GatewayCommand::RoutePlan(args) => args.run(context),
-            GatewayCommand::CacheInvalidate(args) => args.run(context),
-            GatewayCommand::DirectMode(cmd) => cmd.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(GatewayCommand => TemplateConfig, GenerateHosts, RoutePlan, CacheInvalidate, DirectMode);
 #[derive(clap::Subcommand, Debug)]
 pub enum ToolkitCommand {
     /// Package a payload into a CAR + manifest bundle using the canonical tooling.
     Pack(ToolkitPackArgs),
 }
-impl Run for ToolkitCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            ToolkitCommand::Pack(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(ToolkitCommand => Pack);
 #[derive(clap::Subcommand, Debug)]
 pub enum GuardDirectoryCommand {
     /// Fetch a guard directory snapshot over HTTPS, verify it, and emit a summary.
@@ -11532,15 +11161,7 @@ pub enum GuardDirectoryCommand {
     /// Inspect snapshot structure without claiming authenticity or freshness.
     Inspect(GuardDirectoryInspectArgs),
 }
-impl Run for GuardDirectoryCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            GuardDirectoryCommand::Fetch(args) => args.run(context),
-            GuardDirectoryCommand::Verify(args) => args.run(context),
-            GuardDirectoryCommand::Inspect(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(GuardDirectoryCommand => Fetch, Verify, Inspect);
 #[derive(clap::Args, Debug)]
 pub struct GuardDirectoryFetchArgs {
     /// URLs publishing the guard directory snapshot (first success wins).
@@ -11708,15 +11329,7 @@ pub enum GatewayDirectModeCommand {
     /// Emit a configuration snippet restoring default gateway security settings.
     Rollback(GatewayDirectModeRollbackArgs),
 }
-impl Run for GatewayDirectModeCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            GatewayDirectModeCommand::Plan(args) => args.run(context),
-            GatewayDirectModeCommand::Enable(args) => args.run(context),
-            GatewayDirectModeCommand::Rollback(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(GatewayDirectModeCommand => Plan, Enable, Rollback);
 #[derive(clap::Args, Debug)]
 pub struct GatewayDirectModePlanArgs {
     /// Path to the Norito-encoded manifest (`.to`) file to analyse.
@@ -13073,15 +12686,7 @@ pub enum PinCommand {
     /// Register a manifest in the pin registry via Torii.
     Register(PinRegisterArgs),
 }
-impl Run for PinCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            PinCommand::List(args) => args.run(context),
-            PinCommand::Show(args) => args.run(context),
-            PinCommand::Register(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(PinCommand => List, Show, Register);
 #[derive(clap::Args, Debug)]
 pub struct PinListArgs {
     /// Optional closed lifecycle filter.
@@ -13263,13 +12868,7 @@ pub enum AliasCommand {
     /// List alias bindings exposed via Torii.
     List(AliasListArgs),
 }
-impl Run for AliasCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            AliasCommand::List(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(AliasCommand => List);
 #[derive(clap::Args, Debug)]
 pub struct AliasListArgs {
     /// Maximum number of aliases to return.
@@ -13308,13 +12907,7 @@ pub enum ReplicationCommand {
     /// List replication orders.
     List(ReplicationListArgs),
 }
-impl Run for ReplicationCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            ReplicationCommand::List(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(ReplicationCommand => List);
 #[derive(clap::Args, Debug)]
 pub struct ReplicationListArgs {
     /// Maximum number of orders to return.
@@ -13360,25 +12953,13 @@ pub enum StorageCommand {
     #[command(subcommand)]
     Token(StorageTokenCommand),
 }
-impl Run for StorageCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            StorageCommand::Token(cmd) => cmd.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(StorageCommand => Token);
 #[derive(clap::Subcommand, Debug)]
 pub enum StorageTokenCommand {
     /// Issue a stream token for a manifest/provider pair.
     Issue(StorageTokenIssueArgs),
 }
-impl Run for StorageTokenCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            StorageTokenCommand::Issue(args) => args.run(context),
-        }
-    }
-}
+impl_run_for_subcommand!(StorageTokenCommand => Issue);
 #[derive(clap::Args, Debug)]
 pub struct StorageTokenIssueArgs {
     /// Hex-encoded manifest identifier stored on the gateway.
@@ -15710,28 +15291,39 @@ impl ModerationOperatorService {
         }
         Ok(())
     }
-    fn operator_panel_response(
+    fn operator_panel_body(
         &self,
         quarantine_id_hex: &str,
         limit: Option<u32>,
-    ) -> ModerationOperatorHttpResponse {
+    ) -> std::result::Result<Vec<u8>, ModerationOperatorHttpResponse> {
         let response = match self.workflow_source.get_operator_panel(
             quarantine_id_hex,
             SorafsModerationQuarantineFilter { limit },
         ) {
             Ok(response) => response,
             Err(err) => {
-                return moderation_operator_json_error(
+                return Err(moderation_operator_json_error(
                     StatusCode::BAD_GATEWAY,
                     format!("failed to fetch operator-panel response from Torii: {err}"),
-                );
+                ));
             }
         };
         let status = response.status();
         let body = response.into_body();
         if status != StatusCode::OK {
-            return moderation_operator_upstream_response(status, body);
+            return Err(moderation_operator_upstream_response(status, body));
         }
+        Ok(body)
+    }
+    fn operator_panel_response(
+        &self,
+        quarantine_id_hex: &str,
+        limit: Option<u32>,
+    ) -> ModerationOperatorHttpResponse {
+        let body = match self.operator_panel_body(quarantine_id_hex, limit) {
+            Ok(body) => body,
+            Err(response) => return response,
+        };
         match moderation_operator_payload_free_panel_json(&body) {
             Ok(panel) => moderation_operator_json_response(StatusCode::OK, &panel),
             Err(err) => moderation_operator_json_error(
@@ -15740,134 +15332,26 @@ impl ModerationOperatorService {
             ),
         }
     }
-    fn bridge_plan_response(
-        &self,
-        quarantine_id_hex: &str,
-        limit: Option<u32>,
-    ) -> ModerationOperatorHttpResponse {
-        let response = match self.workflow_source.get_operator_panel(
-            quarantine_id_hex,
-            SorafsModerationQuarantineFilter { limit },
-        ) {
-            Ok(response) => response,
-            Err(err) => {
-                return moderation_operator_json_error(
-                    StatusCode::BAD_GATEWAY,
-                    format!("failed to fetch operator-panel response from Torii: {err}"),
-                );
-            }
-        };
-        let status = response.status();
-        let body = response.into_body();
-        if status != StatusCode::OK {
-            return moderation_operator_upstream_response(status, body);
-        }
-        match moderation_operator_payload_free_panel_json(&body)
-            .and_then(|panel| moderation_quarantine_bridge_plan_json(quarantine_id_hex, &panel))
-        {
-            Ok(plan) => moderation_operator_json_response(StatusCode::OK, &plan),
-            Err(err) => moderation_operator_json_error(
-                StatusCode::BAD_GATEWAY,
-                format!("failed to build payload-free bridge plan: {err}"),
-            ),
-        }
-    }
-    fn juror_plan_response(
-        &self,
-        quarantine_id_hex: &str,
-        limit: Option<u32>,
-    ) -> ModerationOperatorHttpResponse {
-        let response = match self.workflow_source.get_operator_panel(
-            quarantine_id_hex,
-            SorafsModerationQuarantineFilter { limit },
-        ) {
-            Ok(response) => response,
-            Err(err) => {
-                return moderation_operator_json_error(
-                    StatusCode::BAD_GATEWAY,
-                    format!("failed to fetch operator-panel response from Torii: {err}"),
-                );
-            }
-        };
-        let status = response.status();
-        let body = response.into_body();
-        if status != StatusCode::OK {
-            return moderation_operator_upstream_response(status, body);
-        }
-        match moderation_operator_payload_free_panel_json(&body)
-            .and_then(|panel| moderation_quarantine_juror_plan_json(quarantine_id_hex, &panel))
-        {
-            Ok(plan) => moderation_operator_json_response(StatusCode::OK, &plan),
-            Err(err) => moderation_operator_json_error(
-                StatusCode::BAD_GATEWAY,
-                format!("failed to build payload-free juror notification plan: {err}"),
-            ),
-        }
-    }
-    fn commit_reveal_status_response(
-        &self,
-        quarantine_id_hex: &str,
-        limit: Option<u32>,
-    ) -> ModerationOperatorHttpResponse {
-        let response = match self.workflow_source.get_operator_panel(
-            quarantine_id_hex,
-            SorafsModerationQuarantineFilter { limit },
-        ) {
-            Ok(response) => response,
-            Err(err) => {
-                return moderation_operator_json_error(
-                    StatusCode::BAD_GATEWAY,
-                    format!("failed to fetch operator-panel response from Torii: {err}"),
-                );
-            }
-        };
-        let status = response.status();
-        let body = response.into_body();
-        if status != StatusCode::OK {
-            return moderation_operator_upstream_response(status, body);
-        }
-        match moderation_operator_payload_free_panel_json(&body).and_then(|panel| {
-            moderation_quarantine_commit_reveal_status_json(quarantine_id_hex, &panel)
-        }) {
-            Ok(status) => moderation_operator_json_response(StatusCode::OK, &status),
-            Err(err) => moderation_operator_json_error(
-                StatusCode::BAD_GATEWAY,
-                format!("failed to build payload-free commit/reveal coordination status: {err}"),
-            ),
-        }
-    }
-    fn juror_notifications_response(
-        &self,
-        quarantine_id_hex: &str,
-        limit: Option<u32>,
-    ) -> ModerationOperatorHttpResponse {
-        let response = match self.workflow_source.get_operator_panel(
-            quarantine_id_hex,
-            SorafsModerationQuarantineFilter { limit },
-        ) {
-            Ok(response) => response,
-            Err(err) => {
-                return moderation_operator_json_error(
-                    StatusCode::BAD_GATEWAY,
-                    format!("failed to fetch operator-panel response from Torii: {err}"),
-                );
-            }
-        };
-        let status = response.status();
-        let body = response.into_body();
-        if status != StatusCode::OK {
-            return moderation_operator_upstream_response(status, body);
-        }
-        match moderation_operator_payload_free_panel_json(&body).and_then(|panel| {
-            moderation_quarantine_juror_notifications_json(quarantine_id_hex, &panel)
-        }) {
-            Ok(notifications) => moderation_operator_json_response(StatusCode::OK, &notifications),
-            Err(err) => moderation_operator_json_error(
-                StatusCode::BAD_GATEWAY,
-                format!("failed to build payload-free juror notification delivery manifest: {err}"),
-            ),
-        }
-    }
+    impl_moderation_operator_derived_response!(
+        bridge_plan_response => moderation_quarantine_bridge_plan_json,
+        plan,
+        "failed to build payload-free bridge plan: {err}"
+    );
+    impl_moderation_operator_derived_response!(
+        juror_plan_response => moderation_quarantine_juror_plan_json,
+        plan,
+        "failed to build payload-free juror notification plan: {err}"
+    );
+    impl_moderation_operator_derived_response!(
+        commit_reveal_status_response => moderation_quarantine_commit_reveal_status_json,
+        status,
+        "failed to build payload-free commit/reveal coordination status: {err}"
+    );
+    impl_moderation_operator_derived_response!(
+        juror_notifications_response => moderation_quarantine_juror_notifications_json,
+        notifications,
+        "failed to build payload-free juror notification delivery manifest: {err}"
+    );
     fn review_response(
         &self,
         quarantine_id_hex: &str,
@@ -16991,7 +16475,9 @@ mod tests {
     };
     use sorafs_orchestrator::soranet::EndpointTag;
     use sorafs_orchestrator::{incentives::RewardConfig, treasury::ExpectedLedgerTransfer};
-    use soranet_pq::{MlDsaSuite, MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
+    use soranet_pq::{
+        MlDsaSuite, MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair,
+    };
     use std::{
         fmt::{self, Display},
         fs,
@@ -17003,140 +16489,131 @@ mod tests {
     use tempfile::{NamedTempFile, TempDir};
     use url::Url;
     include!("sorafs_nonce_rng_tests.rs");
-    #[test]
-    fn hedging_billing_subcommands_parse_all_read_and_ack_routes() {
-        use clap::Parser as _;
-        #[derive(clap::Parser)]
-        struct Parser {
-            #[command(subcommand)]
-            command: Command,
+    test_items! {
+        fn hedging_billing_subcommands_parse_all_read_and_ack_routes() {
+            use clap::Parser as _;
+            #[derive(clap::Parser)]
+            struct Parser {
+                #[command(subcommand)]
+                command: Command,
+            }
+            let checkpoint = "11".repeat(32);
+            let statement_id = "22".repeat(32);
+            let request_nonce = "33".repeat(32);
+            let commands = [
+                vec![
+                    "sorafs-test".to_owned(),
+                    "billing".to_owned(),
+                    "status".to_owned(),
+                ],
+                vec![
+                    "sorafs-test".to_owned(),
+                    "billing".to_owned(),
+                    "statements".to_owned(),
+                    "--expected-checkpoint-fingerprint".to_owned(),
+                    checkpoint.clone(),
+                    "--limit".to_owned(),
+                    "10".to_owned(),
+                ],
+                vec![
+                    "sorafs-test".to_owned(),
+                    "billing".to_owned(),
+                    "statement".to_owned(),
+                    "--statement-id".to_owned(),
+                    statement_id.clone(),
+                    "--expected-checkpoint-fingerprint".to_owned(),
+                    checkpoint.clone(),
+                    "--output".to_owned(),
+                    "statement.norito".to_owned(),
+                ],
+                vec![
+                    "sorafs-test".to_owned(),
+                    "billing".to_owned(),
+                    "acknowledge".to_owned(),
+                    "--statement-id".to_owned(),
+                    statement_id,
+                    "--expected-checkpoint-fingerprint".to_owned(),
+                    checkpoint.clone(),
+                    "--request-nonce".to_owned(),
+                    request_nonce,
+                    "--authentication-proof".to_owned(),
+                    "proof.bin".to_owned(),
+                ],
+                vec![
+                    "sorafs-test".to_owned(),
+                    "billing".to_owned(),
+                    "reconciliation".to_owned(),
+                ],
+                vec![
+                    "sorafs-test".to_owned(),
+                    "hedging".to_owned(),
+                    "exposure".to_owned(),
+                    "--expected-checkpoint-fingerprint".to_owned(),
+                    checkpoint.clone(),
+                    "--limit".to_owned(),
+                    "10".to_owned(),
+                ],
+                vec![
+                    "sorafs-test".to_owned(),
+                    "hedging".to_owned(),
+                    "intents".to_owned(),
+                    "--expected-checkpoint-fingerprint".to_owned(),
+                    checkpoint,
+                    "--limit".to_owned(),
+                    "10".to_owned(),
+                ],
+            ];
+            for command in commands {
+                let parsed = Parser::try_parse_from(command).expect("hedging/billing command parses");
+                let _ = parsed.command;
+            }
         }
-        let checkpoint = "11".repeat(32);
-        let statement_id = "22".repeat(32);
-        let request_nonce = "33".repeat(32);
-        let commands = [
-            vec![
-                "sorafs-test".to_owned(),
-                "billing".to_owned(),
-                "status".to_owned(),
-            ],
-            vec![
-                "sorafs-test".to_owned(),
-                "billing".to_owned(),
-                "statements".to_owned(),
-                "--expected-checkpoint-fingerprint".to_owned(),
-                checkpoint.clone(),
-                "--limit".to_owned(),
-                "10".to_owned(),
-            ],
-            vec![
-                "sorafs-test".to_owned(),
-                "billing".to_owned(),
-                "statement".to_owned(),
-                "--statement-id".to_owned(),
-                statement_id.clone(),
-                "--expected-checkpoint-fingerprint".to_owned(),
-                checkpoint.clone(),
-                "--output".to_owned(),
-                "statement.norito".to_owned(),
-            ],
-            vec![
-                "sorafs-test".to_owned(),
-                "billing".to_owned(),
-                "acknowledge".to_owned(),
-                "--statement-id".to_owned(),
-                statement_id,
-                "--expected-checkpoint-fingerprint".to_owned(),
-                checkpoint.clone(),
-                "--request-nonce".to_owned(),
-                request_nonce,
-                "--authentication-proof".to_owned(),
-                "proof.bin".to_owned(),
-            ],
-            vec![
-                "sorafs-test".to_owned(),
-                "billing".to_owned(),
-                "reconciliation".to_owned(),
-            ],
-            vec![
-                "sorafs-test".to_owned(),
-                "hedging".to_owned(),
-                "exposure".to_owned(),
-                "--expected-checkpoint-fingerprint".to_owned(),
-                checkpoint.clone(),
-                "--limit".to_owned(),
-                "10".to_owned(),
-            ],
-            vec![
-                "sorafs-test".to_owned(),
-                "hedging".to_owned(),
-                "intents".to_owned(),
-                "--expected-checkpoint-fingerprint".to_owned(),
-                checkpoint,
-                "--limit".to_owned(),
-                "10".to_owned(),
-            ],
-        ];
-        for command in commands {
-            let parsed = Parser::try_parse_from(command).expect("hedging/billing command parses");
-            let _ = parsed.command;
+        fn billing_statements_cli_builds_exact_checkpoint_filter() {
+            let checkpoint = "11".repeat(32);
+            let after_statement_id = "22".repeat(32);
+            let args = BillingStatementsArgs {
+                expected_checkpoint_fingerprint: checkpoint.clone(),
+                after_statement_id: Some(after_statement_id.clone()),
+                limit: 25,
+            };
+            let mut context = TestContext::new();
+            args.run_with(&mut context, |_client, filter| {
+                assert_eq_compact! { filter.expected_checkpoint_fingerprint_hex => checkpoint.as_str() };
+                assert_eq_compact! { filter.after_statement_id_hex => Some(after_statement_id.as_str()) };
+                assert_eq!(filter.limit, 25);
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "anchor": {"checkpoint_fingerprint": (checkpoint.to_ascii_uppercase())},
+                    }), "billing statement page response")
+            })
+            .expect("billing statement list succeeds");
+            assert_eq!(context.printed.len(), 1);
+            assert!(context.printed[0].contains("\"anchor\""));
         }
-    }
-    #[test]
-    fn billing_statements_cli_builds_exact_checkpoint_filter() {
-        let checkpoint = "11".repeat(32);
-        let after_statement_id = "22".repeat(32);
-        let args = BillingStatementsArgs {
-            expected_checkpoint_fingerprint: checkpoint.clone(),
-            after_statement_id: Some(after_statement_id.clone()),
-            limit: 25,
-        };
-        let mut context = TestContext::new();
-        args.run_with(&mut context, |_client, filter| {
-            assert_eq_compact! { filter.expected_checkpoint_fingerprint_hex => checkpoint.as_str() };
-            assert_eq_compact! { filter.after_statement_id_hex => Some(after_statement_id.as_str()) };
-            assert_eq!(filter.limit, 25);
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "anchor": {"checkpoint_fingerprint": (checkpoint.to_ascii_uppercase())},
-                }))?)
-                .expect("billing statement page response"))
-        })
-        .expect("billing statement list succeeds");
-        assert_eq!(context.printed.len(), 1);
-        assert!(context.printed[0].contains("\"anchor\""));
-    }
-    #[test]
-    fn hedging_projection_cli_builds_read_only_exact_checkpoint_filter() {
-        let checkpoint = "33".repeat(32);
-        let after = "44".repeat(32);
-        let args = HedgingProjectionArgs {
-            expected_checkpoint_fingerprint: checkpoint.clone(),
-            after: Some(after.clone()),
-            limit: 100,
-        };
-        let mut context = TestContext::new();
-        args.run_with(&mut context, |_client, filter| {
-            assert_eq_compact! { filter.expected_checkpoint_fingerprint_hex => checkpoint.as_str() };
-            assert_eq!(filter.after_hex, Some(after.as_str()));
-            assert_eq!(filter.limit, 100);
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "anchor": {"checkpoint_fingerprint": (checkpoint.to_ascii_uppercase())},
-                    "automatic_execution_enabled": false,
-                }))?)
-                .expect("hedging projection response"))
-        })
-        .expect("hedging projection read succeeds");
-        assert_eq!(context.printed.len(), 1);
-        let output: Value =
-            norito::json::from_str(&context.printed[0]).expect("projection output JSON");
-        assert_eq_compact! { output.get("automatic_execution_enabled").and_then(Value::as_bool) => Some(false); "projection output must preserve the disabled execution claim" };
-    }
+        fn hedging_projection_cli_builds_read_only_exact_checkpoint_filter() {
+            let checkpoint = "33".repeat(32);
+            let after = "44".repeat(32);
+            let args = HedgingProjectionArgs {
+                expected_checkpoint_fingerprint: checkpoint.clone(),
+                after: Some(after.clone()),
+                limit: 100,
+            };
+            let mut context = TestContext::new();
+            args.run_with(&mut context, |_client, filter| {
+                assert_eq_compact! { filter.expected_checkpoint_fingerprint_hex => checkpoint.as_str() };
+                assert_eq!(filter.after_hex, Some(after.as_str()));
+                assert_eq!(filter.limit, 100);
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "anchor": {"checkpoint_fingerprint": (checkpoint.to_ascii_uppercase())},
+                        "automatic_execution_enabled": false,
+                    }), "hedging projection response")
+            })
+            .expect("hedging projection read succeeds");
+            assert_eq!(context.printed.len(), 1);
+            let output: Value =
+                norito::json::from_str(&context.printed[0]).expect("projection output JSON");
+            assert_eq_compact! { output.get("automatic_execution_enabled").and_then(Value::as_bool) => Some(false); "projection output must preserve the disabled execution claim" };
+        }
+        }
     include!("sorafs/hedging_billing_response_tests.rs");
     #[test]
     fn billing_acknowledgement_cli_reads_bounded_binary_proof() {
@@ -17164,13 +16641,9 @@ mod tests {
                 assert_eq!(actual_checkpoint, checkpoint);
                 assert_eq!(proof, &expected);
                 assert_compact! { format!("{proof:?}").contains("[REDACTED]"); "proof debug output must not expose authentication bytes" };
-                Ok(Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "application/json")
-                    .body(norito::json::to_vec(&norito::json!({
+json_response_fixture!(StatusCode::OK, &norito::json!({
                         "acknowledged": true
-                    }))?)
-                    .expect("billing acknowledgement response"))
+                    }), "billing acknowledgement response")
             },
         )
         .expect("billing acknowledgement succeeds");
@@ -17220,7 +16693,7 @@ mod tests {
             read_billing_acknowledgement_proof(&link).expect_err("symlink proof must fail closed");
         assert!(error.to_string().contains("regular non-symlink file"));
     }
-    #[test]
+    test_items! {
     fn billing_proof_reader_retains_windows_direct_identity_guards() {
         let source = include_str!("sorafs.rs");
         for required_guard in [
@@ -17238,7 +16711,6 @@ mod tests {
             assert_compact! { source.contains(required_guard); "billing proof reader lost required direct-file guard `{required_guard}`" };
         }
     }
-    #[test]
     fn hedging_billing_proof_exact_read_detects_length_drift() {
         let path = Path::new("drifting-proof.bin");
         let mut truncated = std::io::Cursor::new(vec![0xA5; 3]);
@@ -17250,7 +16722,6 @@ mod tests {
             .expect_err("extended proof must fail closed");
         assert!(error.to_string().contains("changed length"));
     }
-    #[test]
     fn billing_statement_cli_writes_exact_norito_response() {
         let checkpoint = "88".repeat(32);
         let statement_id = "99".repeat(32);
@@ -17279,7 +16750,6 @@ mod tests {
             norito::json::from_str(&context.printed[0]).expect("statement summary JSON");
         assert_eq_compact! { summary.get("bytes_written").and_then(Value::as_u64) => Some(4) };
     }
-    #[test]
     fn billing_statement_cli_refuses_to_clobber_existing_file() {
         let output_dir = TempDir::new().expect("statement output directory");
         let output = output_dir.path().join("statement.norito");
@@ -17303,6 +16773,7 @@ mod tests {
         assert!(error.to_string().contains("without replacing"));
         assert_eq_compact! { fs::read(&output).expect("read preserved statement") => original };
         assert!(context.printed.is_empty());
+    }
     }
     #[cfg(unix)]
     #[test]
@@ -17334,7 +16805,7 @@ mod tests {
         assert_compact! { fs::symlink_metadata(&output).expect("inspect preserved output symlink").file_type().is_symlink() };
         assert!(context.printed.is_empty());
     }
-    #[test]
+    test_items! {
     fn billing_statement_cli_rejects_substituted_media_type() {
         let output_dir = TempDir::new().expect("statement output directory");
         let output = output_dir.path().join("statement.norito");
@@ -17357,7 +16828,6 @@ mod tests {
         assert_compact! { !output.exists(); "substituted response must not be persisted" };
         assert!(context.printed.is_empty());
     }
-    #[test]
     fn hedging_billing_cli_rejects_aliases_and_invalid_bounds_before_http() {
         let mut context = TestContext::new();
         let uppercase = "AA".repeat(32);
@@ -17388,7 +16858,6 @@ mod tests {
         assert!(zero_nonce.to_string().contains("request nonce"));
         assert!(context.printed.is_empty());
     }
-    #[test]
     fn token_issue_rng_reports_os_seed_failure() {
         let mut rng = FailingSorafsCliNonceRng;
         let error = token_issue_rng_from_rng(&mut rng)
@@ -17397,7 +16866,6 @@ mod tests {
         assert!(message.contains("failed to seed SoraNet admission-token RNG"));
         assert!(message.contains("failing SoraFS CLI nonce RNG"));
     }
-    #[test]
     fn parse_xor_quantity_accepts_canonical_sub_micro_and_wide_inputs() {
         for canonical in [
             "12.3456",
@@ -17408,7 +16876,6 @@ mod tests {
             assert_eq!(amount.to_string(), canonical);
         }
     }
-    #[test]
     fn parse_xor_quantity_rejects_noncanonical_negative_and_over_scale_inputs() {
         for invalid in [
             "",
@@ -17425,7 +16892,6 @@ mod tests {
             assert_compact! { parse_xor_quantity(invalid).is_err(); "invalid XOR quantity must be rejected: {invalid:?}" };
         }
     }
-    #[test]
     fn reserve_quote_builder_renders_inputs() {
         let policy = ReservePolicyV1::default();
         let quote = policy
@@ -17466,7 +16932,6 @@ mod tests {
             .expect("ledger projection should be serialized");
         assert_compact! { ledger_projection.contains_key("rent_due"); "ledger projection exposes rent_due amount: {ledger_projection:?}" };
     }
-    #[test]
     fn reserve_ledger_projection_rejects_non_string_and_noncanonical_quantities() {
         let policy = ReservePolicyV1::default();
         let reserve_balance = XorQuantity::zero();
@@ -17510,7 +16975,6 @@ mod tests {
             assert_compact! { extract_ledger_projection(&artifact).is_err(); "invalid exact quantity must be rejected: {invalid:?}" };
         }
     }
-    #[test]
     fn reserve_ledger_plan_preserves_sub_micro_and_wide_quantities() {
         let sub_micro: XorQuantity = "0.000000001".parse().expect("sub-micro quantity");
         let wide: XorQuantity = "340282366920938463463374607431768211456.000000001"
@@ -17542,7 +17006,6 @@ mod tests {
         assert!(rendered.contains(&sub_micro.to_string()));
         assert!(rendered.contains(&wide.to_string()));
     }
-    #[test]
     fn reserve_lifecycle_builder_renders_stage_and_credit_fields() {
         let policy = ReservePolicyV1::default();
         let quote = policy
@@ -17566,6 +17029,7 @@ mod tests {
         assert_eq!(root.get("credit_draw").and_then(Value::as_str), Some("120"));
         assert_eq_compact! { root.get("disable_adverts").and_then(Value::as_bool) => Some(false) };
         assert_compact! { root.get("lifecycle_projection").is_some(); "full projection should be embedded" };
+    }
     }
     fn sample_guard_directory_snapshot_bytes() -> Vec<u8> {
         let mut rng = StdRng::seed_from_u64(0x5EED);
@@ -17754,33 +17218,29 @@ mod tests {
             Ok(())
         }
     }
-    #[test]
+    test_items! {
     fn output_summary_prefers_json_in_json_mode() {
         let mut ctx = OutputModeContext::new(CliOutputFormat::Json);
         let summary = DaemonIterationSummary::default();
         output_summary(&mut ctx, &summary, false).expect("summary output");
         assert_eq!(ctx.printed, vec!["json"]);
     }
-    #[test]
     fn output_summary_uses_text_in_text_mode() {
         let mut ctx = OutputModeContext::new(CliOutputFormat::Text);
         let summary = DaemonIterationSummary::default();
         output_summary(&mut ctx, &summary, false).expect("summary output");
         assert_eq!(ctx.printed, vec!["text"]);
     }
-    #[test]
     fn log_daemon_summary_emits_json_in_json_mode() {
         let mut ctx = OutputModeContext::new(CliOutputFormat::Json);
         let summary = DaemonIterationSummary::default();
         log_daemon_summary(&mut ctx, &summary, false).expect("daemon summary");
         assert_eq!(ctx.printed, vec!["json"]);
     }
-    #[test]
     fn handshake_update_requires_flags() {
         let result = HandshakeUpdateArgs::default().into_update();
         assert!(result.is_err(), "expected at least one override");
     }
-    #[test]
     fn handshake_update_accepts_pow_overrides() {
         let args = HandshakeUpdateArgs {
             descriptor_commit: Some("aa".into()),
@@ -17798,7 +17258,6 @@ mod tests {
         assert!(pow.min_ticket_ttl_secs.is_none());
         assert!(pow.ticket_ttl_secs.is_none());
     }
-    #[test]
     fn handshake_update_validates_resume_hash_length() {
         let args = HandshakeUpdateArgs {
             descriptor_commit: Some("aa".into()),
@@ -17819,6 +17278,7 @@ mod tests {
             ResumeHashDirective::Set(hex) => assert_eq!(hex.len(), 64),
             ResumeHashDirective::Clear => panic!("expected Set directive"),
         }
+    }
     }
     fn sample_reward_config_json() -> norito::json::Value {
         let mut policy = norito::json::Map::new();
@@ -17917,13 +17377,12 @@ mod tests {
             destination: sample_account_id("relay"),
         }
     }
-    #[test]
+    test_items! {
     fn incentive_quantity_parser_rejects_negative_amounts() {
         let error = parse_quantity_str("-1", "--requested-amount")
             .expect_err("negative reward quantities must be rejected");
         assert!(error.to_string().contains("non-negative quantity"));
     }
-    #[test]
     fn ledger_export_schema_mismatch_reports_expected_and_actual() {
         const SCHEMA_OFFSET: usize = 4 + 1 + 1;
         let export = LedgerExportFile {
@@ -17941,7 +17400,6 @@ mod tests {
         assert_compact! { combined.contains("expected"); "expected schema hash detail in error chain: {combined}" };
         assert_compact! { combined.contains("got"); "expected actual schema hash detail in error chain: {combined}" };
     }
-    #[test]
     fn reconciliation_summary_builds_expected_counts() {
         let missing_record = sample_transfer_record(TransferKind::Payout, 100);
         let unexpected_record = sample_transfer_record(TransferKind::Credit, 25);
@@ -17986,6 +17444,7 @@ mod tests {
         assert_eq_compact! { summary.amount_arithmetic_errors[0].record.amount => invalid_amount_record.amount.to_string() };
         assert_eq_compact! { summary.amount_arithmetic_errors[0].record.amount_nanos => None };
         assert_compact! { summary.amount_arithmetic_errors[0].record.amount_conversion_error.is_some() };
+    }
     }
     fn sample_account_id(name: &str) -> AccountId {
         let mut hasher = Blake3Hasher::new();
@@ -18093,13 +17552,24 @@ mod tests {
     fn read_state(path: &Path) -> IncentivesState {
         load_incentives_state(path).expect("decode incentives state")
     }
+    fn initialize_incentives_state(config: &Path, state: &Path) -> TestContext {
+        let args = IncentivesServiceInitArgs {
+            state: state.to_path_buf(),
+            config: config.to_path_buf(),
+            treasury_account: sample_account_literal("treasury"),
+            force: false,
+        };
+        let mut context = TestContext::new();
+        args.run(&mut context).expect("init command runs");
+        context
+    }
     fn write_state_without_budget(path: &Path) {
         let config_file = write_reward_config_with_budget(None);
         let reward_config = read_reward_config(config_file.path()).expect("reward config");
         let state = IncentivesState::new(&reward_config, sample_account_id("treasury"));
         save_incentives_state(path, &state).expect("write incentives state");
     }
-    #[test]
+    test_items! {
     fn handshake_token_issue_generates_verifiable_token() {
         let mut ctx = TestContext::new();
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keypair");
@@ -18148,7 +17618,6 @@ mod tests {
         assert_eq!(json["flags"], Value::from(0u64));
         assert_eq_compact! { json["token_id_hex"] => Value::from(hex::encode(artifacts.token.token_id())) };
     }
-    #[test]
     fn handshake_token_id_reports_expected_digest() {
         let mut ctx = TestContext::new();
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keypair");
@@ -18188,7 +17657,6 @@ mod tests {
         let json: Value = norito::json::from_str(output).expect("valid json");
         assert_eq_compact! { json["token_id_hex"] => Value::from(hex::encode(artifacts.token.token_id())) };
     }
-    #[test]
     fn handshake_token_fingerprint_matches_helper() {
         let mut ctx = TestContext::new();
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa65).expect("keypair");
@@ -18202,6 +17670,7 @@ mod tests {
         let output = ctx.outputs().last().expect("json output");
         let json: Value = norito::json::from_str(output).expect("valid json");
         assert_eq_compact! { json["issuer_fingerprint_hex"] => Value::from(hex::encode(expected)) };
+    }
     }
     impl RunContext for TestContext {
         fn config(&self) -> &Config {
@@ -18236,7 +17705,7 @@ mod tests {
             Ok(())
         }
     }
-    #[test]
+    test_items! {
     fn gateway_provider_spec_parses_expected_keys() {
         let id_hex = "11".repeat(32);
         let key_hex = "22".repeat(32);
@@ -18250,27 +17719,23 @@ mod tests {
         assert_eq!(parsed.base_url, "https://example.com");
         assert_eq!(parsed.stream_token_b64, "YWJj");
     }
-    #[test]
     fn gateway_provider_spec_rejects_missing_fields() {
         let err = parse_gateway_provider_spec("name=alpha, base-url=https://example.com")
             .expect_err("missing provider-id should fail");
         assert_compact! { err.to_string().contains("provider-id"); "unexpected error: {err}" };
     }
-    #[test]
     fn validate_hex_digest_enforces_format() {
         let valid = validate_hex_digest(&"ab".repeat(32), "--flag").expect("valid digest");
         assert_eq!(valid, "ab".repeat(32));
         let err = validate_hex_digest("zz", "--flag").expect_err("invalid digest");
         assert!(err.to_string().contains("--flag"));
     }
-    #[test]
     fn parse_transport_policy_flag_accepts_valid_value() {
         let value = "soranet-strict".to_string();
         let parsed = parse_transport_policy_flag(Some(&value), "--transport-policy-override")
             .expect("parse transport policy");
         assert_eq!(parsed, Some(TransportPolicy::SoranetStrict));
     }
-    #[test]
     fn parse_transport_policy_flag_rejects_noncanonical_inputs() {
         for rejected in [
             "",
@@ -18288,14 +17753,12 @@ mod tests {
             assert_compact! { parse_transport_policy_flag(Some(&rejected_value), "--transport-policy").is_err(); "noncanonical transport label `{rejected}` must fail" };
         }
     }
-    #[test]
     fn parse_anonymity_policy_flag_accepts_canonical_value() {
         let value = "anon-majority-pq".to_string();
         let parsed = parse_anonymity_policy_flag(Some(&value), "--anonymity-policy-override")
             .expect("parse anonymity policy");
         assert_eq!(parsed, Some(AnonymityPolicy::MajorityPq));
     }
-    #[test]
     fn parse_anonymity_policy_flag_rejects_noncanonical_inputs() {
         for rejected in [
             "",
@@ -18321,7 +17784,6 @@ mod tests {
             assert_compact! { parse_anonymity_policy_flag(Some(&rejected_value), "--anonymity-policy").is_err(); "noncanonical anonymity label `{rejected}` must fail" };
         }
     }
-    #[test]
     fn parse_write_mode_flag_accepts_only_exact_v1_labels() {
         for (label, expected) in [
             ("read-only", WriteModeHint::ReadOnly),
@@ -18343,13 +17805,11 @@ mod tests {
             assert_compact! { parse_write_mode_flag(Some(&rejected_value), "--write-mode").is_err(); "noncanonical write-mode label `{rejected}` must fail" };
         }
     }
-    #[test]
     fn anonymity_policy_label_matches_expected_values() {
         assert_eq_compact! { anonymity_policy_label(AnonymityPolicy::GuardPq) => "anon-guard-pq" };
         assert_eq_compact! { anonymity_policy_label(AnonymityPolicy::MajorityPq) => "anon-majority-pq" };
         assert_eq_compact! { anonymity_policy_label(AnonymityPolicy::StrictPq) => "anon-strict-pq" };
     }
-    #[test]
     fn load_guard_directory_json_rejected() {
         let mut file = NamedTempFile::new().expect("temp file");
         let id_primary = "01".repeat(32);
@@ -18384,7 +17844,6 @@ mod tests {
         assert_compact! { msg.contains("failed to authenticate guard directory"); "unexpected error message: {msg}" };
         assert_compact! { msg.contains("SRCv2"); "error should mention the canonical SRCv2 Norito format: {msg}" };
     }
-    #[test]
     fn load_guard_directory_decodes_srcv2_bundle() {
         let bytes = sample_guard_directory_snapshot_bytes();
         let mut file = NamedTempFile::new().expect("temp file");
@@ -18402,243 +17861,198 @@ mod tests {
         assert_eq!(directory.valid_after(), Some(1_734_000_000));
         assert_eq!(directory.valid_until(), Some(1_734_086_400));
     }
+    }
     include!("sorafs_guard_directory_tests.rs");
-    #[test]
-    fn authenticated_directory_accepts_matching_snapshot_digest() {
-        let bytes = sample_guard_directory_snapshot_bytes();
-        let expected = hex::encode(compute_snapshot_digest(&bytes));
-        let summary = authenticate_guard_directory_bytes(&bytes, &expected, 1_734_000_000)
-            .expect("digest and time should authenticate");
-        assert_eq!(summary.authentication, "authenticated");
-    }
-    #[test]
-    fn authenticated_directory_rejects_mismatch_and_expiry() {
-        let bytes = sample_guard_directory_snapshot_bytes();
-        let mismatch = authenticate_guard_directory_bytes(&bytes, &"00".repeat(32), 1_734_000_000);
-        assert!(mismatch.is_err(), "snapshot digest mismatch should fail");
-        let expected = hex::encode(compute_snapshot_digest(&bytes));
-        let expired = authenticate_guard_directory_bytes(&bytes, &expected, 1_734_086_400);
-        assert!(expired.is_err(), "expired snapshot should fail");
-    }
-    #[test]
-    fn write_guard_directory_snapshot_honours_overwrite_flag() {
-        use tempfile::TempDir;
-        let temp_dir = TempDir::new().expect("temp dir");
-        let path = temp_dir.path().join("snapshot.norito");
-        let bytes = sample_guard_directory_snapshot_bytes();
-        write_guard_directory_snapshot(&path, &bytes, false).expect("first write should succeed");
-        let second = write_guard_directory_snapshot(&path, &bytes, false);
-        assert!(second.is_err(), "expected overwrite protection");
-        write_guard_directory_snapshot(&path, &bytes, true).expect("overwrite when allowed");
-    }
-    #[test]
-    fn pin_list_with_prints_payload() {
-        let block_hash = "11".repeat(32);
-        let after_digest = "22".repeat(32);
-        let args = PinListArgs {
-            status: Some(PinStatusSelector::Approved),
-            limit: Some(5),
-            max_bytes: Some(4096),
-            after_digest_hex: Some(after_digest.clone()),
-            expected_finalized_height: Some(7),
-            expected_finalized_block_hash_hex: Some(block_hash.clone()),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, filter| {
-            assert_eq!(filter.status, Some(PinStatusKindV1::Approved));
-            assert_eq!(filter.limit, Some(5));
-            assert_eq!(filter.max_bytes, Some(4096));
-            assert_eq!(filter.after_digest_hex, Some(after_digest.as_str()));
-            assert_eq!(filter.finalized.expected_finalized_height, Some(7));
-            assert_eq_compact! { filter.finalized.expected_finalized_block_hash_hex => Some(block_hash.as_str()) };
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "manifests": [ { "digest": "aa" } ]
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"manifests\""));
-    }
-    #[test]
-    fn pin_list_with_propagates_error_status() {
-        let args = PinListArgs {
-            status: None,
-            limit: None,
-            max_bytes: None,
-            after_digest_hex: None,
-            expected_finalized_height: None,
-            expected_finalized_block_hash_hex: None,
-        };
-        let mut ctx = TestContext::new();
-        let result = args.run_with(&mut ctx, |_client, _| {
-            Ok(Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "error": "bad request" }),
-                )?)
-                .unwrap())
-        });
-        assert!(result.is_err());
-        assert!(ctx.printed.is_empty());
-    }
-    #[test]
-    fn pin_show_with_handles_not_found() {
-        let args = PinShowArgs {
-            digest: "deadbeef".to_string(),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, digest| {
-            assert_eq!(digest, "deadbeef");
-            Ok(Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "error": "missing" }),
-                )?)
-                .unwrap())
-        })
-        .expect("run should succeed for 404");
-        assert_eq_compact! { ctx.printed => vec!["manifest `deadbeef` not found".to_string()] };
-    }
-    #[test]
-    fn alias_list_with_prints_payload() {
-        let args = AliasListArgs {
-            limit: Some(3),
-            offset: Some(0),
-            namespace: Some("docs".to_string()),
-            manifest_digest: Some("aa".to_string()),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, filter| {
-            assert_eq!(filter.limit, Some(3));
-            assert_eq!(filter.namespace, Some("docs"));
-            assert_eq!(filter.manifest_digest, Some("aa"));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "aliases": [
-                        { "alias": "docs/latest", "digest": "aa" }
-                    ]
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"aliases\""));
-    }
-    #[test]
-    fn replication_list_with_prints_payload() {
-        let args = ReplicationListArgs {
-            limit: Some(2),
-            offset: None,
-            status: Some("completed".to_string()),
-            manifest_digest: None,
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, filter| {
-            assert_eq!(filter.status, Some("completed"));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "orders": [
-                        { "id": "order1", "status": "completed" }
-                    ]
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"orders\""));
-    }
-    #[test]
-    fn transparency_cycles_list_prints_payload() {
-        let args = TransparencyCyclesListArgs { limit: Some(8) };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, filter| {
-            assert_eq!(filter.limit, Some(8));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "cycles": [
-                        { "cycle_id_hex": "aa" }
-                    ]
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"cycles\""));
-    }
-    #[test]
-    fn transparency_cycles_get_normalizes_cycle_id() {
-        let args = TransparencyCyclesGetArgs {
-            cycle_id: format!(" 0x{} ", "AA".repeat(16)),
-            limit: Some(3),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, cycle_id, filter| {
-            assert_eq!(cycle_id, "aa".repeat(16));
-            assert_eq!(filter.limit, Some(3));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "cycle_id_hex": "aa"
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"cycle_id_hex\""));
-    }
-    #[test]
-    fn transparency_cycles_entry_normalizes_identifiers() {
-        let args = TransparencyCyclesEntryArgs {
-            cycle_id: format!(" 0x{} ", "AB".repeat(16)),
-            entry_id: format!(" 0x{} ", "CD".repeat(16)),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, cycle_id, entry_id| {
-            assert_eq!(cycle_id, "ab".repeat(16));
-            assert_eq!(entry_id, "cd".repeat(16));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "entry_id_hex": "bb"
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"entry_id_hex\""));
-    }
-    #[test]
-    fn transparency_explorer_prints_payload() {
-        let args = TransparencyExplorerArgs { limit: Some(5) };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, filter| {
-            assert_eq!(filter.limit, Some(5));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "schema": "sorafs.transparency.explorer_snapshot.v1"
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("explorer_snapshot"));
-    }
+    test_items! {
+        fn authenticated_directory_accepts_matching_snapshot_digest() {
+            let bytes = sample_guard_directory_snapshot_bytes();
+            let expected = hex::encode(compute_snapshot_digest(&bytes));
+            let summary = authenticate_guard_directory_bytes(&bytes, &expected, 1_734_000_000)
+                .expect("digest and time should authenticate");
+            assert_eq!(summary.authentication, "authenticated");
+        }
+        fn authenticated_directory_rejects_mismatch_and_expiry() {
+            let bytes = sample_guard_directory_snapshot_bytes();
+            let mismatch = authenticate_guard_directory_bytes(&bytes, &"00".repeat(32), 1_734_000_000);
+            assert!(mismatch.is_err(), "snapshot digest mismatch should fail");
+            let expected = hex::encode(compute_snapshot_digest(&bytes));
+            let expired = authenticate_guard_directory_bytes(&bytes, &expected, 1_734_086_400);
+            assert!(expired.is_err(), "expired snapshot should fail");
+        }
+        fn write_guard_directory_snapshot_honours_overwrite_flag() {
+            use tempfile::TempDir;
+            let temp_dir = TempDir::new().expect("temp dir");
+            let path = temp_dir.path().join("snapshot.norito");
+            let bytes = sample_guard_directory_snapshot_bytes();
+            write_guard_directory_snapshot(&path, &bytes, false).expect("first write should succeed");
+            let second = write_guard_directory_snapshot(&path, &bytes, false);
+            assert!(second.is_err(), "expected overwrite protection");
+            write_guard_directory_snapshot(&path, &bytes, true).expect("overwrite when allowed");
+        }
+        fn pin_list_with_prints_payload() {
+            let block_hash = "11".repeat(32);
+            let after_digest = "22".repeat(32);
+            let args = PinListArgs {
+                status: Some(PinStatusSelector::Approved),
+                limit: Some(5),
+                max_bytes: Some(4096),
+                after_digest_hex: Some(after_digest.clone()),
+                expected_finalized_height: Some(7),
+                expected_finalized_block_hash_hex: Some(block_hash.clone()),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, filter| {
+                assert_eq!(filter.status, Some(PinStatusKindV1::Approved));
+                assert_eq!(filter.limit, Some(5));
+                assert_eq!(filter.max_bytes, Some(4096));
+                assert_eq!(filter.after_digest_hex, Some(after_digest.as_str()));
+                assert_eq!(filter.finalized.expected_finalized_height, Some(7));
+                assert_eq_compact! { filter.finalized.expected_finalized_block_hash_hex => Some(block_hash.as_str()) };
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "manifests": [ { "digest": "aa" } ]
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"manifests\""));
+        }
+        fn pin_list_with_propagates_error_status() {
+            let args = PinListArgs {
+                status: None,
+                limit: None,
+                max_bytes: None,
+                after_digest_hex: None,
+                expected_finalized_height: None,
+                expected_finalized_block_hash_hex: None,
+            };
+            let mut ctx = TestContext::new();
+            let result = args.run_with(&mut ctx, |_client, _| {
+    json_response_fixture!(StatusCode::BAD_REQUEST,
+                        &norito::json!({ "error": "bad request" }),
+                    )
+            });
+            assert!(result.is_err());
+            assert!(ctx.printed.is_empty());
+        }
+        fn pin_show_with_handles_not_found() {
+            let args = PinShowArgs {
+                digest: "deadbeef".to_string(),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, digest| {
+                assert_eq!(digest, "deadbeef");
+    json_response_fixture!(StatusCode::NOT_FOUND,
+                        &norito::json!({ "error": "missing" }),
+                    )
+            })
+            .expect("run should succeed for 404");
+            assert_eq_compact! { ctx.printed => vec!["manifest `deadbeef` not found".to_string()] };
+        }
+        fn alias_list_with_prints_payload() {
+            let args = AliasListArgs {
+                limit: Some(3),
+                offset: Some(0),
+                namespace: Some("docs".to_string()),
+                manifest_digest: Some("aa".to_string()),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, filter| {
+                assert_eq!(filter.limit, Some(3));
+                assert_eq!(filter.namespace, Some("docs"));
+                assert_eq!(filter.manifest_digest, Some("aa"));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "aliases": [
+                            { "alias": "docs/latest", "digest": "aa" }
+                        ]
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"aliases\""));
+        }
+        fn replication_list_with_prints_payload() {
+            let args = ReplicationListArgs {
+                limit: Some(2),
+                offset: None,
+                status: Some("completed".to_string()),
+                manifest_digest: None,
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, filter| {
+                assert_eq!(filter.status, Some("completed"));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "orders": [
+                            { "id": "order1", "status": "completed" }
+                        ]
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"orders\""));
+        }
+        fn transparency_cycles_list_prints_payload() {
+            let args = TransparencyCyclesListArgs { limit: Some(8) };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, filter| {
+                assert_eq!(filter.limit, Some(8));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "cycles": [
+                            { "cycle_id_hex": "aa" }
+                        ]
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"cycles\""));
+        }
+        fn transparency_cycles_get_normalizes_cycle_id() {
+            let args = TransparencyCyclesGetArgs {
+                cycle_id: format!(" 0x{} ", "AA".repeat(16)),
+                limit: Some(3),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, cycle_id, filter| {
+                assert_eq!(cycle_id, "aa".repeat(16));
+                assert_eq!(filter.limit, Some(3));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "cycle_id_hex": "aa"
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"cycle_id_hex\""));
+        }
+        fn transparency_cycles_entry_normalizes_identifiers() {
+            let args = TransparencyCyclesEntryArgs {
+                cycle_id: format!(" 0x{} ", "AB".repeat(16)),
+                entry_id: format!(" 0x{} ", "CD".repeat(16)),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, cycle_id, entry_id| {
+                assert_eq!(cycle_id, "ab".repeat(16));
+                assert_eq!(entry_id, "cd".repeat(16));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "entry_id_hex": "bb"
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"entry_id_hex\""));
+        }
+        fn transparency_explorer_prints_payload() {
+            let args = TransparencyExplorerArgs { limit: Some(5) };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, filter| {
+                assert_eq!(filter.limit, Some(5));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "schema": "sorafs.transparency.explorer_snapshot.v1"
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("explorer_snapshot"));
+        }
+        }
     fn transparency_explorer_canary_fixture_json(
         value: Value,
     ) -> Result<TransparencyExplorerCanaryHttpResponse> {
@@ -18831,595 +18245,523 @@ mod tests {
         }
         panic!("unexpected transparency publication canary route: {url}");
     }
-    #[test]
-    fn transparency_publication_canary_builds_payload_free_evidence() {
-        let out_dir = TempDir::new().expect("publication canary evidence dir");
-        let out = out_dir.path().join("nested/evidence.json");
-        let cycle_id = "11".repeat(16);
-        let args = TransparencyPublicationCanaryArgs {
-            torii_url: Some(" https://torii.test/root ".to_string()),
-            cycle_ids: vec![cycle_id],
-            limit: Some(3),
-            timeout_secs: 1,
-            out: Some(out.clone()),
-        };
-        let mut ctx = TestContext::new();
-        let mut requested = Vec::new();
-        args.run_with_fetch(&mut ctx, |url| {
-            requested.push(url.to_string());
-            transparency_publication_canary_fixture_response(url, true, StatusCode::OK)
-        })
-        .expect("publication canary should render evidence");
-        assert_eq!(requested.len(), 2);
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(!ctx.printed[0].contains("manifest-must-not-leak"));
-        let value: Value =
-            norito::json::from_str(&ctx.printed[0]).expect("publication canary evidence JSON");
-        let schema = value["schema"].as_str();
-        assert_eq!(schema, Some("sorafs.transparency.publication_canary.v1"));
-        assert_eq!(value["status"].as_str(), Some("passed"));
-        assert_eq!(value["route_count"].as_u64(), Some(2));
-        assert_eq!(value["passed_route_count"].as_u64(), Some(2));
-        assert_eq!(value["cycle_detail_probe_count"].as_u64(), Some(1));
-        assert_eq!(value["publication_bodies_included"].as_bool(), Some(false));
-        let routes = value["routes"]
-            .as_array()
-            .expect("publication canary routes");
-        for field in ["anchor_metadata_present", "publisher_identity_present"] {
-            let all_present = routes
-                .iter()
-                .all(|route| route[field].as_bool() == Some(true));
-            assert!(all_present);
-        }
-        let bytes = fs::read(out).expect("written publication canary evidence");
-        let written: Value = norito::json::from_slice(&bytes).expect("written evidence JSON");
-        assert_eq!(written["schema"], value["schema"]);
-    }
-    #[test]
-    fn transparency_publication_canary_rejects_malformed_cycle_id_before_fetch() {
-        let args = TransparencyPublicationCanaryArgs {
-            torii_url: Some("https://torii.test/root".to_string()),
-            cycle_ids: vec!["not-a-cycle-id".to_string()],
-            limit: Some(3),
-            timeout_secs: 1,
-            out: None,
-        };
-        let mut ctx = TestContext::new();
-        let err = args
-            .run_with_fetch(&mut ctx, |_url| {
-                panic!("malformed cycle id must fail before HTTP fetch")
+    test_items! {
+        fn transparency_publication_canary_builds_payload_free_evidence() {
+            let out_dir = TempDir::new().expect("publication canary evidence dir");
+            let out = out_dir.path().join("nested/evidence.json");
+            let cycle_id = "11".repeat(16);
+            let args = TransparencyPublicationCanaryArgs {
+                torii_url: Some(" https://torii.test/root ".to_string()),
+                cycle_ids: vec![cycle_id],
+                limit: Some(3),
+                timeout_secs: 1,
+                out: Some(out.clone()),
+            };
+            let mut ctx = TestContext::new();
+            let mut requested = Vec::new();
+            args.run_with_fetch(&mut ctx, |url| {
+                requested.push(url.to_string());
+                transparency_publication_canary_fixture_response(url, true, StatusCode::OK)
             })
-            .expect_err("malformed cycle id must be rejected");
-        assert_compact! { err.to_string().contains("--cycle-id must be a 16-byte hex string") };
-        assert!(ctx.printed.is_empty());
-    }
-    #[test]
-    fn transparency_publication_canary_fails_missing_publisher_identity() {
-        let args = TransparencyPublicationCanaryArgs {
-            torii_url: Some("https://torii.test/root".to_string()),
-            cycle_ids: Vec::new(),
-            limit: Some(3),
-            timeout_secs: 1,
-            out: None,
-        };
-        let mut ctx = TestContext::new();
-        args.run_with_fetch(&mut ctx, |url| {
-            transparency_publication_canary_fixture_response(url, false, StatusCode::OK)
-        })
-        .expect("publication canary should emit failed evidence");
-        let value: Value =
-            norito::json::from_str(&ctx.printed[0]).expect("publication canary evidence JSON");
-        assert_eq!(value.get("status").and_then(Value::as_str), Some("failed"));
-        assert_eq!(value["passed_route_count"].as_u64(), Some(0));
-        let routes = value["routes"].as_array().expect("routes");
-        assert_compact! { routes.iter().all(|route| route["publisher_identity_present"].as_bool() == Some(false)) };
-    }
-    #[test]
-    fn transparency_publication_canary_records_http_failure_without_body() {
-        let args = TransparencyPublicationCanaryArgs {
-            torii_url: Some("https://torii.test/root".to_string()),
-            cycle_ids: Vec::new(),
-            limit: Some(3),
-            timeout_secs: 1,
-            out: None,
-        };
-        let mut ctx = TestContext::new();
-        args.run_with_fetch(&mut ctx, |url| {
-            transparency_publication_canary_fixture_response(url, true, StatusCode::BAD_GATEWAY)
-        })
-        .expect("HTTP failure should still emit canary evidence");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(!ctx.printed[0].contains("publication route unavailable"));
-        let value: Value =
-            norito::json::from_str(&ctx.printed[0]).expect("publication canary evidence JSON");
-        assert_eq!(value.get("status").and_then(Value::as_str), Some("failed"));
-        assert_eq!(value["passed_route_count"].as_u64(), Some(0));
-    }
-    #[test]
-    fn transparency_tokens_prints_payload() {
-        let args = TransparencyTokensArgs { limit: Some(7) };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, filter| {
-            assert_eq!(filter.limit, Some(7));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "entries": [
-                        { "payload_kind": "proof_token_issuance" }
-                    ]
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"proof_token_issuance\""));
-    }
-    #[test]
-    fn transparency_token_issuance_submit_reads_json_payload() {
-        let file = write_json_file(&norito::json!({
-            "token_b64": "proof-token-frame",
-            "signer_key_hex": ("a1".repeat(32)),
-            "evidence_digest_hex": ("b2".repeat(32)),
-            "policy_digest_hex": ("c3".repeat(32)),
-            "metadata": [
-                { "key": "producer", "value": "gateway-a" }
-            ]
-        }));
-        let args = TransparencyTokenIssuanceSubmitArgs {
-            payload: file.path().to_path_buf(),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, payload| {
-            let value: Value = norito::json::from_slice(payload).expect("payload is json");
-            assert_eq_compact! { value.get("token_b64").and_then(Value::as_str) => Some("proof-token-frame") };
-            assert_eq_compact! { value.get("signer_key_hex").and_then(Value::as_str) => Some("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1") };
-            Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "schema": "sorafs.transparency.proof_token_issuance.ingest.v1"
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("proof_token_issuance"));
-    }
-    #[test]
-    fn transparency_token_issuance_canary_writes_payload_free_evidence() {
-        let issuance_file = write_json_file(&norito::json!({
-            "token_b64": "proof-token-frame-must-not-leak",
-            "signer_key_hex": ("a1".repeat(32)),
-            "evidence_digest_hex": ("b2".repeat(32)),
-            "policy_digest_hex": ("c3".repeat(32)),
-            "metadata": [
-                { "key": "producer", "value": "gateway-a" }
-            ]
-        }));
-        let out_dir = TempDir::new().expect("proof-token issuance canary evidence dir");
-        let out = out_dir.path().join("nested/evidence.json");
-        let args = TransparencyTokenIssuanceCanaryArgs {
-            issuances: vec![issuance_file.path().to_path_buf()],
-            out: Some(out.clone()),
-        };
-        let mut ctx = TestContext::new();
-        let mut submitted = 0_usize;
-        args.run_with(&mut ctx, |_client, payload| {
-            submitted += 1;
-            let value: Value = norito::json::from_slice(payload).expect("issuance payload JSON");
-            assert_eq_compact! { value.get("token_b64").and_then(Value::as_str) => Some("proof-token-frame-must-not-leak") };
-            Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "schema": "sorafs.transparency.proof_token_issuance.ingest.v1",
-                    "token_id_hex": "token-id-must-not-leak"
-                }))?)
-                .unwrap())
-        })
-        .expect("proof-token issuance canary should succeed");
-        assert_eq!(submitted, 1);
-        assert!(out.exists(), "canary evidence should be written");
-        assert_eq!(ctx.printed.len(), 1);
-        let evidence: Value =
-            norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
-        assert_eq_compact! { evidence.get("schema").and_then(Value::as_str) => Some("sorafs.transparency.proof_token_issuance.canary.v1") };
-        assert_eq_compact! { evidence.get("status").and_then(Value::as_str) => Some("passed") };
-        assert_eq!(evidence.get("probe_count").and_then(Value::as_u64), Some(1));
-        assert_eq_compact! { evidence.get("passed_probe_count").and_then(Value::as_u64) => Some(1) };
-        assert_eq_compact! { evidence.get("issuance_probe_count").and_then(Value::as_u64) => Some(1) };
-        assert_eq_compact! { evidence.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
-        assert_eq_compact! { evidence.get("proof_token_frames_included").and_then(Value::as_bool) => Some(false) };
-        assert_eq_compact! { evidence.get("response_bodies_included").and_then(Value::as_bool) => Some(false) };
-        assert_compact! { !ctx.printed[0].contains("proof-token-frame-must-not-leak"); "canary evidence must not include proof-token frames" };
-        assert_compact! { !ctx.printed[0].contains("token-id-must-not-leak"); "canary evidence must not archive response bodies" };
-    }
-    #[test]
-    fn transparency_token_issuance_canary_records_failed_probe_without_body() {
-        let issuance_file = write_json_file(&norito::json!({
-            "token_b64": "proof-token-frame-must-not-leak",
-            "signer_key_hex": ("a1".repeat(32)),
-            "evidence_digest_hex": ("b2".repeat(32)),
-            "policy_digest_hex": ("c3".repeat(32)),
-        }));
-        let args = TransparencyTokenIssuanceCanaryArgs {
-            issuances: vec![issuance_file.path().to_path_buf()],
-            out: None,
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, _payload| {
-            Ok(Response::builder()
-                .status(StatusCode::BAD_GATEWAY)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "error": "proof-token producer unavailable"
-                }))?)
-                .unwrap())
-        })
-        .expect("failed probe should still emit canary evidence");
-        assert_eq!(ctx.printed.len(), 1);
-        let evidence: Value =
-            norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
-        assert_eq_compact! { evidence.get("status").and_then(Value::as_str) => Some("failed") };
-        assert_eq_compact! { evidence.get("passed_probe_count").and_then(Value::as_u64) => Some(0) };
-        assert_compact! { !ctx.printed[0].contains("proof-token producer unavailable"); "canary evidence must not archive response bodies" };
-    }
-    #[test]
-    fn transparency_token_issuance_canary_rejects_empty_payload_list() {
-        let args = TransparencyTokenIssuanceCanaryArgs {
-            issuances: Vec::new(),
-            out: None,
-        };
-        let mut ctx = TestContext::new();
-        let err = args
-            .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
-            .expect_err("missing issuance payloads must be rejected");
-        assert!(err.to_string().contains("at least one --issuance"));
-        assert!(ctx.printed.is_empty());
-    }
-    #[test]
-    fn transparency_privacy_aggregate_source_event_reads_json_payload() {
-        let mut file = NamedTempFile::new().expect("privacy aggregate source-event file");
-        file.write_all(
-            &norito::json::to_vec(&norito::json!({
+            .expect("publication canary should render evidence");
+            assert_eq!(requested.len(), 2);
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(!ctx.printed[0].contains("manifest-must-not-leak"));
+            let value: Value =
+                norito::json::from_str(&ctx.printed[0]).expect("publication canary evidence JSON");
+            let schema = value["schema"].as_str();
+            assert_eq!(schema, Some("sorafs.transparency.publication_canary.v1"));
+            assert_eq!(value["status"].as_str(), Some("passed"));
+            assert_eq!(value["route_count"].as_u64(), Some(2));
+            assert_eq!(value["passed_route_count"].as_u64(), Some(2));
+            assert_eq!(value["cycle_detail_probe_count"].as_u64(), Some(1));
+            assert_eq!(value["publication_bodies_included"].as_bool(), Some(false));
+            let routes = value["routes"]
+                .as_array()
+                .expect("publication canary routes");
+            for field in ["anchor_metadata_present", "publisher_identity_present"] {
+                let all_present = routes
+                    .iter()
+                    .all(|route| route[field].as_bool() == Some(true));
+                assert!(all_present);
+            }
+            let bytes = fs::read(out).expect("written publication canary evidence");
+            let written: Value = norito::json::from_slice(&bytes).expect("written evidence JSON");
+            assert_eq!(written["schema"], value["schema"]);
+        }
+        fn transparency_publication_canary_rejects_malformed_cycle_id_before_fetch() {
+            let args = TransparencyPublicationCanaryArgs {
+                torii_url: Some("https://torii.test/root".to_string()),
+                cycle_ids: vec!["not-a-cycle-id".to_string()],
+                limit: Some(3),
+                timeout_secs: 1,
+                out: None,
+            };
+            let mut ctx = TestContext::new();
+            let err = args
+                .run_with_fetch(&mut ctx, |_url| {
+                    panic!("malformed cycle id must fail before HTTP fetch")
+                })
+                .expect_err("malformed cycle id must be rejected");
+            assert_compact! { err.to_string().contains("--cycle-id must be a 16-byte hex string") };
+            assert!(ctx.printed.is_empty());
+        }
+        fn transparency_publication_canary_fails_missing_publisher_identity() {
+            let args = TransparencyPublicationCanaryArgs {
+                torii_url: Some("https://torii.test/root".to_string()),
+                cycle_ids: Vec::new(),
+                limit: Some(3),
+                timeout_secs: 1,
+                out: None,
+            };
+            let mut ctx = TestContext::new();
+            args.run_with_fetch(&mut ctx, |url| {
+                transparency_publication_canary_fixture_response(url, false, StatusCode::OK)
+            })
+            .expect("publication canary should emit failed evidence");
+            let value: Value =
+                norito::json::from_str(&ctx.printed[0]).expect("publication canary evidence JSON");
+            assert_eq!(value.get("status").and_then(Value::as_str), Some("failed"));
+            assert_eq!(value["passed_route_count"].as_u64(), Some(0));
+            let routes = value["routes"].as_array().expect("routes");
+            assert_compact! { routes.iter().all(|route| route["publisher_identity_present"].as_bool() == Some(false)) };
+        }
+        fn transparency_publication_canary_records_http_failure_without_body() {
+            let args = TransparencyPublicationCanaryArgs {
+                torii_url: Some("https://torii.test/root".to_string()),
+                cycle_ids: Vec::new(),
+                limit: Some(3),
+                timeout_secs: 1,
+                out: None,
+            };
+            let mut ctx = TestContext::new();
+            args.run_with_fetch(&mut ctx, |url| {
+                transparency_publication_canary_fixture_response(url, true, StatusCode::BAD_GATEWAY)
+            })
+            .expect("HTTP failure should still emit canary evidence");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(!ctx.printed[0].contains("publication route unavailable"));
+            let value: Value =
+                norito::json::from_str(&ctx.printed[0]).expect("publication canary evidence JSON");
+            assert_eq!(value.get("status").and_then(Value::as_str), Some("failed"));
+            assert_eq!(value["passed_route_count"].as_u64(), Some(0));
+        }
+        fn transparency_tokens_prints_payload() {
+            let args = TransparencyTokensArgs { limit: Some(7) };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, filter| {
+                assert_eq!(filter.limit, Some(7));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "entries": [
+                            { "payload_kind": "proof_token_issuance" }
+                        ]
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"proof_token_issuance\""));
+        }
+        fn transparency_token_issuance_submit_reads_json_payload() {
+            let file = write_json_file(&norito::json!({
+                "token_b64": "proof-token-frame",
+                "signer_key_hex": ("a1".repeat(32)),
+                "evidence_digest_hex": ("b2".repeat(32)),
+                "policy_digest_hex": ("c3".repeat(32)),
+                "metadata": [
+                    { "key": "producer", "value": "gateway-a" }
+                ]
+            }));
+            let args = TransparencyTokenIssuanceSubmitArgs {
+                payload: file.path().to_path_buf(),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, payload| {
+                let value: Value = norito::json::from_slice(payload).expect("payload is json");
+                assert_eq_compact! { value.get("token_b64").and_then(Value::as_str) => Some("proof-token-frame") };
+                assert_eq_compact! { value.get("signer_key_hex").and_then(Value::as_str) => Some("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1") };
+    json_response_fixture!(StatusCode::ACCEPTED, &norito::json!({
+                        "schema": "sorafs.transparency.proof_token_issuance.ingest.v1"
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("proof_token_issuance"));
+        }
+        fn transparency_token_issuance_canary_writes_payload_free_evidence() {
+            let issuance_file = write_json_file(&norito::json!({
+                "token_b64": "proof-token-frame-must-not-leak",
+                "signer_key_hex": ("a1".repeat(32)),
+                "evidence_digest_hex": ("b2".repeat(32)),
+                "policy_digest_hex": ("c3".repeat(32)),
+                "metadata": [
+                    { "key": "producer", "value": "gateway-a" }
+                ]
+            }));
+            let out_dir = TempDir::new().expect("proof-token issuance canary evidence dir");
+            let out = out_dir.path().join("nested/evidence.json");
+            let args = TransparencyTokenIssuanceCanaryArgs {
+                issuances: vec![issuance_file.path().to_path_buf()],
+                out: Some(out.clone()),
+            };
+            let mut ctx = TestContext::new();
+            let mut submitted = 0_usize;
+            args.run_with(&mut ctx, |_client, payload| {
+                submitted += 1;
+                let value: Value = norito::json::from_slice(payload).expect("issuance payload JSON");
+                assert_eq_compact! { value.get("token_b64").and_then(Value::as_str) => Some("proof-token-frame-must-not-leak") };
+    json_response_fixture!(StatusCode::ACCEPTED, &norito::json!({
+                        "schema": "sorafs.transparency.proof_token_issuance.ingest.v1",
+                        "token_id_hex": "token-id-must-not-leak"
+                    }))
+            })
+            .expect("proof-token issuance canary should succeed");
+            assert_eq!(submitted, 1);
+            assert!(out.exists(), "canary evidence should be written");
+            assert_eq!(ctx.printed.len(), 1);
+            let evidence: Value =
+                norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+            assert_eq_compact! { evidence.get("schema").and_then(Value::as_str) => Some("sorafs.transparency.proof_token_issuance.canary.v1") };
+            assert_eq_compact! { evidence.get("status").and_then(Value::as_str) => Some("passed") };
+            assert_eq!(evidence.get("probe_count").and_then(Value::as_u64), Some(1));
+            assert_eq_compact! { evidence.get("passed_probe_count").and_then(Value::as_u64) => Some(1) };
+            assert_eq_compact! { evidence.get("issuance_probe_count").and_then(Value::as_u64) => Some(1) };
+            assert_eq_compact! { evidence.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
+            assert_eq_compact! { evidence.get("proof_token_frames_included").and_then(Value::as_bool) => Some(false) };
+            assert_eq_compact! { evidence.get("response_bodies_included").and_then(Value::as_bool) => Some(false) };
+            assert_compact! { !ctx.printed[0].contains("proof-token-frame-must-not-leak"); "canary evidence must not include proof-token frames" };
+            assert_compact! { !ctx.printed[0].contains("token-id-must-not-leak"); "canary evidence must not archive response bodies" };
+        }
+        fn transparency_token_issuance_canary_records_failed_probe_without_body() {
+            let issuance_file = write_json_file(&norito::json!({
+                "token_b64": "proof-token-frame-must-not-leak",
+                "signer_key_hex": ("a1".repeat(32)),
+                "evidence_digest_hex": ("b2".repeat(32)),
+                "policy_digest_hex": ("c3".repeat(32)),
+            }));
+            let args = TransparencyTokenIssuanceCanaryArgs {
+                issuances: vec![issuance_file.path().to_path_buf()],
+                out: None,
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, _payload| {
+    json_response_fixture!(StatusCode::BAD_GATEWAY, &norito::json!({
+                        "error": "proof-token producer unavailable"
+                    }))
+            })
+            .expect("failed probe should still emit canary evidence");
+            assert_eq!(ctx.printed.len(), 1);
+            let evidence: Value =
+                norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+            assert_eq_compact! { evidence.get("status").and_then(Value::as_str) => Some("failed") };
+            assert_eq_compact! { evidence.get("passed_probe_count").and_then(Value::as_u64) => Some(0) };
+            assert_compact! { !ctx.printed[0].contains("proof-token producer unavailable"); "canary evidence must not archive response bodies" };
+        }
+        fn transparency_token_issuance_canary_rejects_empty_payload_list() {
+            let args = TransparencyTokenIssuanceCanaryArgs {
+                issuances: Vec::new(),
+                out: None,
+            };
+            let mut ctx = TestContext::new();
+            let err = args
+                .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
+                .expect_err("missing issuance payloads must be rejected");
+            assert!(err.to_string().contains("at least one --issuance"));
+            assert!(ctx.printed.is_empty());
+        }
+        fn transparency_privacy_aggregate_source_event_reads_json_payload() {
+            let mut file = NamedTempFile::new().expect("privacy aggregate source-event file");
+            file.write_all(
+                &norito::json::to_vec(&norito::json!({
+                    "event_id": "privacy-event-1",
+                    "occurred_at_unix": 1_800_000_500_u64,
+                    "population_label": "moderation.global",
+                    "metrics": [
+                        { "key": "quarantined", "value": 3_u64 }
+                    ],
+                    "policy_digest_hex": ("a1".repeat(32)),
+                }))
+                .expect("serialize privacy aggregate source-event JSON"),
+            )
+            .expect("write privacy aggregate source-event JSON");
+            let args = TransparencyPrivacyAggregateSourceEventArgs {
+                payload: file.path().to_path_buf(),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, payload| {
+                let value: Value = norito::json::from_slice(payload).expect("payload is json");
+                assert_eq_compact! { value.get("event_id").and_then(Value::as_str) => Some("privacy-event-1") };
+                assert_eq_compact! { value.get("population_label").and_then(Value::as_str) => Some("moderation.global") };
+    json_response_fixture!(StatusCode::ACCEPTED,
+                        &norito::json!({ "status": "accepted" }),
+                    )
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"accepted\""));
+        }
+        fn transparency_privacy_aggregate_publish_due_reads_json_payload() {
+            let mut file = NamedTempFile::new().expect("privacy aggregate publish-due file");
+            file.write_all(
+                &norito::json::to_vec(&norito::json!({
+                    "now_unix": 1_800_000_800_u64,
+                    "previous_block_hash_hex": ("d4".repeat(32)),
+                }))
+                .expect("serialize privacy aggregate publish-due JSON"),
+            )
+            .expect("write privacy aggregate publish-due JSON");
+            let args = TransparencyPrivacyAggregatePublishDueArgs {
+                payload: file.path().to_path_buf(),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, payload| {
+                let value: Value = norito::json::from_slice(payload).expect("payload is json");
+                assert_eq_compact! { value.get("previous_block_hash_hex").and_then(Value::as_str) => Some("d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4") };
+                assert!(value.get("cycle_prf_output_hex").is_none());
+    json_response_fixture!(StatusCode::OK,
+                        &norito::json!({ "status": "published" }),
+                    )
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"published\""));
+        }
+        fn transparency_privacy_aggregate_commands_reject_empty_payloads() {
+            let file = NamedTempFile::new().expect("empty privacy aggregate file");
+            let mut ctx = TestContext::new();
+            let source_args = TransparencyPrivacyAggregateSourceEventArgs {
+                payload: file.path().to_path_buf(),
+            };
+            let err = source_args
+                .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
+                .expect_err("empty source-event payload must be rejected");
+            assert!(err.to_string().contains("source-event payload"));
+            let publish_args = TransparencyPrivacyAggregatePublishDueArgs {
+                payload: file.path().to_path_buf(),
+            };
+            let err = publish_args
+                .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
+                .expect_err("empty publish-due payload must be rejected");
+            assert!(err.to_string().contains("publish-due payload"));
+            assert!(ctx.printed.is_empty());
+        }
+        fn transparency_privacy_aggregate_canary_writes_payload_free_evidence() {
+            let source_file = write_json_file(&norito::json!({
                 "event_id": "privacy-event-1",
                 "occurred_at_unix": 1_800_000_500_u64,
                 "population_label": "moderation.global",
+                "subject_digest_hex": ("b2".repeat(32)),
                 "metrics": [
-                    { "key": "quarantined", "value": 3_u64 }
+                    { "key": "quarantined", "value": 3_u64, "unit": "count" }
                 ],
                 "policy_digest_hex": ("a1".repeat(32)),
-            }))
-            .expect("serialize privacy aggregate source-event JSON"),
-        )
-        .expect("write privacy aggregate source-event JSON");
-        let args = TransparencyPrivacyAggregateSourceEventArgs {
-            payload: file.path().to_path_buf(),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, payload| {
-            let value: Value = norito::json::from_slice(payload).expect("payload is json");
-            assert_eq_compact! { value.get("event_id").and_then(Value::as_str) => Some("privacy-event-1") };
-            assert_eq_compact! { value.get("population_label").and_then(Value::as_str) => Some("moderation.global") };
-            Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "status": "accepted" }),
-                )?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"accepted\""));
-    }
-    #[test]
-    fn transparency_privacy_aggregate_publish_due_reads_json_payload() {
-        let mut file = NamedTempFile::new().expect("privacy aggregate publish-due file");
-        file.write_all(
-            &norito::json::to_vec(&norito::json!({
+            }));
+            let publish_file = write_json_file(&norito::json!({
                 "now_unix": 1_800_000_800_u64,
                 "previous_block_hash_hex": ("d4".repeat(32)),
-            }))
-            .expect("serialize privacy aggregate publish-due JSON"),
-        )
-        .expect("write privacy aggregate publish-due JSON");
-        let args = TransparencyPrivacyAggregatePublishDueArgs {
-            payload: file.path().to_path_buf(),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, payload| {
-            let value: Value = norito::json::from_slice(payload).expect("payload is json");
-            assert_eq_compact! { value.get("previous_block_hash_hex").and_then(Value::as_str) => Some("d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4") };
-            assert!(value.get("cycle_prf_output_hex").is_none());
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "status": "published" }),
-                )?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"published\""));
-    }
-    #[test]
-    fn transparency_privacy_aggregate_commands_reject_empty_payloads() {
-        let file = NamedTempFile::new().expect("empty privacy aggregate file");
-        let mut ctx = TestContext::new();
-        let source_args = TransparencyPrivacyAggregateSourceEventArgs {
-            payload: file.path().to_path_buf(),
-        };
-        let err = source_args
-            .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
-            .expect_err("empty source-event payload must be rejected");
-        assert!(err.to_string().contains("source-event payload"));
-        let publish_args = TransparencyPrivacyAggregatePublishDueArgs {
-            payload: file.path().to_path_buf(),
-        };
-        let err = publish_args
-            .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
-            .expect_err("empty publish-due payload must be rejected");
-        assert!(err.to_string().contains("publish-due payload"));
-        assert!(ctx.printed.is_empty());
-    }
-    #[test]
-    fn transparency_privacy_aggregate_canary_writes_payload_free_evidence() {
-        let source_file = write_json_file(&norito::json!({
-            "event_id": "privacy-event-1",
-            "occurred_at_unix": 1_800_000_500_u64,
-            "population_label": "moderation.global",
-            "subject_digest_hex": ("b2".repeat(32)),
-            "metrics": [
-                { "key": "quarantined", "value": 3_u64, "unit": "count" }
-            ],
-            "policy_digest_hex": ("a1".repeat(32)),
-        }));
-        let publish_file = write_json_file(&norito::json!({
-            "now_unix": 1_800_000_800_u64,
-            "previous_block_hash_hex": ("d4".repeat(32)),
-        }));
-        let out_dir = TempDir::new().expect("privacy aggregate canary evidence dir");
-        let out = out_dir.path().join("nested/evidence.json");
-        let args = TransparencyPrivacyAggregateCanaryArgs {
-            source_events: vec![source_file.path().to_path_buf()],
-            publish_due: vec![publish_file.path().to_path_buf()],
-            out: Some(out.clone()),
-        };
-        let mut ctx = TestContext::new();
-        let mut submitted_source = 0_usize;
-        let mut submitted_publish = 0_usize;
-        args.run_with(
-            &mut ctx,
-            |_client, payload| {
-                submitted_source += 1;
-                let value: Value = norito::json::from_slice(payload).expect("source payload JSON");
-                assert_eq_compact! { value.get("event_id").and_then(Value::as_str) => Some("privacy-event-1") };
-                Ok(Response::builder()
-                    .status(StatusCode::ACCEPTED)
-                    .header("Content-Type", "application/json")
-                    .body(norito::json::to_vec(&norito::json!({
-                        "status": "accepted",
-                        "event_id": "privacy-event-1"
-                    }))?)
-                    .unwrap())
-            },
-            |_client, payload| {
-                submitted_publish += 1;
-                let value: Value = norito::json::from_slice(payload).expect("publish payload JSON");
-                assert_eq_compact! { value.get("previous_block_hash_hex").and_then(Value::as_str) => Some("d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4") };
-                assert!(value.get("cycle_prf_output_hex").is_none());
-                Ok(Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "application/json")
-                    .body(norito::json::to_vec(&norito::json!({
-                        "status": "published",
-                        "cycle_id_hex": "aa"
-                    }))?)
-                    .unwrap())
-            },
-        )
-        .expect("privacy aggregate canary should succeed");
-        assert_eq!(submitted_source, 1);
-        assert_eq!(submitted_publish, 1);
-        assert!(out.exists(), "canary evidence should be written");
-        assert_eq!(ctx.printed.len(), 1);
-        let evidence: Value =
-            norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
-        assert_eq_compact! { evidence.get("schema").and_then(Value::as_str) => Some("sorafs.transparency.privacy_aggregate.canary.v1") };
-        assert_eq_compact! { evidence.get("status").and_then(Value::as_str) => Some("passed") };
-        assert_eq!(evidence.get("probe_count").and_then(Value::as_u64), Some(2));
-        assert_eq_compact! { evidence.get("passed_probe_count").and_then(Value::as_u64) => Some(2) };
-        assert_eq_compact! { evidence.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
-        assert_eq_compact! { evidence.get("raw_metric_values_included").and_then(Value::as_bool) => Some(false) };
-        assert_compact! { !ctx.printed[0].contains("\"metrics\""); "canary evidence must not include raw metric arrays" };
-        assert_compact! { !ctx.printed[0].contains("\"quarantined\""); "canary evidence must not include raw metric names" };
-    }
-    #[test]
-    fn transparency_privacy_aggregate_canary_records_failed_probe_without_body() {
-        let publish_file = write_json_file(&norito::json!({
-            "now_unix": 1_800_000_800_u64,
-            "aggregate_id_prefix": "moderation",
-            "privacy_mode": "suppression",
-            "suppression_threshold": 4_u64,
-        }));
-        let args = TransparencyPrivacyAggregateCanaryArgs {
-            source_events: Vec::new(),
-            publish_due: vec![publish_file.path().to_path_buf()],
-            out: None,
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(
-            &mut ctx,
-            |_client, _payload| unreachable!("source-event submit must not run"),
-            |_client, _payload| {
-                Ok(Response::builder()
-                    .status(StatusCode::BAD_GATEWAY)
-                    .header("Content-Type", "application/json")
-                    .body(norito::json::to_vec(&norito::json!({
-                        "error": "scheduler unavailable"
-                    }))?)
-                    .unwrap())
-            },
-        )
-        .expect("failed probe should still emit canary evidence");
-        assert_eq!(ctx.printed.len(), 1);
-        let evidence: Value =
-            norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
-        assert_eq_compact! { evidence.get("status").and_then(Value::as_str) => Some("failed") };
-        assert_eq_compact! { evidence.get("passed_probe_count").and_then(Value::as_u64) => Some(0) };
-        assert_compact! { !ctx.printed[0].contains("scheduler unavailable"); "canary evidence must not archive response bodies" };
-    }
+            }));
+            let out_dir = TempDir::new().expect("privacy aggregate canary evidence dir");
+            let out = out_dir.path().join("nested/evidence.json");
+            let args = TransparencyPrivacyAggregateCanaryArgs {
+                source_events: vec![source_file.path().to_path_buf()],
+                publish_due: vec![publish_file.path().to_path_buf()],
+                out: Some(out.clone()),
+            };
+            let mut ctx = TestContext::new();
+            let mut submitted_source = 0_usize;
+            let mut submitted_publish = 0_usize;
+            args.run_with(
+                &mut ctx,
+                |_client, payload| {
+                    submitted_source += 1;
+                    let value: Value = norito::json::from_slice(payload).expect("source payload JSON");
+                    assert_eq_compact! { value.get("event_id").and_then(Value::as_str) => Some("privacy-event-1") };
+    json_response_fixture!(StatusCode::ACCEPTED, &norito::json!({
+                            "status": "accepted",
+                            "event_id": "privacy-event-1"
+                        }))
+                },
+                |_client, payload| {
+                    submitted_publish += 1;
+                    let value: Value = norito::json::from_slice(payload).expect("publish payload JSON");
+                    assert_eq_compact! { value.get("previous_block_hash_hex").and_then(Value::as_str) => Some("d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4") };
+                    assert!(value.get("cycle_prf_output_hex").is_none());
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                            "status": "published",
+                            "cycle_id_hex": "aa"
+                        }))
+                },
+            )
+            .expect("privacy aggregate canary should succeed");
+            assert_eq!(submitted_source, 1);
+            assert_eq!(submitted_publish, 1);
+            assert!(out.exists(), "canary evidence should be written");
+            assert_eq!(ctx.printed.len(), 1);
+            let evidence: Value =
+                norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+            assert_eq_compact! { evidence.get("schema").and_then(Value::as_str) => Some("sorafs.transparency.privacy_aggregate.canary.v1") };
+            assert_eq_compact! { evidence.get("status").and_then(Value::as_str) => Some("passed") };
+            assert_eq!(evidence.get("probe_count").and_then(Value::as_u64), Some(2));
+            assert_eq_compact! { evidence.get("passed_probe_count").and_then(Value::as_u64) => Some(2) };
+            assert_eq_compact! { evidence.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
+            assert_eq_compact! { evidence.get("raw_metric_values_included").and_then(Value::as_bool) => Some(false) };
+            assert_compact! { !ctx.printed[0].contains("\"metrics\""); "canary evidence must not include raw metric arrays" };
+            assert_compact! { !ctx.printed[0].contains("\"quarantined\""); "canary evidence must not include raw metric names" };
+        }
+        fn transparency_privacy_aggregate_canary_records_failed_probe_without_body() {
+            let publish_file = write_json_file(&norito::json!({
+                "now_unix": 1_800_000_800_u64,
+                "aggregate_id_prefix": "moderation",
+                "privacy_mode": "suppression",
+                "suppression_threshold": 4_u64,
+            }));
+            let args = TransparencyPrivacyAggregateCanaryArgs {
+                source_events: Vec::new(),
+                publish_due: vec![publish_file.path().to_path_buf()],
+                out: None,
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(
+                &mut ctx,
+                |_client, _payload| unreachable!("source-event submit must not run"),
+                |_client, _payload| {
+    json_response_fixture!(StatusCode::BAD_GATEWAY, &norito::json!({
+                            "error": "scheduler unavailable"
+                        }))
+                },
+            )
+            .expect("failed probe should still emit canary evidence");
+            assert_eq!(ctx.printed.len(), 1);
+            let evidence: Value =
+                norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+            assert_eq_compact! { evidence.get("status").and_then(Value::as_str) => Some("failed") };
+            assert_eq_compact! { evidence.get("passed_probe_count").and_then(Value::as_u64) => Some(0) };
+            assert_compact! { !ctx.printed[0].contains("scheduler unavailable"); "canary evidence must not archive response bodies" };
+        }
+        }
     fn write_json_file(value: &Value) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("json file");
         file.write_all(&norito::json::to_vec(value).expect("serialize json"))
             .expect("write json file");
         file
     }
-    #[test]
-    fn appeals_pricing_quote_reads_json_payload() {
-        let file = write_json_file(&norito::json!({
-            "class": "content",
-            "backlog": 4_u64,
-            "evidence_size_mb": 12_u64,
-            "urgency": "normal"
-        }));
-        let args = AppealsPricingQuoteArgs {
-            input: file.path().to_path_buf(),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, payload| {
-            let value: Value = norito::json::from_slice(payload).expect("payload is json");
-            assert_eq!(value.get("class").and_then(Value::as_str), Some("content"));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "deposit_xor": "123" }),
-                )?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"123\""));
-    }
-    #[test]
-    fn appeals_finance_deposit_create_reads_json_payload() {
-        let file = write_json_file(&norito::json!({
-            "case_id": "case-401",
-            "payer_account": "payer",
-            "destination_account": "treasury",
-            "asset_definition_id": "xor#wonderland",
-            "deposit_xor": "100",
-            "idempotency_key": "case-401-round-7"
-        }));
-        let args = AppealsFinanceDepositCreateArgs {
-            input: file.path().to_path_buf(),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, payload| {
-            let value: Value = norito::json::from_slice(payload).expect("payload is json");
-            assert_eq_compact! { value.get("case_id").and_then(Value::as_str) => Some("case-401") };
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "status": "deposit_instruction" }),
-                )?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("deposit_instruction"));
-    }
-    #[test]
-    fn appeals_finance_deposit_get_trims_escrow_id() {
-        let args = AppealsFinanceDepositGetArgs {
-            escrow_id: " 0xAAAA ".to_string(),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, escrow_id| {
-            assert_eq!(escrow_id, "0xAAAA");
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "escrow_id_hex": "aa" }),
-                )?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("escrow_id_hex"));
-    }
-    #[test]
-    fn appeals_finance_deposit_submit_settlement_accepts_accepted_status() {
-        let file = write_json_file(&norito::json!({
-            "deposit_confirmation": {
-                "escrow_id_hex": ("11".repeat(32)),
+    test_items! {
+        fn appeals_pricing_quote_reads_json_payload() {
+            let file = write_json_file(&norito::json!({
+                "class": "content",
+                "backlog": 4_u64,
+                "evidence_size_mb": 12_u64,
+                "urgency": "normal"
+            }));
+            let args = AppealsPricingQuoteArgs {
+                input: file.path().to_path_buf(),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, payload| {
+                let value: Value = norito::json::from_slice(payload).expect("payload is json");
+                assert_eq!(value.get("class").and_then(Value::as_str), Some("content"));
+    json_response_fixture!(StatusCode::OK,
+                        &norito::json!({ "deposit_xor": "123" }),
+                    )
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"123\""));
+        }
+        fn appeals_finance_deposit_create_reads_json_payload() {
+            let file = write_json_file(&norito::json!({
                 "case_id": "case-401",
                 "payer_account": "payer",
                 "destination_account": "treasury",
                 "asset_definition_id": "xor#wonderland",
                 "deposit_xor": "100",
                 "idempotency_key": "case-401-round-7"
-            },
-            "outcome": "uphold"
-        }));
-        let args = AppealsFinanceDepositSubmitSettlementArgs {
-            input: file.path().to_path_buf(),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, payload| {
-            let value: Value = norito::json::from_slice(payload).expect("payload is json");
-            assert_eq!(value.get("outcome").and_then(Value::as_str), Some("uphold"));
-            Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "status": "queued" }),
-                )?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("queued"));
-    }
-    #[test]
-    fn appeals_finance_reports_list_prints_payload() {
-        let args = AppealsFinanceReportsArgs { limit: Some(5) };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, filter| {
-            assert_eq!(filter.limit, Some(5));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "entries": [
-                        { "payload_kind": "appeal_finance_report" }
-                    ]
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("appeal_finance_report"));
-    }
-    #[test]
-    fn appeals_finance_deposit_create_rejects_empty_payload() {
-        let file = NamedTempFile::new().expect("empty payload");
-        let args = AppealsFinanceDepositCreateArgs {
-            input: file.path().to_path_buf(),
-        };
-        let mut ctx = TestContext::new();
-        let err = args
-            .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
-            .expect_err("empty payload must be rejected");
-        assert!(err.to_string().contains("appeal finance deposit payload"));
-        assert!(ctx.printed.is_empty());
-    }
+            }));
+            let args = AppealsFinanceDepositCreateArgs {
+                input: file.path().to_path_buf(),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, payload| {
+                let value: Value = norito::json::from_slice(payload).expect("payload is json");
+                assert_eq_compact! { value.get("case_id").and_then(Value::as_str) => Some("case-401") };
+    json_response_fixture!(StatusCode::OK,
+                        &norito::json!({ "status": "deposit_instruction" }),
+                    )
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("deposit_instruction"));
+        }
+        fn appeals_finance_deposit_get_trims_escrow_id() {
+            let args = AppealsFinanceDepositGetArgs {
+                escrow_id: " 0xAAAA ".to_string(),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, escrow_id| {
+                assert_eq!(escrow_id, "0xAAAA");
+    json_response_fixture!(StatusCode::OK,
+                        &norito::json!({ "escrow_id_hex": "aa" }),
+                    )
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("escrow_id_hex"));
+        }
+        fn appeals_finance_deposit_submit_settlement_accepts_accepted_status() {
+            let file = write_json_file(&norito::json!({
+                "deposit_confirmation": {
+                    "escrow_id_hex": ("11".repeat(32)),
+                    "case_id": "case-401",
+                    "payer_account": "payer",
+                    "destination_account": "treasury",
+                    "asset_definition_id": "xor#wonderland",
+                    "deposit_xor": "100",
+                    "idempotency_key": "case-401-round-7"
+                },
+                "outcome": "uphold"
+            }));
+            let args = AppealsFinanceDepositSubmitSettlementArgs {
+                input: file.path().to_path_buf(),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, payload| {
+                let value: Value = norito::json::from_slice(payload).expect("payload is json");
+                assert_eq!(value.get("outcome").and_then(Value::as_str), Some("uphold"));
+    json_response_fixture!(StatusCode::ACCEPTED,
+                        &norito::json!({ "status": "queued" }),
+                    )
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("queued"));
+        }
+        fn appeals_finance_reports_list_prints_payload() {
+            let args = AppealsFinanceReportsArgs { limit: Some(5) };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, filter| {
+                assert_eq!(filter.limit, Some(5));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "entries": [
+                            { "payload_kind": "appeal_finance_report" }
+                        ]
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("appeal_finance_report"));
+        }
+        fn appeals_finance_deposit_create_rejects_empty_payload() {
+            let file = NamedTempFile::new().expect("empty payload");
+            let args = AppealsFinanceDepositCreateArgs {
+                input: file.path().to_path_buf(),
+            };
+            let mut ctx = TestContext::new();
+            let err = args
+                .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
+                .expect_err("empty payload must be rejected");
+            assert!(err.to_string().contains("appeal finance deposit payload"));
+            assert!(ctx.printed.is_empty());
+        }
+        }
     fn signed_moderation_repro_manifest_fixture() -> ModerationReproManifestV1 {
         use iroha_data_model::sorafs::moderation::{
             MODERATION_REPRO_MANIFEST_VERSION_V1, ModerationModelFingerprintV1,
@@ -19658,547 +19000,514 @@ mod tests {
             }]
         })
     }
-    #[test]
-    fn moderation_ballots_list_prints_payload() {
-        let args = ModerationBallotsListArgs { limit: Some(8) };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, filter| {
-            assert_eq!(filter.limit, Some(8));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "ballots": [
-                        { "case_id": "case-401", "round_id": "round-7" }
-                    ]
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"ballots\""));
-    }
-    #[test]
-    fn moderation_ballots_get_trims_identifiers() {
-        let args = ModerationBallotsGetArgs {
-            case_id: " case-401 ".to_string(),
-            round_id: " round-7 ".to_string(),
-            limit: Some(3),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, case_id, round_id, filter| {
-            assert_eq!(case_id, "case-401");
-            assert_eq!(round_id, "round-7");
-            assert_eq!(filter.limit, Some(3));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "case_id": "case-401",
-                    "round_id": "round-7"
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"case-401\""));
-    }
-    #[test]
-    fn moderation_ballots_no_show_plan_trims_identifiers_and_prints_payload() {
-        let args = ModerationBallotsNoShowPlanArgs {
-            case_id: " case-401 ".to_string(),
-            round_id: " round-7 ".to_string(),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, case_id, round_id| {
-            assert_eq!(case_id, "case-401");
-            assert_eq!(round_id, "round-7");
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "schema": "sorafs.moderation.ballot.no_show_plan.v1",
+    test_items! {
+        fn moderation_ballots_list_prints_payload() {
+            let args = ModerationBallotsListArgs { limit: Some(8) };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, filter| {
+                assert_eq!(filter.limit, Some(8));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "ballots": [
+                            { "case_id": "case-401", "round_id": "round-7" }
+                        ]
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"ballots\""));
+        }
+        fn moderation_ballots_get_trims_identifiers() {
+            let args = ModerationBallotsGetArgs {
+                case_id: " case-401 ".to_string(),
+                round_id: " round-7 ".to_string(),
+                limit: Some(3),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, case_id, round_id, filter| {
+                assert_eq!(case_id, "case-401");
+                assert_eq!(round_id, "round-7");
+                assert_eq!(filter.limit, Some(3));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "case_id": "case-401",
+                        "round_id": "round-7"
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"case-401\""));
+        }
+        fn moderation_ballots_no_show_plan_trims_identifiers_and_prints_payload() {
+            let args = ModerationBallotsNoShowPlanArgs {
+                case_id: " case-401 ".to_string(),
+                round_id: " round-7 ".to_string(),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, case_id, round_id| {
+                assert_eq!(case_id, "case-401");
+                assert_eq!(round_id, "round-7");
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "schema": "sorafs.moderation.ballot.no_show_plan.v1",
+                        "case_id": "case-401",
+                        "round_id": "round-7",
+                        "no_show_count": 2,
+                        "penalty_plan_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"no_show_count\""));
+            assert!(ctx.printed[0].contains("\"penalty_plan_digest_hex\""));
+        }
+        fn moderation_ballots_events_prints_payload() {
+            let args = ModerationBallotsEventsArgs {
+                since: Some(12),
+                limit: Some(4),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, filter| {
+                assert_eq!(filter.since, Some(12));
+                assert_eq!(filter.limit, Some(4));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "events": [
+                            { "sequence": 13, "kind": "commit_accepted" }
+                        ]
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"events\""));
+        }
+        fn moderation_ballots_commit_reads_json_payload() {
+            let mut ctx = TestContext::new();
+            let commit = moderation_ballot_commit_fixture_for_juror(&ctx.cfg.account.to_string());
+            let mut file = NamedTempFile::new().expect("commit file");
+            file.write_all(
+                norito::json::to_json_pretty(&commit)
+                    .expect("render commit json")
+                    .as_bytes(),
+            )
+            .expect("write commit json");
+            let args = ModerationBallotsCommitArgs {
+                payload: file.path().to_path_buf(),
+                format: "json".to_string(),
+            };
+            args.run_with(&mut ctx, |_client, transaction| {
+                assert_eq!(moderation_commit_from_transaction(transaction), commit);
+                Ok(transaction.hash())
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"transaction_hash_hex\""));
+        }
+        fn moderation_ballots_reveal_reads_norito_payload() {
+            let mut ctx = TestContext::new();
+            let reveal = moderation_ballot_reveal_fixture_for_juror(&ctx.cfg.account.to_string());
+            let encoded = to_bytes(&reveal).expect("encode reveal");
+            let mut file = NamedTempFile::new().expect("reveal file");
+            file.write_all(&encoded).expect("write reveal norito");
+            let args = ModerationBallotsRevealArgs {
+                payload: file.path().to_path_buf(),
+                format: "norito".to_string(),
+            };
+            args.run_with(&mut ctx, |_client, transaction| {
+                assert_eq!(moderation_reveal_from_transaction(transaction), reveal);
+                Ok(transaction.hash())
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"transaction_hash_hex\""));
+        }
+        fn moderation_ballots_tally_builds_request() {
+            let args = ModerationBallotsTallyArgs {
+                case_id: " case-401 ".to_string(),
+                round_id: " round-7 ".to_string(),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, transaction| {
+                let instruction = moderation_finalization_from_transaction(transaction);
+                assert_eq!(instruction.case_id(), "case-401");
+                assert_eq!(instruction.round_id(), "round-7");
+                Ok(transaction.hash())
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"transaction_hash_hex\""));
+        }
+        fn moderation_ballots_commit_rejects_invalid_format() {
+            let file = NamedTempFile::new().expect("commit file");
+            let args = ModerationBallotsCommitArgs {
+                payload: file.path().to_path_buf(),
+                format: "yaml".to_string(),
+            };
+            let mut ctx = TestContext::new();
+            let err = args
+                .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
+                .expect_err("invalid format must be rejected");
+            assert!(err.to_string().contains("--format"));
+            assert!(ctx.printed.is_empty());
+        }
+        fn moderation_native_action_and_coordination_inputs_are_bounded() {
+            let action = NamedTempFile::new().expect("action payload file");
+            action
+                .as_file()
+                .set_len((MODERATION_NATIVE_ACTION_INPUT_MAX_BYTES_V1 + 1) as u64)
+                .expect("extend action payload");
+            let action_err = read_moderation_ballot_payload_file(action.path())
+                .expect_err("oversized native action input must be rejected");
+            assert!(action_err.to_string().contains("between 1 and"));
+            let status = NamedTempFile::new().expect("coordination status file");
+            status
+                .as_file()
+                .set_len((MODERATION_COORDINATION_STATUS_MAX_BYTES_V1 + 1) as u64)
+                .expect("extend coordination status");
+            let status_err = load_moderation_commit_reveal_status_payload(status.path())
+                .expect_err("oversized coordination input must be rejected");
+            assert!(status_err.to_string().contains("between 1 and"));
+        }
+        fn moderation_native_juror_actions_reject_caller_timestamps() {
+            let ctx = TestContext::new();
+            let client = ctx.client_from_config();
+            let juror_id = client.account.to_string();
+            let mut commit = moderation_ballot_commit_fixture_for_juror(&juror_id);
+            commit.committed_at_unix_ms = 1;
+            let commit_err = build_moderation_commit_transaction(&client, &commit)
+                .expect_err("caller-supplied commit timestamp must be rejected");
+            assert!(commit_err.to_string().contains("must be zero"));
+            let mut reveal = moderation_ballot_reveal_fixture_for_juror(&juror_id);
+            reveal.revealed_at_unix_ms = 1;
+            let reveal_err = build_moderation_reveal_transaction(&client, &reveal)
+                .expect_err("caller-supplied reveal timestamp must be rejected");
+            assert!(reveal_err.to_string().contains("must be zero"));
+        }
+        fn moderation_native_juror_actions_require_transaction_authority() {
+            let ctx = TestContext::new();
+            let client = ctx.client_from_config();
+            let commit = moderation_ballot_commit_fixture_for_juror("other-juror@moderation");
+            let commit_err = build_moderation_commit_transaction(&client, &commit)
+                .expect_err("substituted commit juror must be rejected");
+            assert!(commit_err.to_string().contains("transaction authority"));
+            let reveal = moderation_ballot_reveal_fixture_for_juror("other-juror@moderation");
+            let reveal_err = build_moderation_reveal_transaction(&client, &reveal)
+                .expect_err("substituted reveal juror must be rejected");
+            assert!(reveal_err.to_string().contains("transaction authority"));
+        }
+        fn moderation_ballots_execute_submits_pending_actions_payload_free() {
+            let mut ctx = TestContext::new();
+            let juror_id = ctx.cfg.account.to_string();
+            let commit = moderation_ballot_commit_fixture_for_juror(&juror_id);
+            let reveal = moderation_ballot_reveal_fixture_for_juror(&juror_id);
+            let mut commit_file = NamedTempFile::new().expect("commit file");
+            commit_file
+                .write_all(
+                    norito::json::to_json_pretty(&commit)
+                        .expect("render commit json")
+                        .as_bytes(),
+                )
+                .expect("write commit json");
+            let mut reveal_file = NamedTempFile::new().expect("reveal file");
+            reveal_file
+                .write_all(&to_bytes(&reveal).expect("encode reveal"))
+                .expect("write reveal norito");
+            let status_file =
+                write_commit_reveal_status_file(&[juror_id.as_str()], &[juror_id.as_str()], true);
+            let args = ModerationBallotsExecuteArgs {
+                status: status_file.path().to_path_buf(),
+                commit_payloads: vec![commit_file.path().to_path_buf()],
+                reveal_payloads: vec![reveal_file.path().to_path_buf()],
+                commit_format: "json".to_string(),
+                reveal_format: "norito".to_string(),
+                submit_tally: true,
+            };
+            let mut committed = Vec::new();
+            let mut revealed = Vec::new();
+            let mut tallied = Vec::new();
+            args.run_with(
+                &mut ctx,
+                |_client, transaction| {
+                    committed.push(moderation_commit_from_transaction(transaction).juror_id);
+                    Ok(transaction.hash())
+                },
+                |_client, transaction| {
+                    revealed.push(moderation_reveal_from_transaction(transaction).juror_id);
+                    Ok(transaction.hash())
+                },
+                |_client, transaction| {
+                    let instruction = moderation_finalization_from_transaction(transaction);
+                    tallied.push((
+                        instruction.case_id().to_string(),
+                        instruction.round_id().to_string(),
+                    ));
+                    Ok(transaction.hash())
+                },
+            )
+            .expect("execution should succeed");
+            assert_eq!(committed, vec![juror_id.clone()]);
+            assert_eq!(revealed, vec![juror_id]);
+            assert_eq_compact! { tallied => vec![("case-401".to_string(), "round-7".to_string())] };
+            assert_eq!(ctx.printed.len(), 1);
+            let summary: Value =
+                norito::json::from_str(&ctx.printed[0]).expect("execution summary JSON");
+            assert_eq_compact! { summary.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.ballots.execution.v1") };
+            assert_eq!(summary.get("action_count").and_then(Value::as_u64), Some(3));
+            assert_eq_compact! { summary.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
+            assert_eq_compact! { summary.get("private_payloads_included").and_then(Value::as_bool) => Some(false) };
+            assert_compact! { !ctx.printed[0].contains("nonce"); "execution summary must not print reveal payload internals" };
+        }
+        fn moderation_ballots_execute_rejects_non_pending_commit() {
+            let commit = moderation_ballot_commit_fixture_for_juror("juror-1@moderation");
+            let mut commit_file = NamedTempFile::new().expect("commit file");
+            commit_file
+                .write_all(
+                    norito::json::to_json_pretty(&commit)
+                        .expect("render commit json")
+                        .as_bytes(),
+                )
+                .expect("write commit json");
+            let status_file = write_commit_reveal_status_file(&["juror-other@moderation"], &[], false);
+            let args = ModerationBallotsExecuteArgs {
+                status: status_file.path().to_path_buf(),
+                commit_payloads: vec![commit_file.path().to_path_buf()],
+                reveal_payloads: Vec::new(),
+                commit_format: "json".to_string(),
+                reveal_format: "json".to_string(),
+                submit_tally: false,
+            };
+            let mut ctx = TestContext::new();
+            let err = args
+                .run_with(
+                    &mut ctx,
+                    |_client, _| unreachable!("commit submit must not run"),
+                    |_client, _| unreachable!("reveal submit must not run"),
+                    |_client, _| unreachable!("tally submit must not run"),
+                )
+                .expect_err("non-pending commit must be rejected");
+            assert!(err.to_string().contains("not pending in --status"));
+            assert!(ctx.printed.is_empty());
+        }
+        fn moderation_ballots_executor_bundle_writes_supervised_job_payload_free() {
+            let temp = TempDir::new().expect("executor bundle temp dir");
+            let bundle_dir = temp.path().join("executor-bundle");
+            let status_path = temp.path().join("runtime/commit-reveal-status.json");
+            let commit_path = temp.path().join("private/commit.json");
+            let reveal_path = temp.path().join("private/reveal.to");
+            let args = ModerationBallotsExecutorBundleArgs {
+                status: status_path.clone(),
+                bundle_out: bundle_dir.clone(),
+                commit_payloads: vec![commit_path.clone()],
+                reveal_payloads: vec![reveal_path.clone()],
+                commit_format: "json".to_string(),
+                reveal_format: "norito".to_string(),
+                submit_tally: true,
+                iroha_bin: "/usr/local/bin/iroha".to_string(),
+                service_name: "org.sora.sorafs.ballots-executor-test".to_string(),
+                service_user: "sorafs-exec".to_string(),
+                service_group: "sorafs-exec".to_string(),
+                interval_secs: 30,
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx)
+                .expect("executor bundle should be written");
+            assert_eq!(ctx.printed.len(), 1);
+            let summary: Value =
+                norito::json::from_str(&ctx.printed[0]).expect("executor bundle summary JSON");
+            assert_eq_compact! { summary.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.ballots.executor_bundle.v1") };
+            assert_eq_compact! { summary.get("commit_payload_count").and_then(Value::as_u64) => Some(1) };
+            assert_eq_compact! { summary.get("reveal_payload_count").and_then(Value::as_u64) => Some(1) };
+            assert_eq_compact! { summary.get("submit_tally").and_then(Value::as_bool) => Some(true) };
+            assert_eq_compact! { summary.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
+            assert_eq_compact! { summary.get("private_payloads_included").and_then(Value::as_bool) => Some(false) };
+            assert_eq_compact! { summary.get("private_payload_files_copied").and_then(Value::as_bool) => Some(false) };
+            let run_script = fs::read_to_string(bundle_dir.join("run.sh")).expect("read run script");
+            assert!(run_script.contains("sorafs moderation ballots execute"));
+            assert!(run_script.contains("--submit-tally"));
+            assert!(run_script.contains(&format!("--commit-payload='{}'", commit_path.display())));
+            assert!(run_script.contains(&format!("--reveal-payload='{}'", reveal_path.display())));
+            assert!(!run_script.contains("nonce"));
+            let env = fs::read_to_string(bundle_dir.join("executor.env")).expect("read env");
+            assert!(env.contains("IROHA_BIN='/usr/local/bin/iroha'"));
+            assert_compact! { env.contains(&format!( "SORAFS_BALLOTS_EXECUTOR_STATUS_PATH='{}'", status_path.display() )) };
+            assert!(!env.contains("commitment_blake2b_256"));
+            let systemd =
+                fs::read_to_string(bundle_dir.join("org.sora.sorafs.ballots-executor-test.service"))
+                    .expect("read systemd unit");
+            assert!(systemd.contains("Type=oneshot"));
+            assert!(systemd.contains("NoNewPrivileges=true"));
+            let timer =
+                fs::read_to_string(bundle_dir.join("org.sora.sorafs.ballots-executor-test.timer"))
+                    .expect("read systemd timer");
+            assert!(timer.contains("OnUnitActiveSec=30s"));
+            let launchd =
+                fs::read_to_string(bundle_dir.join("org.sora.sorafs.ballots-executor-test.plist"))
+                    .expect("read launchd plist");
+            assert!(launchd.contains("<key>StartInterval</key>"));
+            assert!(launchd.contains("<integer>30</integer>"));
+            let metadata: Value =
+                norito::json::from_slice(&fs::read(bundle_dir.join("bundle.json")).expect("metadata"))
+                    .expect("metadata JSON");
+            assert_eq_compact! { metadata.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.ballots.executor_bundle.v1") };
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                let mode = fs::metadata(bundle_dir.join("run.sh"))
+                    .expect("run script metadata")
+                    .permissions()
+                    .mode();
+                assert_ne!(mode & 0o111, 0, "run.sh should be executable");
+            }
+        }
+        fn moderation_ballots_executor_bundle_rejects_empty_action_set() {
+            let temp = TempDir::new().expect("executor bundle temp dir");
+            let args = ModerationBallotsExecutorBundleArgs {
+                status: temp.path().join("status.json"),
+                bundle_out: temp.path().join("executor-bundle"),
+                commit_payloads: Vec::new(),
+                reveal_payloads: Vec::new(),
+                commit_format: "json".to_string(),
+                reveal_format: "json".to_string(),
+                submit_tally: false,
+                iroha_bin: "iroha".to_string(),
+                service_name: "org.sora.sorafs.ballots-executor-test".to_string(),
+                service_user: "sorafs-exec".to_string(),
+                service_group: "sorafs-exec".to_string(),
+                interval_secs: 60,
+            };
+            let mut ctx = TestContext::new();
+            let err = args
+                .run_with(&mut ctx)
+                .expect_err("empty executor bundle action set must be rejected");
+            assert!(err.to_string().contains("at least one --commit-payload"));
+            assert!(ctx.printed.is_empty());
+            assert_compact! { !temp.path().join("executor-bundle").exists(); "bundle directory must not be created on validation failure" };
+        }
+        fn moderation_ballots_executor_canary_writes_payload_free_evidence() {
+            let temp = TempDir::new().expect("executor canary temp dir");
+            let bundle_dir = temp.path().join("executor-bundle");
+            let bundle_args = ModerationBallotsExecutorBundleArgs {
+                status: temp.path().join("runtime/commit-reveal-status.json"),
+                bundle_out: bundle_dir.clone(),
+                commit_payloads: vec![temp.path().join("private/commit.json")],
+                reveal_payloads: vec![temp.path().join("private/reveal.to")],
+                commit_format: "json".to_string(),
+                reveal_format: "norito".to_string(),
+                submit_tally: true,
+                iroha_bin: "/usr/local/bin/iroha".to_string(),
+                service_name: "org.sora.sorafs.ballots-executor-test".to_string(),
+                service_user: "sorafs-exec".to_string(),
+                service_group: "sorafs-exec".to_string(),
+                interval_secs: 30,
+            };
+            let mut setup_ctx = TestContext::new();
+            bundle_args
+                .run_with(&mut setup_ctx)
+                .expect("executor bundle should be written");
+            let execution_summary = write_json_file(&norito::json!({
+                "schema": "sorafs.moderation.ballots.execution.v1",
+                "source": "commit-reveal-status",
+                "status": "executed",
+                "action_count": 2_u64,
+                "commit_action_count": 1_u64,
+                "reveal_action_count": 0_u64,
+                "tally_action_count": 1_u64,
+                "payload_bytes_included": false,
+                "private_payloads_included": false,
+                "actions": [{
+                    "action": "commit",
                     "case_id": "case-401",
                     "round_id": "round-7",
-                    "no_show_count": 2,
-                    "penalty_plan_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"no_show_count\""));
-        assert!(ctx.printed[0].contains("\"penalty_plan_digest_hex\""));
-    }
-    #[test]
-    fn moderation_ballots_events_prints_payload() {
-        let args = ModerationBallotsEventsArgs {
-            since: Some(12),
-            limit: Some(4),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, filter| {
-            assert_eq!(filter.since, Some(12));
-            assert_eq!(filter.limit, Some(4));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "events": [
-                        { "sequence": 13, "kind": "commit_accepted" }
-                    ]
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"events\""));
-    }
-    #[test]
-    fn moderation_ballots_commit_reads_json_payload() {
-        let mut ctx = TestContext::new();
-        let commit = moderation_ballot_commit_fixture_for_juror(&ctx.cfg.account.to_string());
-        let mut file = NamedTempFile::new().expect("commit file");
-        file.write_all(
-            norito::json::to_json_pretty(&commit)
-                .expect("render commit json")
-                .as_bytes(),
-        )
-        .expect("write commit json");
-        let args = ModerationBallotsCommitArgs {
-            payload: file.path().to_path_buf(),
-            format: "json".to_string(),
-        };
-        args.run_with(&mut ctx, |_client, transaction| {
-            assert_eq!(moderation_commit_from_transaction(transaction), commit);
-            Ok(transaction.hash())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"transaction_hash_hex\""));
-    }
-    #[test]
-    fn moderation_ballots_reveal_reads_norito_payload() {
-        let mut ctx = TestContext::new();
-        let reveal = moderation_ballot_reveal_fixture_for_juror(&ctx.cfg.account.to_string());
-        let encoded = to_bytes(&reveal).expect("encode reveal");
-        let mut file = NamedTempFile::new().expect("reveal file");
-        file.write_all(&encoded).expect("write reveal norito");
-        let args = ModerationBallotsRevealArgs {
-            payload: file.path().to_path_buf(),
-            format: "norito".to_string(),
-        };
-        args.run_with(&mut ctx, |_client, transaction| {
-            assert_eq!(moderation_reveal_from_transaction(transaction), reveal);
-            Ok(transaction.hash())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"transaction_hash_hex\""));
-    }
-    #[test]
-    fn moderation_ballots_tally_builds_request() {
-        let args = ModerationBallotsTallyArgs {
-            case_id: " case-401 ".to_string(),
-            round_id: " round-7 ".to_string(),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, transaction| {
-            let instruction = moderation_finalization_from_transaction(transaction);
-            assert_eq!(instruction.case_id(), "case-401");
-            assert_eq!(instruction.round_id(), "round-7");
-            Ok(transaction.hash())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"transaction_hash_hex\""));
-    }
-    #[test]
-    fn moderation_ballots_commit_rejects_invalid_format() {
-        let file = NamedTempFile::new().expect("commit file");
-        let args = ModerationBallotsCommitArgs {
-            payload: file.path().to_path_buf(),
-            format: "yaml".to_string(),
-        };
-        let mut ctx = TestContext::new();
-        let err = args
-            .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
-            .expect_err("invalid format must be rejected");
-        assert!(err.to_string().contains("--format"));
-        assert!(ctx.printed.is_empty());
-    }
-    #[test]
-    fn moderation_native_action_and_coordination_inputs_are_bounded() {
-        let action = NamedTempFile::new().expect("action payload file");
-        action
-            .as_file()
-            .set_len((MODERATION_NATIVE_ACTION_INPUT_MAX_BYTES_V1 + 1) as u64)
-            .expect("extend action payload");
-        let action_err = read_moderation_ballot_payload_file(action.path())
-            .expect_err("oversized native action input must be rejected");
-        assert!(action_err.to_string().contains("between 1 and"));
-        let status = NamedTempFile::new().expect("coordination status file");
-        status
-            .as_file()
-            .set_len((MODERATION_COORDINATION_STATUS_MAX_BYTES_V1 + 1) as u64)
-            .expect("extend coordination status");
-        let status_err = load_moderation_commit_reveal_status_payload(status.path())
-            .expect_err("oversized coordination input must be rejected");
-        assert!(status_err.to_string().contains("between 1 and"));
-    }
-    #[test]
-    fn moderation_native_juror_actions_reject_caller_timestamps() {
-        let ctx = TestContext::new();
-        let client = ctx.client_from_config();
-        let juror_id = client.account.to_string();
-        let mut commit = moderation_ballot_commit_fixture_for_juror(&juror_id);
-        commit.committed_at_unix_ms = 1;
-        let commit_err = build_moderation_commit_transaction(&client, &commit)
-            .expect_err("caller-supplied commit timestamp must be rejected");
-        assert!(commit_err.to_string().contains("must be zero"));
-        let mut reveal = moderation_ballot_reveal_fixture_for_juror(&juror_id);
-        reveal.revealed_at_unix_ms = 1;
-        let reveal_err = build_moderation_reveal_transaction(&client, &reveal)
-            .expect_err("caller-supplied reveal timestamp must be rejected");
-        assert!(reveal_err.to_string().contains("must be zero"));
-    }
-    #[test]
-    fn moderation_native_juror_actions_require_transaction_authority() {
-        let ctx = TestContext::new();
-        let client = ctx.client_from_config();
-        let commit = moderation_ballot_commit_fixture_for_juror("other-juror@moderation");
-        let commit_err = build_moderation_commit_transaction(&client, &commit)
-            .expect_err("substituted commit juror must be rejected");
-        assert!(commit_err.to_string().contains("transaction authority"));
-        let reveal = moderation_ballot_reveal_fixture_for_juror("other-juror@moderation");
-        let reveal_err = build_moderation_reveal_transaction(&client, &reveal)
-            .expect_err("substituted reveal juror must be rejected");
-        assert!(reveal_err.to_string().contains("transaction authority"));
-    }
-    #[test]
-    fn moderation_ballots_execute_submits_pending_actions_payload_free() {
-        let mut ctx = TestContext::new();
-        let juror_id = ctx.cfg.account.to_string();
-        let commit = moderation_ballot_commit_fixture_for_juror(&juror_id);
-        let reveal = moderation_ballot_reveal_fixture_for_juror(&juror_id);
-        let mut commit_file = NamedTempFile::new().expect("commit file");
-        commit_file
-            .write_all(
-                norito::json::to_json_pretty(&commit)
-                    .expect("render commit json")
-                    .as_bytes(),
-            )
-            .expect("write commit json");
-        let mut reveal_file = NamedTempFile::new().expect("reveal file");
-        reveal_file
-            .write_all(&to_bytes(&reveal).expect("encode reveal"))
-            .expect("write reveal norito");
-        let status_file =
-            write_commit_reveal_status_file(&[juror_id.as_str()], &[juror_id.as_str()], true);
-        let args = ModerationBallotsExecuteArgs {
-            status: status_file.path().to_path_buf(),
-            commit_payloads: vec![commit_file.path().to_path_buf()],
-            reveal_payloads: vec![reveal_file.path().to_path_buf()],
-            commit_format: "json".to_string(),
-            reveal_format: "norito".to_string(),
-            submit_tally: true,
-        };
-        let mut committed = Vec::new();
-        let mut revealed = Vec::new();
-        let mut tallied = Vec::new();
-        args.run_with(
-            &mut ctx,
-            |_client, transaction| {
-                committed.push(moderation_commit_from_transaction(transaction).juror_id);
-                Ok(transaction.hash())
-            },
-            |_client, transaction| {
-                revealed.push(moderation_reveal_from_transaction(transaction).juror_id);
-                Ok(transaction.hash())
-            },
-            |_client, transaction| {
-                let instruction = moderation_finalization_from_transaction(transaction);
-                tallied.push((
-                    instruction.case_id().to_string(),
-                    instruction.round_id().to_string(),
-                ));
-                Ok(transaction.hash())
-            },
-        )
-        .expect("execution should succeed");
-        assert_eq!(committed, vec![juror_id.clone()]);
-        assert_eq!(revealed, vec![juror_id]);
-        assert_eq_compact! { tallied => vec![("case-401".to_string(), "round-7".to_string())] };
-        assert_eq!(ctx.printed.len(), 1);
-        let summary: Value =
-            norito::json::from_str(&ctx.printed[0]).expect("execution summary JSON");
-        assert_eq_compact! { summary.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.ballots.execution.v1") };
-        assert_eq!(summary.get("action_count").and_then(Value::as_u64), Some(3));
-        assert_eq_compact! { summary.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
-        assert_eq_compact! { summary.get("private_payloads_included").and_then(Value::as_bool) => Some(false) };
-        assert_compact! { !ctx.printed[0].contains("nonce"); "execution summary must not print reveal payload internals" };
-    }
-    #[test]
-    fn moderation_ballots_execute_rejects_non_pending_commit() {
-        let commit = moderation_ballot_commit_fixture_for_juror("juror-1@moderation");
-        let mut commit_file = NamedTempFile::new().expect("commit file");
-        commit_file
-            .write_all(
-                norito::json::to_json_pretty(&commit)
-                    .expect("render commit json")
-                    .as_bytes(),
-            )
-            .expect("write commit json");
-        let status_file = write_commit_reveal_status_file(&["juror-other@moderation"], &[], false);
-        let args = ModerationBallotsExecuteArgs {
-            status: status_file.path().to_path_buf(),
-            commit_payloads: vec![commit_file.path().to_path_buf()],
-            reveal_payloads: Vec::new(),
-            commit_format: "json".to_string(),
-            reveal_format: "json".to_string(),
-            submit_tally: false,
-        };
-        let mut ctx = TestContext::new();
-        let err = args
-            .run_with(
-                &mut ctx,
-                |_client, _| unreachable!("commit submit must not run"),
-                |_client, _| unreachable!("reveal submit must not run"),
-                |_client, _| unreachable!("tally submit must not run"),
-            )
-            .expect_err("non-pending commit must be rejected");
-        assert!(err.to_string().contains("not pending in --status"));
-        assert!(ctx.printed.is_empty());
-    }
-    #[test]
-    fn moderation_ballots_executor_bundle_writes_supervised_job_payload_free() {
-        let temp = TempDir::new().expect("executor bundle temp dir");
-        let bundle_dir = temp.path().join("executor-bundle");
-        let status_path = temp.path().join("runtime/commit-reveal-status.json");
-        let commit_path = temp.path().join("private/commit.json");
-        let reveal_path = temp.path().join("private/reveal.to");
-        let args = ModerationBallotsExecutorBundleArgs {
-            status: status_path.clone(),
-            bundle_out: bundle_dir.clone(),
-            commit_payloads: vec![commit_path.clone()],
-            reveal_payloads: vec![reveal_path.clone()],
-            commit_format: "json".to_string(),
-            reveal_format: "norito".to_string(),
-            submit_tally: true,
-            iroha_bin: "/usr/local/bin/iroha".to_string(),
-            service_name: "org.sora.sorafs.ballots-executor-test".to_string(),
-            service_user: "sorafs-exec".to_string(),
-            service_group: "sorafs-exec".to_string(),
-            interval_secs: 30,
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx)
-            .expect("executor bundle should be written");
-        assert_eq!(ctx.printed.len(), 1);
-        let summary: Value =
-            norito::json::from_str(&ctx.printed[0]).expect("executor bundle summary JSON");
-        assert_eq_compact! { summary.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.ballots.executor_bundle.v1") };
-        assert_eq_compact! { summary.get("commit_payload_count").and_then(Value::as_u64) => Some(1) };
-        assert_eq_compact! { summary.get("reveal_payload_count").and_then(Value::as_u64) => Some(1) };
-        assert_eq_compact! { summary.get("submit_tally").and_then(Value::as_bool) => Some(true) };
-        assert_eq_compact! { summary.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
-        assert_eq_compact! { summary.get("private_payloads_included").and_then(Value::as_bool) => Some(false) };
-        assert_eq_compact! { summary.get("private_payload_files_copied").and_then(Value::as_bool) => Some(false) };
-        let run_script = fs::read_to_string(bundle_dir.join("run.sh")).expect("read run script");
-        assert!(run_script.contains("sorafs moderation ballots execute"));
-        assert!(run_script.contains("--submit-tally"));
-        assert!(run_script.contains(&format!("--commit-payload='{}'", commit_path.display())));
-        assert!(run_script.contains(&format!("--reveal-payload='{}'", reveal_path.display())));
-        assert!(!run_script.contains("nonce"));
-        let env = fs::read_to_string(bundle_dir.join("executor.env")).expect("read env");
-        assert!(env.contains("IROHA_BIN='/usr/local/bin/iroha'"));
-        assert_compact! { env.contains(&format!( "SORAFS_BALLOTS_EXECUTOR_STATUS_PATH='{}'", status_path.display() )) };
-        assert!(!env.contains("commitment_blake2b_256"));
-        let systemd =
-            fs::read_to_string(bundle_dir.join("org.sora.sorafs.ballots-executor-test.service"))
-                .expect("read systemd unit");
-        assert!(systemd.contains("Type=oneshot"));
-        assert!(systemd.contains("NoNewPrivileges=true"));
-        let timer =
-            fs::read_to_string(bundle_dir.join("org.sora.sorafs.ballots-executor-test.timer"))
-                .expect("read systemd timer");
-        assert!(timer.contains("OnUnitActiveSec=30s"));
-        let launchd =
-            fs::read_to_string(bundle_dir.join("org.sora.sorafs.ballots-executor-test.plist"))
-                .expect("read launchd plist");
-        assert!(launchd.contains("<key>StartInterval</key>"));
-        assert!(launchd.contains("<integer>30</integer>"));
-        let metadata: Value =
-            norito::json::from_slice(&fs::read(bundle_dir.join("bundle.json")).expect("metadata"))
-                .expect("metadata JSON");
-        assert_eq_compact! { metadata.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.ballots.executor_bundle.v1") };
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mode = fs::metadata(bundle_dir.join("run.sh"))
-                .expect("run script metadata")
-                .permissions()
-                .mode();
-            assert_ne!(mode & 0o111, 0, "run.sh should be executable");
+                    "juror_id": "juror-1@moderation",
+                    "transaction_hash_hex": ("ab".repeat(32)),
+                    "payload_bytes_included": false,
+                    "private_payloads_included": false
+                }, {
+                    "action": "tally",
+                    "case_id": "case-401",
+                    "round_id": "round-7",
+                    "juror_id": null,
+                    "transaction_hash_hex": ("cd".repeat(32)),
+                    "payload_bytes_included": false,
+                    "private_payloads_included": false
+                }]
+            }));
+            let out = temp.path().join("nested/executor-canary.json");
+            let args = ModerationBallotsExecutorCanaryArgs {
+                bundle: bundle_dir.clone(),
+                execution_summary: Some(execution_summary.path().to_path_buf()),
+                out: Some(out.clone()),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx)
+                .expect("executor canary should emit evidence");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(out.exists(), "executor canary evidence should be written");
+            let evidence: Value =
+                norito::json::from_str(&ctx.printed[0]).expect("executor canary evidence JSON");
+            assert_eq_compact! { evidence.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.ballots.executor_canary.v1") };
+            assert_eq_compact! { evidence.get("status").and_then(Value::as_str) => Some("passed") };
+            assert_eq_compact! { evidence.get("artifact_count").and_then(Value::as_u64) => Some(7) };
+            assert_eq_compact! { evidence.get("passed_artifact_count").and_then(Value::as_u64) => Some(7) };
+            assert_eq_compact! { evidence.get("execution_summary_present").and_then(Value::as_bool) => Some(true) };
+            assert_eq_compact! { evidence.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
+            assert_eq_compact! { evidence.get("private_payloads_included").and_then(Value::as_bool) => Some(false) };
+            assert_compact! { !ctx.printed[0].contains("payload_b64"); "canary evidence must not include payload bytes" };
+            assert_compact! { !ctx.printed[0].contains("nonce"); "canary evidence must not include reveal internals" };
+            let artifacts = evidence
+                .get("artifacts")
+                .and_then(Value::as_array)
+                .expect("artifact probes");
+            assert_compact! { artifacts.iter().any(|artifact| artifact.get("kind").and_then(Value::as_str) == Some("run_script")) };
         }
-    }
-    #[test]
-    fn moderation_ballots_executor_bundle_rejects_empty_action_set() {
-        let temp = TempDir::new().expect("executor bundle temp dir");
-        let args = ModerationBallotsExecutorBundleArgs {
-            status: temp.path().join("status.json"),
-            bundle_out: temp.path().join("executor-bundle"),
-            commit_payloads: Vec::new(),
-            reveal_payloads: Vec::new(),
-            commit_format: "json".to_string(),
-            reveal_format: "json".to_string(),
-            submit_tally: false,
-            iroha_bin: "iroha".to_string(),
-            service_name: "org.sora.sorafs.ballots-executor-test".to_string(),
-            service_user: "sorafs-exec".to_string(),
-            service_group: "sorafs-exec".to_string(),
-            interval_secs: 60,
-        };
-        let mut ctx = TestContext::new();
-        let err = args
-            .run_with(&mut ctx)
-            .expect_err("empty executor bundle action set must be rejected");
-        assert!(err.to_string().contains("at least one --commit-payload"));
-        assert!(ctx.printed.is_empty());
-        assert_compact! { !temp.path().join("executor-bundle").exists(); "bundle directory must not be created on validation failure" };
-    }
-    #[test]
-    fn moderation_ballots_executor_canary_writes_payload_free_evidence() {
-        let temp = TempDir::new().expect("executor canary temp dir");
-        let bundle_dir = temp.path().join("executor-bundle");
-        let bundle_args = ModerationBallotsExecutorBundleArgs {
-            status: temp.path().join("runtime/commit-reveal-status.json"),
-            bundle_out: bundle_dir.clone(),
-            commit_payloads: vec![temp.path().join("private/commit.json")],
-            reveal_payloads: vec![temp.path().join("private/reveal.to")],
-            commit_format: "json".to_string(),
-            reveal_format: "norito".to_string(),
-            submit_tally: true,
-            iroha_bin: "/usr/local/bin/iroha".to_string(),
-            service_name: "org.sora.sorafs.ballots-executor-test".to_string(),
-            service_user: "sorafs-exec".to_string(),
-            service_group: "sorafs-exec".to_string(),
-            interval_secs: 30,
-        };
-        let mut setup_ctx = TestContext::new();
-        bundle_args
-            .run_with(&mut setup_ctx)
-            .expect("executor bundle should be written");
-        let execution_summary = write_json_file(&norito::json!({
-            "schema": "sorafs.moderation.ballots.execution.v1",
-            "source": "commit-reveal-status",
-            "status": "executed",
-            "action_count": 2_u64,
-            "commit_action_count": 1_u64,
-            "reveal_action_count": 0_u64,
-            "tally_action_count": 1_u64,
-            "payload_bytes_included": false,
-            "private_payloads_included": false,
-            "actions": [{
-                "action": "commit",
-                "case_id": "case-401",
-                "round_id": "round-7",
-                "juror_id": "juror-1@moderation",
-                "transaction_hash_hex": ("ab".repeat(32)),
+        fn moderation_ballots_executor_canary_rejects_payload_bearing_summary() {
+            let temp = TempDir::new().expect("executor canary temp dir");
+            let bundle_dir = temp.path().join("executor-bundle");
+            let bundle_args = ModerationBallotsExecutorBundleArgs {
+                status: temp.path().join("runtime/commit-reveal-status.json"),
+                bundle_out: bundle_dir.clone(),
+                commit_payloads: vec![temp.path().join("private/commit.json")],
+                reveal_payloads: Vec::new(),
+                commit_format: "json".to_string(),
+                reveal_format: "json".to_string(),
+                submit_tally: false,
+                iroha_bin: "iroha".to_string(),
+                service_name: "org.sora.sorafs.ballots-executor-test".to_string(),
+                service_user: "sorafs-exec".to_string(),
+                service_group: "sorafs-exec".to_string(),
+                interval_secs: 60,
+            };
+            let mut setup_ctx = TestContext::new();
+            bundle_args
+                .run_with(&mut setup_ctx)
+                .expect("executor bundle should be written");
+            let execution_summary = write_json_file(&norito::json!({
+                "schema": "sorafs.moderation.ballots.execution.v1",
                 "payload_bytes_included": false,
-                "private_payloads_included": false
-            }, {
-                "action": "tally",
-                "case_id": "case-401",
-                "round_id": "round-7",
-                "juror_id": null,
-                "transaction_hash_hex": ("cd".repeat(32)),
-                "payload_bytes_included": false,
-                "private_payloads_included": false
-            }]
-        }));
-        let out = temp.path().join("nested/executor-canary.json");
-        let args = ModerationBallotsExecutorCanaryArgs {
-            bundle: bundle_dir.clone(),
-            execution_summary: Some(execution_summary.path().to_path_buf()),
-            out: Some(out.clone()),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx)
-            .expect("executor canary should emit evidence");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(out.exists(), "executor canary evidence should be written");
-        let evidence: Value =
-            norito::json::from_str(&ctx.printed[0]).expect("executor canary evidence JSON");
-        assert_eq_compact! { evidence.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.ballots.executor_canary.v1") };
-        assert_eq_compact! { evidence.get("status").and_then(Value::as_str) => Some("passed") };
-        assert_eq_compact! { evidence.get("artifact_count").and_then(Value::as_u64) => Some(7) };
-        assert_eq_compact! { evidence.get("passed_artifact_count").and_then(Value::as_u64) => Some(7) };
-        assert_eq_compact! { evidence.get("execution_summary_present").and_then(Value::as_bool) => Some(true) };
-        assert_eq_compact! { evidence.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
-        assert_eq_compact! { evidence.get("private_payloads_included").and_then(Value::as_bool) => Some(false) };
-        assert_compact! { !ctx.printed[0].contains("payload_b64"); "canary evidence must not include payload bytes" };
-        assert_compact! { !ctx.printed[0].contains("nonce"); "canary evidence must not include reveal internals" };
-        let artifacts = evidence
-            .get("artifacts")
-            .and_then(Value::as_array)
-            .expect("artifact probes");
-        assert_compact! { artifacts.iter().any(|artifact| artifact.get("kind").and_then(Value::as_str) == Some("run_script")) };
-    }
-    #[test]
-    fn moderation_ballots_executor_canary_rejects_payload_bearing_summary() {
-        let temp = TempDir::new().expect("executor canary temp dir");
-        let bundle_dir = temp.path().join("executor-bundle");
-        let bundle_args = ModerationBallotsExecutorBundleArgs {
-            status: temp.path().join("runtime/commit-reveal-status.json"),
-            bundle_out: bundle_dir.clone(),
-            commit_payloads: vec![temp.path().join("private/commit.json")],
-            reveal_payloads: Vec::new(),
-            commit_format: "json".to_string(),
-            reveal_format: "json".to_string(),
-            submit_tally: false,
-            iroha_bin: "iroha".to_string(),
-            service_name: "org.sora.sorafs.ballots-executor-test".to_string(),
-            service_user: "sorafs-exec".to_string(),
-            service_group: "sorafs-exec".to_string(),
-            interval_secs: 60,
-        };
-        let mut setup_ctx = TestContext::new();
-        bundle_args
-            .run_with(&mut setup_ctx)
-            .expect("executor bundle should be written");
-        let execution_summary = write_json_file(&norito::json!({
-            "schema": "sorafs.moderation.ballots.execution.v1",
-            "payload_bytes_included": false,
-            "private_payloads_included": false,
-            "payload_b64": "AAAA",
-            "actions": []
-        }));
-        let args = ModerationBallotsExecutorCanaryArgs {
-            bundle: bundle_dir,
-            execution_summary: Some(execution_summary.path().to_path_buf()),
-            out: None,
-        };
-        let mut ctx = TestContext::new();
-        let err = args
-            .run_with(&mut ctx)
-            .expect_err("payload-bearing execution summary must be rejected");
-        assert!(err.to_string().contains("payload bytes"));
-        assert!(ctx.printed.is_empty());
-    }
-    #[test]
-    fn moderation_quarantine_notifications_deliver_writes_outbox_and_webhook_summary() {
-        let manifest_file = write_json_file(&juror_notifications_manifest_fixture(false));
-        let out_dir = TempDir::new().expect("notification outbox");
-        let args = ModerationQuarantineNotificationsDeliverArgs {
-            manifest: manifest_file.path().to_path_buf(),
-            out_dir: Some(out_dir.path().to_path_buf()),
-            webhook_url: Some("https://moderation.example.test/webhook".to_string()),
-            timeout_secs: 5,
-        };
-        let mut ctx = TestContext::new();
-        let mut posts = Vec::new();
-        args.run_with(&mut ctx, |url, body| {
+                "private_payloads_included": false,
+                "payload_b64": "AAAA",
+                "actions": []
+            }));
+            let args = ModerationBallotsExecutorCanaryArgs {
+                bundle: bundle_dir,
+                execution_summary: Some(execution_summary.path().to_path_buf()),
+                out: None,
+            };
+            let mut ctx = TestContext::new();
+            let err = args
+                .run_with(&mut ctx)
+                .expect_err("payload-bearing execution summary must be rejected");
+            assert!(err.to_string().contains("payload bytes"));
+            assert!(ctx.printed.is_empty());
+        }
+        fn moderation_quarantine_notifications_deliver_writes_outbox_and_webhook_summary() {
+            let manifest_file = write_json_file(&juror_notifications_manifest_fixture(false));
+            let out_dir = TempDir::new().expect("notification outbox");
+            let args = ModerationQuarantineNotificationsDeliverArgs {
+                manifest: manifest_file.path().to_path_buf(),
+                out_dir: Some(out_dir.path().to_path_buf()),
+                webhook_url: Some("https://moderation.example.test/webhook".to_string()),
+                timeout_secs: 5,
+            };
+            let mut ctx = TestContext::new();
+            let mut posts = Vec::new();
+            args.run_with(&mut ctx, |url, body| {
             assert_eq!(url, "https://moderation.example.test/webhook");
             posts.push(body.to_vec());
             Ok(Response::builder()
@@ -20207,57 +19516,55 @@ mod tests {
                 .body(br#"{"status":"accepted"}"#.to_vec())
                 .unwrap())
         })
-        .expect("notification delivery should succeed");
-        assert_eq!(posts.len(), 1);
-        let posted: Value = norito::json::from_slice(&posts[0]).expect("posted notification JSON");
-        assert_eq!(posted["delivery_id"].as_str(), Some("notify-1"));
-        let outbox_file = out_dir.path().join("notify-1.json");
-        assert!(outbox_file.exists(), "outbox file should be written");
-        let outbox_body = fs::read_to_string(outbox_file).expect("read outbox file");
-        assert!(!outbox_body.contains("payload_b64"));
-        assert_eq!(ctx.printed.len(), 1);
-        let summary: Value =
-            norito::json::from_str(&ctx.printed[0]).expect("delivery summary JSON");
-        assert_eq_compact! { summary["schema"].as_str() => Some("sorafs.moderation.juror_notifications.delivery.v1") };
-        assert_eq!(summary["delivery_count"].as_u64(), Some(1));
-        assert_eq!(summary["payload_bytes_included"].as_bool(), Some(false));
-        assert_eq!(summary["private_payloads_included"].as_bool(), Some(false));
-        assert_compact! { !ctx.printed[0].contains("Build the private commit payload locally."); "delivery summary must not repeat notification body text" };
-    }
-    #[test]
-    fn moderation_quarantine_notifications_deliver_rejects_private_payload_flags() {
-        let manifest_file = write_json_file(&juror_notifications_manifest_fixture(true));
-        let out_dir = TempDir::new().expect("notification outbox");
-        let args = ModerationQuarantineNotificationsDeliverArgs {
-            manifest: manifest_file.path().to_path_buf(),
-            out_dir: Some(out_dir.path().to_path_buf()),
-            webhook_url: None,
-            timeout_secs: 5,
-        };
-        let mut ctx = TestContext::new();
-        let err = args
-            .run_with(&mut ctx, |_url, _body| {
-                unreachable!("webhook delivery must not run")
-            })
-            .expect_err("private payload flag must be rejected");
-        assert!(err.to_string().contains("private_payload_included"));
-        assert!(ctx.printed.is_empty());
-        assert_compact! { fs::read_dir(out_dir.path()).expect("read outbox dir").next().is_none(); "outbox must stay empty on validation failure" };
-    }
-    #[test]
-    fn moderation_quarantine_notifications_canary_writes_payload_free_evidence() {
-        let manifest_file = write_json_file(&juror_notifications_manifest_fixture(false));
-        let out_dir = TempDir::new().expect("canary evidence dir");
-        let out = out_dir.path().join("nested/evidence.json");
-        let args = ModerationQuarantineNotificationsCanaryArgs {
-            manifest: manifest_file.path().to_path_buf(),
-            webhook_url: "https://moderation.example.test/webhook".to_string(),
-            out: Some(out.clone()),
-            timeout_secs: 5,
-        };
-        let mut ctx = TestContext::new();
-        let mut posts = Vec::new();
-        args.run_with(&mut ctx, |url, body| {
+            .expect("notification delivery should succeed");
+            assert_eq!(posts.len(), 1);
+            let posted: Value = norito::json::from_slice(&posts[0]).expect("posted notification JSON");
+            assert_eq!(posted["delivery_id"].as_str(), Some("notify-1"));
+            let outbox_file = out_dir.path().join("notify-1.json");
+            assert!(outbox_file.exists(), "outbox file should be written");
+            let outbox_body = fs::read_to_string(outbox_file).expect("read outbox file");
+            assert!(!outbox_body.contains("payload_b64"));
+            assert_eq!(ctx.printed.len(), 1);
+            let summary: Value =
+                norito::json::from_str(&ctx.printed[0]).expect("delivery summary JSON");
+            assert_eq_compact! { summary["schema"].as_str() => Some("sorafs.moderation.juror_notifications.delivery.v1") };
+            assert_eq!(summary["delivery_count"].as_u64(), Some(1));
+            assert_eq!(summary["payload_bytes_included"].as_bool(), Some(false));
+            assert_eq!(summary["private_payloads_included"].as_bool(), Some(false));
+            assert_compact! { !ctx.printed[0].contains("Build the private commit payload locally."); "delivery summary must not repeat notification body text" };
+        }
+        fn moderation_quarantine_notifications_deliver_rejects_private_payload_flags() {
+            let manifest_file = write_json_file(&juror_notifications_manifest_fixture(true));
+            let out_dir = TempDir::new().expect("notification outbox");
+            let args = ModerationQuarantineNotificationsDeliverArgs {
+                manifest: manifest_file.path().to_path_buf(),
+                out_dir: Some(out_dir.path().to_path_buf()),
+                webhook_url: None,
+                timeout_secs: 5,
+            };
+            let mut ctx = TestContext::new();
+            let err = args
+                .run_with(&mut ctx, |_url, _body| {
+                    unreachable!("webhook delivery must not run")
+                })
+                .expect_err("private payload flag must be rejected");
+            assert!(err.to_string().contains("private_payload_included"));
+            assert!(ctx.printed.is_empty());
+            assert_compact! { fs::read_dir(out_dir.path()).expect("read outbox dir").next().is_none(); "outbox must stay empty on validation failure" };
+        }
+        fn moderation_quarantine_notifications_canary_writes_payload_free_evidence() {
+            let manifest_file = write_json_file(&juror_notifications_manifest_fixture(false));
+            let out_dir = TempDir::new().expect("canary evidence dir");
+            let out = out_dir.path().join("nested/evidence.json");
+            let args = ModerationQuarantineNotificationsCanaryArgs {
+                manifest: manifest_file.path().to_path_buf(),
+                webhook_url: "https://moderation.example.test/webhook".to_string(),
+                out: Some(out.clone()),
+                timeout_secs: 5,
+            };
+            let mut ctx = TestContext::new();
+            let mut posts = Vec::new();
+            args.run_with(&mut ctx, |url, body| {
             assert_eq!(url, "https://moderation.example.test/webhook");
             posts.push(body.to_vec());
             Ok(Response::builder()
@@ -20266,30 +19573,29 @@ mod tests {
                 .body(br#"{"status":"accepted"}"#.to_vec())
                 .unwrap())
         })
-        .expect("canary should succeed");
-        assert_eq!(posts.len(), 1);
-        assert!(out.exists(), "canary evidence file should be written");
-        assert_eq!(ctx.printed.len(), 1);
-        let evidence: Value =
-            norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
-        assert_eq_compact! { evidence["schema"].as_str() => Some("sorafs.moderation.juror_notifications.transport_canary.v1") };
-        assert_eq!(evidence["status"].as_str(), Some("passed"));
-        assert_eq!(evidence["probe_count"].as_u64(), Some(1));
-        assert_eq!(evidence["accepted_count"].as_u64(), Some(1));
-        assert_compact! { evidence["manifest_body_blake3_hex"].as_str().is_some(); "canary evidence should expose the typed manifest digest key" };
-        assert_compact! { evidence.get("manifest_body_blake3").is_none(); "canary evidence must not emit the ambiguous manifest digest key" };
-        assert_eq!(evidence["payload_bytes_included"].as_bool(), Some(false));
-        assert_eq!(evidence["private_payloads_included"].as_bool(), Some(false));
-        assert_compact! { !ctx.printed[0].contains("Build the private commit payload locally."); "canary evidence must not repeat notification body text" };
-    }
-    #[test]
-    fn moderation_quarantine_notifications_canary_records_failed_probe_without_body() {
-        let manifest_file = write_json_file(&juror_notifications_manifest_fixture(false));
-        let args = ModerationQuarantineNotificationsCanaryArgs {
-            manifest: manifest_file.path().to_path_buf(),
-            webhook_url: "https://moderation.example.test/webhook".to_string(),
-            out: None,
-            timeout_secs: 5,
+            .expect("canary should succeed");
+            assert_eq!(posts.len(), 1);
+            assert!(out.exists(), "canary evidence file should be written");
+            assert_eq!(ctx.printed.len(), 1);
+            let evidence: Value =
+                norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+            assert_eq_compact! { evidence["schema"].as_str() => Some("sorafs.moderation.juror_notifications.transport_canary.v1") };
+            assert_eq!(evidence["status"].as_str(), Some("passed"));
+            assert_eq!(evidence["probe_count"].as_u64(), Some(1));
+            assert_eq!(evidence["accepted_count"].as_u64(), Some(1));
+            assert_compact! { evidence["manifest_body_blake3_hex"].as_str().is_some(); "canary evidence should expose the typed manifest digest key" };
+            assert_compact! { evidence.get("manifest_body_blake3").is_none(); "canary evidence must not emit the ambiguous manifest digest key" };
+            assert_eq!(evidence["payload_bytes_included"].as_bool(), Some(false));
+            assert_eq!(evidence["private_payloads_included"].as_bool(), Some(false));
+            assert_compact! { !ctx.printed[0].contains("Build the private commit payload locally."); "canary evidence must not repeat notification body text" };
+        }
+        fn moderation_quarantine_notifications_canary_records_failed_probe_without_body() {
+            let manifest_file = write_json_file(&juror_notifications_manifest_fixture(false));
+            let args = ModerationQuarantineNotificationsCanaryArgs {
+                manifest: manifest_file.path().to_path_buf(),
+                webhook_url: "https://moderation.example.test/webhook".to_string(),
+                out: None,
+                timeout_secs: 5,
         };
         let mut ctx = TestContext::new();
         args.run_with(&mut ctx, |_url, _body| {
@@ -20299,661 +19605,584 @@ mod tests {
                 .body(br#"{"error":"transport unavailable"}"#.to_vec())
                 .unwrap())
         })
-        .expect("canary should emit failed evidence instead of hiding probe failure");
-        let evidence: Value =
-            norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
-        assert_eq!(evidence["status"].as_str(), Some("failed"));
-        assert_eq!(evidence["accepted_count"].as_u64(), Some(0));
-        assert_compact! { !ctx.printed[0].contains("transport unavailable"); "canary evidence must hash response bodies instead of archiving them" };
-    }
-    #[test]
-    fn moderation_quarantine_notifications_run_does_not_follow_cross_origin_redirects() {
-        for canary in [false, true] {
-            let manifest = write_json_file(&juror_notifications_manifest_fixture(false));
-            let origin = TcpListener::bind("127.0.0.1:0").expect("bind redirect origin");
-            let origin_addr = origin.local_addr().expect("redirect origin address");
-            let target = TcpListener::bind("127.0.0.1:0").expect("bind redirect target");
-            let target_addr = target.local_addr().expect("redirect target address");
-            let server = thread::spawn(move || {
-                let (mut stream, _) = origin.accept().expect("accept webhook request");
-                let mut request = [0_u8; 8192];
-                let len = stream.read(&mut request).expect("read webhook request");
-                assert!(request[..len].starts_with(b"POST "));
-                write!(
-                    stream,
-                    "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{target_addr}/stolen\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                )
-                .expect("write redirect response");
-            });
-            let webhook_url = format!("http://{origin_addr}/webhook");
-            let mut ctx = TestContext::new();
-            if canary {
-                ModerationQuarantineNotificationsCanaryArgs {
-                    manifest: manifest.path().to_path_buf(),
-                    webhook_url,
-                    out: None,
-                    timeout_secs: 1,
-                }
-                .run(&mut ctx)
-                .expect("redirect must produce failed canary evidence");
-                let evidence: Value =
-                    norito::json::from_str(&ctx.printed[0]).expect("redirect canary evidence JSON");
-                assert_eq!(evidence["status"].as_str(), Some("failed"));
-                assert_eq!(evidence["accepted_count"].as_u64(), Some(0));
-                assert_eq!(evidence["probes"][0]["response_status"].as_u64(), Some(307));
-            } else {
-                let err = ModerationQuarantineNotificationsDeliverArgs {
-                    manifest: manifest.path().to_path_buf(),
-                    out_dir: None,
-                    webhook_url: Some(webhook_url),
-                    timeout_secs: 1,
-                }
-                .run(&mut ctx)
-                .expect_err("redirected delivery must fail");
-                assert!(err.to_string().contains("status 307"));
-                assert!(ctx.printed.is_empty());
-            }
-            server.join().expect("redirect server finished");
-            target
-                .set_nonblocking(true)
-                .expect("set target nonblocking");
-            assert_compact! { matches!(target.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock); "cross-origin redirect target must receive no connection" };
+            .expect("canary should emit failed evidence instead of hiding probe failure");
+            let evidence: Value =
+                norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+            assert_eq!(evidence["status"].as_str(), Some("failed"));
+            assert_eq!(evidence["accepted_count"].as_u64(), Some(0));
+            assert_compact! { !ctx.printed[0].contains("transport unavailable"); "canary evidence must hash response bodies instead of archiving them" };
         }
-    }
-    #[test]
-    fn sorafs_get_canary_runs_do_not_follow_cross_origin_redirects() {
-        for command in 0_u8..3 {
-            let origin = TcpListener::bind("127.0.0.1:0").expect("bind redirect origin");
-            let origin_addr = origin.local_addr().expect("redirect origin address");
-            let target = TcpListener::bind("127.0.0.1:0").expect("bind redirect target");
-            let target_addr = target.local_addr().expect("redirect target address");
-            let server = thread::spawn(move || {
-                let (mut stream, _) = origin.accept().expect("accept GET canary request");
-                let mut request = [0_u8; 8192];
-                let len = stream.read(&mut request).expect("read GET canary request");
-                assert!(request[..len].starts_with(b"GET "));
-                write!(
-                    stream,
-                    "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{target_addr}/substitute\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                )
-                .expect("write redirect response");
-            });
-            let base_url = format!("http://{origin_addr}/root");
-            let mut ctx = TestContext::new();
-            match command {
-                0 => {
-                    let error = TransparencyExplorerCanaryArgs {
-                        torii_url: Some(base_url),
-                        limit: None,
-                        timeout_secs: 1,
+        fn moderation_quarantine_notifications_run_does_not_follow_cross_origin_redirects() {
+            for canary in [false, true] {
+                let manifest = write_json_file(&juror_notifications_manifest_fixture(false));
+                let origin = TcpListener::bind("127.0.0.1:0").expect("bind redirect origin");
+                let origin_addr = origin.local_addr().expect("redirect origin address");
+                let target = TcpListener::bind("127.0.0.1:0").expect("bind redirect target");
+                let target_addr = target.local_addr().expect("redirect target address");
+                let server = thread::spawn(move || {
+                    let (mut stream, _) = origin.accept().expect("accept webhook request");
+                    let mut request = [0_u8; 8192];
+                    let len = stream.read(&mut request).expect("read webhook request");
+                    assert!(request[..len].starts_with(b"POST "));
+                    write!(
+                        stream,
+                        "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{target_addr}/stolen\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                    .expect("write redirect response");
+                });
+                let webhook_url = format!("http://{origin_addr}/webhook");
+                let mut ctx = TestContext::new();
+                if canary {
+                    ModerationQuarantineNotificationsCanaryArgs {
+                        manifest: manifest.path().to_path_buf(),
+                        webhook_url,
                         out: None,
+                        timeout_secs: 1,
                     }
                     .run(&mut ctx)
-                    .expect_err("explorer redirect must fail");
-                    assert!(error.to_string().contains("307"));
-                    assert!(ctx.printed.is_empty());
-                }
-                1 => {
-                    TransparencyPublicationCanaryArgs {
-                        torii_url: Some(base_url),
-                        cycle_ids: Vec::new(),
-                        limit: None,
-                        timeout_secs: 1,
-                        out: None,
-                    }
-                    .run(&mut ctx)
-                    .expect("publication redirect must emit failed evidence");
-                    let evidence: Value = norito::json::from_str(&ctx.printed[0])
-                        .expect("publication redirect evidence JSON");
+                    .expect("redirect must produce failed canary evidence");
+                    let evidence: Value =
+                        norito::json::from_str(&ctx.printed[0]).expect("redirect canary evidence JSON");
                     assert_eq!(evidence["status"].as_str(), Some("failed"));
-                    assert_eq!(evidence["routes"][0]["status_code"].as_u64(), Some(307));
-                    assert_eq!(evidence["routes"][0]["passed"].as_bool(), Some(false));
-                }
-                2 => {
-                    let error = ModerationQuarantineOperatorCanaryArgs {
-                        operator_url: base_url,
-                        quarantine_id: "ba".repeat(16),
-                        limit: None,
+                    assert_eq!(evidence["accepted_count"].as_u64(), Some(0));
+                    assert_eq!(evidence["probes"][0]["response_status"].as_u64(), Some(307));
+                } else {
+                    let err = ModerationQuarantineNotificationsDeliverArgs {
+                        manifest: manifest.path().to_path_buf(),
+                        out_dir: None,
+                        webhook_url: Some(webhook_url),
                         timeout_secs: 1,
-                        out: None,
                     }
                     .run(&mut ctx)
-                    .expect_err("operator redirect must fail");
-                    assert!(error.to_string().contains("307"));
+                    .expect_err("redirected delivery must fail");
+                    assert!(err.to_string().contains("status 307"));
                     assert!(ctx.printed.is_empty());
                 }
-                _ => unreachable!("bounded GET canary selector"),
+                server.join().expect("redirect server finished");
+                target
+                    .set_nonblocking(true)
+                    .expect("set target nonblocking");
+                assert_compact! { matches!(target.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock); "cross-origin redirect target must receive no connection" };
             }
-            server.join().expect("redirect server finished");
-            target.set_nonblocking(true).expect("nonblocking target");
-            assert_compact! { matches!(target.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock); "cross-origin redirect target must receive no GET connection" };
         }
-    }
-    #[test]
-    fn moderation_registry_list_with_prints_payload() {
-        let args = ModerationRegistryListArgs { limit: Some(5) };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, filter| {
-            assert_eq!(filter.limit, Some(5));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "repro_manifests": [
-                        { "manifest_id_hex": "aa", "model_count": 1 }
-                    ],
-                    "adversarial_corpora": []
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"repro_manifests\""));
-    }
-    #[test]
-    fn moderation_registry_submit_repro_reads_json_manifest() {
-        let manifest = signed_moderation_repro_manifest_fixture();
-        let expected_bytes = to_bytes(&manifest).expect("encode canonical repro manifest");
-        let mut file = NamedTempFile::new().expect("repro manifest file");
-        file.write_all(
-            norito::json::to_json_pretty(&manifest)
-                .expect("render repro json")
-                .as_bytes(),
-        )
-        .expect("write repro json");
-        let args = ModerationRegistrySubmitReproArgs {
-            manifest: file.path().to_path_buf(),
-            format: "json".to_string(),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, manifest_bytes| {
-            assert_eq!(manifest_bytes, expected_bytes.as_slice());
-            Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "status": "admitted" }),
-                )?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"admitted\""));
-    }
-    #[test]
-    fn moderation_registry_submit_corpus_reads_norito_manifest() {
-        let manifest = adversarial_corpus_manifest_fixture();
-        let expected_bytes = to_bytes(&manifest).expect("encode canonical corpus manifest");
-        let mut file = NamedTempFile::new().expect("corpus manifest file");
-        file.write_all(&expected_bytes)
-            .expect("write corpus norito");
-        let args = ModerationRegistrySubmitCorpusArgs {
-            manifest: file.path().to_path_buf(),
-            format: "norito".to_string(),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, manifest_bytes| {
-            assert_eq!(manifest_bytes, expected_bytes.as_slice());
-            Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "status": "admitted" }),
-                )?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"admitted\""));
-    }
-    #[test]
-    fn moderation_registry_submit_repro_rejects_invalid_format() {
-        let file = NamedTempFile::new().expect("manifest file");
-        let args = ModerationRegistrySubmitReproArgs {
-            manifest: file.path().to_path_buf(),
-            format: "yaml".to_string(),
-        };
-        let mut ctx = TestContext::new();
-        let err = args
-            .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
-            .expect_err("invalid format must be rejected");
-        assert!(err.to_string().contains("--format"));
-        assert!(ctx.printed.is_empty());
-    }
-    #[test]
-    fn moderation_screening_list_with_prints_payload() {
-        let args = ModerationScreeningListArgs { limit: Some(6) };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, filter| {
-            assert_eq!(filter.limit, Some(6));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "screening_records": [
-                        { "record_id_hex": "aa", "verdict": "quarantine" }
-                    ]
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"screening_records\""));
-    }
-    #[test]
-    fn moderation_screening_submit_reads_authenticated_authority_json() {
-        let idempotency_key = [0xA1_u8; 32];
-        let expected_idempotency_key = encode(idempotency_key);
-        let uppercase_idempotency_key =
-            format!("0x{}", encode(idempotency_key).to_ascii_uppercase());
-        let authority_b64 = STANDARD.encode(b"canonical committee aggregate");
-        let member_one_b64 = STANDARD.encode(b"canonical signed member one");
-        let member_two_b64 = STANDARD.encode(b"canonical signed member two");
-        let mut file = NamedTempFile::new().expect("screening result file");
-        let mut screening_result = Map::new();
-        screening_result.insert(
-            "idempotency_key_hex".to_owned(),
-            Value::String(uppercase_idempotency_key),
-        );
-        screening_result.insert(
-            "evidence_kind".to_owned(),
-            Value::String("committee_aggregate".to_owned()),
-        );
-        screening_result.insert(
-            "authority_b64".to_owned(),
-            Value::String(authority_b64.clone()),
-        );
-        screening_result.insert(
-            "committee_member_results_b64".to_owned(),
-            Value::Array(vec![
-                Value::String(member_one_b64.clone()),
-                Value::String(member_two_b64.clone()),
-            ]),
-        );
-        file.write_all(
-            &norito::json::to_vec(&Value::Object(screening_result))
-                .expect("serialize screening JSON"),
-        )
-        .expect("write screening JSON");
-        let args = ModerationScreeningSubmitArgs {
-            input: file.path().to_path_buf(),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, request| {
-            assert_eq!(request.idempotency_key_hex, expected_idempotency_key);
-            assert_eq!(request.evidence_kind, "committee_aggregate");
-            assert_eq!(request.authority_b64, authority_b64);
-            assert_eq_compact! { request.committee_member_results_b64 =>[member_one_b64.clone(), member_two_b64.clone()] };
-            Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "status": "accepted" }),
-                )?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"accepted\""));
-    }
-    #[test]
-    fn moderation_screening_submit_rejects_missing_field() {
-        let mut file = NamedTempFile::new().expect("screening result file");
-        file.write_all(
-            &norito::json::to_vec(&norito::json!({
-                "idempotency_key_hex": (encode([0x11_u8; 32])),
-                "evidence_kind": "signed_result",
-                "committee_member_results_b64": [],
-            }))
-            .expect("serialize screening JSON"),
-        )
-        .expect("write screening JSON");
-        let args = ModerationScreeningSubmitArgs {
-            input: file.path().to_path_buf(),
-        };
-        let mut ctx = TestContext::new();
-        let err = args
-            .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
-            .expect_err("missing authority must be rejected");
-        assert!(err.to_string().contains("authority_b64"));
-        assert!(ctx.printed.is_empty());
-    }
-    #[test]
-    fn moderation_quarantine_list_with_prints_payload() {
-        let args = ModerationQuarantineListArgs { limit: Some(4) };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, filter| {
-            assert_eq!(filter.limit, Some(4));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "quarantine_records": [
-                        { "quarantine_id_hex": "aa", "state": "pending_review" }
-                    ]
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"quarantine_records\""));
-    }
-    #[test]
-    fn moderation_quarantine_object_store_reads_payload_file() {
-        let quarantine_id = [0xA7_u8; 16];
-        let mut file = NamedTempFile::new().expect("temp payload");
-        file.write_all(b"quarantine payload bytes")
-            .expect("write payload");
-        let args = ModerationQuarantineObjectStoreArgs {
-            quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
-            payload_file: file.path().to_path_buf(),
-            captured_at: Some("@1800000310".to_string()),
-            content_type: Some(" application/octet-stream ".to_string()),
-            notes: Some(" sealed via cli ".to_string()),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, id, request| {
-            assert_eq!(id, encode(quarantine_id));
-            assert_eq!(request.payload, b"quarantine payload bytes");
-            assert_eq!(request.captured_at_unix, Some(1_800_000_310));
-            assert_eq!(request.content_type, Some("application/octet-stream"));
-            assert_eq!(request.notes, Some("sealed via cli"));
-            Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "status": "stored" }),
-                )?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"stored\""));
-    }
-    #[test]
-    fn moderation_quarantine_object_read_prints_payload_json() {
-        let quarantine_id = [0xB8_u8; 16];
-        let args = ModerationQuarantineObjectReadArgs {
-            quarantine_id: encode(quarantine_id),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, id| {
-            assert_eq!(id, encode(quarantine_id));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "status": "read",
-                    "payload_b64": "cGF5bG9hZA=="
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"payload_b64\""));
-    }
-    #[test]
-    fn moderation_quarantine_object_store_rejects_empty_payload_file() {
-        let file = NamedTempFile::new().expect("empty payload");
-        let args = ModerationQuarantineObjectStoreArgs {
-            quarantine_id: encode([0xC9_u8; 16]),
-            payload_file: file.path().to_path_buf(),
-            captured_at: Some("@1800000310".to_string()),
-            content_type: None,
-            notes: None,
-        };
-        let mut ctx = TestContext::new();
-        let err = args
-            .run_with(&mut ctx, |_client, _, _| {
-                unreachable!("submit must not run")
-            })
-            .expect_err("empty payload must be rejected");
-        assert!(err.to_string().contains("--payload-file"));
-        assert!(ctx.printed.is_empty());
-    }
-    #[test]
-    fn moderation_quarantine_review_builds_request() {
-        let quarantine_id = [0xAB_u8; 16];
-        let args = ModerationQuarantineReviewArgs {
-            quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
-            reviewed_by: Some(" operator@moderation ".to_string()),
-            reviewed_at: Some("@1800000210".to_string()),
-            notes: Some(" reviewed locally ".to_string()),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, id, request| {
-            assert_eq!(id, encode(quarantine_id));
-            assert_eq!(request.reviewed_by, "operator@moderation");
-            assert_eq!(request.reviewed_at_unix, Some(1_800_000_210));
-            assert_eq!(request.notes, Some("reviewed locally"));
-            Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "state": "reviewed" }),
-                )?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"reviewed\""));
-    }
-    #[test]
-    fn moderation_quarantine_release_defaults_authority_to_cli_account() {
-        let quarantine_id = [0xCD_u8; 16];
-        let args = ModerationQuarantineReleaseArgs {
-            quarantine_id: encode(quarantine_id),
-            release_authority: None,
-            released_at: Some("@1800000220".to_string()),
-            notes: None,
-        };
-        let mut ctx = TestContext::new();
-        let expected_authority = ctx.config().account.to_string();
-        args.run_with(&mut ctx, |_client, id, request| {
-            assert_eq!(id, encode(quarantine_id));
-            assert_eq!(request.release_authority, expected_authority);
-            assert_eq!(request.released_at_unix, Some(1_800_000_220));
-            assert_eq!(request.notes, None);
-            Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "state": "released" }),
-                )?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"released\""));
-    }
-    #[test]
-    fn moderation_quarantine_appeal_handoff_reads_json_payload() {
-        let quarantine_id = [0xA4_u8; 16];
-        let input = write_json_file(&norito::json!({
-            "class": "content",
-            "backlog": 2_u64,
-            "evidence_size_mb": 8_u64,
-            "payer_account": "payer",
-            "destination_account": "treasury",
-            "asset_definition_id": "xor#wonderland"
-        }));
-        let args = ModerationQuarantineAppealHandoffArgs {
-            quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
-            input: input.path().to_path_buf(),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, id, payload| {
-            assert_eq!(id, encode(quarantine_id));
-            let value: Value = norito::json::from_slice(payload)?;
-            assert_eq!(value.get("class").and_then(Value::as_str), Some("content"));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "schema": "sorafs.moderation.quarantine.appeal_handoff.v1",
-                    "status": "ready_for_deposit"
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("ready_for_deposit"));
-    }
-    #[test]
-    fn moderation_quarantine_appeal_handoff_rejects_empty_payload() {
-        let input = NamedTempFile::new().expect("empty appeal handoff payload");
-        let args = ModerationQuarantineAppealHandoffArgs {
-            quarantine_id: encode([0xA5_u8; 16]),
-            input: input.path().to_path_buf(),
-        };
-        let mut ctx = TestContext::new();
-        let err = args
-            .run_with(&mut ctx, |_client, _, _| {
-                unreachable!("submit must not run")
-            })
-            .expect_err("empty appeal handoff payload must be rejected");
-        assert_compact! { err.to_string().contains("moderation quarantine appeal handoff payload") };
-        assert!(ctx.printed.is_empty());
-    }
-    #[test]
-    fn moderation_quarantine_operator_panel_reads_workflow_view() {
-        let quarantine_id = [0xA8_u8; 16];
-        let args = ModerationQuarantineOperatorPanelArgs {
-            quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
-            limit: Some(4),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, id, filter| {
-            assert_eq!(id, encode(quarantine_id));
-            assert_eq!(filter.limit, Some(4));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "schema": "sorafs.moderation.quarantine.operator_panel.v1",
-                    "status": "ready"
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("operator_panel"));
-    }
-    #[test]
-    fn moderation_quarantine_operator_panel_rejects_bad_quarantine_id() {
-        let args = ModerationQuarantineOperatorPanelArgs {
-            quarantine_id: "abcd".to_owned(),
-            limit: None,
-        };
-        let mut ctx = TestContext::new();
-        let err = args
-            .run_with(&mut ctx, |_client, _, _| unreachable!("get must not run"))
-            .expect_err("bad quarantine id must be rejected");
-        assert!(err.to_string().contains("--quarantine-id"));
-        assert!(ctx.printed.is_empty());
-    }
-    #[test]
-    fn moderation_quarantine_bridge_plan_derives_workflow_actions() {
-        let quarantine_id = [0xA9_u8; 16];
-        let args = ModerationQuarantineBridgePlanArgs {
-            quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
-            limit: Some(5),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, id, filter| {
-            assert_eq!(id, encode(quarantine_id));
-            assert_eq!(filter.limit, Some(5));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "schema": "sorafs.moderation.quarantine.operator_panel.v1",
-                    "status": "ready",
-                    "record": {
-                        "quarantine_id_hex": (encode(quarantine_id)),
-                        "state": "reviewed"
-                    },
-                    "object_status": "stored",
-                    "case_count": 1_u64,
-                    "returned_case_count": 1_u64,
-                    "cases": [(fixture_finalized_moderation_case(&[], &[], &[]))],
-                    "operator_routes": {
-                        "object": "/v1/sorafs/moderation/quarantine/object"
-                    },
-                    "next_actions": [
-                        {
-                            "action": "read_object",
-                            "route": "/v1/sorafs/moderation/quarantine/object",
-                            "required": false
-                        },
-                        {
-                            "action": "submit_native_case_actions",
-                            "route": "/v1/sorafs/moderation/ballots",
-                            "required": true
+        fn sorafs_get_canary_runs_do_not_follow_cross_origin_redirects() {
+            for command in 0_u8..3 {
+                let origin = TcpListener::bind("127.0.0.1:0").expect("bind redirect origin");
+                let origin_addr = origin.local_addr().expect("redirect origin address");
+                let target = TcpListener::bind("127.0.0.1:0").expect("bind redirect target");
+                let target_addr = target.local_addr().expect("redirect target address");
+                let server = thread::spawn(move || {
+                    let (mut stream, _) = origin.accept().expect("accept GET canary request");
+                    let mut request = [0_u8; 8192];
+                    let len = stream.read(&mut request).expect("read GET canary request");
+                    assert!(request[..len].starts_with(b"GET "));
+                    write!(
+                        stream,
+                        "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{target_addr}/substitute\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                    .expect("write redirect response");
+                });
+                let base_url = format!("http://{origin_addr}/root");
+                let mut ctx = TestContext::new();
+                match command {
+                    0 => {
+                        let error = TransparencyExplorerCanaryArgs {
+                            torii_url: Some(base_url),
+                            limit: None,
+                            timeout_secs: 1,
+                            out: None,
                         }
-                    ]
-                }))?)
-                .unwrap())
-        })
-        .expect("bridge plan should render");
-        assert_eq!(ctx.printed.len(), 1);
-        let value: Value = norito::json::from_str(&ctx.printed[0]).expect("bridge plan json");
-        assert_eq_compact! { value.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.quarantine.bridge_plan.v1") };
-        assert_eq_compact! { value.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
-        let actions = value
-            .get("actions")
-            .and_then(Value::as_array)
-            .expect("actions");
-        assert_eq!(actions.len(), 2);
-        assert_eq_compact! { actions[1].get("automation_status").and_then(Value::as_str) => Some("waiting_for_native_commit_reveal_finalization") };
-        let cli = actions[1]
-            .get("cli")
-            .and_then(Value::as_array)
-            .expect("cli");
-        assert_compact! { cli.iter().any(|part| part.as_str() == Some("quarantine-case")) };
-        assert!(!ctx.printed[0].contains("payload_b64"));
-    }
-    #[test]
-    fn moderation_quarantine_bridge_plan_rejects_payload_bytes() {
-        let quarantine_id = [0xAA_u8; 16];
-        let args = ModerationQuarantineBridgePlanArgs {
-            quarantine_id: encode(quarantine_id),
-            limit: None,
-        };
-        let mut ctx = TestContext::new();
-        let err = args
-            .run_with(&mut ctx, |_client, _id, _filter| {
-                Ok(Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "application/json")
-                    .body(norito::json::to_vec(&norito::json!({
+                        .run(&mut ctx)
+                        .expect_err("explorer redirect must fail");
+                        assert!(error.to_string().contains("307"));
+                        assert!(ctx.printed.is_empty());
+                    }
+                    1 => {
+                        TransparencyPublicationCanaryArgs {
+                            torii_url: Some(base_url),
+                            cycle_ids: Vec::new(),
+                            limit: None,
+                            timeout_secs: 1,
+                            out: None,
+                        }
+                        .run(&mut ctx)
+                        .expect("publication redirect must emit failed evidence");
+                        let evidence: Value = norito::json::from_str(&ctx.printed[0])
+                            .expect("publication redirect evidence JSON");
+                        assert_eq!(evidence["status"].as_str(), Some("failed"));
+                        assert_eq!(evidence["routes"][0]["status_code"].as_u64(), Some(307));
+                        assert_eq!(evidence["routes"][0]["passed"].as_bool(), Some(false));
+                    }
+                    2 => {
+                        let error = ModerationQuarantineOperatorCanaryArgs {
+                            operator_url: base_url,
+                            quarantine_id: "ba".repeat(16),
+                            limit: None,
+                            timeout_secs: 1,
+                            out: None,
+                        }
+                        .run(&mut ctx)
+                        .expect_err("operator redirect must fail");
+                        assert!(error.to_string().contains("307"));
+                        assert!(ctx.printed.is_empty());
+                    }
+                    _ => unreachable!("bounded GET canary selector"),
+                }
+                server.join().expect("redirect server finished");
+                target.set_nonblocking(true).expect("nonblocking target");
+                assert_compact! { matches!(target.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock); "cross-origin redirect target must receive no GET connection" };
+            }
+        }
+        fn moderation_registry_list_with_prints_payload() {
+            let args = ModerationRegistryListArgs { limit: Some(5) };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, filter| {
+                assert_eq!(filter.limit, Some(5));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "repro_manifests": [
+                            { "manifest_id_hex": "aa", "model_count": 1 }
+                        ],
+                        "adversarial_corpora": []
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"repro_manifests\""));
+        }
+        fn moderation_registry_submit_repro_reads_json_manifest() {
+            let manifest = signed_moderation_repro_manifest_fixture();
+            let expected_bytes = to_bytes(&manifest).expect("encode canonical repro manifest");
+            let mut file = NamedTempFile::new().expect("repro manifest file");
+            file.write_all(
+                norito::json::to_json_pretty(&manifest)
+                    .expect("render repro json")
+                    .as_bytes(),
+            )
+            .expect("write repro json");
+            let args = ModerationRegistrySubmitReproArgs {
+                manifest: file.path().to_path_buf(),
+                format: "json".to_string(),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, manifest_bytes| {
+                assert_eq!(manifest_bytes, expected_bytes.as_slice());
+    json_response_fixture!(StatusCode::ACCEPTED,
+                        &norito::json!({ "status": "admitted" }),
+                    )
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"admitted\""));
+        }
+        fn moderation_registry_submit_corpus_reads_norito_manifest() {
+            let manifest = adversarial_corpus_manifest_fixture();
+            let expected_bytes = to_bytes(&manifest).expect("encode canonical corpus manifest");
+            let mut file = NamedTempFile::new().expect("corpus manifest file");
+            file.write_all(&expected_bytes)
+                .expect("write corpus norito");
+            let args = ModerationRegistrySubmitCorpusArgs {
+                manifest: file.path().to_path_buf(),
+                format: "norito".to_string(),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, manifest_bytes| {
+                assert_eq!(manifest_bytes, expected_bytes.as_slice());
+    json_response_fixture!(StatusCode::ACCEPTED,
+                        &norito::json!({ "status": "admitted" }),
+                    )
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"admitted\""));
+        }
+        fn moderation_registry_submit_repro_rejects_invalid_format() {
+            let file = NamedTempFile::new().expect("manifest file");
+            let args = ModerationRegistrySubmitReproArgs {
+                manifest: file.path().to_path_buf(),
+                format: "yaml".to_string(),
+            };
+            let mut ctx = TestContext::new();
+            let err = args
+                .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
+                .expect_err("invalid format must be rejected");
+            assert!(err.to_string().contains("--format"));
+            assert!(ctx.printed.is_empty());
+        }
+        fn moderation_screening_list_with_prints_payload() {
+            let args = ModerationScreeningListArgs { limit: Some(6) };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, filter| {
+                assert_eq!(filter.limit, Some(6));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "screening_records": [
+                            { "record_id_hex": "aa", "verdict": "quarantine" }
+                        ]
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"screening_records\""));
+        }
+        fn moderation_screening_submit_reads_authenticated_authority_json() {
+            let idempotency_key = [0xA1_u8; 32];
+            let expected_idempotency_key = encode(idempotency_key);
+            let uppercase_idempotency_key =
+                format!("0x{}", encode(idempotency_key).to_ascii_uppercase());
+            let authority_b64 = STANDARD.encode(b"canonical committee aggregate");
+            let member_one_b64 = STANDARD.encode(b"canonical signed member one");
+            let member_two_b64 = STANDARD.encode(b"canonical signed member two");
+            let mut file = NamedTempFile::new().expect("screening result file");
+            let mut screening_result = Map::new();
+            screening_result.insert(
+                "idempotency_key_hex".to_owned(),
+                Value::String(uppercase_idempotency_key),
+            );
+            screening_result.insert(
+                "evidence_kind".to_owned(),
+                Value::String("committee_aggregate".to_owned()),
+            );
+            screening_result.insert(
+                "authority_b64".to_owned(),
+                Value::String(authority_b64.clone()),
+            );
+            screening_result.insert(
+                "committee_member_results_b64".to_owned(),
+                Value::Array(vec![
+                    Value::String(member_one_b64.clone()),
+                    Value::String(member_two_b64.clone()),
+                ]),
+            );
+            file.write_all(
+                &norito::json::to_vec(&Value::Object(screening_result))
+                    .expect("serialize screening JSON"),
+            )
+            .expect("write screening JSON");
+            let args = ModerationScreeningSubmitArgs {
+                input: file.path().to_path_buf(),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, request| {
+                assert_eq!(request.idempotency_key_hex, expected_idempotency_key);
+                assert_eq!(request.evidence_kind, "committee_aggregate");
+                assert_eq!(request.authority_b64, authority_b64);
+                assert_eq_compact! { request.committee_member_results_b64 =>[member_one_b64.clone(), member_two_b64.clone()] };
+    json_response_fixture!(StatusCode::ACCEPTED,
+                        &norito::json!({ "status": "accepted" }),
+                    )
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"accepted\""));
+        }
+        fn moderation_screening_submit_rejects_missing_field() {
+            let mut file = NamedTempFile::new().expect("screening result file");
+            file.write_all(
+                &norito::json::to_vec(&norito::json!({
+                    "idempotency_key_hex": (encode([0x11_u8; 32])),
+                    "evidence_kind": "signed_result",
+                    "committee_member_results_b64": [],
+                }))
+                .expect("serialize screening JSON"),
+            )
+            .expect("write screening JSON");
+            let args = ModerationScreeningSubmitArgs {
+                input: file.path().to_path_buf(),
+            };
+            let mut ctx = TestContext::new();
+            let err = args
+                .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
+                .expect_err("missing authority must be rejected");
+            assert!(err.to_string().contains("authority_b64"));
+            assert!(ctx.printed.is_empty());
+        }
+        fn moderation_quarantine_list_with_prints_payload() {
+            let args = ModerationQuarantineListArgs { limit: Some(4) };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, filter| {
+                assert_eq!(filter.limit, Some(4));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "quarantine_records": [
+                            { "quarantine_id_hex": "aa", "state": "pending_review" }
+                        ]
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"quarantine_records\""));
+        }
+        fn moderation_quarantine_object_store_reads_payload_file() {
+            let quarantine_id = [0xA7_u8; 16];
+            let mut file = NamedTempFile::new().expect("temp payload");
+            file.write_all(b"quarantine payload bytes")
+                .expect("write payload");
+            let args = ModerationQuarantineObjectStoreArgs {
+                quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
+                payload_file: file.path().to_path_buf(),
+                captured_at: Some("@1800000310".to_string()),
+                content_type: Some(" application/octet-stream ".to_string()),
+                notes: Some(" sealed via cli ".to_string()),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, id, request| {
+                assert_eq!(id, encode(quarantine_id));
+                assert_eq!(request.payload, b"quarantine payload bytes");
+                assert_eq!(request.captured_at_unix, Some(1_800_000_310));
+                assert_eq!(request.content_type, Some("application/octet-stream"));
+                assert_eq!(request.notes, Some("sealed via cli"));
+    json_response_fixture!(StatusCode::ACCEPTED,
+                        &norito::json!({ "status": "stored" }),
+                    )
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"stored\""));
+        }
+        fn moderation_quarantine_object_read_prints_payload_json() {
+            let quarantine_id = [0xB8_u8; 16];
+            let args = ModerationQuarantineObjectReadArgs {
+                quarantine_id: encode(quarantine_id),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, id| {
+                assert_eq!(id, encode(quarantine_id));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "status": "read",
+                        "payload_b64": "cGF5bG9hZA=="
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"payload_b64\""));
+        }
+        fn moderation_quarantine_object_store_rejects_empty_payload_file() {
+            let file = NamedTempFile::new().expect("empty payload");
+            let args = ModerationQuarantineObjectStoreArgs {
+                quarantine_id: encode([0xC9_u8; 16]),
+                payload_file: file.path().to_path_buf(),
+                captured_at: Some("@1800000310".to_string()),
+                content_type: None,
+                notes: None,
+            };
+            let mut ctx = TestContext::new();
+            let err = args
+                .run_with(&mut ctx, |_client, _, _| {
+                    unreachable!("submit must not run")
+                })
+                .expect_err("empty payload must be rejected");
+            assert!(err.to_string().contains("--payload-file"));
+            assert!(ctx.printed.is_empty());
+        }
+        fn moderation_quarantine_review_builds_request() {
+            let quarantine_id = [0xAB_u8; 16];
+            let args = ModerationQuarantineReviewArgs {
+                quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
+                reviewed_by: Some(" operator@moderation ".to_string()),
+                reviewed_at: Some("@1800000210".to_string()),
+                notes: Some(" reviewed locally ".to_string()),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, id, request| {
+                assert_eq!(id, encode(quarantine_id));
+                assert_eq!(request.reviewed_by, "operator@moderation");
+                assert_eq!(request.reviewed_at_unix, Some(1_800_000_210));
+                assert_eq!(request.notes, Some("reviewed locally"));
+    json_response_fixture!(StatusCode::ACCEPTED,
+                        &norito::json!({ "state": "reviewed" }),
+                    )
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"reviewed\""));
+        }
+        fn moderation_quarantine_release_defaults_authority_to_cli_account() {
+            let quarantine_id = [0xCD_u8; 16];
+            let args = ModerationQuarantineReleaseArgs {
+                quarantine_id: encode(quarantine_id),
+                release_authority: None,
+                released_at: Some("@1800000220".to_string()),
+                notes: None,
+            };
+            let mut ctx = TestContext::new();
+            let expected_authority = ctx.config().account.to_string();
+            args.run_with(&mut ctx, |_client, id, request| {
+                assert_eq!(id, encode(quarantine_id));
+                assert_eq!(request.release_authority, expected_authority);
+                assert_eq!(request.released_at_unix, Some(1_800_000_220));
+                assert_eq!(request.notes, None);
+    json_response_fixture!(StatusCode::ACCEPTED,
+                        &norito::json!({ "state": "released" }),
+                    )
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"released\""));
+        }
+        fn moderation_quarantine_appeal_handoff_reads_json_payload() {
+            let quarantine_id = [0xA4_u8; 16];
+            let input = write_json_file(&norito::json!({
+                "class": "content",
+                "backlog": 2_u64,
+                "evidence_size_mb": 8_u64,
+                "payer_account": "payer",
+                "destination_account": "treasury",
+                "asset_definition_id": "xor#wonderland"
+            }));
+            let args = ModerationQuarantineAppealHandoffArgs {
+                quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
+                input: input.path().to_path_buf(),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, id, payload| {
+                assert_eq!(id, encode(quarantine_id));
+                let value: Value = norito::json::from_slice(payload)?;
+                assert_eq!(value.get("class").and_then(Value::as_str), Some("content"));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "schema": "sorafs.moderation.quarantine.appeal_handoff.v1",
+                        "status": "ready_for_deposit"
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("ready_for_deposit"));
+        }
+        fn moderation_quarantine_appeal_handoff_rejects_empty_payload() {
+            let input = NamedTempFile::new().expect("empty appeal handoff payload");
+            let args = ModerationQuarantineAppealHandoffArgs {
+                quarantine_id: encode([0xA5_u8; 16]),
+                input: input.path().to_path_buf(),
+            };
+            let mut ctx = TestContext::new();
+            let err = args
+                .run_with(&mut ctx, |_client, _, _| {
+                    unreachable!("submit must not run")
+                })
+                .expect_err("empty appeal handoff payload must be rejected");
+            assert_compact! { err.to_string().contains("moderation quarantine appeal handoff payload") };
+            assert!(ctx.printed.is_empty());
+        }
+        fn moderation_quarantine_operator_panel_reads_workflow_view() {
+            let quarantine_id = [0xA8_u8; 16];
+            let args = ModerationQuarantineOperatorPanelArgs {
+                quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
+                limit: Some(4),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, id, filter| {
+                assert_eq!(id, encode(quarantine_id));
+                assert_eq!(filter.limit, Some(4));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
                         "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                        "status": "ready"
+                    }))
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("operator_panel"));
+        }
+        fn moderation_quarantine_operator_panel_rejects_bad_quarantine_id() {
+            let args = ModerationQuarantineOperatorPanelArgs {
+                quarantine_id: "abcd".to_owned(),
+                limit: None,
+            };
+            let mut ctx = TestContext::new();
+            let err = args
+                .run_with(&mut ctx, |_client, _, _| unreachable!("get must not run"))
+                .expect_err("bad quarantine id must be rejected");
+            assert!(err.to_string().contains("--quarantine-id"));
+            assert!(ctx.printed.is_empty());
+        }
+        fn moderation_quarantine_bridge_plan_derives_workflow_actions() {
+            let quarantine_id = [0xA9_u8; 16];
+            let args = ModerationQuarantineBridgePlanArgs {
+                quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
+                limit: Some(5),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, id, filter| {
+                assert_eq!(id, encode(quarantine_id));
+                assert_eq!(filter.limit, Some(5));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                        "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                        "status": "ready",
                         "record": {
+                            "quarantine_id_hex": (encode(quarantine_id)),
                             "state": "reviewed"
                         },
                         "object_status": "stored",
-                        "payload_b64": "c2hvdWxkLW5vdC1iZS1oZXJl",
-                        "next_actions": []
-                    }))?)
-                    .unwrap())
+                        "case_count": 1_u64,
+                        "returned_case_count": 1_u64,
+                        "cases": [(fixture_finalized_moderation_case(&[], &[], &[]))],
+                        "operator_routes": {
+                            "object": "/v1/sorafs/moderation/quarantine/object"
+                        },
+                        "next_actions": [
+                            {
+                                "action": "read_object",
+                                "route": "/v1/sorafs/moderation/quarantine/object",
+                                "required": false
+                            },
+                            {
+                                "action": "submit_native_case_actions",
+                                "route": "/v1/sorafs/moderation/ballots",
+                                "required": true
+                            }
+                        ]
+                    }))
             })
-            .expect_err("payload bytes must be rejected");
-        assert!(err.to_string().contains("payload bytes"));
-        assert!(ctx.printed.is_empty());
-    }
-    #[test]
-    fn moderation_quarantine_bridge_plan_rejects_bad_quarantine_id() {
-        let args = ModerationQuarantineBridgePlanArgs {
-            quarantine_id: "abcd".to_owned(),
-            limit: None,
-        };
-        let mut ctx = TestContext::new();
-        let err = args
-            .run_with(&mut ctx, |_client, _, _| unreachable!("get must not run"))
-            .expect_err("bad quarantine id must be rejected");
-        assert!(err.to_string().contains("--quarantine-id"));
-        assert!(ctx.printed.is_empty());
-    }
+            .expect("bridge plan should render");
+            assert_eq!(ctx.printed.len(), 1);
+            let value: Value = norito::json::from_str(&ctx.printed[0]).expect("bridge plan json");
+            assert_eq_compact! { value.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.quarantine.bridge_plan.v1") };
+            assert_eq_compact! { value.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
+            let actions = value
+                .get("actions")
+                .and_then(Value::as_array)
+                .expect("actions");
+            assert_eq!(actions.len(), 2);
+            assert_eq_compact! { actions[1].get("automation_status").and_then(Value::as_str) => Some("waiting_for_native_commit_reveal_finalization") };
+            let cli = actions[1]
+                .get("cli")
+                .and_then(Value::as_array)
+                .expect("cli");
+            assert_compact! { cli.iter().any(|part| part.as_str() == Some("quarantine-case")) };
+            assert!(!ctx.printed[0].contains("payload_b64"));
+        }
+        fn moderation_quarantine_bridge_plan_rejects_payload_bytes() {
+            let quarantine_id = [0xAA_u8; 16];
+            let args = ModerationQuarantineBridgePlanArgs {
+                quarantine_id: encode(quarantine_id),
+                limit: None,
+            };
+            let mut ctx = TestContext::new();
+            let err = args
+                .run_with(&mut ctx, |_client, _id, _filter| {
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                            "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                            "record": {
+                                "state": "reviewed"
+                            },
+                            "object_status": "stored",
+                            "payload_b64": "c2hvdWxkLW5vdC1iZS1oZXJl",
+                            "next_actions": []
+                        }))
+                })
+                .expect_err("payload bytes must be rejected");
+            assert!(err.to_string().contains("payload bytes"));
+            assert!(ctx.printed.is_empty());
+        }
+        fn moderation_quarantine_bridge_plan_rejects_bad_quarantine_id() {
+            let args = ModerationQuarantineBridgePlanArgs {
+                quarantine_id: "abcd".to_owned(),
+                limit: None,
+            };
+            let mut ctx = TestContext::new();
+            let err = args
+                .run_with(&mut ctx, |_client, _, _| unreachable!("get must not run"))
+                .expect_err("bad quarantine id must be rejected");
+            assert!(err.to_string().contains("--quarantine-id"));
+            assert!(ctx.printed.is_empty());
+        }
+        }
     fn moderation_operator_canary_fixture_json(
         value: Value,
     ) -> Result<ModerationOperatorCanaryHttpResponse> {
@@ -21052,7 +20281,7 @@ mod tests {
         }
         panic!("unexpected canary route: {url}");
     }
-    #[test]
+    test_items! {
     fn moderation_quarantine_operator_canary_builds_payload_free_evidence() {
         let quarantine_id = [0xBA_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
@@ -21105,7 +20334,6 @@ mod tests {
         let written: Value = norito::json::from_slice(&bytes).expect("written evidence JSON");
         assert_eq!(written["schema"], value["schema"]);
     }
-    #[test]
     fn moderation_quarantine_operator_canary_rejects_payload_bytes() {
         let quarantine_id = [0xBB_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
@@ -21130,7 +20358,6 @@ mod tests {
         assert!(err.to_string().contains("payload bytes"));
         assert!(ctx.printed.is_empty());
     }
-    #[test]
     fn moderation_quarantine_operator_canary_rejects_schema_drift() {
         let quarantine_id = [0xBC_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
@@ -21155,6 +20382,7 @@ mod tests {
         assert!(err.to_string().contains("schema"));
         assert!(ctx.printed.is_empty());
     }
+    }
     struct FixtureModerationOperatorPanelSource {
         expected_quarantine_id_hex: String,
         expected_limit: Option<u32>,
@@ -21175,6 +20403,20 @@ mod tests {
                 .body(self.body.clone())
                 .unwrap())
         }
+    }
+    macro_rules! moderation_operator_panel_fixture {
+        ($quarantine_id_hex:ident; $($extra:tt)*) => {
+            norito::json!({
+                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
+                "status": "ready",
+                "record": {
+                    "quarantine_id_hex": ($quarantine_id_hex.clone()),
+                    "state": "reviewed"
+                },
+                "object_status": "stored",
+                $($extra)*
+            })
+        };
     }
     fn fixture_moderation_operator_service(
         quarantine_id: [u8; 16],
@@ -21359,23 +20601,38 @@ mod tests {
         let request = moderation_operator_parse_http_request(&raw, 1024).expect("HTTP request");
         service.handle_request(&request)
     }
-    #[test]
+    fn assert_moderation_operator_payload_rejected(
+        quarantine_id: [u8; 16],
+        request: String,
+        quarantine_id_hex: String,
+    ) {
+        let service = fixture_moderation_operator_service(
+            quarantine_id,
+            None,
+            moderation_operator_panel_fixture! {
+                quarantine_id_hex;
+                "case_count": 1_u64,
+                "returned_case_count": 1_u64,
+                "cases": [(fixture_payload_bearing_finalized_moderation_case())],
+                "next_actions": []
+            },
+        );
+        let response = handle_moderation_operator_raw_request(&service, request);
+        assert_eq!(response.status, StatusCode::BAD_GATEWAY);
+        let body = String::from_utf8(response.body).expect("error JSON is UTF-8");
+        assert!(body.contains("payload bytes"));
+    }
+    test_items! {
     fn moderation_operator_service_routes_operator_panel_with_query_limit() {
         let quarantine_id = [0xAB_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
         let service = fixture_moderation_operator_service(
             quarantine_id,
             Some(7),
-            norito::json!({
-                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
-                "status": "ready",
-                "record": {
-                    "quarantine_id_hex": (quarantine_id_hex.clone()),
-                    "state": "reviewed"
-                },
-                "object_status": "stored",
+            moderation_operator_panel_fixture! {
+                quarantine_id_hex;
                 "next_actions": []
-            }),
+            },
         );
         let response = handle_moderation_operator_raw_request(
             &service,
@@ -21388,21 +20645,14 @@ mod tests {
         assert_eq_compact! { value.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.quarantine.operator_panel.v1") };
         assert!(!String::from_utf8_lossy(&response.body).contains("payload_b64"));
     }
-    #[test]
     fn moderation_operator_service_builds_bridge_plan_without_payload() {
         let quarantine_id = [0xAC_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
         let service = fixture_moderation_operator_service(
             quarantine_id,
             Some(5),
-            norito::json!({
-                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
-                "status": "ready",
-                "record": {
-                    "quarantine_id_hex": (quarantine_id_hex.clone()),
-                    "state": "reviewed"
-                },
-                "object_status": "stored",
+            moderation_operator_panel_fixture! {
+                quarantine_id_hex;
                 "case_count": 0_u64,
                 "returned_case_count": 0_u64,
                 "cases": [],
@@ -21411,7 +20661,7 @@ mod tests {
                     "route": "/v1/sorafs/moderation/quarantine/review",
                     "required": true
                 }]
-            }),
+            },
         );
         let response = handle_moderation_operator_raw_request(
             &service,
@@ -21429,21 +20679,14 @@ mod tests {
             .expect("planned actions");
         assert_eq_compact! { actions[0].get("automation_status").and_then(Value::as_str) => Some("operator_review_required") };
     }
-    #[test]
     fn moderation_operator_service_builds_juror_plan_without_payload() {
         let quarantine_id = [0xA4_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
         let service = fixture_moderation_operator_service(
             quarantine_id,
             Some(2),
-            norito::json!({
-                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
-                "status": "ready",
-                "record": {
-                    "quarantine_id_hex": (quarantine_id_hex.clone()),
-                    "state": "reviewed"
-                },
-                "object_status": "stored",
+            moderation_operator_panel_fixture! {
+                quarantine_id_hex;
                 "case_count": 1_u64,
                 "returned_case_count": 1_u64,
                 "truncated_cases": false,
@@ -21455,7 +20698,7 @@ mod tests {
                     )
                 )],
                 "next_actions": []
-            }),
+            },
         );
         let response = handle_moderation_operator_raw_request(
             &service,
@@ -21485,21 +20728,14 @@ mod tests {
         assert_eq_compact! { jurors[1].get("notification_status").and_then(Value::as_str) => Some("commit_required") };
         assert_eq_compact! { jurors[1].get("routes").and_then(Value::as_object).and_then(|routes| routes.get("commit")).and_then(Value::as_str) => Some("/v1/sorafs/moderation/ballots/commits") };
     }
-    #[test]
     fn moderation_operator_service_builds_juror_notifications_without_payload() {
         let quarantine_id = [0xA6_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
         let service = fixture_moderation_operator_service(
             quarantine_id,
             Some(3),
-            norito::json!({
-                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
-                "status": "ready",
-                "record": {
-                    "quarantine_id_hex": (quarantine_id_hex.clone()),
-                    "state": "reviewed"
-                },
-                "object_status": "stored",
+            moderation_operator_panel_fixture! {
+                quarantine_id_hex;
                 "case_count": 1_u64,
                 "returned_case_count": 1_u64,
                 "truncated_cases": false,
@@ -21515,7 +20751,7 @@ mod tests {
                     )
                 )],
                 "next_actions": []
-            }),
+            },
         );
         let response = handle_moderation_operator_raw_request(
             &service,
@@ -21547,21 +20783,14 @@ mod tests {
         assert_eq_compact! { notifications[1].get("delivery_id").and_then(Value::as_str).map(str::len) => Some(64) };
         assert_compact! { notifications[1].get("body").and_then(Value::as_str).expect("notification body").contains("carries no payload bytes") };
     }
-    #[test]
     fn moderation_operator_service_builds_commit_reveal_status_without_payload() {
         let quarantine_id = [0xA8_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
         let service = fixture_moderation_operator_service(
             quarantine_id,
             Some(3),
-            norito::json!({
-                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
-                "status": "ready",
-                "record": {
-                    "quarantine_id_hex": (quarantine_id_hex.clone()),
-                    "state": "reviewed"
-                },
-                "object_status": "stored",
+            moderation_operator_panel_fixture! {
+                quarantine_id_hex;
                 "case_count": 1_u64,
                 "returned_case_count": 1_u64,
                 "truncated_cases": false,
@@ -21577,7 +20806,7 @@ mod tests {
                     )
                 )],
                 "next_actions": []
-            }),
+            },
         );
         let response = handle_moderation_operator_raw_request(
             &service,
@@ -21611,117 +20840,50 @@ mod tests {
         assert_eq_compact! { ballots[0].get("tally_request").and_then(Value::as_object).and_then(|request| request.get("submission")).and_then(Value::as_str) => Some("caller-signed-native-transaction") };
         assert_compact! { ballots[0].get("tally_request").and_then(Value::as_object).is_some_and(|request| !request.contains_key("body")) };
     }
-    #[test]
     fn moderation_operator_service_rejects_juror_plan_payload_bytes() {
         let quarantine_id = [0xA5_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
-        let service = fixture_moderation_operator_service(
+        assert_moderation_operator_payload_rejected(
             quarantine_id,
-            None,
-            norito::json!({
-                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
-                "status": "ready",
-                "record": {
-                    "quarantine_id_hex": (quarantine_id_hex.clone()),
-                    "state": "reviewed"
-                },
-                "object_status": "stored",
-                "case_count": 1_u64,
-                "returned_case_count": 1_u64,
-                "cases": [(fixture_payload_bearing_finalized_moderation_case())],
-                "next_actions": []
-            }),
-        );
-        let response = handle_moderation_operator_raw_request(
-            &service,
             format!(
                 "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-plan HTTP/1.1\r\nHost: local\r\n\r\n"
             ),
+            quarantine_id_hex,
         );
-        assert_eq!(response.status, StatusCode::BAD_GATEWAY);
-        let body = String::from_utf8(response.body).expect("error JSON is UTF-8");
-        assert!(body.contains("payload bytes"));
     }
-    #[test]
     fn moderation_operator_service_rejects_juror_notifications_payload_bytes() {
         let quarantine_id = [0xA7_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
-        let service = fixture_moderation_operator_service(
+        assert_moderation_operator_payload_rejected(
             quarantine_id,
-            None,
-            norito::json!({
-                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
-                "status": "ready",
-                "record": {
-                    "quarantine_id_hex": (quarantine_id_hex.clone()),
-                    "state": "reviewed"
-                },
-                "object_status": "stored",
-                "case_count": 1_u64,
-                "returned_case_count": 1_u64,
-                "cases": [(fixture_payload_bearing_finalized_moderation_case())],
-                "next_actions": []
-            }),
-        );
-        let response = handle_moderation_operator_raw_request(
-            &service,
             format!(
                 "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-notifications HTTP/1.1\r\nHost: local\r\n\r\n"
             ),
+            quarantine_id_hex,
         );
-        assert_eq!(response.status, StatusCode::BAD_GATEWAY);
-        let body = String::from_utf8(response.body).expect("error JSON is UTF-8");
-        assert!(body.contains("payload bytes"));
     }
-    #[test]
     fn moderation_operator_service_rejects_commit_reveal_status_payload_bytes() {
         let quarantine_id = [0xA9_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
-        let service = fixture_moderation_operator_service(
+        assert_moderation_operator_payload_rejected(
             quarantine_id,
-            None,
-            norito::json!({
-                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
-                "status": "ready",
-                "record": {
-                    "quarantine_id_hex": (quarantine_id_hex.clone()),
-                    "state": "reviewed"
-                },
-                "object_status": "stored",
-                "case_count": 1_u64,
-                "returned_case_count": 1_u64,
-                "cases": [(fixture_payload_bearing_finalized_moderation_case())],
-                "next_actions": []
-            }),
-        );
-        let response = handle_moderation_operator_raw_request(
-            &service,
             format!(
                 "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/commit-reveal-status HTTP/1.1\r\nHost: local\r\n\r\n"
             ),
+            quarantine_id_hex,
         );
-        assert_eq!(response.status, StatusCode::BAD_GATEWAY);
-        let body = String::from_utf8(response.body).expect("error JSON is UTF-8");
-        assert!(body.contains("payload bytes"));
     }
-    #[test]
     fn moderation_operator_service_rejects_payload_b64_from_upstream() {
         let quarantine_id = [0xAD_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
         let service = fixture_moderation_operator_service(
             quarantine_id,
             None,
-            norito::json!({
-                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
-                "status": "ready",
-                "record": {
-                    "quarantine_id_hex": (quarantine_id_hex.clone()),
-                    "state": "reviewed"
-                },
-                "object_status": "stored",
+            moderation_operator_panel_fixture! {
+                quarantine_id_hex;
                 "payload_b64": "c2hvdWxkLW5vdC1sZWFr",
                 "next_actions": []
-            }),
+            },
         );
         let response = handle_moderation_operator_raw_request(
             &service,
@@ -21733,7 +20895,6 @@ mod tests {
         let body = String::from_utf8(response.body).expect("error JSON is UTF-8");
         assert!(body.contains("payload bytes"));
     }
-    #[test]
     fn moderation_operator_service_rejects_request_body() {
         let request = b"GET /healthz HTTP/1.1\r\nHost: local\r\nContent-Length: 2\r\n\r\n{}";
         let parsed =
@@ -21758,7 +20919,6 @@ mod tests {
         let response = service.handle_request(&parsed);
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
     }
-    #[test]
     fn moderation_operator_parse_rejects_post_without_content_length() {
         let quarantine_id_hex = encode([0x42_u8; 16]);
         let request = format!(
@@ -21769,7 +20929,6 @@ mod tests {
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert!(error.message.contains("requires Content-Length"));
     }
-    #[test]
     fn moderation_operator_parse_rejects_body_without_content_length() {
         let request = b"GET /healthz HTTP/1.1\r\nHost: local\r\n\r\n{}";
         let error = moderation_operator_parse_http_request(request, 1024)
@@ -21777,7 +20936,6 @@ mod tests {
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert!(error.message.contains("requires Content-Length"));
     }
-    #[test]
     fn moderation_operator_parse_rejects_trailing_bytes_after_declared_body() {
         let request = b"GET /healthz HTTP/1.1\r\nHost: local\r\nContent-Length: 0\r\n\r\nGET / HTTP/1.1\r\n\r\n";
         let error = moderation_operator_parse_http_request(request, 1024)
@@ -21785,7 +20943,6 @@ mod tests {
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert!(error.message.contains("trailing bytes"));
     }
-    #[test]
     fn moderation_operator_read_rejects_trailing_bytes_after_declared_body() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
         let addr = listener.local_addr().expect("listener address");
@@ -21804,7 +20961,6 @@ mod tests {
         assert!(error.message.contains("trailing bytes"));
         client.join().expect("client thread finished");
     }
-    #[test]
     fn moderation_operator_service_serves_browser_ui() {
         let quarantine_id = [0xA1_u8; 16];
         let service = fixture_moderation_operator_service(quarantine_id, None, norito::json!({}));
@@ -21826,7 +20982,6 @@ mod tests {
         assert!(http.contains("Content-Type: text/html; charset=utf-8"));
         assert!(http.contains("X-Content-Type-Options: nosniff"));
     }
-    #[test]
     fn moderation_operator_service_status_lists_browser_ui_route() {
         let quarantine_id = [0xA2_u8; 16];
         let service = fixture_moderation_operator_service(quarantine_id, None, norito::json!({}));
@@ -21848,7 +21003,6 @@ mod tests {
         assert_compact! { routes.iter().any(|route| { route.as_str() == Some("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-notifications") }) };
         assert_compact! { routes.iter().any(|route| { route.as_str() == Some("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/commit-reveal-status") }) };
     }
-    #[test]
     fn moderation_operator_service_rejects_browser_ui_request_body() {
         let quarantine_id = [0xA3_u8; 16];
         let service = fixture_moderation_operator_service(quarantine_id, None, norito::json!({}));
@@ -21860,7 +21014,6 @@ mod tests {
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
         assert_eq_compact! { response.content_type => ModerationOperatorService::JSON_CONTENT_TYPE };
     }
-    #[test]
     fn moderation_operator_service_rejects_mutation_without_csrf_token() {
         let quarantine_id = [0xA9_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
@@ -21882,7 +21035,6 @@ mod tests {
         let body = String::from_utf8(response.body).expect("error body UTF-8");
         assert!(body.contains(MODERATION_OPERATOR_CSRF_HEADER));
     }
-    #[test]
     fn moderation_operator_service_rejects_mutation_with_wrong_csrf_token() {
         let quarantine_id = [0xAA_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
@@ -21904,7 +21056,6 @@ mod tests {
         let body = String::from_utf8(response.body).expect("error body UTF-8");
         assert!(body.contains("CSRF"));
     }
-    #[test]
     fn moderation_operator_service_forwards_review_with_default_actor() {
         let quarantine_id = [0xAE_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
@@ -21929,7 +21080,6 @@ mod tests {
         let value: Value = norito::json::from_slice(&response.body).expect("review response JSON");
         assert_eq_compact! { value.get("status").and_then(Value::as_str) => Some("reviewed") };
     }
-    #[test]
     fn moderation_operator_service_forwards_release_with_explicit_authority() {
         let quarantine_id = [0xAF_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
@@ -21954,7 +21104,6 @@ mod tests {
         let value: Value = norito::json::from_slice(&response.body).expect("release response JSON");
         assert_eq_compact! { value.get("status").and_then(Value::as_str) => Some("released") };
     }
-    #[test]
     fn moderation_operator_service_forwards_appeal_handoff_payload() {
         let quarantine_id = [0xB0_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
@@ -21979,7 +21128,6 @@ mod tests {
         let value: Value = norito::json::from_slice(&response.body).expect("handoff response JSON");
         assert_eq_compact! { value.get("status").and_then(Value::as_str) => Some("handoff_ready") };
     }
-    #[test]
     fn moderation_operator_service_rejects_mutation_payload_bytes() {
         let quarantine_id = [0xB2_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
@@ -22001,7 +21149,6 @@ mod tests {
         let body = String::from_utf8(response.body).expect("error body UTF-8");
         assert!(body.contains("payload bytes"));
     }
-    #[test]
     fn moderation_quarantine_review_rejects_blank_notes() {
         let args = ModerationQuarantineReviewArgs {
             quarantine_id: encode([0xEF_u8; 16]),
@@ -22018,10 +21165,10 @@ mod tests {
         assert!(err.to_string().contains("--notes"));
         assert!(ctx.printed.is_empty());
     }
-    #[test]
     fn repair_ticket_id_rejects_lowercase() {
         let result = parse_repair_ticket_id("rep-1", "--ticket-id");
         assert!(result.is_err(), "lowercase ticket id should fail");
+    }
     }
     fn single_repair_action(transaction: &SignedTransaction) -> &ApplySorafsRepairTaskAction {
         let iroha_data_model::transaction::Executable::Instructions(instructions) =
@@ -22035,354 +21182,336 @@ mod tests {
             .downcast_ref::<ApplySorafsRepairTaskAction>()
             .expect("repair transaction contains ApplySorafsRepairTaskAction")
     }
-    #[test]
-    fn repair_list_uses_finalized_task_cursor() {
-        let args = RepairListArgs {
-            ticket_id: None,
-            limit: Some(25),
-            expected_finalized_height: Some(7),
-            expected_finalized_block_hash: Some(format!("0x{}", "AB".repeat(32))),
-            after_task_id: Some("CD".repeat(32)),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(
-            &mut ctx,
-            |_client, filter| {
-                assert_eq!(filter.limit, Some(25));
-                assert_eq!(filter.finalized.expected_finalized_height, Some(7));
-                assert_eq_compact! { filter.finalized.expected_finalized_block_hash_hex => Some("ab".repeat(32).as_str()) };
-                assert_eq!(filter.after_task_id_hex, Some("cd".repeat(32).as_str()));
-                Ok(Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "application/json")
-                    .body(norito::json::to_vec(&norito::json!({
-                        "tasks": [ { "ticket_id": "REP-1" } ]
-                    }))?)
-                    .unwrap())
-            },
-            |_client, _, _| unreachable!("single-task lookup should not be called"),
-        )
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"tasks\""));
-    }
-    #[test]
-    fn repair_claim_builds_native_signed_transaction() {
-        let args = RepairClaimArgs {
-            ticket_id: "REP-501".to_string(),
-            expected_revision: 2,
-            lease_duration_ms: 60_000,
-            idempotency_key: Some("claim-501".to_string()),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, transaction| {
-            let apply = single_repair_action(transaction);
-            assert_eq!(apply.ticket_id, "REP-501");
-            assert_eq!(apply.expected_revision, 2);
-            let SorafsRepairTaskActionV1::Claim(action) = &apply.action else {
-                panic!("expected claim action");
+    test_items! {
+        fn repair_list_uses_finalized_task_cursor() {
+            let args = RepairListArgs {
+                ticket_id: None,
+                limit: Some(25),
+                expected_finalized_height: Some(7),
+                expected_finalized_block_hash: Some(format!("0x{}", "AB".repeat(32))),
+                after_task_id: Some("CD".repeat(32)),
             };
-            assert_eq!(action.lease_duration_ms, 60_000);
-            assert_eq!(action.idempotency_key, "claim-501");
-            Ok(transaction.hash())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("transaction_hash_hex"));
-    }
-    #[test]
-    fn repair_renew_builds_native_signed_transaction() {
-        let args = RepairRenewArgs {
-            ticket_id: "REP-502".to_string(),
-            expected_revision: 3,
-            lease_generation: 2,
-            lease_duration_ms: 90_000,
-            idempotency_key: Some("renew-502".to_string()),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, transaction| {
-            let apply = single_repair_action(transaction);
-            assert_eq!(apply.ticket_id, "REP-502");
-            assert_eq!(apply.expected_revision, 3);
-            let SorafsRepairTaskActionV1::Renew(action) = &apply.action else {
-                panic!("expected renew action");
+            let mut ctx = TestContext::new();
+            args.run_with(
+                &mut ctx,
+                |_client, filter| {
+                    assert_eq!(filter.limit, Some(25));
+                    assert_eq!(filter.finalized.expected_finalized_height, Some(7));
+                    assert_eq_compact! { filter.finalized.expected_finalized_block_hash_hex => Some("ab".repeat(32).as_str()) };
+                    assert_eq!(filter.after_task_id_hex, Some("cd".repeat(32).as_str()));
+    json_response_fixture!(StatusCode::OK, &norito::json!({
+                            "tasks": [ { "ticket_id": "REP-1" } ]
+                        }))
+                },
+                |_client, _, _| unreachable!("single-task lookup should not be called"),
+            )
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("\"tasks\""));
+        }
+        fn repair_claim_builds_native_signed_transaction() {
+            let args = RepairClaimArgs {
+                ticket_id: "REP-501".to_string(),
+                expected_revision: 2,
+                lease_duration_ms: 60_000,
+                idempotency_key: Some("claim-501".to_string()),
             };
-            assert_eq!(action.lease_generation, 2);
-            assert_eq!(action.lease_duration_ms, 90_000);
-            assert_eq!(action.idempotency_key, "renew-502");
-            Ok(transaction.hash())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-    }
-    #[test]
-    fn repair_complete_builds_native_signed_transaction() {
-        let evidence_digest = [0x33_u8; 32];
-        let args = RepairCompleteArgs {
-            ticket_id: "REP-503".to_string(),
-            expected_revision: 4,
-            lease_generation: 2,
-            evidence_digest: encode(evidence_digest),
-            idempotency_key: Some("complete-503".to_string()),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, transaction| {
-            let apply = single_repair_action(transaction);
-            assert_eq!(apply.ticket_id, "REP-503");
-            assert_eq!(apply.expected_revision, 4);
-            let SorafsRepairTaskActionV1::Complete(action) = &apply.action else {
-                panic!("expected complete action");
-            };
-            assert_eq!(action.lease_generation, 2);
-            assert_eq!(action.evidence_digest, evidence_digest);
-            assert_eq!(action.idempotency_key, "complete-503");
-            Ok(transaction.hash())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-    }
-    #[test]
-    fn repair_fail_builds_native_signed_transaction() {
-        let failure_digest = [0x55_u8; 32];
-        let args = RepairFailArgs {
-            ticket_id: "REP-504".to_string(),
-            expected_revision: 5,
-            lease_generation: 3,
-            failure_digest: encode(failure_digest),
-            idempotency_key: Some("fail-504".to_string()),
-        };
-        let mut ctx = TestContext::new();
-        args.run_with(&mut ctx, |_client, transaction| {
-            let apply = single_repair_action(transaction);
-            assert_eq!(apply.ticket_id, "REP-504");
-            assert_eq!(apply.expected_revision, 5);
-            let SorafsRepairTaskActionV1::Fail(action) = &apply.action else {
-                panic!("expected fail action");
-            };
-            assert_eq!(action.lease_generation, 3);
-            assert_eq!(action.failure_digest, failure_digest);
-            assert_eq!(action.idempotency_key, "fail-504");
-            Ok(transaction.hash())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-    }
-    #[test]
-    fn repair_escalate_builds_native_atomic_slash_transaction() {
-        let manifest_digest = [0x77_u8; 32];
-        let provider_id = [0x88_u8; 32];
-        let args = RepairEscalateArgs {
-            ticket_id: "REP-505".to_string(),
-            expected_revision: 6,
-            lease_generation: 4,
-            manifest_digest: encode(manifest_digest),
-            provider_id: encode(provider_id),
-            penalty: "0.0000009".to_owned(),
-            rationale: "sla_missed".to_string(),
-            auditor: None,
-            submitted_at: Some("@1700000504".to_string()),
-            idempotency_key: Some("escalate-505".to_string()),
-        };
-        let mut ctx = TestContext::new();
-        let expected_auditor = ctx.config().account.to_string();
-        args.run_with(&mut ctx, |_client, transaction| {
-            let apply = single_repair_action(transaction);
-            assert_eq!(apply.ticket_id, "REP-505");
-            assert_eq!(apply.expected_revision, 6);
-            let SorafsRepairTaskActionV1::Escalate(action) = &apply.action else {
-                panic!("expected escalate action");
-            };
-            assert_eq!(action.lease_generation, 4);
-            assert_eq!(action.idempotency_key, "escalate-505");
-            let proposal: RepairSlashProposalV1 =
-                norito::decode_from_bytes(&action.slash_proposal_payload)
-                    .expect("decode canonical slash proposal");
-            assert_eq!(proposal.ticket_id.0, "REP-505");
-            assert_eq!(proposal.provider_id, provider_id);
-            assert_eq!(proposal.manifest_digest, manifest_digest);
-            assert_eq!(proposal.auditor_account, expected_auditor);
-            assert_eq_compact! { proposal.proposed_penalty => "0.0000009".parse::<XorQuantity>().expect("valid quantity") };
-            assert_eq!(proposal.submitted_at_unix, 1_700_000_504);
-            assert!(proposal.approval.is_none());
-            Ok(transaction.hash())
-        })
-        .expect("run should succeed");
-        assert_eq!(ctx.printed.len(), 1);
-    }
-    #[test]
-    fn repair_action_rejects_zero_compare_and_set_revision() {
-        let args = RepairClaimArgs {
-            ticket_id: "REP-506".to_string(),
-            expected_revision: 0,
-            lease_duration_ms: 60_000,
-            idempotency_key: Some("claim-506".to_string()),
-        };
-        let mut ctx = TestContext::new();
-        let error = args
-            .run_with(&mut ctx, |_client, _| {
-                unreachable!("zero revision must fail before submission")
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, transaction| {
+                let apply = single_repair_action(transaction);
+                assert_eq!(apply.ticket_id, "REP-501");
+                assert_eq!(apply.expected_revision, 2);
+                let SorafsRepairTaskActionV1::Claim(action) = &apply.action else {
+                    panic!("expected claim action");
+                };
+                assert_eq!(action.lease_duration_ms, 60_000);
+                assert_eq!(action.idempotency_key, "claim-501");
+                Ok(transaction.hash())
             })
-            .expect_err("zero compare-and-set revision must fail");
-        assert!(error.to_string().contains("--expected-revision"));
-        assert!(ctx.printed.is_empty());
-    }
-    #[test]
-    fn gc_inspect_reports_expiry_state() {
-        let dir = TempDir::new().expect("temp dir");
-        write_gc_manifest(
-            dir.path(),
-            "alpha",
-            1_000,
-            ManifestStorageClass::Hot,
-            100,
-            10,
-        );
-        write_gc_manifest(
-            dir.path(),
-            "beta",
-            2_000,
-            ManifestStorageClass::Warm,
-            200,
-            20,
-        );
-        write_gc_manifest(dir.path(), "gamma", 0, ManifestStorageClass::Cold, 300, 30);
-        let report = build_gc_report("inspect", Some(dir.path()), Some("@1500"), Some(100), false)
-            .expect("report");
-        assert_eq!(report.mode, "inspect");
-        assert_eq!(report.total_manifests, 3);
-        assert_eq!(report.total_payload_bytes, 600);
-        assert_eq!(report.total_car_bytes, 60);
-        assert_eq!(report.expired_count, 1);
-        assert_eq!(report.expired_payload_bytes, 100);
-        assert_eq!(report.expired_car_bytes, 10);
-        assert_eq!(report.entries.len(), 3);
-        assert_eq!(report.now_unix, 1_500);
-        assert_eq!(report.grace_secs, 100);
-        let first = &report.entries[0];
-        assert_eq!(first.manifest_id, "alpha");
-        assert_eq!(first.storage_class, "hot");
-        assert_eq!(first.expires_at_unix, Some(1_100));
-        assert!(first.expired);
-        assert_eq!(first.payload_bytes, 100);
-        assert_eq!(first.car_bytes, 10);
-        assert_eq!(first.manifest_digest_hex.len(), 64);
-        let last = &report.entries[2];
-        assert_eq!(last.manifest_id, "gamma");
-        assert_eq!(last.storage_class, "cold");
-        assert_eq!(last.expires_at_unix, None);
-        assert!(!last.expired);
-    }
-    #[test]
-    fn gc_dry_run_filters_expired() {
-        let dir = TempDir::new().expect("temp dir");
-        write_gc_manifest(
-            dir.path(),
-            "alpha",
-            1_000,
-            ManifestStorageClass::Hot,
-            100,
-            10,
-        );
-        write_gc_manifest(
-            dir.path(),
-            "beta",
-            2_000,
-            ManifestStorageClass::Warm,
-            200,
-            20,
-        );
-        let report = build_gc_report("dry_run", Some(dir.path()), Some("@1500"), Some(100), true)
-            .expect("report");
-        assert_eq!(report.mode, "dry_run");
-        assert_eq!(report.total_manifests, 2);
-        assert_eq!(report.expired_count, 1);
-        assert_eq!(report.entries.len(), 1);
-        assert_eq!(report.entries[0].manifest_id, "alpha");
-        assert!(report.entries[0].expired);
-    }
-    #[test]
-    fn gc_inspect_command_prints_json_report() {
-        let dir = TempDir::new().expect("temp dir");
-        write_gc_manifest(dir.path(), "alpha", 0, ManifestStorageClass::Hot, 50, 5);
-        let args = GcInspectArgs {
-            data_dir: Some(dir.path().to_path_buf()),
-            now: Some("@1500".to_string()),
-            grace_secs: Some(100),
-        };
-        let mut ctx = TestContext::new();
-        GcCommand::Inspect(args).run(&mut ctx).expect("inspect run");
-        let output = ctx.outputs().last().expect("output");
-        let json: Value = norito::json::from_str(output).expect("json");
-        assert_eq!(json["mode"], Value::from("inspect"));
-        assert_eq!(json["total_manifests"], Value::from(1u64));
-        assert_eq!(json["entries"].as_array().map(Vec::len), Some(1));
-    }
-    #[test]
-    fn gc_dry_run_command_filters_json_entries() {
-        let dir = TempDir::new().expect("temp dir");
-        write_gc_manifest(
-            dir.path(),
-            "alpha",
-            1_000,
-            ManifestStorageClass::Warm,
-            10,
-            1,
-        );
-        write_gc_manifest(dir.path(), "beta", 2_000, ManifestStorageClass::Cold, 20, 2);
-        let args = GcDryRunArgs {
-            data_dir: Some(dir.path().to_path_buf()),
-            now: Some("@1500".to_string()),
-            grace_secs: Some(100),
-        };
-        let mut ctx = TestContext::new();
-        GcCommand::DryRun(args).run(&mut ctx).expect("dry run");
-        let output = ctx.outputs().last().expect("output");
-        let json: Value = norito::json::from_str(output).expect("json");
-        assert_eq!(json["mode"], Value::from("dry_run"));
-        assert_eq!(json["total_manifests"], Value::from(2u64));
-        assert_eq!(json["entries"].as_array().map(Vec::len), Some(1));
-    }
-    #[test]
-    fn gc_manifest_entries_require_manifest_dir() {
-        let dir = TempDir::new().expect("temp dir");
-        let err = load_gc_manifest_entries(dir.path()).expect_err("missing manifests");
-        assert_compact! { err.to_string().contains("SoraFS manifests directory"); "unexpected error: {err}" };
-    }
-    #[test]
-    fn gc_retention_deadline_respects_zero_epoch() {
-        assert_eq!(retention_deadline(0, 5), None);
-        assert_eq!(retention_deadline(10, 5), Some(15));
-    }
-    #[test]
-    fn gc_storage_class_labels_match_expected_values() {
-        assert_eq_compact! { manifest_storage_class_label(ManifestStorageClass::Hot) => "hot" };
-        assert_eq_compact! { manifest_storage_class_label(ManifestStorageClass::Warm) => "warm" };
-        assert_eq_compact! { manifest_storage_class_label(ManifestStorageClass::Cold) => "cold" };
-    }
-    #[test]
-    fn storage_token_issue_passes_arguments_and_prints_nonce() {
-        use std::cell::RefCell;
-        let args = StorageTokenIssueArgs {
-            manifest_id: "aa".repeat(32),
-            provider_id: "bb".repeat(32),
-            client_id: "gateway-alpha".into(),
-            nonce: None,
-            ttl_secs: Some(600),
-            max_streams: Some(5),
-            rate_limit_bytes: Some(256_000),
-            requests_per_minute: Some(90),
-        };
-        let mut ctx = TestContext::new();
-        let captured = RefCell::new(None);
-        args.run_with(
-            &mut ctx,
-            |_, manifest, provider, client_id, nonce, overrides| {
-                *captured.borrow_mut() = Some((
-                    manifest.to_owned(),
-                    provider.to_owned(),
-                    client_id.to_owned(),
-                    nonce.to_owned(),
-                    *overrides,
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+            assert!(ctx.printed[0].contains("transaction_hash_hex"));
+        }
+        fn repair_renew_builds_native_signed_transaction() {
+            let args = RepairRenewArgs {
+                ticket_id: "REP-502".to_string(),
+                expected_revision: 3,
+                lease_generation: 2,
+                lease_duration_ms: 90_000,
+                idempotency_key: Some("renew-502".to_string()),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, transaction| {
+                let apply = single_repair_action(transaction);
+                assert_eq!(apply.ticket_id, "REP-502");
+                assert_eq!(apply.expected_revision, 3);
+                let SorafsRepairTaskActionV1::Renew(action) = &apply.action else {
+                    panic!("expected renew action");
+                };
+                assert_eq!(action.lease_generation, 2);
+                assert_eq!(action.lease_duration_ms, 90_000);
+                assert_eq!(action.idempotency_key, "renew-502");
+                Ok(transaction.hash())
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+        }
+        fn repair_complete_builds_native_signed_transaction() {
+            let evidence_digest = [0x33_u8; 32];
+            let args = RepairCompleteArgs {
+                ticket_id: "REP-503".to_string(),
+                expected_revision: 4,
+                lease_generation: 2,
+                evidence_digest: encode(evidence_digest),
+                idempotency_key: Some("complete-503".to_string()),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, transaction| {
+                let apply = single_repair_action(transaction);
+                assert_eq!(apply.ticket_id, "REP-503");
+                assert_eq!(apply.expected_revision, 4);
+                let SorafsRepairTaskActionV1::Complete(action) = &apply.action else {
+                    panic!("expected complete action");
+                };
+                assert_eq!(action.lease_generation, 2);
+                assert_eq!(action.evidence_digest, evidence_digest);
+                assert_eq!(action.idempotency_key, "complete-503");
+                Ok(transaction.hash())
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+        }
+        fn repair_fail_builds_native_signed_transaction() {
+            let failure_digest = [0x55_u8; 32];
+            let args = RepairFailArgs {
+                ticket_id: "REP-504".to_string(),
+                expected_revision: 5,
+                lease_generation: 3,
+                failure_digest: encode(failure_digest),
+                idempotency_key: Some("fail-504".to_string()),
+            };
+            let mut ctx = TestContext::new();
+            args.run_with(&mut ctx, |_client, transaction| {
+                let apply = single_repair_action(transaction);
+                assert_eq!(apply.ticket_id, "REP-504");
+                assert_eq!(apply.expected_revision, 5);
+                let SorafsRepairTaskActionV1::Fail(action) = &apply.action else {
+                    panic!("expected fail action");
+                };
+                assert_eq!(action.lease_generation, 3);
+                assert_eq!(action.failure_digest, failure_digest);
+                assert_eq!(action.idempotency_key, "fail-504");
+                Ok(transaction.hash())
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+        }
+        fn repair_escalate_builds_native_atomic_slash_transaction() {
+            let manifest_digest = [0x77_u8; 32];
+            let provider_id = [0x88_u8; 32];
+            let args = RepairEscalateArgs {
+                ticket_id: "REP-505".to_string(),
+                expected_revision: 6,
+                lease_generation: 4,
+                manifest_digest: encode(manifest_digest),
+                provider_id: encode(provider_id),
+                penalty: "0.0000009".to_owned(),
+                rationale: "sla_missed".to_string(),
+                auditor: None,
+                submitted_at: Some("@1700000504".to_string()),
+                idempotency_key: Some("escalate-505".to_string()),
+            };
+            let mut ctx = TestContext::new();
+            let expected_auditor = ctx.config().account.to_string();
+            args.run_with(&mut ctx, |_client, transaction| {
+                let apply = single_repair_action(transaction);
+                assert_eq!(apply.ticket_id, "REP-505");
+                assert_eq!(apply.expected_revision, 6);
+                let SorafsRepairTaskActionV1::Escalate(action) = &apply.action else {
+                    panic!("expected escalate action");
+                };
+                assert_eq!(action.lease_generation, 4);
+                assert_eq!(action.idempotency_key, "escalate-505");
+                let proposal: RepairSlashProposalV1 =
+                    norito::decode_from_bytes(&action.slash_proposal_payload)
+                        .expect("decode canonical slash proposal");
+                assert_eq!(proposal.ticket_id.0, "REP-505");
+                assert_eq!(proposal.provider_id, provider_id);
+                assert_eq!(proposal.manifest_digest, manifest_digest);
+                assert_eq!(proposal.auditor_account, expected_auditor);
+                assert_eq_compact! { proposal.proposed_penalty => "0.0000009".parse::<XorQuantity>().expect("valid quantity") };
+                assert_eq!(proposal.submitted_at_unix, 1_700_000_504);
+                assert!(proposal.approval.is_none());
+                Ok(transaction.hash())
+            })
+            .expect("run should succeed");
+            assert_eq!(ctx.printed.len(), 1);
+        }
+        fn repair_action_rejects_zero_compare_and_set_revision() {
+            let args = RepairClaimArgs {
+                ticket_id: "REP-506".to_string(),
+                expected_revision: 0,
+                lease_duration_ms: 60_000,
+                idempotency_key: Some("claim-506".to_string()),
+            };
+            let mut ctx = TestContext::new();
+            let error = args
+                .run_with(&mut ctx, |_client, _| {
+                    unreachable!("zero revision must fail before submission")
+                })
+                .expect_err("zero compare-and-set revision must fail");
+            assert!(error.to_string().contains("--expected-revision"));
+            assert!(ctx.printed.is_empty());
+        }
+        fn gc_inspect_reports_expiry_state() {
+            let dir = TempDir::new().expect("temp dir");
+            write_gc_manifest(
+                dir.path(),
+                "alpha",
+                1_000,
+                ManifestStorageClass::Hot,
+                100,
+                10,
+            );
+            write_gc_manifest(
+                dir.path(),
+                "beta",
+                2_000,
+                ManifestStorageClass::Warm,
+                200,
+                20,
+            );
+            write_gc_manifest(dir.path(), "gamma", 0, ManifestStorageClass::Cold, 300, 30);
+            let report = build_gc_report("inspect", Some(dir.path()), Some("@1500"), Some(100), false)
+                .expect("report");
+            assert_eq!(report.mode, "inspect");
+            assert_eq!(report.total_manifests, 3);
+            assert_eq!(report.total_payload_bytes, 600);
+            assert_eq!(report.total_car_bytes, 60);
+            assert_eq!(report.expired_count, 1);
+            assert_eq!(report.expired_payload_bytes, 100);
+            assert_eq!(report.expired_car_bytes, 10);
+            assert_eq!(report.entries.len(), 3);
+            assert_eq!(report.now_unix, 1_500);
+            assert_eq!(report.grace_secs, 100);
+            let first = &report.entries[0];
+            assert_eq!(first.manifest_id, "alpha");
+            assert_eq!(first.storage_class, "hot");
+            assert_eq!(first.expires_at_unix, Some(1_100));
+            assert!(first.expired);
+            assert_eq!(first.payload_bytes, 100);
+            assert_eq!(first.car_bytes, 10);
+            assert_eq!(first.manifest_digest_hex.len(), 64);
+            let last = &report.entries[2];
+            assert_eq!(last.manifest_id, "gamma");
+            assert_eq!(last.storage_class, "cold");
+            assert_eq!(last.expires_at_unix, None);
+            assert!(!last.expired);
+        }
+        fn gc_dry_run_filters_expired() {
+            let dir = TempDir::new().expect("temp dir");
+            write_gc_manifest(
+                dir.path(),
+                "alpha",
+                1_000,
+                ManifestStorageClass::Hot,
+                100,
+                10,
+            );
+            write_gc_manifest(
+                dir.path(),
+                "beta",
+                2_000,
+                ManifestStorageClass::Warm,
+                200,
+                20,
+            );
+            let report = build_gc_report("dry_run", Some(dir.path()), Some("@1500"), Some(100), true)
+                .expect("report");
+            assert_eq!(report.mode, "dry_run");
+            assert_eq!(report.total_manifests, 2);
+            assert_eq!(report.expired_count, 1);
+            assert_eq!(report.entries.len(), 1);
+            assert_eq!(report.entries[0].manifest_id, "alpha");
+            assert!(report.entries[0].expired);
+        }
+        fn gc_inspect_command_prints_json_report() {
+            let dir = TempDir::new().expect("temp dir");
+            write_gc_manifest(dir.path(), "alpha", 0, ManifestStorageClass::Hot, 50, 5);
+            let args = GcInspectArgs {
+                data_dir: Some(dir.path().to_path_buf()),
+                now: Some("@1500".to_string()),
+                grace_secs: Some(100),
+            };
+            let mut ctx = TestContext::new();
+            GcCommand::Inspect(args).run(&mut ctx).expect("inspect run");
+            let output = ctx.outputs().last().expect("output");
+            let json: Value = norito::json::from_str(output).expect("json");
+            assert_eq!(json["mode"], Value::from("inspect"));
+            assert_eq!(json["total_manifests"], Value::from(1u64));
+            assert_eq!(json["entries"].as_array().map(Vec::len), Some(1));
+        }
+        fn gc_dry_run_command_filters_json_entries() {
+            let dir = TempDir::new().expect("temp dir");
+            write_gc_manifest(
+                dir.path(),
+                "alpha",
+                1_000,
+                ManifestStorageClass::Warm,
+                10,
+                1,
+            );
+            write_gc_manifest(dir.path(), "beta", 2_000, ManifestStorageClass::Cold, 20, 2);
+            let args = GcDryRunArgs {
+                data_dir: Some(dir.path().to_path_buf()),
+                now: Some("@1500".to_string()),
+                grace_secs: Some(100),
+            };
+            let mut ctx = TestContext::new();
+            GcCommand::DryRun(args).run(&mut ctx).expect("dry run");
+            let output = ctx.outputs().last().expect("output");
+            let json: Value = norito::json::from_str(output).expect("json");
+            assert_eq!(json["mode"], Value::from("dry_run"));
+            assert_eq!(json["total_manifests"], Value::from(2u64));
+            assert_eq!(json["entries"].as_array().map(Vec::len), Some(1));
+        }
+        fn gc_manifest_entries_require_manifest_dir() {
+            let dir = TempDir::new().expect("temp dir");
+            let err = load_gc_manifest_entries(dir.path()).expect_err("missing manifests");
+            assert_compact! { err.to_string().contains("SoraFS manifests directory"); "unexpected error: {err}" };
+        }
+        fn gc_retention_deadline_respects_zero_epoch() {
+            assert_eq!(retention_deadline(0, 5), None);
+            assert_eq!(retention_deadline(10, 5), Some(15));
+        }
+        fn gc_storage_class_labels_match_expected_values() {
+            assert_eq_compact! { manifest_storage_class_label(ManifestStorageClass::Hot) => "hot" };
+            assert_eq_compact! { manifest_storage_class_label(ManifestStorageClass::Warm) => "warm" };
+            assert_eq_compact! { manifest_storage_class_label(ManifestStorageClass::Cold) => "cold" };
+        }
+        fn storage_token_issue_passes_arguments_and_prints_nonce() {
+            use std::cell::RefCell;
+            let args = StorageTokenIssueArgs {
+                manifest_id: "aa".repeat(32),
+                provider_id: "bb".repeat(32),
+                client_id: "gateway-alpha".into(),
+                nonce: None,
+                ttl_secs: Some(600),
+                max_streams: Some(5),
+                rate_limit_bytes: Some(256_000),
+                requests_per_minute: Some(90),
+            };
+            let mut ctx = TestContext::new();
+            let captured = RefCell::new(None);
+            args.run_with(
+                &mut ctx,
+                |_, manifest, provider, client_id, nonce, overrides| {
+                    *captured.borrow_mut() = Some((
+                        manifest.to_owned(),
+                        provider.to_owned(),
+                        client_id.to_owned(),
+                        nonce.to_owned(),
+                        *overrides,
                 ));
                 let body = norito::json::to_vec(&norito::json!({ "token": { "body": {} } }))?;
                 Ok(Response::builder()
@@ -22391,156 +21520,152 @@ mod tests {
                     .body(body)
                     .unwrap())
             },
-        )
-        .expect("token issue succeeds");
-        let (manifest, provider, client_id, nonce, overrides) =
-            captured.borrow().clone().expect("captured arguments");
-        assert_eq!(manifest, "aa".repeat(32));
-        assert_eq!(provider, "bb".repeat(32));
-        assert_eq!(client_id, "gateway-alpha");
-        assert_eq!(overrides.ttl_secs, Some(600));
-        assert_eq!(overrides.max_streams, Some(5));
-        assert_eq!(overrides.rate_limit_bytes, Some(256_000));
-        assert_eq!(overrides.requests_per_minute, Some(90));
-        assert_eq!(ctx.printed.len(), 2);
-        assert_compact! { ctx.printed[0].starts_with("nonce: "); "expected nonce println, got {}", ctx.printed[0] };
-        assert_eq_compact! { ctx.printed[1] => "{\"token\":{\"body\":{}}}"; "expected JSON payload output" };
-        assert_eq_compact! { nonce.len() => 24; "nonce should be 12 random bytes hex encoded" };
-    }
-    #[test]
-    fn direct_mode_plan_generates_summary() {
-        let manifest = ManifestBuilder::new()
-            .root_cid(vec![0x01, 0x02, 0x03])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_profile(ChunkingProfileV1 {
-                profile_id: ProfileId(7),
-                namespace: "sorafs".into(),
-                name: "sf1".into(),
-                semver: "1.0.0".into(),
-                min_size: 4096,
-                target_size: 262_144,
-                max_size: 524_288,
-                break_mask: 0,
-                multihash_code: BLAKE3_256_MULTIHASH_CODE,
-                aliases: vec!["sf1".into()],
-            })
-            .chunk_digest_sha3_256([0xCD; 32])
-            .por_root([0xCE; 32])
-            .content_length(1_048_576)
-            .car_digest([0xAB; 32])
-            .car_size(1_111_111)
-            .pin_policy(PinPolicy {
-                min_replicas: 3,
-                storage_class: ManifestStorageClass::Hot,
-                retention_epoch: 0,
-            })
-            .add_metadata("manifest.requires_envelope", "true")
-            .add_metadata("capability.direct_car", "true")
-            .build()
-            .expect("build manifest");
-        let bytes = to_bytes(&manifest).expect("encode manifest");
-        let mut temp_manifest = NamedTempFile::new().expect("temp manifest");
-        temp_manifest
-            .write_all(&bytes)
-            .expect("write manifest bytes");
-        let provider = [0xAA; 32];
-        let args = GatewayDirectModePlanArgs {
-            manifest: temp_manifest.path().to_path_buf(),
-            admission_envelope: None,
-            provider_id: Some(hex::encode(provider)),
-            chain_id: Some("nexus".to_owned()),
-            scheme: "https".to_owned(),
-        };
-        let mut ctx = TestContext::new();
-        args.run(&mut ctx).expect("plan command runs");
-        assert_eq!(ctx.outputs().len(), 1);
-        let plan: DirectModePlanOutput =
-            norito::json::from_str(&ctx.outputs()[0]).expect("parse plan");
-        assert_eq!(plan.provider_id_hex, hex::encode(provider));
-        assert_eq!(plan.chain_id, "nexus");
-        assert_compact! { plan.direct_car.canonical_url.contains("/direct/v1/car/"); "direct car locator should reference the manifest digest" };
-        assert!(plan.capabilities.direct_car_supported);
-    }
-    #[test]
-    fn toolkit_pack_emits_manifest_and_report() {
-        let temp = TempDir::new().expect("temp dir");
-        let payload_path = temp.path().join("payload.bin");
-        fs::write(&payload_path, b"payload-bytes").expect("write payload");
-        let manifest_path = temp.path().join("manifest.to");
-        let car_path = temp.path().join("payload.car");
-        let json_path = temp.path().join("report.json");
-        let args = ToolkitPackArgs {
-            input: payload_path,
-            manifest_out: Some(manifest_path.clone()),
-            car_out: Some(car_path.clone()),
-            json_out: Some(json_path.clone()),
-            hybrid_envelope_out: None,
-            hybrid_envelope_json_out: None,
-            hybrid_recipient_x25519: None,
-            hybrid_recipient_kyber: None,
-        };
-        let mut ctx = TestContext::new();
-        args.run(&mut ctx).expect("pack");
-        let manifest_bytes = fs::read(&manifest_path).expect("read manifest");
-        let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes).expect("decode manifest");
-        assert_eq!(manifest.content_length, 13);
-        let car_bytes = fs::read(&car_path).expect("read CAR archive");
-        assert_eq!(manifest.car_size, car_bytes.len() as u64);
-        let archive_digest = *blake3::hash(&car_bytes).as_bytes();
-        let archive_digest_hex = hex::encode(archive_digest);
-        assert_eq_compact! { manifest.car_digest => archive_digest; "manifest must bind every byte of the canonical CARv2 archive" };
-        let report_bytes = fs::read(&json_path).expect("read report");
-        let report: Value = norito::json::from_slice(&report_bytes).expect("decode report");
-        assert_eq_compact! { report.get("car_archive_digest_hex").and_then(Value::as_str) => Some(archive_digest_hex.as_str()) };
-        assert_eq_compact! { report.get("manifest").and_then(|manifest| manifest.get("car_digest_hex")).and_then(Value::as_str) => Some(archive_digest_hex.as_str()) };
-        assert_ne!(
-            report.get("car_payload_digest_hex").and_then(Value::as_str),
-            Some(archive_digest_hex.as_str()),
-            "CARv1 payload-section digest must remain diagnostic-only"
-        );
-        let digest_hex = hex::encode(manifest.digest().expect("manifest digest").as_bytes());
-        assert_eq_compact! { report.get("manifest_digest_hex").and_then(Value::as_str) => Some(digest_hex.as_str()) };
-        let por_root_hex = hex::encode(manifest.por_root);
-        assert_eq_compact! { report.get("por_root_hex").and_then(Value::as_str) => Some(por_root_hex.as_str()) };
-        assert_eq_compact! { report.get("manifest").and_then(|manifest| manifest.get("por_root_hex")).and_then(Value::as_str) => Some(por_root_hex.as_str()) };
-    }
-    #[test]
-    fn hybrid_manifest_aad_appends_filename() {
-        let digest = blake3::hash(b"manifest");
-        let chunk_digest = [0x11; 32];
-        let aad = build_hybrid_manifest_aad(&digest, chunk_digest, Some("manifest.to"));
-        let name_len_offset = HYBRID_MANIFEST_AAD_DOMAIN.len() + 32 + 32;
-        let length_bytes: [u8; 4] = aad[name_len_offset..name_len_offset + 4]
-            .try_into()
-            .expect("length bytes");
-        let length = u32::from_be_bytes(length_bytes);
-        assert_eq!(length as usize, "manifest.to".len());
-        assert_eq!(&aad[name_len_offset + 4..], b"manifest.to");
-    }
-    #[test]
-    fn chunk_digest_sha3_matches_manual_hash() {
-        let payload = b"hello-world".to_vec();
-        let plan =
-            CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let computed = compute_chunk_digest_sha3(&plan.chunks);
-        let mut hasher = Sha3::v256();
-        for chunk in &plan.chunks {
-            hasher.update(&chunk.offset.to_le_bytes());
-            hasher.update(&u64::from(chunk.length).to_le_bytes());
-            hasher.update(&chunk.digest);
+            )
+            .expect("token issue succeeds");
+            let (manifest, provider, client_id, nonce, overrides) =
+                captured.borrow().clone().expect("captured arguments");
+            assert_eq!(manifest, "aa".repeat(32));
+            assert_eq!(provider, "bb".repeat(32));
+            assert_eq!(client_id, "gateway-alpha");
+            assert_eq!(overrides.ttl_secs, Some(600));
+            assert_eq!(overrides.max_streams, Some(5));
+            assert_eq!(overrides.rate_limit_bytes, Some(256_000));
+            assert_eq!(overrides.requests_per_minute, Some(90));
+            assert_eq!(ctx.printed.len(), 2);
+            assert_compact! { ctx.printed[0].starts_with("nonce: "); "expected nonce println, got {}", ctx.printed[0] };
+            assert_eq_compact! { ctx.printed[1] => "{\"token\":{\"body\":{}}}"; "expected JSON payload output" };
+            assert_eq_compact! { nonce.len() => 24; "nonce should be 12 random bytes hex encoded" };
         }
-        let mut expected = [0u8; 32];
-        hasher.finalize(&mut expected);
-        assert_eq!(computed, expected);
-    }
-    #[test]
-    fn ensure_metadata_entry_dedupes_case_insensitive() {
-        let mut metadata = vec![("manifest.requires_envelope".to_string(), "true".to_string())];
-        ensure_metadata_entry(&mut metadata, "Manifest.Requires_Envelope", "false");
-        assert_eq!(metadata.len(), 1);
-        ensure_metadata_entry(&mut metadata, "manifest.hybrid_suite", "suite");
-        assert_eq!(metadata.len(), 2);
-    }
+        fn direct_mode_plan_generates_summary() {
+            let manifest = ManifestBuilder::new()
+                .root_cid(vec![0x01, 0x02, 0x03])
+                .dag_codec(DagCodecId(0x71))
+                .chunking_profile(ChunkingProfileV1 {
+                    profile_id: ProfileId(7),
+                    namespace: "sorafs".into(),
+                    name: "sf1".into(),
+                    semver: "1.0.0".into(),
+                    min_size: 4096,
+                    target_size: 262_144,
+                    max_size: 524_288,
+                    break_mask: 0,
+                    multihash_code: BLAKE3_256_MULTIHASH_CODE,
+                    aliases: vec!["sf1".into()],
+                })
+                .chunk_digest_sha3_256([0xCD; 32])
+                .por_root([0xCE; 32])
+                .content_length(1_048_576)
+                .car_digest([0xAB; 32])
+                .car_size(1_111_111)
+                .pin_policy(PinPolicy {
+                    min_replicas: 3,
+                    storage_class: ManifestStorageClass::Hot,
+                    retention_epoch: 0,
+                })
+                .add_metadata("manifest.requires_envelope", "true")
+                .add_metadata("capability.direct_car", "true")
+                .build()
+                .expect("build manifest");
+            let bytes = to_bytes(&manifest).expect("encode manifest");
+            let mut temp_manifest = NamedTempFile::new().expect("temp manifest");
+            temp_manifest
+                .write_all(&bytes)
+                .expect("write manifest bytes");
+            let provider = [0xAA; 32];
+            let args = GatewayDirectModePlanArgs {
+                manifest: temp_manifest.path().to_path_buf(),
+                admission_envelope: None,
+                provider_id: Some(hex::encode(provider)),
+                chain_id: Some("nexus".to_owned()),
+                scheme: "https".to_owned(),
+            };
+            let mut ctx = TestContext::new();
+            args.run(&mut ctx).expect("plan command runs");
+            assert_eq!(ctx.outputs().len(), 1);
+            let plan: DirectModePlanOutput =
+                norito::json::from_str(&ctx.outputs()[0]).expect("parse plan");
+            assert_eq!(plan.provider_id_hex, hex::encode(provider));
+            assert_eq!(plan.chain_id, "nexus");
+            assert_compact! { plan.direct_car.canonical_url.contains("/direct/v1/car/"); "direct car locator should reference the manifest digest" };
+            assert!(plan.capabilities.direct_car_supported);
+        }
+        fn toolkit_pack_emits_manifest_and_report() {
+            let temp = TempDir::new().expect("temp dir");
+            let payload_path = temp.path().join("payload.bin");
+            fs::write(&payload_path, b"payload-bytes").expect("write payload");
+            let manifest_path = temp.path().join("manifest.to");
+            let car_path = temp.path().join("payload.car");
+            let json_path = temp.path().join("report.json");
+            let args = ToolkitPackArgs {
+                input: payload_path,
+                manifest_out: Some(manifest_path.clone()),
+                car_out: Some(car_path.clone()),
+                json_out: Some(json_path.clone()),
+                hybrid_envelope_out: None,
+                hybrid_envelope_json_out: None,
+                hybrid_recipient_x25519: None,
+                hybrid_recipient_kyber: None,
+            };
+            let mut ctx = TestContext::new();
+            args.run(&mut ctx).expect("pack");
+            let manifest_bytes = fs::read(&manifest_path).expect("read manifest");
+            let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes).expect("decode manifest");
+            assert_eq!(manifest.content_length, 13);
+            let car_bytes = fs::read(&car_path).expect("read CAR archive");
+            assert_eq!(manifest.car_size, car_bytes.len() as u64);
+            let archive_digest = *blake3::hash(&car_bytes).as_bytes();
+            let archive_digest_hex = hex::encode(archive_digest);
+            assert_eq_compact! { manifest.car_digest => archive_digest; "manifest must bind every byte of the canonical CARv2 archive" };
+            let report_bytes = fs::read(&json_path).expect("read report");
+            let report: Value = norito::json::from_slice(&report_bytes).expect("decode report");
+            assert_eq_compact! { report.get("car_archive_digest_hex").and_then(Value::as_str) => Some(archive_digest_hex.as_str()) };
+            assert_eq_compact! { report.get("manifest").and_then(|manifest| manifest.get("car_digest_hex")).and_then(Value::as_str) => Some(archive_digest_hex.as_str()) };
+            assert_ne!(
+                report.get("car_payload_digest_hex").and_then(Value::as_str),
+                Some(archive_digest_hex.as_str()),
+                "CARv1 payload-section digest must remain diagnostic-only"
+            );
+            let digest_hex = hex::encode(manifest.digest().expect("manifest digest").as_bytes());
+            assert_eq_compact! { report.get("manifest_digest_hex").and_then(Value::as_str) => Some(digest_hex.as_str()) };
+            let por_root_hex = hex::encode(manifest.por_root);
+            assert_eq_compact! { report.get("por_root_hex").and_then(Value::as_str) => Some(por_root_hex.as_str()) };
+            assert_eq_compact! { report.get("manifest").and_then(|manifest| manifest.get("por_root_hex")).and_then(Value::as_str) => Some(por_root_hex.as_str()) };
+        }
+        fn hybrid_manifest_aad_appends_filename() {
+            let digest = blake3::hash(b"manifest");
+            let chunk_digest = [0x11; 32];
+            let aad = build_hybrid_manifest_aad(&digest, chunk_digest, Some("manifest.to"));
+            let name_len_offset = HYBRID_MANIFEST_AAD_DOMAIN.len() + 32 + 32;
+            let length_bytes: [u8; 4] = aad[name_len_offset..name_len_offset + 4]
+                .try_into()
+                .expect("length bytes");
+            let length = u32::from_be_bytes(length_bytes);
+            assert_eq!(length as usize, "manifest.to".len());
+            assert_eq!(&aad[name_len_offset + 4..], b"manifest.to");
+        }
+        fn chunk_digest_sha3_matches_manual_hash() {
+            let payload = b"hello-world".to_vec();
+            let plan =
+                CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
+            let computed = compute_chunk_digest_sha3(&plan.chunks);
+            let mut hasher = Sha3::v256();
+            for chunk in &plan.chunks {
+                hasher.update(&chunk.offset.to_le_bytes());
+                hasher.update(&u64::from(chunk.length).to_le_bytes());
+                hasher.update(&chunk.digest);
+            }
+            let mut expected = [0u8; 32];
+            hasher.finalize(&mut expected);
+            assert_eq!(computed, expected);
+        }
+        fn ensure_metadata_entry_dedupes_case_insensitive() {
+            let mut metadata = vec![("manifest.requires_envelope".to_string(), "true".to_string())];
+            ensure_metadata_entry(&mut metadata, "Manifest.Requires_Envelope", "false");
+            assert_eq!(metadata.len(), 1);
+            ensure_metadata_entry(&mut metadata, "manifest.hybrid_suite", "suite");
+            assert_eq!(metadata.len(), 2);
+        }
+        }
     fn direct_mode_enable_capabilities() -> ManifestCapabilitySummary {
         ManifestCapabilitySummary {
             direct_car_supported: true,
@@ -22593,7 +21718,7 @@ mod tests {
             .read_and_complete::<UserSorafsConfig>()
             .expect("generated snippet must satisfy the iroha_config SoraFS schema")
     }
-    #[test]
+    test_items! {
     fn direct_mode_enable_renders_snippet() {
         let plan = direct_mode_enable_test_plan(direct_mode_enable_capabilities());
         let plan_file = write_direct_mode_plan(&plan);
@@ -22614,7 +21739,6 @@ mod tests {
         assert!(!snippet.contains("[torii.sorafs_gateway]"));
         assert_sorafs_config_snippet_is_schema_valid(snippet);
     }
-    #[test]
     fn direct_mode_enable_rejects_missing_direct_car_capability() {
         let plan = direct_mode_enable_test_plan(ManifestCapabilitySummary::default());
         let plan_file = write_direct_mode_plan(&plan);
@@ -22628,7 +21752,6 @@ mod tests {
         assert!(format!("{err:#}").contains("capabilities.direct_car_supported=true"));
         assert!(ctx.outputs().is_empty());
     }
-    #[test]
     fn direct_mode_enable_rejects_manifest_envelope_disabled() {
         let capabilities = ManifestCapabilitySummary {
             requires_manifest_envelope: false,
@@ -22647,7 +21770,6 @@ mod tests {
         assert!(format!("{err:#}").contains("requires_manifest_envelope=true"));
         assert!(ctx.outputs().is_empty());
     }
-    #[test]
     fn direct_mode_enable_rejects_tampered_direct_car_locator() {
         let mut plan = direct_mode_enable_test_plan(direct_mode_enable_capabilities());
         plan.direct_car.canonical_url = format!(
@@ -22665,11 +21787,9 @@ mod tests {
         assert!(format!("{err:#}").contains("direct_car.canonical_url mismatch"));
         assert!(ctx.outputs().is_empty());
     }
-    #[test]
     fn direct_mode_toml_string_escape_blocks_config_injection() {
         assert_eq_compact! { escape_toml_basic_string("nexus\"\nenforce_admission = false\\") => "nexus\\\"\\nenforce_admission = false\\\\" };
     }
-    #[test]
     fn direct_mode_rollback_snippet_matches_defaults() {
         let args = GatewayDirectModeRollbackArgs;
         let mut ctx = TestContext::new();
@@ -22680,7 +21800,6 @@ mod tests {
         assert!(!snippet.contains("[torii.sorafs_gateway]"));
         assert_sorafs_config_snippet_is_schema_valid(snippet);
     }
-    #[test]
     fn gateway_route_plan_writes_plan_and_headers() {
         use base64::engine::general_purpose::STANDARD as BASE64;
         use tempfile::TempDir;
@@ -22729,7 +21848,6 @@ mod tests {
         assert!(header_file.contains("Sora-Content-CID"));
         assert_compact! { ctx.outputs().iter().any(|line| line.contains(output_path.to_string_lossy().as_ref())) };
     }
-    #[test]
     fn gateway_route_plan_supports_rollback_and_toggles() {
         use tempfile::TempDir;
         let tmp = TempDir::new().expect("temp dir");
@@ -22781,7 +21899,6 @@ mod tests {
         assert_compact! { rollback_headers.contains("Sora-Route-Binding"); "rollback template should include Sora-Route-Binding" };
         assert_compact! { ctx.outputs().iter().any(|line| line.contains("rollback headers written")); "expected rollback output message" };
     }
-    #[test]
     fn gateway_cache_invalidate_prints_payload_and_curl() {
         let args = GatewayCacheInvalidateArgs {
             endpoint: "https://cache.example.com/purge".to_owned(),
@@ -22804,7 +21921,6 @@ mod tests {
         assert_compact! { curl.contains("https://cache.example.com/purge"); "curl snippet should reference endpoint" };
         assert_compact! { curl.contains("Authorization: Bearer $CACHE_TOKEN"); "curl snippet should reference the auth env var" };
     }
-    #[test]
     fn gateway_cache_invalidate_writes_payload_file() {
         let temp_payload = NamedTempFile::new().expect("temp payload file");
         let path = temp_payload.into_temp_path();
@@ -22828,7 +21944,6 @@ mod tests {
         let curl = &ctx.outputs()[1];
         assert_compact! { curl.contains("--data '{"); "curl snippet should embed the JSON payload" };
     }
-    #[test]
     fn gateway_cache_invalidate_rejects_invalid_alias() {
         let args = GatewayCacheInvalidateArgs {
             endpoint: "https://cache.example.com/purge".to_owned(),
@@ -22843,7 +21958,6 @@ mod tests {
         let result = args.run(&mut ctx);
         assert!(result.is_err(), "invalid alias should fail");
     }
-    #[test]
     fn incentives_compute_generates_instruction() {
         let mut config_file = NamedTempFile::new().expect("config file");
         config_file
@@ -22883,7 +21997,6 @@ mod tests {
         assert_eq!(decoded.beneficiary, sample_account_id("beneficiary"));
         assert!(decoded.payout_amount > Quantity::zero());
     }
-    #[test]
     fn incentives_open_dispute_produces_payload() {
         let instruction = sample_reward_instruction();
         let mut instruction_file = NamedTempFile::new().expect("instruction file");
@@ -22914,7 +22027,6 @@ mod tests {
         assert_eq!(dispute.submitted_at_unix, 1_234);
         assert_eq!(dispute.submitted_by, sample_account_id("operator"));
     }
-    #[test]
     fn incentives_dashboard_summarises_rewards() {
         let mut inst1 = sample_reward_instruction();
         inst1.payout_amount = Quantity::from(40_u32);
@@ -22945,6 +22057,7 @@ mod tests {
         assert_eq!(rows[0]["payout_count"].as_u64(), Some(2));
         assert_eq!(rows[0]["payout_amount"].as_str(), Some("50"));
     }
+    }
     #[test]
     #[allow(clippy::too_many_lines)]
     fn incentives_service_shadow_run_generates_summary() {
@@ -22972,14 +22085,7 @@ mod tests {
         let config_file = write_sample_reward_config_file();
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
-        let init_args = IncentivesServiceInitArgs {
-            state: state_path.clone(),
-            config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_literal("treasury"),
-            force: false,
-        };
-        let mut init_ctx = TestContext::new();
-        init_args.run(&mut init_ctx).expect("init command runs");
+        let _init_ctx = initialize_incentives_state(config_file.path(), &state_path);
         let metrics_dir = tmp_dir.path().join("metrics");
         fs::create_dir_all(&metrics_dir).expect("create metrics dir");
         let relay_a = [0x21_u8; 32];
@@ -23107,7 +22213,7 @@ mod tests {
         assert_eq!(relays.len(), 2);
         assert_compact! { relays.iter().any(|relay| relay["warning_epochs"].as_u64() == Some(1)) };
     }
-    #[test]
+    test_items! {
     fn incentives_service_shadow_run_rejects_state_without_budget_id() {
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
@@ -23130,7 +22236,6 @@ mod tests {
         assert_compact! { err.to_string().contains("budget_approval_id"); "unexpected error: {err}" };
         assert!(ctx.outputs().is_empty());
     }
-    #[test]
     fn incentives_shadow_run_summary_reports_unconvertible_payout_amount() {
         let relay_id_hex = relay_id_to_hex([0x5A; 32]);
         let summary = DaemonIterationSummary {
@@ -23168,7 +22273,6 @@ mod tests {
         assert_eq!(shadow.relays[0].amount_conversion_errors, 1);
         assert_eq!(shadow.relays[0].payout_nanos, 0);
     }
-    #[test]
     fn incentives_state_roundtrip_serializes() {
         let policy = RelayBondPolicyV1 {
             minimum_exit_bond: Quantity::from(1_000_u32),
@@ -23197,7 +22301,6 @@ mod tests {
         assert_eq!(decoded.payouts.len(), state.payouts.len());
         assert_eq_compact! { decoded.reward_config.base_reward => state.reward_config.base_reward };
     }
-    #[test]
     fn incentives_service_init_rejects_missing_budget_id() {
         let config_file = write_reward_config_with_budget(None);
         let tmp_dir = tempfile::tempdir().expect("temp dir");
@@ -23215,7 +22318,6 @@ mod tests {
         assert_compact! { err.to_string().contains("budget_approval_id"); "unexpected error: {err}" };
         assert_compact! { !state_path.exists(); "init must not write state without budget approval" };
     }
-    #[test]
     fn incentives_service_process_rejects_state_without_budget_id() {
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
@@ -23238,19 +22340,11 @@ mod tests {
             .expect_err("budget id should be required");
         assert_compact! { err.to_string().contains("budget_approval_id"); "unexpected error: {err}" };
     }
-    #[test]
     fn incentives_service_audit_flags_underbonded_relay() {
         let config_file = write_sample_reward_config_file();
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
-        let init_args = IncentivesServiceInitArgs {
-            state: state_path.clone(),
-            config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_literal("treasury"),
-            force: false,
-        };
-        let mut init_ctx = TestContext::new();
-        init_args.run(&mut init_ctx).expect("init command runs");
+        let _init_ctx = initialize_incentives_state(config_file.path(), &state_path);
         let underbonded = sample_bond_entry(500);
         let bond_file = write_bond_file(&underbonded);
         let mut relay_entry = Map::new();
@@ -23292,7 +22386,6 @@ mod tests {
         let summary: Value = norito::json::from_str(&ctx.outputs()[0]).expect("parse summary");
         assert_eq_compact! { summary["bond"]["insufficient_bond"].as_u64() => Some(1); "underbonded relay should be reported" };
     }
-    #[test]
     fn incentives_service_audit_flags_budget_mismatch_and_missing() {
         let config_file = write_sample_reward_config_file();
         let reward_config = read_reward_config(config_file.path()).expect("reward config");
@@ -23329,19 +22422,11 @@ mod tests {
         assert_eq_compact! { budget.get("mismatched_budget_approval").and_then(Value::as_u64) => Some(1) };
         assert_eq_compact! { budget.get("payouts_without_budget").and_then(Value::as_u64) => Some(1) };
     }
-    #[test]
     fn incentives_service_init_writes_state() {
         let config_file = write_sample_reward_config_file();
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
-        let args = IncentivesServiceInitArgs {
-            state: state_path.clone(),
-            config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_literal("treasury"),
-            force: false,
-        };
-        let mut ctx = TestContext::new();
-        args.run(&mut ctx).expect("init command runs");
+        let _ctx = initialize_incentives_state(config_file.path(), &state_path);
         assert!(state_path.exists());
         let state = read_state(&state_path);
         assert_eq!(state.version, IncentivesState::VERSION);
@@ -23350,19 +22435,11 @@ mod tests {
         assert!(state.disputes.is_empty());
         assert_eq_compact! { state.reward_config.policy.bond_asset_id => xor_asset_id().to_string() };
     }
-    #[test]
     fn incentives_service_process_records_reward() {
         let config_file = write_sample_reward_config_file();
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
-        let init_args = IncentivesServiceInitArgs {
-            state: state_path.clone(),
-            config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_literal("treasury"),
-            force: false,
-        };
-        let mut init_ctx = TestContext::new();
-        init_args.run(&mut init_ctx).expect("init command runs");
+        let _init_ctx = initialize_incentives_state(config_file.path(), &state_path);
         let metrics = sample_metrics();
         let metrics_file = write_metrics_file(&metrics);
         let bond_file = write_bond_file(&sample_bond_entry(2_000));
@@ -23393,7 +22470,6 @@ mod tests {
             decode_from_bytes(&instruction_bytes).expect("decode instruction");
         assert_eq!(instruction.epoch, metrics.epoch);
     }
-    #[test]
     fn incentives_daemon_rejects_state_without_budget_id() {
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
@@ -23441,19 +22517,11 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert_compact! { err.contains("budget_approval_id"); "unexpected error: {err}" };
     }
-    #[test]
     fn incentives_daemon_reports_budget_hash() {
         let config_file = write_sample_reward_config_file();
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
-        let init_args = IncentivesServiceInitArgs {
-            state: state_path.clone(),
-            config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_literal("treasury"),
-            force: false,
-        };
-        let mut init_ctx = TestContext::new();
-        init_args.run(&mut init_ctx).expect("init command runs");
+        let _init_ctx = initialize_incentives_state(config_file.path(), &state_path);
         let metrics_dir = tmp_dir.path().join("metrics");
         fs::create_dir_all(&metrics_dir).expect("create metrics dir");
         let metrics = sample_metrics();
@@ -23510,20 +22578,14 @@ mod tests {
         let expected_budget_hex = sample_budget_id_hex();
         assert_eq_compact! { summary["expected_budget_approval"].as_str() => Some(expected_budget_hex.as_str()) };
     }
+    }
     #[test]
     #[allow(clippy::too_many_lines)]
     fn incentives_service_dispute_flow_updates_state() {
         let config_file = write_sample_reward_config_file();
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
-        let init_args = IncentivesServiceInitArgs {
-            state: state_path.clone(),
-            config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_literal("treasury"),
-            force: false,
-        };
-        let mut init_ctx = TestContext::new();
-        init_args.run(&mut init_ctx).expect("init command runs");
+        let _init_ctx = initialize_incentives_state(config_file.path(), &state_path);
         let metrics_file = write_metrics_file(&sample_metrics());
         let bond_file = write_bond_file(&sample_bond_entry(2_000));
         let process_args = IncentivesServiceProcessArgs {

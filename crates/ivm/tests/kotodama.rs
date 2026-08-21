@@ -1945,6 +1945,10 @@ fn raw_axt_intrinsics_are_rejected() {
         }],
     };
     let handle = axt::AssetHandle {
+        asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+        ])
+        .expect("valid AXT fixture asset id"),
         scope: vec!["transfer".to_string()],
         subject: axt::HandleSubject {
             account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_string(),

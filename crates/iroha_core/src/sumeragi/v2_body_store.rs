@@ -22,9 +22,9 @@ use super::{
         RecoveredWalVoteSign,
     },
     v2_apply::{V2ApplyError, V2ApplyService, VerifiedRecoveredFinalitySubject},
-    v2_effects::{BodyStoreTask, BodyValidationTask, EffectWorkId},
+    v2_effects::{BodyStoreTask, EffectWorkId},
     v2_lifecycle_coordinator::{
-        AuthenticatedRecoveredWalDecisionFetchProjection,
+        AuthenticatedRecoveredLifecycleOutputV1, AuthenticatedRecoveredWalDecisionFetchProjection,
         AuthenticatedRecoveredWalValidateLedgerParent, LifecycleContext,
         RecoveredDecisionApplyReplayLineageV1, TerminalValidateNoSuccessorClaim,
     },
@@ -96,6 +96,19 @@ pub(crate) struct DurableBodyReceipt {
     subject: wire::BlockSubject,
     manifest_hash: HashOf<wire::PayloadManifest>,
     frame_hash: Hash,
+}
+/// Opaque proof that one exact recovered frame was reopened under the
+/// genesis-authority signature policy for a parentless height-one context.
+#[derive(Debug)]
+#[must_use = "genesis-authority frame proof must remain with cold replay"]
+pub(in crate::sumeragi) struct AuthenticatedGenesisBodyStoreFrameV1 {
+    receipt: DurableBodyReceipt,
+}
+impl AuthenticatedGenesisBodyStoreFrameV1 {
+    /// Compare this policy proof with the exact recovered durable receipt.
+    pub(in crate::sumeragi) fn exactly_matches(&self, receipt: &DurableBodyReceipt) -> bool {
+        &self.receipt == receipt
+    }
 }
 /// Durable proof that one fully authenticated certified-Fetch response's exact
 /// canonical body has crossed the local file-and-directory sync boundary.
@@ -495,17 +508,14 @@ impl DurableBodyValidationOutcome {
     }
     /// Consume this closed result only when deterministic validation succeeded.
     ///
-    /// A rejection or sidecar deferral is returned intact so the future typed
-    /// lifecycle transaction cannot accidentally discard or relabel it while
-    /// attempting the success-only Validate completion path.
+    /// A rejection or sidecar deferral is returned intact so the typed
+    /// lifecycle completion transaction cannot accidentally discard or relabel
+    /// it while attempting the success-only Validate path.
     pub(crate) fn into_validated_receipt(self) -> Result<ValidatedBodyReceipt, Self> {
         match self.0 {
             DurableBodyValidationOutcomeBody::Validated(receipt) => Ok(receipt),
             body => Err(Self(body)),
         }
-    }
-    fn into_body(self) -> DurableBodyValidationOutcomeBody {
-        self.0
     }
     /// Construct a sealed successful outcome for lifecycle boundary tests.
     #[cfg(test)]
@@ -823,6 +833,39 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
         }
         true
     }
+
+    /// Select the sole revalidated rejection marker named by one cold report row.
+    ///
+    /// The output carrier retains the private manifest/frame/rejection binding;
+    /// this catalog exposes no marker parts.  Selection is rollback-safe under
+    /// `Drop` and shares the same selected map as terminal Validate recovery, so
+    /// one durable rejection can never authorize two logical restart owners.
+    pub(super) fn select_exact_invalid_body_report(
+        &mut self,
+        report: &AuthenticatedRecoveredLifecycleOutputV1,
+    ) -> bool {
+        if !report.requires_rejected_body_marker() {
+            return false;
+        }
+        let mut exact_key = None;
+        for (key, rejected) in &self.rejected {
+            if report.exactly_matches_rejected_body_outcome(&rejected.sealed_outcome())
+                && exact_key.replace(*key).is_some()
+            {
+                return false;
+            }
+        }
+        let Some(key) = exact_key else {
+            return false;
+        };
+        let rejected = self
+            .rejected
+            .remove(&key)
+            .expect("an exact invalid-body marker remains unselected");
+        let displaced = self.selected_rejected.insert(key, rejected);
+        debug_assert!(displaced.is_none());
+        true
+    }
     /// Consume selected outcomes and restore every unselected catalog entry.
     pub(super) fn commit_selected(mut self) {
         self.restore_unselected();
@@ -885,65 +928,6 @@ impl BodyStoreCompletion {
     /// Exact manifest stored beside the durable bytes.
     pub(crate) const fn manifest(&self) -> &wire::PayloadManifest {
         &self.manifest
-    }
-}
-/// Result minted by the body-store service after reloading and validating the
-/// exact durable body represented by a validation task.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[must_use]
-pub(crate) enum BodyValidationCompletion {
-    /// Deterministic semantic validation succeeded.
-    Validated {
-        /// Stable asynchronous work identifier.
-        work_id: EffectWorkId,
-        /// Non-forgeable validation receipt.
-        receipt: ValidatedBodyReceipt,
-    },
-    /// Deterministic semantic validation rejected the exact body.
-    Rejected {
-        /// Stable asynchronous work identifier.
-        work_id: EffectWorkId,
-        /// Deterministic validator diagnostic.
-        reason: String,
-    },
-    /// Validation is sound but cannot finish until the exact certified merge
-    /// sidecar referenced by the durable body is fetched and authenticated.
-    DeferredMergeSidecar {
-        /// Stable asynchronous work identifier retained for the exact retry.
-        work_id: EffectWorkId,
-        /// Complete compact reference needed by the bounded sidecar transport.
-        reference: CertifiedMergeLedgerReference,
-    },
-}
-impl BodyValidationCompletion {
-    /// Stable asynchronous work identifier.
-    pub(crate) const fn work_id(&self) -> EffectWorkId {
-        match self {
-            Self::Validated { work_id, .. }
-            | Self::Rejected { work_id, .. }
-            | Self::DeferredMergeSidecar { work_id, .. } => *work_id,
-        }
-    }
-    /// Non-forgeable success receipt, when validation succeeded.
-    pub(crate) const fn validated_receipt(&self) -> Option<&ValidatedBodyReceipt> {
-        match self {
-            Self::Validated { receipt, .. } => Some(receipt),
-            Self::Rejected { .. } | Self::DeferredMergeSidecar { .. } => None,
-        }
-    }
-    /// Deterministic rejection diagnostic, when validation failed.
-    pub(crate) fn rejection_reason(&self) -> Option<&str> {
-        match self {
-            Self::Rejected { reason, .. } => Some(reason),
-            Self::Validated { .. } | Self::DeferredMergeSidecar { .. } => None,
-        }
-    }
-    /// Compact certified merge reference whose absence deferred validation.
-    pub(crate) const fn missing_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
-        match self {
-            Self::DeferredMergeSidecar { reference, .. } => Some(reference),
-            Self::Validated { .. } | Self::Rejected { .. } => None,
-        }
     }
 }
 /// Typed classification supplied by deterministic body validators.
@@ -1553,6 +1537,24 @@ impl V2BodyStore {
     pub(crate) fn matches_context(&self, context: &wire::HeightContext) -> bool {
         &self.context == context
     }
+    /// Authenticate one exact recovered frame under the private genesis policy.
+    pub(in crate::sumeragi) fn authenticate_genesis_authority_frame(
+        &self,
+        receipt: &DurableBodyReceipt,
+    ) -> Option<AuthenticatedGenesisBodyStoreFrameV1> {
+        (self.context.height == 1
+            && self.context.parent_commit_qc.is_none()
+            && self.context.snapshot_bootstrap.is_none()
+            && matches!(
+                &self.signature_policy,
+                BlockSignaturePolicy::GenesisAuthority(_)
+            )
+            && self.owns_receipt(receipt)
+            && self.load_envelope(receipt).is_ok())
+        .then(|| AuthenticatedGenesisBodyStoreFrameV1 {
+            receipt: receipt.clone(),
+        })
+    }
     /// Compare this exact opened store with one sealed lifecycle storage root.
     ///
     /// The caller receives only a boolean. The context-addressed directory and
@@ -1997,8 +1999,8 @@ impl V2BodyStore {
     /// Checksummed restart markers cannot cross this boundary. The store is
     /// consumed even on error so there is no raw fallback path after a failed
     /// attempt to seal unrevalidated state.
-    // TODO: Runner cutover must call this immediately after semantic marker
-    // replay and move the result into the unified lifecycle-owner factory.
+    // The unified lifecycle-owner factory consumes this immediately after
+    // semantic marker replay.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn into_revalidated_startup(
         self,
@@ -2297,49 +2299,6 @@ impl V2BodyStore {
         }
     }
     // DURABLE_BODY_VALIDATION_API_END
-    /// Execute deterministic validation against the exact durable task body.
-    ///
-    /// Filesystem loading, canonical decoding, and the validator callback all
-    /// run in the caller's storage/validation service context, never on the
-    /// serialized reducer owner. Production callers use
-    /// `ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block` so the
-    /// store-verified proposal-round signature is not redundantly rechecked
-    /// while all transaction/state checks remain. Validation success is bound
-    /// to the exact durable proposal round; a marker from another view cannot
-    /// authorize this task. Final application re-executes and checks the
-    /// commitment.
-    pub(crate) fn execute_validation_task<F, E>(
-        &mut self,
-        task: &BodyValidationTask,
-        validator: F,
-    ) -> Result<BodyValidationCompletion, V2BodyStoreError>
-    where
-        F: FnOnce(&SignedBlock) -> Result<wire::ExecutionCommitment, E>,
-        E: BodyValidationError,
-    {
-        if task.round() != task.durable_receipt().round()
-            || task.subject() != task.durable_receipt().subject()
-        {
-            return Err(V2BodyStoreError::ReceiptMismatch);
-        }
-        let work_id = task.id();
-        let outcome = self.execute_durable_validation(
-            task.durable_receipt().clone(),
-            task.durable_receipt().manifest_hash(),
-            validator,
-        )?;
-        match outcome.into_body() {
-            DurableBodyValidationOutcomeBody::Validated(receipt) => {
-                Ok(BodyValidationCompletion::Validated { work_id, receipt })
-            }
-            DurableBodyValidationOutcomeBody::Rejected { reason, .. } => {
-                Ok(BodyValidationCompletion::Rejected { work_id, reason })
-            }
-            DurableBodyValidationOutcomeBody::DeferredMergeSidecar { reference, .. } => {
-                Ok(BodyValidationCompletion::DeferredMergeSidecar { work_id, reference })
-            }
-        }
-    }
     /// Durably persist the exact body carried by an authenticated certified
     /// Fetch response and bind its complete transport occurrence.
     ///

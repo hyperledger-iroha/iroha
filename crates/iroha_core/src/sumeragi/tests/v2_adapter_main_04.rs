@@ -322,10 +322,13 @@ fn tc_promoted_lock_requires_same_subject_reproposal_before_commit() {
             && *validated_round == round
             && *validated_subject == subject
     ));
-    let validation = adapter
-        .validation_succeeded(fetch_tag, round, subject, &validated)
-        .expect("validate the TC-protected body without relabelling its origin")
-        .into_effects();
+    let validation = settle_ready_validate_succeeded_for_test(
+        &mut adapter,
+        fetch_tag,
+        round,
+        subject,
+        &validated,
+    );
     let current_round = wire::ConsensusRound {
         view: fetch_tag.view(),
         ..round
@@ -509,10 +512,13 @@ fn full_normal_deferred_lane_cannot_drop_absolute_timeout() {
         .body_stored(tag, round, proposed_subject, &receipt)
         .expect("body stored");
     let validated = ValidatedBodyReceipt::for_test(receipt);
-    let sign = adapter
-        .validation_succeeded(tag, round, proposed_subject, &validated)
-        .expect("body valid")
-        .into_effects();
+    let sign = settle_ready_validate_succeeded_for_test(
+        &mut adapter,
+        tag,
+        round,
+        proposed_subject,
+        &validated,
+    );
     let sign_tag = match sign.as_slice() {
         [AdapterEffect::Sign { tag, .. }] => *tag,
         effects => panic!("unexpected validation effects: {effects:?}"),

@@ -569,7 +569,6 @@ impl PendingSuccessorConstruction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LocalValidationDisposition {
-    Ignored,
     RetryNonEmpty,
     FatalNonEmpty,
 }
@@ -724,38 +723,6 @@ impl LocalProposalState {
         self.non_empty_retry = None;
         self.candidate_work_wait = None;
         true
-    }
-    fn handle_validation_rejection(
-        &mut self,
-        owner: LocalProposalOwner,
-        expected_round: wire::ConsensusRound,
-        rejected_round: wire::ConsensusRound,
-        rejected_subject: wire::BlockSubject,
-    ) -> LocalValidationDisposition {
-        let owner = self.reconcile(owner);
-        if expected_round != rejected_round || self.submitted != Some((owner, rejected_subject)) {
-            return LocalValidationDisposition::Ignored;
-        }
-        if self
-            .pending_events
-            .as_ref()
-            .is_some_and(|pending| pending.owner == owner && pending.subject == rejected_subject)
-        {
-            self.pending_events = None;
-        }
-        if self.global_selection.as_ref().is_some_and(|selection| {
-            selection.owner == owner && selection.subject == rejected_subject
-        }) {
-            self.global_selection = None;
-        }
-        if self.non_empty_retry == Some(owner) {
-            return LocalValidationDisposition::FatalNonEmpty;
-        }
-        self.attempted = None;
-        self.non_empty_retry = Some(owner);
-        self.submitted = None;
-        self.candidate_work_wait = None;
-        LocalValidationDisposition::RetryNonEmpty
     }
     /// Abandon a candidate whose lane-local ownership could not be bound
     /// before the body was submitted, then give the exact owner one ordinary
@@ -1459,7 +1426,7 @@ fn schedule_local_proposal(
                     );
                     return Ok(());
                 }
-                LocalValidationDisposition::FatalNonEmpty | LocalValidationDisposition::Ignored => {
+                LocalValidationDisposition::FatalNonEmpty => {
                     return Err(V2RunnerError::LaneCandidateBinding);
                 }
             }
@@ -1813,11 +1780,27 @@ fn commit_certificate_admission_completed(
 }
 fn advance_executor(
     receiver: &FairV2Ingress,
+    lifecycle_owner: &mut super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
     limit: usize,
-) -> Result<(), V2RunnerError> {
+) -> Result<bool, V2RunnerError> {
     for _ in 0..limit.max(1) {
+        if recovered_lifecycle_output_requires_yield(
+            super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
+                lifecycle_owner,
+                executor,
+                services,
+            )?,
+        ) || executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)? > 0
+            || executor.has_pending_live_wal_sign_admission()
+            || executor.settle_pending_lifecycle_output_admissions(lifecycle_owner, services)? > 0
+            || executor.has_pending_lifecycle_output_admissions()
+            || executor.settle_pending_durable_validate_admissions(lifecycle_owner, services)? > 0
+            || executor.has_pending_durable_validate_admissions()
+        {
+            return Ok(true);
+        }
         executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
         match executor.step(Instant::now(), services)? {
             EffectExecutorStep::Idle => break,
@@ -1829,8 +1812,35 @@ fn advance_executor(
                 let _ = reconcile_executor_locked_body(executor, services)?;
             }
         }
+        if recovered_lifecycle_output_requires_yield(
+            super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
+                lifecycle_owner,
+                executor,
+                services,
+            )?,
+        ) || executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)? > 0
+            || executor.has_pending_live_wal_sign_admission()
+            || executor.settle_pending_lifecycle_output_admissions(lifecycle_owner, services)? > 0
+            || executor.has_pending_lifecycle_output_admissions()
+            || executor.settle_pending_durable_validate_admissions(lifecycle_owner, services)? > 0
+            || executor.has_pending_durable_validate_admissions()
+        {
+            return Ok(true);
+        }
     }
-    Ok(())
+    Ok(false)
+}
+fn recovered_lifecycle_output_requires_yield(
+    settlement: super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1,
+) -> bool {
+    match settlement {
+        super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed
+        | super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::SourceRetained => {
+            true
+        }
+        super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Empty
+        | super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Deferred => false,
+    }
 }
 fn reconcile_executor_locked_body(
     executor: &mut V2EffectExecutor,
@@ -2801,9 +2811,6 @@ pub(super) enum V2RunnerError {
     /// A fresh, inbound, or recovered body carried no deterministic ledger work.
     #[error("Sumeragi v2 proposal carries no transaction, internal, or time-trigger work")]
     EmptyProposalWork,
-    /// The one bounded non-empty recovery retry failed deterministic validation.
-    #[error("Sumeragi v2 non-empty recovery retry failed validation: {0}")]
-    LocalNonEmptyRetryRejected(String),
     /// The exact bounded discovery request vanished before reducer admission.
     #[error("Sumeragi v2 CommitQC discovery request disappeared before reducer admission")]
     BlockSyncRequestDisappeared,

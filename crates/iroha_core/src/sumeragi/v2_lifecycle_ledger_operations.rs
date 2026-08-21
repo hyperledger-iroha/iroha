@@ -631,7 +631,7 @@ impl LifecycleLedgerV1 {
         DurableCertifiedBodyPipelineRecoveryError,
     > {
         self.authenticate_durable_certified_body_pipeline_census(verified, store)?
-            .into_startup(self)
+            .into_startup(self, verified)
             .ok_or(DurableCertifiedBodyPipelineRecoveryError::InvalidStorageCut)
     }
     fn authenticate_durable_certified_body_pipeline_census(
@@ -701,11 +701,13 @@ impl LifecycleLedgerV1 {
             if record.continuation() != Some(DurableContinuation::None) {
                 return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow);
             }
-            let standalone_validate_origin = record.work_class()
-                == Some(LifecycleWorkClass::Validate)
+            let validate_record = record.work_class() == Some(LifecycleWorkClass::Validate);
+            let standalone_validate_origin = validate_record
                 && (record.replay_authority.is_local_body_origin()
                     || record.replay_authority.is_remote_proposal_origin());
-            if standalone_validate_origin {
+            let certified_genesis_candidate =
+                validate_record && record.replay_authority.is_certified_body_origin();
+            if standalone_validate_origin || certified_genesis_candidate {
                 let owner = record.owner();
                 let has_foreign_owner_history = owner.first_admission_ordinal() != record.ordinal()
                     || self.records.iter().any(|candidate| {
@@ -717,27 +719,31 @@ impl LifecycleLedgerV1 {
                         .and_then(DurableContinuation::successor_parts)
                         .is_some_and(|(_, successor)| successor == record.ordinal())
                 });
-                if has_foreign_owner_history || has_incoming_continuation {
+                if standalone_validate_origin
+                    && (has_foreign_owner_history || has_incoming_continuation)
+                {
                     return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow);
                 }
-                let authenticated = record
-                    .authenticate_durable_standalone_validate_origin(verified, || {
-                        projection::authenticate_durable_body_frame_recovery(
-                            self.context(),
-                            store,
-                            reference,
-                        )
-                    })?
-                    .ok_or(DurableCertifiedBodyPipelineRecoveryError::InvalidReplayJoin)?;
-                if !live_ordinals.insert(record.ordinal()) {
-                    return Err(DurableCertifiedBodyPipelineRecoveryError::AmbiguousCensus);
+                if !has_foreign_owner_history && !has_incoming_continuation {
+                    let authenticated = record
+                        .authenticate_durable_standalone_validate_origin(verified, || {
+                            projection::authenticate_durable_body_frame_recovery(
+                                self.context(),
+                                store,
+                                reference,
+                            )
+                        })?
+                        .ok_or(DurableCertifiedBodyPipelineRecoveryError::InvalidReplayJoin)?;
+                    if !live_ordinals.insert(record.ordinal()) {
+                        return Err(DurableCertifiedBodyPipelineRecoveryError::AmbiguousCensus);
+                    }
+                    entries.push(
+                        AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1::StandaloneValidate(
+                            authenticated,
+                        ),
+                    );
+                    continue;
                 }
-                entries.push(
-                    AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1::StandaloneValidate(
-                        authenticated,
-                    ),
-                );
-                continue;
             }
             let (fetch, store_parent) = match record.work_class() {
                 Some(LifecycleWorkClass::Fetch) => (record, None),

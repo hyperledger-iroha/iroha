@@ -108,13 +108,25 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 f"{path}: {label} must use the opaque checked-transition gate; "
                 f"found obsolete direct-kernel forms {observed}"
             )
-    runner_path, runner_source = load("crates/iroha_core/src/sumeragi/v2_runner.rs")
-    lifecycle_run_inner_path, lifecycle_run_inner_source = load("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs")
-    lifecycle_pending_kura_path, lifecycle_pending_kura_source = load("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs")
-    runner_authority_path, runner_authority_source = load("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_runner_authority.rs")
-    sumeragi_path, sumeragi_source = load("crates/iroha_core/src/sumeragi/mod.rs")
+    runner_path, runner_source = load(
+        "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    )
+    lifecycle_run_inner_path, lifecycle_run_inner_source = load(
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"
+    )
+    lifecycle_pending_kura_path, lifecycle_pending_kura_source = load(
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs"
+    )
+    runner_authority_path, runner_authority_source = load(
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_runner_authority.rs"
+    )
+    sumeragi_path, sumeragi_source = load(
+        "crates/iroha_core/src/sumeragi/mod.rs"
+    )
 
-    recovery_path, recovery_source = load("crates/iroha_core/src/sumeragi/v2_recovery.rs")
+    recovery_path, recovery_source = load(
+        "crates/iroha_core/src/sumeragi/v2_recovery.rs"
+    )
     if recovery_source:
         production_recovery_source = recovery_source.split(
             "\n#[cfg(test)]\nmod tests {", 1
@@ -315,8 +327,12 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "self.authenticated_genesis",
             ),
         )
-        ledger_path, ledger_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs")
-        ledger_operations_path, ledger_operations_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_operations.rs")
+        ledger_path, ledger_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs"
+        )
+        ledger_operations_path, ledger_operations_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_operations.rs"
+        )
         if ledger_source:
             predecessor_store_join = region(
                 ledger_path,
@@ -434,7 +450,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "self.successor_store.load().ok().as_ref() != Some(successor_ledger)",
                     "owner_store.load().ok().as_ref() != Some(successor_ledger)",
                     "LifecycleLedgerV1::from_coordinator(&owner.coordinator)",
-                    "exactly_covers_recovered_ready_work(&owner.coordinator)",
+                    "owner.exact_lifecycle_output_ordinals_for_registry_census()",
+                    "exactly_covers_recovered_ready_work_with_owner_held_outputs(",
                     "fn exactly_matches_successor_owner(",
                     "self.successor_descends_from_retirement()",
                     "self.matches_successor_owner_ledger(owner, &self.successor_ledger)",
@@ -502,10 +519,18 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 4,
             )
 
-        adapter_path, adapter_source = load("crates/iroha_core/src/sumeragi/v2.rs")
-        body_store_path, body_store_source = load("crates/iroha_core/src/sumeragi/v2_body_store.rs")
-        safety_wal_path, safety_wal_source = load("crates/iroha_core/src/sumeragi/safety_wal.rs")
-        adjacent_store_path, adjacent_store_source = load("crates/iroha_core/src/sumeragi/serviced_candidate_store.rs")
+        adapter_path, adapter_source = load(
+            "crates/iroha_core/src/sumeragi/v2.rs"
+        )
+        body_store_path, body_store_source = load(
+            "crates/iroha_core/src/sumeragi/v2_body_store.rs"
+        )
+        safety_wal_path, safety_wal_source = load(
+            "crates/iroha_core/src/sumeragi/safety_wal.rs"
+        )
+        adjacent_store_path, adjacent_store_source = load(
+            "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"
+        )
         if adapter_source:
             authenticated_startup = region(
                 adapter_path,
@@ -619,7 +644,6 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network()",
                     "fn recovered_lifecycle_factory_inputs_reject_a_same_context_foreign_startup()",
                     "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
-                    "fn recovered_wal_sign_status_publication_is_exact_last_and_unwired()",
                     "assert!(context_binding < body_root)",
                     "assert!(body_root < wal_path)",
                     "assert!(wal_path < apply_service)",
@@ -871,33 +895,81 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "fn complete_tip_retirement_binds_only_the_exact_unlaunched_successor_owner()",
                 ),
             )
-        launch_path, launch_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs")
-        turn_driver_path, turn_driver_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs")
+        launch_path, launch_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"
+        )
+        turn_driver_path, turn_driver_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs"
+        )
         kura_path, kura_source = load("crates/iroha_core/src/kura.rs")
-        owner_path, owner_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs")
-        worker_path, worker_source = load("crates/iroha_core/src/sumeragi/v2_worker.rs")
-        scheduler_path, scheduler_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs")
-        registry_path, registry_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs")
-        registry_validate_path, registry_validate_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs")
-        concrete_admission_path, concrete_admission_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_concrete_admission.rs")
-        lifecycle_projection_path, lifecycle_projection_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs")
-        wal_recovery_path, wal_recovery_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs")
-        selector_path, selector_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs")
-        ingress_position_path, ingress_position_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs")
-        body_pipeline_path, body_pipeline_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs")
-        replay_authority_path, replay_authority_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs")
-        runtime_path, runtime_source = load("crates/iroha_core/src/sumeragi/v2_runtime.rs")
-        effects_path, effects_source = load("crates/iroha_core/src/sumeragi/v2_effects.rs")
-        transport_path, transport_source = load("crates/iroha_core/src/sumeragi/v2_transport.rs")
-        lifecycle_open_path, lifecycle_open_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs")
+        owner_path, owner_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"
+        )
+        worker_path, worker_source = load(
+            "crates/iroha_core/src/sumeragi/v2_worker.rs"
+        )
+        scheduler_path, scheduler_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs"
+        )
+        registry_path, registry_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"
+        )
+        registry_validate_path, registry_validate_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs"
+        )
+        registry_validate_impl_path, registry_validate_impl_source = load(
+            "crates/iroha_core/src/sumeragi/"
+            "v2_lifecycle_work_registry_validate_recovery_registry_impl.rs"
+        )
+        concrete_admission_path, concrete_admission_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_concrete_admission.rs"
+        )
+        lifecycle_projection_path, lifecycle_projection_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs"
+        )
+        wal_recovery_path, wal_recovery_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs"
+        )
+        selector_path, selector_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs"
+        )
+        ingress_position_path, ingress_position_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs"
+        )
+        body_pipeline_path, body_pipeline_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs"
+        )
+        replay_authority_path, replay_authority_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs"
+        )
+        runtime_path, runtime_source = load(
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+        )
+        effects_path, effects_source = load(
+            "crates/iroha_core/src/sumeragi/v2_effects.rs"
+        )
+        transport_path, transport_source = load(
+            "crates/iroha_core/src/sumeragi/v2_transport.rs"
+        )
+        lifecycle_open_path, lifecycle_open_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs"
+        )
         runner_dependency_path = runner_authority_path
         runner_dependency_source = f"{runner_authority_source}\n{runner_source}"
-        finalized_output_path, finalized_output_source = load("crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs")
-        lifecycle_startup_test_path, lifecycle_startup_test_source = load("crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs")
+        finalized_output_path, finalized_output_source = load(
+            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs"
+        )
+        lifecycle_startup_test_path, lifecycle_startup_test_source = load(
+            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs"
+        )
         state_path, state_source = load("crates/iroha_core/src/state.rs")
         snapshot_path, snapshot_source = load("crates/iroha_core/src/snapshot.rs")
-        schema_path, schema_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs")
-        apply_path, apply_source = load("crates/iroha_core/src/sumeragi/v2_apply.rs")
+        schema_path, schema_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs"
+        )
+        apply_path, apply_source = load(
+            "crates/iroha_core/src/sumeragi/v2_apply.rs"
+        )
         if (
             launch_source
             and turn_driver_source
@@ -1211,7 +1283,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "fresh Serve exhaustive all-live registry census",
                     all_live_census.source,
                     "sign.dispatch_key.is_none()",
-                    3,
+                    4,
                 )
                 require_token_count(
                     registry_validate_path,
@@ -3434,7 +3506,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 (
                     "services.matches_lifecycle_body_store(body_store_identity)",
                     "if exact_ready != self.coordinator.ready_index",
-                    "work_class == LifecycleWorkClass::Broadcast",
+                    "record.work_class != LifecycleWorkClass::Broadcast",
                     "recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal",
                     "attest_ready_recovered_lifecycle_signed_broadcast",
                     "for ready_ordinal in &exact_ready",
@@ -4455,8 +4527,12 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "Self::open_safety_wal_store_root_directory(&store_root, &store_root_lock_file)?",
                 ),
             )
-        payload_store_path, payload_store_source = load("crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs")
-        coordinator_path, coordinator_source = load("crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs")
+        payload_store_path, payload_store_source = load(
+            "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs"
+        )
+        coordinator_path, coordinator_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"
+        )
         if payload_store_source and lifecycle_open_source and coordinator_source:
             payload_census = region(
                 payload_store_path,
@@ -4631,6 +4707,28 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     ".retire_lifecycle_stores()",
                 ),
             )
+            finalization_readiness = region(
+                launch_path,
+                launch_source,
+                "shared lifecycle finalization readiness",
+                "fn ready_for_finalized_rollover(&mut self) -> bool {",
+                "impl ActivatedProductionLifecycleV1",
+            )
+            require_order(
+                launch_path,
+                "shared lifecycle finalization readiness",
+                finalization_readiness,
+                (
+                    "self.executor.ready_to_finish()",
+                    "!self.owner.has_recovered_lifecycle_outputs()",
+                    "self.pending_kura_apply_replay.is_none()",
+                    "self.recovered_local_proposal_attempt.is_none()",
+                    "self.pending_lifecycle_completion.is_none()",
+                    "self.pending_ingress_capacity.is_none()",
+                    "self.completion_observer_activation.is_none()",
+                    "exactly_covers_finalization_work(&self.owner.coordinator)",
+                ),
+            )
             activated_finalization = region(
                 launch_path,
                 launch_source,
@@ -4643,8 +4741,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "activated lifecycle finalization",
                 activated_finalization,
                 (
-                    "executor.ready_to_finish()",
-                    "exactly_covers_finalization_work",
+                    "self.launched.ready_for_finalized_rollover()",
                     "let Self { mut launched, local_proposal, runner_activation, } = self",
                     "runner_activation.retire(&launched.leader_wire_ingress_binding.ingress)",
                     "drop(local_proposal)",
@@ -4661,11 +4758,22 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "activated lifecycle finalization quiescence",
                 activated_finalization,
                 (
-                    "pending_lifecycle_completion.is_some()",
-                    "pending_ingress_capacity.is_some()",
-                    "completion_observer_activation.is_some()",
                     "ProductionLifecycleFinalizationErrorV1::NotReady",
                     "finalized_adapter: finalized",
+                ),
+            )
+            require_order(
+                lifecycle_run_inner_path,
+                "runner lifecycle finalization preflight",
+                lifecycle_run_inner_source,
+                (
+                    "if !ready_to_finish || producer_turn.is_some()",
+                    "schedule_local_proposal(",
+                    "let finalization_ready = ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner)",
+                    "let rollover_ready = if finalization_ready",
+                    "preflight_finalized_lane_rollover(",
+                    "if ready_to_finish && !rollover_ready",
+                    "finalize_lifecycle_height(",
                 ),
             )
             output_rollover = region(
@@ -4808,36 +4916,69 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 ),
             )
             finalization_registry = region(
-                registry_validate_path,
-                registry_validate_source,
+                registry_validate_impl_path,
+                registry_validate_impl_source,
                 "finalization-only recovered registry census",
                 "fn exactly_covers_finalization_work(",
                 "fn exactly_covers_ready_work_with_extra(",
             )
             require_tokens(
-                registry_validate_path,
+                registry_validate_impl_path,
                 "finalization-only recovered registry census",
                 finalization_registry,
                 (
                     "coordinator.fault.is_some() || coordinator.active_lease.is_some()",
+                    "DurableRecoveredLifecycleSignedBroadcast(_)",
+                    ".collect::<std::collections::BTreeSet<_>>()",
                     "self.exact_recovered_wal_registry_slot()",
-                    "self.exactly_covers_ready_work_with_extra(coordinator, extra, None, true)",
+                    "RecoveredWalRegistrySlotV1::None",
+                    "self.exactly_covers_ready_work_with_extra( coordinator, extra, &std::collections::BTreeSet::new(), None, &refanned_broadcasts, )",
                 ),
             )
             finalization_pair_link = region(
-                registry_validate_path,
-                registry_validate_source,
+                registry_validate_impl_path,
+                registry_validate_impl_source,
                 "finalization recovered Broadcast pair link",
                 "fn exact_optional_recovered_wal_authority(",
                 "/// Install one work value without overwriting an incumbent address.",
             )
             require_tokens(
-                registry_validate_path,
+                registry_validate_impl_path,
                 "finalization recovered Broadcast pair link",
                 finalization_pair_link,
                 (
                     "broadcast.is_unpaired()",
                     "carrier.pairs_exact_next_sign(next_sign, next_sign_digest)",
+                    "refanned_broadcasts.iter().all(|ordinal|",
+                    "LifecycleLedgerV1::from_coordinator(coordinator)",
+                    "!matches!(record.state, super::LifecycleState::Waiting(_))",
+                    "broadcast.validates_in_ledger(exact_ledger)",
+                    "broadcast.paired_next_sign_matches_terminal_record( coordinator, exact_ledger, )",
+                    "broadcast.matches_current_finalization_record(",
+                    "!refanned_broadcasts.contains(&record.ordinal)",
+                ),
+            )
+            terminal_pair_link = region(
+                registry_path,
+                registry_source,
+                "retained recovered Broadcast terminal next-Sign link",
+                "fn paired_next_sign_matches_terminal_record(",
+                "fn validates_at(",
+            )
+            require_tokens(
+                registry_path,
+                "retained recovered Broadcast terminal next-Sign link",
+                terminal_pair_link,
+                (
+                    "LifecycleState::Terminal(outcome)",
+                    "exact_single_record_slot( next_record, LifecycleWorkClass::SignVote.capacity_class(), )",
+                    "ConcreteWorkAddress::new(next_record.owner, next_record.ordinal, next_slot) == Some(next_address)",
+                    "installed_digest == next_digest",
+                    "coordinator.key_index.get(&next_record.key) == Some(&next_address.ordinal)",
+                    "coordinator.owner_index.get(&next_record.owner.causal_root()) == Some(&next_record.owner)",
+                    "!coordinator.ready_index.contains(&next_address.ordinal)",
+                    "durable_next.terminal() == Some(Some(outcome))",
+                    "continuation.matches_record( LifecycleWorkClass::SignVote, Some(outcome), next_address.ordinal, ledger.high_water(), )",
                 ),
             )
             require_tokens(
@@ -4857,11 +4998,14 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 scheduler_source,
                 (
                     "fn recovered_broadcast_refanout_ranks_exact_pair_before_unrelated_ready_sign()",
+                    "fn finalization_waits_for_every_authenticated_recovered_broadcast_refanout()",
                     "finalization_registry_census_is_exact_for_test()",
                 ),
             )
             for literal in (
-                '"finalization accepts the exact volatile refanout wait beside its Ready next Sign"',
+                '"finalization accepts the exact volatile refanout wait after its next Sign retires"',
+                '"all exact post-output waits form one bounded finalization census"',
+                '"finalization rejects a corrupted retained digest after paired Sign retirement"',
                 '"finalization must reject the corrupted exact next-Sign link"',
             ):
                 require_literal_count(
@@ -4871,111 +5015,11 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     literal,
                     1,
                 )
-        snapshot_authority = region(
+        _check_successor_snapshot_authority(
             recovery_path,
             recovery_source,
-            "SnapshotSuccessorActivationAuthority::new",
-            "fn new(record: &wire::SnapshotV2BootstrapRecord) -> Self",
-            "\n    /// Imported snapshot height which anchors the first executable context.",
-        )
-        require_tokens(
-            recovery_path,
-            "SnapshotSuccessorActivationAuthority::new",
-            snapshot_authority,
-            (
-                "record.context.snapshot_bootstrap.as_ref()",
-                "expect(\"verified snapshot activation authority retains its anchor\")",
-                "record_hash: HashOf::new(record), snapshot_height: anchor.snapshot_height, snapshot_block_hash: anchor.snapshot_block_hash, successor_context_id: record.context.id(),",
-            ),
-        )
-        recovery = region(
-            recovery_path,
-            recovery_source,
-            "recover_active_height_with_plan",
-            "pub(crate) fn recover_active_height_with_plan(",
-            "\nfn verify_state_kura_prefix(",
-        )
-        require_tokens(
-            recovery_path,
-            "recover_active_height_with_plan snapshot authority",
-            recovery,
-            (
-                "authenticate_v2_snapshot_replay_boundary(kura, state, &replay_plan)?;",
-                "if record.context() != &bootstrap.context || record.proofs_of_possession() != bootstrap.validator_set_pops",
-                "let verified_context = VerifiedHeightContext::snapshot_bootstrap(bootstrap)?;",
-                "RecoveredSuccessorActivationAuthority::SnapshotBootstrap( SnapshotSuccessorActivationAuthority::new(bootstrap), )",
-            ),
-        )
-        require_order(
-            recovery_path,
-            "recover_active_height_with_plan snapshot authority",
-            recovery,
-            (
-                "authenticate_v2_snapshot_replay_boundary(",
-                "is_entirely_audited_snapshot_import()",
-                "authenticated_snapshot_v2_bootstrap()",
-                "record.context() != &bootstrap.context",
-                "VerifiedHeightContext::snapshot_bootstrap(bootstrap)",
-                "SnapshotSuccessorActivationAuthority::new(bootstrap)",
-            ),
-        )
-        require_tokens(
-            recovery_path,
-            "recover_active_height_with_plan complete-tip authority",
-            recovery,
-            (
-                "kura.v2_finality_artifact_with_receipt(durable_height)?",
-                "let predecessor_record = context_store.load(durable_height)?",
-                "let verified_predecessor = verify_persisted_height( kura, state, &context_store, predecessor_record, durable_height, )?;",
-                "let predecessor_signature_policy = if durable_height == 1 { BlockSignaturePolicy::GenesisAuthority(genesis_public_key.clone()) } else { BlockSignaturePolicy::RotatingLeader };",
-                "build_verified_successor(state, &context_store, &parent_artifact, &parent_receipt)?;",
-                "let (verified_context, activation) = successor.into_parts();",
-                "RecoveredCompleteTipActivationAuthority::authenticate( parent_artifact, parent_receipt, verified_predecessor, predecessor_signature_policy, &verified_context, activation, kura, )?;",
-                "RecoveredSuccessorActivationAuthority::CompleteTip( complete_tip_activation, )",
-            ),
-        )
-        require_order(
-            recovery_path,
-            "recover_active_height_with_plan complete-tip authority",
-            recovery,
-            (
-                "verify_persisted_height(",
-                "build_verified_successor(",
-                "successor.into_parts()",
-                "RecoveredCompleteTipActivationAuthority::authenticate(",
-                "RecoveredSuccessorActivationAuthority::CompleteTip(",
-            ),
-        )
-        verified_successor = region(
-            recovery_path,
-            recovery_source,
-            "build_verified_successor",
-            "pub(crate) fn build_verified_successor(",
-            "\nfn verify_persisted_height(",
-        )
-        require_tokens(
-            recovery_path,
-            "build_verified_successor",
-            verified_successor,
-            (
-                "DurableV2PredecessorIdentity::authenticate(parent_artifact, parent_receipt)?;",
-                "if state_height != parent_height || state_block_hash != Some(predecessor.block_hash)",
-                "if parent_record.context() != &parent_artifact.height_context",
-                "VerifiedHeightContext::successor( expected, proofs, parent_artifact, parent_receipt, parent_record.proofs_of_possession(), )?;",
-                "DurableSuccessorActivationAuthority { predecessor, successor_context_id: verified.context().id(), }",
-                "DurableSuccessorActivationAuthority { predecessor, successor_context_id: verified_context.context().id(), }",
-            ),
-        )
-        require_order(
-            recovery_path,
-            "build_verified_successor",
-            verified_successor,
-            (
-                "DurableV2PredecessorIdentity::authenticate(",
-                "state_height != parent_height",
-                "parent_record.context() != &parent_artifact.height_context",
-                "VerifiedHeightContext::successor(",
-                "DurableSuccessorActivationAuthority",
-            ),
+            region,
+            require_tokens,
+            require_order,
         )
     return errors

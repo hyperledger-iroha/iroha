@@ -290,6 +290,26 @@ impl LifecycleV2IngressDrainDispositionV1 {
     }
 }
 
+fn recovered_output_drain_disposition(
+    settlement: super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1,
+    producer_claim: LifecycleProducerClaimDispositionV1,
+) -> Option<LifecycleV2IngressDrainDispositionV1> {
+    match settlement {
+        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Empty
+        | super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Deferred => {
+            None
+        }
+        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::SourceRetained => {
+            Some(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                producer_claim,
+            ))
+        }
+        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed => {
+            Some(LifecycleV2IngressDrainDispositionV1::ready(producer_claim))
+        }
+    }
+}
+
 /// Drain one bounded ordinary Completion/Runtime/Ingress batch through the
 /// activated lifecycle owner.
 ///
@@ -328,6 +348,23 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
 
     let mut outer_turns = outer_ingress_turns(limit, context_id, height);
     while let Some(current_turn) = outer_turns.next_current() {
+        let recovered_output_settlement = activated.with_runner_runtime(
+            runner,
+            |owner, executor, services, _local_proposal| {
+                super::super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
+                    owner, executor, services,
+                )
+                .map_err(V2RunnerError::from)
+            },
+        )?;
+        if let Some(disposition) =
+            recovered_output_drain_disposition(recovered_output_settlement, producer_claim)
+        {
+            // A preceding completion may have exposed this exact ordinal as
+            // the new Ready minimum. Settle it before the turn driver can
+            // acquire a registry-backed lease for the cold-only carrier.
+            return Ok(disposition);
+        }
         match current_turn.target() {
             LifecycleRunnerRankTarget::Completion => {
                 use super::super::v2_lifecycle_coordinator::{
@@ -388,22 +425,23 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                 }
             }
             LifecycleRunnerRankTarget::Runtime => {
-                let installed_terminal = activated.with_runner_runtime(
+                let (installed_terminal, lifecycle_yield) = activated.with_runner_runtime(
                     runner,
-                    |_owner, executor, services, _local_proposal| {
+                    |owner, executor, services, _local_proposal| {
                         let was_terminal = executor
                             .local_proposal_directive()?
                             .decided_subject()
                             .is_some();
-                        advance_executor(receiver, executor, services, 1)?;
+                        let lifecycle_yield =
+                            advance_executor(receiver, owner, executor, services, 1)?;
                         let is_terminal = executor
                             .local_proposal_directive()?
                             .decided_subject()
                             .is_some();
-                        Ok::<_, V2RunnerError>(!was_terminal && is_terminal)
+                        Ok::<_, V2RunnerError>((!was_terminal && is_terminal, lifecycle_yield))
                     },
                 )?;
-                if installed_terminal {
+                if installed_terminal || lifecycle_yield {
                     return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
                 }
                 if producer_claim.blocks_ingress() {
@@ -498,7 +536,39 @@ mod tests {
 
     #[test]
     fn completed_certified_serve_yields_before_the_next_outer_turn() {
-        use super::super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1;
+        use super::super::super::v2_lifecycle_coordinator::{
+            ProductionLifecycleCompletionSelectionV1, RecoveredLifecycleOutputSettlementV1,
+        };
+
+        let claim = LifecycleProducerClaimDispositionV1::initial();
+        assert_eq!(
+            recovered_output_drain_disposition(
+                RecoveredLifecycleOutputSettlementV1::Completed,
+                claim,
+            ),
+            Some(LifecycleV2IngressDrainDispositionV1::ready(claim))
+        );
+        let retained = recovered_output_drain_disposition(
+            RecoveredLifecycleOutputSettlementV1::SourceRetained,
+            claim,
+        )
+        .expect("source-retained output requires a timed retry");
+        assert!(retained.requires_yield());
+        assert_eq!(
+            retained,
+            LifecycleV2IngressDrainDispositionV1::retry_before_producer(claim)
+        );
+        assert_eq!(
+            recovered_output_drain_disposition(RecoveredLifecycleOutputSettlementV1::Empty, claim),
+            None
+        );
+        assert_eq!(
+            recovered_output_drain_disposition(
+                RecoveredLifecycleOutputSettlementV1::Deferred,
+                claim,
+            ),
+            None
+        );
 
         assert!(completion_selection_stops_batch(
             &ProductionLifecycleCompletionSelectionV1::CertifiedServeClaimedCompleted

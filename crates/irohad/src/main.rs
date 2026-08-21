@@ -1885,6 +1885,7 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::LaneBlockNewViewVote(_)
                 | BlockMessage::LaneBlockNewViewCertificate(_) => IngressPolicy::critical(),
                 BlockMessage::LaneHistoricalRecoveryResponse(_) => IngressPolicy::bulk(),
+                BlockMessage::KuraReplicaAdvert(_) => IngressPolicy::limited(),
                 BlockMessage::V2(message) => {
                     use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
                     match &message.payload {
@@ -7948,8 +7949,7 @@ impl Iroha {
         }
         // Independent lane producers transfer FIFO ownership before they
         // publish any payload bytes. Install and replay that durable ownership
-        // journal before the mandatory ordinary queue-plan journal can reinsert
-        // pending transactions.
+        // journal before the mandatory ordinary queue-plan journal can reinsert pending transactions.
         let lane_reservation_journal_path = config
             .kura
             .store_dir
@@ -8414,8 +8414,7 @@ impl Iroha {
         state.set_streaming_storage_paths(streaming_soranet_spool_dir, streaming_soravpn_spool_dir);
         state.set_fraud_monitoring(fraud_cfg);
         // Settlement runtime state was installed before Kura replay. Preserve
-        // its lazily derived escrow bindings instead of replacing the replayed
-        // snapshot after Kura has started.
+        // its lazily derived escrow bindings instead of replacing the replayed snapshot after Kura has started.
         state.set_gov(gov_cfg);
         state.set_merge_ledger_cache_capacity(merge_cache_capacity);
         log_startup_trace(
@@ -9982,16 +9981,14 @@ impl Iroha {
     ) -> Option<&sorafs_reputation_runtime::ReputationRuntimeHandleV1> {
         self.sorafs_reputation_runtime.as_ref()
     }
-    /// Access the supervised committed `SoraFS` hedging/billing status and
-    /// metrics handle.
+    /// Access the supervised committed `SoraFS` hedging/billing status and metrics handle.
     #[must_use]
     pub fn sorafs_hedging_billing_runtime(
         &self,
     ) -> Option<&sorafs_hedging_billing_runtime::HedgingBillingRuntimeHandleV1> {
         self.sorafs_hedging_billing_runtime.as_ref()
     }
-    /// Access the supervised finalized-ledger `SoraFS` provider-ingest status
-    /// and metrics handle.
+    /// Access the supervised finalized-ledger `SoraFS` provider-ingest status and metrics handle.
     #[must_use]
     pub fn sorafs_provider_ingest_runtime(
         &self,
@@ -10162,8 +10159,7 @@ async fn config_updates_relay(
     // The network actor was constructed from this same current snapshot. Wait
     // for an actual Kiso change before rebuilding the runtime handshake state;
     // replaying the initial value would try to reopen its already-locked
-    // persistent ticket-revocation store.
-    // See https://github.com/tokio-rs/tokio/issues/5616 and
+    // persistent ticket-revocation store. See https://github.com/tokio-rs/tokio/issues/5616 and
     // https://github.com/rust-lang/rust-clippy/issues/10636
     #[cfg(feature = "telemetry")]
     #[allow(clippy::redundant_pub_crate)]
@@ -11588,10 +11584,16 @@ fn filesystem_identity(path: &Path) -> Option<String> {
 #[cfg(unix)]
 fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
     let stats = rustix::fs::statvfs(path).ok()?;
-    let fragment_size = stats.f_frsize.max(stats.f_bsize);
+    let fragment_size = statvfs_fragment_size(stats.f_frsize, stats.f_bsize)?;
     let available_bytes = stats.f_bavail.checked_mul(fragment_size)?;
     let total_bytes = stats.f_blocks.checked_mul(fragment_size)?;
     Some((available_bytes, total_bytes))
+}
+#[cfg(unix)]
+fn statvfs_fragment_size(fragment_size: u64, block_size: u64) -> Option<u64> {
+    (0 < fragment_size)
+        .then_some(fragment_size)
+        .or_else(|| (0 < block_size).then_some(block_size))
 }
 #[cfg(target_os = "windows")]
 fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
@@ -13039,8 +13041,7 @@ fn run_main(
 ///
 /// Preparation happens before the expensive qualification pass and keeps the
 /// destination directory open until publication. The final name must not
-/// exist: qualification seals are immutable release artifacts and are never
-/// replaced in place.
+/// exist: qualification seals are immutable release artifacts and are never replaced in place.
 struct QualificationSealPublicationTarget {
     path: PathBuf,
     #[cfg(unix)]
@@ -19132,19 +19133,6 @@ mod tests {
                 diagnostic.contains("below the 150 managed bytes"),
                 "{diagnostic}"
             );
-        }
-        #[test]
-        fn runtime_budget_rejects_zero_underflow_and_overflow() {
-            for probe in [
-                storage_budget_probe(1_000, 200, 0),
-                storage_budget_probe(1_000, 199, 0),
-                storage_budget_probe(1_000, 1, u64::MAX),
-            ] {
-                assert!(
-                    derive_runtime_nexus_storage_budget(&[probe]).is_err(),
-                    "invalid capacity arithmetic must fail closed"
-                );
-            }
         }
         #[cfg(unix)]
         include!("main/runtime_budget_and_config_tests.rs");

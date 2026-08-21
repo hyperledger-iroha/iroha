@@ -58,6 +58,29 @@ PendingApply, Applied}`. A status snapshot is valid only when its body state,
 phase, height context, lock, and last committed subject satisfy the revision-4
 cross-field invariants.
 
+## Feature-isolated authenticated fault selection
+
+The adversarial test daemon has a feature-only inbound message controller. It
+runs after P2P authentication and before ordinary consensus ingress; it is not
+a production configuration surface and cannot disable mandatory DA/RBC.
+
+A direct `PayloadChunk` rule binds the semantic sender, the peer identity that
+authenticated the received copy, the manifest hash encoded by the chunk, and
+the exact chunk index. When a test cannot know the manifest hash before
+submission, `payload_chunk_from_proposal` creates a deferred Hold rule for one
+sender, authenticated route, proposal height/view, and chunk index. An
+unresolved rule may only Hold and can provisionally retain that authenticated
+index. The matching authenticated Proposal atomically fills in the manifest
+hash before the retained occurrence can be released as exact target evidence.
+
+The daemon retains at most 1,024 route-specific Proposal observations, keyed by
+semantic sender, authenticated route, and manifest hash and mapped to the exact
+height/view. This bounded evidence prevents a chunk already attributed to an
+earlier round from wildcard-matching an unresolved future rule. If that chunk
+was provisionally held before its Proposal arrived, the now-mismatched
+occurrence is released in ingress order; the target Proposal instead resolves
+the rule and keeps its exact manifest/index occurrence held.
+
 ## Safety and liveness consequences
 
 - `FullBodyBeforePrepare`: every Prepare signer owns the exact durable,
@@ -92,6 +115,25 @@ status, and requires quorum peers at or above the target height to report one
 identical committed subject. Focused unit and model coverage additionally
 checks resource-cap edges, corrupted chunks, withheld evidence, volatile shard
 reacquisition, restart hydration, and the one durable canonical-body boundary.
+
+The exact authenticated-loss test starts its controller with an empty
+genesis-safe revision, installs Proposal-bound Hold rules for height 2/view 0,
+and submits a 10 MiB payload to four validators. It requires at least three
+receivers to retain chunk indices 57, 58, and 59 under their resolved exact
+manifest selectors, proves the three-of-six RS16 loss prevents premature
+commit, heals through the acknowledged drain fence, and then requires all four
+peers to converge on one committed subject:
+
+```bash
+scripts/cargo_fast.sh --stable-local-metadata -- test \
+  -p integration_tests --test consensus_and_da \
+  sumeragi_da::authenticated_payload_chunk_hold_heals_and_converges_four_peers \
+  -- --nocapture --test-threads=1
+```
+
+The test and controller path are present in the current tree. A fresh
+current-tree acceptance result is still pending at this checkpoint, so this
+document does not claim that integration command passed.
 
 ## Performance and fault evidence
 

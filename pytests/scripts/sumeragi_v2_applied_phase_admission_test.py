@@ -244,20 +244,23 @@ def test_applied_phase_production_preflight_must_precede_ordinal_allocation(
     ), errors
 
 
-def test_applied_phase_busy_scope_requires_both_evidence_phases(
+def test_applied_phase_busy_scope_requires_body_stored_evidence(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
     repo_root, _formal_dir = copy_applied_phase_admission_mutation_fixture(
         tmp_path, module
     )
-    runtime_path = repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    runtime_path = (
+        repo_root
+        / "crates/iroha_core/src/sumeragi/tests/v2_runtime_main_04.rs"
+    )
     source = runtime_path.read_text(encoding="utf-8")
     item = module.rust_items(
         source,
-        "completion_retries_coalesce_across_ingress_and_busy_deferred_ownership",
+        "store_completion_retries_coalesce_across_ingress_and_busy_deferred_ownership",
     )[0]
-    old = "DeferredBodyPipelineStageForTest::ValidationSucceeded,"
+    old = "DeferredBodyPipelineStageForTest::BodyStored,"
     assert item.source.count(old) == 1
     item_start = source.index(item.source)
     item_end = item_start + len(item.source)
@@ -265,7 +268,7 @@ def test_applied_phase_busy_scope_requires_both_evidence_phases(
         source[:item_start]
         + item.source.replace(
             old,
-            "DeferredBodyPipelineStageForTest::BodyStored,",
+            "DeferredBodyPipelineStageForTest::BodyAvailable,",
             1,
         )
         + source[item_end:],
@@ -279,7 +282,7 @@ def test_applied_phase_busy_scope_requires_both_evidence_phases(
     )
 
     assert any(
-        "ValidationSucceeded Busy-owner witness" in error for error in errors
+        "BodyStored Busy-owner witness" in error for error in errors
     ), errors
 
 
@@ -302,6 +305,9 @@ def test_formal_gate_validates_fresh_evidence_before_tlc_and_replay() -> None:
     )
     applied_phase_admission_mutations = source.index(
         "run_sumeragi_v2_applied_phase_admission_mutations.sh"
+    )
+    durable_validate_lifecycle_mutations = source.index(
+        "run_sumeragi_v2_durable_validate_lifecycle_mutations.sh"
     )
     liveness_ownership_mutations = source.index(
         "run_sumeragi_v2_liveness_ownership_mutations.sh"
@@ -342,6 +348,7 @@ def test_formal_gate_validates_fresh_evidence_before_tlc_and_replay() -> None:
         < progress_mutations
         < effect_capacity_mutations
         < applied_phase_admission_mutations
+        < durable_validate_lifecycle_mutations
         < liveness_ownership_mutations
         < indexed_service_activation_mutations
         < adequate_leader_readiness_mutations
@@ -358,6 +365,7 @@ def test_formal_gate_validates_fresh_evidence_before_tlc_and_replay() -> None:
     )
     for invocation in (
         "run_sumeragi_v2_applied_phase_admission_mutations.sh",
+        "run_sumeragi_v2_durable_validate_lifecycle_mutations.sh",
         "run_sumeragi_v2_indexed_service_activation_mutations.sh",
         "run_sumeragi_v2_adequate_leader_readiness_mutations.sh",
         "run_sumeragi_v2_indexed_height_mutation.sh",

@@ -24,6 +24,18 @@ macro_rules! routing_test {
     };
 }
 
+macro_rules! app_api_items {
+    ($($item:item)*) => {
+        $(#[cfg(feature = "app_api")] $item)*
+    };
+}
+
+macro_rules! derived_items {
+    ($($(#[$attribute:meta])* ($($derive:path),+ $(,)?) $item:item)*) => {
+        $($(#[$attribute])* #[derive($($derive),+)] $item)*
+    };
+}
+
 use axum::{
     Json,
     body::Body,
@@ -258,12 +270,13 @@ pub async fn handler_openapi_spec(State(_state): State<crate::SharedAppState>) -
                 .unwrap()
         })
 }
-#[derive(Clone, Debug, Encode, Decode)]
+derived_items! {
+(Clone, Debug, Encode, Decode)
 struct EvidenceListWire {
     total: u64,
     items: Vec<EvidenceRecord>,
 }
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 struct SumeragiPacemakerResponse {
     backoff_ms: u64,
     rtt_floor_ms: u64,
@@ -276,43 +289,29 @@ struct SumeragiPacemakerResponse {
     view_timeout_target_ms: u64,
     view_timeout_remaining_ms: u64,
 }
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 struct PrfContext {
     height: u64,
     view: u64,
     #[norito(skip_serializing_if = "Option::is_none")]
     epoch_seed: Option<String>,
 }
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 struct SumeragiLeaderResponse {
     leader_index: u64,
     prf: PrfContext,
 }
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 struct SumeragiParamsResponse {
     block_cadence_ms: u64,
     max_clock_drift_ms: u64,
     chain_height: u64,
 }
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 pub(crate) struct PipelinePreflightSumeragi {
     pub block_cadence_ms: u64,
 }
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 pub(crate) struct PipelinePreflightAdmission {
     pub max_signatures: u64,
     pub max_instructions: u64,
@@ -320,25 +319,11 @@ pub(crate) struct PipelinePreflightAdmission {
     pub max_decompressed_bytes: u64,
     pub max_metadata_depth: u64,
 }
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 pub(crate) struct PipelinePreflightBlock {
     pub max_transactions: u64,
 }
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 pub(crate) struct PipelinePreflightPipeline {
     pub signature_batch_max: u64,
     pub signature_batch_max_ed25519: u64,
@@ -350,27 +335,13 @@ pub(crate) struct PipelinePreflightPipeline {
     pub ivm_admission_cycle_limit: u64,
     pub ivm_max_decoded_instructions: u64,
 }
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 pub(crate) struct PipelinePreflightQueue {
     pub size: u64,
     pub queued: u64,
     pub inflight: u64,
 }
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 pub(crate) struct PipelinePreflightFees {
     pub fee_asset_id: String,
     pub fee_sink_account_id: String,
@@ -382,14 +353,7 @@ pub(crate) struct PipelinePreflightFees {
     pub settlement_mode: String,
     pub successful_claim_fee_exempt_authorities: Vec<String>,
 }
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 pub(crate) struct PipelinePreflightResponse {
     pub schema_version: u64,
     pub chain_height: u64,
@@ -400,9 +364,10 @@ pub(crate) struct PipelinePreflightResponse {
     pub queue: PipelinePreflightQueue,
     pub fees: PipelinePreflightFees,
 }
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 struct CountResponse {
     count: u64,
+}
 }
 #[cfg(test)]
 fn json_string(value: Value) -> String {
@@ -574,19 +539,17 @@ mod pagination_tests {
 }
 include!("routing/pagination_ordering.rs");
 include!("routing/legacy_streaming_page.rs");
-#[cfg(feature = "app_api")]
+app_api_items! {
 struct PageResult<T> {
     items: Vec<T>,
     total: Option<usize>,
     has_more: bool,
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AppCountMode {
     Bounded,
     Exact,
 }
-#[cfg(feature = "app_api")]
 impl AppCountMode {
     const fn label(self) -> &'static str {
         match self {
@@ -595,7 +558,6 @@ impl AppCountMode {
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn app_count_mode(raw: Option<&str>, endpoint: &'static str) -> AppCountMode {
     match raw {
         Some("exact") => AppCountMode::Exact,
@@ -611,13 +573,11 @@ fn app_count_mode(raw: Option<&str>, endpoint: &'static str) -> AppCountMode {
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn app_transaction_count_mode(raw: Option<&str>, endpoint: &'static str) -> AppCountMode {
     raw.map_or(AppCountMode::Bounded, |raw| {
         app_count_mode(Some(raw), endpoint)
     })
 }
-#[cfg(feature = "app_api")]
 fn normalize_app_generic_count_mode(
     envelope: &mut crate::filter::QueryEnvelope,
     endpoint: &'static str,
@@ -625,7 +585,6 @@ fn normalize_app_generic_count_mode(
     let count_mode = app_count_mode(envelope.count_mode.as_deref(), endpoint);
     envelope.count_mode = Some(count_mode.label().to_owned());
 }
-#[cfg(feature = "app_api")]
 fn collect_page_streaming_bounded<K, T, I>(
     iter: I,
     offset: u64,
@@ -683,7 +642,6 @@ where
         has_more,
     }
 }
-#[cfg(feature = "app_api")]
 fn collect_page_streaming_for_mode<K, T, I>(
     iter: I,
     offset: u64,
@@ -709,14 +667,12 @@ where
         }
     }
 }
-#[cfg(feature = "app_api")]
 #[derive(Copy, Clone)]
 struct EffectivePagination {
     limit: Option<u64>,
     offset: u64,
     cap: u64,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct QueryProjectionArchiveCacheKey {
     resource: QueryProjectionResourceKind,
@@ -725,18 +681,14 @@ struct QueryProjectionArchiveCacheKey {
     indexed_height: u64,
     indexed_block_hash_hex: Option<String>,
 }
-#[cfg(feature = "app_api")]
 const QUERY_PROJECTION_ARCHIVE_HOT_CACHE_MAX_ENTRIES: usize = 32;
-#[cfg(feature = "app_api")]
 const QUERY_PROJECTION_ARCHIVE_HOT_CACHE_MAX_BYTES: usize = 256 * 1024 * 1024;
-#[cfg(feature = "app_api")]
 #[derive(Default)]
 struct QueryProjectionArchiveHotCache {
     entries: BTreeMap<QueryProjectionArchiveCacheKey, QueryProjectionShardArchive>,
     insertion_order: VecDeque<QueryProjectionArchiveCacheKey>,
     total_payload_bytes: usize,
 }
-#[cfg(feature = "app_api")]
 impl QueryProjectionArchiveHotCache {
     fn get(&self, key: &QueryProjectionArchiveCacheKey) -> Option<QueryProjectionShardArchive> {
         self.entries.get(key).cloned()
@@ -775,14 +727,11 @@ impl QueryProjectionArchiveHotCache {
         self.total_payload_bytes = 0;
     }
 }
-#[cfg(feature = "app_api")]
 static QUERY_PROJECTION_ARCHIVE_CACHE: LazyLock<RwLock<QueryProjectionArchiveHotCache>> =
     LazyLock::new(|| RwLock::new(QueryProjectionArchiveHotCache::default()));
-#[cfg(feature = "app_api")]
 fn query_projection_block_hash_hex(hash: Option<HashOf<BlockHeader>>) -> Option<String> {
     hash.map(|hash| hex::encode(hash.as_ref().as_ref()))
 }
-#[cfg(feature = "app_api")]
 fn query_projection_archive_cache_key(
     archive: &QueryProjectionShardArchive,
 ) -> QueryProjectionArchiveCacheKey {
@@ -794,7 +743,6 @@ fn query_projection_archive_cache_key(
         indexed_block_hash_hex: query_projection_block_hash_hex(archive.indexed_block_hash),
     }
 }
-#[cfg(feature = "app_api")]
 fn query_projection_checkpoint_cache_key(
     shard: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpointShard,
     checkpoint: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpoint,
@@ -807,14 +755,12 @@ fn query_projection_checkpoint_cache_key(
         indexed_block_hash_hex: query_projection_block_hash_hex(checkpoint.indexed_block_hash),
     }
 }
-#[cfg(feature = "app_api")]
 fn query_projection_archive_cache_weight(archive: &QueryProjectionShardArchive) -> usize {
     archive
         .payload
         .len()
         .saturating_add(core::mem::size_of::<QueryProjectionShardArchive>())
 }
-#[cfg(feature = "app_api")]
 fn query_projection_archive_from_hot_cache(
     key: &QueryProjectionArchiveCacheKey,
 ) -> Option<QueryProjectionShardArchive> {
@@ -828,7 +774,6 @@ fn query_projection_archive_from_hot_cache(
         }
     }
 }
-#[cfg(feature = "app_api")]
 pub(crate) fn cache_query_projection_archive_for_query(archive: QueryProjectionShardArchive) {
     match QUERY_PROJECTION_ARCHIVE_CACHE.write() {
         Ok(mut cache) => {
@@ -847,12 +792,10 @@ fn clear_query_projection_archive_cache_for_tests() {
         cache.clear();
     }
 }
-#[cfg(feature = "app_api")]
 fn app_query_page_cap(state: &CoreState) -> u64 {
     let _ = state;
     app_query_limits().max_page_limit
 }
-#[cfg(feature = "app_api")]
 fn enforce_app_pagination(
     limit: Option<u64>,
     offset: u64,
@@ -894,7 +837,6 @@ fn enforce_app_pagination(
         cap: max_cap,
     })
 }
-#[cfg(feature = "app_api")]
 fn map_filter_error(err: crate::filter::ValidateError, endpoint: &'static str) -> Error {
     match err {
         crate::filter::ValidateError::UnsupportedField(field) => Error::AppQueryValidation {
@@ -907,7 +849,6 @@ fn map_filter_error(err: crate::filter::ValidateError, endpoint: &'static str) -
         },
     }
 }
-#[cfg(feature = "app_api")]
 fn collect_page_linear<T, I>(
     iter: I,
     offset: u64,
@@ -950,7 +891,6 @@ where
     }
     (items, matched)
 }
-#[cfg(feature = "app_api")]
 fn collect_page_linear_bounded<T, I>(
     iter: I,
     offset: u64,
@@ -993,7 +933,6 @@ where
         has_more,
     }
 }
-#[cfg(feature = "app_api")]
 fn collect_page_linear_for_mode<T, I>(
     iter: I,
     offset: u64,
@@ -1018,7 +957,6 @@ where
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn page_result_from_counted_items<T>(
     items: Vec<T>,
     matched: usize,
@@ -1032,7 +970,6 @@ fn page_result_from_counted_items<T>(
         has_more: u64::try_from(matched).unwrap_or(u64::MAX) > returned_until,
     }
 }
-#[cfg(feature = "app_api")]
 fn insert_page_metadata<T>(
     top: &mut norito::json::Map,
     page: &PageResult<T>,
@@ -1047,7 +984,6 @@ fn insert_page_metadata<T>(
         norito::json::Value::from(count_mode.label()),
     );
 }
-#[cfg(feature = "app_api")]
 fn insert_bounded_page_metadata<T>(top: &mut norito::json::Map, page: &PageResult<T>) {
     insert_page_metadata(top, page, AppCountMode::Bounded);
 }
@@ -1153,6 +1089,7 @@ mod streaming_pager_tests {
         assert_eq!(total, 5);
         assert_eq!(counter.get(), 5);
     }
+}
 }
 /// Telemetry handle that pairs a runtime [`Telemetry`] instance with capability gating.
 #[derive(Clone)]
@@ -1298,8 +1235,9 @@ where
         }
     }
 }
+derived_items! {
 #[cfg(feature = "telemetry")]
-#[derive(Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+(Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)
 /// Request payload accepted by `/v1/soranet/privacy/event`.
 pub struct RecordSoranetPrivacyEventDto {
     /// Privacy telemetry event emitted by a relay component.
@@ -1309,7 +1247,7 @@ pub struct RecordSoranetPrivacyEventDto {
     pub source: Option<String>,
 }
 #[cfg(feature = "telemetry")]
-#[derive(Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+(Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)
 /// Request payload accepted by `/v1/soranet/privacy/share`.
 pub struct RecordSoranetPrivacyShareDto {
     /// Secret-shared Prio contribution emitted by a collector.
@@ -1318,40 +1256,23 @@ pub struct RecordSoranetPrivacyShareDto {
     #[norito(default)]
     pub forwarded_by: Option<String>,
 }
-#[derive(
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 pub struct AliasResolveRequestDto {
     pub alias: String,
 }
-#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)
 pub struct AssetAliasResolveRequestDto {
     pub alias: String,
 }
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/contracts/aliases/resolve`.
 pub struct ContractAliasResolveRequestDto {
     /// Contract alias literal in `name::domain.dataspace` or `name::dataspace` form.
     pub contract_alias: String,
 }
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Authenticated request accepted by `/v1/contracts/deployment-state`.
 pub struct ContractDeploymentStateRequestDto {
@@ -1360,16 +1281,7 @@ pub struct ContractDeploymentStateRequestDto {
     /// Exact contract alias literal whose deployment CAS state is requested.
     pub contract_alias: String,
 }
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Clone, Debug, PartialEq, Eq, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// One internally consistent smart-contract deployment CAS snapshot.
 pub struct ContractDeploymentStateResponseDto {
@@ -1394,32 +1306,23 @@ pub struct ContractDeploymentStateResponseDto {
     /// Active account/contract address chain discriminant as canonical decimal text.
     pub chain_discriminant: String,
 }
-#[cfg(feature = "app_api")]
+}
+app_api_items! {
 /// Maximum number of exact state keys accepted in one first-release request.
 const CONTRACT_STATE_MAX_EXPLICIT_PATHS_V1: usize = 10_000;
-#[cfg(feature = "app_api")]
 /// Retained variable response budget, derived from sixteen maximum-size V1 state records.
 ///
 /// Prefix reads stop and expose `next_offset` before crossing this boundary;
 /// exact and explicit-path reads fail closed so callers can split the request.
 const CONTRACT_STATE_RESPONSE_RETAINED_BYTES_V1: usize =
     16 * ivm::state_value::MAX_STATE_VALUE_RECORD_BYTES;
-#[cfg(feature = "app_api")]
 /// Maximum number of query-relevant state schemas retained while decoding one response.
 const CONTRACT_STATE_SCHEMA_MAX_ENTRIES_V1: usize = 10_000;
-#[cfg(feature = "app_api")]
 /// Aggregate canonical bytes admitted for query-relevant state schemas.
 const CONTRACT_STATE_SCHEMA_MAX_CANONICAL_BYTES_V1: usize =
     16 * ivm::state_value::MAX_STATE_VALUE_SCHEMA_BYTES;
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+derived_items! {
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Summary information for a registered Kaigi relay.
 pub struct KaigiRelaySummaryDto {
     /// Canonical relay identifier.
@@ -1437,15 +1340,7 @@ pub struct KaigiRelaySummaryDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub reported_at_ms: Option<u64>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Detailed metrics and metadata for a Kaigi relay.
 pub struct KaigiRelayDetailDto {
     /// Summary payload for the relay.
@@ -1465,16 +1360,7 @@ pub struct KaigiRelayDetailDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub metrics: Option<KaigiRelayDomainMetricsDto>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, Default, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Domain-level counters associated with Kaigi relays.
 pub struct KaigiRelayDomainMetricsDto {
     /// Owning domain label.
@@ -1488,40 +1374,23 @@ pub struct KaigiRelayDomainMetricsDto {
     /// Total health reports processed.
     pub health_reports_total: u64,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, Default, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Optional query parameters shared by Kaigi relay endpoints.
 pub struct KaigiRelayFormatParams {
     #[norito(default)]
     pub reserved: Option<String>,
 }
+}
 /// Maximum number of relay records a single Kaigi diagnostic snapshot may inspect or return.
 ///
 /// The hard bound prevents relay metadata from being materialized into an unbounded
 /// response-sized allocation. A deployment must keep its active relay registry within this cap.
-#[cfg(feature = "app_api")]
 pub const KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS: usize =
     defaults::torii::APP_API_MAX_LIST_LIMIT as usize;
 /// Maximum retained JSON bytes for one Kaigi call-signal result page.
-#[cfg(feature = "app_api")]
 pub const KAIGI_CALL_SIGNALS_MAX_RETAINED_BYTES: u64 = 4 * 1024 * 1024;
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+derived_items! {
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// List response for Kaigi relay summaries.
 pub struct KaigiRelaySummaryListDto {
     /// Total number of relay entries returned.
@@ -1529,15 +1398,7 @@ pub struct KaigiRelaySummaryListDto {
     /// Relay summaries.
     pub items: Vec<KaigiRelaySummaryDto>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Aggregate snapshot of Kaigi relay health across the network.
 pub struct KaigiRelayHealthSnapshotDto {
     /// Relays currently reported healthy.
@@ -1555,15 +1416,7 @@ pub struct KaigiRelayHealthSnapshotDto {
     /// Per-domain counters.
     pub domains: Vec<KaigiRelayDomainMetricsDto>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Call-level Kaigi view returned by the app-facing Torii API.
 pub struct KaigiCallViewDto {
     /// Full Kaigi call identifier.
@@ -1626,15 +1479,7 @@ pub struct KaigiCallViewDto {
     /// Number of usage segments recorded so far.
     pub segments_recorded: u32,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// App-facing Kaigi signaling record derived from committed transaction metadata.
 pub struct KaigiCallSignalDto {
     /// Entrypoint hash of the transaction carrying the signal.
@@ -1660,15 +1505,7 @@ pub struct KaigiCallSignalDto {
     /// Parsed signal metadata payload.
     pub metadata: IrohaJson,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Paginated list of call-level Kaigi signaling records.
 pub struct KaigiCallSignalListDto {
     /// Total number of matching signals before pagination.
@@ -1676,15 +1513,7 @@ pub struct KaigiCallSignalListDto {
     /// Current result page.
     pub items: Vec<KaigiCallSignalDto>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// SSE payload reference for a Kaigi call.
 pub struct KaigiCallEventCallRefDto {
     /// Full Kaigi call identifier.
@@ -1694,10 +1523,7 @@ pub struct KaigiCallEventCallRefDto {
     /// Call-name component of the call identifier.
     pub call_name: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 /// Optional query parameters for Kaigi call-signal listing.
 pub struct KaigiCallSignalsParams {
     /// Only include signals whose metadata timestamp is at or after this value.
@@ -1710,20 +1536,14 @@ pub struct KaigiCallSignalsParams {
     #[norito(default)]
     pub offset: Option<u64>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 /// Optional query parameters for Kaigi call SSE streams.
 pub struct KaigiCallEventsParams {
     /// Restrict events to a comma-separated list of kinds (`roster_updated`, `ended`).
     #[norito(default)]
     pub kind: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Default, Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
-)]
+( Default, Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 /// Optional query parameters for the Kaigi relay SSE stream.
 pub struct KaigiRelayEventsParams {
     /// Restrict events to a specific domain id.
@@ -1736,28 +1556,25 @@ pub struct KaigiRelayEventsParams {
     #[norito(default)]
     pub kind: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Clone)]
+(Clone)
 struct KaigiRelaySnapshot {
     domain: DomainId,
     registration: KaigiRelayRegistration,
     feedback: Option<KaigiRelayFeedback>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Default, Clone, Debug)]
+(Default, Clone, Debug)
 struct KaigiDomainCounters {
     registrations: u64,
     manifest_updates: u64,
     failovers: u64,
     health_reports: u64,
 }
-#[cfg(feature = "app_api")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+(Clone, Copy, Debug, PartialEq, Eq)
 enum KaigiRelayEventKind {
     Registration,
     Health,
 }
-#[cfg(feature = "app_api")]
+}
 impl KaigiRelayEventKind {
     const fn as_str(self) -> &'static str {
         match self {
@@ -1766,7 +1583,6 @@ impl KaigiRelayEventKind {
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn increment_kaigi_relay_diagnostic_count(count: &mut usize) -> Result<(), Error> {
     if *count >= KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS {
         return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
@@ -1774,7 +1590,6 @@ fn increment_kaigi_relay_diagnostic_count(count: &mut usize) -> Result<(), Error
     *count += 1;
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn find_kaigi_relay(
     state: &CoreState,
     relay_id: &AccountId,
@@ -1815,7 +1630,6 @@ fn find_kaigi_relay(
     }
     Ok(None)
 }
-#[cfg(feature = "app_api")]
 fn visit_kaigi_relays_bounded(
     state: &CoreState,
     mut visit: impl FnMut(KaigiRelaySnapshot) -> ControlFlow<()>,
@@ -1861,28 +1675,24 @@ fn visit_kaigi_relays_bounded(
     }
     Ok(count)
 }
-#[cfg(feature = "app_api")]
 fn kaigi_privacy_mode_label(mode: iroha_data_model::kaigi::KaigiPrivacyMode) -> &'static str {
     match mode {
         iroha_data_model::kaigi::KaigiPrivacyMode::Transparent => "transparent",
         iroha_data_model::kaigi::KaigiPrivacyMode::ZkRosterV1 => "private",
     }
 }
-#[cfg(feature = "app_api")]
 fn kaigi_room_policy_label(policy: iroha_data_model::kaigi::KaigiRoomPolicy) -> &'static str {
     match policy {
         iroha_data_model::kaigi::KaigiRoomPolicy::Public => "public",
         iroha_data_model::kaigi::KaigiRoomPolicy::Authenticated => "authenticated",
     }
 }
-#[cfg(feature = "app_api")]
 fn kaigi_status_label(status: iroha_data_model::kaigi::KaigiStatus) -> &'static str {
     match status {
         iroha_data_model::kaigi::KaigiStatus::Active => "active",
         iroha_data_model::kaigi::KaigiStatus::Ended => "ended",
     }
 }
-#[cfg(feature = "app_api")]
 fn kaigi_call_event_ref(call_id: &KaigiId) -> KaigiCallEventCallRefDto {
     KaigiCallEventCallRefDto {
         call_id: call_id.to_string(),
@@ -1890,7 +1700,6 @@ fn kaigi_call_event_ref(call_id: &KaigiId) -> KaigiCallEventCallRefDto {
         call_name: call_id.call_name.to_string(),
     }
 }
-#[cfg(feature = "app_api")]
 fn load_kaigi_record(
     state: &CoreState,
     call_id: &KaigiId,
@@ -1912,7 +1721,6 @@ fn load_kaigi_record(
             ))
         })
 }
-#[cfg(feature = "app_api")]
 fn kaigi_call_view_from_record(record: &iroha_data_model::kaigi::KaigiRecord) -> KaigiCallViewDto {
     let reveal_authorities =
         record.privacy_mode == iroha_data_model::kaigi::KaigiPrivacyMode::Transparent;
@@ -1956,14 +1764,12 @@ fn kaigi_call_view_from_record(record: &iroha_data_model::kaigi::KaigiRecord) ->
         segments_recorded: record.segments_recorded,
     }
 }
-#[cfg(feature = "app_api")]
 fn kaigi_metadata_value<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     value
         .as_object()
         .and_then(|record| record.get(key))
         .or_else(|| value.get(key))
 }
-#[cfg(feature = "app_api")]
 fn kaigi_metadata_string(value: &Value, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
         kaigi_metadata_value(value, key)?
@@ -1971,12 +1777,10 @@ fn kaigi_metadata_string(value: &Value, keys: &[&str]) -> Option<String> {
             .map(ToOwned::to_owned)
     })
 }
-#[cfg(feature = "app_api")]
 fn kaigi_metadata_u64(value: &Value, keys: &[&str]) -> Option<u64> {
     keys.iter()
         .find_map(|key| kaigi_metadata_value(value, key)?.as_u64())
 }
-#[cfg(feature = "app_api")]
 fn kaigi_signal_from_transaction(
     tx: &iroha_data_model::query::CommittedTransaction,
     reveal_authorities: bool,
@@ -2049,22 +1853,14 @@ fn kaigi_domain_counters(
             .get(),
     }
 }
-#[derive(
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+}
+derived_items! {
+( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 pub struct AliasResolveIndexRequestDto {
     pub index: u64,
 }
-#[derive(
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 pub struct AliasLookupByAccountRequestDto {
     pub account_id: String,
@@ -2073,12 +1869,7 @@ pub struct AliasLookupByAccountRequestDto {
     #[norito(default)]
     pub domain: Option<String>,
 }
-#[derive(
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/retail/recipients/lookup`.
 pub struct RetailRecipientLookupRequestDto {
@@ -2087,24 +1878,14 @@ pub struct RetailRecipientLookupRequestDto {
     /// Canonical bank alias FQN, for example `payee@hbl.sbp`.
     pub alias_fqn: String,
 }
-#[derive(
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/retail/recipients/route`.
 pub struct RetailRecipientRouteRequestDto {
     /// Canonical recipient account id, encoded as an I105 literal.
     pub account_id: String,
 }
-#[derive(
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 /// Privacy-minimized response returned by `/v1/retail/recipients/route`.
 pub struct RetailRecipientRouteResponseDto {
     /// Canonical recipient account id supplied in the request.
@@ -2114,12 +1895,7 @@ pub struct RetailRecipientRouteResponseDto {
     /// Canonical FI identifier derived from the alias domain.
     pub fi_id: String,
 }
-#[derive(
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 /// Response payload returned by `/v1/retail/recipients/lookup`.
 pub struct RetailRecipientLookupResponseDto {
     /// Whether the bank confirmed the account, alias, FI, and recipient name.
@@ -2137,12 +1913,7 @@ pub struct RetailRecipientLookupResponseDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub full_name: Option<String>,
 }
-#[derive(
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 pub struct AliasResolveResponseDto {
     pub alias: String,
@@ -2152,12 +1923,7 @@ pub struct AliasResolveResponseDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }
-#[derive(
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 pub struct AliasResolveIndexResponseDto {
     pub index: u64,
@@ -2166,12 +1932,7 @@ pub struct AliasResolveIndexResponseDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }
-#[derive(
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 pub struct AliasLookupByAccountItemDto {
     pub alias: String,
@@ -2180,12 +1941,7 @@ pub struct AliasLookupByAccountItemDto {
     pub domain: Option<String>,
     pub is_primary: bool,
 }
-#[derive(
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 pub struct AliasLookupByAccountResponseDto {
     pub account_id: String,
@@ -2195,7 +1951,7 @@ pub struct AliasLookupByAccountResponseDto {
     pub source: Option<String>,
 }
 #[cfg(feature = "app_api")]
-#[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
+(Debug, Clone, crate::json_macros::JsonSerialize)
 pub struct AccountAliasLeaseDto {
     pub alias: String,
     pub dataspace: String,
@@ -2219,19 +1975,13 @@ pub struct AccountAliasLeaseDto {
     pub max_renewal_amount: Option<Quantity>,
 }
 #[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize)]
+(Debug, crate::json_macros::JsonSerialize)
 pub struct AccountAliasLeaseListResponseDto {
     pub account_id: String,
     pub total: u64,
     pub items: Vec<AccountAliasLeaseDto>,
 }
-#[derive(
-    Clone,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 pub struct AssetAliasBindingDto {
     pub alias: String,
     pub status: String,
@@ -2240,6 +1990,7 @@ pub struct AssetAliasBindingDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub grace_until_ms: Option<u64>,
     pub bound_at_ms: u64,
+}
 }
 fn asset_alias_binding_status_label(status: AssetDefinitionAliasLeaseStatus) -> &'static str {
     match status {
@@ -2261,13 +2012,8 @@ pub(crate) fn asset_alias_binding_dto(
         bound_at_ms: binding.bound_at_ms,
     }
 }
-#[derive(
-    Clone,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+derived_items! {
+( Clone, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 /// Current on-chain lease metadata for a contract alias binding.
 pub struct ContractAliasBindingDto {
@@ -2283,6 +2029,7 @@ pub struct ContractAliasBindingDto {
     pub grace_until_ms: Option<u64>,
     /// Initial bind timestamp in unix milliseconds.
     pub bound_at_ms: u64,
+}
 }
 fn contract_alias_binding_status_label(status: ContractAliasLeaseStatus) -> &'static str {
     match status {
@@ -2304,12 +2051,8 @@ pub(crate) fn contract_alias_binding_dto(
         bound_at_ms: binding.bound_at_ms,
     }
 }
-#[derive(
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+derived_items! {
+( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 pub struct AssetAliasResolveResponseDto {
     pub alias: String,
     pub asset_definition_id: String,
@@ -2323,12 +2066,7 @@ pub struct AssetAliasResolveResponseDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }
-#[derive(
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 /// Response payload returned by `/v1/contracts/aliases/resolve`.
 pub struct ContractAliasResolveResponseDto {
@@ -2345,24 +2083,14 @@ pub struct ContractAliasResolveResponseDto {
     /// Resolution backend source.
     pub source: String,
 }
-#[derive(
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 pub struct AliasErrorResponseDto {
     pub error: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+}
+app_api_items! {
+derived_items! {
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Summary information for a registered RAM-LFE program policy.
 pub struct RamLfeProgramPolicySummaryDto {
     pub program_id: String,
@@ -2386,15 +2114,7 @@ pub struct RamLfeProgramPolicySummaryDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Public proof-verifier metadata for proof-mode RAM-LFE policies.
 pub struct RamLfeProofVerifierMetadataDto {
     pub proof_backend: String,
@@ -2402,27 +2122,18 @@ pub struct RamLfeProofVerifierMetadataDto {
     pub public_inputs_schema_hash: String,
     pub verifying_key_bytes_b64: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// List response for RAM-LFE program policies.
 pub struct RamLfeProgramPolicyListDto {
     pub total: u64,
     pub items: Vec<RamLfeProgramPolicySummaryDto>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, norito::derive::NoritoDeserialize)]
+(Debug, norito::derive::NoritoDeserialize)
 /// Execute one RAM-LFE program from a BFV-encrypted input.
 pub struct RamLfeExecuteRequestDto {
     pub encrypted_input: String,
 }
-#[cfg(feature = "app_api")]
+}
 impl norito::json::JsonDeserialize for RamLfeExecuteRequestDto {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -2470,15 +2181,8 @@ impl norito::json::JsonDeserialize for RamLfeExecuteRequestDto {
         })
     }
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+derived_items! {
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Successful response emitted by `/v1/ram-lfe/programs/{program_id}/execute`.
 pub struct RamLfeExecuteResponseDto {
     pub program_id: String,
@@ -2495,15 +2199,7 @@ pub struct RamLfeExecuteResponseDto {
     pub receipt: RamLfeExecutionReceiptDto,
     pub output_opening: iroha_data_model::ram_lfe::RamLfeOutputOpening,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Canonical public RAM-LFE execution receipt payload.
 pub struct RamLfeExecutionReceiptPayloadDto {
     pub program_id: String,
@@ -2520,15 +2216,7 @@ pub struct RamLfeExecutionReceiptPayloadDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub expires_at_ms: Option<u64>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Public receipt attestation union.
 pub struct RamLfeReceiptAttestationDto {
     pub kind: String,
@@ -2539,29 +2227,13 @@ pub struct RamLfeReceiptAttestationDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub proof_b64: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Canonical public RAM-LFE execution receipt.
 pub struct RamLfeExecutionReceiptDto {
     pub payload: RamLfeExecutionReceiptPayloadDto,
     pub attestation: RamLfeReceiptAttestationDto,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Stateless receipt-verification request for RAM-LFE execution receipts.
 pub struct RamLfeReceiptVerifyRequestDto {
     pub receipt: iroha_data_model::ram_lfe::RamLfeExecutionReceipt,
@@ -2569,15 +2241,7 @@ pub struct RamLfeReceiptVerifyRequestDto {
     #[norito(default)]
     pub output_hex: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Stateless RAM-LFE receipt-verification result.
 pub struct RamLfeReceiptVerifyResponseDto {
     pub valid: bool,
@@ -2591,15 +2255,7 @@ pub struct RamLfeReceiptVerifyResponseDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Summary information for a registered identifier policy.
 pub struct IdentifierPolicySummaryDto {
     pub policy_id: String,
@@ -2624,29 +2280,20 @@ pub struct IdentifierPolicySummaryDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// List response for identifier policies.
 pub struct IdentifierPolicyListDto {
     pub total: u64,
     pub items: Vec<IdentifierPolicySummaryDto>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, norito::derive::NoritoDeserialize)]
+(Debug, norito::derive::NoritoDeserialize)
 /// Resolve an encrypted identifier under one policy namespace.
 pub struct IdentifierResolveRequestDto {
     pub policy_id: String,
     pub encrypted_input: String,
     pub output_opening: iroha_data_model::ram_lfe::RamLfeOutputOpening,
 }
-#[cfg(feature = "app_api")]
+}
 impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -2735,19 +2382,13 @@ impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
         })
     }
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+derived_items! {
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Successful response emitted by `/v1/identifiers/resolve`.
 pub struct IdentifierResolveResponseDto {
     pub payload: IdentifierResolutionReceiptPayloadDto,
     pub attestation: RamLfeReceiptAttestationDto,
+}
 }
 #[cfg(all(test, feature = "app_api"))]
 mod ram_lfe_encrypted_only_request_dto_tests {
@@ -2869,15 +2510,8 @@ mod ram_lfe_encrypted_only_request_dto_tests {
         );
     }
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+derived_items! {
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Canonical public identifier-resolution receipt payload.
 pub struct IdentifierResolutionReceiptPayloadDto {
     pub policy_id: String,
@@ -2888,15 +2522,7 @@ pub struct IdentifierResolutionReceiptPayloadDto {
     pub uaid: String,
     pub account_id: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Persisted identifier-claim binding returned by receipt-hash lookup.
 pub struct IdentifierClaimLookupResponseDto {
     pub policy_id: String,
@@ -2907,6 +2533,8 @@ pub struct IdentifierClaimLookupResponseDto {
     pub verified_at_ms: u64,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub expires_at_ms: Option<u64>,
+}
+}
 }
 impl<G> TelemetryGate for MaybeTelemetry<G>
 where
@@ -3037,7 +2665,7 @@ fn infallible_pretty_json_response<T: json::JsonSerialize + ?Sized>(
 ) -> Response {
     application_json_response(json::to_json_pretty(value).unwrap_or_else(|_| fallback.into()))
 }
-#[cfg(feature = "app_api")]
+app_api_items! {
 fn filter_expr_depth(expr: &FilterExpr) -> usize {
     match expr {
         FilterExpr::And(list) | FilterExpr::Or(list) => {
@@ -3047,7 +2675,6 @@ fn filter_expr_depth(expr: &FilterExpr) -> usize {
         _ => 1,
     }
 }
-#[cfg(feature = "app_api")]
 fn paginated_json_response<T>(
     page: &PageResult<T>,
     count_mode: AppCountMode,
@@ -3063,7 +2690,6 @@ fn paginated_json_response<T>(
     insert_page_metadata(&mut top, page, count_mode);
     pretty_json_response(&top)
 }
-#[cfg(feature = "app_api")]
 fn paginated_json_map_response<T>(
     page: &PageResult<T>,
     count_mode: AppCountMode,
@@ -3071,7 +2697,6 @@ fn paginated_json_map_response<T>(
 ) -> Result<Response> {
     paginated_json_response(page, count_mode, |item| Ok(Value::Object(item_json(item))))
 }
-#[cfg(feature = "app_api")]
 fn id_paginated_json_response<T>(
     page: &PageResult<T>,
     count_mode: AppCountMode,
@@ -3083,13 +2708,11 @@ fn id_paginated_json_response<T>(
         row
     })
 }
-#[cfg(feature = "app_api")]
 fn app_api_transaction_signing_error(context: &str, err: impl fmt::Display) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
         "failed to sign {context} transaction: {err}",
     )))
 }
-#[cfg(feature = "app_api")]
 fn sign_app_api_transaction(
     builder: TransactionBuilder,
     private_key: &iroha_crypto::PrivateKey,
@@ -3099,7 +2722,6 @@ fn sign_app_api_transaction(
         .try_sign(private_key)
         .map_err(|err| app_api_transaction_signing_error(context, err))
 }
-#[cfg(feature = "app_api")]
 fn quote_app_api_transaction_builder(
     builder: TransactionBuilder,
     queue: &Queue,
@@ -3161,15 +2783,9 @@ fn quote_app_api_transaction_builder(
     TransactionBuilder::from_payload(payload)
         .map_err(|err| app_api_transaction_signing_error(context, err))
 }
+derived_items! {
 /// Canonical unsigned transaction prepared by Torii for local signing.
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 pub struct AppApiTransactionDraftDto {
     /// Always `false`; Torii has not submitted this transaction.
@@ -3179,7 +2795,7 @@ pub struct AppApiTransactionDraftDto {
     /// Signature message (`HashOf<TransactionPayload>`) encoded as padded base64.
     pub signing_message_b64: String,
 }
-#[cfg(feature = "app_api")]
+}
 fn new_app_api_transaction_builder_from_state(
     state: &CoreState,
     authority: AccountId,
@@ -3190,7 +2806,6 @@ fn new_app_api_transaction_builder_from_state(
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
 }
-#[cfg(feature = "app_api")]
 fn app_api_transaction_draft(builder: &TransactionBuilder) -> AppApiTransactionDraftDto {
     use base64::Engine as _;
     AppApiTransactionDraftDto {
@@ -3201,7 +2816,6 @@ fn app_api_transaction_draft(builder: &TransactionBuilder) -> AppApiTransactionD
             .encode(builder.payload_hash_bytes()),
     }
 }
-#[cfg(feature = "app_api")]
 fn quote_and_sign_app_api_transaction(
     builder: TransactionBuilder,
     private_key: &iroha_crypto::PrivateKey,
@@ -3215,7 +2829,6 @@ fn quote_and_sign_app_api_transaction(
         context,
     )
 }
-#[cfg(feature = "app_api")]
 fn decode_app_api_detached_signature(signature_b64: &str) -> Result<Signature> {
     use base64::Engine as _;
     let signature_bytes = base64::engine::general_purpose::STANDARD
@@ -3233,9 +2846,31 @@ fn decode_app_api_detached_signature(signature_b64: &str) -> Result<Signature> {
         ))
     })
 }
-#[cfg(feature = "app_api")]
+fn decode_app_api_detached_authority_signature(
+    public_key_hex: Option<&str>,
+    signature_b64: Option<&str>,
+    expected_authority: &AccountId,
+    mismatch_message: &'static str,
+) -> Result<Signature> {
+    let public_key_hex = public_key_hex
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
+    let signature_b64 = signature_b64
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
+    let public_key_bytes = hex::decode(public_key_hex)
+        .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+    let public_key =
+        PublicKey::from_bytes(Algorithm::Ed25519, &public_key_bytes)
+            .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+    if AccountId::new(public_key) != *expected_authority {
+        return Err(conversion_error(mismatch_message.to_owned()));
+    }
+    decode_app_api_detached_signature(signature_b64)
+}
 const SCCP_MAX_DETACHED_SIGNATURE_BYTES_V1: usize = 16 * 1024;
-#[cfg(feature = "app_api")]
 fn decode_app_api_authority_signature(
     authority: &AccountId,
     signature_b64: Option<&str>,
@@ -3598,13 +3233,11 @@ mod app_api_transaction_signing_tests {
         assert!(message.contains("propose/approve"));
     }
 }
-#[cfg(feature = "app_api")]
 fn explorer_not_found() -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::NotFound,
     ))
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
 struct ConfidentialPolicyTransitionDto {
     transition_id: String,
@@ -3614,7 +3247,6 @@ struct ConfidentialPolicyTransitionDto {
     conversion_window: Option<u64>,
     window_open_height: Option<u64>,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
 struct ConfidentialAssetPolicyDto {
     asset_id: String,
@@ -3626,7 +3258,6 @@ struct ConfidentialAssetPolicyDto {
     pedersen_params_id: Option<u32>,
     pending_transition: Option<ConfidentialPolicyTransitionDto>,
 }
-#[cfg(feature = "app_api")]
 impl ConfidentialAssetPolicyDto {
     fn from_policy(
         asset_id: iroha_data_model::asset::id::AssetDefinitionId,
@@ -3666,12 +3297,10 @@ impl ConfidentialAssetPolicyDto {
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn encode_hash_hex(hash: &Hash) -> String {
     hex::encode_upper(hash.as_ref())
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_confidential_asset_transitions(
     state: Arc<CoreState>,
     axum::extract::Path(definition_id): axum::extract::Path<String>,
@@ -3689,6 +3318,7 @@ pub async fn handle_v1_confidential_asset_transitions(
         block_height,
     );
     Ok(JsonBody(dto).into_response())
+}
 }
 #[cfg(feature = "zk-proof-tags")]
 /// GET /v1/zk/proof-tags/{backend}/{hash} — return ZK1 TLV tags for ProofId (debug).
@@ -3911,7 +3541,7 @@ impl Default for ProofApiLimits {
         }
     }
 }
-#[cfg(feature = "app_api")]
+app_api_items! {
 #[derive(
     Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]
@@ -3942,7 +3572,6 @@ pub struct ProofListQuery {
     /// If true, return only ids as objects { backend, hash }
     pub ids_only: Option<bool>,
 }
-#[cfg(feature = "app_api")]
 fn parse_status_opt(s: Option<&str>) -> Option<iroha_data_model::proof::ProofStatus> {
     use iroha_data_model::proof::ProofStatus as PS;
     match s {
@@ -3952,7 +3581,6 @@ fn parse_status_opt(s: Option<&str>) -> Option<iroha_data_model::proof::ProofSta
         _ => None,
     }
 }
-#[cfg(feature = "app_api")]
 fn bridge_record_to_json(
     record: &iroha_data_model::bridge::BridgeProofRecord,
 ) -> norito::json::Value {
@@ -4070,7 +3698,6 @@ fn bridge_record_to_json(
     obj.insert("payload".into(), norito::json::Value::Object(payload));
     norito::json::Value::Object(obj)
 }
-#[cfg(feature = "app_api")]
 /// GET /v1/zk/proofs — list proofs with filters
 pub async fn handle_list_proofs(
     state: Arc<CoreState>,
@@ -4241,7 +3868,6 @@ pub async fn handle_list_proofs(
     });
     Ok(resp)
 }
-#[cfg(feature = "app_api")]
 /// GET /v1/zk/proofs/count — return count for filters
 pub async fn handle_count_proofs(
     state: Arc<CoreState>,
@@ -4346,7 +3972,6 @@ pub async fn handle_count_proofs(
     });
     Ok(resp)
 }
-#[cfg(feature = "app_api")]
 #[derive(
     Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]
@@ -4367,7 +3992,6 @@ pub struct VkListQuery {
     /// If true, return only ids as objects { backend, name }
     pub ids_only: Option<bool>,
 }
-#[cfg(feature = "app_api")]
 /// GET /v1/zk/vk — list verifying keys with optional filters.
 pub async fn handle_list_vk(
     state: Arc<CoreState>,
@@ -4484,6 +4108,7 @@ pub async fn handle_list_vk(
         norito::json::to_json_pretty(&arr).unwrap_or_else(|_| "[]".into())
     };
     Ok(application_json_response(body))
+}
 }
 include!("routing/signed_query_execution.rs");
 // ---------------------- Iroha Connect (feature-gated) ----------------------
@@ -4783,15 +4408,9 @@ mod connect_session_tests {
     }
     include!("routing/connect_session_request_decode_tests.rs");
 }
+derived_items! {
 // ------------------------ ZK convenience DTOs (examples) ------------------------
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request for recent shielded ledger roots (convenience JSON wrapper).
 /// Mirrors the Norito type used by IVM syscalls.
@@ -4802,14 +4421,7 @@ pub struct ZkRootsGetRequestDto {
     /// Maximum number of recent roots to return.
     pub max: u32,
 }
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Response with recent roots and the exact committed state snapshot.
 pub struct ZkRootsGetResponseDto {
     /// Latest or profile-defined empty root as a lowercase, 0x-less hex string.
@@ -4821,14 +4433,7 @@ pub struct ZkRootsGetResponseDto {
     /// Canonical lowercase hash of that committed block.
     pub evaluated_block_hash: String,
 }
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request for current profiled confidential-tree inclusion paths.
 pub struct ZkMerklePathGetRequestDto {
@@ -4838,14 +4443,7 @@ pub struct ZkMerklePathGetRequestDto {
     /// Commitment hex strings (32 bytes, lowercase, 0x-less preferred).
     pub commitments: Vec<String>,
 }
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Inclusion path for one commitment in a profiled confidential tree.
 pub struct ZkMerklePathDto {
     /// Commitment being proven, encoded as lowercase 32-byte hex.
@@ -4861,14 +4459,7 @@ pub struct ZkMerklePathDto {
     /// Current profiled confidential-tree root for this path.
     pub root: String,
 }
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Response with current profiled confidential-tree inclusion paths.
 pub struct ZkMerklePathGetResponseDto {
     /// Committed block height at which the frontier and paths were read.
@@ -4886,28 +4477,14 @@ pub struct ZkMerklePathGetResponseDto {
     /// Paths returned in the same order as the request commitments.
     pub paths: Vec<ZkMerklePathDto>,
 }
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request for election tally (convenience JSON wrapper).
 pub struct ZkVoteGetTallyRequestDto {
     /// Canonical governance selector V1 identifying the election.
     pub election_id: String,
 }
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Response with election tally (convenience JSON wrapper).
 pub struct ZkVoteGetTallyResponseDto {
     /// Height of the committed block whose state supplied this tally.
@@ -4918,6 +4495,7 @@ pub struct ZkVoteGetTallyResponseDto {
     pub finalized: bool,
     /// Public tally counts per option (length equals number of options).
     pub tally: Vec<u64>,
+}
 }
 #[cfg(test)]
 mod zk_request_dto_json_tests {
@@ -4946,21 +4524,19 @@ mod zk_request_dto_json_tests {
         assert_unknown_field(error);
     }
 }
+app_api_items! {
 /// Wrapped response for proof lookups that preserves payload size for egress gating.
-#[cfg(feature = "app_api")]
 pub struct ProofHttpResponse {
     /// Final HTTP response.
     pub response: axum::response::Response,
     /// Serialized payload length in bytes (0 for 304).
     pub bytes: u64,
 }
-#[cfg(feature = "app_api")]
 impl axum::response::IntoResponse for ProofHttpResponse {
     fn into_response(self) -> axum::response::Response {
         self.response
     }
 }
-#[cfg(feature = "app_api")]
 /// GET /v1/zk/proof/{backend}/{hash} — read proof record by backend and proof hash (hex).
 pub async fn handle_get_proof(
     state: Arc<CoreState>,
@@ -5099,7 +4675,6 @@ pub async fn handle_get_proof(
         bytes,
     })
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
 #[norito(deny_unknown_fields)]
 /// Canonical signed-query envelope for `FindProofRecordById`.
@@ -5107,7 +4682,6 @@ pub struct ProofFindByIdQueryDto {
     /// Versioned Norito `SignedQuery` bytes encoded as canonical padded base64.
     pub signed_query_b64: String,
 }
-#[cfg(feature = "app_api")]
 /// Decode and constrain a locally signed `FindProofRecordById` query.
 pub fn signed_find_proof_by_id(
     dto: &ProofFindByIdQueryDto,
@@ -5165,6 +4739,7 @@ mod proof_query_envelope_tests {
             "non-proof signed query must be rejected"
         );
     }
+}
 }
 /// GET /v1/sumeragi/pacemaker — snapshot of pacemaker timers and config
 #[cfg(feature = "telemetry")]
@@ -5609,15 +5184,8 @@ pub fn parse_sccp_recent_query(raw_query: Option<&str>) -> Result<SccpRecentWind
 pub fn validate_sccp_recent_query(raw_query: Option<&str>) -> Result<()> {
     parse_sccp_recent_query(raw_query).map(|_| ())
 }
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+derived_items! {
+( Clone, Copy, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Fixed SCCP V1 route-registry capacity limits.
 pub struct SccpRegistryLimitsDto {
@@ -5632,15 +5200,7 @@ pub struct SccpRegistryLimitsDto {
     /// Maximum retained native trust anchors in one lane.
     pub max_retained_native_trust_anchors_per_lane: u32,
 }
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Clone, Copy, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Consensus-critical SCCP proof and deterministic verifier-work limits.
 pub struct SccpResourceLimitsDto {
@@ -5690,6 +5250,7 @@ pub struct SccpResourceLimitsDto {
     pub max_bn254_pairing_checks_per_transaction: u32,
     /// Maximum BN254 pairing-product checks committed in one block.
     pub max_bn254_pairing_checks_per_block: u32,
+}
 }
 impl SccpRegistryLimitsDto {
     fn v1() -> Self {
@@ -5764,14 +5325,8 @@ impl From<iroha_config::parameters::actual::Sccp> for SccpResourceLimitsDto {
         }
     }
 }
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+derived_items! {
+( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Stable first-release SCCP HTTP surface discovery.
 pub struct SccpCapabilitiesDto {
@@ -5807,7 +5362,7 @@ pub struct SccpCapabilitiesDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub native_message_submit_path: Option<String>,
 }
-#[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 #[norito(deny_unknown_fields)]
 /// Route-scoped, state-derived SORA outbound IVM material.
 ///
@@ -5837,7 +5392,7 @@ pub struct SccpSoraOutboundMaterialDto {
     /// Active governance version of the referenced proof verification key.
     pub verifying_key_version: u32,
 }
-#[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 #[norito(deny_unknown_fields)]
 /// Canonical readback and proof-request links for one finalized outbound message.
 pub struct SccpRecentMessageLinksDto {
@@ -5846,7 +5401,7 @@ pub struct SccpRecentMessageLinksDto {
     /// Query-free canonical Groth16 request lookup path.
     pub proof_request_path: String,
 }
-#[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 #[norito(deny_unknown_fields)]
 /// Compact newest-first SCCP outbound-message discovery record.
 pub struct SccpRecentMessageDto {
@@ -5887,9 +5442,7 @@ pub struct SccpRecentMessageDto {
     /// Canonical bundle and state-derived proof-request links.
     pub links: SccpRecentMessageLinksDto,
 }
-#[derive(
-    Clone, Copy, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,
-)]
+( Clone, Copy, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Compound continuation for SCCP recent-message discovery.
 pub struct SccpRecentCursorDto {
@@ -5898,7 +5451,7 @@ pub struct SccpRecentCursorDto {
     /// Commitment index of the last item returned by the current page.
     pub after_index: u32,
 }
-#[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 #[norito(deny_unknown_fields)]
 /// Newest-first SCCP recent-message discovery response.
 pub struct SccpRecentMessagesDto {
@@ -5909,10 +5462,11 @@ pub struct SccpRecentMessagesDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub next: Option<SccpRecentCursorDto>,
 }
-#[derive(Clone, Debug)]
+(Clone, Debug)
 struct SccpIndexedOutboundRecord {
     key: iroha_data_model::bridge::SccpOutboundMessageKeyV1,
     descriptor: iroha_data_model::bridge::SccpOutboundMessageDescriptorV1,
+}
 }
 fn validate_sccp_indexed_outbound_record(
     message_id: [u8; 32],
@@ -9283,9 +8837,8 @@ pub async fn handle_v1_sumeragi_evidence_count(
 const EVIDENCE_LIST_LIMIT_CAP: usize = 1_000;
 /// Maximum evidence records an operator may skip before the bounded page.
 const EVIDENCE_LIST_OFFSET_CAP: usize = 10_000;
-#[derive(
-    Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
-)]
+derived_items! {
+( Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 /// Optional query params for evidence listing
 pub struct EvidenceListQuery {
     /// Maximum number of entries to return (1..=1000). Default 50.
@@ -9295,9 +8848,7 @@ pub struct EvidenceListQuery {
     /// Optional filter by the sole first-release kind: `SumeragiV2Equivocation`.
     pub kind: Option<String>,
 }
-#[derive(
-    Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
-)]
+( Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 /// Raw evidence-list query whose values retain their exact decoded spelling.
 pub(crate) struct EvidenceListStringQuery {
@@ -9307,6 +8858,7 @@ pub(crate) struct EvidenceListStringQuery {
     pub offset: Option<String>,
     /// Exact evidence-kind query value, when present.
     pub kind: Option<String>,
+}
 }
 fn invalid_evidence_list_pagination(field: &'static str, value: &str, expected: &str) -> Error {
     Error::AppQueryValidation {
@@ -12207,15 +11759,9 @@ mod contract_manifest_response_tests {
         }
     }
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    Default,
-)]
+app_api_items! {
+derived_items! {
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Default,)
 pub struct ContractStateQuery {
     /// Optional canonical contract address used to scope logical state paths.
     pub contract_address: Option<String>,
@@ -12236,8 +11782,7 @@ pub struct ContractStateQuery {
     /// Optional decoded output mode. Supported: `json`.
     pub decode: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize)]
+(Debug, crate::json_macros::JsonSerialize)
 pub struct ContractStateEntry {
     pub path: String,
     pub found: bool,
@@ -12248,8 +11793,7 @@ pub struct ContractStateEntry {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub value_json: Option<IrohaJson>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize)]
+(Debug, crate::json_macros::JsonSerialize)
 pub struct ContractStateResponse {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub contract_address: Option<String>,
@@ -12267,12 +11811,11 @@ pub struct ContractStateResponse {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<u64>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+(Clone, Copy, Debug, PartialEq, Eq)
 enum ContractStateDecodeMode {
     Json,
 }
-#[cfg(feature = "app_api")]
+}
 fn parse_contract_state_decode_mode(
     raw: Option<&str>,
 ) -> core::result::Result<Option<ContractStateDecodeMode>, String> {
@@ -12284,13 +11827,11 @@ fn parse_contract_state_decode_mode(
         )),
     }
 }
-#[cfg(feature = "app_api")]
 enum ContractStateSelection {
     Exact(StatePath),
     Paths(Vec<StatePath>),
     Prefix(StatePath),
 }
-#[cfg(feature = "app_api")]
 fn contract_state_schema_is_relevant(
     selection: &ContractStateSelection,
     schema_name: &str,
@@ -12312,7 +11853,6 @@ fn contract_state_schema_is_relevant(
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn register_contract_state_schema(
     registry: &mut BTreeMap<String, Option<ivm::EmbeddedStateType>>,
     retained_canonical_bytes: &mut usize,
@@ -12350,7 +11890,6 @@ fn register_contract_state_schema(
     *retained_canonical_bytes = next;
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn collect_contract_state_schemas(
     world: &impl WorldReadOnly,
     contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
@@ -12391,7 +11930,6 @@ fn collect_contract_state_schemas(
     }
     Ok(registry)
 }
-#[cfg(feature = "app_api")]
 fn decode_contract_state_pointer_payload<'a>(
     bytes: &'a [u8],
     expected: ivm::pointer_abi::PointerType,
@@ -12404,7 +11942,6 @@ fn decode_contract_state_pointer_payload<'a>(
     }
     Ok(tlv.payload)
 }
-#[cfg(feature = "app_api")]
 fn encode_contract_state_tlv(
     pointer_type: ivm::pointer_abi::PointerType,
     payload: &[u8],
@@ -12418,7 +11955,6 @@ fn encode_contract_state_tlv(
     encoded.extend_from_slice(Hash::new(payload).as_ref());
     Some(encoded)
 }
-#[cfg(feature = "app_api")]
 fn encode_contract_state_pointer_tlv_bytes(
     ty: &ivm::EmbeddedStateType,
     raw: &str,
@@ -12497,7 +12033,6 @@ fn encode_contract_state_pointer_tlv_bytes(
     };
     encode_contract_state_tlv(type_id, &payload)
 }
-#[cfg(feature = "app_api")]
 fn contract_state_stored_map_key_suffix(
     key_ty: &ivm::EmbeddedStateType,
     logical_key_suffix: &str,
@@ -12591,7 +12126,6 @@ fn contract_state_logical_map_key_suffix(
         == Some(stored_key_suffix))
     .then_some(logical_key)
 }
-#[cfg(feature = "app_api")]
 fn contract_state_logical_map_entry_value(
     registry: &BTreeMap<String, Option<ivm::EmbeddedStateType>>,
     logical_path: &str,
@@ -12604,7 +12138,6 @@ fn contract_state_logical_map_entry_value(
     let stored_key_suffix = contract_state_stored_map_key_suffix(key, key_suffix)?;
     get_value(&format!("{base}/{stored_key_suffix}"))
 }
-#[cfg(feature = "app_api")]
 fn contract_state_logical_map_parts<'a>(
     registry: &'a BTreeMap<String, Option<ivm::EmbeddedStateType>>,
     logical_path: &'a str,
@@ -12620,7 +12153,6 @@ fn contract_state_logical_map_parts<'a>(
         })
         .max_by_key(|(base, _, _)| base.len())
 }
-#[cfg(feature = "app_api")]
 fn contract_state_value_schema(
     ty: &ivm::EmbeddedStateType,
 ) -> core::result::Result<ivm::state_value::StateValueSchemaV1, String> {
@@ -12661,7 +12193,6 @@ fn contract_state_value_schema(
     }
     Err("embedded durable-state schema is invalid".into())
 }
-#[cfg(feature = "app_api")]
 fn decode_canonical_contract_state_norito<T>(
     payload: &[u8],
     label: &str,
@@ -12678,7 +12209,6 @@ where
     }
     Ok(value)
 }
-#[cfg(feature = "app_api")]
 fn decode_contract_state_pointer_json_fragment(
     envelope: &[u8],
     ty: &ivm::EmbeddedStateType,
@@ -12794,14 +12324,12 @@ fn decode_contract_state_pointer_json_fragment(
     norito::json::write_json_string(&string_value, &mut json);
     Ok(json)
 }
-#[cfg(feature = "app_api")]
 enum ContractStateJsonNode<'a> {
     Fragment(String),
     Static(&'static str),
     Array(Vec<usize>),
     Object(Vec<(&'a str, usize)>),
 }
-#[cfg(feature = "app_api")]
 fn try_push_contract_state_item<T>(
     values: &mut Vec<T>,
     value: T,
@@ -12812,7 +12340,6 @@ fn try_push_contract_state_item<T>(
     values.push(value);
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn push_contract_state_json_node<'a>(
     arena: &mut Vec<ContractStateJsonNode<'a>>,
     node: ContractStateJsonNode<'a>,
@@ -12821,7 +12348,6 @@ fn push_contract_state_json_node<'a>(
     try_push_contract_state_item(arena, node)?;
     Ok(index)
 }
-#[cfg(feature = "app_api")]
 fn drain_contract_state_children(
     completed: &mut Vec<usize>,
     value_start: usize,
@@ -12838,7 +12364,6 @@ fn drain_contract_state_children(
     values.extend(completed.drain(value_start..));
     Ok(values)
 }
-#[cfg(feature = "app_api")]
 fn render_contract_state_json(
     arena: &[ContractStateJsonNode<'_>],
     root: usize,
@@ -12924,7 +12449,6 @@ fn render_contract_state_json(
     }
     Ok(output)
 }
-#[cfg(feature = "app_api")]
 fn decode_contract_state_atoms_json(
     ty: &ivm::EmbeddedStateType,
     atoms: &[ivm::state_value::StateValueAtomV1],
@@ -13299,7 +12823,6 @@ fn decode_contract_state_atoms_json(
     *atom_index = cursors[0].index;
     result
 }
-#[cfg(feature = "app_api")]
 fn decode_contract_state_scalar_json(
     bytes: &[u8],
     ty: &ivm::EmbeddedStateType,
@@ -13326,7 +12849,6 @@ fn decode_contract_state_scalar_json(
     }
     Ok(value)
 }
-#[cfg(feature = "app_api")]
 fn decode_contract_state_value_json(
     base: &str,
     ty: &ivm::EmbeddedStateType,
@@ -13338,7 +12860,6 @@ fn decode_contract_state_value_json(
     let bytes = get_value(base).ok_or_else(|| format!("state path `{base}` not found"))?;
     decode_contract_state_scalar_json(bytes.as_slice(), ty)
 }
-#[cfg(feature = "app_api")]
 fn decode_contract_state_map_value_json(
     base: &str,
     value_ty: &ivm::EmbeddedStateType,
@@ -13352,7 +12873,6 @@ fn decode_contract_state_map_value_json(
     let bytes = get_value(&path).ok_or_else(|| format!("state path `{path}` not found"))?;
     decode_contract_state_scalar_json(bytes.as_slice(), value_ty)
 }
-#[cfg(feature = "app_api")]
 fn validate_contract_state_stored_map_key_suffix(
     key_ty: &ivm::EmbeddedStateType,
     suffix: &str,
@@ -13403,7 +12923,6 @@ fn validate_contract_state_stored_map_key_suffix(
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn match_contract_state_map_key_suffix(
     base: &str,
     key_ty: &ivm::EmbeddedStateType,
@@ -13418,7 +12937,6 @@ fn match_contract_state_map_key_suffix(
         stored_key_suffix.to_owned(),
     )))
 }
-#[cfg(feature = "app_api")]
 fn decode_contract_state_path_json(
     registry: &BTreeMap<String, Option<ivm::EmbeddedStateType>>,
     logical_path: &str,
@@ -13444,7 +12962,6 @@ fn decode_contract_state_path_json(
         })?;
     decode_contract_state_map_value_json(base, value, &stored_key_suffix, get_value)
 }
-#[cfg(feature = "app_api")]
 fn contract_state_value_exists(
     base: &str,
     ty: &ivm::EmbeddedStateType,
@@ -13452,7 +12969,6 @@ fn contract_state_value_exists(
 ) -> bool {
     !matches!(ty, ivm::EmbeddedStateType::StateMap { .. }) && has_value(base)
 }
-#[cfg(feature = "app_api")]
 fn contract_state_map_entry_exists(
     base: &str,
     value_ty: &ivm::EmbeddedStateType,
@@ -13462,7 +12978,6 @@ fn contract_state_map_entry_exists(
     !matches!(value_ty, ivm::EmbeddedStateType::StateMap { .. })
         && has_value(&format!("{base}/{stored_key_suffix}"))
 }
-#[cfg(feature = "app_api")]
 fn contract_state_logical_path_exists(
     registry: &BTreeMap<String, Option<ivm::EmbeddedStateType>>,
     logical_path: &str,
@@ -13493,7 +13008,6 @@ fn contract_state_logical_path_exists(
     };
     contract_state_value_exists(logical_path, schema, has_value)
 }
-#[cfg(feature = "app_api")]
 #[iroha_futures::telemetry_future]
 pub async fn handle_get_contract_state(
     state: Arc<CoreState>,
@@ -15071,7 +14585,6 @@ mod contract_state_tests {
 }
 /// Fetch on-chain contract code bytes (base64) by code_hash.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_get_contract_code_bytes(
     state: Arc<CoreState>,
     axum::extract::Path(code_hash): axum::extract::Path<String>,
@@ -15113,7 +14626,6 @@ pub async fn handle_get_contract_code_bytes(
     let mut resp = application_json_response(body);
     Ok(resp)
 }
-#[cfg(feature = "app_api")]
 fn explicit_contract_entrypoint(raw: &str) -> Result<&str> {
     let entrypoint = raw.trim();
     if entrypoint.is_empty() {
@@ -15123,7 +14635,6 @@ fn explicit_contract_entrypoint(raw: &str) -> Result<&str> {
     }
     Ok(entrypoint)
 }
-#[cfg(feature = "app_api")]
 fn encode_contract_argument_record(
     prepared: &ivm::PreparedContract,
     entrypoint: &str,
@@ -15141,7 +14652,6 @@ fn encode_contract_argument_record(
             .map_err(|error| format!("payload does not match entrypoint schema: {error}")),
     }
 }
-#[cfg(feature = "app_api")]
 fn prepare_contract_argument_record(
     prepared: &ivm::PreparedContract,
     entrypoint: &str,
@@ -15164,7 +14674,6 @@ fn prepare_contract_argument_record(
         _ => Err("contract argument schema and canonical record diverged".to_owned()),
     }
 }
-#[cfg(feature = "app_api")]
 fn bound_signed_contract_arguments(
     arguments: Option<Vec<u8>>,
 ) -> core::result::Result<
@@ -15176,23 +14685,14 @@ fn bound_signed_contract_arguments(
         .transpose()
         .map_err(|error| error.to_string())
 }
-#[cfg(feature = "app_api")]
 const ASSET_TRANSFER_MAX_ACCOUNT_LITERAL_BYTES: usize = 512;
-#[cfg(feature = "app_api")]
 const ASSET_TRANSFER_MAX_DEFINITION_LITERAL_BYTES: usize = 64;
-#[cfg(feature = "app_api")]
 const ASSET_TRANSFER_MAX_SCOPE_LITERAL_BYTES: usize = 30;
-#[cfg(feature = "app_api")]
 const ASSET_TRANSFER_MAX_AMOUNT_LITERAL_BYTES: usize = 192;
-#[cfg(feature = "app_api")]
 const ASSET_TRANSFER_MAX_MEMO_BYTES: usize = 256;
-#[cfg(feature = "app_api")]
 const ASSET_TRANSFER_MAX_TTL_MS: u64 = 10 * 60 * 1_000;
-#[cfg(feature = "app_api")]
 const ASSET_TRANSFER_MAX_CREATION_AGE_MS: u64 = 5 * 60 * 1_000;
-#[cfg(feature = "app_api")]
 const ASSET_TRANSFER_MAX_FUTURE_SKEW_MS: u64 = 30 * 1_000;
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct NormalizedAssetTransfer {
     authority: AccountId,
@@ -15206,7 +14706,6 @@ struct NormalizedAssetTransfer {
     transaction_ttl_ms: u64,
     intent: AssetTransferIntentDto,
 }
-#[cfg(feature = "app_api")]
 enum AssetTransferSigningState {
     Prepare,
     Submit {
@@ -15214,7 +14713,6 @@ enum AssetTransferSigningState {
         signature: Signature,
     },
 }
-#[cfg(feature = "app_api")]
 fn exact_asset_transfer_account(raw: &str, field: &str) -> Result<AccountId> {
     if raw.is_empty() || raw.len() > ASSET_TRANSFER_MAX_ACCOUNT_LITERAL_BYTES {
         return Err(conversion_error(format!(
@@ -15230,7 +14728,6 @@ fn exact_asset_transfer_account(raw: &str, field: &str) -> Result<AccountId> {
     }
     Ok(parsed.into_account_id())
 }
-#[cfg(feature = "app_api")]
 fn exact_asset_transfer_definition(raw: &str) -> Result<AssetDefinitionId> {
     if raw.is_empty() || raw.len() > ASSET_TRANSFER_MAX_DEFINITION_LITERAL_BYTES {
         return Err(conversion_error(format!(
@@ -15246,7 +14743,6 @@ fn exact_asset_transfer_definition(raw: &str) -> Result<AssetDefinitionId> {
     }
     Ok(definition)
 }
-#[cfg(feature = "app_api")]
 fn exact_asset_transfer_scope(raw: &str) -> Result<iroha_data_model::asset::AssetBalanceScope> {
     if raw.is_empty() || raw.len() > ASSET_TRANSFER_MAX_SCOPE_LITERAL_BYTES {
         return Err(conversion_error(
@@ -15280,7 +14776,6 @@ fn exact_asset_transfer_scope(raw: &str) -> Result<iroha_data_model::asset::Asse
         DataSpaceId::new(dataspace),
     ))
 }
-#[cfg(feature = "app_api")]
 fn exact_asset_transfer_amount(raw: &str) -> Result<iroha_primitives::numeric::Quantity> {
     if raw.is_empty() || raw.len() > ASSET_TRANSFER_MAX_AMOUNT_LITERAL_BYTES {
         return Err(conversion_error(format!(
@@ -15330,7 +14825,6 @@ mod asset_transfer_quantity_tests {
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn exact_asset_transfer_memo(memo: Option<String>) -> Result<Option<String>> {
     let Some(memo) = memo else {
         return Ok(None);
@@ -15347,7 +14841,6 @@ fn exact_asset_transfer_memo(memo: Option<String>) -> Result<Option<String>> {
     }
     Ok(Some(memo))
 }
-#[cfg(feature = "app_api")]
 fn exact_asset_transfer_public_key(raw: &str) -> Result<PublicKey> {
     if raw.len() != 64 || raw != raw.to_ascii_lowercase() || raw.starts_with("0x") {
         return Err(conversion_error(
@@ -15364,7 +14857,6 @@ fn exact_asset_transfer_public_key(raw: &str) -> Result<PublicKey> {
     PublicKey::from_bytes(Algorithm::Ed25519, &bytes)
         .map_err(|error| conversion_error(format!("invalid public_key_hex: {error}")))
 }
-#[cfg(feature = "app_api")]
 fn exact_asset_transfer_signature(raw: &str) -> Result<Signature> {
     use base64::Engine as _;
     // A 64-byte Ed25519 signature is exactly 88 bytes in canonical padded base64.
@@ -15388,7 +14880,6 @@ fn exact_asset_transfer_signature(raw: &str) -> Result<Signature> {
     iroha_crypto::ed25519_parse_signature(&bytes)
         .map_err(|error| conversion_error(format!("invalid signature_base64: {error}")))
 }
-#[cfg(feature = "app_api")]
 fn validate_asset_transfer_time(
     creation_time_ms: u64,
     transaction_ttl_ms: u64,
@@ -15410,7 +14901,6 @@ fn validate_asset_transfer_time(
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn validate_asset_transfer_time_shape(
     creation_time_ms: u64,
     transaction_ttl_ms: u64,
@@ -15445,7 +14935,6 @@ fn normalize_asset_transfer_request(
     )?;
     Ok(normalized)
 }
-#[cfg(feature = "app_api")]
 fn normalize_asset_transfer_request_shape(
     chain_id: &ChainId,
     request: AssetTransferRequestDto,
@@ -15540,7 +15029,6 @@ fn normalize_asset_transfer_request_shape(
         signing_state,
     ))
 }
-#[cfg(feature = "app_api")]
 impl NormalizedAssetTransfer {
     fn transaction_builder(&self, network_id: NetworkId) -> TransactionBuilder {
         let source_asset_id = AssetId::with_scope(
@@ -15591,13 +15079,11 @@ impl NormalizedAssetTransfer {
         }
     }
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AssetTransferSubmissionDisposition {
     Queued,
     Applied { block_height: Option<u64> },
 }
-#[cfg(feature = "app_api")]
 impl AssetTransferSubmissionDisposition {
     const fn receipt_status(self) -> &'static str {
         match self {
@@ -15606,7 +15092,6 @@ impl AssetTransferSubmissionDisposition {
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn committed_asset_transfer_height(
     state: &CoreState,
     entrypoint_hash: &HashOf<TransactionEntrypoint>,
@@ -15615,7 +15100,6 @@ fn committed_asset_transfer_height(
         .committed_entrypoint_height(entrypoint_hash)
         .and_then(|height| u64::try_from(height.get()).ok())
 }
-#[cfg(feature = "app_api")]
 fn known_asset_transfer_submission(
     queue: &Queue,
     state: &CoreState,
@@ -15632,7 +15116,6 @@ fn known_asset_transfer_submission(
         .contains_pending_hash(entrypoint_hash, state)
         .then_some(AssetTransferSubmissionDisposition::Queued)
 }
-#[cfg(feature = "app_api")]
 fn asset_transfer_pipeline_status_response(
     transaction_hash_hex: String,
     disposition: AssetTransferSubmissionDisposition,
@@ -15654,7 +15137,6 @@ fn asset_transfer_pipeline_status_response(
         }
     }
 }
-#[cfg(feature = "app_api")]
 #[iroha_futures::telemetry_future]
 async fn submit_asset_transfer_request(
     chain_id: Arc<ChainId>,
@@ -16488,7 +15970,6 @@ mod asset_transfer_request_tests {
         assert_eq!(queue.active_len(), 0);
     }
 }
-#[cfg(feature = "app_api")]
 /// POST /v1/contracts/call — invoke a deployed contract entrypoint with optional payload.
 #[iroha_futures::telemetry_future]
 async fn submit_contract_call_request(
@@ -16589,30 +16070,12 @@ async fn submit_contract_call_request(
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
     if public_key_hex.is_some() || signature_b64.is_some() {
-        let public_key_hex = public_key_hex
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
-        let signature_b64 = signature_b64
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
-        let public_key_bytes = hex::decode(public_key_hex)
-            .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-        let public_key = iroha_crypto::PublicKey::from_bytes(
-            iroha_crypto::Algorithm::Ed25519,
-            &public_key_bytes,
-        )
-        .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-        let expected_authority = dm::AccountId::new(public_key.clone());
-        if authority != expected_authority {
-            return Err(conversion_error(
-                "public_key_hex does not match authority".to_owned(),
-            ));
-        }
-        let signature = decode_app_api_detached_signature(signature_b64)?;
+        let signature = decode_app_api_detached_authority_signature(
+            public_key_hex.as_deref(),
+            signature_b64.as_deref(),
+            &authority,
+            "public_key_hex does not match authority",
+        )?;
         let tx = builder.build_with_signature(signature);
         tx.verify_signature().map_err(|err| {
             conversion_error(format!(
@@ -16685,7 +16148,6 @@ async fn submit_contract_call_request(
         }),
     })
 }
-#[cfg(feature = "app_api")]
 fn queued_pipeline_status_response(
     tx_hash_hex: String,
 ) -> iroha_torii_shared::PipelineTransactionStatusResponse {
@@ -16699,7 +16161,6 @@ fn queued_pipeline_status_response(
         "queue".to_owned(),
     )
 }
-#[cfg(feature = "app_api")]
 fn decode_sccp_native_proof_b64(
     encoded: &str,
 ) -> Result<(iroha_sccp::SccpNativeInboundMessageProofV1, Vec<u8>)> {
@@ -16722,7 +16183,6 @@ fn decode_sccp_native_proof_b64(
         .map_err(|error| conversion_error(format!("invalid native SCCP proof: {error}")))?;
     Ok((proof, bytes))
 }
-#[cfg(feature = "app_api")]
 fn validate_sccp_creation_time(creation_time_ms: Option<u64>) -> Result<()> {
     if creation_time_ms == Some(0) {
         return Err(conversion_error(
@@ -16731,7 +16191,6 @@ fn validate_sccp_creation_time(creation_time_ms: Option<u64>) -> Result<()> {
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn validate_sccp_taira_chain_id(chain_id: &ChainId) -> Result<()> {
     if chain_id.to_string() != iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1 {
         return Err(conversion_error(format!(
@@ -16741,7 +16200,6 @@ fn validate_sccp_taira_chain_id(chain_id: &ChainId) -> Result<()> {
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn validate_sccp_submit_signing_state(
     authority: &AccountId,
     signature_b64: Option<&str>,
@@ -16772,7 +16230,6 @@ fn validate_sccp_submit_signing_state(
         )),
     }
 }
-#[cfg(feature = "app_api")]
 fn validate_sccp_taira_transfer_recipient(payload: &SccpPayloadV1) -> Result<()> {
     let SccpPayloadV1::Transfer(transfer) = payload;
     if transfer.recipient_codec != iroha_sccp::SCCP_CODEC_CANONICAL_TEXT {
@@ -16822,7 +16279,6 @@ fn validate_sccp_taira_transfer_recipient(payload: &SccpPayloadV1) -> Result<()>
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn decode_sccp_transaction_payload_b64(
     encoded: &str,
 ) -> Result<(
@@ -16868,7 +16324,6 @@ fn decode_sccp_transaction_payload_b64(
     }
     Ok((payload, bytes))
 }
-#[cfg(feature = "app_api")]
 fn validate_sccp_transaction_metadata(metadata: &Metadata) -> Result<()> {
     if metadata.is_empty() {
         return Ok(());
@@ -16877,7 +16332,6 @@ fn validate_sccp_transaction_metadata(metadata: &Metadata) -> Result<()> {
         "SCCP transaction metadata must be empty; fee selection belongs in fee_payment".to_owned(),
     ))
 }
-#[cfg(feature = "app_api")]
 fn exact_sccp_transaction_builder(
     network_id: &NetworkId,
     authority: &AccountId,
@@ -16950,7 +16404,6 @@ fn exact_sccp_transaction_builder(
     }
     Ok(builder)
 }
-#[cfg(feature = "app_api")]
 fn build_exact_sccp_signed_transaction(
     state: &CoreState,
     authority: &AccountId,
@@ -16987,7 +16440,6 @@ fn build_exact_sccp_signed_transaction(
     }
     Ok(transaction)
 }
-#[cfg(feature = "app_api")]
 fn decode_sccp_destination_proof_b64(
     encoded: &str,
 ) -> Result<iroha_sccp::SccpGroth16Bn254ProofArtifactV1> {
@@ -17013,7 +16465,6 @@ fn decode_sccp_destination_proof_b64(
         )
     })
 }
-#[cfg(feature = "app_api")]
 fn governed_sccp_native_route_configuration_hash(
     registry: &iroha_core::state::ValidatedSccpRegistryV1,
     native_proof: &iroha_sccp::SccpNativeInboundMessageProofV1,
@@ -17095,7 +16546,6 @@ fn governed_sccp_native_route_configuration_hash(
         ))
     })
 }
-#[cfg(feature = "app_api")]
 fn evaluate_contract_view_request(
     state: Arc<CoreState>,
     req: ContractViewDto,
@@ -17176,7 +16626,6 @@ fn evaluate_contract_view_request(
         result,
     }))
 }
-#[cfg(feature = "app_api")]
 /// POST /v1/assets/transfer — prepare or submit one exact numeric asset transfer.
 pub async fn handle_post_asset_transfer(
     chain_id: Arc<ChainId>,
@@ -17196,7 +16645,6 @@ pub async fn handle_post_asset_transfer(
     .await?;
     pretty_json_response(&response)
 }
-#[cfg(feature = "app_api")]
 /// POST /v1/contracts/call — submit a public contract call transaction and
 /// return the queued execution receipt metadata.
 pub async fn handle_post_contract_call(
@@ -17211,7 +16659,6 @@ pub async fn handle_post_contract_call(
     Ok(infallible_pretty_json_response(&response, "{}"))
 }
 /// POST /v1/contracts/call/batch/prepare — resolve and ABI-bind one exact ordered batch.
-#[cfg(feature = "app_api")]
 pub fn handle_post_contract_call_batch_prepare(
     state: Arc<CoreState>,
     NoritoJson(request): NoritoJson<ContractCallBatchPrepareDto>,
@@ -17220,7 +16667,6 @@ pub fn handle_post_contract_call_batch_prepare(
     pretty_json_response(&response)
 }
 /// POST /v1/contracts/call/simulate — execute a public contract entrypoint locally without submission.
-#[cfg(feature = "app_api")]
 pub fn handle_post_contract_call_simulate(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<ContractCallSimulateDto>,
@@ -17298,7 +16744,6 @@ pub fn handle_post_contract_call_simulate(
     )?;
     Ok(body)
 }
-#[cfg(feature = "app_api")]
 enum PreparedBridgeProofSubmit {
     Direct {
         transaction: SignedTransaction,
@@ -17306,7 +16751,6 @@ enum PreparedBridgeProofSubmit {
     },
     Prepare(BridgeSubmitResponseDto),
 }
-#[cfg(feature = "app_api")]
 fn prepare_bridge_proof_submit(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
@@ -17455,7 +16899,6 @@ fn prepare_bridge_proof_submit(
 }
 /// POST /v1/bridge/proofs/submit — submit a bridge proof derived from a live SCCP bundle.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_bridge_proof_submit(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
@@ -17517,7 +16960,6 @@ pub(crate) async fn handle_post_bridge_proof_submit(
     })
     .await
 }
-#[cfg(feature = "app_api")]
 enum PreparedBridgeMessageSubmit {
     Direct {
         transaction: SignedTransaction,
@@ -17526,7 +16968,6 @@ enum PreparedBridgeMessageSubmit {
     },
     Prepare(BridgeSubmitResponseDto),
 }
-#[cfg(feature = "app_api")]
 fn prepare_bridge_message_submit(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
@@ -17702,7 +17143,6 @@ fn prepare_bridge_message_submit(
     Ok(prepared)
 }
 /// POST /v1/bridge/messages — prepare or submit one native SCCP proof-admission transaction.
-#[cfg(feature = "app_api")]
 #[iroha_futures::telemetry_future]
 pub(crate) async fn handle_post_bridge_message_submit(
     chain_id: Arc<ChainId>,
@@ -17763,7 +17203,6 @@ pub(crate) async fn handle_post_bridge_message_submit(
     .await
 }
 /// POST /v1/contracts/view — execute a read-only contract view entrypoint locally.
-#[cfg(feature = "app_api")]
 pub fn handle_post_contract_view(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<ContractViewDto>,
@@ -17784,7 +17223,6 @@ pub fn handle_post_contract_view(
     };
     Ok((status, body))
 }
-#[cfg(feature = "app_api")]
 /// POST /v1/contracts/view/batch — execute multiple read-only contract view entrypoints locally.
 pub fn handle_post_contract_view_batch(
     state: Arc<CoreState>,
@@ -17882,7 +17320,6 @@ pub fn handle_post_contract_view_batch(
     )?;
     Ok(body)
 }
-#[cfg(feature = "app_api")]
 /// Validate contract-view batch admission before routing or VM execution.
 pub fn validate_contract_view_batch_request(req: &ContractViewBatchDto) -> Result<()> {
     if req.items.is_empty() {
@@ -17902,17 +17339,16 @@ pub fn validate_contract_view_batch_request(req: &ContractViewBatchDto) -> Resul
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 // Canonical argument preparation checks a conservative predecode gas quote
 // covering bounded complete materialization. Keep implicit contract-call/view
 // budgets above the strict admission floor; representative bounded schemas fit.
 const DEFAULT_CONTRACT_ARGUMENT_GAS_LIMIT: u64 = 1_500_000;
-#[cfg(feature = "app_api")]
 fn current_time_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
+}
 }
 pub(crate) fn asset_alias_observation_time_ms(state: &CoreState) -> u64 {
     state
@@ -17920,7 +17356,7 @@ pub(crate) fn asset_alias_observation_time_ms(state: &CoreState) -> u64 {
         .map(|header| header.creation_time_ms)
         .unwrap_or(0)
 }
-#[cfg(feature = "app_api")]
+app_api_items! {
 fn advertised_contract_entrypoint<'a>(
     manifest: &'a manifest::ContractManifest,
     selector: &str,
@@ -17935,7 +17371,6 @@ fn advertised_contract_entrypoint<'a>(
         .find(|candidate| candidate.name == selector)
         .ok_or_else(|| conversion_error(format!("unknown contract entrypoint `{selector}`")))
 }
-#[cfg(feature = "app_api")]
 fn ensure_contract_entrypoint_kind<'a>(
     manifest: &'a manifest::ContractManifest,
     selector: &str,
@@ -17955,14 +17390,12 @@ fn ensure_contract_entrypoint_kind<'a>(
     }
     Ok(descriptor)
 }
-#[cfg(feature = "app_api")]
 fn ensure_public_contract_entrypoint<'a>(
     manifest: &'a manifest::ContractManifest,
     selector: &str,
 ) -> Result<&'a manifest::EntrypointDescriptor> {
     ensure_contract_entrypoint_kind(manifest, selector, manifest::EntryPointKind::Kotoage)
 }
-#[cfg(feature = "app_api")]
 fn ensure_callable_contract_entrypoint<'a>(
     manifest: &'a manifest::ContractManifest,
     selector: &str,
@@ -17975,7 +17408,6 @@ fn ensure_callable_contract_entrypoint<'a>(
     }
     Ok(descriptor)
 }
-#[cfg(feature = "app_api")]
 fn ensure_contract_call_entrypoint<'a>(
     manifest: &'a manifest::ContractManifest,
     selector: &str,
@@ -17986,14 +17418,12 @@ fn ensure_contract_call_entrypoint<'a>(
         None => ensure_callable_contract_entrypoint(manifest, selector),
     }
 }
-#[cfg(feature = "app_api")]
 fn ensure_view_contract_entrypoint<'a>(
     manifest: &'a manifest::ContractManifest,
     selector: &str,
 ) -> Result<&'a manifest::EntrypointDescriptor> {
     ensure_contract_entrypoint_kind(manifest, selector, manifest::EntryPointKind::View)
 }
-#[cfg(feature = "app_api")]
 fn normalize_contract_payload(
     descriptor: &manifest::EntrypointDescriptor,
     payload: Option<&IrohaJson>,
@@ -18041,7 +17471,6 @@ fn normalize_contract_payload(
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn normalize_contract_payload_after_authorization<E>(
     authorize: impl FnOnce() -> core::result::Result<(), E>,
     descriptor: &manifest::EntrypointDescriptor,
@@ -18051,7 +17480,6 @@ fn normalize_contract_payload_after_authorization<E>(
     authorize()?;
     normalize_contract_payload(descriptor, payload).map_err(map_normalization_error)
 }
-#[cfg(feature = "app_api")]
 pub(crate) fn normalize_contract_call_metadata_for_bytecode(
     metadata: &mut Metadata,
     bytecode: &[u8],
@@ -18121,7 +17549,6 @@ pub(crate) fn normalize_contract_call_metadata_for_bytecode(
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn resolve_contract_entrypoint_pc(
     prepared: &ivm::PreparedContract,
     selector: &str,
@@ -18141,19 +17568,16 @@ fn resolve_contract_entrypoint_pc(
         ))
     })
 }
-#[cfg(feature = "app_api")]
 struct ContractViewExecutionError {
     message: String,
     vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
 }
-#[cfg(feature = "app_api")]
 struct ContractCallSimulationExecution {
     normalized_payload: Option<IrohaJson>,
     gas_used: u64,
     queued_instructions: Vec<iroha_data_model::isi::InstructionBox>,
     result: Option<IrohaJson>,
 }
-#[cfg(feature = "app_api")]
 struct ContractCallSimulationError {
     message: String,
     vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
@@ -18161,22 +17585,19 @@ struct ContractCallSimulationError {
     gas_used: u64,
     queued_instructions: Vec<iroha_data_model::isi::InstructionBox>,
 }
+}
 /// Canonical server/client ceiling for `/v1/contracts/call/simulate` JSON.
 pub const CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES: usize = 8 * 1024 * 1024;
 /// Maximum number of VM executions admitted by one contract view batch.
 pub const CONTRACT_VIEW_BATCH_MAX_ITEMS: usize = 256;
 /// Maximum number of ordered executable items admitted by contract-call batch preparation.
 pub const CONTRACT_CALL_BATCH_MAX_ITEMS: usize = 256;
-#[cfg(feature = "app_api")]
+app_api_items! {
 const CONTRACT_CALL_BATCH_BINDING_VERSION_V1: u16 = 1;
-#[cfg(feature = "app_api")]
 const CONTRACT_CALL_BATCH_BINDING_DOMAIN_V1: &[u8] = b"iroha:contract-call-batch-binding:v1\0";
-#[cfg(feature = "app_api")]
 const CONTRACT_CALL_BATCH_ARGUMENTS_DOMAIN_V1: &[u8] = b"iroha:contract-call-batch-arguments:v1\0";
-#[cfg(feature = "app_api")]
 const CONTRACT_CALL_BATCH_INSTRUCTION_DOMAIN_V1: &[u8] =
     b"iroha:contract-call-batch-instruction:v1\0";
-#[cfg(feature = "app_api")]
 fn contract_call_batch_digest(domain: &[u8], chunks: &[&[u8]]) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
@@ -18185,7 +17606,6 @@ fn contract_call_batch_digest(domain: &[u8], chunks: &[&[u8]]) -> String {
     }
     hasher.finalize().to_hex().to_string()
 }
-#[cfg(feature = "app_api")]
 fn exact_contract_hash_pin(expected: Option<&str>, actual: &Hash, field: &str) -> Result<String> {
     let actual = hex::encode(actual.as_ref());
     if let Some(expected) = expected {
@@ -18207,7 +17627,6 @@ fn exact_contract_hash_pin(expected: Option<&str>, actual: &Hash, field: &str) -
     }
     Ok(actual)
 }
-#[cfg(feature = "app_api")]
 fn canonical_instruction_from_base64(
     encoded: &str,
     index: usize,
@@ -18248,7 +17667,6 @@ fn canonical_instruction_from_base64(
         .to_owned();
     Ok((instruction, canonical, wire_id))
 }
-#[cfg(feature = "app_api")]
 fn prepare_contract_call_batch(
     state: &CoreState,
     request: ContractCallBatchPrepareDto,
@@ -18445,7 +17863,6 @@ fn prepare_contract_call_batch(
         prepared_entries,
     })
 }
-#[cfg(feature = "app_api")]
 fn append_contract_simulation_json_literal(
     out: &mut Vec<u8>,
     literal: &[u8],
@@ -18459,7 +17876,6 @@ fn append_contract_simulation_json_literal(
     out.extend_from_slice(literal);
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn append_contract_json_string(out: &mut Vec<u8>, value: &str, max_bytes: usize) -> Result<()> {
     append_contract_simulation_json_literal(out, b"\"", max_bytes)?;
     let bytes = value.as_bytes();
@@ -18505,7 +17921,6 @@ fn append_contract_json_string(out: &mut Vec<u8>, value: &str, max_bytes: usize)
     }
     append_contract_simulation_json_literal(out, b"\"", max_bytes)
 }
-#[cfg(feature = "app_api")]
 fn append_contract_json_number<T: core::fmt::Display>(
     out: &mut Vec<u8>,
     value: &T,
@@ -18514,7 +17929,6 @@ fn append_contract_json_number<T: core::fmt::Display>(
     let value = value.to_string();
     append_contract_simulation_json_literal(out, value.as_bytes(), max_bytes)
 }
-#[cfg(feature = "app_api")]
 fn append_contract_json_optional_string(
     out: &mut Vec<u8>,
     value: Option<&str>,
@@ -18525,7 +17939,6 @@ fn append_contract_json_optional_string(
         None => append_contract_simulation_json_literal(out, b"null", max_bytes),
     }
 }
-#[cfg(feature = "app_api")]
 fn append_contract_json_optional_number<T: core::fmt::Display>(
     out: &mut Vec<u8>,
     value: Option<T>,
@@ -18536,7 +17949,6 @@ fn append_contract_json_optional_number<T: core::fmt::Display>(
         None => append_contract_simulation_json_literal(out, b"null", max_bytes),
     }
 }
-#[cfg(feature = "app_api")]
 fn append_contract_json_optional_bool(
     out: &mut Vec<u8>,
     value: Option<bool>,
@@ -18548,7 +17960,6 @@ fn append_contract_json_optional_bool(
         None => append_contract_simulation_json_literal(out, b"null", max_bytes),
     }
 }
-#[cfg(feature = "app_api")]
 fn append_contract_json_optional_iroha(
     out: &mut Vec<u8>,
     value: Option<&IrohaJson>,
@@ -18561,7 +17972,6 @@ fn append_contract_json_optional_iroha(
         None => append_contract_simulation_json_literal(out, b"null", max_bytes),
     }
 }
-#[cfg(feature = "app_api")]
 fn append_contract_vm_diagnostic(
     out: &mut Vec<u8>,
     diagnostic: &ContractViewVmDiagnosticDto,
@@ -18622,7 +18032,6 @@ fn append_contract_vm_diagnostic(
     append_contract_json_optional_bool(out, diagnostic.predecoded_hit, max_bytes)?;
     append_contract_simulation_json_literal(out, b"}", max_bytes)
 }
-#[cfg(feature = "app_api")]
 fn append_contract_json_optional_diagnostic(
     out: &mut Vec<u8>,
     diagnostic: Option<&ContractViewVmDiagnosticDto>,
@@ -18633,7 +18042,6 @@ fn append_contract_json_optional_diagnostic(
         None => append_contract_simulation_json_literal(out, b"null", max_bytes),
     }
 }
-#[cfg(feature = "app_api")]
 fn append_bounded_instruction_json(
     out: &mut Vec<u8>,
     instruction: &iroha_data_model::isi::InstructionBox,
@@ -18646,7 +18054,6 @@ fn append_bounded_instruction_json(
     })?;
     append_contract_simulation_json_literal(out, &fragment, max_bytes)
 }
-#[cfg(feature = "app_api")]
 fn append_contract_view_target_fields(
     out: &mut Vec<u8>,
     dataspace: &str,
@@ -18670,7 +18077,6 @@ fn append_contract_view_target_fields(
     append_contract_simulation_json_literal(out, b",\"entrypoint\":", max_bytes)?;
     append_contract_json_string(out, entrypoint, max_bytes)
 }
-#[cfg(feature = "app_api")]
 fn append_contract_view_success_fields(
     out: &mut Vec<u8>,
     response: &ContractViewResponseDto,
@@ -18689,7 +18095,6 @@ fn append_contract_view_success_fields(
     append_contract_simulation_json_literal(out, b",\"result\":", max_bytes)?;
     append_contract_simulation_json_literal(out, response.result.get().as_bytes(), max_bytes)
 }
-#[cfg(feature = "app_api")]
 fn append_contract_view_error_fields(
     out: &mut Vec<u8>,
     response: &ContractViewErrorResponseDto,
@@ -18710,7 +18115,6 @@ fn append_contract_view_error_fields(
     append_contract_simulation_json_literal(out, b",\"vm_diagnostic\":", max_bytes)?;
     append_contract_json_optional_diagnostic(out, response.vm_diagnostic.as_ref(), max_bytes)
 }
-#[cfg(feature = "app_api")]
 fn encode_contract_view_success_bounded(
     response: &ContractViewResponseDto,
     max_bytes: usize,
@@ -18721,7 +18125,6 @@ fn encode_contract_view_success_bounded(
     append_contract_simulation_json_literal(&mut out, b"}", max_bytes)?;
     Ok(out)
 }
-#[cfg(feature = "app_api")]
 fn encode_contract_view_error_bounded(
     response: &ContractViewErrorResponseDto,
     max_bytes: usize,
@@ -18732,7 +18135,6 @@ fn encode_contract_view_error_bounded(
     append_contract_simulation_json_literal(&mut out, b"}", max_bytes)?;
     Ok(out)
 }
-#[cfg(feature = "app_api")]
 fn encode_contract_call_simulation_response_bounded(
     response: &ContractCallSimulateResponseDto,
     max_bytes: usize,
@@ -18780,7 +18182,6 @@ fn encode_contract_call_simulation_response_bounded(
     append_contract_simulation_json_literal(&mut out, b"}", max_bytes)?;
     Ok(out)
 }
-#[cfg(feature = "app_api")]
 fn map_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> ContractViewVmDiagnosticDto {
     ContractViewVmDiagnosticDto {
         trap_kind: format!("{:?}", diag.trap_kind),
@@ -18808,7 +18209,6 @@ fn map_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> ContractViewVmDiagnos
         predecoded_hit: diag.context.predecoded_hit,
     }
 }
-#[cfg(feature = "app_api")]
 fn exact_contract_permission_target(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
@@ -18824,7 +18224,6 @@ fn exact_contract_permission_target(
         iroha_data_model::permission::Permission::new(required.to_owned(), IrohaJson::new(()))
     }
 }
-#[cfg(feature = "app_api")]
 fn authority_has_exact_contract_permission(
     world: &impl WorldReadOnly,
     authority: &iroha_data_model::account::AccountId,
@@ -18845,7 +18244,6 @@ fn authority_has_exact_contract_permission(
     });
     Ok(direct || through_role)
 }
-#[cfg(feature = "app_api")]
 fn resolve_exact_contract_runtime_alias(
     world: &impl WorldReadOnly,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -18889,7 +18287,6 @@ fn resolve_exact_contract_runtime_alias(
     }
     Ok(live_alias)
 }
-#[cfg(feature = "app_api")]
 fn exact_prepared_entrypoint<'a>(
     prepared: &'a ivm::PreparedContract,
     selector: &str,
@@ -18905,7 +18302,6 @@ fn exact_prepared_entrypoint<'a>(
     }
     Ok(embedded)
 }
-#[cfg(feature = "app_api")]
 fn ensure_contract_view_authorized(
     world: &impl WorldReadOnly,
     authority: &iroha_data_model::account::AccountId,
@@ -18943,7 +18339,6 @@ fn ensure_contract_view_authorized(
         })
     }
 }
-#[cfg(feature = "app_api")]
 fn contract_call_runtime_permission(
     kind: manifest::EntryPointKind,
     declared_permission: Option<&str>,
@@ -18959,7 +18354,6 @@ fn contract_call_runtime_permission(
         manifest::EntryPointKind::View => None,
     }
 }
-#[cfg(feature = "app_api")]
 fn ensure_contract_call_authorized(
     world: &impl WorldReadOnly,
     authority: &iroha_data_model::account::AccountId,
@@ -19005,7 +18399,6 @@ fn ensure_contract_call_authorized(
         })
     }
 }
-#[cfg(feature = "app_api")]
 fn execute_contract_view(
     state: &CoreState,
     authority: &iroha_data_model::account::AccountId,
@@ -19182,7 +18575,6 @@ fn execute_contract_view(
         vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
     })
 }
-#[cfg(feature = "app_api")]
 fn execute_contract_call_simulation(
     state: &CoreState,
     authority: &iroha_data_model::account::AccountId,
@@ -19402,7 +18794,6 @@ fn execute_contract_call_simulation(
         result,
     })
 }
-#[cfg(feature = "app_api")]
 fn build_contract_call_metadata(
     _manifest: &manifest::ContractManifest,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -19469,23 +18860,19 @@ fn build_contract_call_metadata(
     }
     metadata
 }
-#[cfg(feature = "app_api")]
 const CONTRACT_CALL_RESERVED_METADATA_PREFIXES: &[&str] = &["contract_", "validation_fee_"];
-#[cfg(feature = "app_api")]
 const CONTRACT_CALL_RESERVED_METADATA_KEYS: &[&str] = &[
     "fee_sponsor",
     "fee_sponsor_account",
     "gas_asset_id",
     "gas_limit",
 ];
-#[cfg(feature = "app_api")]
 fn is_reserved_contract_call_metadata_key(key: &str) -> bool {
     CONTRACT_CALL_RESERVED_METADATA_KEYS.contains(&key)
         || CONTRACT_CALL_RESERVED_METADATA_PREFIXES
             .iter()
             .any(|prefix| key.starts_with(prefix))
 }
-#[cfg(feature = "app_api")]
 fn merge_contract_call_metadata(
     mut caller_metadata: Metadata,
     system_metadata: Metadata,
@@ -19507,7 +18894,6 @@ fn merge_contract_call_metadata(
     }
     Ok(caller_metadata)
 }
-#[cfg(feature = "app_api")]
 fn validate_app_api_fee_payment(
     fee_payment: &iroha_data_model::transaction::FeePaymentIntent,
     require_gas_limit: bool,
@@ -19522,12 +18908,10 @@ fn validate_app_api_fee_payment(
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn normalize_transaction_memo(memo: Option<String>) -> Option<String> {
     memo.map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
 }
-#[cfg(feature = "app_api")]
 fn normalize_validation_fee_policy_metadata(
     version: Option<String>,
     hash: Option<String>,
@@ -19600,7 +18984,6 @@ fn normalize_validation_fee_policy_metadata(
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn append_canonical_multisig_validation_fee_marker(
     instructions: &mut Vec<iroha_data_model::isi::InstructionBox>,
     validation_fee_policy_metadata: Option<&(u64, String, Option<u64>, Option<u64>)>,
@@ -19639,7 +19022,6 @@ fn append_canonical_multisig_validation_fee_marker(
     );
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn build_multisig_propose_metadata(memo: Option<&str>) -> Metadata {
     let mut metadata = Metadata::default();
     if let Some(memo) = memo {
@@ -19648,7 +19030,6 @@ fn build_multisig_propose_metadata(memo: Option<&str>) -> Metadata {
     }
     metadata
 }
-#[cfg(feature = "app_api")]
 fn build_multisig_propose_metadata_with_validation_fee(
     memo: Option<&str>,
     validation_fee_policy_metadata: Option<(u64, &str, Option<u64>, Option<u64>)>,
@@ -19687,7 +19068,6 @@ fn build_multisig_propose_metadata_with_validation_fee(
     }
     metadata
 }
-#[cfg(feature = "app_api")]
 fn unsigned_transaction_routing_plan(
     queue: &Queue,
     state: &CoreState,
@@ -19719,7 +19099,6 @@ fn unsigned_transaction_routing_plan(
             backpressure: queue.current_backpressure(),
         })
 }
-#[cfg(feature = "app_api")]
 fn multisig_immediate_execution_routing_plan(
     queue: &Queue,
     state: &CoreState,
@@ -19741,7 +19120,6 @@ fn multisig_immediate_execution_routing_plan(
         context,
     )
 }
-#[cfg(feature = "app_api")]
 fn derive_multisig_contract_call_trigger_id(
     multisig_account_id: &iroha_data_model::account::AccountId,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -19762,7 +19140,6 @@ fn derive_multisig_contract_call_trigger_id(
         .map_err(|err| conversion_error(format!("failed to derive trigger id: {err}")))?;
     Ok(iroha_data_model::trigger::TriggerId::new(trigger_name))
 }
-#[cfg(feature = "app_api")]
 fn build_multisig_contract_call_instructions(
     multisig_account_id: &iroha_data_model::account::AccountId,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -19833,9 +19210,7 @@ fn build_multisig_contract_call_instructions(
     let instructions_hash = HashOf::new(&instructions);
     Ok((instructions, instructions_hash))
 }
-#[cfg(feature = "app_api")]
 const MULTISIG_SPEC_METADATA_KEY: &str = "multisig/spec";
-#[cfg(feature = "app_api")]
 fn multisig_account_state_contract_key(
     multisig_account_id: &iroha_data_model::account::AccountId,
 ) -> StatePath {
@@ -19845,7 +19220,6 @@ fn multisig_account_state_contract_key(
     ))
     .expect("multisig account state contract key")
 }
-#[cfg(feature = "app_api")]
 fn multisig_signatory_index_contract_key(
     signatory_account_id: &iroha_data_model::account::AccountId,
 ) -> StatePath {
@@ -19855,7 +19229,6 @@ fn multisig_signatory_index_contract_key(
     ))
     .expect("multisig signatory state contract key")
 }
-#[cfg(feature = "app_api")]
 fn multisig_proposal_state_prefix(
     multisig_account_id: &iroha_data_model::account::AccountId,
 ) -> StatePath {
@@ -19865,7 +19238,6 @@ fn multisig_proposal_state_prefix(
     ))
     .expect("multisig proposal state prefix")
 }
-#[cfg(feature = "app_api")]
 fn multisig_proposal_state_contract_key(
     multisig_account_id: &iroha_data_model::account::AccountId,
     instructions_hash: &HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
@@ -19877,7 +19249,6 @@ fn multisig_proposal_state_contract_key(
     ))
     .expect("multisig proposal state contract key")
 }
-#[cfg(feature = "app_api")]
 fn multisig_proposal_terminal_state_prefix(
     multisig_account_id: &iroha_data_model::account::AccountId,
 ) -> StatePath {
@@ -19887,7 +19258,6 @@ fn multisig_proposal_terminal_state_prefix(
     ))
     .expect("multisig proposal terminal state prefix")
 }
-#[cfg(feature = "app_api")]
 fn multisig_proposal_terminal_state_contract_key(
     multisig_account_id: &iroha_data_model::account::AccountId,
     instructions_hash: &HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
@@ -19899,48 +19269,41 @@ fn multisig_proposal_terminal_state_contract_key(
     ))
     .expect("multisig proposal terminal state contract key")
 }
-#[cfg(feature = "app_api")]
 fn multisig_not_found_error() -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::NotFound,
     ))
 }
-#[cfg(feature = "app_api")]
 fn multisig_selector_validation_error(message: impl Into<String>) -> Error {
     Error::AppQueryValidation {
         code: "multisig_selector_invalid",
         message: message.into(),
     }
 }
-#[cfg(feature = "app_api")]
 fn multisig_cursor_validation_error(message: impl Into<String>) -> Error {
     Error::AppQueryValidation {
         code: "multisig_cursor_invalid",
         message: message.into(),
     }
 }
-#[cfg(feature = "app_api")]
 fn multisig_selector_forbidden_error(code: &'static str, message: impl Into<String>) -> Error {
     Error::AppForbidden {
         code,
         message: message.into(),
     }
 }
-#[cfg(feature = "app_api")]
 fn multisig_selector_not_found_error(code: &'static str, message: impl Into<String>) -> Error {
     Error::AppNotFound {
         code,
         message: message.into(),
     }
 }
-#[cfg(feature = "app_api")]
 fn multisig_selector_conflict_error(code: &'static str, message: impl Into<String>) -> Error {
     Error::AppConflict {
         code,
         message: message.into(),
     }
 }
-#[cfg(feature = "app_api")]
 fn selected_multisig_alias_literal(selector: &MultisigAccountSelectorDto) -> Option<String> {
     selector
         .multisig_account_alias
@@ -19948,7 +19311,6 @@ fn selected_multisig_alias_literal(selector: &MultisigAccountSelectorDto) -> Opt
         .filter(|value| !value.is_empty() && value.trim() == *value)
         .map(str::to_owned)
 }
-#[cfg(feature = "app_api")]
 fn reject_unverified_multisig_alias_selector(selector: &MultisigAccountSelectorDto) -> Result<()> {
     if selector.multisig_account_alias.is_some() {
         return Err(multisig_selector_forbidden_error(
@@ -19977,7 +19339,6 @@ mod multisig_alias_selector_guard_tests {
         ));
     }
 }
-#[cfg(feature = "app_api")]
 fn parse_multisig_account_alias(
     alias_input: &str,
     catalog: &DataSpaceCatalog,
@@ -20003,7 +19364,6 @@ fn parse_multisig_account_alias(
     }
     Ok(alias)
 }
-#[cfg(feature = "app_api")]
 fn resolve_multisig_account_selector(
     state: &CoreState,
     selector: &MultisigAccountSelectorDto,
@@ -20066,7 +19426,6 @@ fn resolve_multisig_account_selector(
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn load_multisig_spec(
     state: &CoreState,
     multisig_account_id: &iroha_data_model::account::AccountId,
@@ -20117,7 +19476,6 @@ fn load_multisig_spec(
     }
     Ok(account_state.spec)
 }
-#[cfg(feature = "app_api")]
 fn validate_multisig_spec_account_binding(
     multisig_account_id: &iroha_data_model::account::AccountId,
     spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
@@ -20144,7 +19502,6 @@ fn validate_multisig_spec_account_binding(
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn decode_multisig_spec_from_metadata(
     value: IrohaJson,
 ) -> Result<iroha_executor_data_model::isi::multisig::MultisigSpec> {
@@ -20152,7 +19509,6 @@ fn decode_multisig_spec_from_metadata(
         conversion_error(format!("invalid multisig spec metadata on account: {err}"))
     })
 }
-#[cfg(feature = "app_api")]
 fn resolve_multisig_account_and_spec(
     state: &CoreState,
     selector: &MultisigAccountSelectorDto,
@@ -20187,7 +19543,6 @@ fn resolve_multisig_account_and_spec(
     }
     Ok((multisig_account_id, spec))
 }
-#[cfg(feature = "app_api")]
 fn resolve_multisig_proposal_hash(
     proposal_id: Option<String>,
     instructions_hash: Option<String>,
@@ -20233,7 +19588,6 @@ fn resolve_multisig_proposal_hash(
         })?;
     Ok((hash_literal, instructions_hash))
 }
-#[cfg(feature = "app_api")]
 fn approvals_reach_quorum(
     spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
     approvals: &BTreeSet<iroha_data_model::account::AccountId>,
@@ -20247,7 +19601,6 @@ fn approvals_reach_quorum(
         .fold(0_u16, u16::saturating_add);
     approved_weight >= u16::from(spec.quorum)
 }
-#[cfg(feature = "app_api")]
 fn validate_multisig_proposal_approvals(
     spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
     proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
@@ -20263,7 +19616,6 @@ fn validate_multisig_proposal_approvals(
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MultisigProposalStatus {
     CollectingSignatures,
@@ -20271,7 +19623,6 @@ enum MultisigProposalStatus {
     Canceled,
     Expired,
 }
-#[cfg(feature = "app_api")]
 impl MultisigProposalStatus {
     fn as_str(self) -> &'static str {
         match self {
@@ -20282,14 +19633,12 @@ impl MultisigProposalStatus {
         }
     }
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
 struct MultisigProposalRecord {
     proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
     status: MultisigProposalStatus,
     terminal_at_ms: Option<u64>,
 }
-#[cfg(feature = "app_api")]
 fn proposal_value_from_state(
     proposal_state: iroha_executor_data_model::isi::multisig::MultisigProposalState,
 ) -> iroha_executor_data_model::isi::multisig::MultisigProposalValue {
@@ -20301,7 +19650,6 @@ fn proposal_value_from_state(
         proposal_state.is_relayed,
     )
 }
-#[cfg(feature = "app_api")]
 fn validate_multisig_active_proposal_binding(
     multisig_account_id: &iroha_data_model::account::AccountId,
     instructions_hash: &HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
@@ -20318,7 +19666,6 @@ fn validate_multisig_active_proposal_binding(
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn validate_multisig_terminal_proposal_binding(
     multisig_account_id: &iroha_data_model::account::AccountId,
     instructions_hash: &HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
@@ -20346,7 +19693,6 @@ fn validate_multisig_terminal_proposal_binding(
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn classify_active_multisig_proposal_status(
     _spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
     proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
@@ -20361,7 +19707,6 @@ fn classify_active_multisig_proposal_status(
         MultisigProposalStatus::CollectingSignatures
     }
 }
-#[cfg(feature = "app_api")]
 fn load_multisig_active_proposal_state_optional(
     state: &CoreState,
     multisig_account_id: &iroha_data_model::account::AccountId,
@@ -20387,7 +19732,6 @@ fn load_multisig_active_proposal_state_optional(
     )?;
     Ok(Some(proposal_state))
 }
-#[cfg(feature = "app_api")]
 fn load_multisig_proposal_record(
     state: &CoreState,
     multisig_account_id: &iroha_data_model::account::AccountId,
@@ -20459,11 +19803,8 @@ fn load_multisig_proposal_record(
         terminal_at_ms: Some(terminal_state.terminal_at_ms),
     }))
 }
-#[cfg(feature = "app_api")]
 const MULTISIG_PROPOSAL_VISIBILITY_WAIT_WINDOW: Duration = Duration::from_secs(15);
-#[cfg(feature = "app_api")]
 const MULTISIG_PROPOSAL_VISIBILITY_POLL_INTERVAL: Duration = Duration::from_millis(250);
-#[cfg(feature = "app_api")]
 async fn wait_for_multisig_proposal_record_visibility(
     state: &CoreState,
     multisig_account_id: &iroha_data_model::account::AccountId,
@@ -20489,7 +19830,6 @@ async fn wait_for_multisig_proposal_record_visibility(
         tokio::time::sleep(poll).await;
     }
 }
-#[cfg(feature = "app_api")]
 fn multisig_proposal_is_cancel_wrapper(
     proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
 ) -> bool {
@@ -20504,13 +19844,11 @@ fn multisig_proposal_is_cancel_wrapper(
             )
     )
 }
-#[cfg(feature = "app_api")]
 fn multisig_proposal_is_user_visible(
     proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
 ) -> bool {
     proposal.is_relayed.is_none() && !multisig_proposal_is_cancel_wrapper(proposal)
 }
-#[cfg(feature = "app_api")]
 fn requested_multisig_statuses(statuses: &[String]) -> Result<BTreeSet<String>> {
     const STATUS_COUNT: usize = 4;
     if statuses.len() > STATUS_COUNT {
@@ -20542,7 +19880,6 @@ fn requested_multisig_statuses(statuses: &[String]) -> Result<BTreeSet<String>> 
     }
     Ok(normalized)
 }
-#[cfg(feature = "app_api")]
 fn requested_multisig_operation_types(operation_types: &[String]) -> Result<BTreeSet<String>> {
     const OPERATION_TYPE_COUNT: usize = 32;
     const OPERATION_TYPE_MAX_BYTES: usize = 128;
@@ -20578,12 +19915,9 @@ fn requested_multisig_operation_types(operation_types: &[String]) -> Result<BTre
     }
     Ok(normalized)
 }
-#[cfg(feature = "app_api")]
 const MULTISIG_PROPOSALS_CURSOR_MAX_BYTES: usize = 512;
 /// Hard response-page bound for browser-facing multisig proposal reads.
-#[cfg(feature = "app_api")]
 pub(crate) const MULTISIG_PROPOSALS_MAX_PAGE_LIMIT: u64 = 100;
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MultisigProposalsCursor {
     multisig_account_fingerprint: String,
@@ -20591,19 +19925,16 @@ struct MultisigProposalsCursor {
     instructions_hash: String,
     status_fingerprint: String,
 }
-#[cfg(feature = "app_api")]
 pub(crate) fn multisig_account_fingerprint(
     multisig_account_id: &iroha_data_model::account::AccountId,
 ) -> String {
     Hash::new(format!("iroha.torii.multisig.account.v1\0{}", multisig_account_id).as_bytes())
         .to_string()
 }
-#[cfg(feature = "app_api")]
 fn multisig_status_fingerprint(statuses: &BTreeSet<String>) -> String {
     let statuses = statuses.iter().cloned().collect::<Vec<_>>().join("\0");
     Hash::new(format!("iroha.torii.multisig.statuses.v1\0{statuses}").as_bytes()).to_string()
 }
-#[cfg(feature = "app_api")]
 fn encode_multisig_proposals_cursor(cursor: &MultisigProposalsCursor) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
         "v1|{}|{}|{}|{}",
@@ -20613,7 +19944,6 @@ fn encode_multisig_proposals_cursor(cursor: &MultisigProposalsCursor) -> String 
         cursor.status_fingerprint
     ))
 }
-#[cfg(feature = "app_api")]
 fn decode_multisig_proposals_cursor(
     raw: &str,
     multisig_account_id: &iroha_data_model::account::AccountId,
@@ -20705,7 +20035,6 @@ fn decode_multisig_proposals_cursor(
     }
     Ok(cursor)
 }
-#[cfg(feature = "app_api")]
 fn multisig_proposal_sort_order(
     left_proposed_at_ms: u64,
     left_instructions_hash: &str,
@@ -20716,7 +20045,6 @@ fn multisig_proposal_sort_order(
         .cmp(&left_proposed_at_ms)
         .then_with(|| left_instructions_hash.cmp(right_instructions_hash))
 }
-#[cfg(feature = "app_api")]
 fn multisig_proposal_cursor_for(
     entry: &MultisigProposalEntryDto,
     multisig_account_id: &iroha_data_model::account::AccountId,
@@ -20729,7 +20057,6 @@ fn multisig_proposal_cursor_for(
         status_fingerprint: multisig_status_fingerprint(requested_statuses),
     }
 }
-#[cfg(feature = "app_api")]
 fn multisig_proposal_is_after_cursor(
     entry: &MultisigProposalEntryDto,
     cursor: &MultisigProposalsCursor,
@@ -20744,7 +20071,6 @@ fn multisig_proposal_is_after_cursor(
         Ordering::Greater
     )
 }
-#[cfg(feature = "app_api")]
 fn multisig_proposal_matches_cursor(
     entry: &MultisigProposalEntryDto,
     cursor: &MultisigProposalsCursor,
@@ -20752,30 +20078,25 @@ fn multisig_proposal_matches_cursor(
     entry.proposal.proposed_at_ms == cursor.proposed_at_ms
         && entry.instructions_hash == cursor.instructions_hash
 }
-#[cfg(feature = "app_api")]
 fn multisig_metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
     let name = Name::from_str(key).ok()?;
     let value = metadata.get(&name)?;
     let parsed = value.try_into_any::<String>().ok()?;
     (!parsed.is_empty() && parsed.trim() == parsed).then_some(parsed)
 }
-#[cfg(feature = "app_api")]
 fn multisig_metadata_json(metadata: &Metadata, key: &str) -> Option<norito::json::Value> {
     metadata
         .get(&Name::from_str(key).ok()?)?
         .try_into_any_norito::<norito::json::Value>()
         .ok()
 }
-#[cfg(feature = "app_api")]
 fn json_object_has_exact_keys(object: &Map, expected: &[&str]) -> bool {
     object.len() == expected.len() && expected.iter().all(|key| object.contains_key(*key))
 }
-#[cfg(feature = "app_api")]
 fn required_nonempty_json_string(object: &Map, key: &str) -> Option<String> {
     let literal = object.get(key)?.as_str()?;
     (!literal.is_empty() && literal.trim() == literal).then(|| literal.to_owned())
 }
-#[cfg(feature = "app_api")]
 fn required_canonical_account_id_string(object: &Map, key: &str) -> Option<String> {
     let literal = required_nonempty_json_string(object, key)?;
     let account = iroha_data_model::account::AccountId::parse_encoded(&literal)
@@ -20783,7 +20104,6 @@ fn required_canonical_account_id_string(object: &Map, key: &str) -> Option<Strin
         .into_account_id();
     (account.to_string() == literal).then_some(literal)
 }
-#[cfg(feature = "app_api")]
 fn required_canonical_asset_definition_id_string(object: &Map, key: &str) -> Option<String> {
     let literal = required_nonempty_json_string(object, key)?;
     let asset = literal
@@ -20791,13 +20111,11 @@ fn required_canonical_asset_definition_id_string(object: &Map, key: &str) -> Opt
         .ok()?;
     (asset.canonical_address() == literal).then_some(literal)
 }
-#[cfg(feature = "app_api")]
 fn required_canonical_name_string(object: &Map, key: &str) -> Option<String> {
     let literal = required_nonempty_json_string(object, key)?;
     let name = literal.parse::<Name>().ok()?;
     (name.as_ref() == literal).then_some(literal)
 }
-#[cfg(feature = "app_api")]
 fn canonical_quantity_string(value: &Value, allow_zero: bool) -> Option<String> {
     let literal = value.as_str()?;
     if literal.is_empty() || literal.trim() != literal {
@@ -20809,7 +20127,6 @@ fn canonical_quantity_string(value: &Value, allow_zero: bool) -> Option<String> 
     }
     (quantity.to_string() == literal).then(|| literal.to_owned())
 }
-#[cfg(feature = "app_api")]
 struct StrictMultisigContractCallIntent {
     operation_type: &'static str,
     intent: IrohaJson,
@@ -20818,7 +20135,6 @@ struct StrictMultisigContractCallIntent {
     contract_entrypoint: String,
     payload: IrohaJson,
 }
-#[cfg(feature = "app_api")]
 fn strict_multisig_contract_call_intent(
     multisig_account_id: &iroha_data_model::account::AccountId,
     proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
@@ -21015,7 +20331,6 @@ fn strict_multisig_contract_call_intent(
         payload: IrohaJson::new(payload),
     })
 }
-#[cfg(feature = "app_api")]
 fn strict_multisig_contract_call_intent_with_world<W: iroha_core::state::WorldReadOnly>(
     world: &W,
     multisig_account_id: &iroha_data_model::account::AccountId,
@@ -21063,7 +20378,6 @@ fn strict_multisig_contract_call_intent_with_world<W: iroha_core::state::WorldRe
     }
     Some(parsed)
 }
-#[cfg(feature = "app_api")]
 fn multisig_asset_transfer_control_operation(
     instruction: &iroha_data_model::isi::InstructionBox,
 ) -> Option<(&'static str, IrohaJson)> {
@@ -21156,7 +20470,6 @@ fn multisig_asset_transfer_control_operation(
     }
     None
 }
-#[cfg(feature = "app_api")]
 fn multisig_proposal_operation_type<W: iroha_core::state::WorldReadOnly>(
     world: &W,
     multisig_account_id: &iroha_data_model::account::AccountId,
@@ -21212,7 +20525,6 @@ fn multisig_proposal_operation_type<W: iroha_core::state::WorldReadOnly>(
     }
     "ONCHAIN_MULTISIG"
 }
-#[cfg(feature = "app_api")]
 fn multisig_proposal_intent<W: iroha_core::state::WorldReadOnly>(
     world: &W,
     multisig_account_id: &iroha_data_model::account::AccountId,
@@ -21239,14 +20551,12 @@ fn multisig_proposal_intent<W: iroha_core::state::WorldReadOnly>(
             })
         })
 }
-#[cfg(feature = "app_api")]
 fn status_matches_requested_set(
     requested: &BTreeSet<String>,
     status: MultisigProposalStatus,
 ) -> bool {
     requested.is_empty() || requested.contains(status.as_str())
 }
-#[cfg(feature = "app_api")]
 fn query_multisig_proposals(
     state: &CoreState,
     multisig_account_id: &iroha_data_model::account::AccountId,
@@ -25950,7 +25260,6 @@ seiyaku BytesPayloadNormalizeTest {
 /// POST /v1/contracts/call/multisig/propose — propose a multisig participation envelope
 /// for a contract call.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_contract_call_multisig_propose(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -26066,30 +25375,12 @@ pub async fn handle_post_contract_call_multisig_propose(
     )?;
     let fee_payment = builder.payload().fee_payment.clone();
     let response = if public_key_hex.is_some() || signature_b64.is_some() {
-        let public_key_hex = public_key_hex
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
-        let signature_b64 = signature_b64
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
-        let public_key_bytes = hex::decode(public_key_hex)
-            .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-        let public_key = iroha_crypto::PublicKey::from_bytes(
-            iroha_crypto::Algorithm::Ed25519,
-            &public_key_bytes,
-        )
-        .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-        let expected_authority = dm::AccountId::new(public_key.clone());
-        if signer_account_id != expected_authority {
-            return Err(conversion_error(
-                "public_key_hex does not match signer_account_id".to_owned(),
-            ));
-        }
-        let signature = decode_app_api_detached_signature(signature_b64)?;
+        let signature = decode_app_api_detached_authority_signature(
+            public_key_hex.as_deref(),
+            signature_b64.as_deref(),
+            &signer_account_id,
+            "public_key_hex does not match signer_account_id",
+        )?;
         let tx = builder.build_with_signature(signature);
         tx.verify_signature().map_err(|err| {
             conversion_error(format!(
@@ -26180,7 +25471,6 @@ pub async fn handle_post_contract_call_multisig_propose(
 /// POST /v1/contracts/call/multisig/approve — approve a multisig participation envelope
 /// for a contract call.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_contract_call_multisig_approve(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -26229,30 +25519,12 @@ pub async fn handle_post_contract_call_multisig_approve(
     )?;
     let fee_payment = builder.payload().fee_payment.clone();
     let response = if public_key_hex.is_some() || signature_b64.is_some() {
-        let public_key_hex = public_key_hex
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
-        let signature_b64 = signature_b64
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
-        let public_key_bytes = hex::decode(public_key_hex)
-            .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-        let public_key = iroha_crypto::PublicKey::from_bytes(
-            iroha_crypto::Algorithm::Ed25519,
-            &public_key_bytes,
-        )
-        .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-        let expected_authority = dm::AccountId::new(public_key.clone());
-        if signer_account_id != expected_authority {
-            return Err(conversion_error(
-                "public_key_hex does not match signer_account_id".to_owned(),
-            ));
-        }
-        let signature = decode_app_api_detached_signature(signature_b64)?;
+        let signature = decode_app_api_detached_authority_signature(
+            public_key_hex.as_deref(),
+            signature_b64.as_deref(),
+            &signer_account_id,
+            "public_key_hex does not match signer_account_id",
+        )?;
         let tx = builder.build_with_signature(signature);
         tx.verify_signature().map_err(|err| {
             conversion_error(format!(
@@ -26301,7 +25573,6 @@ pub async fn handle_post_contract_call_multisig_approve(
 }
 /// POST /v1/multisig/cancel — cancel a multisig proposal through a multisig proposal or approval.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_cancel(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -26393,30 +25664,12 @@ pub async fn handle_post_multisig_cancel(
     )?;
     let fee_payment = builder.payload().fee_payment.clone();
     let response = if public_key_hex.is_some() || signature_b64.is_some() {
-        let public_key_hex = public_key_hex
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
-        let signature_b64 = signature_b64
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
-        let public_key_bytes = hex::decode(public_key_hex)
-            .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-        let public_key = iroha_crypto::PublicKey::from_bytes(
-            iroha_crypto::Algorithm::Ed25519,
-            &public_key_bytes,
-        )
-        .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-        let expected_authority = dm::AccountId::new(public_key.clone());
-        if signer_account_id != expected_authority {
-            return Err(conversion_error(
-                "public_key_hex does not match signer_account_id".to_owned(),
-            ));
-        }
-        let signature = decode_app_api_detached_signature(signature_b64)?;
+        let signature = decode_app_api_detached_authority_signature(
+            public_key_hex.as_deref(),
+            signature_b64.as_deref(),
+            &signer_account_id,
+            "public_key_hex does not match signer_account_id",
+        )?;
         let tx = builder.build_with_signature(signature);
         tx.verify_signature().map_err(|err| {
             conversion_error(format!(
@@ -26487,7 +25740,6 @@ pub async fn handle_post_multisig_cancel(
 }
 /// POST /v1/multisig/propose — propose a generic multisig instruction batch.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_propose(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -26579,30 +25831,12 @@ pub async fn handle_post_multisig_propose(
     )?;
     let fee_payment = builder.payload().fee_payment.clone();
     let response = if public_key_hex.is_some() || signature_b64.is_some() {
-        let public_key_hex = public_key_hex
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
-        let signature_b64 = signature_b64
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
-        let public_key_bytes = hex::decode(public_key_hex)
-            .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-        let public_key = iroha_crypto::PublicKey::from_bytes(
-            iroha_crypto::Algorithm::Ed25519,
-            &public_key_bytes,
-        )
-        .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-        let expected_authority = dm::AccountId::new(public_key.clone());
-        if signer_account_id != expected_authority {
-            return Err(conversion_error(
-                "public_key_hex does not match signer_account_id".to_owned(),
-            ));
-        }
-        let signature = decode_app_api_detached_signature(signature_b64)?;
+        let signature = decode_app_api_detached_authority_signature(
+            public_key_hex.as_deref(),
+            signature_b64.as_deref(),
+            &signer_account_id,
+            "public_key_hex does not match signer_account_id",
+        )?;
         let tx = builder.build_with_signature(signature);
         tx.verify_signature().map_err(|err| {
             conversion_error(format!(
@@ -26685,7 +25919,6 @@ pub async fn handle_post_multisig_propose(
 }
 /// POST /v1/multisig/approve — approve a generic multisig proposal.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_approve(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -26734,30 +25967,12 @@ pub async fn handle_post_multisig_approve(
     )?;
     let fee_payment = builder.payload().fee_payment.clone();
     let response = if public_key_hex.is_some() || signature_b64.is_some() {
-        let public_key_hex = public_key_hex
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
-        let signature_b64 = signature_b64
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
-        let public_key_bytes = hex::decode(public_key_hex)
-            .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-        let public_key = iroha_crypto::PublicKey::from_bytes(
-            iroha_crypto::Algorithm::Ed25519,
-            &public_key_bytes,
-        )
-        .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-        let expected_authority = dm::AccountId::new(public_key.clone());
-        if signer_account_id != expected_authority {
-            return Err(conversion_error(
-                "public_key_hex does not match signer_account_id".to_owned(),
-            ));
-        }
-        let signature = decode_app_api_detached_signature(signature_b64)?;
+        let signature = decode_app_api_detached_authority_signature(
+            public_key_hex.as_deref(),
+            signature_b64.as_deref(),
+            &signer_account_id,
+            "public_key_hex does not match signer_account_id",
+        )?;
         let tx = builder.build_with_signature(signature);
         tx.verify_signature().map_err(|err| {
             conversion_error(format!(
@@ -26800,14 +26015,12 @@ pub async fn handle_post_multisig_approve(
 }
 /// POST /v1/multisig/spec — resolve a multisig selector and return the active authority spec.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_spec(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<MultisigSpecRequestDto>,
 ) -> Result<JsonBody<MultisigSpecResponseDto>> {
     Ok(JsonBody(multisig_spec_response(&state, &req, None)?))
 }
-#[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_multisig_spec_for_authority(
     state: Arc<CoreState>,
     req: MultisigSpecRequestDto,
@@ -26819,7 +26032,6 @@ pub(crate) async fn handle_post_multisig_spec_for_authority(
         Some(&resolve_authority),
     )?))
 }
-#[cfg(feature = "app_api")]
 fn multisig_spec_response(
     state: &Arc<CoreState>,
     req: &MultisigSpecRequestDto,
@@ -26834,7 +26046,6 @@ fn multisig_spec_response(
 }
 /// POST /v1/multisig/proposals/query — query multisig proposals for a multisig authority.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_proposals_query(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<MultisigProposalsQueryRequestDto>,
@@ -26843,7 +26054,6 @@ pub async fn handle_post_multisig_proposals_query(
         &state, &req, None,
     )?))
 }
-#[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_multisig_proposals_query_for_authority(
     state: Arc<CoreState>,
     req: MultisigProposalsQueryRequestDto,
@@ -26855,7 +26065,6 @@ pub(crate) async fn handle_post_multisig_proposals_query_for_authority(
         Some(&resolve_authority),
     )?))
 }
-#[cfg(feature = "app_api")]
 fn multisig_proposals_query_response(
     state: &Arc<CoreState>,
     req: &MultisigProposalsQueryRequestDto,
@@ -26926,7 +26135,6 @@ fn multisig_proposals_query_response(
 }
 /// POST /v1/multisig/proposals/resolve — resolve a multisig selector and fetch a specific proposal.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_proposals_resolve(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<MultisigProposalsResolveRequestDto>,
@@ -26935,7 +26143,6 @@ pub async fn handle_post_multisig_proposals_resolve(
         &state, &req, None,
     )?))
 }
-#[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_multisig_proposals_resolve_for_authority(
     state: Arc<CoreState>,
     req: MultisigProposalsResolveRequestDto,
@@ -26947,13 +26154,9 @@ pub(crate) async fn handle_post_multisig_proposals_resolve_for_authority(
         Some(&resolve_authority),
     )?))
 }
-#[cfg(feature = "app_api")]
 const REGULATED_RECOVERY_GUARDIAN_COUNT: usize = 3;
-#[cfg(feature = "app_api")]
 const REGULATED_RECOVERY_GUARDIAN_QUORUM: u16 = 2;
-#[cfg(feature = "app_api")]
 const REGULATED_RECOVERY_TIMELOCK_MS: u64 = 72 * 60 * 60 * 1_000;
-#[cfg(feature = "app_api")]
 fn resolve_account_recovery_alias(
     state: &CoreState,
     alias_literal: &str,
@@ -26994,7 +26197,6 @@ fn resolve_account_recovery_alias(
         })?;
     Ok((alias, active))
 }
-#[cfg(feature = "app_api")]
 fn regulated_account_recovery_policy(
     state: &CoreState,
     policy: &iroha_data_model::account::AccountRecoveryPolicy,
@@ -27038,7 +26240,6 @@ fn regulated_account_recovery_policy(
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn load_regulated_account_recovery_policy(
     state: &CoreState,
     alias: &iroha_data_model::account::AccountAlias,
@@ -27057,7 +26258,6 @@ fn load_regulated_account_recovery_policy(
     regulated_account_recovery_policy(state, &policy)?;
     Ok(policy)
 }
-#[cfg(feature = "app_api")]
 fn validate_recovered_company_controller(
     controller: &iroha_data_model::account::AccountController,
 ) -> Result<()> {
@@ -27088,7 +26288,6 @@ fn validate_recovered_company_controller(
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn recovered_company_account_id(
     controller: &iroha_data_model::account::AccountController,
 ) -> iroha_data_model::account::AccountId {
@@ -27101,7 +26300,6 @@ fn recovered_company_account_id(
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn validate_account_recovery_detached_signer(auth: &AccountRecoveryDetachedAuthDto) -> Result<()> {
     let signer_key = auth
         .signer_account_id
@@ -27154,7 +26352,6 @@ fn validate_account_recovery_detached_signer(auth: &AccountRecoveryDetachedAuthD
         )),
     }
 }
-#[cfg(feature = "app_api")]
 fn recovery_guardian_authorized(
     policy: &iroha_data_model::account::AccountRecoveryPolicy,
     signer: &iroha_data_model::account::AccountId,
@@ -27167,7 +26364,6 @@ fn recovery_guardian_authorized(
         )))
     }
 }
-#[cfg(feature = "app_api")]
 async fn execute_account_recovery_mutation(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -27231,7 +26427,6 @@ async fn execute_account_recovery_mutation(
 }
 /// POST /v1/accounts/recovery/policy/set — prepare or submit exact regulated recovery policy setup.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_account_recovery_policy_set(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -27270,7 +26465,6 @@ pub async fn handle_post_account_recovery_policy_set(
 }
 /// POST /v1/accounts/recovery/propose — prepare or submit a regulated recovery proposal.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_account_recovery_propose(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -27302,7 +26496,6 @@ pub async fn handle_post_account_recovery_propose(
 }
 /// POST /v1/accounts/recovery/approve — prepare or submit one guardian approval.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_account_recovery_approve(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -27328,7 +26521,6 @@ pub async fn handle_post_account_recovery_approve(
 }
 /// POST /v1/accounts/recovery/finalize — prepare or submit quorum/timelock finalization.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_account_recovery_finalize(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -27352,7 +26544,6 @@ pub async fn handle_post_account_recovery_finalize(
     )
     .await
 }
-#[cfg(feature = "app_api")]
 fn account_recovery_invalidation_evidence(
     state: &CoreState,
     active_account: &iroha_data_model::account::AccountId,
@@ -27429,7 +26620,6 @@ fn account_recovery_invalidation_evidence(
 }
 /// POST /v1/accounts/recovery/status — query authoritative alias-bound recovery evidence.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_account_recovery_status(
     state: Arc<CoreState>,
     NoritoJson(request): NoritoJson<AccountRecoveryStatusRequestDto>,
@@ -27688,7 +26878,6 @@ mod account_recovery_route_tests {
         );
     }
 }
-#[cfg(feature = "app_api")]
 fn multisig_proposals_resolve_response(
     state: &Arc<CoreState>,
     req: &MultisigProposalsResolveRequestDto,
@@ -27729,7 +26918,6 @@ fn multisig_proposals_resolve_response(
         terminal_at_ms: proposal_record.terminal_at_ms,
     })
 }
-#[cfg(feature = "app_api")]
 fn format_unix_timestamp_ms_rfc3339(value: u64) -> Result<String> {
     let timestamp = OffsetDateTime::from_unix_timestamp_nanos(i128::from(value) * 1_000_000)
         .map_err(|err| conversion_error(format!("invalid unix timestamp: {err}")))?;
@@ -27737,7 +26925,6 @@ fn format_unix_timestamp_ms_rfc3339(value: u64) -> Result<String> {
         .format(&Rfc3339)
         .map_err(|err| conversion_error(format!("failed to format timestamp: {err}")))
 }
-#[cfg(feature = "app_api")]
 fn load_asset_transfer_control_store(
     account_id: &iroha_data_model::account::AccountId,
     metadata: &iroha_data_model::metadata::Metadata,
@@ -27758,7 +26945,6 @@ fn load_asset_transfer_control_store(
             ))
         })
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_post_asset_transfer_control_get(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<AssetTransferControlGetRequestDto>,
@@ -27844,6 +27030,7 @@ pub async fn handle_post_asset_transfer_control_get(
         usages,
         checkpoint,
     }))
+}
 }
 /// Fetch proof verification record by proof id.
 #[iroha_futures::telemetry_future]
@@ -28025,14 +27212,9 @@ mod proof_retention_summary_tests {
         assert_eq!(summaries.len(), PROOF_RETENTION_STATUS_MAX_BACKENDS);
     }
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+app_api_items! {
+derived_items! {
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// DTO for registering a verifying key
 pub struct ZkVkRegisterDto {
@@ -28084,26 +27266,19 @@ pub struct ZkVkRegisterDto {
     #[norito(default)]
     pub status: Option<iroha_data_model::confidential::ConfidentialStatus>,
 }
-#[cfg(feature = "app_api")]
+}
 #[allow(dead_code)]
 fn _assert_vk_register_dto_send() {
     fn assert_send<T: Send>() {}
     assert_send::<ZkVkRegisterDto>();
 }
-#[cfg(feature = "app_api")]
 #[allow(dead_code)]
 fn _assert_vk_register_dto_json() {
     fn assert_json<T: norito::json::JsonDeserializeOwned>() {}
     assert_json::<ZkVkRegisterDto>();
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+derived_items! {
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// DTO for updating a verifying key record
 pub struct ZkVkUpdateDto {
@@ -28154,19 +27329,17 @@ pub struct ZkVkUpdateDto {
     #[norito(default)]
     pub status: Option<iroha_data_model::confidential::ConfidentialStatus>,
 }
-#[cfg(feature = "app_api")]
+}
 #[allow(dead_code)]
 fn _assert_vk_update_dto_send() {
     fn assert_send<T: Send>() {}
     assert_send::<ZkVkUpdateDto>();
 }
-#[cfg(feature = "app_api")]
 #[allow(dead_code)]
 fn _assert_vk_update_dto_json() {
     fn assert_json<T: norito::json::JsonDeserializeOwned>() {}
     assert_json::<ZkVkUpdateDto>();
 }
-#[cfg(feature = "app_api")]
 fn parse_commitment_hex(s: &str) -> Result<[u8; 32]> {
     let bytes = hex::decode(s).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -28184,7 +27357,6 @@ fn parse_commitment_hex(s: &str) -> Result<[u8; 32]> {
     arr.copy_from_slice(&bytes);
     Ok(arr)
 }
-#[cfg(feature = "app_api")]
 fn parse_hex32_str(value: &str, field: &str) -> Result<[u8; 32]> {
     let trimmed = value.trim_start_matches("0x");
     let bytes = hex::decode(trimmed).map_err(|e| {
@@ -28205,7 +27377,6 @@ fn parse_hex32_str(value: &str, field: &str) -> Result<[u8; 32]> {
     arr.copy_from_slice(&bytes);
     Ok(arr)
 }
-#[cfg(feature = "app_api")]
 struct VkRecordInputs {
     backend: String,
     version: u32,
@@ -28223,7 +27394,6 @@ struct VkRecordInputs {
     activation_height: Option<u64>,
     withdraw_height: Option<u64>,
 }
-#[cfg(feature = "app_api")]
 fn mk_record_from_inputs(
     inputs: VkRecordInputs,
 ) -> Result<iroha_data_model::proof::VerifyingKeyRecord> {
@@ -28352,7 +27522,6 @@ fn mk_record_from_inputs(
     record.gas_schedule_id = gas_schedule_id;
     Ok(record)
 }
-#[cfg(feature = "app_api")]
 fn vk_record_to_json(rec: &iroha_data_model::proof::VerifyingKeyRecord) -> norito::json::Value {
     use crate::json_value;
     use iroha_data_model::confidential::ConfidentialStatus;
@@ -28422,7 +27591,6 @@ fn vk_record_to_json(rec: &iroha_data_model::proof::VerifyingKeyRecord) -> norit
     m.insert("key".into(), key_value);
     norito::json::Value::Object(m)
 }
-#[cfg(feature = "app_api")]
 fn vk_record_norito_base64(rec: &iroha_data_model::proof::VerifyingKeyRecord) -> Result<String> {
     let bytes = norito::to_bytes(rec).map_err(|err| {
         conversion_error(format!(
@@ -28431,7 +27599,6 @@ fn vk_record_norito_base64(rec: &iroha_data_model::proof::VerifyingKeyRecord) ->
     })?;
     Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
-#[cfg(feature = "app_api")]
 fn vk_detail_to_json(
     id: &iroha_data_model::proof::VerifyingKeyId,
     rec: &iroha_data_model::proof::VerifyingKeyRecord,
@@ -28676,7 +27843,6 @@ mod vk_record_input_tests {
     }
 }
 /// POST /v1/zk/vk/register — prepare `RegisterVerifyingKey` for local signing.
-#[cfg(feature = "app_api")]
 pub async fn handle_post_vk_register(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -28715,7 +27881,6 @@ pub async fn handle_post_vk_register(
     Ok(JsonBody(app_api_transaction_draft(&builder)))
 }
 /// POST /v1/zk/vk/update — prepare `UpdateVerifyingKey` for local signing.
-#[cfg(feature = "app_api")]
 pub async fn handle_post_vk_update(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -28754,7 +27919,6 @@ pub async fn handle_post_vk_update(
     Ok(JsonBody(app_api_transaction_draft(&builder)))
 }
 /// GET /v1/zk/vk/{backend}/{name} — read verifying key record.
-#[cfg(feature = "app_api")]
 pub async fn handle_get_vk(
     state: Arc<CoreState>,
     axum::extract::Path((backend, name)): axum::extract::Path<(String, String)>,
@@ -28770,13 +27934,10 @@ pub async fn handle_get_vk(
     let detail = vk_detail_to_json(&id, &rec)?;
     Ok(infallible_pretty_json_response(&detail, "{}"))
 }
+}
+derived_items! {
 /// DTO used by Torii for POST/GET registry endpoints.
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 pub struct ContractCodeRecordDto {
     pub manifest: iroha_data_model::smart_contract::manifest::ContractManifest,
     /// Optional hex-encoded `code_hash` (from manifest) for convenience
@@ -28790,14 +27951,11 @@ pub struct ContractCodeRecordDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub code_bytes: Option<Vec<u8>>,
 }
-#[cfg(feature = "app_api")]
+}
+app_api_items! {
+derived_items! {
 #[allow(missing_copy_implementations)]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request for binding, updating, or clearing a contract alias.
 #[norito(deny_unknown_fields)]
 pub struct SetContractAliasDto {
@@ -28812,15 +27970,7 @@ pub struct SetContractAliasDto {
     #[norito(default)]
     pub lease_expiry_ms: Option<u64>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Unsigned contract-alias transaction draft for local signing.
 #[norito(deny_unknown_fields)]
 pub struct SetContractAliasResponseDto {
@@ -28838,7 +27988,7 @@ pub struct SetContractAliasResponseDto {
     /// Signature message (`HashOf<TransactionPayload>`) encoded as padded base64.
     pub signing_message_b64: String,
 }
-#[cfg(feature = "app_api")]
+}
 fn prepare_contract_call(
     state: &CoreState,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -28918,14 +28068,12 @@ fn prepare_contract_call(
         contract_alias,
     })
 }
-#[cfg(feature = "app_api")]
 fn prepare_contract_call_by_address(
     state: &CoreState,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
 ) -> core::result::Result<PreparedContractCall, Error> {
     prepare_contract_call(state, contract_address, None)
 }
-#[cfg(feature = "app_api")]
 fn prepare_contract_call_by_alias(
     state: &CoreState,
     contract_alias: &iroha_data_model::smart_contract::ContractAlias,
@@ -28942,7 +28090,6 @@ fn prepare_contract_call_by_alias(
         })?;
     prepare_contract_call(state, &contract_address, Some(contract_alias.clone()))
 }
-#[cfg(feature = "app_api")]
 fn resolve_contract_call_target(
     state: &CoreState,
     contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
@@ -28961,7 +28108,6 @@ fn resolve_contract_call_target(
         )),
     }
 }
-#[cfg(feature = "app_api")]
 fn dataspace_alias_for_contract_address(
     state: &CoreState,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -28980,15 +28126,8 @@ fn dataspace_alias_for_contract_address(
             ))
         })
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+derived_items! {
+( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Exact request payload for a detached, single-instruction quantity transfer.
 ///
@@ -29022,10 +28161,7 @@ pub struct AssetTransferRequestDto {
     #[norito(default)]
     pub signature_base64: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone, Debug, PartialEq, Eq, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,
-)]
+( Clone, Debug, PartialEq, Eq, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Canonical transfer intent bound into both the response and operation receipt.
 pub struct AssetTransferIntentDto {
     /// Human-readable chain label included only in the normalized receipt.
@@ -29051,8 +28187,7 @@ pub struct AssetTransferIntentDto {
     /// Transaction time-to-live embedded in the payload.
     pub transaction_ttl_ms: u64,
 }
-#[cfg(feature = "app_api")]
-#[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Normalized public evidence for an asset-transfer prepare or submit operation.
 pub struct AssetTransferReceiptDto {
     /// Stable operation discriminator; always `asset_transfer`.
@@ -29075,8 +28210,7 @@ pub struct AssetTransferReceiptDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub entrypoint_hash_hex: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Response for `POST /v1/assets/transfer`.
 pub struct AssetTransferResponseDto {
     /// Whether request processing succeeded.
@@ -29108,15 +28242,7 @@ pub struct AssetTransferResponseDto {
     /// Public normalized operation evidence.
     pub receipt: AssetTransferReceiptDto,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for invoking a deployed contract.
 #[norito(deny_unknown_fields)]
 pub struct ContractCallDto {
@@ -29154,15 +28280,7 @@ pub struct ContractCallDto {
     /// Explicit payer selection, sponsor revision, fee limits, and gas bound.
     pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// One manifest-resolved contract-call intent in an ordered batch.
 pub struct ContractCallBatchIntentDto {
@@ -29187,15 +28305,7 @@ pub struct ContractCallBatchIntentDto {
     #[norito(default)]
     pub payload: Option<IrohaJson>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// One ordered input to contract-call batch preparation.
 pub struct ContractCallBatchPrepareItemDto {
@@ -29206,23 +28316,14 @@ pub struct ContractCallBatchPrepareItemDto {
     #[norito(default)]
     pub instruction_b64: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request for canonical ordered contract-call batch preparation.
 pub struct ContractCallBatchPrepareDto {
     /// Ordered call and native-instruction items.
     pub entries: Vec<ContractCallBatchPrepareItemDto>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+(Clone, Debug, crate::json_macros::JsonSerialize)
 /// Signature-bound public descriptor for one prepared batch item.
 pub struct ContractCallBatchBindingItemDto {
     /// Zero-based position in the prepared executable.
@@ -29260,8 +28361,7 @@ pub struct ContractCallBatchBindingItemDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub instruction_digest_hex: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+(Clone, Debug, crate::json_macros::JsonSerialize)
 /// Canonical manifest embedded in signed transaction metadata.
 pub struct ContractCallBatchBindingDto {
     /// Binding schema version.
@@ -29269,8 +28369,7 @@ pub struct ContractCallBatchBindingDto {
     /// Ordered descriptors for every executable item.
     pub items: Vec<ContractCallBatchBindingItemDto>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+(Clone, Debug, crate::json_macros::JsonSerialize)
 /// One exact executable item returned by batch preparation.
 pub struct ContractCallBatchPreparedItemDto {
     /// Zero-based position in the prepared executable.
@@ -29299,8 +28398,7 @@ pub struct ContractCallBatchPreparedItemDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub instruction_b64: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+(Clone, Debug, crate::json_macros::JsonSerialize)
 /// Canonical plan returned by contract-call batch preparation.
 pub struct ContractCallBatchPlanDto {
     /// Whether canonical preparation completed successfully.
@@ -29312,14 +28410,7 @@ pub struct ContractCallBatchPlanDto {
     /// Ordered exact executable items.
     pub prepared_entries: Vec<ContractCallBatchPreparedItemDto>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for simulating a deployed contract call without submitting a transaction.
 #[norito(deny_unknown_fields)]
 pub struct ContractCallSimulateDto {
@@ -29339,15 +28430,7 @@ pub struct ContractCallSimulateDto {
     /// Caller-specified execution gas limit (must be positive).
     pub gas_limit: u64,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Public, normalized evidence for a contract operation.
 pub struct OperationReceiptDto {
     /// Operation category, for example `contract_call` or `contract_deploy`.
@@ -29401,8 +28484,7 @@ pub struct OperationReceiptDto {
     /// Public digest of the normalized operation payload or artifact bytes.
     pub payload_digest_hex: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Response payload returned after enqueuing a contract call transaction.
 pub struct ContractCallResponseDto {
     /// Whether queuing succeeded.
@@ -29446,14 +28528,13 @@ pub struct ContractCallResponseDto {
     /// Public normalized operation evidence.
     pub operation_receipt: OperationReceiptDto,
 }
-#[cfg(feature = "app_api")]
+}
 fn contract_payload_digest_hex(payload: Option<&IrohaJson>) -> String {
     let canonical = payload
         .and_then(|value| norito::json::to_json(value).ok())
         .unwrap_or_default();
     hex::encode(blake3_hash(canonical.as_bytes()).as_bytes())
 }
-#[cfg(feature = "app_api")]
 struct ContractCallReceiptInput<'a> {
     status: &'a str,
     dataspace: &'a str,
@@ -29468,7 +28549,6 @@ struct ContractCallReceiptInput<'a> {
     fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     payload_digest_hex: &'a str,
 }
-#[cfg(feature = "app_api")]
 fn contract_call_operation_receipt(input: ContractCallReceiptInput<'_>) -> OperationReceiptDto {
     OperationReceiptDto {
         operation_kind: "contract_call".to_owned(),
@@ -29488,7 +28568,6 @@ fn contract_call_operation_receipt(input: ContractCallReceiptInput<'_>) -> Opera
         payload_digest_hex: input.payload_digest_hex.to_owned(),
     }
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 /// Response payload returned after simulating a contract call.
 pub struct ContractCallSimulateResponseDto {
@@ -29524,6 +28603,7 @@ pub struct ContractCallSimulateResponseDto {
     #[norito(default)]
     pub vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
 }
+}
 fn strict_json_object_from_parser(
     parser: &mut norito::json::Parser<'_>,
     allowed_fields: &[&str],
@@ -29557,7 +28637,7 @@ fn reject_unknown_json_object_fields(
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
+app_api_items! {
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request payload for submitting a bridge proof derived from a live SCCP bundle.
@@ -29585,7 +28665,6 @@ pub struct BridgeProofSubmitDto {
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct BridgeProofSubmitDtoWire {
@@ -29599,7 +28678,6 @@ struct BridgeProofSubmitDtoWire {
     #[norito(default)]
     creation_time_ms: Option<u64>,
 }
-#[cfg(feature = "app_api")]
 impl From<BridgeProofSubmitDtoWire> for BridgeProofSubmitDto {
     fn from(wire: BridgeProofSubmitDtoWire) -> Self {
         let BridgeProofSubmitDtoWire {
@@ -29620,7 +28698,6 @@ impl From<BridgeProofSubmitDtoWire> for BridgeProofSubmitDto {
         }
     }
 }
-#[cfg(feature = "app_api")]
 impl norito::json::JsonDeserialize for BridgeProofSubmitDto {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -29654,7 +28731,6 @@ impl norito::json::JsonDeserialize for BridgeProofSubmitDto {
             .map(Into::into)
     }
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// Exact response returned by both SCCP bridge submit endpoints.
@@ -29692,7 +28768,6 @@ pub struct BridgeSubmitResponseDto {
     #[norito(default)]
     pub signing_message_b64: Option<String>,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request payload for preparing one proof-driven native SCCP admission transaction.
@@ -29718,7 +28793,6 @@ pub struct BridgeMessageSubmitDto {
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct BridgeMessageSubmitDtoWire {
@@ -29732,7 +28806,6 @@ struct BridgeMessageSubmitDtoWire {
     #[norito(default)]
     creation_time_ms: Option<u64>,
 }
-#[cfg(feature = "app_api")]
 impl From<BridgeMessageSubmitDtoWire> for BridgeMessageSubmitDto {
     fn from(wire: BridgeMessageSubmitDtoWire) -> Self {
         let BridgeMessageSubmitDtoWire {
@@ -29753,7 +28826,6 @@ impl From<BridgeMessageSubmitDtoWire> for BridgeMessageSubmitDto {
         }
     }
 }
-#[cfg(feature = "app_api")]
 impl norito::json::JsonDeserialize for BridgeMessageSubmitDto {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -29787,14 +28859,8 @@ impl norito::json::JsonDeserialize for BridgeMessageSubmitDto {
             .map(Into::into)
     }
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+derived_items! {
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for invoking a read-only contract view entrypoint.
 pub struct ContractViewDto {
     /// Account identity used as the read authority and host context.
@@ -29813,14 +28879,7 @@ pub struct ContractViewDto {
     /// Caller-specified gas limit for the local read execution (must be > 0).
     pub gas_limit: u64,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// One item inside a batched read-only contract view request.
 pub struct ContractViewBatchItemDto {
     /// Optional stable caller-provided item identifier.
@@ -29841,14 +28900,7 @@ pub struct ContractViewBatchItemDto {
     #[norito(default)]
     pub gas_limit: Option<u64>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for invoking multiple read-only contract view entrypoints in one HTTP round-trip.
 pub struct ContractViewBatchDto {
     /// Account identity used as the read authority and host context.
@@ -29859,8 +28911,7 @@ pub struct ContractViewBatchDto {
     /// The batch items to execute.
     pub items: Vec<ContractViewBatchItemDto>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Response payload returned after executing a read-only contract view.
 pub struct ContractViewResponseDto {
     /// Whether execution succeeded.
@@ -29879,8 +28930,7 @@ pub struct ContractViewResponseDto {
     /// Decoded result payload.
     pub result: IrohaJson,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 pub struct ContractViewVmDiagnosticDto {
     pub trap_kind: String,
     pub message: String,
@@ -29912,8 +28962,7 @@ pub struct ContractViewVmDiagnosticDto {
     #[norito(default)]
     pub predecoded_hit: Option<bool>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 pub struct ContractViewErrorResponseDto {
     pub ok: bool,
     pub dataspace: String,
@@ -29926,10 +28975,7 @@ pub struct ContractViewErrorResponseDto {
     #[norito(default)]
     pub vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 pub struct ContractViewBatchGetParams {
     /// Optional limit for pagination.
     pub limit: Option<u64>,
@@ -29937,16 +28983,7 @@ pub struct ContractViewBatchGetParams {
     #[norito(default)]
     pub offset: u64,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    Clone,
-    Default,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, Clone, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(decode_from_slice)]
 /// Selects a multisig authority either by its active concrete account id or by stable alias.
 pub struct MultisigAccountSelectorDto {
@@ -29957,14 +28994,7 @@ pub struct MultisigAccountSelectorDto {
     #[norito(default)]
     pub multisig_account_alias: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for proposing a generic multisig instruction batch.
 #[norito(deny_unknown_fields)]
 pub struct MultisigProposeDto {
@@ -30002,14 +29032,7 @@ pub struct MultisigProposeDto {
     #[norito(default)]
     pub validation_fee_transfer_entry_index: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for approving a generic multisig proposal.
 #[norito(deny_unknown_fields)]
 pub struct MultisigApproveDto {
@@ -30036,14 +29059,7 @@ pub struct MultisigApproveDto {
     #[norito(default)]
     pub instructions_hash: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload for proposing a multisig-wrapped contract call.
 pub struct MultisigContractCallProposeDto {
@@ -30075,14 +29091,7 @@ pub struct MultisigContractCallProposeDto {
     /// Explicit signature-bound payer, sponsor revision, fee limits, and gas bound.
     pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload for approving a multisig-wrapped contract call proposal.
 pub struct MultisigContractCallApproveDto {
@@ -30108,6 +29117,7 @@ pub struct MultisigContractCallApproveDto {
     /// Optional deterministic hash of the proposal instructions.
     #[norito(default)]
     pub instructions_hash: Option<String>,
+}
 }
 #[cfg(all(test, feature = "app_api"))]
 mod multisig_native_norito_dto_tests {
@@ -30204,14 +29214,8 @@ mod multisig_native_norito_dto_tests {
             .expect_err("retired multisig metadata fee sponsor fixture must not decode");
     }
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+derived_items! {
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for canceling a multisig proposal through a multisig action.
 #[norito(deny_unknown_fields)]
 pub struct MultisigCancelRequestDto {
@@ -30238,8 +29242,7 @@ pub struct MultisigCancelRequestDto {
     #[norito(default)]
     pub instructions_hash: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Response payload for multisig participation endpoints.
 pub struct MultisigContractCallResponseDto {
     /// Whether processing succeeded.
@@ -30272,8 +29275,7 @@ pub struct MultisigContractCallResponseDto {
     #[norito(default)]
     pub signing_message_b64: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Response payload for the first-class multisig cancel endpoint.
 pub struct MultisigCancelResponseDto {
     /// Whether processing succeeded.
@@ -30310,29 +29312,20 @@ pub struct MultisigCancelResponseDto {
     #[norito(default)]
     pub signing_message_b64: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload for resolving a multisig spec through the alias-aware selector.
 pub struct MultisigSpecRequestDto {
     #[norito(flatten)]
     pub selector: MultisigAccountSelectorDto,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Response payload containing the resolved active multisig account and its spec.
 pub struct MultisigSpecResponseDto {
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     pub spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Response payload for a multisig proposal query.
 pub struct MultisigProposalsQueryResponseDto {
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
@@ -30341,14 +29334,7 @@ pub struct MultisigProposalsQueryResponseDto {
     #[norito(default)]
     pub next_cursor: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload for resolving a single multisig proposal.
 pub struct MultisigProposalsResolveRequestDto {
@@ -30362,8 +29348,7 @@ pub struct MultisigProposalsResolveRequestDto {
     #[norito(default)]
     pub instructions_hash: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Response payload for a selector-explicit multisig proposal read.
 pub struct MultisigProposalResolveResponseDto {
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
@@ -30377,14 +29362,7 @@ pub struct MultisigProposalResolveResponseDto {
     #[norito(default)]
     pub terminal_at_ms: Option<u64>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload for querying multisig proposals.
 pub struct MultisigProposalsQueryRequestDto {
@@ -30401,10 +29379,7 @@ pub struct MultisigProposalsQueryRequestDto {
     #[norito(default)]
     pub limit: Option<u64>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug, Clone, PartialEq, Eq, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,
-)]
+( Debug, Clone, PartialEq, Eq, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Envelope describing a multisig proposal returned by Torii.
 pub struct MultisigProposalEntryDto {
     pub proposal_id: String,
@@ -30417,30 +29392,14 @@ pub struct MultisigProposalEntryDto {
     #[norito(default)]
     pub terminal_at_ms: Option<u64>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(decode_from_slice)]
 /// Stable account selector shared by native recovery routes.
 pub struct AccountRecoverySelectorDto {
     /// Canonical stable alias whose active controller and recovery state are targeted.
     pub account_alias: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(decode_from_slice)]
 /// Detached-signature fields shared by native recovery mutations.
 pub struct AccountRecoveryDetachedAuthDto {
@@ -30458,14 +29417,7 @@ pub struct AccountRecoveryDetachedAuthDto {
     /// Explicit signature-bound payer, sponsor revision, fee limits, and gas bound.
     pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Configure the exact regulated 2-of-3, 72-hour account-recovery policy.
 pub struct AccountRecoveryPolicySetDto {
@@ -30480,14 +29432,7 @@ pub struct AccountRecoveryPolicySetDto {
     /// Recovery cooling period. Regulated application routes require exactly 259,200,000 ms.
     pub timelock_ms: u64,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Propose an alias-bound controller replacement through regulated recovery.
 pub struct AccountRecoveryProposeDto {
@@ -30498,14 +29443,7 @@ pub struct AccountRecoveryProposeDto {
     /// Exact replacement controller requested for the stable alias.
     pub new_controller: iroha_data_model::account::AccountController,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Approve an alias-bound regulated account-recovery request.
 pub struct AccountRecoveryApproveDto {
@@ -30514,14 +29452,7 @@ pub struct AccountRecoveryApproveDto {
     #[norito(flatten)]
     pub auth: AccountRecoveryDetachedAuthDto,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Finalize an alias-bound regulated account-recovery request after quorum and cooling.
 pub struct AccountRecoveryFinalizeDto {
@@ -30530,22 +29461,14 @@ pub struct AccountRecoveryFinalizeDto {
     #[norito(flatten)]
     pub auth: AccountRecoveryDetachedAuthDto,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Query an alias-bound recovery policy, request, and proposal-invalidation evidence.
 pub struct AccountRecoveryStatusRequestDto {
     #[norito(flatten)]
     pub selector: AccountRecoverySelectorDto,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, Clone, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Detached-signature preparation or submission response for a recovery mutation.
 pub struct AccountRecoveryMutationResponseDto {
     pub ok: bool,
@@ -30564,16 +29487,14 @@ pub struct AccountRecoveryMutationResponseDto {
     #[norito(default)]
     pub signing_message_b64: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, Clone, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Terminal native multisig proposal evidence retained by recovery finalization.
 pub struct AccountRecoveryInvalidatedProposalEvidenceDto {
     pub proposal_id: String,
     pub status: String,
     pub terminal_at_ms: u64,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, Clone, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Authoritative alias-bound recovery state and terminal evidence.
 pub struct AccountRecoveryStatusResponseDto {
     pub account_alias: String,
@@ -30585,29 +29506,20 @@ pub struct AccountRecoveryStatusResponseDto {
     pub invalidated_proposals: Vec<AccountRecoveryInvalidatedProposalEvidenceDto>,
     pub invalidation_evidence_complete: bool,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for reading asset-transfer control state for one account and asset definition.
 pub struct AssetTransferControlGetRequestDto {
     pub account_id: iroha_data_model::account::AccountId,
     pub asset_definition_id: iroha_data_model::asset::AssetDefinitionId,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// One configured asset-transfer cap.
 pub struct AssetTransferControlLimitDto {
     pub window: String,
     #[norito(default)]
     pub cap_amount: Option<Quantity>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// One usage bucket currently applied to an asset-transfer control.
 pub struct AssetTransferUsageBucketDto {
     pub window: String,
@@ -30616,8 +29528,7 @@ pub struct AssetTransferUsageBucketDto {
     #[norito(default)]
     pub cap_amount: Option<Quantity>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Asset-transfer control state for a single `(account_id, asset_definition_id)` pair.
 pub struct AssetTransferControlDto {
     pub account_id: iroha_data_model::account::AccountId,
@@ -30634,15 +29545,13 @@ pub struct AssetTransferControlDto {
     #[norito(default)]
     pub updated_at: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Ledger tip at which an asset-transfer control read was observed.
 pub struct AssetTransferControlCheckpointDto {
     pub block_height: u64,
     pub block_hash: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Response payload for asset-transfer control reads.
 pub struct AssetTransferControlGetResponseDto {
     pub control: AssetTransferControlDto,
@@ -30651,8 +29560,7 @@ pub struct AssetTransferControlGetResponseDto {
     #[norito(default)]
     pub checkpoint: Option<AssetTransferControlCheckpointDto>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Clone)]
+(Clone)
 struct PreparedContractCall {
     program: iroha_core::smartcontracts::ivm::cache::ProgramSummary,
     code_hash: iroha_crypto::Hash,
@@ -30662,19 +29570,12 @@ struct PreparedContractCall {
     contract_address: iroha_data_model::smart_contract::ContractAddress,
     contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
 }
+}
 // ---------------------- Subscription API DTOs ----------------------
-#[cfg(feature = "app_api")]
 /// First-release subscription mutation draft layout version.
 pub const SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1: u16 = 1;
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+derived_items! {
+( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// One canonical framed instruction returned for local transaction signing.
 pub struct SubscriptionInstructionDraftDto {
@@ -30683,15 +29584,7 @@ pub struct SubscriptionInstructionDraftDto {
     /// Lowercase hexadecimal canonical framed instruction bytes.
     pub payload_hex: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for creating a subscription plan.
 #[norito(deny_unknown_fields)]
 pub struct SubscriptionPlanCreateDto {
@@ -30702,8 +29595,7 @@ pub struct SubscriptionPlanCreateDto {
     /// Subscription plan payload stored on the asset definition.
     pub plan: iroha_data_model::subscription::SubscriptionPlan,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Canonical unsigned transaction draft for registering a subscription plan.
 pub struct SubscriptionPlanCreateResponseDto {
     /// Always `false`; Torii has not submitted this transaction.
@@ -30715,10 +29607,7 @@ pub struct SubscriptionPlanCreateResponseDto {
     /// Signature message (`HashOf<TransactionPayload>`) encoded as padded base64.
     pub signing_message_b64: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 /// Query parameters for listing subscription plans.
 pub struct SubscriptionPlanListParams {
     /// Optional plan provider filter using a canonical I105 id or on-chain alias.
@@ -30732,8 +29621,7 @@ pub struct SubscriptionPlanListParams {
     #[norito(default)]
     pub count_mode: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Subscription plan list item.
 pub struct SubscriptionPlanListItem {
     /// Plan asset definition id.
@@ -30741,8 +29629,7 @@ pub struct SubscriptionPlanListItem {
     /// Plan metadata payload.
     pub plan: iroha_data_model::subscription::SubscriptionPlan,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Response payload for listing subscription plans.
 pub struct SubscriptionPlanListResponseDto {
     /// Plan items.
@@ -30755,15 +29642,7 @@ pub struct SubscriptionPlanListResponseDto {
     /// Count mode used to produce pagination metadata.
     pub count_mode: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload for creating a subscription.
 pub struct SubscriptionCreateDto {
@@ -30786,8 +29665,7 @@ pub struct SubscriptionCreateDto {
     #[norito(default)]
     pub grant_usage_to_provider: Option<bool>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Exact unsigned subscription creation draft.
 pub struct SubscriptionCreateResponseDto {
     /// Response layout version.
@@ -30814,10 +29692,7 @@ pub struct SubscriptionCreateResponseDto {
     /// Canonical instructions the authority must sign and submit.
     pub tx_instructions: Vec<SubscriptionInstructionDraftDto>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
-)]
+( Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 /// Query parameters for listing subscriptions.
 pub struct SubscriptionListParams {
     /// Optional subscriber filter using a canonical I105 id or on-chain alias.
@@ -30835,8 +29710,7 @@ pub struct SubscriptionListParams {
     #[norito(default)]
     pub count_mode: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Subscription list item payload.
 pub struct SubscriptionListItem {
     /// Subscription NFT id.
@@ -30850,8 +29724,7 @@ pub struct SubscriptionListItem {
     #[norito(default)]
     pub plan: Option<iroha_data_model::subscription::SubscriptionPlan>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Response payload for listing subscriptions.
 pub struct SubscriptionListResponseDto {
     /// Subscription items.
@@ -30864,8 +29737,7 @@ pub struct SubscriptionListResponseDto {
     /// Count mode used to produce pagination metadata.
     pub count_mode: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Response payload for fetching a subscription.
 pub struct SubscriptionGetResponseDto {
     /// Subscription NFT id.
@@ -30879,15 +29751,7 @@ pub struct SubscriptionGetResponseDto {
     #[norito(default)]
     pub plan: Option<iroha_data_model::subscription::SubscriptionPlan>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload for subscription status updates.
 pub struct SubscriptionActionDto {
@@ -30900,18 +29764,7 @@ pub struct SubscriptionActionDto {
     #[norito(default)]
     pub cancel_mode: Option<SubscriptionCancelMode>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    PartialEq,
-    Eq,
-)]
+( Clone, Copy, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, PartialEq, Eq,)
 #[norito(
     tag = "mode",
     content = "value",
@@ -30923,15 +29776,7 @@ pub enum SubscriptionCancelMode {
     Immediate,
     PeriodEnd,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for recording subscription usage.
 #[norito(deny_unknown_fields)]
 pub struct SubscriptionUsageRequestDto {
@@ -30945,8 +29790,7 @@ pub struct SubscriptionUsageRequestDto {
     #[norito(default)]
     pub usage_trigger_id: Option<iroha_data_model::trigger::TriggerId>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Exact details projected by a subscription action draft.
 pub struct SubscriptionActionDraftDetailsDto {
     /// Billing trigger affected by the action.
@@ -30962,8 +29806,7 @@ pub struct SubscriptionActionDraftDetailsDto {
     /// Exact subscription state produced when the draft instructions commit.
     pub resulting_subscription: iroha_data_model::subscription::SubscriptionState,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Exact unsigned subscription action draft.
 pub struct SubscriptionActionResponseDto {
     /// Response layout version.
@@ -30979,8 +29822,7 @@ pub struct SubscriptionActionResponseDto {
     /// Canonical instructions the authority must sign and submit.
     pub tx_instructions: Vec<SubscriptionInstructionDraftDto>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Canonical unsigned transaction draft for recording subscription usage.
 pub struct SubscriptionUsageResponseDto {
     /// Always `false`; Torii has not submitted this transaction.
@@ -30992,13 +29834,7 @@ pub struct SubscriptionUsageResponseDto {
     /// Signature message (`HashOf<TransactionPayload>`) encoded as padded base64.
     pub signing_message_b64: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Response returned after registering a manifest for pinning.
 pub struct RegisterPinManifestResponseDto {
     /// Admission state. Always `submitted`; it does not imply finality.
@@ -31008,13 +29844,7 @@ pub struct RegisterPinManifestResponseDto {
     /// Canonical manifest digest (BLAKE3-256) as hex.
     pub manifest_digest_hex: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Response payload for the capacity declaration endpoint.
 pub struct RegisterCapacityDeclarationResponseDto {
     /// Provider identifier as hex.
@@ -31026,13 +29856,7 @@ pub struct RegisterCapacityDeclarationResponseDto {
     /// Epoch when the declaration expires.
     pub valid_until_epoch: u64,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Response payload for the capacity telemetry endpoint.
 pub struct RecordCapacityTelemetryResponseDto {
     /// Provider identifier as hex.
@@ -31042,8 +29866,7 @@ pub struct RecordCapacityTelemetryResponseDto {
     /// End epoch (inclusive) of the telemetry window.
     pub window_end_epoch: u64,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+(Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)
 /// Query parameters for listing PoR challenge statuses.
 pub struct PorStatusQueryDto {
     pub manifest: Option<String>,
@@ -31057,8 +29880,7 @@ pub struct PorStatusQueryDto {
     /// Opaque continuation returned by the preceding page.
     pub cursor: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+(Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)
 /// Query parameters for exporting PoR challenge history.
 pub struct PorExportQueryDto {
     pub start_epoch: Option<u64>,
@@ -31070,58 +29892,34 @@ pub struct PorExportQueryDto {
     /// Opaque continuation returned by the preceding page.
     pub cursor: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for recording a PoR proof submitted by a provider.
 pub struct RecordPorProofDto {
     /// Base64-encoded Norito `PorProofV1`.
     pub proof_b64: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for recording a PoR audit verdict.
 pub struct RecordPorVerdictDto {
     /// Base64-encoded Norito `AuditVerdictV1`.
     pub verdict_b64: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Response payload returned after recording a PoR challenge or proof.
 pub struct RecordPorSubmissionResponseDto {
     /// Result status (`accepted`).
     pub status: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Response payload returned after recording a PoR verdict.
 pub struct RecordPorVerdictResponseDto {
     /// Result status (`accepted`).
     pub status: String,
 }
+}
 /// POST /v1/contracts/aliases — prepare a canonical unsigned transaction that
 /// binds, updates, or clears the alias for an existing public contract instance.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_contract_alias_set(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -31167,7 +29965,6 @@ pub async fn handle_post_contract_alias_set(
 }
 /// POST /v1/sorafs/pin/register — submit a manifest registration transaction after validation.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_sorafs_register_manifest(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -31197,6 +29994,7 @@ pub async fn handle_post_sorafs_register_manifest(
     *resp.status_mut() = axum::http::StatusCode::ACCEPTED;
     Ok(resp)
 }
+}
 const SORAFS_CAPACITY_DECLARATION_PAYLOAD_MAX_BYTES: usize = 256 * 1024;
 const SORAFS_CAPACITY_DECLARATION_DECODE_LIMITS: norito::core::DecodeLimits =
     norito::core::DecodeLimits::new(
@@ -31206,7 +30004,7 @@ const SORAFS_CAPACITY_DECLARATION_DECODE_LIMITS: norito::core::DecodeLimits =
         SORAFS_CAPACITY_DECLARATION_PAYLOAD_MAX_BYTES * 4,
         32,
     );
-#[cfg(feature = "app_api")]
+app_api_items! {
 fn validate_sorafs_capacity_declaration_transaction<'a>(
     network_id: &NetworkId,
     transaction: &'a SignedTransaction,
@@ -31288,7 +30086,6 @@ fn validate_sorafs_capacity_declaration_transaction<'a>(
     }
     Ok(register)
 }
-#[cfg(feature = "app_api")]
 fn validate_sorafs_capacity_telemetry_transaction<'a>(
     network_id: &NetworkId,
     transaction: &'a SignedTransaction,
@@ -31353,7 +30150,6 @@ fn validate_sorafs_capacity_telemetry_transaction<'a>(
     Ok(submit)
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_sorafs_register_capacity_declaration(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -31387,7 +30183,6 @@ pub async fn handle_post_sorafs_register_capacity_declaration(
     Ok(infallible_pretty_json_response(&response, "{}"))
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_sorafs_record_capacity_telemetry(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -31419,14 +30214,12 @@ pub async fn handle_post_sorafs_record_capacity_telemetry(
     .await?;
     Ok(infallible_pretty_json_response(&response, "{}"))
 }
-#[cfg(feature = "app_api")]
 fn sorafs_transaction_quota_subject(transaction: &SignedTransaction) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"iroha:sorafs:control-plane-quota:v1\0");
     hasher.update(transaction.authority().to_string().as_bytes());
     *hasher.finalize().as_bytes()
 }
-#[cfg(feature = "app_api")]
 fn ensure_sorafs_quota_authority_registered(
     state: &CoreState,
     transaction: &SignedTransaction,
@@ -31443,7 +30236,6 @@ fn ensure_sorafs_quota_authority_registered(
         })
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_sorafs_record_por_proof(
     _telemetry: MaybeTelemetry,
     sorafs_node: sorafs_node::NodeHandle,
@@ -31503,7 +30295,6 @@ pub(crate) async fn handle_post_sorafs_record_por_proof(
     Ok(infallible_pretty_json_response(&response, "{}"))
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_sorafs_record_por_verdict(
     telemetry: MaybeTelemetry,
     sorafs_node: sorafs_node::NodeHandle,
@@ -31582,7 +30373,6 @@ pub(crate) async fn handle_post_sorafs_record_por_verdict(
     };
     Ok(infallible_pretty_json_response(&response, "{}"))
 }
-#[cfg(feature = "app_api")]
 pub fn handle_get_sorafs_por_status(
     coordinator: Arc<sorafs::PorCoordinator>,
     query: PorStatusQueryDto,
@@ -31616,7 +30406,6 @@ pub fn handle_get_sorafs_por_status(
         .query_status_page(&filter, limits, cursor)
         .map_err(por_coordinator_error)
 }
-#[cfg(feature = "app_api")]
 pub fn handle_get_sorafs_por_export(
     coordinator: Arc<sorafs::PorCoordinator>,
     query: PorExportQueryDto,
@@ -31638,7 +30427,6 @@ pub fn handle_get_sorafs_por_export(
         .export_status_page(range, limits, cursor)
         .map_err(por_coordinator_error)
 }
-#[cfg(feature = "app_api")]
 pub fn handle_get_sorafs_por_report(
     coordinator: Arc<sorafs::PorCoordinator>,
     cycle: PorReportIsoWeek,
@@ -31646,6 +30434,7 @@ pub fn handle_get_sorafs_por_report(
     coordinator
         .weekly_report(cycle)
         .map_err(por_coordinator_error)
+}
 }
 pub(crate) fn parse_hex_array<const N: usize>(value: &str, field: &str) -> Result<[u8; N], Error> {
     let trimmed = value.trim_start_matches("0x");
@@ -31783,14 +30572,13 @@ pub(crate) fn decode_por_verdict_payload(payload_b64: &str) -> Result<AuditVerdi
     decode_audit_verdict_v1(&bytes)
         .map_err(|err| conversion_error(format!("invalid verdict payload: {err}")))
 }
-#[cfg(feature = "app_api")]
+app_api_items! {
 fn por_submission_forbidden(code: &'static str, message: impl Into<String>) -> Error {
     Error::AppForbidden {
         code,
         message: message.into(),
     }
 }
-#[cfg(feature = "app_api")]
 fn authenticated_ed25519_payload<'a>(
     signer: &'a PublicKey,
     role: &'static str,
@@ -31809,7 +30597,6 @@ fn authenticated_ed25519_payload<'a>(
     }
     Ok(payload)
 }
-#[cfg(feature = "app_api")]
 fn verify_authenticated_por_proof(
     proof: &PorProofV1,
     authenticated_signer: &PublicKey,
@@ -31839,7 +30626,6 @@ fn verify_authenticated_por_proof(
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn verify_authenticated_por_verdict(
     verdict: &AuditVerdictV1,
     authenticated_signer: &PublicKey,
@@ -31865,6 +30651,7 @@ fn verify_authenticated_por_verdict(
         ));
     }
     Ok(())
+}
 }
 fn por_tracker_error(err: sorafs_node::PorTrackerError) -> Error {
     use iroha_data_model::query::error::QueryExecutionFail;
@@ -31901,7 +30688,7 @@ fn por_coordinator_error(err: PorCoordinatorError) -> Error {
 }
 const SORAFS_PIN_ALIAS_SEGMENT_MAX_BYTES: usize = 128;
 const SORAFS_PIN_ALIAS_PROOF_MAX_BYTES: usize = 1024 * 1024;
-#[cfg(feature = "app_api")]
+app_api_items! {
 fn validate_single_signed_instruction<'a, T: 'static>(
     network_id: &NetworkId,
     transaction: &'a SignedTransaction,
@@ -31946,7 +30733,6 @@ fn validate_single_signed_instruction<'a, T: 'static>(
         )
     })
 }
-#[cfg(feature = "app_api")]
 fn validate_sorafs_pin_register_transaction<'a>(
     network_id: &NetworkId,
     transaction: &'a SignedTransaction,
@@ -31978,7 +30764,6 @@ fn validate_sorafs_pin_register_transaction<'a>(
     }
     Ok(register)
 }
-#[cfg(feature = "app_api")]
 fn decode_sorafs_pin_manifest_bytes(
     manifest_bytes: &[u8],
     constraints: &ManifestPinPolicyConstraints,
@@ -32015,7 +30800,6 @@ fn decode_sorafs_pin_manifest_bytes(
     })?;
     Ok((manifest, *digest.as_bytes()))
 }
-#[cfg(feature = "app_api")]
 fn validate_sorafs_pin_alias_segment(value: &str, field: &str) -> Result<()> {
     let bytes = value.as_bytes();
     if bytes.is_empty()
@@ -32036,7 +30820,6 @@ fn validate_sorafs_pin_alias_segment(value: &str, field: &str) -> Result<()> {
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn validate_sorafs_pin_alias_binding(
     alias: &iroha_data_model::sorafs::pin_registry::ManifestAliasBinding,
 ) -> Result<()> {
@@ -32049,6 +30832,7 @@ fn validate_sorafs_pin_alias_binding(
         ));
     }
     Ok(())
+}
 }
 fn convert_manifest_policy(
     policy: &ManifestPinPolicy,
@@ -33797,8 +32581,8 @@ pub async fn handle_p2p_ws(
         let _ = ws.close().await;
     }
 }
+app_api_items! {
 // ---------------------- v1 App-Facing Endpoints ----------------------
-#[cfg(feature = "app_api")]
 #[derive(Clone, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Default)]
 struct TxProjection {
     authority: Option<String>,
@@ -33808,7 +32592,6 @@ struct TxProjection {
     result_ok: bool,
     memo: Option<String>,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct AccountHistoryProjection {
     id: String,
@@ -33829,13 +32612,11 @@ struct AccountHistoryProjection {
     finalized_at_ms: Option<u64>,
     requesting_fi_id: Option<String>,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct AccountHistoryIndexCacheKey {
     committed_height: usize,
     tip_block_hash: Option<String>,
 }
-#[cfg(feature = "app_api")]
 #[derive(Default, Clone)]
 struct AccountHistoryIndex {
     cache_key: AccountHistoryIndexCacheKey,
@@ -33844,10 +32625,8 @@ struct AccountHistoryIndex {
     by_asset_id: std::collections::HashMap<String, Vec<usize>>,
     by_asset_definition: std::collections::HashMap<String, Vec<usize>>,
 }
-#[cfg(feature = "app_api")]
 static ACCOUNT_HISTORY_INDEX: LazyLock<RwLock<Option<Arc<AccountHistoryIndex>>>> =
     LazyLock::new(|| RwLock::new(None));
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Default)]
 struct ContractActivityProjection {
     authority: Option<String>,
@@ -33860,13 +32639,11 @@ struct ContractActivityProjection {
     contract_payload: Option<norito::json::Value>,
     fee_payment: Option<iroha_data_model::transaction::FeePaymentIntent>,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ContractActivityIndexCacheKey {
     committed_height: usize,
     tip_block_hash: Option<String>,
 }
-#[cfg(feature = "app_api")]
 #[derive(Default, Clone)]
 struct ContractActivityIndex {
     cache_key: ContractActivityIndexCacheKey,
@@ -33878,10 +32655,8 @@ struct ContractActivityIndex {
     ok_positions: Vec<usize>,
     error_positions: Vec<usize>,
 }
-#[cfg(feature = "app_api")]
 static CONTRACT_ACTIVITY_INDEX: LazyLock<RwLock<Option<Arc<ContractActivityIndex>>>> =
     LazyLock::new(|| RwLock::new(None));
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Default)]
 struct ContractEventProjection {
     event_id: String,
@@ -33903,13 +32678,11 @@ struct ContractEventProjection {
     payload: Option<norito::json::Value>,
     fee_payment: Option<iroha_data_model::transaction::FeePaymentIntent>,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ContractEventIndexCacheKey {
     committed_height: usize,
     tip_block_hash: Option<String>,
 }
-#[cfg(feature = "app_api")]
 #[derive(Default, Clone)]
 struct ContractEventIndex {
     cache_key: ContractEventIndexCacheKey,
@@ -33925,24 +32698,20 @@ struct ContractEventIndex {
     ok_positions: Vec<usize>,
     error_positions: Vec<usize>,
 }
-#[cfg(feature = "app_api")]
 static CONTRACT_EVENT_INDEX: LazyLock<RwLock<Option<Arc<ContractEventIndex>>>> =
     LazyLock::new(|| RwLock::new(None));
-#[cfg(feature = "app_api")]
 #[derive(Debug)]
 enum ContractActivityCandidatePositions<'a> {
     All,
     Indexed(std::borrow::Cow<'a, [usize]>),
     Empty,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug)]
 enum ContractEventCandidatePositions<'a> {
     All,
     Indexed(std::borrow::Cow<'a, [usize]>),
     Empty,
 }
-#[cfg(feature = "app_api")]
 fn contract_activity_index_cache_key(state: &CoreState) -> ContractActivityIndexCacheKey {
     let committed_height = state.committed_height();
     let tip_block_hash = std::num::NonZeroUsize::new(committed_height)
@@ -33953,7 +32722,6 @@ fn contract_activity_index_cache_key(state: &CoreState) -> ContractActivityIndex
         tip_block_hash,
     }
 }
-#[cfg(feature = "app_api")]
 fn contract_event_index_cache_key(state: &CoreState) -> ContractEventIndexCacheKey {
     let committed_height = state.committed_height();
     let tip_block_hash = std::num::NonZeroUsize::new(committed_height)
@@ -33964,7 +32732,6 @@ fn contract_event_index_cache_key(state: &CoreState) -> ContractEventIndexCacheK
         tip_block_hash,
     }
 }
-#[cfg(feature = "app_api")]
 fn account_history_index_cache_key(state: &CoreState) -> AccountHistoryIndexCacheKey {
     let committed_height = state.committed_height();
     let tip_block_hash = committed_block_hash_string_at_height(state, committed_height);
@@ -33973,14 +32740,12 @@ fn account_history_index_cache_key(state: &CoreState) -> AccountHistoryIndexCach
         tip_block_hash,
     }
 }
-#[cfg(feature = "app_api")]
 fn committed_block_hash_string_at_height(state: &CoreState, height: usize) -> Option<String> {
     let height = u64::try_from(height).ok()?;
     state
         .committed_block_hash_at_height(height)
         .map(|hash| format!("{hash}"))
 }
-#[cfg(feature = "app_api")]
 fn account_history_insert_index(
     index: &mut std::collections::HashMap<String, Vec<usize>>,
     key: &str,
@@ -33990,7 +32755,6 @@ fn account_history_insert_index(
         index.entry(key.to_owned()).or_default().push(position);
     }
 }
-#[cfg(feature = "app_api")]
 fn append_account_history_projection(
     index: &mut AccountHistoryIndex,
     projection: AccountHistoryProjection,
@@ -34005,7 +32769,6 @@ fn append_account_history_projection(
     }
     index.items.push(projection);
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct AccountHistoryTxBase {
     timestamp_ms: Option<u64>,
@@ -34013,7 +32776,6 @@ struct AccountHistoryTxBase {
     result_ok: bool,
     status: String,
 }
-#[cfg(feature = "app_api")]
 fn account_history_tx_base(
     tx: &iroha_data_model::query::CommittedTransaction,
 ) -> AccountHistoryTxBase {
@@ -34029,7 +32791,6 @@ fn account_history_tx_base(
         },
     }
 }
-#[cfg(feature = "app_api")]
 fn account_history_direction_label(
     role: crate::account_activity::AccountActivityRole,
 ) -> &'static str {
@@ -34040,7 +32801,6 @@ fn account_history_direction_label(
         crate::account_activity::AccountActivityRole::Affected => "affected",
     }
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct AccountHistoryMovement {
     account: AccountId,
@@ -34051,13 +32811,11 @@ struct AccountHistoryMovement {
     amount: Option<String>,
     history_type: &'static str,
 }
-#[cfg(feature = "app_api")]
 fn asset_definition_string_from_asset(
     asset_id: &iroha_data_model::asset::AssetId,
 ) -> Option<String> {
     Some(asset_id.definition().to_string())
 }
-#[cfg(feature = "app_api")]
 fn account_history_push_directional(
     out: &mut Vec<AccountHistoryMovement>,
     from: &AccountId,
@@ -34099,7 +32857,6 @@ fn account_history_push_directional(
         history_type,
     });
 }
-#[cfg(feature = "app_api")]
 fn account_history_movements_from_instruction(
     instr: &iroha_data_model::isi::InstructionBox,
 ) -> Vec<AccountHistoryMovement> {
@@ -34249,7 +33006,6 @@ fn account_history_movements_from_instruction(
         })
         .collect()
 }
-#[cfg(feature = "app_api")]
 fn append_account_history_projections_for_tx(
     index: &mut AccountHistoryIndex,
     tx: &iroha_data_model::query::CommittedTransaction,
@@ -34334,7 +33090,6 @@ fn append_account_history_projections_for_tx(
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn account_history_projections_for_height_range(
     state: &CoreState,
     start_height: usize,
@@ -34387,7 +33142,6 @@ fn account_history_projections_for_height_range(
     }
     index.items
 }
-#[cfg(feature = "app_api")]
 fn build_account_history_index(
     state: &CoreState,
     cache_key: AccountHistoryIndexCacheKey,
@@ -34402,7 +33156,6 @@ fn build_account_history_index(
     }
     index
 }
-#[cfg(feature = "app_api")]
 fn account_history_cache_extends_append_only(
     existing: &AccountHistoryIndex,
     state: &CoreState,
@@ -34424,7 +33177,6 @@ fn account_history_cache_extends_append_only(
     };
     Some(previous_tip_block_hash) == existing.cache_key.tip_block_hash
 }
-#[cfg(feature = "app_api")]
 fn extend_account_history_index(
     state: &CoreState,
     previous: &AccountHistoryIndex,
@@ -34449,7 +33201,6 @@ fn extend_account_history_index(
     }
     index
 }
-#[cfg(feature = "app_api")]
 fn account_history_index_snapshot(state: &CoreState) -> Arc<AccountHistoryIndex> {
     let cache_key = account_history_index_cache_key(state);
     if let Some(existing) = ACCOUNT_HISTORY_INDEX
@@ -34478,7 +33229,6 @@ fn account_history_index_snapshot(state: &CoreState) -> Arc<AccountHistoryIndex>
     *guard = Some(Arc::clone(&rebuilt));
     rebuilt
 }
-#[cfg(feature = "app_api")]
 fn contract_activity_insert_index(
     index: &mut std::collections::HashMap<String, Vec<usize>>,
     key: &str,
@@ -34486,7 +33236,6 @@ fn contract_activity_insert_index(
 ) {
     index.entry(key.to_owned()).or_default().push(position);
 }
-#[cfg(feature = "app_api")]
 fn append_contract_activity_projection(
     index: &mut ContractActivityIndex,
     projection: ContractActivityProjection,
@@ -34513,7 +33262,6 @@ fn append_contract_activity_projection(
     }
     index.items.push(projection);
 }
-#[cfg(feature = "app_api")]
 fn append_contract_event_projection(
     index: &mut ContractEventIndex,
     projection: ContractEventProjection,
@@ -34546,7 +33294,6 @@ fn append_contract_event_projection(
     }
     index.items.push(projection);
 }
-#[cfg(feature = "app_api")]
 fn contract_activity_projections_for_height_range(
     state: &CoreState,
     start_height: usize,
@@ -34606,7 +33353,6 @@ fn contract_activity_projections_for_height_range(
     }
     projections
 }
-#[cfg(feature = "app_api")]
 fn contract_event_module(contract_alias: Option<&str>, contract_address: &str) -> String {
     if let Some(module) = canonical_contract_module(contract_alias, contract_address) {
         return module.to_owned();
@@ -34618,7 +33364,6 @@ fn contract_event_module(contract_alias: Option<&str>, contract_address: &str) -
         .unwrap_or(source)
         .to_owned()
 }
-#[cfg(feature = "app_api")]
 fn canonical_contract_module(
     contract_alias: Option<&str>,
     contract_address: &str,
@@ -34626,7 +33371,6 @@ fn canonical_contract_module(
     trader_contract_module(contract_alias, contract_address)
         .or_else(|| uranai_contract_module(contract_alias, contract_address))
 }
-#[cfg(feature = "app_api")]
 fn uranai_contract_module(
     contract_alias: Option<&str>,
     contract_address: &str,
@@ -34640,7 +33384,6 @@ fn uranai_contract_module(
     }
     None
 }
-#[cfg(feature = "app_api")]
 fn trader_contract_module(
     contract_alias: Option<&str>,
     contract_address: &str,
@@ -34695,7 +33438,6 @@ fn trader_contract_module(
     }
     None
 }
-#[cfg(feature = "app_api")]
 fn canonical_contract_event_kind(module: &str, entrypoint: &str) -> Option<&'static str> {
     let normalized = entrypoint.trim().to_ascii_lowercase();
     match (module, normalized.as_str()) {
@@ -34768,7 +33510,6 @@ fn canonical_contract_event_kind(module: &str, entrypoint: &str) -> Option<&'sta
         _ => None,
     }
 }
-#[cfg(feature = "app_api")]
 fn canonical_contract_event_payload(
     module: &str,
     entrypoint: &str,
@@ -35104,7 +33845,6 @@ fn canonical_contract_event_payload(
     }
     Some(IrohaJson::new(Value::Object(normalized)))
 }
-#[cfg(feature = "app_api")]
 fn participant_hint_key(key: &str) -> bool {
     matches!(
         key,
@@ -35126,7 +33866,6 @@ fn participant_hint_key(key: &str) -> bool {
         || key.ends_with("_account_alias")
         || key.ends_with("_authority")
 }
-#[cfg(feature = "app_api")]
 fn collect_contract_event_payload_fields(
     payload: &norito::json::Value,
 ) -> (Vec<String>, Vec<String>, Map) {
@@ -35206,7 +33945,6 @@ fn collect_contract_event_payload_fields(
         numeric_fields,
     )
 }
-#[cfg(feature = "app_api")]
 fn contract_event_projection_from_tx(
     height: usize,
     tx: &iroha_data_model::query::CommittedTransaction,
@@ -35268,7 +34006,6 @@ fn contract_event_projection_from_tx(
         fee_payment,
     })
 }
-#[cfg(feature = "app_api")]
 fn contract_event_projections_for_height_range(
     state: &CoreState,
     start_height: usize,
@@ -35328,7 +34065,6 @@ fn contract_event_projections_for_height_range(
     }
     projections
 }
-#[cfg(feature = "app_api")]
 fn build_contract_activity_index(
     state: &CoreState,
     cache_key: ContractActivityIndexCacheKey,
@@ -35344,7 +34080,6 @@ fn build_contract_activity_index(
     }
     index
 }
-#[cfg(feature = "app_api")]
 fn build_contract_event_index(
     state: &CoreState,
     cache_key: ContractEventIndexCacheKey,
@@ -35360,7 +34095,6 @@ fn build_contract_event_index(
     }
     index
 }
-#[cfg(feature = "app_api")]
 fn contract_activity_cache_extends_append_only(
     existing: &ContractActivityIndex,
     state: &CoreState,
@@ -35383,7 +34117,6 @@ fn contract_activity_cache_extends_append_only(
     };
     Some(format!("{}", block.hash())) == existing.cache_key.tip_block_hash
 }
-#[cfg(feature = "app_api")]
 fn contract_event_cache_extends_append_only(
     existing: &ContractEventIndex,
     state: &CoreState,
@@ -35406,7 +34139,6 @@ fn contract_event_cache_extends_append_only(
     };
     Some(format!("{}", block.hash())) == existing.cache_key.tip_block_hash
 }
-#[cfg(feature = "app_api")]
 fn extend_contract_activity_index(
     existing: &ContractActivityIndex,
     state: &CoreState,
@@ -35424,7 +34156,6 @@ fn extend_contract_activity_index(
     index.cache_key = next_key;
     index
 }
-#[cfg(feature = "app_api")]
 fn extend_contract_event_index(
     existing: &ContractEventIndex,
     state: &CoreState,
@@ -35440,7 +34171,6 @@ fn extend_contract_event_index(
     index.cache_key = next_key;
     index
 }
-#[cfg(feature = "app_api")]
 fn contract_activity_index_snapshot(state: &CoreState) -> Arc<ContractActivityIndex> {
     let cache_key = contract_activity_index_cache_key(state);
     if let Some(existing) = CONTRACT_ACTIVITY_INDEX
@@ -35479,7 +34209,6 @@ fn contract_activity_index_snapshot(state: &CoreState) -> Arc<ContractActivityIn
     }
     rebuilt
 }
-#[cfg(feature = "app_api")]
 fn contract_event_index_snapshot(state: &CoreState) -> Arc<ContractEventIndex> {
     let cache_key = contract_event_index_cache_key(state);
     if let Some(existing) = CONTRACT_EVENT_INDEX
@@ -35518,7 +34247,6 @@ fn contract_event_index_snapshot(state: &CoreState) -> Arc<ContractEventIndex> {
     }
     rebuilt
 }
-#[cfg(feature = "app_api")]
 fn intersect_contract_activity_positions(left: &[usize], right: &[usize]) -> Vec<usize> {
     let mut merged = Vec::with_capacity(left.len().min(right.len()));
     let mut left_index = 0usize;
@@ -35536,7 +34264,6 @@ fn intersect_contract_activity_positions(left: &[usize], right: &[usize]) -> Vec
     }
     merged
 }
-#[cfg(feature = "app_api")]
 fn contract_activity_candidate_positions<'a>(
     index: &'a ContractActivityIndex,
     params: &ContractActivityGetParams,
@@ -35596,7 +34323,6 @@ fn contract_activity_candidate_positions<'a>(
     }
     ContractActivityCandidatePositions::Indexed(merged)
 }
-#[cfg(feature = "app_api")]
 fn collect_contract_activity_page(
     index: &ContractActivityIndex,
     params: &ContractActivityGetParams,
@@ -35660,7 +34386,6 @@ fn collect_contract_activity_page(
     }
     (items, matched)
 }
-#[cfg(feature = "app_api")]
 fn contract_event_candidate_positions<'a>(
     index: &'a ContractEventIndex,
     params: &ContractEventGetParams,
@@ -35740,7 +34465,6 @@ fn contract_event_candidate_positions<'a>(
     }
     ContractEventCandidatePositions::Indexed(merged)
 }
-#[cfg(feature = "app_api")]
 fn contract_event_matches(
     projection: &ContractEventProjection,
     params: &ContractEventGetParams,
@@ -35814,7 +34538,6 @@ fn contract_event_matches(
     }
     true
 }
-#[cfg(feature = "app_api")]
 fn collect_contract_event_page(
     index: &ContractEventIndex,
     params: &ContractEventGetParams,
@@ -35878,7 +34601,6 @@ fn collect_contract_event_page(
     }
     (items, matched)
 }
-#[cfg(feature = "app_api")]
 fn tx_field_value(
     tx: &iroha_data_model::query::CommittedTransaction,
     field: &str,
@@ -35964,7 +34686,6 @@ fn tx_field_value(
         _ => None,
     }
 }
-#[cfg(feature = "app_api")]
 fn tx_metadata_json_value(
     tx: &iroha_data_model::query::CommittedTransaction,
     key: &str,
@@ -35978,7 +34699,6 @@ fn tx_metadata_json_value(
     }?;
     norito::json::from_str(&raw).ok()
 }
-#[cfg(feature = "app_api")]
 fn tx_metadata_string(
     tx: &iroha_data_model::query::CommittedTransaction,
     key: &str,
@@ -35995,7 +34715,6 @@ fn tx_metadata_string(
         value => norito::json::to_json(&value).ok(),
     }
 }
-#[cfg(feature = "app_api")]
 fn tx_metadata_u64(tx: &iroha_data_model::query::CommittedTransaction, key: &str) -> Option<u64> {
     match tx_metadata_json_value(tx, key)? {
         norito::json::Value::Number(value) => value
@@ -36005,7 +34724,6 @@ fn tx_metadata_u64(tx: &iroha_data_model::query::CommittedTransaction, key: &str
         _ => None,
     }
 }
-#[cfg(feature = "app_api")]
 fn append_asset_ids_from_instruction(
     out: &mut Vec<iroha_data_model::asset::AssetId>,
     instr: &iroha_data_model::isi::InstructionBox,
@@ -36079,7 +34797,6 @@ fn append_asset_ids_from_instruction(
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn instruction_matches_asset_id(
     instr: &iroha_data_model::isi::InstructionBox,
     expected: &iroha_data_model::asset::AssetId,
@@ -36143,14 +34860,12 @@ fn instruction_matches_asset_id(
     }
     false
 }
-#[cfg(feature = "app_api")]
 fn instruction_matches_account_id(
     instr: &iroha_data_model::isi::InstructionBox,
     expected: &AccountId,
 ) -> bool {
     crate::account_activity::instruction_matches_account_id(instr, expected)
 }
-#[cfg(feature = "app_api")]
 fn instruction_matches_domain_predicate<F>(
     instr: &iroha_data_model::isi::InstructionBox,
     matches_domain: &F,
@@ -36248,7 +34963,6 @@ where
     }
     false
 }
-#[cfg(feature = "app_api")]
 fn executable_explicit_instructions(
     executable: &iroha_data_model::transaction::Executable,
     mut visit: impl FnMut(&iroha_data_model::isi::InstructionBox),
@@ -36257,7 +34971,6 @@ fn executable_explicit_instructions(
         visit(instruction);
     }
 }
-#[cfg(feature = "app_api")]
 fn executable_contains_account_id(
     executable: &iroha_data_model::transaction::Executable,
     expected: &AccountId,
@@ -36268,7 +34981,6 @@ fn executable_contains_account_id(
     });
     found
 }
-#[cfg(feature = "app_api")]
 fn executable_contains_domain_predicate<F>(
     executable: &iroha_data_model::transaction::Executable,
     matches_domain: &F,
@@ -36287,7 +34999,6 @@ where
     });
     found
 }
-#[cfg(feature = "app_api")]
 /// Return whether a committed transaction directly names the exact account.
 pub(crate) fn tx_references_account_id(
     tx: &iroha_data_model::query::CommittedTransaction,
@@ -36310,7 +35021,6 @@ pub(crate) fn tx_references_account_id(
             .any(|instruction| instruction_matches_account_id(instruction, expected)),
     }
 }
-#[cfg(feature = "app_api")]
 fn tx_references_domain_predicate<F>(
     tx: &iroha_data_model::query::CommittedTransaction,
     matches_domain: &F,
@@ -36340,7 +35050,6 @@ where
         }),
     }
 }
-#[cfg(feature = "app_api")]
 fn tx_references_dataspace_alias(
     tx: &iroha_data_model::query::CommittedTransaction,
     expected_dataspace_alias: &str,
@@ -36361,19 +35070,16 @@ fn tx_references_dataspace_alias(
         asset_definition_domains,
     )
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
 pub(crate) enum TxHistoryAssetSelectorInput {
     AssetId(iroha_data_model::asset::AssetId),
     DefinitionSelector(String),
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
 pub(crate) enum TxHistoryAssetSelector {
     AssetId(iroha_data_model::asset::AssetId),
     DefinitionId(iroha_data_model::asset::id::AssetDefinitionId),
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
 pub(crate) struct TxHistoryVisibilityScope {
     pub viewer_account_ids: Vec<AccountId>,
@@ -36381,7 +35087,6 @@ pub(crate) struct TxHistoryVisibilityScope {
     pub allow_dataspace_wide: bool,
     pub asset_definition_domains: BTreeMap<iroha_data_model::asset::AssetDefinitionId, DomainId>,
 }
-#[cfg(feature = "app_api")]
 fn tx_matches_history_visibility_scope(
     tx: &iroha_data_model::query::CommittedTransaction,
     visibility: &TxHistoryVisibilityScope,
@@ -36398,7 +35103,6 @@ fn tx_matches_history_visibility_scope(
         .iter()
         .any(|account_id| tx_references_account_id(tx, account_id))
 }
-#[cfg(feature = "app_api")]
 pub(crate) fn parse_tx_history_asset_selector(raw: &str) -> Result<TxHistoryAssetSelectorInput> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -36421,7 +35125,6 @@ pub(crate) fn parse_tx_history_asset_selector(raw: &str) -> Result<TxHistoryAsse
             .to_string(),
     ))
 }
-#[cfg(feature = "app_api")]
 pub(crate) fn resolve_tx_history_asset_selector(
     world: &impl WorldReadOnly,
     now_ms: u64,
@@ -36450,7 +35153,6 @@ pub(crate) fn resolve_tx_history_asset_selector(
         .map(|selector| selector.into_resolved(world, now_ms))
         .transpose()
 }
-#[cfg(feature = "app_api")]
 impl TxHistoryAssetSelectorInput {
     fn into_resolved(
         self,
@@ -36466,7 +35168,6 @@ impl TxHistoryAssetSelectorInput {
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn tx_matches_asset_selector(
     tx: &iroha_data_model::query::CommittedTransaction,
     selector: &TxHistoryAssetSelector,
@@ -36481,7 +35182,6 @@ fn tx_matches_asset_selector(
             .any(|candidate| candidate.definition() == definition_id),
     }
 }
-#[cfg(feature = "app_api")]
 fn executable_contains_asset_id(
     executable: &iroha_data_model::transaction::Executable,
     expected: &iroha_data_model::asset::AssetId,
@@ -36492,7 +35192,6 @@ fn executable_contains_asset_id(
     });
     found
 }
-#[cfg(feature = "app_api")]
 fn tx_collect_asset_ids(
     tx: &iroha_data_model::query::CommittedTransaction,
 ) -> Vec<iroha_data_model::asset::AssetId> {
@@ -36520,7 +35219,6 @@ fn tx_collect_asset_ids(
     }
     out
 }
-#[cfg(feature = "app_api")]
 fn filter_contains_asset_id(expr: &FilterExpr) -> bool {
     use FilterExpr as F;
     match expr {
@@ -36538,12 +35236,10 @@ fn filter_contains_asset_id(expr: &FilterExpr) -> bool {
         | F::IsNull(field) => field.0 == "asset_id",
     }
 }
-#[cfg(feature = "app_api")]
 enum TxAssetSelector {
     AssetId(iroha_data_model::asset::AssetId),
     DefinitionId(iroha_data_model::asset::AssetDefinitionId),
 }
-#[cfg(feature = "app_api")]
 fn parse_tx_asset_selector(literal: &str) -> Option<TxAssetSelector> {
     iroha_data_model::asset::AssetId::parse_literal(literal)
         .ok()
@@ -36554,7 +35250,6 @@ fn parse_tx_asset_selector(literal: &str) -> Option<TxAssetSelector> {
                 .map(TxAssetSelector::DefinitionId)
         })
 }
-#[cfg(feature = "app_api")]
 fn tx_asset_matches_selector(
     assets: &[iroha_data_model::asset::AssetId],
     selector: &TxAssetSelector,
@@ -36566,11 +35261,9 @@ fn tx_asset_matches_selector(
             .any(|candidate| candidate.definition() == expected),
     }
 }
-#[cfg(feature = "app_api")]
 fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> Result<()> {
     validate_tx_filter_adapter_for_endpoint(expr, telemetry, ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY)
 }
-#[cfg(feature = "app_api")]
 fn validate_tx_filter_adapter_for_endpoint(
     expr: &FilterExpr,
     telemetry: &MaybeTelemetry,
@@ -36753,7 +35446,6 @@ fn validate_tx_filter_adapter_for_endpoint(
     }
     validate_rec(expr, 0, telemetry, endpoint)
 }
-#[cfg(feature = "app_api")]
 fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransaction) -> bool {
     use FilterExpr as F;
     // Precompute commonly used fields
@@ -37113,7 +35805,6 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn tx_matches_account_history_subject(
     tx: &iroha_data_model::query::CommittedTransaction,
     account_id: &iroha_data_model::account::AccountId,
@@ -37137,7 +35828,6 @@ fn tx_matches_account_history_subject(
             .any(|instruction| instruction_matches_account_id(instruction, account_id)),
     }
 }
-#[cfg(feature = "app_api")]
 fn filter_expr_references_field(expr: &FilterExpr, field_name: &str) -> bool {
     use FilterExpr as F;
     match expr {
@@ -37157,7 +35847,6 @@ fn filter_expr_references_field(expr: &FilterExpr, field_name: &str) -> bool {
         | F::IsNull(field) => field.0 == field_name,
     }
 }
-#[cfg(feature = "app_api")]
 #[allow(clippy::ref_option)]
 fn project_tx(
     tx: &iroha_data_model::query::CommittedTransaction,
@@ -37217,7 +35906,6 @@ fn project_tx(
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn tx_to_query_row(tx: &iroha_data_model::query::CommittedTransaction) -> norito::json::Map {
     let projection = project_tx(tx, &None);
     let mut row = norito::json::Map::new();
@@ -37263,7 +35951,6 @@ fn tx_to_query_row(tx: &iroha_data_model::query::CommittedTransaction) -> norito
     row.insert("metadata".into(), metadata);
     row
 }
-#[cfg(feature = "app_api")]
 fn contract_activity_projection_from_tx(
     tx: &iroha_data_model::query::CommittedTransaction,
 ) -> Option<ContractActivityProjection> {
@@ -37282,7 +35969,6 @@ fn contract_activity_projection_from_tx(
         fee_payment,
     })
 }
-#[cfg(feature = "app_api")]
 fn tx_fee_projection(
     tx: &iroha_data_model::query::CommittedTransaction,
 ) -> Option<iroha_data_model::transaction::FeePaymentIntent> {
@@ -37296,7 +35982,6 @@ fn tx_fee_projection(
     };
     intent
 }
-#[cfg(feature = "app_api")]
 fn contract_activity_matches(
     projection: &ContractActivityProjection,
     params: &ContractActivityGetParams,
@@ -37346,7 +36031,6 @@ fn contract_activity_matches(
     }
     true
 }
-#[cfg(feature = "app_api")]
 fn tx_predicate_from_filter(
     expr: &FilterExpr,
 ) -> iroha_data_model::query::dsl::CompoundPredicate<iroha_data_model::query::CommittedTransaction>
@@ -37360,239 +36044,130 @@ fn tx_predicate_from_filter(
         crate::predicates::build_tx_predicate(expr)
     }
 }
-#[cfg(feature = "app_api")]
 static SUBSCRIPTION_PLAN_KEY: LazyLock<Name> = LazyLock::new(|| {
     Name::from_str(iroha_data_model::subscription::SUBSCRIPTION_PLAN_METADATA_KEY)
         .expect("subscription plan metadata key is valid")
 });
-#[cfg(feature = "app_api")]
 static SUBSCRIPTION_KEY: LazyLock<Name> = LazyLock::new(|| {
     Name::from_str(iroha_data_model::subscription::SUBSCRIPTION_METADATA_KEY)
         .expect("subscription metadata key is valid")
 });
-#[cfg(feature = "app_api")]
 static SUBSCRIPTION_INVOICE_KEY: LazyLock<Name> = LazyLock::new(|| {
     Name::from_str(iroha_data_model::subscription::SUBSCRIPTION_INVOICE_METADATA_KEY)
         .expect("subscription invoice metadata key is valid")
 });
-#[cfg(feature = "app_api")]
 static SUBSCRIPTION_TRIGGER_REF_KEY: LazyLock<Name> = LazyLock::new(|| {
     Name::from_str(iroha_data_model::subscription::SUBSCRIPTION_TRIGGER_REF_METADATA_KEY)
         .expect("subscription trigger reference metadata key is valid")
 });
-#[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_LIST: &str = "/v1/accounts";
-#[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_QUERY: &str = "/v1/accounts/query";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_GET: &str = "/v1/accounts/{account_id}";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ONBOARD_PLAN: &str = "/v1/accounts/onboard/plan";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ONBOARD: &str = "/v1/accounts/onboard";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_FAUCET: &str = "/v1/accounts/faucet";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_FAUCET_PUZZLE: &str = "/v1/accounts/faucet/puzzle";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNT_ALIASES: &str = "/v1/accounts/{account_id}/aliases";
-#[cfg(feature = "app_api")]
 const APP_API_TRANSACTION_TTL_SECS: u64 = 300;
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE: &str = "/v1/contracts/call/multisig/propose";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE: &str = "/v1/contracts/call/multisig/approve";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_PROPOSE: &str = "/v1/multisig/propose";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_APPROVE: &str = "/v1/multisig/approve";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_CANCEL: &str = "/v1/multisig/cancel";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_SPEC: &str = "/v1/multisig/spec";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_PROPOSALS_QUERY: &str = "/v1/multisig/proposals/query";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_PROPOSALS_RESOLVE: &str = "/v1/multisig/proposals/resolve";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNT_RECOVERY_POLICY_SET: &str = "/v1/accounts/recovery/policy/set";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNT_RECOVERY_PROPOSE: &str = "/v1/accounts/recovery/propose";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNT_RECOVERY_APPROVE: &str = "/v1/accounts/recovery/approve";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNT_RECOVERY_FINALIZE: &str = "/v1/accounts/recovery/finalize";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNT_RECOVERY_STATUS: &str = "/v1/accounts/recovery/status";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_TRANSACTIONS_QUERY: &str = "/v1/transactions/query";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_TRANSACTIONS_VISIBLE_QUERY: &str = "/v1/transactions/visible/query";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS: &str = "/v1/accounts/{account_id}/transactions";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_HISTORY: &str = "/v1/accounts/{account_id}/history";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_ACTIVITY: &str = "/v1/contracts/activity";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_EVENTS: &str = "/v1/contracts/events";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_EVENTS_SSE: &str = "/v1/contracts/events/sse";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_VIEW_BATCH: &str = "/v1/contracts/view/batch";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_ROLLUPS_SWAPS_FILLS: &str = "/v1/contracts/rollups/swaps/fills";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_ROLLUPS_SWAPS_CANDLES: &str = "/v1/contracts/rollups/swaps/candles";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACTIVITY: &str =
     "/v1/contracts/rollups/trader/activity";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACCOUNT: &str = "/v1/contracts/rollups/trader/account";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_ROLLUPS_INTENTS: &str = "/v1/contracts/rollups/intents";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_ROLLUPS_VAULT_POSITIONS: &str =
     "/v1/contracts/rollups/vaults/positions";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_ROLLUPS_OPERATORS_STATUS: &str =
     "/v1/contracts/rollups/operators/status";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_ROLLUPS_MARGIN_HEALTH: &str = "/v1/contracts/rollups/margin/health";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_ROLLUPS_RWA_LOTS: &str = "/v1/contracts/rollups/rwa/lots";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_ROLLUPS_DLMM_HOOKS: &str = "/v1/contracts/rollups/dlmm/hooks";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY: &str =
     "/v1/contracts/rollups/uranai/markets/history";
-#[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_PERMISSIONS: &str = "/v1/accounts/{account_id}/permissions";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ASSETS: &str = "/v1/accounts/{account_id}/assets";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ASSETS_QUERY: &str = "/v1/accounts/{account_id}/assets/query";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_PORTFOLIO: &str = "/v1/accounts/{uaid}/portfolio";
-#[cfg(feature = "app_api")]
 const ENDPOINT_DOMAINS_LIST: &str = "/v1/domains";
-#[cfg(feature = "app_api")]
 const ENDPOINT_DOMAINS_QUERY: &str = "/v1/domains/query";
+}
 pub const ENDPOINT_SPACE_DIRECTORY_BINDINGS: &str = "/v1/space-directory/uaids/{uaid}";
-#[cfg(feature = "app_api")]
+app_api_items! {
 pub const ENDPOINT_SPACE_DIRECTORY_MANIFESTS: &str = "/v1/space-directory/uaids/{uaid}/manifests";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_SPACE_DIRECTORY_MANIFEST_REVOKE: &str = "/v1/space-directory/manifests/revoke";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_SPACE_DIRECTORY_MANIFEST_PUBLISH: &str = "/v1/space-directory/manifests";
-#[cfg(feature = "app_api")]
 const ENDPOINT_REPO_AGREEMENTS_LIST: &str = "/v1/repo/agreements";
-#[cfg(feature = "app_api")]
 const ENDPOINT_REPO_AGREEMENTS_QUERY: &str = "/v1/repo/agreements/query";
-#[cfg(feature = "app_api")]
 const ENDPOINT_ASSET_DEFINITIONS_LIST: &str = "/v1/assets/definitions";
-#[cfg(feature = "app_api")]
 const ENDPOINT_ASSET_DEFINITION_GET: &str = "/v1/assets/definitions/{asset}";
-#[cfg(feature = "app_api")]
 const ENDPOINT_ASSET_DEFINITIONS_QUERY: &str = "/v1/assets/definitions/query";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ASSET_HOLDERS: &str = "/v1/assets/{definition_id}/holders";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ASSET_HOLDERS_QUERY: &str = "/v1/assets/{definition_id}/holders/query";
-#[cfg(feature = "app_api")]
 const ENDPOINT_NFTS_LIST: &str = "/v1/nfts";
-#[cfg(feature = "app_api")]
 const ENDPOINT_NFTS_QUERY: &str = "/v1/nfts/query";
-#[cfg(feature = "app_api")]
 const ENDPOINT_RWAS_LIST: &str = "/v1/rwas";
-#[cfg(feature = "app_api")]
 const ENDPOINT_RWAS_QUERY: &str = "/v1/rwas/query";
-#[cfg(feature = "app_api")]
 const ENDPOINT_SUBSCRIPTION_PLANS_LIST: &str = "/v1/subscriptions/plans";
-#[cfg(feature = "app_api")]
 const ENDPOINT_SUBSCRIPTIONS_LIST: &str = "/v1/subscriptions";
-#[cfg(feature = "app_api")]
 const ENDPOINT_KAIGI_RELAYS: &str = "/v1/kaigi/relays";
-#[cfg(feature = "app_api")]
 const ENDPOINT_KAIGI_RELAY_DETAIL: &str = "/v1/kaigi/relays/{relay_id}";
-#[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_BLOCKS: &str = "/v1/explorer/blocks";
-#[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_HEALTH: &str = "/v1/explorer/health";
-#[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_BLOCK_DETAIL: &str = "/v1/explorer/blocks/{identifier}";
-#[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_TRANSACTIONS: &str = "/v1/explorer/transactions";
-#[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_TRANSACTIONS_LATEST: &str = "/v1/explorer/transactions/latest";
-#[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_INSTRUCTIONS: &str = "/v1/explorer/instructions";
-#[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_INSTRUCTIONS_LATEST: &str = "/v1/explorer/instructions/latest";
-#[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_TRANSACTION_DETAIL: &str = "/v1/explorer/transactions/{hash}";
-#[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_INSTRUCTION_DETAIL: &str = "/v1/explorer/instructions/{hash}/{index}";
-#[cfg(feature = "app_api")]
 const ENDPOINT_EXPLORER_ACCOUNT_QR: &str = "/v1/explorer/accounts/{account_id}/qr";
-#[cfg(feature = "app_api")]
 const CONTEXT_ACCOUNTS_TRANSACTIONS_QUERY_FILTER: &str =
     "/v1/accounts/{account_id}/transactions/query#filter";
-#[cfg(feature = "app_api")]
 const CONTEXT_KAIGI_RELAY_DETAIL: &str = "/v1/kaigi/relays/{relay_id}";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_NEXUS_PUBLIC_LANE_VALIDATORS: &str =
     "/v1/nexus/public-lanes/{lane_id}/validators";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_NEXUS_PUBLIC_LANE_STAKE: &str = "/v1/nexus/public-lanes/{lane_id}/stake";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS: &str =
     "/v1/nexus/public-lanes/{lane_id}/rewards/pending";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY: &str =
     "/v1/nexus/dataspaces/accounts/{literal}/summary";
-#[cfg(feature = "app_api")]
 const CONTEXT_NEXUS_PUBLIC_LANE_STAKE: &str = ENDPOINT_NEXUS_PUBLIC_LANE_STAKE;
-#[cfg(feature = "app_api")]
 const CONTEXT_NEXUS_PUBLIC_LANE_REWARDS: &str = ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS;
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+derived_items! {
+( Debug, Default, Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 pub struct PublicLaneValidatorsQueryParams {
     #[norito(default)]
     pub reserved: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Debug, Default, Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 pub struct PublicLaneStakeQueryParams {
     #[norito(default)]
     pub validator: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Debug, Default, Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 pub struct PublicLaneRewardsQueryParams {
     #[norito(default)]
     pub account: Option<String>,
@@ -37602,20 +36177,12 @@ pub struct PublicLaneRewardsQueryParams {
     #[norito(default)]
     pub upto_epoch: Option<u64>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+( Debug, Default, Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 pub struct NexusDataspacesAccountSummaryQueryParams {
     #[norito(default)]
     pub reserved: Option<String>,
 }
-#[cfg(feature = "app_api")]
+}
 pub fn parse_account_path_segment(
     literal: &str,
     telemetry: &MaybeTelemetry,
@@ -37635,6 +36202,7 @@ pub fn parse_account_path_segment(
                 )),
             ))
         })
+}
 }
 pub(crate) fn parse_account_literal_with_state(
     _state: &CoreState,
@@ -37665,7 +36233,7 @@ pub(crate) fn parse_account_literal_with_state(
         }
     }
 }
-#[cfg(feature = "app_api")]
+app_api_items! {
 pub(crate) fn parse_account_path_segment_with_state(
     state: &CoreState,
     literal: &str,
@@ -37679,7 +36247,6 @@ pub(crate) fn parse_account_path_segment_with_state(
         )))
     })
 }
-#[cfg(feature = "app_api")]
 pub fn parse_lane_id_literal(literal: &str) -> Result<LaneId, Error> {
     use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
     let trimmed = literal.trim();
@@ -37690,7 +36257,6 @@ pub fn parse_lane_id_literal(literal: &str) -> Result<LaneId, Error> {
     })?;
     Ok(LaneId::new(parsed))
 }
-#[cfg(feature = "app_api")]
 fn canonicalize_account_literal_value(
     value: &mut norito::json::Value,
     state: Option<&CoreState>,
@@ -37732,7 +36298,6 @@ fn canonicalize_account_literal_value(
         _ => Err(Error::Query(ValidationFail::TooComplex)),
     }
 }
-#[cfg(feature = "app_api")]
 fn scoped_accounts_for_subject_sorted(
     world: &impl WorldReadOnly,
     parsed_account: &AccountId,
@@ -37749,7 +36314,6 @@ fn scoped_accounts_for_subject_sorted(
     accounts.dedup();
     accounts
 }
-#[cfg(feature = "app_api")]
 fn canonicalize_filter_account_literals(
     expr: &mut FilterExpr,
     field_name: &str,
@@ -37788,7 +36352,6 @@ fn canonicalize_filter_account_literals(
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn canonicalize_accounts_filter_literals(
     expr: &mut FilterExpr,
     telemetry: &MaybeTelemetry,
@@ -37796,7 +36359,6 @@ fn canonicalize_accounts_filter_literals(
 ) -> Result<()> {
     canonicalize_filter_account_literals(expr, "id", None, telemetry, context)
 }
-#[cfg(feature = "app_api")]
 fn canonicalize_accounts_filter_literals_with_state(
     expr: &mut FilterExpr,
     state: &CoreState,
@@ -37805,7 +36367,6 @@ fn canonicalize_accounts_filter_literals_with_state(
 ) -> Result<()> {
     canonicalize_filter_account_literals(expr, "id", Some(state), telemetry, context)
 }
-#[cfg(feature = "app_api")]
 fn canonicalize_repo_filter_literals(
     expr: &mut FilterExpr,
     telemetry: &MaybeTelemetry,
@@ -37816,7 +36377,6 @@ fn canonicalize_repo_filter_literals(
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn canonicalize_query_account_literal(
     label: &'static str,
     literal: Option<&str>,
@@ -37842,6 +36402,7 @@ fn canonicalize_query_account_literal(
             })
         })
         .transpose()
+}
 }
 pub fn parse_account_literal(
     literal: &str,
@@ -38140,6 +36701,7 @@ pub(crate) fn committed_transactions_snapshot(
     .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))
 }
 include!("routing/committed_transaction_pagination.rs");
+app_api_items! {
 /// POST /v1/accounts/{account_id}/transactions/query
 ///
 /// Body: JSON `QueryEnvelope` with optional `filter`, `select`, and `pagination`.
@@ -38156,7 +36718,6 @@ include!("routing/committed_transaction_pagination.rs");
 /// Supported filter fields: `authority`, `timestamp_ms`, `entrypoint_hash`, `result_ok`,
 /// `metadata.<key>`, and `asset_id` (matches asset ids referenced by instruction payloads).
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_account_transactions(
     state: Arc<CoreState>,
     axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -38174,7 +36735,6 @@ pub async fn handle_v1_account_transactions(
 }
 /// POST /v1/accounts/{account_id}/transactions/query` with configurable address enforcement.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_account_transactions_with_policy(
     state: Arc<CoreState>,
     axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -38502,7 +37062,6 @@ pub async fn handle_v1_account_transactions_with_policy(
 /// and fan out over every account. Supported filter fields match the account
 /// transaction query endpoint.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_transactions_query(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<QueryEnvelope>,
@@ -38512,7 +37071,6 @@ pub async fn handle_v1_transactions_query(
 }
 /// POST `/v1/transactions/query` with configurable asset enforcement.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_transactions_query_with_policy(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<QueryEnvelope>,
@@ -38531,7 +37089,6 @@ pub async fn handle_v1_transactions_query_with_policy(
 }
 /// POST `/v1/transactions/visible/query` with server-side viewer visibility.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_transactions_visible_query_with_policy(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<QueryEnvelope>,
@@ -38550,7 +37107,6 @@ pub async fn handle_v1_transactions_visible_query_with_policy(
     .await
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 async fn handle_v1_transactions_query_scoped_with_policy(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<QueryEnvelope>,
@@ -38785,7 +37341,6 @@ async fn handle_v1_transactions_query_scoped_with_policy(
 }
 /// GET /v1/accounts/{account_id}/transactions — Convenience JSON endpoint.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_account_transactions_get(
     state: Arc<CoreState>,
     axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -38803,7 +37358,6 @@ pub async fn handle_v1_account_transactions_get(
 }
 /// GET `/v1/accounts/{account_id}/transactions` with configurable address enforcement.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_account_transactions_get_with_policy(
     state: Arc<CoreState>,
     axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -38900,7 +37454,6 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     insert_page_metadata(&mut top, &page, count_mode);
     pretty_json_response(&top)
 }
-#[cfg(feature = "app_api")]
 fn account_history_projection_matches_asset_selector(
     projection: &AccountHistoryProjection,
     selector: &TxHistoryAssetSelector,
@@ -38919,7 +37472,6 @@ fn account_history_projection_matches_asset_selector(
 }
 /// GET `/v1/accounts/{account_id}/history` — indexed account activity history.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_account_history_get_with_policy(
     state: Arc<CoreState>,
     axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -39040,7 +37592,6 @@ pub async fn handle_v1_account_history_get_with_policy(
 }
 /// GET `/v1/transactions/history` — visible history feed for the authenticated viewer.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_transactions_history_get(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<AccountTransactionsGetParams>,
@@ -39129,7 +37680,6 @@ pub async fn handle_v1_transactions_history_get(
 }
 /// GET `/v1/contracts/activity` — contract-call activity feed derived from committed transaction metadata.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_activity_get(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<ContractActivityGetParams>,
@@ -39195,7 +37745,6 @@ pub async fn handle_v1_contracts_activity_get(
 }
 /// GET `/v1/contracts/events` — generic contract event feed derived from committed transaction metadata.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_events_get(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<ContractEventGetParams>,
@@ -39257,7 +37806,6 @@ pub async fn handle_v1_contracts_events_get(
 }
 /// GET /v1/parameters — Returns current executor/system parameters as JSON.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_parameters(state: Arc<CoreState>) -> Result<impl IntoResponse> {
     let world = state.world_view();
     let params = world.parameters().clone();
@@ -41566,6 +40114,7 @@ mod explorer_endpoint_telemetry_tests {
         assert_eq!(after_samples, before_samples + 1);
     }
 }
+}
 // Textual inclusion keeps query integration test paths unchanged.
 include!("tests/routing_tx_query_smoke.rs");
 // Textual inclusion keeps app API integration test paths unchanged.
@@ -41906,11 +40455,10 @@ mod query_endpoint_tests {
         assert_eq!(rec.id.proof_hash, arr);
     }
 }
+app_api_items! {
+derived_items! {
 /// Query params for the SSE endpoint.
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 pub struct ContractEventsSseParams {
     /// Filter by canonical I105 authority.
     pub authority: Option<String>,
@@ -41935,15 +40483,12 @@ pub struct ContractEventsSseParams {
     /// Filter items by execution outcome.
     pub result_ok: Option<bool>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 pub struct EventsSseParams {
     /// Optional JSON-encoded filter expression.
     pub filter: Option<String>,
 }
-#[cfg(feature = "app_api")]
+}
 fn contract_event_query_from_sse_params(
     params: &ContractEventsSseParams,
 ) -> ContractEventGetParams {
@@ -41964,7 +40509,6 @@ fn contract_event_query_from_sse_params(
         count_mode: None,
     }
 }
-#[cfg(feature = "app_api")]
 struct ContractEventsSseState {
     rx: tokio::sync::broadcast::Receiver<EventBox>,
     state: Arc<CoreState>,
@@ -41972,11 +40516,12 @@ struct ContractEventsSseState {
     last_block_height: Option<u64>,
     terminal: bool,
 }
+}
 #[cfg(not(test))]
 const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 #[cfg(test)]
 const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(25);
-#[cfg(feature = "app_api")]
+app_api_items! {
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 struct StreamErrorEvent {
     code: String,
@@ -41984,7 +40529,6 @@ struct StreamErrorEvent {
     dropped_messages: Option<u64>,
     replay_available: bool,
 }
-#[cfg(feature = "app_api")]
 fn stream_error_event(
     code: &'static str,
     message: impl Into<String>,
@@ -42007,7 +40551,6 @@ fn stream_error_event(
 /// The canonical live streams do not retain a replay log. Returning a native
 /// SSE error keeps the rejection compatible with `Accept: text/event-stream`
 /// while making the unsupported resume request explicit and machine-readable.
-#[cfg(feature = "app_api")]
 pub fn stream_resume_unsupported_response() -> Response {
     let event = stream_error_event(
         "stream_resume_unsupported",
@@ -42031,7 +40574,6 @@ pub fn stream_resume_unsupported_response() -> Response {
     response
 }
 /// GET /v1/contracts/events/sse – Server-Sent Events stream of generic contract events.
-#[cfg(feature = "app_api")]
 pub fn handle_v1_contracts_events_sse(
     events: EventsSender,
     state: Arc<CoreState>,
@@ -42144,7 +40686,6 @@ pub fn handle_v1_contracts_events_sse(
 ///
 /// curl example:
 ///   curl -N "http://127.0.0.1:8080/v1/events/sse"
-#[cfg(feature = "app_api")]
 pub fn handle_v1_events_sse(
     events: EventsSender,
     crate::NoritoQuery(params): crate::NoritoQuery<EventsSseParams>,
@@ -42256,11 +40797,11 @@ pub fn handle_v1_events_sse(
             .text("heartbeat"),
     ))
 }
-#[cfg(feature = "app_api")]
 struct EventsSseState {
     rx: tokio::sync::broadcast::Receiver<EventBox>,
     pending: VecDeque<EventBox>,
     terminal: bool,
+}
 }
 #[derive(Clone, Copy)]
 enum ExplorerStreamKind {
@@ -42268,28 +40809,25 @@ enum ExplorerStreamKind {
     Transactions,
     Instructions,
 }
-#[cfg(feature = "app_api")]
+app_api_items! {
 pub fn handle_v1_explorer_blocks_stream(
     kura: Arc<Kura>,
     events: EventsSender,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
     explorer_stream(kura, events, ExplorerStreamKind::Blocks)
 }
-#[cfg(feature = "app_api")]
 pub fn handle_v1_explorer_transactions_stream(
     kura: Arc<Kura>,
     events: EventsSender,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
     explorer_stream(kura, events, ExplorerStreamKind::Transactions)
 }
-#[cfg(feature = "app_api")]
 pub fn handle_v1_explorer_instructions_stream(
     kura: Arc<Kura>,
     events: EventsSender,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
     explorer_stream(kura, events, ExplorerStreamKind::Instructions)
 }
-#[cfg(feature = "app_api")]
 fn explorer_stream(
     kura: Arc<Kura>,
     events: EventsSender,
@@ -42340,7 +40878,6 @@ fn explorer_stream(
     );
     Sse::new(stream)
 }
-#[cfg(feature = "app_api")]
 struct ExplorerStreamState {
     rx: tokio::sync::broadcast::Receiver<EventBox>,
     kura: Arc<Kura>,
@@ -42348,7 +40885,6 @@ struct ExplorerStreamState {
     kind: ExplorerStreamKind,
     keepalive_interval: tokio::time::Interval,
 }
-#[cfg(feature = "app_api")]
 struct ExplorerPendingBlock {
     block: Arc<SignedBlock>,
     height: u64,
@@ -42357,7 +40893,6 @@ struct ExplorerPendingBlock {
     instruction_index: usize,
     block_emitted: bool,
 }
-#[cfg(feature = "app_api")]
 fn explorer_pending_block(kura: &Kura, height: u64) -> Option<ExplorerPendingBlock> {
     let height_usize: usize = match height.try_into() {
         Ok(value) => value,
@@ -42385,7 +40920,6 @@ fn explorer_pending_block(kura: &Kura, height: u64) -> Option<ExplorerPendingBlo
         block_emitted: false,
     })
 }
-#[cfg(feature = "app_api")]
 impl ExplorerPendingBlock {
     fn next_payload(&mut self, kind: ExplorerStreamKind) -> Option<String> {
         match kind {
@@ -42491,7 +41025,6 @@ impl ExplorerPendingBlock {
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn committed_block_height(event: &EventBox) -> Option<u64> {
     match event {
         EventBox::Pipeline(pipeline_event) => {
@@ -42788,7 +41321,6 @@ fn telemetry_live_tagged_payload(kind: &str, payload: Value) -> Value {
 fn telemetry_live_json(value: &Value) -> String {
     norito::json::to_json(value).unwrap_or_else(|_| "{}".to_owned())
 }
-#[cfg(feature = "app_api")]
 /// GET `/v1/gov/stream` — SSE stream of governance refresh hints.
 pub fn handle_v1_gov_stream(
     events: EventsSender,
@@ -42823,7 +41355,6 @@ pub fn handle_v1_gov_stream(
     );
     Sse::new(stream)
 }
-#[cfg(feature = "app_api")]
 fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
     use iroha_data_model::events::data::{DataEvent, governance::GovernanceEvent};
     let EventBox::Data(shared) = event_box else {
@@ -42932,7 +41463,6 @@ fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
     }
     updates
 }
-#[cfg(feature = "app_api")]
 fn governance_stream_payload(kind: &str, id: Option<String>) -> Value {
     let mut entries = vec![json_entry("kind", kind)];
     if let Some(id) = id {
@@ -43069,7 +41599,9 @@ where
         },
     }
 }
+}
 include!("routing/kaigi_response_format_tests.rs");
+app_api_items! {
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 /// GET `/v1/kaigi/relays` — summary snapshot of registered relays and health indicators.
 #[iroha_futures::telemetry_future]
@@ -43264,7 +41796,6 @@ pub async fn handle_v1_kaigi_relays_health(
     };
     Ok(respond_kaigi_json_document_with_format(&snapshot, format))
 }
-#[cfg(feature = "app_api")]
 /// GET `/v1/kaigi/calls/{call_id}` — return the current stored Kaigi call record.
 pub async fn handle_v1_kaigi_call(
     state: Arc<CoreState>,
@@ -43273,7 +41804,6 @@ pub async fn handle_v1_kaigi_call(
     let record = load_kaigi_record(state.as_ref(), &call_id)?;
     Ok(JsonBody(kaigi_call_view_from_record(&record)).into_response())
 }
-#[cfg(feature = "app_api")]
 /// GET `/v1/kaigi/calls/{call_id}/signals` — list committed signal metadata for a call.
 pub async fn handle_v1_kaigi_call_signals(
     state: Arc<CoreState>,
@@ -43394,7 +41924,6 @@ pub async fn handle_v1_kaigi_call_signals(
         .collect();
     Ok(JsonBody(KaigiCallSignalListDto { total, items }).into_response())
 }
-#[cfg(feature = "app_api")]
 fn parse_kaigi_kind_filter(kind: Option<&str>) -> Option<BTreeSet<String>> {
     let raw = kind?.trim();
     if raw.is_empty() {
@@ -43407,7 +41936,6 @@ fn parse_kaigi_kind_filter(kind: Option<&str>) -> Option<BTreeSet<String>> {
         .collect();
     if set.is_empty() { None } else { Some(set) }
 }
-#[cfg(feature = "app_api")]
 fn parse_kaigi_call_kind_filter(kind: Option<&str>) -> Option<BTreeSet<String>> {
     let raw = kind?.trim();
     if raw.is_empty() {
@@ -43420,7 +41948,6 @@ fn parse_kaigi_call_kind_filter(kind: Option<&str>) -> Option<BTreeSet<String>> 
         .collect();
     if set.is_empty() { None } else { Some(set) }
 }
-#[cfg(feature = "app_api")]
 fn convert_kaigi_event(
     event_box: &EventBox,
 ) -> Option<(KaigiRelayEventKind, String, String, norito::json::Value)> {
@@ -43466,7 +41993,6 @@ fn convert_kaigi_event(
         _ => None,
     }
 }
-#[cfg(feature = "app_api")]
 fn convert_kaigi_call_event(event_box: &EventBox, call_id: &KaigiId) -> Option<(String, Value)> {
     use iroha_data_model::events::data::{DataEvent, prelude::DomainEvent};
     let EventBox::Data(data_event) = event_box else {
@@ -43527,7 +42053,6 @@ fn convert_kaigi_call_event(event_box: &EventBox, call_id: &KaigiId) -> Option<(
         _ => None,
     }
 }
-#[cfg(feature = "app_api")]
 /// GET `/v1/kaigi/calls/{call_id}/events` — SSE stream of Kaigi call lifecycle updates.
 pub fn handle_v1_kaigi_call_events_sse(
     events: EventsSender,
@@ -43571,7 +42096,6 @@ pub fn handle_v1_kaigi_call_events_sse(
     );
     Sse::new(stream)
 }
-#[cfg(feature = "app_api")]
 /// GET `/v1/kaigi/relays/events` — Server-Sent Events stream of relay telemetry updates.
 pub fn handle_v1_kaigi_relays_sse(
     events: EventsSender,
@@ -43625,7 +42149,6 @@ pub fn handle_v1_kaigi_relays_sse(
     );
     Sse::new(stream)
 }
-#[cfg(feature = "app_api")]
 /// GET `/v1/soradns/directory/latest` — return the latest resolver directory record.
 pub fn handle_v1_soradns_directory_latest(state: Arc<CoreState>) -> Result<JsonValueBody, Error> {
     use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
@@ -43648,7 +42171,6 @@ pub fn handle_v1_soradns_directory_latest(state: Arc<CoreState>) -> Result<JsonV
     payload.insert("record".into(), json_value(&record));
     Ok(JsonValueBody(Value::Object(payload)))
 }
-#[cfg(feature = "app_api")]
 /// GET `/v1/soradns/directory/events` — SSE stream of resolver directory governance events.
 pub fn handle_v1_soradns_directory_events_sse(
     events: EventsSender,
@@ -43670,7 +42192,6 @@ pub fn handle_v1_soradns_directory_events_sse(
     });
     Sse::new(stream)
 }
-#[cfg(feature = "app_api")]
 fn convert_soradns_event(event_box: &EventBox) -> Option<norito::json::Value> {
     use iroha_data_model::{
         events::data::{DataEvent, soradns::SoradnsDirectoryEvent},
@@ -43753,7 +42274,6 @@ fn convert_soradns_event(event_box: &EventBox) -> Option<norito::json::Value> {
         json_entry("payload", payload_value),
     ]))
 }
-#[cfg(feature = "app_api")]
 fn soradns_rotation_policy_value(policy: &DirectoryRotationPolicyV1) -> norito::json::Value {
     json_object(vec![
         json_entry("min_interval_ms", policy.min_interval_ms),
@@ -43762,13 +42282,13 @@ fn soradns_rotation_policy_value(policy: &DirectoryRotationPolicyV1) -> norito::
         json_entry("council_threshold", policy.council_threshold),
     ])
 }
-#[cfg(feature = "app_api")]
 fn soradns_revoke_reason_label(reason: RadRevokeReason) -> &'static str {
     match reason {
         RadRevokeReason::OperatorRequest => "operator_request",
         RadRevokeReason::GovernanceAction => "governance_action",
         RadRevokeReason::IntegrityViolation => "integrity_violation",
     }
+}
 }
 fn settlement_order_label(
     order: iroha_data_model::isi::settlement::SettlementExecutionOrder,
@@ -44603,7 +43123,7 @@ pub fn event_to_json_value(ev: &iroha_data_model::events::EventBox) -> norito::j
         }
     }
 }
-#[cfg(feature = "app_api")]
+app_api_items! {
 fn event_filters_from_expr(expr: &FilterExpr) -> Vec<EventFilterBox> {
     // Build filters for SSE using available typed filter boxes.
     // Supported fields/operators:
@@ -44810,7 +43330,6 @@ fn event_filters_from_expr(expr: &FilterExpr) -> Vec<EventFilterBox> {
     }
     to_event_boxes(build(expr))
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Default, Clone)]
 struct SseFilterSpec {
     filters: Option<Arc<Vec<EventFilterBox>>>,
@@ -44818,13 +43337,11 @@ struct SseFilterSpec {
     proof_call_hash: Option<Vec<[u8; 32]>>,
     proof_envelope_hash: Option<Vec<[u8; 32]>>,
 }
-#[cfg(feature = "app_api")]
 fn sse_filter_error(msg: impl Into<String>) -> crate::Error {
     crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::Conversion(msg.into()),
     ))
 }
-#[cfg(feature = "app_api")]
 fn parse_sse_filter_params(raw: Option<&str>) -> Result<SseFilterSpec, crate::Error> {
     let Some(raw) = raw else {
         return Ok(SseFilterSpec::default());
@@ -44833,7 +43350,6 @@ fn parse_sse_filter_params(raw: Option<&str>) -> Result<SseFilterSpec, crate::Er
         .map_err(|_| sse_filter_error("invalid filter expression"))?;
     parse_sse_filters(&expr).map_err(sse_filter_error)
 }
-#[cfg(feature = "app_api")]
 fn parse_sse_filters(expr: &FilterExpr) -> Result<SseFilterSpec, String> {
     #[derive(Default)]
     struct SseFilterUsage {
@@ -45464,125 +43980,8 @@ mod cursor_mode_tests {
         assert!(res.is_ok());
     }
 }
-#[cfg(test)]
-mod transaction_ingress_overload_tests {
-    use super::*;
-    use iroha_core::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        queue::Queue,
-        state::{State, World},
-    };
-    use iroha_crypto::Algorithm;
-    use iroha_data_model::prelude::*;
-    use iroha_logger::Level;
-    use std::{
-        num::{NonZeroU64, NonZeroUsize},
-        sync::Arc,
-        time::Duration,
-    };
-    fn signed_log_transaction(
-        network_id: NetworkId,
-        key_pair: &KeyPair,
-        label: &str,
-    ) -> SignedTransaction {
-        let authority = AccountId::new(key_pair.public_key().clone());
-        TransactionBuilder::new(
-            network_id,
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([InstructionBox::from(Log::new(
-            Level::INFO,
-            label.to_owned(),
-        ))])
-        .sign(key_pair.private_key())
-    }
-    fn checked_transaction_ingress_keypair(seed: u8, context: &'static str) -> KeyPair {
-        checked_routing_fixture_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
-    }
-    #[test]
-    fn transaction_ingress_precheck_rejects_incoming_batch_over_retained_byte_budget() {
-        let state = State::new_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-        let mut queue_cfg = iroha_config::parameters::actual::Queue {
-            capacity: NonZeroUsize::new(32).expect("queue capacity non-zero"),
-            capacity_per_user: NonZeroUsize::new(32).expect("queue per-user capacity non-zero"),
-            transaction_time_to_live: Duration::from_secs(60),
-            ..Default::default()
-        };
-        queue_cfg.max_retained_bytes =
-            NonZeroU64::new(Queue::retained_byte_cost_floor_for_transactions(1))
-                .expect("non-zero retained byte budget");
-        let queue = Queue::from_config(queue_cfg, events);
-        reject_ingress_if_queue_capacity_saturated(&queue, &state, 1)
-            .expect("one incoming tx should fit the empty byte budget");
-        let err = reject_ingress_if_queue_capacity_saturated(&queue, &state, 2)
-            .expect_err("incoming batch should be shed before admission");
-        match err {
-            Error::PushIntoQueue {
-                source,
-                backpressure,
-            } => {
-                assert!(matches!(source.as_ref(), iroha_core::queue::Error::Full));
-                assert!(backpressure.is_saturated());
-            }
-            other => panic!("expected queue backpressure error, got {other:?}"),
-        }
-    }
-    routing_test! { async transaction_ingress_allows_latency_saturated_queue_before_capacity
-        let state = Arc::new(State::new_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
-        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-        let queue = Arc::new(Queue::from_config(
-            iroha_config::parameters::actual::Queue {
-                capacity: NonZeroUsize::new(32).expect("queue capacity non-zero"),
-                capacity_per_user: NonZeroUsize::new(32).expect("queue per-user capacity non-zero"),
-                transaction_time_to_live: Duration::from_secs(60),
-                ..Default::default()
-            },
-            events,
-        ));
-        let first_key_pair =
-            checked_transaction_ingress_keypair(0x9A, "derive first ingress fixture signer key");
-        let first = signed_log_transaction(*state.network_id_ref(), &first_key_pair, "first");
-        handle_transaction(Arc::clone(&queue), Arc::clone(&state), first)
-            .await
-            .expect("first transaction should enter queue");
-        queue.backdate_queued_transactions_for_tests(Duration::from_secs(3));
-        let second_key_pair =
-            checked_transaction_ingress_keypair(0x9B, "derive second ingress fixture signer key");
-        let second = signed_log_transaction(*state.network_id_ref(), &second_key_pair, "second");
-        handle_transaction(Arc::clone(&queue), Arc::clone(&state), second)
-            .await
-            .expect(
-                "latency-saturated queue should accept fresh ingress until capacity is exhausted",
-            );
-        let pressure = queue.pressure_snapshot();
-        assert!(
-            pressure.saturated_by_age,
-            "latency saturation must remain visible as queue pressure telemetry"
-        );
-        assert!(
-            !pressure.saturated_by_count,
-            "test setup should exercise age-only saturation before capacity"
-        );
-        let backpressure = queue.current_backpressure();
-        assert!(
-            !backpressure.is_saturated(),
-            "age-only queue pressure must not close ingress before capacity"
-        );
-        assert_eq!(backpressure.queued(), 2);
-        assert_eq!(backpressure.capacity().get(), 32);
-    }
 }
+include!("routing/transaction_ingress_overload_tests.rs");
 #[cfg(test)]
 mod validation_fee_torii_ingress_tests {
     use super::*;
@@ -47239,7 +45638,7 @@ mod hot_path_load_profile_tests {
         );
     }
 }
-#[cfg(feature = "app_api")]
+app_api_items! {
 fn parse_tx_status(s: &str) -> Option<TransactionStatus> {
     match s {
         "Queued" => Some(TransactionStatus::Queued),
@@ -47253,7 +45652,6 @@ fn parse_tx_status(s: &str) -> Option<TransactionStatus> {
         _ => None,
     }
 }
-#[cfg(feature = "app_api")]
 fn parse_block_status(s: &str) -> Option<BlockStatus> {
     match s {
         "Created" => Some(BlockStatus::Created),
@@ -47266,16 +45664,9 @@ fn parse_block_status(s: &str) -> Option<BlockStatus> {
         _ => None,
     }
 }
+derived_items! {
 /// Common GET list params: optional JSON filter + pagination.
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    Default,
-    Debug,
-    Clone,
-)]
+( crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 pub struct ListFilterParams {
     /// Optional JSON-encoded FilterExpr for compact GET filters.
     pub filter: Option<String>,
@@ -47291,15 +45682,7 @@ pub struct ListFilterParams {
     pub count_mode: Option<String>,
 }
 /// Common GET pagination params with count mode.
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    Default,
-    Debug,
-    Clone,
-)]
+( crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 pub struct PaginationParams {
     /// Optional limit for pagination.
     pub limit: Option<u64>,
@@ -47310,15 +45693,7 @@ pub struct PaginationParams {
     #[norito(default)]
     pub count_mode: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    Default,
-    Debug,
-    Clone,
-)]
+( crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 pub struct AccountAssetsGetParams {
     /// Optional limit for pagination.
     pub limit: Option<u64>,
@@ -47333,15 +45708,7 @@ pub struct AccountAssetsGetParams {
     #[norito(default)]
     pub count_mode: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    Default,
-    Debug,
-    Clone,
-)]
+( crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 pub struct AccountTransactionsGetParams {
     /// Optional limit for pagination.
     pub limit: Option<u64>,
@@ -47354,15 +45721,7 @@ pub struct AccountTransactionsGetParams {
     #[norito(default)]
     pub count_mode: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    Default,
-    Debug,
-    Clone,
-)]
+( crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 pub struct AccountHistoryGetParams {
     /// Optional limit for pagination.
     pub limit: Option<u64>,
@@ -47375,15 +45734,7 @@ pub struct AccountHistoryGetParams {
     #[norito(default)]
     pub count_mode: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    Default,
-    Debug,
-    Clone,
-)]
+( crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 /// Query parameters accepted by the committed contract-activity feed.
 pub struct ContractActivityGetParams {
     /// Optional limit for pagination.
@@ -47409,10 +45760,7 @@ pub struct ContractActivityGetParams {
     #[norito(default)]
     pub count_mode: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 pub struct ContractEventGetParams {
     /// Optional limit for pagination.
     pub limit: Option<u64>,
@@ -47445,10 +45793,7 @@ pub struct ContractEventGetParams {
     #[norito(default)]
     pub count_mode: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 pub struct ContractRollupSwapsFillsParams {
     /// Optional limit for pagination.
     pub limit: Option<u64>,
@@ -47470,10 +45815,7 @@ pub struct ContractRollupSwapsFillsParams {
     #[norito(default)]
     pub count_mode: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 pub struct ContractRollupSwapsCandlesParams {
     /// Optional limit for pagination.
     pub limit: Option<u64>,
@@ -47498,10 +45840,7 @@ pub struct ContractRollupSwapsCandlesParams {
     #[norito(default)]
     pub count_mode: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 pub struct UranaiMarketHistoryParams {
     /// Market id whose committed DPM price history should be replayed.
     pub market_id: String,
@@ -47524,10 +45863,7 @@ pub struct UranaiMarketHistoryParams {
     #[norito(default)]
     pub count_mode: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 pub struct TraderRollupAccountParams {
     /// Trader authority whose product summary should be returned.
     pub authority: String,
@@ -47535,15 +45871,7 @@ pub struct TraderRollupAccountParams {
     #[norito(default)]
     pub scan_limit: Option<u64>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    Default,
-    Debug,
-    Clone,
-)]
+( crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 pub struct AssetHolderGetParams {
     /// Optional limit for pagination.
     pub limit: Option<u64>,
@@ -47558,21 +45886,18 @@ pub struct AssetHolderGetParams {
     #[norito(default)]
     pub count_mode: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
+(Debug, Clone, crate::json_macros::JsonSerialize)
 struct RepoLegDto {
     asset_definition_id: String,
     quantity: String,
     metadata: Value,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
+(Debug, Clone, crate::json_macros::JsonSerialize)
 struct RepoGovernanceDto {
     haircut_bps: u16,
     margin_frequency_secs: u64,
 }
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
+(Debug, Clone, crate::json_macros::JsonSerialize)
 struct RepoAgreementDto {
     id: String,
     initiator: String,
@@ -47590,8 +45915,7 @@ struct RepoAgreementDto {
     settlement_timestamp_ms: Option<u64>,
     status: String,
 }
-#[cfg(feature = "app_api")]
-#[derive(Clone)]
+(Clone)
 struct RepoAgreementProjection {
     canonical_id: String,
     initiator_canonical: String,
@@ -47602,7 +45926,7 @@ struct RepoAgreementProjection {
     rate_bps: u16,
     dto: RepoAgreementDto,
 }
-#[cfg(feature = "app_api")]
+}
 impl RepoAgreementProjection {
     fn from_agreement(agreement: &RepoAgreement) -> RepoAgreementProjection {
         let canonical_id = agreement.id().to_string();
@@ -47659,20 +45983,17 @@ impl RepoAgreementProjection {
         }
     }
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone, Copy)]
 enum RepoAgreementAccountIndex {
     Initiator,
     Counterparty,
     Custodian,
 }
-#[cfg(feature = "app_api")]
 fn repo_agreement_id_from_filter_value(value: &Value) -> Option<RepoAgreementId> {
     value
         .as_str()
         .and_then(|raw| raw.parse::<RepoAgreementId>().ok())
 }
-#[cfg(feature = "app_api")]
 fn repo_agreement_account_index(field: &str) -> Option<RepoAgreementAccountIndex> {
     match field {
         "initiator" => Some(RepoAgreementAccountIndex::Initiator),
@@ -47681,7 +46002,6 @@ fn repo_agreement_account_index(field: &str) -> Option<RepoAgreementAccountIndex
         _ => None,
     }
 }
-#[cfg(feature = "app_api")]
 fn repo_agreement_ids_for_accounts(
     world: &impl WorldReadOnly,
     index: RepoAgreementAccountIndex,
@@ -47706,7 +46026,6 @@ fn repo_agreement_ids_for_accounts(
     }
     ids
 }
-#[cfg(feature = "app_api")]
 fn intersect_repo_agreement_candidates(
     selected: &mut Option<BTreeSet<RepoAgreementId>>,
     candidates: BTreeSet<RepoAgreementId>,
@@ -47717,7 +46036,6 @@ fn intersect_repo_agreement_candidates(
         *selected = Some(candidates);
     }
 }
-#[cfg(feature = "app_api")]
 fn repo_filter_candidate_ids(
     world: &impl WorldReadOnly,
     expr: Option<&crate::filter::FilterExpr>,
@@ -47769,7 +46087,6 @@ fn repo_filter_candidate_ids(
         _ => None,
     }
 }
-#[cfg(feature = "app_api")]
 fn repo_agreements_for_filter<'a>(
     world: &'a impl WorldReadOnly,
     filter: Option<&crate::filter::FilterExpr>,
@@ -47788,7 +46105,6 @@ fn repo_agreements_for_filter<'a>(
             .map(|(_, agreement)| agreement),
     )
 }
-#[cfg(feature = "app_api")]
 fn repo_agreement_projection_to_query_row(proj: &RepoAgreementProjection) -> norito::json::Map {
     let mut row = norito::json::Map::new();
     row.insert("id".into(), Value::from(proj.canonical_id.clone()));
@@ -47866,7 +46182,6 @@ fn repo_agreement_projection_to_query_row(proj: &RepoAgreementProjection) -> nor
     row.insert("status".into(), Value::from(proj.dto.status.clone()));
     row
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone, Copy)]
 enum RepoAgreementSortField {
     Id,
@@ -47874,13 +46189,11 @@ enum RepoAgreementSortField {
     InitiatedTimestamp,
     RateBps,
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct RepoAgreementSortSelector {
     ascending: bool,
     field: RepoAgreementSortField,
 }
-#[cfg(feature = "app_api")]
 fn compile_repo_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<RepoAgreementSortSelector> {
     let mut selectors = Vec::new();
     for sk in spec {
@@ -47904,7 +46217,6 @@ fn compile_repo_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<RepoAgreementS
     }
     selectors
 }
-#[cfg(feature = "app_api")]
 fn repo_sort_key(
     proj: &RepoAgreementProjection,
     selectors: &[RepoAgreementSortSelector],
@@ -47947,7 +46259,6 @@ fn repo_sort_key(
     }
     MultiSortKey::new(components)
 }
-#[cfg(feature = "app_api")]
 fn repo_filter_projection(expr: &FilterExpr, proj: &RepoAgreementProjection) -> bool {
     use FilterExpr as F;
     match expr {
@@ -48029,7 +46340,6 @@ fn repo_filter_projection(expr: &FilterExpr, proj: &RepoAgreementProjection) -> 
         _ => false,
     }
 }
-#[cfg(feature = "app_api")]
 fn validate_repo_filter(expr: &FilterExpr) -> Result<(), Error> {
     fn repo_filter_error(message: &str) -> Error {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -48074,13 +46384,11 @@ fn validate_repo_filter(expr: &FilterExpr) -> Result<(), Error> {
         _ => Err(repo_filter_error("unsupported repo filter operator")),
     }
 }
-#[cfg(feature = "app_api")]
 fn record_account_literal_selection(telemetry: &MaybeTelemetry, endpoint: &'static str) {
     telemetry.with_metrics(|metrics| {
         metrics.inc_torii_account_literal(endpoint, crate::account_literal::metric_label());
     });
 }
-#[cfg(feature = "app_api")]
 fn record_explorer_endpoint_result<T>(
     telemetry: &MaybeTelemetry,
     endpoint: &'static str,
@@ -48092,7 +46400,6 @@ fn record_explorer_endpoint_result<T>(
         metrics.record_torii_explorer_request(endpoint, outcome, started.elapsed());
     });
 }
-#[cfg(feature = "app_api")]
 fn account_history_projections_to_json(
     items: &[AccountHistoryProjection],
 ) -> Vec<norito::json::Value> {
@@ -48182,7 +46489,6 @@ fn account_history_projections_to_json(
         })
         .collect()
 }
-#[cfg(feature = "app_api")]
 fn tx_projections_to_json(items: &[TxProjection]) -> Vec<norito::json::Value> {
     items
         .iter()
@@ -48210,7 +46516,6 @@ fn tx_projections_to_json(items: &[TxProjection]) -> Vec<norito::json::Value> {
         })
         .collect()
 }
-#[cfg(feature = "app_api")]
 fn contract_activity_projections_to_json(
     items: &[ContractActivityProjection],
 ) -> Vec<norito::json::Value> {
@@ -48263,7 +46568,6 @@ fn contract_activity_projections_to_json(
         })
         .collect()
 }
-#[cfg(feature = "app_api")]
 fn contract_event_projection_to_json_value(it: &ContractEventProjection) -> norito::json::Value {
     let mut m = norito::json::Map::new();
     m.insert(
@@ -48359,7 +46663,6 @@ fn contract_event_projection_to_json_value(it: &ContractEventProjection) -> nori
     }
     norito::json::Value::Object(m)
 }
-#[cfg(feature = "app_api")]
 fn contract_event_projections_to_json(
     items: &[ContractEventProjection],
 ) -> Vec<norito::json::Value> {
@@ -48368,13 +46671,9 @@ fn contract_event_projections_to_json(
         .map(contract_event_projection_to_json_value)
         .collect()
 }
-#[cfg(feature = "app_api")]
 const DEFAULT_TRADER_SWAP_SCAN_LIMIT: u64 = 600;
-#[cfg(feature = "app_api")]
 const MAX_TRADER_SWAP_SCAN_LIMIT: u64 = 5_000;
-#[cfg(feature = "app_api")]
 const DEFAULT_TRADER_CANDLE_BUCKET_MS: u64 = 900_000;
-#[cfg(feature = "app_api")]
 const TRADER_MODULE_ORDER: &[&str] = &[
     "swaps",
     "n3x",
@@ -48390,7 +46689,6 @@ const TRADER_MODULE_ORDER: &[&str] = &[
     "rwa",
     "dlmmHooks",
 ];
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
 struct SwapFillRollupItem {
     record_id: u64,
@@ -48405,7 +46703,6 @@ struct SwapFillRollupItem {
     timestamp_ms: Option<u64>,
     execution_hash: Option<String>,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
 struct SwapFillRollup {
     authority: String,
@@ -48418,7 +46715,6 @@ struct SwapFillRollup {
     total: usize,
     items: Vec<SwapFillRollupItem>,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Default)]
 struct SwapAnalytics {
     avg_entry: Option<f64>,
@@ -48433,7 +46729,6 @@ struct SwapAnalytics {
     win_rate: Option<f64>,
     avg_cushion_ratio: Option<f64>,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
 struct TraderActivityItem {
     module_key: String,
@@ -48444,7 +46739,6 @@ struct TraderActivityItem {
     context: String,
     execution_hash: String,
 }
-#[cfg(feature = "app_api")]
 fn trader_module_label(module: &str) -> &'static str {
     match module {
         "swaps" => "Swaps",
@@ -48463,7 +46757,6 @@ fn trader_module_label(module: &str) -> &'static str {
         _ => "Contract",
     }
 }
-#[cfg(feature = "app_api")]
 fn trader_module_contract_key(module: &str) -> &'static str {
     match module {
         "swaps" => "dlmm.dlmm_router",
@@ -48482,7 +46775,6 @@ fn trader_module_contract_key(module: &str) -> &'static str {
         _ => "unknown",
     }
 }
-#[cfg(feature = "app_api")]
 fn trader_module_alias_candidates(module: &str) -> &'static [&'static str] {
     match module {
         "swaps" => &["dlmm_router::dlmm.universal"],
@@ -48501,13 +46793,11 @@ fn trader_module_alias_candidates(module: &str) -> &'static [&'static str] {
         _ => &[],
     }
 }
-#[cfg(feature = "app_api")]
 fn trader_module_is_supported(module: &str) -> bool {
     TRADER_MODULE_ORDER
         .iter()
         .any(|candidate| *candidate == module)
 }
-#[cfg(feature = "app_api")]
 fn compact_number(value: f64, max_fraction_digits: usize) -> String {
     if !value.is_finite() {
         return "-".to_owned();
@@ -48525,7 +46815,6 @@ fn compact_number(value: f64, max_fraction_digits: usize) -> String {
         rendered
     }
 }
-#[cfg(feature = "app_api")]
 fn format_signed_asset_amount(value: f64, symbol: &str) -> String {
     if !value.is_finite() {
         return "-".to_owned();
@@ -48539,13 +46828,11 @@ fn format_signed_asset_amount(value: f64, symbol: &str) -> String {
     };
     format!("{sign}{} {}", compact_number(value.abs(), 4), symbol)
 }
-#[cfg(feature = "app_api")]
 fn format_percent_ratio(value: Option<f64>) -> String {
     value
         .map(|raw| format!("{}%", compact_number(raw * 100.0, 2)))
         .unwrap_or_else(|| "-".to_owned())
 }
-#[cfg(feature = "app_api")]
 fn asset_ticker(asset_id: &str) -> String {
     asset_id
         .split('#')
@@ -48554,7 +46841,6 @@ fn asset_ticker(asset_id: &str) -> String {
         .trim()
         .to_ascii_uppercase()
 }
-#[cfg(feature = "app_api")]
 fn humanize_identifier(raw: &str) -> String {
     raw.split('_')
         .filter(|segment| !segment.is_empty())
@@ -48568,26 +46854,22 @@ fn humanize_identifier(raw: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
-#[cfg(feature = "app_api")]
 fn format_timestamp_label(timestamp_ms: Option<u64>) -> String {
     timestamp_ms
         .and_then(|raw| OffsetDateTime::from_unix_timestamp((raw / 1000) as i64).ok())
         .map(|dt| format!("{:02}:{:02} UTC", dt.hour(), dt.minute()))
         .unwrap_or_else(|| "-".to_owned())
 }
-#[cfg(feature = "app_api")]
 fn value_as_i64(value: &Value) -> Option<i64> {
     value
         .as_i64()
         .or_else(|| value.as_u64().and_then(|raw| i64::try_from(raw).ok()))
         .or_else(|| value.as_str().and_then(|raw| raw.parse::<i64>().ok()))
 }
-#[cfg(feature = "app_api")]
 fn object_lookup_i64(object: &Map, keys: &[&str]) -> Option<i64> {
     keys.iter()
         .find_map(|key| object.get(*key).and_then(value_as_i64))
 }
-#[cfg(feature = "app_api")]
 fn object_lookup_string(object: &Map, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
         object
@@ -48597,12 +46879,10 @@ fn object_lookup_string(object: &Map, keys: &[&str]) -> Option<String> {
             .filter(|value| !value.is_empty())
     })
 }
-#[cfg(feature = "app_api")]
 fn iroha_json_to_value(value: &IrohaJson) -> Result<Value> {
     json::parse_value(value.get())
         .map_err(|err| conversion_error(format!("invalid contract view JSON: {err}")))
 }
-#[cfg(feature = "app_api")]
 fn parse_contract_view_int(value: &Value) -> Option<i64> {
     match value {
         Value::Array(values) => values.first().and_then(value_as_i64),
@@ -48610,15 +46890,12 @@ fn parse_contract_view_int(value: &Value) -> Option<i64> {
         other => value_as_i64(other),
     }
 }
-#[cfg(feature = "app_api")]
 const URANAI_DPM_VIRTUAL_SHARES_XOR: i64 = 100;
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
 struct UranaiOutcomeDescriptor {
     outcome_id: String,
     label: String,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
 struct UranaiDpmReplayState {
     market_id: String,
@@ -48630,7 +46907,6 @@ struct UranaiDpmReplayState {
     incomplete_replay: bool,
     initialized: bool,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum UranaiReplayAction {
     CreateMarket,
@@ -48638,7 +46914,6 @@ enum UranaiReplayAction {
     Sell,
     PrivateBuy,
 }
-#[cfg(feature = "app_api")]
 impl UranaiDpmReplayState {
     fn new(market_id: &str) -> Self {
         let outcome_count = 2;
@@ -48831,7 +47106,6 @@ impl UranaiDpmReplayState {
             .collect()
     }
 }
-#[cfg(feature = "app_api")]
 fn uranai_default_outcome_descriptor(
     outcome_count: usize,
     outcome_index: usize,
@@ -48851,13 +47125,11 @@ fn uranai_default_outcome_descriptor(
         },
     }
 }
-#[cfg(feature = "app_api")]
 fn uranai_default_outcome_descriptors(outcome_count: usize) -> Vec<UranaiOutcomeDescriptor> {
     (0..outcome_count)
         .map(|outcome_index| uranai_default_outcome_descriptor(outcome_count, outcome_index))
         .collect()
 }
-#[cfg(feature = "app_api")]
 fn uranai_market_outcome_count(payload: &Map) -> usize {
     object_lookup_i64(payload, &["outcome_count", "outcomeCount"])
         .and_then(|value| usize::try_from(value).ok())
@@ -48871,7 +47143,6 @@ fn uranai_market_outcome_count(payload: &Map) -> usize {
         })
         .unwrap_or(2)
 }
-#[cfg(feature = "app_api")]
 fn uranai_outcome_descriptors_from_payload(
     payload: &Map,
     outcome_count: usize,
@@ -48904,12 +47175,10 @@ fn uranai_outcome_descriptors_from_payload(
         })
         .collect()
 }
-#[cfg(feature = "app_api")]
 fn uranai_dpm_quantity(shares: i64) -> u128 {
     u128::from(u64::try_from(URANAI_DPM_VIRTUAL_SHARES_XOR).expect("positive virtual reserve"))
         + u128::from(u64::try_from(shares.max(0)).expect("nonnegative shares"))
 }
-#[cfg(feature = "app_api")]
 fn uranai_int_sqrt_floor(value: u128) -> u128 {
     let mut low = 0_u128;
     let mut high = 1_u128 << 64;
@@ -48923,7 +47192,6 @@ fn uranai_int_sqrt_floor(value: u128) -> u128 {
     }
     low
 }
-#[cfg(feature = "app_api")]
 fn uranai_dpm_cost(outstanding_shares: &[i64]) -> Option<u128> {
     let mut sum = 0_u128;
     for shares in outstanding_shares {
@@ -48932,7 +47200,6 @@ fn uranai_dpm_cost(outstanding_shares: &[i64]) -> Option<u128> {
     }
     Some(uranai_int_sqrt_floor(sum))
 }
-#[cfg(feature = "app_api")]
 fn uranai_quote_dpm_buy(
     outstanding_shares: &[i64],
     outcome_index: usize,
@@ -48961,7 +47228,6 @@ fn uranai_quote_dpm_buy(
     let shares_out = selected_after.checked_sub(selected_quantity)?;
     i64::try_from(shares_out).ok()
 }
-#[cfg(feature = "app_api")]
 fn uranai_quote_dpm_sell(
     outstanding_shares: &[i64],
     outcome_index: usize,
@@ -48980,7 +47246,6 @@ fn uranai_quote_dpm_sell(
     let collateral_out = before.checked_sub(uranai_dpm_cost(&next)?)?;
     i64::try_from(collateral_out).ok()
 }
-#[cfg(feature = "app_api")]
 fn uranai_replay_action(event_kind: &str) -> Option<UranaiReplayAction> {
     match event_kind.trim().to_ascii_lowercase().as_str() {
         "market_created" | "create_market" => Some(UranaiReplayAction::CreateMarket),
@@ -48990,11 +47255,9 @@ fn uranai_replay_action(event_kind: &str) -> Option<UranaiReplayAction> {
         _ => None,
     }
 }
-#[cfg(feature = "app_api")]
 fn uranai_payload_market_id(payload: &Map) -> Option<String> {
     object_lookup_string(payload, &["market_id", "marketId"])
 }
-#[cfg(feature = "app_api")]
 fn uranai_projection_contract_matches(
     projection: &ContractEventProjection,
     params: &UranaiMarketHistoryParams,
@@ -49014,7 +47277,6 @@ fn uranai_projection_contract_matches(
     }
     true
 }
-#[cfg(feature = "app_api")]
 fn uranai_history_timestamp_in_range(
     timestamp_ms: Option<u64>,
     params: &UranaiMarketHistoryParams,
@@ -49039,7 +47301,6 @@ fn uranai_history_timestamp_in_range(
     }
     true
 }
-#[cfg(feature = "app_api")]
 fn collect_uranai_market_history_points(
     index: &ContractEventIndex,
     params: &UranaiMarketHistoryParams,
@@ -49131,7 +47392,6 @@ fn collect_uranai_market_history_points(
         contract_alias,
     )
 }
-#[cfg(feature = "app_api")]
 fn uranai_market_history_rollup_to_json_value(
     index: &ContractEventIndex,
     params: &UranaiMarketHistoryParams,
@@ -49178,7 +47438,6 @@ fn uranai_market_history_rollup_to_json_value(
     top.insert("items".into(), Value::Array(page.items));
     Value::Object(top)
 }
-#[cfg(feature = "app_api")]
 fn parse_router_assets_from_value(value: &Value) -> Result<(String, String)> {
     match value {
         Value::Array(values) if values.len() >= 2 => {
@@ -49210,7 +47469,6 @@ fn parse_router_assets_from_value(value: &Value) -> Result<(String, String)> {
         )),
     }
 }
-#[cfg(feature = "app_api")]
 fn parse_swap_history_record(record_id: u64, value: &Value) -> Result<SwapFillRollupItem> {
     let (trader, input_is_base, amount_in, amount_out, min_out) = match value {
         Value::Array(values) if values.len() >= 5 => (
@@ -49287,7 +47545,6 @@ fn parse_swap_history_record(record_id: u64, value: &Value) -> Result<SwapFillRo
         execution_hash: None,
     })
 }
-#[cfg(feature = "app_api")]
 fn parse_contract_alias_literal(
     literal: Option<&str>,
 ) -> Result<Option<iroha_data_model::smart_contract::ContractAlias>> {
@@ -49300,7 +47557,6 @@ fn parse_contract_alias_literal(
         })
         .transpose()
 }
-#[cfg(feature = "app_api")]
 fn parse_contract_address_literal(
     literal: Option<&str>,
 ) -> Result<Option<iroha_data_model::smart_contract::ContractAddress>> {
@@ -49314,7 +47570,6 @@ fn parse_contract_address_literal(
         })
         .transpose()
 }
-#[cfg(feature = "app_api")]
 fn resolve_rollup_contract_target(
     state: &CoreState,
     contract_address_literal: Option<&str>,
@@ -49343,7 +47598,6 @@ fn resolve_rollup_contract_target(
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn call_contract_view_value(
     state: Arc<CoreState>,
     authority: &iroha_data_model::account::AccountId,
@@ -49375,7 +47629,6 @@ fn call_contract_view_value(
     };
     iroha_json_to_value(&result)
 }
-#[cfg(feature = "app_api")]
 fn load_swap_fill_rollup(
     state: Arc<CoreState>,
     params: &ContractRollupSwapsFillsParams,
@@ -49502,7 +47755,6 @@ fn load_swap_fill_rollup(
         items: stitched,
     })
 }
-#[cfg(feature = "app_api")]
 fn swap_fill_rollup_to_json_value(
     rollup: &SwapFillRollup,
     limit: Option<u64>,
@@ -49568,7 +47820,6 @@ fn swap_fill_rollup_to_json_value(
     top.insert("items".into(), Value::Array(items));
     Value::Object(top)
 }
-#[cfg(feature = "app_api")]
 fn compute_swap_analytics(items: &[SwapFillRollupItem]) -> SwapAnalytics {
     let mut quote_inventory = 0.0_f64;
     let mut cost_basis_base = 0.0_f64;
@@ -49631,7 +47882,6 @@ fn compute_swap_analytics(items: &[SwapFillRollupItem]) -> SwapAnalytics {
         avg_cushion_ratio: (cushion_count > 0.0).then_some(cushion_ratio_sum / cushion_count),
     }
 }
-#[cfg(feature = "app_api")]
 fn swap_analytics_to_json_value(analytics: &SwapAnalytics) -> Value {
     let mut object = Map::new();
     object.insert(
@@ -49682,14 +47932,12 @@ fn swap_analytics_to_json_value(analytics: &SwapAnalytics) -> Value {
     );
     Value::Object(object)
 }
-#[cfg(feature = "app_api")]
 fn event_payload_object(projection: &ContractEventProjection) -> Option<Map> {
     projection.payload.as_ref().and_then(|value| match value {
         Value::Object(object) => Some(object.clone()),
         _ => None,
     })
 }
-#[cfg(feature = "app_api")]
 fn trader_activity_item_from_projection(
     projection: &ContractEventProjection,
 ) -> TraderActivityItem {
@@ -50066,7 +48314,6 @@ fn trader_activity_item_from_projection(
         execution_hash: projection.tx_hash_hex.clone(),
     }
 }
-#[cfg(feature = "app_api")]
 fn collect_trader_activity_page(
     index: &ContractEventIndex,
     params: &ContractEventGetParams,
@@ -50107,7 +48354,6 @@ fn collect_trader_activity_page(
     }
     (items, matched)
 }
-#[cfg(feature = "app_api")]
 fn trader_activity_items_to_json(items: &[TraderActivityItem]) -> Vec<Value> {
     items
         .iter()
@@ -50130,7 +48376,6 @@ fn trader_activity_items_to_json(items: &[TraderActivityItem]) -> Vec<Value> {
         })
         .collect()
 }
-#[cfg(feature = "app_api")]
 fn module_card_json(
     key: &str,
     contract_address: Option<String>,
@@ -50176,7 +48421,6 @@ fn module_card_json(
     );
     Value::Object(object)
 }
-#[cfg(feature = "app_api")]
 fn resolve_trader_module_contract_address(state: &CoreState, module: &str) -> Option<String> {
     trader_module_alias_candidates(module)
         .iter()
@@ -50188,7 +48432,6 @@ fn resolve_trader_module_contract_address(state: &CoreState, module: &str) -> Op
                 .map(|prepared| prepared.contract_address.to_string())
         })
 }
-#[cfg(feature = "app_api")]
 fn build_trader_account_modules_json(
     state: &CoreState,
     fills: &SwapFillRollup,
@@ -50307,7 +48550,6 @@ fn build_trader_account_modules_json(
         })
         .collect()
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_swaps_fills_get(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<ContractRollupSwapsFillsParams>,
@@ -50319,7 +48561,6 @@ pub async fn handle_v1_contracts_rollups_swaps_fills_get(
         "{}",
     ))
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_swaps_candles_get(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<ContractRollupSwapsCandlesParams>,
@@ -50420,7 +48661,6 @@ pub async fn handle_v1_contracts_rollups_swaps_candles_get(
     top.insert("items".into(), Value::Array(items));
     Ok(infallible_pretty_json_response(&Value::Object(top), "{}"))
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_uranai_markets_history_get(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<UranaiMarketHistoryParams>,
@@ -50455,7 +48695,6 @@ pub async fn handle_v1_contracts_rollups_uranai_markets_history_get(
         "{}",
     ))
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_trader_activity_get(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<ContractEventGetParams>,
@@ -50489,7 +48728,6 @@ pub async fn handle_v1_contracts_rollups_trader_activity_get(
     insert_page_metadata(&mut top, &page, count_mode);
     Ok(infallible_pretty_json_response(&Value::Object(top), "{}"))
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_trader_account_get(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<TraderRollupAccountParams>,
@@ -50562,7 +48800,6 @@ pub async fn handle_v1_contracts_rollups_trader_account_get(
     );
     Ok(infallible_pretty_json_response(&Value::Object(top), "{}"))
 }
-#[cfg(feature = "app_api")]
 async fn handle_v1_contracts_rollups_module_get(
     state: Arc<CoreState>,
     crate::NoritoQuery(mut params): crate::NoritoQuery<ContractEventGetParams>,
@@ -50602,7 +48839,6 @@ async fn handle_v1_contracts_rollups_module_get(
     insert_page_metadata(&mut top, &page, count_mode);
     Ok(infallible_pretty_json_response(&Value::Object(top), "{}"))
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_intents_get(
     state: Arc<CoreState>,
     query: crate::NoritoQuery<ContractEventGetParams>,
@@ -50617,7 +48853,6 @@ pub async fn handle_v1_contracts_rollups_intents_get(
     )
     .await
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_vault_positions_get(
     state: Arc<CoreState>,
     query: crate::NoritoQuery<ContractEventGetParams>,
@@ -50632,7 +48867,6 @@ pub async fn handle_v1_contracts_rollups_vault_positions_get(
     )
     .await
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_operators_status_get(
     state: Arc<CoreState>,
     query: crate::NoritoQuery<ContractEventGetParams>,
@@ -50647,7 +48881,6 @@ pub async fn handle_v1_contracts_rollups_operators_status_get(
     )
     .await
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_margin_health_get(
     state: Arc<CoreState>,
     query: crate::NoritoQuery<ContractEventGetParams>,
@@ -50662,7 +48895,6 @@ pub async fn handle_v1_contracts_rollups_margin_health_get(
     )
     .await
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_rwa_lots_get(
     state: Arc<CoreState>,
     query: crate::NoritoQuery<ContractEventGetParams>,
@@ -50677,7 +48909,6 @@ pub async fn handle_v1_contracts_rollups_rwa_lots_get(
     )
     .await
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_dlmm_hooks_get(
     state: Arc<CoreState>,
     query: crate::NoritoQuery<ContractEventGetParams>,
@@ -51540,7 +49771,6 @@ mod tx_projection_display_tests {
         assert_eq!(items[0].tx_hash_hex, "hash-4");
     }
 }
-#[cfg(feature = "app_api")]
 fn parse_sort_spec(spec: &str) -> Vec<crate::filter::SortKey> {
     let mut out = Vec::new();
     for part in spec.split(',') {
@@ -51565,7 +49795,6 @@ fn parse_sort_spec(spec: &str) -> Vec<crate::filter::SortKey> {
     out
 }
 // ---------------------- Balances and Holders ----------------------
-#[cfg(feature = "app_api")]
 #[derive(Clone, Default)]
 pub(crate) struct PrimaryAliasProjection {
     pub(crate) literal: Option<String>,
@@ -51574,7 +49803,6 @@ pub(crate) struct PrimaryAliasProjection {
     pub(crate) domain: Option<String>,
     pub(crate) has_primary_alias: bool,
 }
-#[cfg(feature = "app_api")]
 fn primary_alias_projection_from_alias(
     alias: &iroha_data_model::account::rekey::AccountAlias,
     catalog: &DataSpaceCatalog,
@@ -51600,7 +49828,6 @@ fn primary_alias_projection_from_alias(
         has_primary_alias: true,
     }
 }
-#[cfg(feature = "app_api")]
 fn primary_alias_projection_from_binding_record(
     binding: &iroha_data_model::query::account::AccountAliasBindingRecord,
 ) -> PrimaryAliasProjection {
@@ -51622,14 +49849,12 @@ fn primary_alias_projection_from_binding_record(
         has_primary_alias: true,
     }
 }
-#[cfg(feature = "app_api")]
 pub(crate) fn primary_alias_projection_for_account_id(
     _state: &CoreState,
     _account_id: &AccountId,
 ) -> PrimaryAliasProjection {
     PrimaryAliasProjection::default()
 }
-#[cfg(feature = "app_api")]
 fn primary_alias_projection_for_account_id_in_world(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -51660,7 +49885,6 @@ fn primary_alias_projection_for_account_id_in_world(
     }
     PrimaryAliasProjection::default()
 }
-#[cfg(feature = "app_api")]
 fn primary_alias_projection_batch_for_account_ids(
     _world: &impl WorldReadOnly,
     _catalog: &DataSpaceCatalog,
@@ -51672,7 +49896,6 @@ fn primary_alias_projection_batch_for_account_ids(
         .map(|account_id| (account_id, PrimaryAliasProjection::default()))
         .collect()
 }
-#[cfg(feature = "app_api")]
 fn insert_primary_alias_fields(map: &mut norito::json::Map, _alias: &PrimaryAliasProjection) {
     // Generic account and asset projections do not carry a canonical signed caller or an exact
     // alias-resolution grant. Preserve the response shape without exposing directory data.
@@ -51682,7 +49905,6 @@ fn insert_primary_alias_fields(map: &mut norito::json::Map, _alias: &PrimaryAlia
     map.insert("primary_alias_domain".into(), norito::json::Value::Null);
     map.insert("has_primary_alias".into(), norito::json::Value::from(false));
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct AccountAssetListItem {
     asset: String,
@@ -51693,7 +49915,6 @@ struct AccountAssetListItem {
     quantity: iroha_primitives::numeric::Quantity,
     primary_alias: PrimaryAliasProjection,
 }
-#[cfg(feature = "app_api")]
 fn asset_definition_projection_fields(
     world: &impl WorldReadOnly,
     definition_id: &AssetDefinitionId,
@@ -51713,7 +49934,6 @@ fn asset_definition_projection_fields(
         })
         .clone()
 }
-#[cfg(feature = "app_api")]
 fn push_account_asset_projection(
     world: &impl WorldReadOnly,
     asset_id: &AssetId,
@@ -51735,7 +49955,6 @@ fn push_account_asset_projection(
         primary_alias: primary_alias.clone(),
     });
 }
-#[cfg(feature = "app_api")]
 fn collect_projected_account_assets(
     state: &CoreState,
     world: &impl WorldReadOnly,
@@ -51784,19 +50003,16 @@ fn collect_projected_account_assets(
     }
     projected_assets
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone, Copy)]
 enum AccountAssetSortField {
     Asset,
     Scope,
     Quantity,
 }
-#[cfg(feature = "app_api")]
 struct AccountAssetSortSelector {
     ascending: bool,
     field: AccountAssetSortField,
 }
-#[cfg(feature = "app_api")]
 fn compile_account_asset_sort_spec(
     spec: &[crate::filter::SortKey],
 ) -> Vec<AccountAssetSortSelector> {
@@ -51821,7 +50037,6 @@ fn compile_account_asset_sort_spec(
     }
     selectors
 }
-#[cfg(feature = "app_api")]
 fn account_asset_sort_key(
     proj: &AccountAssetListItem,
     selectors: &[AccountAssetSortSelector],
@@ -51854,7 +50069,6 @@ fn account_asset_sort_key(
     }
     MultiSortKey::new(components)
 }
-#[cfg(feature = "app_api")]
 fn filter_account_asset_item(expr: &crate::filter::FilterExpr, it: &AccountAssetListItem) -> bool {
     use crate::filter::FilterExpr as F;
     let field_str = |field: &str| -> Option<&str> {
@@ -51958,7 +50172,6 @@ fn filter_account_asset_item(expr: &crate::filter::FilterExpr, it: &AccountAsset
         },
     }
 }
-#[cfg(feature = "app_api")]
 struct AccountPermissionListItem {
     name: String,
     payload: norito::json::Value,
@@ -51969,7 +50182,6 @@ struct AccountPermissionListItem {
 /// assigned to the account. Security inventory consumers must not treat direct grants alone as the
 /// account's authority.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_account_permissions(
     state: Arc<CoreState>,
     axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -51986,7 +50198,6 @@ pub async fn handle_v1_account_permissions(
 }
 /// List permissions with configurable address enforcement.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_account_permissions_with_policy(
     state: Arc<CoreState>,
     axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -52058,7 +50269,6 @@ pub async fn handle_v1_account_permissions_with_policy(
 }
 /// List assets for an account with basic pagination.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_account_assets(
     state: Arc<CoreState>,
     axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -52075,7 +50285,6 @@ pub async fn handle_v1_account_assets(
 }
 /// List assets with configurable address enforcement.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_account_assets_with_policy(
     state: Arc<CoreState>,
     axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -52151,7 +50360,6 @@ pub async fn handle_v1_account_assets_with_policy(
 // ---------------------- Repo agreement listing ----------------------
 /// GET /v1/repo/agreements — List active and settled repo agreements with optional filtering.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_repo_agreements(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
@@ -52201,7 +50409,6 @@ pub async fn handle_v1_repo_agreements(
 }
 /// POST /v1/repo/agreements/query — Structured query for repo agreements.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_repo_agreements_query(
     state: Arc<CoreState>,
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
@@ -52424,6 +50631,7 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
         initiator_id,
         counterparty_id,
     }
+}
 }
 #[cfg(all(test, feature = "app_api"))]
 routing_test! { async repo_agreements_list_filters_by_id
@@ -52650,26 +50858,20 @@ routing_test! { sync repo_filter_candidate_ids_extracts_safe_indexed_constraints
         .collect();
     assert_eq!(candidate_rows, vec![first_id]);
 }
+app_api_items! {
 // ---------------------- Domains listing ----------------------
-#[cfg(feature = "app_api")]
 const DOMAINS_LIVE_MAX_EXAMINED_ROWS: usize = 65_536;
-#[cfg(feature = "app_api")]
 const DOMAINS_LIVE_MAX_RETAINED_BYTES: usize = 4 * 1024 * 1024;
-#[cfg(feature = "app_api")]
 const ASSET_HOLDERS_LIVE_MAX_EXAMINED_ROWS: usize = 65_536;
-#[cfg(feature = "app_api")]
 const ASSET_HOLDERS_LIVE_MAX_RETAINED_BYTES: usize = 8 * 1024 * 1024;
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct DomainProj {
     id: String,
 }
-#[cfg(feature = "app_api")]
 enum LiveIndexedSource<I, F> {
     Indexed(I),
     Full(F),
 }
-#[cfg(feature = "app_api")]
 impl<T, I, F> Iterator for LiveIndexedSource<I, F>
 where
     I: Iterator<Item = T>,
@@ -52689,7 +50891,6 @@ where
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn app_live_budget_error(
     endpoint: &'static str,
     code: &'static str,
@@ -52700,7 +50901,6 @@ fn app_live_budget_error(
         message: format!("{endpoint}: {}", message.into()),
     }
 }
-#[cfg(feature = "app_api")]
 fn checked_retained_bytes(
     current: usize,
     additional: usize,
@@ -52723,7 +50923,6 @@ fn checked_retained_bytes(
     }
     Ok(next)
 }
-#[cfg(feature = "app_api")]
 fn collect_live_page_with_budget<S, K, T, I, P, W>(
     iter: I,
     offset: u64,
@@ -52843,7 +51042,6 @@ where
         has_more,
     })
 }
-#[cfg(feature = "app_api")]
 fn collect_live_rows_with_budget<S, T, I, P, W>(
     iter: I,
     max_examined_rows: usize,
@@ -52887,19 +51085,16 @@ where
     }
     Ok(rows)
 }
-#[cfg(feature = "app_api")]
 fn retained_json_text_bytes(text: &str) -> usize {
     // JSON may expand one input byte to a six-byte escape. The fixed charge covers the owned
     // string, map/node bookkeeping, and allocator metadata retained alongside the payload.
     256usize.saturating_add(text.len().saturating_mul(6))
 }
-#[cfg(feature = "app_api")]
 fn domain_projection_retained_bytes(domain: &DomainProj) -> usize {
     retained_json_text_bytes(&domain.id)
 }
 /// GET /v1/domains — List domains with basic pagination.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_domains(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<PaginationParams>,
@@ -52928,17 +51123,14 @@ pub async fn handle_v1_domains(
     // Norito JSON response
     id_paginated_json_response(&page, count_mode, |item| item.id.clone())
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone, Copy)]
 enum DomainSortField {
     Id,
 }
-#[cfg(feature = "app_api")]
 struct DomainSortSelector {
     ascending: bool,
     field: DomainSortField,
 }
-#[cfg(feature = "app_api")]
 fn compile_domain_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<DomainSortSelector> {
     let mut selectors = Vec::new();
     for sk in spec {
@@ -52959,7 +51151,6 @@ fn compile_domain_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<DomainSortSe
     }
     selectors
 }
-#[cfg(feature = "app_api")]
 fn domain_sort_key(id: &str, selectors: &[DomainSortSelector]) -> MultiSortKey {
     let mut components = Vec::with_capacity(selectors.len());
     for selector in selectors {
@@ -52979,7 +51170,6 @@ fn domain_sort_key(id: &str, selectors: &[DomainSortSelector]) -> MultiSortKey {
 ///
 /// Phase 1: ignores `filter`/`select` and applies deterministic sorting by id if requested.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_domains_query(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
@@ -53269,31 +51459,26 @@ mod pagination_enforcement_tests {
     }
 }
 // ---------------------- Accounts listing ----------------------
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct AccountListItem {
     canonical_id: String,
     display_id: String,
     primary_alias: PrimaryAliasProjection,
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 enum AccountSortField {
     Id,
     Metadata(Option<iroha_data_model::prelude::Name>),
     Unsupported,
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct AccountSortSelector {
     ascending: bool,
     field: AccountSortField,
 }
-#[cfg(feature = "app_api")]
 fn metadata_json_to_string(j: &iroha_primitives::json::Json) -> String {
     j.get().clone()
 }
-#[cfg(feature = "app_api")]
 fn compile_account_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<AccountSortSelector> {
     let mut selectors = Vec::new();
     for sk in spec {
@@ -53315,7 +51500,6 @@ fn compile_account_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<AccountSort
     }
     selectors
 }
-#[cfg(feature = "app_api")]
 fn account_sort_key(
     account: &iroha_data_model::account::Account,
     selectors: &[AccountSortSelector],
@@ -53342,7 +51526,6 @@ fn account_sort_key(
     }
     MultiSortKey::new(components)
 }
-#[cfg(feature = "app_api")]
 fn filter_metadata_object(expr: &FilterExpr, id: &str, metadata: &Metadata) -> bool {
     use FilterExpr as F;
     match expr {
@@ -53470,12 +51653,10 @@ fn filter_metadata_object(expr: &FilterExpr, id: &str, metadata: &Metadata) -> b
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn account_filter_object(expr: &FilterExpr, account: &iroha_data_model::account::Account) -> bool {
     let id = account.id().to_string();
     filter_metadata_object(expr, &id, account.metadata())
 }
-#[cfg(feature = "app_api")]
 fn account_filter_projection(expr: &FilterExpr, proj: &AccountListItem) -> bool {
     use FilterExpr as F;
     let field_str = |field: &str| -> Option<&str> {
@@ -53552,13 +51733,11 @@ fn account_filter_projection(expr: &FilterExpr, proj: &AccountListItem) -> bool 
         F::Lt(_, _) | F::Lte(_, _) | F::Gt(_, _) | F::Gte(_, _) => false,
     }
 }
-#[cfg(feature = "app_api")]
 fn account_from_world_entry(
     entry: iroha_data_model::account::AccountEntry<'_>,
 ) -> iroha_data_model::account::Account {
     account_from_key_value(entry.id(), entry.value())
 }
-#[cfg(feature = "app_api")]
 fn account_from_key_value(
     id: &AccountId,
     value: &iroha_data_model::account::AccountValue,
@@ -53572,7 +51751,6 @@ fn account_from_key_value(
         opaque_ids: details.opaque_ids,
     }
 }
-#[cfg(feature = "app_api")]
 fn account_read_response_from_world_entry(
     entry: iroha_data_model::account::AccountEntry<'_>,
 ) -> iroha_torii_shared::AccountReadResponse {
@@ -53584,13 +51762,11 @@ fn account_read_response_from_world_entry(
         opaque_ids: details.opaque_ids,
     }
 }
-#[cfg(feature = "app_api")]
 pub(crate) fn collect_subject_accounts(
     world: &impl WorldReadOnly,
 ) -> Vec<iroha_data_model::account::Account> {
     collect_subject_accounts_from_iter(world.accounts_iter().map(account_from_world_entry))
 }
-#[cfg(feature = "app_api")]
 fn collect_subject_accounts_from_iter(
     accounts: impl IntoIterator<Item = iroha_data_model::account::Account>,
 ) -> Vec<iroha_data_model::account::Account> {
@@ -53607,7 +51783,6 @@ fn collect_subject_accounts_from_iter(
     }
     by_subject.into_values().collect()
 }
-#[cfg(feature = "app_api")]
 fn account_filter_candidate_ids(
     expr: Option<&crate::filter::FilterExpr>,
 ) -> Option<BTreeSet<AccountId>> {
@@ -53642,7 +51817,6 @@ fn account_filter_candidate_ids(
         _ => None,
     }
 }
-#[cfg(feature = "app_api")]
 fn collect_subject_accounts_for_filter(
     world: &impl WorldReadOnly,
     filter: Option<&crate::filter::FilterExpr>,
@@ -53762,7 +51936,6 @@ mod account_permissions_json_tests {
             .expect("role-inherited permission item");
     }
 }
-#[cfg(feature = "app_api")]
 fn uaid_parse_error(reason: &'static str) -> Error {
     iroha_logger::warn!(
         target: "torii.uaid.parse",
@@ -53773,7 +51946,6 @@ fn uaid_parse_error(reason: &'static str) -> Error {
         iroha_data_model::query::error::QueryExecutionFail::InvalidSingularParameters,
     ))
 }
-#[cfg(feature = "app_api")]
 fn canonicalize_uaid_literal(raw: &str) -> Result<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -53791,7 +51963,6 @@ fn canonicalize_uaid_literal(raw: &str) -> Result<String> {
     }
     Ok(hex_portion.to_ascii_lowercase())
 }
-#[cfg(feature = "app_api")]
 fn parse_uaid_literal(raw: &str) -> Result<UniversalAccountId> {
     let canonical_hex = canonicalize_uaid_literal(raw)?;
     let hash = Hash::from_str(&canonical_hex).map_err(|_| uaid_parse_error("hash_decode"))?;
@@ -53832,21 +52003,11 @@ mod uaid_parsing_tests {
         assert!(parse_uaid_literal(&"0".repeat(64)).is_err());
     }
 }
-#[cfg(feature = "app_api")]
 const ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1: &[u8] =
     b"iroha:account-onboarding-plan-receipt:v1\0";
+derived_items! {
 /// Secret-free intent accepted by the sponsored onboarding planner.
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    Encode,
-    Decode,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-)]
+( Clone, Debug, PartialEq, Eq, Encode, Decode, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize,)
 #[norito(deny_unknown_fields)]
 pub struct AccountOnboardingPlanRequestDto {
     /// Request layout version. The only accepted value is `1`.
@@ -53859,23 +52020,14 @@ pub struct AccountOnboardingPlanRequestDto {
     #[norito(default)]
     pub permissions: Vec<String>,
 }
-#[cfg(feature = "app_api")]
+}
 impl AccountOnboardingPlanRequestDto {
     /// Current request layout version.
     pub const VERSION: u8 = 1;
 }
+derived_items! {
 /// Canonical body committed and signed by a stateless onboarding receipt.
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    Encode,
-    Decode,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-)]
+( Clone, Debug, PartialEq, Eq, Encode, Decode, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize,)
 #[norito(deny_unknown_fields)]
 pub struct AccountOnboardingPlanBodyDto {
     /// Receipt layout version. The only accepted value is `1`.
@@ -53903,7 +52055,7 @@ pub struct AccountOnboardingPlanBodyDto {
     /// Last block timestamp at which this receipt may be applied.
     pub valid_until_ms: u64,
 }
-#[cfg(feature = "app_api")]
+}
 impl AccountOnboardingPlanBodyDto {
     /// Current canonical receipt body layout version.
     pub const VERSION: u8 = 1;
@@ -53917,18 +52069,9 @@ impl AccountOnboardingPlanBodyDto {
         ])
     }
 }
+derived_items! {
 /// Stateless, signer-authenticated onboarding plan receipt.
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    Encode,
-    Decode,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-)]
+( Clone, Debug, PartialEq, Eq, Encode, Decode, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize,)
 #[norito(deny_unknown_fields)]
 pub struct AccountOnboardingPlanReceiptDto {
     /// Canonical plan body.
@@ -53938,7 +52081,7 @@ pub struct AccountOnboardingPlanReceiptDto {
     /// Onboarding-authority signature over `plan_hash`.
     pub signature: Signature,
 }
-#[cfg(feature = "app_api")]
+}
 impl AccountOnboardingPlanReceiptDto {
     /// Create and sign a receipt without retaining any server-side plan state.
     fn try_new(
@@ -53969,7 +52112,6 @@ impl AccountOnboardingPlanReceiptDto {
             )
     }
 }
-#[cfg(feature = "app_api")]
 fn account_onboarding_receipt_signature_is_valid(
     authority: &AccountId,
     signature: &Signature,
@@ -53980,7 +52122,6 @@ fn account_onboarding_receipt_signature_is_valid(
         .is_some_and(|signatory| signature.verify(signatory, plan_hash.as_ref()).is_ok())
 }
 /// Apply request containing only a previously issued stateless receipt.
-#[cfg(feature = "app_api")]
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct AccountOnboardingApplyRequestDto {
@@ -53988,7 +52129,6 @@ pub struct AccountOnboardingApplyRequestDto {
     pub receipt: AccountOnboardingPlanReceiptDto,
 }
 /// Sponsored onboarding apply result.
-#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct AccountOnboardingResponseDto {
     /// Canonical target account.
@@ -54096,7 +52236,6 @@ mod sponsored_onboarding_dto_tests {
         ));
     }
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
 pub struct AccountFaucetRequestDto {
     pub account_id: String,
@@ -54105,7 +52244,6 @@ pub struct AccountFaucetRequestDto {
     #[norito(default)]
     pub pow_nonce_hex: Option<String>,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct AccountFaucetResponseDto {
     pub account_id: String,
@@ -54115,7 +52253,6 @@ pub struct AccountFaucetResponseDto {
     pub tx_hash_hex: String,
     pub status: &'static str,
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct AccountFaucetPuzzleDto {
     pub algorithm: &'static str,
@@ -54130,7 +52267,6 @@ pub struct AccountFaucetPuzzleDto {
     pub scrypt_p: u32,
     pub max_anchor_age_blocks: u64,
 }
-#[cfg(feature = "app_api")]
 impl crate::utils::extractors::SupportsNoritoDecode for AccountFaucetRequestDto {
     fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
         norito::json::from_slice::<Self>(bytes).map_err(|err| {
@@ -54138,7 +52274,6 @@ impl crate::utils::extractors::SupportsNoritoDecode for AccountFaucetRequestDto 
         })
     }
 }
-#[cfg(feature = "app_api")]
 fn onboarding_invalid_request(reason: &str) -> Error {
     iroha_logger::warn!(target: "torii.onboard", reason, "Sponsored onboarding request rejected");
     let (code, hint) = onboarding_error_metadata(reason);
@@ -54148,7 +52283,6 @@ fn onboarding_invalid_request(reason: &str) -> Error {
         hint,
     }
 }
-#[cfg(feature = "app_api")]
 fn onboarding_error_metadata(reason: &str) -> (&'static str, Option<&'static str>) {
     let normalized = reason.to_ascii_lowercase();
     if normalized.contains("disabled") {
@@ -54224,7 +52358,6 @@ fn onboarding_error_metadata(reason: &str) -> (&'static str, Option<&'static str
         ("onboarding_invalid_request", None)
     }
 }
-#[cfg(feature = "app_api")]
 fn faucet_invalid_request(reason: &str) -> Error {
     iroha_logger::warn!(target: "torii.faucet", reason, "Account faucet request rejected");
     let normalized = reason.to_ascii_lowercase();
@@ -54265,11 +52398,8 @@ fn faucet_invalid_request(reason: &str) -> Error {
         message: reason.to_owned(),
     }
 }
-#[cfg(feature = "app_api")]
 const FAUCET_POW_ALGORITHM: &str = "scrypt-leading-zero-bits-v2";
-#[cfg(feature = "app_api")]
 const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v3";
-#[cfg(feature = "app_api")]
 fn leading_zero_bits(bytes: &[u8]) -> u32 {
     let mut total = 0u32;
     for byte in bytes {
@@ -54282,7 +52412,6 @@ fn leading_zero_bits(bytes: &[u8]) -> u32 {
     }
     total
 }
-#[cfg(feature = "app_api")]
 fn adaptive_faucet_pow_extra_bits(
     recent_claims: u64,
     claims_per_extra_bit: u64,
@@ -54294,7 +52423,6 @@ fn adaptive_faucet_pow_extra_bits(
     let extra = recent_claims / claims_per_extra_bit;
     u8::try_from(extra).unwrap_or(u8::MAX).min(max_extra_bits)
 }
-#[cfg(feature = "app_api")]
 fn faucet_instruction_is_claim(
     instruction: &InstructionBox,
     source_asset_id: &AssetId,
@@ -54311,7 +52439,6 @@ fn faucet_instruction_is_claim(
     };
     inner.source == *source_asset_id && inner.object == amount.clone()
 }
-#[cfg(feature = "app_api")]
 fn faucet_executable_is_claim(
     executable: &Executable,
     source_asset_id: &AssetId,
@@ -54320,6 +52447,7 @@ fn faucet_executable_is_claim(
     executable
         .explicit_instructions()
         .any(|instruction| faucet_instruction_is_claim(instruction, source_asset_id, amount))
+}
 }
 #[cfg(all(test, feature = "app_api"))]
 routing_test! { sync faucet_claim_scanner_includes_instruction_items_from_mixed_batch
@@ -54359,7 +52487,7 @@ routing_test! { sync faucet_claim_scanner_includes_instruction_items_from_mixed_
         &amount
     ));
 }
-#[cfg(feature = "app_api")]
+app_api_items! {
 fn resolve_faucet_asset_definition_id(
     app: &crate::SharedAppState,
     faucet: &iroha_config::parameters::actual::ToriiFaucet,
@@ -54371,13 +52499,11 @@ fn resolve_faucet_asset_definition_id(
         asset_alias_observation_time_ms(app.state.as_ref()),
     )
 }
-#[cfg(feature = "app_api")]
 fn configured_faucet_quantity(
     faucet: &iroha_config::parameters::actual::ToriiFaucet,
 ) -> Result<iroha_primitives::numeric::Quantity> {
     Ok(faucet.amount.clone())
 }
-#[cfg(feature = "app_api")]
 fn faucet_pow_recent_claims(
     app: &crate::SharedAppState,
     faucet: &iroha_config::parameters::actual::ToriiFaucet,
@@ -54434,7 +52560,6 @@ fn faucet_pow_recent_claims(
     };
     Ok(total.saturating_add(u64::try_from(queued_claims).unwrap_or(u64::MAX)))
 }
-#[cfg(feature = "app_api")]
 fn faucet_pow_scrypt_params(
     faucet: &iroha_config::parameters::actual::ToriiFaucet,
 ) -> Result<ScryptParams> {
@@ -54446,7 +52571,6 @@ fn faucet_pow_scrypt_params(
     )
     .map_err(|_| faucet_invalid_request("invalid faucet pow scrypt configuration"))
 }
-#[cfg(feature = "app_api")]
 fn faucet_pow_effective_difficulty_bits(
     app: &crate::SharedAppState,
     faucet: &iroha_config::parameters::actual::ToriiFaucet,
@@ -54463,7 +52587,6 @@ fn faucet_pow_effective_difficulty_bits(
         .get()
         .saturating_add(adaptive_bits))
 }
-#[cfg(feature = "app_api")]
 fn faucet_pow_challenge_salt(
     app: &crate::SharedAppState,
     faucet: &iroha_config::parameters::actual::ToriiFaucet,
@@ -54483,7 +52606,6 @@ fn faucet_pow_challenge_salt(
         .map(Some)
         .ok_or_else(|| faucet_invalid_request("faucet pow vrf seed unavailable"))
 }
-#[cfg(feature = "app_api")]
 fn faucet_pow_challenge(
     network_id: &iroha_data_model::NetworkId,
     account_id: &AccountId,
@@ -54502,7 +52624,6 @@ fn faucet_pow_challenge(
     }
     hasher.finalize().into()
 }
-#[cfg(feature = "app_api")]
 fn faucet_pow_anchor_hash(
     app: &crate::SharedAppState,
     anchor_height: u64,
@@ -54517,7 +52638,6 @@ fn faucet_pow_anchor_hash(
         .ok_or_else(|| faucet_invalid_request("unknown faucet pow anchor height"))?;
     Ok(block.hash())
 }
-#[cfg(feature = "app_api")]
 fn faucet_pow_digest(
     challenge: &[u8; 32],
     scrypt_params: &ScryptParams,
@@ -54528,7 +52648,6 @@ fn faucet_pow_digest(
         .map_err(|_| faucet_invalid_request("failed to derive faucet pow digest"))?;
     Ok(output)
 }
-#[cfg(feature = "app_api")]
 fn verify_faucet_pow(
     app: &crate::SharedAppState,
     faucet: &iroha_config::parameters::actual::ToriiFaucet,
@@ -54577,13 +52696,14 @@ fn verify_faucet_pow(
 #[cfg(all(feature = "app_api", test))]
 #[path = "routing/faucet_pow_tests.rs"]
 mod faucet_pow_tests;
+}
 struct NormalizedAccountOnboarding {
     request: AccountOnboardingPlanRequestDto,
     account_id: AccountId,
     intent: iroha_data_model::alias_setup::AliasIntentV1,
     permissions: Vec<Permission>,
 }
-#[cfg(feature = "app_api")]
+app_api_items! {
 fn onboarding_committed_anchor(
     state: &CoreState,
 ) -> Result<(iroha_data_model::alias_setup::AliasPlanAnchorV1, u64)> {
@@ -54607,7 +52727,6 @@ fn onboarding_committed_anchor(
         now_ms,
     ))
 }
-#[cfg(feature = "app_api")]
 fn ensure_authenticated_onboarding_name(
     alias: &iroha_data_model::alias_setup::ResolvedAccountAliasV1,
     authenticated_scope: &crate::AuthenticatedOnboardingScope,
@@ -54629,7 +52748,6 @@ fn ensure_authenticated_onboarding_name(
             .to_owned(),
     })
 }
-#[cfg(feature = "app_api")]
 fn normalize_account_onboarding_request(
     app: &crate::SharedAppState,
     authenticated_scope: &crate::AuthenticatedOnboardingScope,
@@ -54732,7 +52850,6 @@ fn normalize_account_onboarding_request(
         permissions,
     })
 }
-#[cfg(feature = "app_api")]
 fn onboarding_frame(
     instruction: &InstructionBox,
 ) -> Result<iroha_data_model::alias_setup::AliasFramedInstructionV1> {
@@ -54748,14 +52865,12 @@ fn onboarding_frame(
         framed_payload,
     })
 }
-#[cfg(feature = "app_api")]
 fn onboarding_receipt_plan_mismatch(message: impl Into<String>) -> Error {
     Error::AppConflict {
         code: "alias.onboarding.receipt_plan_mismatch",
         message: message.into(),
     }
 }
-#[cfg(feature = "app_api")]
 fn decode_canonical_onboarding_frames(
     frames: &[iroha_data_model::alias_setup::AliasFramedInstructionV1],
 ) -> Result<Vec<InstructionBox>> {
@@ -54780,7 +52895,6 @@ fn decode_canonical_onboarding_frames(
     }
     Ok(instructions)
 }
-#[cfg(feature = "app_api")]
 fn onboarding_disposition_transition_allowed(
     planned: iroha_data_model::alias_setup::AliasPlanDispositionV1,
     live: iroha_data_model::alias_setup::AliasPlanDispositionV1,
@@ -54791,7 +52905,6 @@ fn onboarding_disposition_transition_allowed(
         (Create, Create | Repair | NoOp) | (Repair, Repair | NoOp) | (NoOp, NoOp)
     )
 }
-#[cfg(feature = "app_api")]
 fn onboarding_frames_are_ordered_subset(
     live: &[iroha_data_model::alias_setup::AliasFramedInstructionV1],
     planned: &[iroha_data_model::alias_setup::AliasFramedInstructionV1],
@@ -54803,7 +52916,6 @@ fn onboarding_frames_are_ordered_subset(
             .any(|planned_frame| planned_frame == live_frame)
     })
 }
-#[cfg(feature = "app_api")]
 fn validate_onboarding_receipt_plan_shape(
     body: &AccountOnboardingPlanBodyDto,
     normalized: &NormalizedAccountOnboarding,
@@ -54909,7 +53021,6 @@ fn validate_onboarding_receipt_plan_shape(
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn onboarding_missing_ancillary_instructions(
     world: &impl WorldReadOnly,
     signer: &crate::AccountOnboardingSigner,
@@ -54947,7 +53058,6 @@ fn onboarding_missing_ancillary_instructions(
     }
     Ok(instructions)
 }
-#[cfg(feature = "app_api")]
 fn onboarding_owner_auto_renew_follow_up(
     app: &crate::SharedAppState,
     signer: &crate::AccountOnboardingSigner,
@@ -55007,7 +53117,6 @@ fn onboarding_owner_auto_renew_follow_up(
     onboarding_frame(&ConfigureAliasAutoRenew::new(target, expected_revision, Some(desired)).into())
         .map(Some)
 }
-#[cfg(feature = "app_api")]
 fn build_account_onboarding_plan(
     app: &crate::SharedAppState,
     authenticated_scope: &crate::AuthenticatedOnboardingScope,
@@ -55149,7 +53258,6 @@ fn build_account_onboarding_plan(
     AccountOnboardingPlanReceiptDto::try_new(body, &signer.private_key.0)
 }
 /// Plan sponsored account onboarding without mutating world state.
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_onboard_plan(
     app: crate::SharedAppState,
     authenticated_scope: crate::AuthenticatedOnboardingScope,
@@ -55166,7 +53274,6 @@ pub async fn handle_v1_accounts_onboard_plan(
 }
 /// Revalidate and atomically submit a stateless sponsored onboarding receipt.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_onboard_apply(
     app: crate::SharedAppState,
     authenticated_scope: crate::AuthenticatedOnboardingScope,
@@ -55374,7 +53481,6 @@ pub async fn handle_v1_accounts_onboard_apply(
     Ok((StatusCode::ACCEPTED, response))
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_faucet_puzzle(
     app: crate::SharedAppState,
 ) -> Result<impl IntoResponse> {
@@ -55421,7 +53527,6 @@ pub async fn handle_v1_accounts_faucet_puzzle(
     Ok((StatusCode::OK, resp))
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_faucet(
     app: crate::SharedAppState,
     crate::NoritoJson(req): crate::NoritoJson<AccountFaucetRequestDto>,
@@ -55520,7 +53625,6 @@ pub async fn handle_v1_accounts_faucet(
     );
     Ok((StatusCode::ACCEPTED, resp))
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_account_aliases(
     app: crate::SharedAppState,
     axum::extract::Path(account_id_literal): axum::extract::Path<String>,
@@ -55605,7 +53709,6 @@ pub async fn handle_v1_account_aliases(
     };
     Ok(infallible_pretty_json_response(&payload, "{}"))
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_account_get(
     state: Arc<CoreState>,
     axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -55635,7 +53738,6 @@ pub async fn handle_v1_account_get(
 }
 /// GET /v1/accounts — List accounts with basic pagination.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
@@ -55709,7 +53811,6 @@ pub async fn handle_v1_accounts(
 }
 /// POST /v1/accounts/query — JSON envelope with optional pagination/sort.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_query(
     state: Arc<CoreState>,
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
@@ -55826,7 +53927,6 @@ pub async fn handle_v1_accounts_query(
 }
 /// GET /v1/accounts/{uaid}/portfolio — aggregated holdings for a UAID.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_portfolio(
     state: Arc<CoreState>,
     axum::extract::Path(raw_uaid): axum::extract::Path<String>,
@@ -55843,7 +53943,6 @@ pub async fn handle_v1_accounts_portfolio(
     drop(world);
     pretty_json_response(&portfolio_snapshot_to_json(&snapshot))
 }
-#[cfg(feature = "app_api")]
 pub(crate) fn parse_asset_balance_scope_literal(
     raw: &str,
 ) -> Result<iroha_data_model::asset::AssetBalanceScope> {
@@ -55863,7 +53962,6 @@ pub(crate) fn parse_asset_balance_scope_literal(
         "scope must be `global` or `dataspace:<id>`".to_owned(),
     ))
 }
-#[cfg(feature = "app_api")]
 fn filter_portfolio_by_asset_id(
     snapshot: &mut iroha_data_model::nexus::portfolio::UniversalPortfolio,
     asset_id: &AssetId,
@@ -55888,7 +53986,6 @@ fn filter_portfolio_by_asset_id(
     snapshot.totals.accounts = u64::try_from(accounts.len()).unwrap_or(u64::MAX);
     snapshot.totals.positions = positions;
 }
-#[cfg(feature = "app_api")]
 fn portfolio_snapshot_to_json(
     snapshot: &iroha_data_model::nexus::portfolio::UniversalPortfolio,
 ) -> Value {
@@ -55923,7 +54020,6 @@ fn portfolio_snapshot_to_json(
         json_entry("dataspaces", Value::Array(dataspaces)),
     ])
 }
-#[cfg(feature = "app_api")]
 fn dataspaces_accounts_to_json(
     accounts: &[iroha_data_model::nexus::portfolio::AccountPortfolio],
 ) -> Vec<Value> {
@@ -55959,7 +54055,6 @@ fn dataspaces_accounts_to_json(
         })
         .collect()
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Default, Clone)]
 struct DataspaceSummaryAccumulator {
     dataspace_id: DataSpaceId,
@@ -55971,7 +54066,6 @@ struct DataspaceSummaryAccumulator {
     asset_definitions: BTreeSet<String>,
     commitments: Vec<sumeragi::status::DataspaceCommitmentSnapshot>,
 }
-#[cfg(feature = "app_api")]
 fn upsert_dataspace_summary<'a>(
     summaries: &'a mut BTreeMap<DataSpaceId, DataspaceSummaryAccumulator>,
     dataspace_id: DataSpaceId,
@@ -55985,7 +54079,6 @@ fn upsert_dataspace_summary<'a>(
             ..DataspaceSummaryAccumulator::default()
         })
 }
-#[cfg(feature = "app_api")]
 fn manifest_summary_json(manifest: Option<&SpaceDirectoryManifestRecord>) -> Value {
     let mut map = Map::new();
     if let Some(record) = manifest {
@@ -56059,7 +54152,6 @@ fn manifest_summary_json(manifest: Option<&SpaceDirectoryManifestRecord>) -> Val
     }
     Value::Object(map)
 }
-#[cfg(feature = "app_api")]
 fn commitments_summary_json(
     commitments: &[sumeragi::status::DataspaceCommitmentSnapshot],
 ) -> Value {
@@ -56131,7 +54223,6 @@ fn commitments_summary_json(
 }
 /// GET /v1/nexus/dataspaces/accounts/{literal}/summary — joined dataspace view by account literal.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_nexus_dataspaces_account_summary(
     state: Arc<CoreState>,
     axum::extract::Path(raw_literal): axum::extract::Path<String>,
@@ -56351,13 +54442,8 @@ pub async fn handle_v1_nexus_dataspaces_account_summary(
     root.insert("dataspaces".into(), Value::Array(dataspaces_json));
     pretty_json_response(&Value::Object(root))
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+derived_items! {
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for preparing a space-directory manifest transaction.
 #[norito(deny_unknown_fields)]
 pub struct SpaceDirectoryManifestPublishDto {
@@ -56370,13 +54456,7 @@ pub struct SpaceDirectoryManifestPublishDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
+( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for revoking a manifest from the space directory.
 #[norito(deny_unknown_fields)]
 pub struct SpaceDirectoryManifestRevokeDto {
@@ -56392,6 +54472,7 @@ pub struct SpaceDirectoryManifestRevokeDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
 }
 #[cfg(all(test, feature = "app_api"))]
 mod app_api_inline_signing_boundary_tests {
@@ -56425,16 +54506,8 @@ mod app_api_inline_signing_boundary_tests {
         assert_private_key_rejected!(SpaceDirectoryManifestRevokeDto);
     }
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Default,
-    Debug,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::NoritoSerialize,
-)]
+derived_items! {
+( Default, Debug, Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize,)
 pub struct SpaceDirectoryManifestQuery {
     #[norito(default)]
     pub dataspace: Option<u64>,
@@ -56447,19 +54520,12 @@ pub struct SpaceDirectoryManifestQuery {
     #[norito(default)]
     pub count_mode: Option<String>,
 }
-#[cfg(feature = "app_api")]
-#[derive(
-    Default,
-    Debug,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::NoritoSerialize,
-)]
+( Default, Debug, Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize,)
 pub struct SpaceDirectoryBindingsQuery {
     #[norito(default)]
     pub reserved: Option<String>,
+}
+}
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SpaceDirectoryManifestStatus {
@@ -56501,9 +54567,9 @@ impl DataspaceAliasLookup {
         self.aliases.get(&id).map(String::as_str)
     }
 }
+app_api_items! {
 /// GET /v1/space-directory/uaids/{uaid} — UAID dataspace bindings snapshot.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_space_directory_bindings(
     state: Arc<CoreState>,
     axum::extract::Path(raw_uaid): axum::extract::Path<String>,
@@ -56539,7 +54605,6 @@ pub async fn handle_v1_space_directory_bindings(
 }
 /// GET /v1/space-directory/uaids/{uaid}/manifests — UAID manifest inventory.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_space_directory_manifests(
     state: Arc<CoreState>,
     axum::extract::Path(raw_uaid): axum::extract::Path<String>,
@@ -56636,7 +54701,6 @@ pub async fn handle_v1_space_directory_manifests(
 /// POST /v1/space-directory/manifests — prepare a canonical unsigned manifest
 /// publication transaction for local signing.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_space_directory_manifest_publish(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -56670,7 +54734,6 @@ pub async fn handle_post_space_directory_manifest_publish(
 /// POST /v1/space-directory/manifests/revoke — prepare a canonical unsigned
 /// manifest-revocation transaction for local signing.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_space_directory_manifest_revoke(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -56703,7 +54766,6 @@ pub async fn handle_post_space_directory_manifest_revoke(
     )?;
     Ok(JsonBody(app_api_transaction_draft(&builder)))
 }
-#[cfg(feature = "app_api")]
 fn manifest_entry_to_json(
     dataspace_id: DataSpaceId,
     record: &SpaceDirectoryManifestRecord,
@@ -56740,7 +54802,6 @@ fn manifest_entry_to_json(
     );
     Ok(Value::Object(entry))
 }
-#[cfg(feature = "app_api")]
 fn manifest_status(record: &SpaceDirectoryManifestRecord) -> &'static str {
     if record.lifecycle.revocation.is_some() {
         "Revoked"
@@ -56752,7 +54813,6 @@ fn manifest_status(record: &SpaceDirectoryManifestRecord) -> &'static str {
         "Pending"
     }
 }
-#[cfg(feature = "app_api")]
 fn manifest_status_matches(
     record: &SpaceDirectoryManifestRecord,
     filter: SpaceDirectoryManifestStatus,
@@ -56763,7 +54823,6 @@ fn manifest_status_matches(
         SpaceDirectoryManifestStatus::Inactive => !record.is_active(),
     }
 }
-#[cfg(feature = "app_api")]
 fn manifest_lifecycle_json(lifecycle: &SpaceDirectoryManifestLifecycle) -> Value {
     let mut obj = Map::new();
     match lifecycle.activated_epoch {
@@ -56790,7 +54849,6 @@ fn manifest_lifecycle_json(lifecycle: &SpaceDirectoryManifestLifecycle) -> Value
     obj.insert("revocation".into(), revocation_value);
     Value::Object(obj)
 }
-#[cfg(feature = "app_api")]
 fn bindings_for_dataspace(
     bindings: Option<&UaidDataspaceBindings>,
     dataspace_id: DataSpaceId,
@@ -57566,7 +55624,9 @@ mod space_directory_manifest_helper_tests {
         );
     }
 }
+}
 include!("routing/accounts_query_tests.rs");
+app_api_items! {
 #[cfg(all(test, feature = "app_api"))]
 mod asset_definitions_query_tests {
     use super::*;
@@ -57895,7 +55955,6 @@ mod asset_definitions_query_tests {
         assert_eq!(items, vec!["newer", "older"]);
     }
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_accounts(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerCursorQuery,
@@ -57912,7 +55971,6 @@ pub async fn handle_v1_explorer_accounts(
     .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
     Ok(JsonBody(page).into_response())
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_domains(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerCursorQuery,
@@ -57923,7 +55981,6 @@ pub async fn handle_v1_explorer_domains(
         .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
     Ok(JsonBody(page).into_response())
 }
-#[cfg(feature = "app_api")]
 fn explorer_circulating_quantity(
     total: &iroha_primitives::numeric::Quantity,
     locked: &iroha_primitives::numeric::Quantity,
@@ -57934,7 +55991,6 @@ fn explorer_circulating_quantity(
         ))
     })
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_asset_definitions(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerCursorQuery,
@@ -57979,7 +56035,6 @@ pub async fn handle_v1_explorer_asset_definitions(
     }
     Ok(JsonBody(page).into_response())
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_assets(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerCursorQuery,
@@ -57998,7 +56053,6 @@ pub async fn handle_v1_explorer_assets(
     .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
     Ok(JsonBody(page).into_response())
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_nfts(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerCursorQuery,
@@ -58015,7 +56069,6 @@ pub async fn handle_v1_explorer_nfts(
     .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
     Ok(JsonBody(page).into_response())
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_rwas(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerCursorQuery,
@@ -58032,7 +56085,6 @@ pub async fn handle_v1_explorer_rwas(
     .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
     Ok(JsonBody(page).into_response())
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_blocks(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -58077,6 +56129,7 @@ pub async fn handle_v1_explorer_blocks(
     })();
     record_explorer_endpoint_result(&telemetry, ENDPOINT_EXPLORER_BLOCKS, started, &response);
     response
+}
 }
 #[cfg(all(test, feature = "app_api"))]
 routing_test! { async explorer_blocks_falls_back_to_hash_only_committed_journal
@@ -58156,7 +56209,7 @@ routing_test! { async explorer_blocks_falls_back_to_hash_only_committed_journal
         Some(second_hash.as_str())
     );
 }
-#[cfg(feature = "app_api")]
+app_api_items! {
 pub async fn handle_v1_explorer_health(
     state: Arc<CoreState>,
     kura: Arc<Kura>,
@@ -58175,13 +56228,11 @@ pub async fn handle_v1_explorer_health(
     record_explorer_endpoint_result(&telemetry, ENDPOINT_EXPLORER_HEALTH, started, &response);
     response
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplorerTransactionStatusFilter {
     Committed,
     Rejected,
 }
-#[cfg(feature = "app_api")]
 pub fn parse_transaction_status_filter(
     raw: &str,
 ) -> Result<ExplorerTransactionStatusFilter, Error> {
@@ -58191,14 +56242,12 @@ pub fn parse_transaction_status_filter(
         _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
     }
 }
-#[cfg(feature = "app_api")]
 struct ExplorerTransactionFilters {
     authority: Option<AccountId>,
     status: Option<ExplorerTransactionStatusFilter>,
     block: Option<u64>,
     asset_id: Option<iroha_data_model::asset::AssetId>,
 }
-#[cfg(feature = "app_api")]
 impl ExplorerTransactionFilters {
     fn matches(
         &self,
@@ -58232,7 +56281,6 @@ impl ExplorerTransactionFilters {
         true
     }
 }
-#[cfg(feature = "app_api")]
 struct ExplorerInstructionFilters {
     account: Option<AccountId>,
     authority: Option<AccountId>,
@@ -58242,7 +56290,6 @@ struct ExplorerInstructionFilters {
     kind: Option<ExplorerInstructionKind>,
     asset_id: Option<iroha_data_model::asset::AssetId>,
 }
-#[cfg(feature = "app_api")]
 impl ExplorerInstructionFilters {
     fn matches_transaction(
         &self,
@@ -58335,7 +56382,6 @@ async fn explorer_network_metrics_snapshot(
         avg_block_time,
     })
 }
-#[cfg(feature = "app_api")]
 fn latest_block_created_at(kura: &Kura, height: u64) -> Option<String> {
     let nonzero_height = nonzero_height(height)?;
     let block = kura.get_block(nonzero_height)?;
@@ -58343,7 +56389,6 @@ fn latest_block_created_at(kura: &Kura, height: u64) -> Option<String> {
         block.header().creation_time(),
     ))
 }
-#[cfg(feature = "app_api")]
 fn average_block_time_ms(kura: &Kura, latest: u64, window: usize) -> Option<u64> {
     if latest <= 1 || window == 0 {
         return None;
@@ -58379,11 +56424,12 @@ fn average_block_time_ms(kura: &Kura, latest: u64, window: usize) -> Option<u64>
         Some((sum / (deltas.len() as u128)) as u64)
     }
 }
+}
 fn nonzero_height(height: u64) -> Option<NonZeroUsize> {
     let height_usize: usize = height.try_into().ok()?;
     NonZeroUsize::new(height_usize)
 }
-#[cfg(feature = "app_api")]
+app_api_items! {
 pub async fn handle_v1_explorer_transactions(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -58438,7 +56484,6 @@ pub async fn handle_v1_explorer_transactions(
     );
     response
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_transactions_latest(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -58487,7 +56532,6 @@ pub async fn handle_v1_explorer_transactions_latest(
     );
     response
 }
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
 pub struct ExplorerInstructionQuery {
     pub account: Option<AccountId>,
@@ -58498,7 +56542,6 @@ pub struct ExplorerInstructionQuery {
     pub kind: Option<ExplorerInstructionKind>,
     pub asset_id: Option<iroha_data_model::asset::AssetId>,
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_instructions(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -58562,7 +56605,6 @@ pub async fn handle_v1_explorer_instructions(
     );
     response
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_instructions_latest(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -58620,7 +56662,6 @@ pub async fn handle_v1_explorer_instructions_latest(
     );
     response
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_transaction_detail(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -58641,7 +56682,6 @@ pub async fn handle_v1_explorer_transaction_detail(
     );
     response
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_instruction_detail(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -58663,7 +56703,6 @@ pub async fn handle_v1_explorer_instruction_detail(
     );
     response
 }
-#[cfg(feature = "app_api")]
 fn external_signed_transaction_results(
     block: &SignedBlock,
 ) -> impl Iterator<
@@ -58676,7 +56715,6 @@ fn external_signed_transaction_results(
     (0..block.external_entrypoint_count())
         .filter_map(move |index| external_signed_transaction_result_at(block, index))
 }
-#[cfg(feature = "app_api")]
 fn external_signed_transaction_result_at(
     block: &SignedBlock,
     index: usize,
@@ -58689,7 +56727,6 @@ fn external_signed_transaction_result_at(
     let result = block.results().nth(index)?;
     Some((entrypoint_hash, signed, result))
 }
-#[cfg(feature = "app_api")]
 fn collect_latest_transaction_summaries(
     state: &CoreState,
     start_height: u64,
@@ -58734,14 +56771,12 @@ fn collect_latest_transaction_summaries(
     }
     Ok(out)
 }
-#[cfg(feature = "app_api")]
 fn explorer_pagination_window(page: u64, per_page: u64) -> (u64, u64, u64) {
     let per_page = crate::explorer::normalize_history_per_page(per_page);
     let start_index = page.saturating_sub(1).saturating_mul(per_page);
     let end_index = start_index.saturating_add(per_page);
     (per_page, start_index, end_index)
 }
-#[cfg(feature = "app_api")]
 fn explorer_pagination_meta(
     page: u64,
     per_page: u64,
@@ -58754,7 +56789,6 @@ fn explorer_pagination_meta(
         total_items,
     }
 }
-#[cfg(feature = "app_api")]
 fn collect_transaction_summaries(
     state: &CoreState,
     start_height: u64,
@@ -58806,7 +56840,6 @@ fn collect_transaction_summaries(
     }
     Ok((out, explorer_pagination_meta(page, per_page, total_items)))
 }
-#[cfg(feature = "app_api")]
 fn collect_latest_instruction_history(
     state: &CoreState,
     start_height: u64,
@@ -58885,7 +56918,6 @@ fn collect_latest_instruction_history(
     }
     Ok(out)
 }
-#[cfg(feature = "app_api")]
 fn collect_instruction_history(
     state: &CoreState,
     start_height: u64,
@@ -58972,7 +57004,6 @@ fn collect_instruction_history(
     }
     Ok((out, explorer_pagination_meta(page, per_page, total_items)))
 }
-#[cfg(feature = "app_api")]
 fn find_transaction_detail(
     state: &CoreState,
     start_height: u64,
@@ -58997,7 +57028,6 @@ fn find_transaction_detail(
     }
     Err(explorer_not_found())
 }
-#[cfg(feature = "app_api")]
 fn find_instruction_detail(
     state: &CoreState,
     start_height: u64,
@@ -59027,7 +57057,6 @@ fn find_instruction_detail(
     }
     Err(explorer_not_found())
 }
-#[cfg(feature = "app_api")]
 fn indexed_transaction_height(
     state: &CoreState,
     start_height: u64,
@@ -59037,7 +57066,6 @@ fn indexed_transaction_height(
     let height_u64 = u64::try_from(height.get()).ok()?;
     (height_u64 <= start_height).then_some(height_u64)
 }
-#[cfg(feature = "app_api")]
 fn transaction_detail_at_height(
     state: &CoreState,
     height: u64,
@@ -59062,7 +57090,6 @@ fn transaction_detail_at_height(
     }
     Ok(None)
 }
-#[cfg(feature = "app_api")]
 fn find_transaction_detail_by_scan(
     state: &CoreState,
     start_height: u64,
@@ -59083,7 +57110,6 @@ fn find_transaction_detail_by_scan(
     }
     Ok(None)
 }
-#[cfg(feature = "app_api")]
 fn instruction_detail_at_height(
     state: &CoreState,
     height: u64,
@@ -59120,7 +57146,6 @@ fn instruction_detail_at_height(
     }
     Ok(None)
 }
-#[cfg(feature = "app_api")]
 fn find_instruction_detail_by_scan(
     state: &CoreState,
     start_height: u64,
@@ -59142,7 +57167,6 @@ fn find_instruction_detail_by_scan(
     }
     Ok(None)
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_account_detail(
     state: Arc<CoreState>,
     account_id: AccountId,
@@ -59159,7 +57183,6 @@ pub async fn handle_v1_explorer_account_detail(
         .map_err(|_| explorer_not_found())?;
     Ok(JsonBody(dto).into_response())
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_account_qr(
     state: Arc<CoreState>,
     account_id: AccountId,
@@ -59174,7 +57197,6 @@ pub async fn handle_v1_explorer_account_qr(
         crate::explorer::ExplorerAccountQrDto::build(&account_id).map_err(explorer_qr_error)?;
     Ok(JsonBody(dto).into_response())
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_domain_detail(
     state: Arc<CoreState>,
     domain_id: DomainId,
@@ -59191,7 +57213,6 @@ pub async fn handle_v1_explorer_domain_detail(
         .map_err(|_| explorer_not_found())?;
     Ok(JsonBody(dto).into_response())
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_asset_definition_detail(
     state: Arc<CoreState>,
     definition_id: AssetDefinitionId,
@@ -59221,13 +57242,10 @@ pub async fn handle_v1_explorer_asset_definition_detail(
     }
     Ok(JsonBody(dto).into_response())
 }
-#[cfg(feature = "app_api")]
 /// First-release ceiling for holder rows examined by one explorer distribution snapshot.
 const EXPLORER_SNAPSHOT_MAX_EXAMINED_HOLDERS_V1: usize = 65_536;
-#[cfg(feature = "app_api")]
 /// First-release ceiling for distinct participant identities retained by one econometrics scan.
 const EXPLORER_ECONOMETRICS_MAX_RETAINED_PARTICIPANTS_V1: usize = 65_536;
-#[cfg(feature = "app_api")]
 fn retain_explorer_snapshot_holder(
     holders: &mut Vec<(AccountId, Quantity)>,
     account_id: &AccountId,
@@ -59253,7 +57271,6 @@ fn retain_explorer_snapshot_holder(
     holders.push((account_id.clone(), balance.clone()));
     Ok(())
 }
-#[cfg(feature = "app_api")]
 fn mark_explorer_econometrics_participant(
     participants: &mut BTreeMap<AccountId, u8>,
     participant: &AccountId,
@@ -59278,7 +57295,6 @@ fn mark_explorer_econometrics_participant(
     participants.insert(participant.clone(), membership_bit);
     Ok(true)
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_asset_definition_snapshot(
     state: Arc<CoreState>,
     definition_id: AssetDefinitionId,
@@ -59551,7 +57567,6 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
     };
     Ok(JsonBody(dto).into_response())
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_asset_definition_econometrics(
     state: Arc<CoreState>,
     definition_id: AssetDefinitionId,
@@ -60612,7 +58627,6 @@ mod explorer_asset_definition_snapshot_tests {
         assert_eq!(parse_u64("nakamoto_67"), 1);
     }
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_asset_detail(
     state: Arc<CoreState>,
     asset_id: AssetId,
@@ -60624,7 +58638,6 @@ pub async fn handle_v1_explorer_asset_detail(
         .map_err(|_| explorer_not_found())?;
     Ok(JsonBody(dto).into_response())
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_nft_detail(
     state: Arc<CoreState>,
     nft_id: NftId,
@@ -60636,7 +58649,6 @@ pub async fn handle_v1_explorer_nft_detail(
         .map_err(|_| explorer_not_found())?;
     Ok(JsonBody(dto).into_response())
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_rwa_detail(
     state: Arc<CoreState>,
     rwa_id: dm::rwa::RwaId,
@@ -60648,12 +58660,10 @@ pub async fn handle_v1_explorer_rwa_detail(
         .map_err(|_| explorer_not_found())?;
     Ok(JsonBody(dto).into_response())
 }
-#[cfg(feature = "app_api")]
 enum ExplorerBlockIdentifier {
     Height(NonZeroUsize),
     Hash(HashOf<BlockHeader>),
 }
-#[cfg(feature = "app_api")]
 fn explorer_hash_only_block_dto(
     state: &CoreState,
     height: NonZeroUsize,
@@ -60670,7 +58680,6 @@ fn explorer_hash_only_block_dto(
         prev_block_hash,
     ))
 }
-#[cfg(feature = "app_api")]
 fn parse_block_identifier(raw: &str) -> Result<ExplorerBlockIdentifier, Error> {
     let trimmed = raw.trim();
     if let Ok(height_value) = trimmed.parse::<u64>() {
@@ -60688,7 +58697,6 @@ fn parse_block_identifier(raw: &str) -> Result<ExplorerBlockIdentifier, Error> {
         HashOf::<BlockHeader>::from_untyped_unchecked(hash),
     ))
 }
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_block_detail(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -60723,7 +58731,6 @@ pub async fn handle_v1_explorer_block_detail(
     );
     response
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct AssetDefinitionListItem {
     definition: iroha_data_model::asset::definition::AssetDefinition,
@@ -60732,7 +58739,6 @@ struct AssetDefinitionListItem {
     alias: Option<String>,
     alias_binding: Option<AssetAliasBindingDto>,
 }
-#[cfg(feature = "app_api")]
 fn validate_accounts_filter_adapter(expr: &FilterExpr) -> Result<()> {
     use FilterExpr as F;
     match expr {
@@ -60802,7 +58808,6 @@ fn validate_accounts_filter_adapter(expr: &FilterExpr) -> Result<()> {
         }
     }
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 enum AssetDefinitionSortField {
     Id,
@@ -60815,13 +58820,11 @@ enum AssetDefinitionSortField {
     Metadata(Option<iroha_data_model::prelude::Name>),
     Unsupported,
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct AssetDefinitionSortSelector {
     ascending: bool,
     field: AssetDefinitionSortField,
 }
-#[cfg(feature = "app_api")]
 fn compile_asset_definition_sort_spec(
     spec: &[crate::filter::SortKey],
 ) -> Vec<AssetDefinitionSortSelector> {
@@ -60857,7 +58860,6 @@ fn compile_asset_definition_sort_spec(
     }
     selectors
 }
-#[cfg(feature = "app_api")]
 fn asset_definition_sort_key(
     item: &AssetDefinitionListItem,
     selectors: &[AssetDefinitionSortSelector],
@@ -60913,7 +58915,6 @@ fn asset_definition_sort_key(
     }
     MultiSortKey::new(components)
 }
-#[cfg(feature = "app_api")]
 fn asset_definition_filter_object(
     expr: &FilterExpr,
     def: &iroha_data_model::asset::definition::AssetDefinition,
@@ -61034,7 +59035,6 @@ fn asset_definition_filter_object(
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn asset_definition_filter_projection(expr: &FilterExpr, proj: &AssetDefinitionListItem) -> bool {
     use FilterExpr as F;
     let alias_binding_status = proj
@@ -61208,7 +59208,6 @@ fn asset_definition_filter_projection(expr: &FilterExpr, proj: &AssetDefinitionL
         },
     }
 }
-#[cfg(feature = "app_api")]
 fn asset_definition_filter_mentions_metadata(expr: &FilterExpr) -> bool {
     use FilterExpr as F;
     match expr {
@@ -61226,7 +59225,6 @@ fn asset_definition_filter_mentions_metadata(expr: &FilterExpr) -> bool {
         | F::IsNull(f) => f.0.starts_with("metadata."),
     }
 }
-#[cfg(feature = "app_api")]
 fn project_asset_definition_list_item(
     def: &iroha_data_model::asset::definition::AssetDefinition,
     alias_binding: Option<&AssetAliasBindingDto>,
@@ -61239,7 +59237,6 @@ fn project_asset_definition_list_item(
         alias_binding: alias_binding.cloned(),
     }
 }
-#[cfg(feature = "app_api")]
 fn asset_definition_to_json_value(
     def: &iroha_data_model::asset::definition::AssetDefinition,
     alias_binding: Option<&AssetAliasBindingDto>,
@@ -61258,11 +59255,9 @@ fn asset_definition_to_json_value(
     }
     Ok(value)
 }
-#[cfg(feature = "app_api")]
 fn asset_definition_id_from_filter_value(value: &Value) -> Option<AssetDefinitionId> {
     value.as_str()?.parse().ok()
 }
-#[cfg(feature = "app_api")]
 fn intersect_asset_definition_candidates(
     selected: &mut Option<BTreeSet<AssetDefinitionId>>,
     candidates: BTreeSet<AssetDefinitionId>,
@@ -61273,7 +59268,6 @@ fn intersect_asset_definition_candidates(
         *selected = Some(candidates);
     }
 }
-#[cfg(feature = "app_api")]
 fn asset_definition_filter_candidate_ids(
     world: &impl WorldReadOnly,
     expr: Option<&crate::filter::FilterExpr>,
@@ -61312,7 +59306,6 @@ fn asset_definition_filter_candidate_ids(
         _ => None,
     }
 }
-#[cfg(feature = "app_api")]
 fn asset_definitions_for_filter<'a>(
     world: &'a impl WorldReadOnly,
     filter: Option<&crate::filter::FilterExpr>,
@@ -61330,7 +59323,6 @@ fn asset_definitions_for_filter<'a>(
             .filter_map(|definition| world.asset_definition(definition.id()).ok()),
     )
 }
-#[cfg(feature = "app_api")]
 fn asset_definition_alias_binding_for(
     world: &impl WorldReadOnly,
     definition_id: &AssetDefinitionId,
@@ -61343,7 +59335,6 @@ fn asset_definition_alias_binding_for(
 }
 /// GET /v1/assets/definitions — List asset definitions as full objects.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_assets_definitions(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
@@ -61399,7 +59390,6 @@ pub async fn handle_v1_assets_definitions(
 }
 /// GET /v1/assets/definitions/{asset} — Fetch a single asset definition by id or alias.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_asset_definition(
     state: Arc<CoreState>,
     axum::extract::Path(asset): axum::extract::Path<String>,
@@ -61424,7 +59414,6 @@ pub async fn handle_v1_asset_definition(
 /// POST /v1/assets/definitions/query — JSON envelope with optional pagination/sort and
 /// full asset-definition objects in the response.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_assets_definitions_query(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
@@ -61507,7 +59496,6 @@ pub async fn handle_v1_assets_definitions_query(
         asset_definition_to_json_value(&item.definition, item.alias_binding.as_ref())
     })
 }
-#[cfg(feature = "app_api")]
 fn validate_defs_filter_adapter(expr: &FilterExpr) -> Result<()> {
     use FilterExpr as F;
     match expr {
@@ -61617,6 +59605,7 @@ fn validate_defs_filter_adapter(expr: &FilterExpr) -> Result<()> {
         }
     }
 }
+}
 #[cfg(all(test, feature = "app_api"))]
 routing_test! { sync asset_definition_filter_candidate_ids_extracts_safe_exact_constraints
     let world_storage = iroha_core::state::World::new();
@@ -61653,8 +59642,8 @@ routing_test! { sync asset_definition_filter_candidate_ids_extracts_safe_exact_c
     ]);
     assert!(asset_definition_filter_candidate_ids(&world, Some(&unsafe_or)).is_none());
 }
+app_api_items! {
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_nexus_public_lane_validators(
     state: Arc<CoreState>,
     lane_id: LaneId,
@@ -61687,7 +59676,6 @@ pub async fn handle_v1_nexus_public_lane_validators(
     )
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_nexus_public_lane_stake(
     state: Arc<CoreState>,
     lane_id: LaneId,
@@ -61745,7 +59733,6 @@ pub async fn handle_v1_nexus_public_lane_stake(
     )
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_nexus_public_lane_rewards(
     state: Arc<CoreState>,
     lane_id: LaneId,
@@ -61808,7 +59795,6 @@ pub async fn handle_v1_nexus_public_lane_rewards(
         entries.into_iter().map(|(_, value)| value).collect(),
     )
 }
-#[cfg(feature = "app_api")]
 fn collect_pending_public_lane_rewards<'a>(
     lane_id: LaneId,
     account_id: &iroha_data_model::account::AccountId,
@@ -61887,7 +59873,6 @@ fn collect_pending_public_lane_rewards<'a>(
         })
         .collect())
 }
-#[cfg(feature = "app_api")]
 fn build_lane_items_payload(lane_id: LaneId, items: Vec<Value>) -> Map {
     let mut root = Map::new();
     root.insert("lane_id".into(), Value::from(u64::from(lane_id)));
@@ -61895,31 +59880,28 @@ fn build_lane_items_payload(lane_id: LaneId, items: Vec<Value>) -> Map {
     root.insert("items".into(), Value::Array(items));
     root
 }
-#[cfg(feature = "app_api")]
 fn lane_items_response(lane_id: LaneId, items: Vec<Value>) -> Result<Response> {
     let payload = build_lane_items_payload(lane_id, items);
     pretty_json_response(&payload)
 }
-#[cfg(feature = "app_api")]
 fn public_lane_validator_record_matches_key(
     key: &(LaneId, AccountId),
     record: &PublicLaneValidatorRecord,
 ) -> bool {
     key.0 == record.lane_id && key.1 == record.validator
 }
-#[cfg(feature = "app_api")]
 fn public_lane_stake_share_matches_key(
     key: &(LaneId, AccountId, AccountId),
     share: &PublicLaneStakeShare,
 ) -> bool {
     key.0 == share.lane_id && key.1 == share.validator && key.2 == share.staker
 }
-#[cfg(feature = "app_api")]
 fn public_lane_reward_record_matches_key(
     key: &(LaneId, u64),
     record: &PublicLaneRewardRecord,
 ) -> bool {
     key.0 == record.lane_id && key.1 == record.epoch
+}
 }
 #[cfg(all(test, feature = "app_api"))]
 routing_test! { sync public_lane_validator_record_matches_key_rejects_mismatched_rows
@@ -62313,7 +60295,7 @@ routing_test! { async public_lane_handlers_hide_future_created_autoscale_stale_r
     .into_response();
     assert_empty_public_lane_items(&public_lane_items_payload(rewards).await, future_lane);
 }
-#[cfg(feature = "app_api")]
+app_api_items! {
 fn validator_record_to_json(record: &PublicLaneValidatorRecord) -> (String, Value) {
     let mut map = Map::new();
     let canonical_validator = record.validator.to_string();
@@ -62357,7 +60339,6 @@ fn validator_record_to_json(record: &PublicLaneValidatorRecord) -> (String, Valu
     map.insert("authority_source".into(), Value::from("staking"));
     (canonical_validator, Value::Object(map))
 }
-#[cfg(feature = "app_api")]
 fn manifest_validator_to_json(
     lane_id: LaneId,
     binding: &iroha_core::governance::manifest::ManifestValidatorBinding,
@@ -62382,7 +60363,6 @@ fn manifest_validator_to_json(
     map.insert("authority_source".into(), Value::from("manifest"));
     (canonical_validator, Value::Object(map))
 }
-#[cfg(feature = "app_api")]
 fn validator_status_to_json(status: &PublicLaneValidatorStatus) -> Value {
     let mut map = Map::new();
     match status {
@@ -62414,7 +60394,6 @@ fn validator_status_to_json(status: &PublicLaneValidatorStatus) -> Value {
     }
     Value::Object(map)
 }
-#[cfg(feature = "app_api")]
 fn stake_share_to_json(share: &PublicLaneStakeShare) -> (String, Value) {
     let mut map = Map::new();
     let canonical_validator = share.validator.to_string();
@@ -62437,7 +60416,6 @@ fn stake_share_to_json(share: &PublicLaneStakeShare) -> (String, Value) {
         Value::Object(map),
     )
 }
-#[cfg(feature = "app_api")]
 fn pending_reward_to_json(
     reward: iroha_data_model::nexus::PublicLanePendingReward,
 ) -> (String, Value) {
@@ -62460,7 +60438,6 @@ fn pending_reward_to_json(
         Value::Object(map),
     )
 }
-#[cfg(feature = "app_api")]
 fn public_lane_unbonding_to_json(unbonding: &PublicLaneUnbonding) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -62471,7 +60448,6 @@ fn public_lane_unbonding_to_json(unbonding: &PublicLaneUnbonding) -> Value {
     map.insert("release_at_ms".into(), Value::from(unbonding.release_at_ms));
     Value::Object(map)
 }
-#[cfg(feature = "app_api")]
 fn exact_field_filter_candidates<T>(
     expr: Option<&crate::filter::FilterExpr>,
     field_name: &str,
@@ -62518,25 +60494,21 @@ where
     }
 }
 // ---------------------- NFTs listing ----------------------
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct NftListItem {
     id: String,
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 enum NftSortField {
     Id,
     Metadata(Option<iroha_data_model::prelude::Name>),
     Unsupported,
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct NftSortSelector {
     ascending: bool,
     field: NftSortField,
 }
-#[cfg(feature = "app_api")]
 fn compile_nft_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<NftSortSelector> {
     let mut selectors = Vec::new();
     for sk in spec {
@@ -62558,7 +60530,6 @@ fn compile_nft_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<NftSortSelector
     }
     selectors
 }
-#[cfg(feature = "app_api")]
 fn nft_sort_key(nft: &iroha_data_model::nft::Nft, selectors: &[NftSortSelector]) -> MultiSortKey {
     let mut components = Vec::with_capacity(selectors.len());
     for selector in selectors {
@@ -62579,12 +60550,10 @@ fn nft_sort_key(nft: &iroha_data_model::nft::Nft, selectors: &[NftSortSelector])
     }
     MultiSortKey::new(components)
 }
-#[cfg(feature = "app_api")]
 fn nft_filter_object(expr: &FilterExpr, nft: &iroha_data_model::nft::Nft) -> bool {
     let id = nft.id().to_string();
     filter_metadata_object(expr, &id, nft.content())
 }
-#[cfg(feature = "app_api")]
 fn filter_id(expr: &FilterExpr, id: &str) -> bool {
     use FilterExpr as F;
     match expr {
@@ -62611,22 +60580,18 @@ fn filter_id(expr: &FilterExpr, id: &str) -> bool {
         F::IsNull(_) | F::Lt(_, _) | F::Lte(_, _) | F::Gt(_, _) | F::Gte(_, _) => false,
     }
 }
-#[cfg(feature = "app_api")]
 fn nft_filter_projection(expr: &FilterExpr, item: &NftListItem) -> bool {
     filter_id(expr, &item.id)
 }
-#[cfg(feature = "app_api")]
 fn nft_to_query_row(nft: &iroha_data_model::nft::Nft) -> norito::json::Map {
     let mut row = Map::new();
     row.insert("id".into(), Value::from(nft.id().to_string()));
     row.insert("metadata".into(), metadata_to_json(nft.content()));
     row
 }
-#[cfg(feature = "app_api")]
 fn nft_filter_candidate_ids(expr: Option<&crate::filter::FilterExpr>) -> Option<BTreeSet<NftId>> {
     exact_field_filter_candidates(expr, "id")
 }
-#[cfg(feature = "app_api")]
 fn nft_from_key_value(id: &NftId, value: &iroha_data_model::nft::NftValue) -> Nft {
     let details = value.clone().into_inner();
     Nft {
@@ -62635,7 +60600,6 @@ fn nft_from_key_value(id: &NftId, value: &iroha_data_model::nft::NftValue) -> Nf
         owned_by: details.owned_by,
     }
 }
-#[cfg(feature = "app_api")]
 fn nfts_for_filter<'a>(
     world: &'a impl WorldReadOnly,
     filter: Option<&crate::filter::FilterExpr>,
@@ -62656,7 +60620,6 @@ fn nfts_for_filter<'a>(
 }
 /// GET /v1/nfts — List NFTs with basic pagination.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_nfts(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
@@ -62708,7 +60671,6 @@ pub async fn handle_v1_nfts(
 }
 /// POST /v1/nfts/query — JSON envelope with optional pagination/sort.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_nfts_query(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
@@ -62779,7 +60741,6 @@ pub async fn handle_v1_nfts_query(
     );
     id_paginated_json_response(&page, count_mode, |item| item.id.clone())
 }
-#[cfg(feature = "app_api")]
 fn validate_id_filter_adapter(expr: &FilterExpr) -> Result<()> {
     use FilterExpr as F;
     match expr {
@@ -62795,9 +60756,9 @@ fn validate_id_filter_adapter(expr: &FilterExpr) -> Result<()> {
         _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
     }
 }
-#[cfg(feature = "app_api")]
 fn validate_nfts_filter_adapter(expr: &FilterExpr) -> Result<()> {
     validate_id_filter_adapter(expr)
+}
 }
 #[cfg(all(test, feature = "app_api"))]
 routing_test! { sync nft_filter_candidate_ids_extracts_safe_exact_constraints
@@ -62833,18 +60794,16 @@ routing_test! { sync nft_filter_candidate_ids_extracts_safe_exact_constraints
     ]);
     assert!(nft_filter_candidate_ids(Some(&unsafe_or)).is_none());
 }
+app_api_items! {
 // ---------------------- RWAs listing ----------------------
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct RwaListItem {
     id: String,
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct RwaSortSelector {
     ascending: bool,
 }
-#[cfg(feature = "app_api")]
 fn compile_rwa_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<RwaSortSelector> {
     let mut selectors = Vec::new();
     for sk in spec {
@@ -62859,7 +60818,6 @@ fn compile_rwa_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<RwaSortSelector
     }
     selectors
 }
-#[cfg(feature = "app_api")]
 fn rwa_sort_key(item: &RwaListItem, selectors: &[RwaSortSelector]) -> MultiSortKey {
     let mut components = Vec::with_capacity(selectors.len());
     for selector in selectors {
@@ -62871,19 +60829,15 @@ fn rwa_sort_key(item: &RwaListItem, selectors: &[RwaSortSelector]) -> MultiSortK
     }
     MultiSortKey::new(components)
 }
-#[cfg(feature = "app_api")]
 fn rwa_filter_object(expr: &FilterExpr, item: &RwaListItem) -> bool {
     filter_id(expr, &item.id)
 }
-#[cfg(feature = "app_api")]
 fn rwa_filter_candidate_ids(expr: Option<&crate::filter::FilterExpr>) -> Option<BTreeSet<RwaId>> {
     exact_field_filter_candidates(expr, "id")
 }
-#[cfg(feature = "app_api")]
 fn rwa_list_item_from_id(id: &RwaId) -> RwaListItem {
     RwaListItem { id: id.to_string() }
 }
-#[cfg(feature = "app_api")]
 fn rwas_for_filter<'a>(
     world: &'a impl WorldReadOnly,
     filter: Option<&crate::filter::FilterExpr>,
@@ -62902,7 +60856,6 @@ fn rwas_for_filter<'a>(
             .map(|entry| rwa_list_item_from_id(entry.id())),
     )
 }
-#[cfg(feature = "app_api")]
 /// GET /v1/rwas — List RWA lots with basic pagination.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_rwas(
@@ -62946,7 +60899,6 @@ pub async fn handle_v1_rwas(
     );
     id_paginated_json_response(&page, count_mode, |item| item.id.clone())
 }
-#[cfg(feature = "app_api")]
 /// POST /v1/rwas/query — JSON envelope with optional pagination/sort.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_rwas_query(
@@ -63012,9 +60964,9 @@ pub async fn handle_v1_rwas_query(
     );
     id_paginated_json_response(&page, count_mode, |item| item.id.clone())
 }
-#[cfg(feature = "app_api")]
 fn validate_rwas_filter_adapter(expr: &FilterExpr) -> Result<()> {
     validate_id_filter_adapter(expr)
+}
 }
 #[cfg(all(test, feature = "app_api"))]
 routing_test! { sync rwa_filter_candidate_ids_extracts_safe_exact_constraints
@@ -63051,8 +61003,8 @@ routing_test! { sync rwa_filter_candidate_ids_extracts_safe_exact_constraints
     ]);
     assert!(rwa_filter_candidate_ids(Some(&unsafe_or)).is_none());
 }
+app_api_items! {
 // ---------------------- Subscription API ----------------------
-#[cfg(feature = "app_api")]
 fn parse_subscription_status_filter(raw: &str) -> Result<SubscriptionStatus> {
     let status = match raw.trim().to_ascii_lowercase().as_str() {
         "active" => SubscriptionStatus::Active,
@@ -63068,7 +61020,6 @@ fn parse_subscription_status_filter(raw: &str) -> Result<SubscriptionStatus> {
     };
     Ok(status)
 }
-#[cfg(feature = "app_api")]
 fn subscription_plan_from_metadata(metadata: &Metadata) -> Result<Option<SubscriptionPlan>> {
     let Some(value) = metadata.get(&*SUBSCRIPTION_PLAN_KEY) else {
         return Ok(None);
@@ -63078,7 +61029,6 @@ fn subscription_plan_from_metadata(metadata: &Metadata) -> Result<Option<Subscri
         .map_err(|err| conversion_error(format!("invalid subscription plan metadata: {err}")))?;
     Ok(Some(plan))
 }
-#[cfg(feature = "app_api")]
 fn subscription_state_from_metadata(metadata: &Metadata) -> Result<Option<SubscriptionState>> {
     let Some(value) = metadata.get(&*SUBSCRIPTION_KEY) else {
         return Ok(None);
@@ -63088,7 +61038,6 @@ fn subscription_state_from_metadata(metadata: &Metadata) -> Result<Option<Subscr
         .map_err(|err| conversion_error(format!("invalid subscription metadata: {err}")))?;
     Ok(Some(state))
 }
-#[cfg(feature = "app_api")]
 fn subscription_invoice_from_metadata(metadata: &Metadata) -> Result<Option<SubscriptionInvoice>> {
     let Some(value) = metadata.get(&*SUBSCRIPTION_INVOICE_KEY) else {
         return Ok(None);
@@ -63098,7 +61047,6 @@ fn subscription_invoice_from_metadata(metadata: &Metadata) -> Result<Option<Subs
         .map_err(|err| conversion_error(format!("invalid subscription invoice metadata: {err}")))?;
     Ok(Some(invoice))
 }
-#[cfg(feature = "app_api")]
 fn subscription_status_label(status: SubscriptionStatus) -> &'static str {
     match status {
         SubscriptionStatus::Active => "active",
@@ -63108,14 +61056,12 @@ fn subscription_status_label(status: SubscriptionStatus) -> &'static str {
         SubscriptionStatus::Suspended => "suspended",
     }
 }
-#[cfg(feature = "app_api")]
 fn subscription_invoice_status_label(status: SubscriptionInvoiceStatus) -> &'static str {
     match status {
         SubscriptionInvoiceStatus::Paid => "paid",
         SubscriptionInvoiceStatus::Failed => "failed",
     }
 }
-#[cfg(feature = "app_api")]
 fn name_status_label(status: &NameStatus) -> &'static str {
     match status {
         NameStatus::Active => "active",
@@ -63125,7 +61071,6 @@ fn name_status_label(status: &NameStatus) -> &'static str {
         NameStatus::Tombstoned(_) => "tombstoned",
     }
 }
-#[cfg(feature = "app_api")]
 fn account_alias_lease_dto_from_record(
     alias: String,
     dataspace: String,
@@ -63155,7 +61100,6 @@ fn account_alias_lease_dto_from_record(
             .map(|config| config.max_amount.clone()),
     }
 }
-#[cfg(feature = "app_api")]
 fn network_time_ms() -> Result<u64> {
     let now = time::now().now;
     let duration = now
@@ -63164,7 +61108,6 @@ fn network_time_ms() -> Result<u64> {
     u64::try_from(duration.as_millis())
         .map_err(|_| conversion_error("network time milliseconds overflow".to_string()))
 }
-#[cfg(feature = "app_api")]
 fn default_charge_ms(now_ms: u64, billing: SubscriptionBilling) -> Result<u64> {
     use iroha_primitives::calendar;
     match billing.cadence {
@@ -63197,7 +61140,6 @@ fn default_charge_ms(now_ms: u64, billing: SubscriptionBilling) -> Result<u64> {
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn resolve_charge_ms(billing: SubscriptionBilling, requested: Option<u64>) -> Result<u64> {
     if let Some(value) = requested {
         return Ok(value);
@@ -63205,7 +61147,6 @@ fn resolve_charge_ms(billing: SubscriptionBilling, requested: Option<u64>) -> Re
     let now_ms = network_time_ms()?;
     default_charge_ms(now_ms, billing)
 }
-#[cfg(feature = "app_api")]
 fn initial_period_for_charge(
     billing: SubscriptionBilling,
     charge_at_ms: u64,
@@ -63247,14 +61188,12 @@ fn initial_period_for_charge(
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn derive_trigger_id(prefix: &str, subscription_id: &NftId) -> Result<TriggerId> {
     let hash = Hash::new(subscription_id.to_string());
     let name = format!("{prefix}{}", hex::encode(hash.as_ref()));
     TriggerId::from_str(&name)
         .map_err(|err| conversion_error(format!("invalid derived trigger id: {err}")))
 }
-#[cfg(feature = "app_api")]
 fn resolve_trigger_id(
     prefix: &str,
     subscription_id: &NftId,
@@ -63264,7 +61203,6 @@ fn resolve_trigger_id(
         .map(Ok)
         .unwrap_or_else(|| derive_trigger_id(prefix, subscription_id))
 }
-#[cfg(feature = "app_api")]
 fn subscription_instruction_drafts(
     instructions: impl IntoIterator<Item = InstructionBox>,
 ) -> Result<Vec<SubscriptionInstructionDraftDto>> {
@@ -63287,7 +61225,6 @@ fn subscription_instruction_drafts(
         })
         .collect()
 }
-#[cfg(feature = "app_api")]
 fn subscription_billing_trigger_operation(existed: bool, included: bool) -> &'static str {
     match (existed, included) {
         (false, false) => "none",
@@ -63296,7 +61233,6 @@ fn subscription_billing_trigger_operation(existed: bool, included: bool) -> &'st
         (true, true) => "replace",
     }
 }
-#[cfg(feature = "app_api")]
 fn subscription_action_draft_response(
     authority: AccountId,
     action: &'static str,
@@ -63329,7 +61265,6 @@ fn subscription_action_draft_response(
         tx_instructions,
     }))
 }
-#[cfg(feature = "app_api")]
 fn ivm_syscall_program(syscall: u32, max_cycles: NonZeroU64) -> IvmBytecode {
     let opcode = u8::try_from(syscall).expect("syscall opcode fits in u8");
     let mut code = Vec::new();
@@ -63346,7 +61281,6 @@ fn ivm_syscall_program(syscall: u32, max_cycles: NonZeroU64) -> IvmBytecode {
     blob.extend_from_slice(&code);
     IvmBytecode::from_compiled(blob)
 }
-#[cfg(feature = "app_api")]
 fn build_billing_trigger(
     trigger_id: TriggerId,
     authority: AccountId,
@@ -63379,7 +61313,6 @@ fn build_billing_trigger(
     .with_metadata(metadata);
     Trigger::new(trigger_id, action)
 }
-#[cfg(feature = "app_api")]
 fn build_usage_trigger(
     trigger_id: TriggerId,
     authority: AccountId,
@@ -63401,7 +61334,6 @@ fn build_usage_trigger(
     Trigger::new(trigger_id, action)
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_plan(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -63447,7 +61379,6 @@ pub async fn handle_post_v1_subscription_plan(
     }))
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_subscription_plans(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<SubscriptionPlanListParams>,
@@ -63512,7 +61443,6 @@ pub async fn handle_v1_subscription_plans(
     Ok(infallible_pretty_json_response(&payload, "{}"))
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_create(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<SubscriptionCreateDto>,
@@ -63637,7 +61567,6 @@ pub async fn handle_post_v1_subscription_create(
     }))
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_subscriptions(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<SubscriptionListParams>,
@@ -63750,7 +61679,6 @@ pub async fn handle_v1_subscriptions(
     Ok(infallible_pretty_json_response(&payload, "{}"))
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_subscription_get(
     state: Arc<CoreState>,
     subscription_id: NftId,
@@ -63776,7 +61704,6 @@ pub async fn handle_v1_subscription_get(
     Ok(infallible_pretty_json_response(&payload, "{}"))
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_pause(
     state: Arc<CoreState>,
     subscription_id: NftId,
@@ -63848,7 +61775,6 @@ pub async fn handle_post_v1_subscription_pause(
     )
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_resume(
     state: Arc<CoreState>,
     subscription_id: NftId,
@@ -63935,7 +61861,6 @@ pub async fn handle_post_v1_subscription_resume(
     )
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_cancel(
     state: Arc<CoreState>,
     subscription_id: NftId,
@@ -64025,7 +61950,6 @@ pub async fn handle_post_v1_subscription_cancel(
     )
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_keep(
     state: Arc<CoreState>,
     subscription_id: NftId,
@@ -64091,7 +62015,6 @@ pub async fn handle_post_v1_subscription_keep(
     )
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_charge_now(
     state: Arc<CoreState>,
     subscription_id: NftId,
@@ -64172,7 +62095,6 @@ pub async fn handle_post_v1_subscription_charge_now(
     )
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_usage(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -64246,10 +62168,11 @@ mod subscription_api_tests {
     }
     include!("routing/subscription_query_filter_tests.rs");
 }
+}
 include!("routing/adapter_filter_tests.rs");
+app_api_items! {
 /// POST /v1/accounts/{account_id}/assets/query — JSON envelope with pagination/sort
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_account_assets_query(
     state: Arc<CoreState>,
     axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -64266,7 +62189,6 @@ pub async fn handle_v1_account_assets_query(
 }
 /// POST assets query with configurable address enforcement.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_account_assets_query_with_policy(
     state: Arc<CoreState>,
     axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -64379,7 +62301,6 @@ pub async fn handle_v1_account_assets_query_with_policy(
         row
     })
 }
-#[cfg(feature = "app_api")]
 fn validate_asset_filter_adapter(expr: &FilterExpr) -> Result<()> {
     use FilterExpr as F;
     match expr {
@@ -64453,7 +62374,6 @@ fn validate_asset_filter_adapter(expr: &FilterExpr) -> Result<()> {
         },
     }
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct AssetHolderListItem {
     account_id: iroha_data_model::account::AccountId,
@@ -64464,7 +62384,6 @@ struct AssetHolderListItem {
     quantity: iroha_primitives::numeric::Quantity,
     primary_alias: PrimaryAliasProjection,
 }
-#[cfg(feature = "app_api")]
 fn live_asset_holder_item(
     asset_id: &AssetId,
     quantity: &iroha_primitives::numeric::Quantity,
@@ -64484,7 +62403,6 @@ fn live_asset_holder_item(
         primary_alias: PrimaryAliasProjection::default(),
     }
 }
-#[cfg(feature = "app_api")]
 fn asset_holder_projection_retained_bytes(item: &AssetHolderListItem) -> usize {
     let mut retained = retained_json_text_bytes(&item.canonical_id)
         .saturating_add(retained_json_text_bytes(&item.asset))
@@ -64495,7 +62413,6 @@ fn asset_holder_projection_retained_bytes(item: &AssetHolderListItem) -> usize {
     }
     retained.saturating_add(512)
 }
-#[cfg(feature = "app_api")]
 fn accumulate_asset_holder_quantity(
     map: &mut BTreeMap<
         (AccountId, iroha_data_model::asset::AssetBalanceScope),
@@ -64520,18 +62437,15 @@ fn accumulate_asset_holder_quantity(
     })?;
     Ok(())
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone, Copy)]
 enum AssetHolderSortField {
     AccountId,
     Quantity,
 }
-#[cfg(feature = "app_api")]
 struct AssetHolderSortSelector {
     ascending: bool,
     field: AssetHolderSortField,
 }
-#[cfg(feature = "app_api")]
 fn compile_asset_holder_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<AssetHolderSortSelector> {
     let mut selectors = Vec::new();
     for sk in spec {
@@ -64553,7 +62467,6 @@ fn compile_asset_holder_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<AssetH
     }
     selectors
 }
-#[cfg(feature = "app_api")]
 fn asset_holder_sort_key(
     item: &AssetHolderListItem,
     selectors: &[AssetHolderSortSelector],
@@ -64579,7 +62492,6 @@ fn asset_holder_sort_key(
     }
     MultiSortKey::new(components)
 }
-#[cfg(feature = "app_api")]
 fn filter_asset_holder_item(expr: &crate::filter::FilterExpr, item: &AssetHolderListItem) -> bool {
     use crate::filter::FilterExpr as F;
     let field_str = |field: &str| -> Option<&str> {
@@ -64695,13 +62607,11 @@ fn filter_asset_holder_item(expr: &crate::filter::FilterExpr, item: &AssetHolder
         }
     }
 }
-#[cfg(feature = "app_api")]
 fn account_id_from_filter_value(value: &Value) -> Option<AccountId> {
     AccountId::parse_encoded(value.as_str()?)
         .ok()
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
 }
-#[cfg(feature = "app_api")]
 fn intersect_account_candidates(
     selected: &mut Option<BTreeSet<AccountId>>,
     candidates: BTreeSet<AccountId>,
@@ -64712,7 +62622,6 @@ fn intersect_account_candidates(
         *selected = Some(candidates);
     }
 }
-#[cfg(feature = "app_api")]
 fn asset_holder_filter_account_candidates(
     expr: Option<&crate::filter::FilterExpr>,
 ) -> Option<BTreeSet<AccountId>> {
@@ -64747,7 +62656,6 @@ fn asset_holder_filter_account_candidates(
         _ => None,
     }
 }
-#[cfg(feature = "app_api")]
 pub(crate) fn asset_balance_scope_literal(
     scope: &iroha_data_model::asset::AssetBalanceScope,
 ) -> String {
@@ -64759,7 +62667,6 @@ pub(crate) fn asset_balance_scope_literal(
     }
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_asset_holders(
     state: Arc<CoreState>,
     axum::extract::Path(definition_id): axum::extract::Path<String>,
@@ -64844,7 +62751,6 @@ pub async fn handle_v1_asset_holders(
 /// POST /v1/assets/{definition_id}/holders/query — JSON envelope with pagination/sort.
 /// Supports filter fields: `account_id`, `asset`, `asset_alias`, `scope`, and `quantity`.
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub async fn handle_v1_asset_holders_query(
     state: Arc<CoreState>,
     axum::extract::Path(definition_id): axum::extract::Path<String>,
@@ -64861,7 +62767,6 @@ pub async fn handle_v1_asset_holders_query(
     .await
 }
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
 pub(crate) async fn handle_v1_asset_holders_query_with_app(
     app: Option<crate::SharedAppState>,
     state: Arc<CoreState>,
@@ -65047,7 +62952,6 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
     // Norito JSON response
     paginated_json_map_response(&page, count_mode, asset_holder_item_to_json_row)
 }
-#[cfg(feature = "app_api")]
 fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
     use FilterExpr as F;
     let validate_asset = |value: &norito::json::Value| -> Result<()> {
@@ -65141,28 +63045,24 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
         },
     }
 }
-#[cfg(feature = "app_api")]
 fn aggregate_validation_error(message: impl Into<String>) -> Error {
     Error::AppQueryValidation {
         code: "unsupported_aggregate_shape",
         message: message.into(),
     }
 }
-#[cfg(feature = "app_api")]
 fn projection_archive_unavailable_error(message: impl Into<String>) -> Error {
     Error::AppServiceUnavailable {
         code: "projection_archive_unavailable",
         message: message.into(),
     }
 }
-#[cfg(feature = "app_api")]
 fn asset_holder_live_aggregate_enabled() -> bool {
     cfg!(test)
         || std::env::var("IROHA_TORII_ALLOW_LIVE_ASSET_HOLDER_AGGREGATE")
             .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
 }
-#[cfg(feature = "app_api")]
 fn is_valid_aggregate_alias(alias: &str) -> bool {
     let mut chars = alias.chars();
     match chars.next() {
@@ -65172,14 +63072,12 @@ fn is_valid_aggregate_alias(alias: &str) -> bool {
         _ => false,
     }
 }
-#[cfg(feature = "app_api")]
 fn json_value_to_numeric(value: &Value) -> Option<iroha_primitives::numeric::Numeric> {
     value
         .as_u64()
         .map(Into::into)
         .or_else(|| value.as_str()?.parse().ok())
 }
-#[cfg(feature = "app_api")]
 fn compare_json_values(left: &Value, right: &Value) -> Option<Ordering> {
     if let (Some(lhs), Some(rhs)) = (json_value_to_numeric(left), json_value_to_numeric(right)) {
         return Some(lhs.cmp(&rhs));
@@ -65192,11 +63090,9 @@ fn compare_json_values(left: &Value, right: &Value) -> Option<Ordering> {
     }
     None
 }
-#[cfg(feature = "app_api")]
 fn aggregate_field_value<'a>(row: &'a norito::json::Map, field: &str) -> Option<&'a Value> {
     row.get(field)
 }
-#[cfg(feature = "app_api")]
 fn evaluate_filter_on_aggregate_row(
     expr: &crate::filter::FilterExpr,
     row: &norito::json::Map,
@@ -65244,7 +63140,6 @@ fn evaluate_filter_on_aggregate_row(
         F::IsNull(field) => aggregate_field_value(row, &field.0).is_none_or(Value::is_null),
     }
 }
-#[cfg(feature = "app_api")]
 fn validate_aggregate_filter_fields(
     expr: &crate::filter::FilterExpr,
     allowed_fields: &BTreeSet<String>,
@@ -65280,7 +63175,6 @@ fn validate_aggregate_filter_fields(
         | F::IsNull(field) => validate_field(field),
     }
 }
-#[cfg(feature = "app_api")]
 fn validate_aggregate_sort_fields(
     sort: &[crate::filter::SortKey],
     allowed_fields: &BTreeSet<String>,
@@ -65295,7 +63189,6 @@ fn validate_aggregate_sort_fields(
     }
     Ok(())
 }
-#[cfg(feature = "app_api")]
 enum AggregateMetricState {
     Count(u64),
     // Exact for the currently allowed distinct fields: accounts emit unique `id`
@@ -65312,7 +63205,6 @@ enum AggregateMetricState {
         count: u64,
     },
 }
-#[cfg(feature = "app_api")]
 impl AggregateMetricState {
     fn new(metric: &crate::filter::AggregateMetric) -> Result<Self> {
         use crate::filter::AggregateFn as FnKind;
@@ -65453,12 +63345,10 @@ impl AggregateMetricState {
         }
     }
 }
-#[cfg(feature = "app_api")]
 struct AggregateGroupState {
     group_values: Vec<(String, Value)>,
     metrics: Vec<AggregateMetricState>,
 }
-#[cfg(feature = "app_api")]
 fn aggregate_rows(
     rows: impl IntoIterator<Item = norito::json::Map>,
     aggregate: &crate::filter::AggregateSpec,
@@ -65508,7 +63398,6 @@ fn aggregate_rows(
         })
         .collect()
 }
-#[cfg(feature = "app_api")]
 fn sort_aggregate_rows_in_place(rows: &mut [norito::json::Map], sort: &[crate::filter::SortKey]) {
     rows.sort_by(|left, right| {
         for key in sort {
@@ -65532,7 +63421,6 @@ fn sort_aggregate_rows_in_place(rows: &mut [norito::json::Map], sort: &[crate::f
         Ordering::Equal
     });
 }
-#[cfg(feature = "app_api")]
 fn query_index_snapshot(state: &CoreState) -> (u64, Option<String>) {
     let snapshot = state.query_index_status_snapshot();
     let block_hash = snapshot
@@ -65540,7 +63428,6 @@ fn query_index_snapshot(state: &CoreState) -> (u64, Option<String>) {
         .map(|hash| hex::encode(hash.as_ref().as_ref()));
     (snapshot.indexed_height, block_hash)
 }
-#[cfg(feature = "app_api")]
 fn generic_query_snapshot(
     state: &CoreState,
     query_source: &'static str,
@@ -65548,7 +63435,6 @@ fn generic_query_snapshot(
     let (indexed_height, indexed_block_hash) = query_index_snapshot(state);
     crate::generic_query::QuerySnapshot::new(indexed_height, indexed_block_hash, query_source)
 }
-#[cfg(feature = "app_api")]
 fn execute_generic_resource_query<I>(
     state: &CoreState,
     resource_id: &str,
@@ -65574,7 +63460,6 @@ where
         generic_query_snapshot(state, query_source),
     )
 }
-#[cfg(feature = "app_api")]
 fn object_row_from_value(value: Value) -> Result<norito::json::Map, Error> {
     match value {
         Value::Object(map) => Ok(map),
@@ -65585,14 +63470,12 @@ fn object_row_from_value(value: Value) -> Result<norito::json::Map, Error> {
         )),
     }
 }
-#[cfg(feature = "app_api")]
 fn account_list_item_to_query_row(item: &AccountListItem) -> norito::json::Map {
     let mut row = norito::json::Map::new();
     row.insert("id".into(), Value::from(item.canonical_id.clone()));
     insert_primary_alias_fields(&mut row, &item.primary_alias);
     row
 }
-#[cfg(feature = "app_api")]
 fn account_asset_item_to_query_row(item: &AccountAssetListItem) -> norito::json::Map {
     let mut row = norito::json::Map::new();
     row.insert("account_id".into(), Value::from(item.account_id.clone()));
@@ -65609,7 +63492,6 @@ fn account_asset_item_to_query_row(item: &AccountAssetListItem) -> norito::json:
     insert_primary_alias_fields(&mut row, &item.primary_alias);
     row
 }
-#[cfg(feature = "app_api")]
 fn asset_holder_item_to_json_row(item: &AssetHolderListItem) -> Map {
     let mut row = norito::json::Map::new();
     row.insert("asset".into(), Value::from(item.asset.clone()));
@@ -65628,7 +63510,6 @@ fn asset_holder_item_to_json_row(item: &AssetHolderListItem) -> Map {
     insert_primary_alias_fields(&mut row, &item.primary_alias);
     row
 }
-#[cfg(feature = "app_api")]
 fn asset_holder_item_to_query_row(item: &AssetHolderListItem) -> Map {
     let mut row = Map::new();
     row.insert("account_id".into(), Value::from(item.canonical_id.clone()));
@@ -65644,7 +63525,6 @@ fn asset_holder_item_to_query_row(item: &AssetHolderListItem) -> Map {
     insert_primary_alias_fields(&mut row, &item.primary_alias);
     row
 }
-#[cfg(feature = "app_api")]
 fn build_aggregate_response(
     state: &CoreState,
     mut rows: Vec<norito::json::Map>,
@@ -65684,7 +63564,6 @@ fn build_aggregate_response(
     top.insert("query_source".into(), Value::from(query_source));
     pretty_json_response(&top)
 }
-#[cfg(feature = "app_api")]
 fn validate_accounts_aggregate_request(
     aggregate: &crate::filter::AggregateSpec,
     sort: &[crate::filter::SortKey],
@@ -65755,7 +63634,6 @@ fn validate_accounts_aggregate_request(
     }
     Ok(allowed_result_fields)
 }
-#[cfg(feature = "app_api")]
 fn validate_asset_holders_aggregate_request(
     aggregate: &crate::filter::AggregateSpec,
     sort: &[crate::filter::SortKey],
@@ -65832,7 +63710,6 @@ fn validate_asset_holders_aggregate_request(
     }
     Ok(allowed_result_fields)
 }
-#[cfg(feature = "app_api")]
 fn handle_v1_accounts_query_aggregate(
     state: Arc<CoreState>,
     accounts: Vec<iroha_data_model::account::Account>,
@@ -65884,7 +63761,6 @@ fn handle_v1_accounts_query_aggregate(
         "live",
     )
 }
-#[cfg(feature = "app_api")]
 async fn handle_v1_asset_holders_query_aggregate(
     app: Option<&crate::SharedAppState>,
     state: Arc<CoreState>,
@@ -65977,7 +63853,6 @@ async fn handle_v1_asset_holders_query_aggregate(
         "live_debug",
     )
 }
-#[cfg(feature = "app_api")]
 fn asset_holder_projection_row_to_query_row(
     asset: &str,
     asset_alias: Option<&str>,
@@ -66004,7 +63879,6 @@ fn asset_holder_projection_row_to_query_row(
     );
     map
 }
-#[cfg(feature = "app_api")]
 fn archived_asset_holder_retained_bytes(
     asset: &str,
     asset_alias: Option<&str>,
@@ -66028,17 +63902,14 @@ fn archived_asset_holder_retained_bytes(
     }
     retained.saturating_add(512)
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QueryProjectionArchiveResolutionSource {
     HotCache,
     LocalDurableStore,
 }
-#[cfg(feature = "app_api")]
 fn query_projection_archive_validation_error(message: impl Into<String>) -> Error {
     projection_archive_unavailable_error(message.into())
 }
-#[cfg(feature = "app_api")]
 async fn asset_holder_projection_query_rows(
     app: Option<&crate::SharedAppState>,
     state: &CoreState,
@@ -66134,7 +64005,6 @@ async fn asset_holder_projection_query_rows(
         query_source,
     )))
 }
-#[cfg(feature = "app_api")]
 pub(crate) fn query_projection_archive_storage_artifacts(
     archive: &QueryProjectionShardArchive,
 ) -> Result<
@@ -66202,7 +64072,6 @@ pub(crate) fn query_projection_archive_storage_artifacts(
         })?;
     Ok((archive_payload.payload, plan, manifest))
 }
-#[cfg(feature = "app_api")]
 fn validate_query_projection_asset_holder_archive(
     archive: &QueryProjectionShardArchive,
     checkpoint: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpoint,
@@ -66291,7 +64160,6 @@ fn validate_query_projection_asset_holder_archive(
     }
     Ok(rowset)
 }
-#[cfg(feature = "app_api")]
 async fn resolve_query_projection_archive_for_shard(
     app: Option<&crate::SharedAppState>,
     _state: &CoreState,
@@ -66325,7 +64193,6 @@ async fn resolve_query_projection_archive_for_shard(
         crate::sorafs::api::REMOTE_HYDRATION_CAPABILITY_REQUIRED,
     ))
 }
-#[cfg(feature = "app_api")]
 fn load_query_projection_archive_from_local_store(
     app: &crate::SharedAppState,
     shard: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpointShard,
@@ -66364,7 +64231,6 @@ fn load_query_projection_archive_from_local_store(
         })?;
     decode_query_projection_archive_payload(&payload)
 }
-#[cfg(feature = "app_api")]
 fn decode_query_projection_archive_payload(
     payload: &[u8],
 ) -> Result<Option<QueryProjectionShardArchive>, Error> {
@@ -66380,6 +64246,7 @@ fn decode_query_projection_archive_payload(
             ))
         })?;
     Ok(Some(archive))
+}
 }
 // No route-level tests here to avoid heavy state setup; see filter unit tests for parser coverage.
 #[iroha_futures::telemetry_future]

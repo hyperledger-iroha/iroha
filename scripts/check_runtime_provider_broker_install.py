@@ -75,16 +75,6 @@ LAYOUTS = {
         consumer_assets=(
             (
                 PurePosixPath(
-                    "/etc/systemd/system/taira-irohad.service.d/"
-                    "20-runtime-provider-broker-v1.conf"
-                ),
-                PurePosixPath(
-                    "configs/sorafs/runtime_provider_broker/systemd/"
-                    "taira-irohad.service.d/20-runtime-provider-broker-v1.conf"
-                ),
-            ),
-            (
-                PurePosixPath(
                     "/etc/systemd/system/sorafs-governance-dag@.service.d/"
                     "20-runtime-provider-broker-v1.conf"
                 ),

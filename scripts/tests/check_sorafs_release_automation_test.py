@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -590,13 +591,20 @@ def test_pop_broker_wire_structs_reject_private_recipient_fields(
         / "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs"
     )
     source = protocol.read_text(encoding="utf-8")
-    declaration = f"struct {struct_name} {{"
-    drifted = source.replace(
-        declaration,
-        f"{declaration}\n    recipient_private_key: Vec<u8>,",
-        1,
+    declaration = re.search(
+        (
+            rf"(?:struct\s+{re.escape(struct_name)}|"
+            rf"define_broker_wire_struct!\(\s*[A-Za-z_][A-Za-z0-9_]*\s+"
+            rf"(?:pub\(super\)\s+)?{re.escape(struct_name)})\s*\{{"
+        ),
+        source,
     )
-    assert drifted != source
+    assert declaration is not None
+    drifted = (
+        source[: declaration.end()]
+        + "\n    pub(super) recipient_private_key: Vec<u8>,"
+        + source[declaration.end() :]
+    )
     protocol.write_text(drifted, encoding="utf-8")
 
     with pytest.raises(ValueError, match=rf"wire struct {struct_name} fields must be exactly"):

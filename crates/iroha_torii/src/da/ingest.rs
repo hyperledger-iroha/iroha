@@ -231,6 +231,7 @@ pub async fn handler_post_da_ingest(
         .telemetry_cluster_label
         .as_deref()
         .unwrap_or("default");
+    let nexus = app.state.nexus_snapshot();
     validate_request_shape(&request).map_err(|(status, message)| {
         ResponseError::from(build_error_response(status, message, format))
     })?;

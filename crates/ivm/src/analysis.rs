@@ -320,12 +320,14 @@ pub fn analyze_prepared_static_state_accesses(
             &mut outgoing,
             &mut result,
         );
-        if contract.has_indirect_control_flow(pc) {
+        if contract.has_indirect_control_flow(pc) && !is_protected_contract_return(op) {
             // An indirect edge has no authenticated target in the prepared
             // control-flow graph. Treat the proof as incomplete even when the
             // visible instruction itself is not a durable-state syscall:
             // otherwise a JR/JALR target could hide an unaccounted state
-            // access while the scheduler accepts an exact access set.
+            // access while the scheduler accepts an exact access set. The
+            // sole exception is the canonical contract return enforced by
+            // `IVM::load_prepared`'s protected return stack.
             result.complete = false;
         }
         let successors = contract.control_flow_successors(pc)?;
@@ -385,6 +387,12 @@ fn direct_call_edges(op: &DecodedOp) -> Option<(u64, u64)> {
         .and_then(|target| u64::try_from(target).ok())?;
     let return_pc = op.pc.checked_add(u64::from(op.len))?;
     Some((call_target, return_pc))
+}
+fn is_protected_contract_return(op: &DecodedOp) -> bool {
+    wide::opcode(op.inst) == wide::control::JALR
+        && wide::rd(op.inst) == 0
+        && wide::rs1(op.inst) == 1
+        && wide::imm8(op.inst) == 0
 }
 fn authenticated_literal_names(contract: &PreparedContract) -> Vec<Option<String>> {
     contract
@@ -1144,6 +1152,28 @@ seiyaku IndirectStateAnalysis {
         assert!(!analysis.complete);
         assert!(!analysis.has_state_reads);
         assert!(!analysis.has_state_writes);
+    }
+    #[test]
+    fn protected_contract_return_requires_exact_jalr_encoding() {
+        let op = |inst| DecodedOp {
+            pc: 0,
+            inst,
+            len: 4,
+        };
+        assert!(is_protected_contract_return(&op(wide_enc::encode_rr(
+            wide::control::JALR,
+            0,
+            1,
+            0,
+        ))));
+        for inst in [
+            wide_enc::encode_rr(wide::control::JR, 1, 0, 0),
+            wide_enc::encode_rr(wide::control::JALR, 1, 1, 0),
+            wide_enc::encode_rr(wide::control::JALR, 0, 2, 0),
+            wide_enc::encode_ri(wide::control::JALR, 0, 1, 1),
+        ] {
+            assert!(!is_protected_contract_return(&op(inst)));
+        }
     }
     #[test]
     fn static_state_analysis_invalidates_host_paths_across_unbounded_stores() {

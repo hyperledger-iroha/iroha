@@ -42,28 +42,6 @@ class SourcePin:
 
 SOURCE_PINS = (
     SourcePin(
-        "crates/irohad/src/bin/taira_privacy_prebundle_gate.rs",
-        "09c529aa46fedb48ea5cf904d2f347c792ce3f8c",
-        "8245150373edaa2b263a0ba6367c14c40efe96aeed1db93b22bf1b949fd171ab",
-        20_297,
-        529,
-        20,
-        (
-            "frozen_matrix_shape_is_accepted_before_compiled_profile_checks",
-            "noncanonical_text_framing_is_rejected",
-            "duplicate_headers_and_bad_indices_are_rejected",
-            "reordered_or_missing_exact12_routes_are_rejected",
-            "typed_envelope_variant_and_digest_mutations_are_rejected",
-            "retired_protocol_set_is_exact_unique_and_unrepresentable",
-            "retired_matrix_rows_match_the_shared_data_model_reservation_in_order",
-            "frozen_registry_digest_is_independently_recomputed",
-            "valid_looking_typed_kat_substitution_breaks_the_frozen_artifact_digest",
-            "compiled_profile_report_rejects_missing_duplicate_and_reordered_routes",
-            "compiled_profile_report_rejects_each_consensus_binding_mutation",
-        ),
-        "4bf5d9fe4a11aa5b5fd21a2953c140d855beba9bcc8a32c7fd446d314389dcd9",
-    ),
-    SourcePin(
         "crates/ivm/tests/streaming_access_contract.rs",
         "274d80e20f030dbe1e3fe0e70c0bf1ba55aac41a",
         "fb77b83d93d66efe5c2b5a6332b48858007cfe0747abcb39a33fd9315ec46f85",
@@ -88,10 +66,10 @@ SOURCE_PINS = (
         "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
     ),
 )
-RETIRED_RUST_LINES = 1_087
-RETIRED_FUNCTION_ITEMS = 32
-RETIRED_TESTS = 14
-RETIRED_STANDALONE_TARGETS = 2
+RETIRED_RUST_LINES = 558
+RETIRED_FUNCTION_ITEMS = 12
+RETIRED_TESTS = 3
+RETIRED_STANDALONE_TARGETS = 1
 RETIRED_GROUP_MODULES = 1
 
 
@@ -110,23 +88,6 @@ class ManifestPin:
 
 
 MANIFEST_PINS = (
-    ManifestPin(
-        "crates/irohad/Cargo.toml",
-        "5b6da0edd93f8754000af68b5a76e6274edb1c3f",
-        "002af8aab51e8dd22aabd563f8104c812ba09204800263cfd79a816b321b70fa",
-        6_527,
-        175,
-        b"""[[bin]]
-name = "taira_privacy_prebundle_gate"
-path = "src/bin/taira_privacy_prebundle_gate.rs"
-required-features = ["dev-tools", "zk-stark"]
-
-""",
-        "6cf4903af347d3590662fa4744e08b4cff6f7e7d",
-        "633ebd03ef468c85456e363d990056e508b5ddf4ef69bcf4e9904358547fff0a",
-        6_385,
-        170,
-    ),
     ManifestPin(
         "crates/ivm/tests/grouped/group_08.rs",
         "524f511e980801ebb66b46810df02e2df558f55e",
@@ -184,20 +145,6 @@ LOCK_PIN = FilePin(
     13_758,
 )
 REPLACEMENT_PINS = (
-    FilePin(
-        "crates/iroha_test_network/Cargo.toml",
-        "13a8d689d40b8525a56c59b5c08ca8ce22c786da",
-        "11e5e017f17b86941b106f3c48d5924e54ede9d35a3b4dd7bb6c21973f304ee1",
-        1_891,
-        53,
-    ),
-    FilePin(
-        "crates/iroha_test_network/src/bin/taira_privacy_release_runner.rs",
-        "be52f78f4f43b30cd6a4d9031077353dfad4b130",
-        "b97afd80244bb5af476adbc68a9fab56e6c92f825d8674a4aa0e550f25263a4b",
-        271_164,
-        6_706,
-    ),
     FilePin(
         "crates/iroha_core/src/streaming.rs",
         "08257a928e5c284ee621e5896a801920788bace4",
@@ -277,9 +224,6 @@ class InventoryPin:
     sha256: str
 
 
-IROHAD_BIN_INVENTORY = InventoryPin(
-    5, "9650f509eb92476cea92784a7872ea5bcf65ef144759a09db7647e3329321345"
-)
 NORITO_BENCH_INVENTORY = InventoryPin(
     25, "6fa6a27cd9bd202974b15f2c7484d0e248fd76c49376c104f1d70381d5ee1e8a"
 )
@@ -297,20 +241,6 @@ WORKFLOW_INVENTORY = InventoryPin(
 )
 
 REPLACEMENT_MARKERS = {
-    "crates/iroha_test_network/Cargo.toml": (
-        ('name = "taira_privacy_release_runner"', 1),
-        ('path = "src/bin/taira_privacy_release_runner.rs"', 1),
-        ('required-features = ["privacy-release-evidence"]', 1),
-    ),
-    "crates/iroha_test_network/src/bin/taira_privacy_release_runner.rs": (
-        ("fn validate_exact12_matrix(bytes: &[u8])", 1),
-        ("fn checked_in_exact12_artifact_is_derived_from_the_compiled_generator()", 1),
-        ("fn exact12_parser_accepts_only_the_closed_order_and_registry_digest()", 1),
-        (
-            "fn exact12_parser_rejects_typed_route_retirement_and_shape_substitutions()",
-            1,
-        ),
-    ),
     "crates/iroha_core/src/streaming.rs": (
         ("fn process_streaming_event_registers_ticket_from_ready_event()", 1),
         ("fn process_streaming_event_revokes_ticket()", 1),
@@ -336,32 +266,11 @@ REPLACEMENT_MARKERS = {
 }
 
 CONSUMER_PATTERNS = (
-    "taira_privacy_prebundle_gate",
     "streaming_access_contract",
     "--bench adaptive_telemetry",
     "crates/norito/benches/adaptive_telemetry.rs",
 )
-ALLOWED_CONSUMER_HITS = tuple(
-    sorted(
-        (
-            (
-                "configs/soranexus/taira/README.md",
-                chr(96)
-                + "taira_privacy_prebundle_gate"
-                + chr(96)
-                + " output, a test log, or a report generated before",
-            ),
-            (
-                "scripts/tests/taira_rollout_operator_guidance_test.py",
-                '    assert "taira_privacy_prebundle_gate" not in source',
-            ),
-            (
-                "scripts/tests/taira_rollout_operator_guidance_test.py",
-                '    assert "taira_privacy_prebundle_gate" not in dockerfile',
-            ),
-        )
-    )
-)
+ALLOWED_CONSUMER_HITS: tuple[tuple[str, str], ...] = ()
 
 TEST_RE = re.compile(
     r"(?P<attrs>(?:^[ \t]*#\[[^\n]+\]\n)+)"
@@ -483,7 +392,7 @@ def _authenticate_openings() -> dict[str, bytes]:
         "function-item ledger",
     )
     _require(sum(len(pin.test_names) for pin in SOURCE_PINS) == RETIRED_TESTS, "test ledger")
-    _require(RETIRED_STANDALONE_TARGETS == 2, "standalone-target ledger")
+    _require(RETIRED_STANDALONE_TARGETS == 1, "standalone-target ledger")
     _require(RETIRED_GROUP_MODULES == 1, "group-module ledger")
 
     for pin in SOURCE_PINS:
@@ -618,13 +527,10 @@ def _validate(snapshot: Snapshot, openings: dict[str, bytes]) -> None:
         _require(data is not None, f"declaration file missing: {pin.path}")
         _require(data == _expected_post(pin, openings[pin.path]), "declaration postimage drifted")
 
-    irohad = snapshot.files["crates/irohad/Cargo.toml"]
     norito = snapshot.files["crates/norito/Cargo.toml"]
     ivm = snapshot.files[IVM_MANIFEST]
     group = snapshot.files["crates/ivm/tests/grouped/group_08.rs"]
-    assert irohad is not None and norito is not None and ivm is not None and group is not None
-    _require(irohad.decode().count("autobins = false") == 1, "irohad autobins changed")
-    _check_inventory(_tables(irohad.decode(), "bin"), IROHAD_BIN_INVENTORY, "irohad bin")
+    assert norito is not None and ivm is not None and group is not None
     _require(norito.decode().count("autotests = false") == 1, "Norito autotests changed")
     benches = _tables(norito.decode(), "bench")
     _require(all(path is None and not features for _name, path, features in benches), "bench shape")
@@ -705,11 +611,13 @@ class ObsoleteDeveloperTestRetirementSourceTest(unittest.TestCase):
                     _validate(_mutate(self.snapshot, pin.path, data + pin.removal), self.openings)
 
     def test_mutation_replacement_source_fails(self) -> None:
-        path = "crates/iroha_test_network/src/bin/taira_privacy_release_runner.rs"
+        path = "crates/iroha_core/src/streaming.rs"
         source = self.snapshot.files[path]
         assert source is not None
         mutated = source.replace(
-            b"fn validate_exact12_matrix(", b"fn weakened_exact12_matrix(", 1
+            b"fn process_streaming_event_registers_ticket_from_ready_event(",
+            b"fn weakened_streaming_event_registers_ticket_from_ready_event(",
+            1,
         )
         with self.assertRaisesRegex(GuardError, "replacement"):
             _validate(_mutate(self.snapshot, path, mutated), self.openings)

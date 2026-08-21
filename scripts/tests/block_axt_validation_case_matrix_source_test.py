@@ -11,7 +11,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = REPO_ROOT / "crates/iroha_core/src/block.rs"
-MAX_SOURCE_LINES = 32_064
+MAX_SOURCE_LINES = 30_566
 
 REGION_START = (
     "        #[derive(Clone, Copy, Debug)]\n"
@@ -21,7 +21,7 @@ REGION_END = (
     "        #[test]\n"
     "        fn axt_validation_rejects_mismatched_commit_heights"
 )
-REGION_HASH = "662107aa5a67a88ffa1b4226477186b403cd4ba8a7d4949d8ec4aa81e1b1712e"
+REGION_HASH = "48986d39bda50caea7f2adcc304eb0ce770c1f86c16e1fc7e1e8c31481a79750"
 
 MATRIX_CASES = (
     (
@@ -94,46 +94,68 @@ BESPOKE_TEST_HASHES = {
     "axt_validation_rejects_noncanonical_embedded_policy_snapshots":
         "9be312da6261ceecb9a0c40d96e716fc129623e32c069ba4dc3fb046964c71a0",
     "axt_validation_accepts_cross_lane_handles":
-        "f9bdc9ec4ecaed3e82812050c6b3363659712eebf86d95784e42939a138f9a69",
+        "dd6e061db7e058f95b571accad0d59b10b1bba7a42d5502be0a9c0a65036ee3f",
+    "axt_validation_reuses_one_dataspace_proof_for_two_bound_intents":
+        "ea57607d88751d7fc8e27f404c8200e4d29f2fb07380b15e93746d04e76ed87f",
     "axt_validation_accepts_authenticated_hidden_amount":
-        "f2936a4bb7c4fcf69040f64a27d6e83095f9c7ced022a45881e73a6c292951ab",
-    "axt_validation_rejects_two_copy_attacker_amount_commitment":
-        "019e8e7a8be7a0735ddbc7057c7fc3575f08325d82c71d96655818fd68cfa15e",
+        "d90374537db0c8f926f1f5684071405ccf9a2b2d94e0e82c365e2b672370af7e",
+    "axt_validation_rejects_opaque_authorization_carrier_at_generic_boundary":
+        "65459e230970dce76966b41295974d312da2c838ded18e4513f8eac460c1eb05",
+    "axt_validation_enforces_registered_asset_balance_policy":
+        "ba1dfb49d466125760c266edcccdbaf946df5e54dc1d31bde57d3bc147be77a9",
+    "axt_validation_rejects_duplicate_use_of_one_proof_claim":
+        "b4f9a6b5c4bb09c9574b8ba8071a1229dcbeaaa7005eb95b79e308ed050cc031",
+    "axt_validation_rejects_signed_origin_outside_bound_descriptor":
+        "5e68e73626090e29536b5457a432e4232b0eb082b12f2a2c46cfc744dca3c11b",
+    "axt_validation_rejects_correctly_signed_handle_for_another_asset":
+        "71b289cf3965c6df6588e7be5f7c3e84cad7d99af1ab9da3d97e4fd582e2c382",
+    "axt_validation_enforces_exact_block_start_asset_incarnation":
+        "79e4e82067f9d340635a4d7cb9e1904f6909f5c604fcc86a4f73771016d48447",
+    "axt_validation_rejects_proof_reused_for_another_remote_spend_recipient":
+        "84cda80adfffb5cc452104f7113da30d5a0519f965a8e432cf98189e742e916b",
+    "axt_validation_rejects_mutated_proof_amount_with_recomputed_commitment":
+        "c3552547faf5bb61290414f7ebc1570a9eae42d546c13abbce56fa2d73df1926",
     "axt_validation_rejects_stale_fragment_commitment":
-        "588142a47facc24d1859f7b33986ff97ecf526439f0e57d9851f07213a74fa56",
-    "axt_validation_rejects_duplicate_handle_use_across_dataspaces":
-        "1e8a686c0e64670ba9f22b727c5d42e62fde86b7cca0d89df57fc543faadf678",
+        "91fc4b3405e47d47008987847d5d1faf9acb078454ab0ffcaca491313e26662a",
+    "axt_validation_rejects_account_alias_in_remote_spend_intent":
+        "a6bae05750bb8a95b4e6ea11975bfa10c1023acc1164988467f43072adf1c42b",
+    "axt_validation_accepts_same_replay_and_budget_tuple_from_distinct_dataspaces":
+        "7eb9984ecf5c40a94396e6c1697f2b98cdec838e676b1b467fdea4e3a6fde7f9",
     "axt_validation_rejects_raw_manifest_root_proof":
-        "6335fb820ab2e56f65788dbee3cd38bddf11469f3f9d35e97620df8e7c3862dc",
+        "441b0b032913293f3d9dc6ac58383833c346a93f4d4a75b7598bd9fda4eb3e1c",
+    "axt_validation_rejects_extended_proof_expiry":
+        "47efb1dbe587e0c23f31fd68114a33ec69803494bd84f2ee7e720aca27a40368",
+    "axt_validation_rejects_manifest_rotation_and_da_relabelling":
+        "7a0877403b74cfb2b5b1afe90f456d10d2604708408faabfb4dafce31e03d93a",
     "axt_validation_rejects_manifest_mismatch_in_proof":
-        "e717c725627d5e78a48da62055efb566e917020f95318f89c4bfefe03ad56fe8",
+        "13f781b7e5850d45b3bbc7fd3b133f7e4c95e2c8be13a19a0afacc0776a1afd2",
     "axt_validation_rejects_proof_dsid_mismatch":
-        "ab491c7e0f17f37169ecbfc3a3a966be77ecad831a26c184a711de520d17a0c8",
-    "axt_validation_accepts_block_snapshot_when_state_cache_empty":
-        "1248b5463bb415ff7e27db835557c0e7d9927ed7fb0efaa20c64403b2041c006",
+        "327ad232b9f4e597baa417a676be8677d59b33b12d0d53d6e827bef075fb9d25",
+    "axt_validation_accepts_authenticated_block_snapshot":
+        "c7b57523b52202f6808e17e2e15445dd6034d05028956204f5eb1a61c08f9195",
     "axt_validation_uses_policy_slot_per_dataspace":
-        "0a949d77247c4e705bda5db959d06c3b8328c226177449931772acbfad8d93d2",
+        "108deed49d721bf57f57a59ca0681cc9dfc665ef602137697e89b68d015e2a74",
     "axt_validation_rejects_empty_policy_snapshot":
         "6e8e94abf75abc05f10bac97d2fe3bcda60d16285f10faeed32442b5dab45041",
     "axt_validation_rejects_zero_manifest_root_from_snapshot":
         "52432ff64fca545f2202562facf01c55bc9a9386fcab24e3582b42790ec237b5",
     "axt_validation_accepts_hidden_amount_commitment":
-        "edaf3249e0692a0b993842897ae1deeed44c80439f97dc5bfe2a3ee437e2d46d",
+        "fe79a9fcc3ec22393dd6609edf8f11f8e83204f06393cf84ebf36c0378c2f07d",
     "axt_validation_rejects_hidden_amount_commitment_mismatch":
-        "9c63b351283174fd25b762ad2575afdce2ebe5831a0b57d21944ee1e8eab8713",
+        "a0a3e14b38719128bc06d714b7adacf7218bb271f6804f0c65316c13e0898333",
 }
 
 SHARED_HELPER_HASHES = {
     "sample_handle":
-        "76743d421a1d39d8d3115345478ea4f56bfa9b04b533dd28fa2bb5db52ee6551",
+        "2f963dc46f34877fd2b431d7262d9219eb054963910e4026e100be7c97ad2ddf",
     "proof_blob_for":
-        "5b860f61ef654bfc76cc341d75d052c2abba21bf25dc74a712e1c8af3d812485",
+        "87f6a919670fed9c3118ad26cea7bffc91c461a21019d6bd122dc9ecd0c23c4c",
     "proof_blob_for_with_amount":
-        "6b74aafdb38e35e59cb1a5dcaf405fec08be50968382921ca4aba83c6710c490",
+        "fe01c562c6820a2f4ea5e37b59b76b2a98fc8390c59b6fe880608f3b6302e363",
     "proof_blob_for_with_authenticated_amount":
-        "2c4acd11286984a0d457f909ed9d0b55820e1e70b5b426dce7c29b351d4b0103",
+        "27226d9ecc262e8c3fa44c7f8abc94a030d66a535413707af02182a41728df6a",
     "build_block_with_envelopes":
-        "f29a80312bf576a8af52c5af2739b8148bca9cc181dd708d4f8348de40bb5a53",
+        "ae61d2835072ddb8549e33233c76b8a6d119d82908e49e748e11537f28c9eb7d",
     "axt_policy_snapshot_for_validation_test":
         "5c19b10c8a2065426bc8b1c648c6d47d6411edcf4f9eb0249789e6cfdfdd9dc4",
     "axt_validation_state":
@@ -171,7 +193,7 @@ REQUIRED_REGION_TOKENS = (
     'second.handle.sub_nonce = 4;',
     'payload: vec![0; 32]',
     'handles[0].handle.manifest_view_root = [0x55; 32];',
-    'expect_axt_error(err, spec.reason, spec.needle);',
+    'expect_axt_envelope_error(&state, envelope, spec.reason, spec.needle);',
 )
 FORBIDDEN_REGION_TOKENS = ("Box::new", "Custom(", "=> |", "move |")
 
@@ -311,8 +333,8 @@ def _validate_source(source: str) -> None:
     if frozenset(direct_names) != frozenset(BESPOKE_TEST_HASHES):
         raise GuardError("bespoke AXT validation test inventory changed")
     logical_names = [name for name, _variant in MATRIX_CASES] + list(direct_names)
-    if len(logical_names) != 35 or len(set(logical_names)) != 35:
-        raise GuardError("AXT validation test names must remain 35 unique entries")
+    if len(logical_names) != 46 or len(set(logical_names)) != 46:
+        raise GuardError("AXT validation test names must remain 46 unique entries")
     if frozenset(logical_names) != EXPECTED_TESTS:
         raise GuardError("AXT validation test name set changed")
 
@@ -354,7 +376,8 @@ class BlockAxtValidationCaseMatrixSourceTests(unittest.TestCase):
 
     def test_guard_rejects_error_category_mutation(self) -> None:
         original = (
-            'Some((b"handle-era", 10)), HandleEra,\n'
+            'Some((b"handle-era", 10)),\n'
+            '                        HandleEra,\n'
             '                        "handle era differs from the exact active policy era",'
         )
         mutated = original.replace("HandleEra", "Expiry", 1)

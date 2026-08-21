@@ -695,11 +695,20 @@ impl CoreHost {
             .map(Self::axt_commit_gas)
             .ok_or(VMError::PermissionDenied)?;
         preflight_reserved_syscall_gas(vm, gas)?;
-        self.axt_state
+        let state = self
+            .axt_state
             .take()
             .expect("axt_state checked before gas preflight");
-        self.axt_active = false;
-        Ok(gas)
+        match state.validate_commit() {
+            Ok(()) => {
+                self.axt_active = false;
+                Ok(gas)
+            }
+            Err(err) => {
+                self.axt_state = Some(state);
+                Err(err)
+            }
+        }
     }
     /// Attach a schema registry implementation.
     pub fn with_schema_registry(mut self, reg: Box<dyn SchemaRegistry + Send + Sync>) -> Self {

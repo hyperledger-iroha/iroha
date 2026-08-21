@@ -138,7 +138,7 @@ run_case post-apply-physical-owner-mutant \
   "Invariant AppliedPhaseHasNoPhysicalOwner is violated." \
   "<ApplyOwnedCallback"
 
-run_case conflicting-validation-evidence-coalescing-mutant \
+run_case conflicting-storage-evidence-coalescing-mutant \
   applied_phase_conflicting_evidence_coalesced_bug.cfg 12 \
   "TLC2 Version 2.19" \
   "Invariant ConflictingEvidenceFailsClosed is violated." \
@@ -156,6 +156,6 @@ run_case stale-tag-admitted-as-current-mutant \
   "Invariant WellFormedStaleTagIsMarkerFree is violated." \
   "<ObserveWellFormedStaleTag"
 
-echo "[tlc] evidence-bearing BodyStored/ValidationSucceeded callbacks suppress exact applied retries before ordinal allocation"
-echo "[tlc] their Busy retries retain one owner; validation conflicts and malformed callbacks fail closed"
+echo "[tlc] evidence-bearing BodyStored callbacks suppress exact applied retries before ordinal allocation"
+echo "[tlc] their Busy retries retain one owner; storage conflicts and malformed callbacks fail closed"
 echo "[tlc] malformed-plus-stale callbacks reject before well-formed stale callbacks coalesce marker-free"

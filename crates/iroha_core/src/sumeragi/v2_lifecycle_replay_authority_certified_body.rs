@@ -3,6 +3,48 @@ struct CertifiedBodyPipelineReplayFamilyV1 {
     source: BodyPipelineReplaySourceV1,
     body_frame: BodyFrameBindingV1,
 }
+/// Move-only launch proof that the exact configured genesis body was authenticated
+/// before the height-one lifecycle opened.
+///
+/// The canonical bytes and subject may be borrowed by the executor, but a Fetch
+/// replay seal can be minted only through this value. Raw block bytes or a raw
+/// height context are therefore insufficient to manufacture local genesis
+/// lifecycle authority.
+#[derive(Debug)]
+#[must_use = "installed authenticated genesis must remain with the height-one executor"]
+pub(in crate::sumeragi) struct InstalledAuthenticatedGenesisReplayAuthorityV1 {
+    context: wire::HeightContext,
+    subject: wire::BlockSubject,
+    canonical_wire: Arc<[u8]>,
+}
+/// Inert authenticated-genesis Fetch origin awaiting its exact Store successor.
+#[derive(Debug)]
+pub(in crate::sumeragi) struct AuthenticatedGenesisFetchReplayEvidenceV1 {
+    coordinates: CertifiedBodyPipelineCoordinatesV1,
+}
+/// Inert authenticated-genesis Store origin awaiting one exact durable body frame.
+#[derive(Debug)]
+pub(in crate::sumeragi) struct AuthenticatedGenesisStoreReplayEvidenceV1 {
+    coordinates: CertifiedBodyPipelineCoordinatesV1,
+    store_pending: Arc<PendingRuntimeEffectBinding>,
+}
+/// Durable authenticated-genesis Store lineage awaiting its exact Validate successor.
+#[derive(Debug)]
+pub(in crate::sumeragi) struct AuthenticatedGenesisStoredReplayEvidenceV1 {
+    family: CertifiedBodyPipelineReplayFamilyV1,
+    store_pending: Arc<PendingRuntimeEffectBinding>,
+}
+/// Internal families admitted through the closed top-level `LocalBody` owner.
+///
+/// `AuthenticatedGenesis` retains a certified replay envelope because the
+/// inherited runtime candidate statement carries QC authority. It is still a
+/// `LocalBody` admission origin because the exact bytes came from the opaque
+/// launch-authenticated local genesis cut, not from a remote response.
+#[derive(Clone, Debug)]
+enum LocalValidateReplayFamilyV1 {
+    Assembled(LocalBodyPipelineReplayFamilyV1),
+    AuthenticatedGenesis(CertifiedBodyPipelineReplayFamilyV1),
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CertifiedBodyPipelineCoordinatesV1 {
     tag: ReplayEventTagV1,
@@ -11,6 +53,446 @@ struct CertifiedBodyPipelineCoordinatesV1 {
     fetch_manifest_present: bool,
     certified_sources: Vec<PeerId>,
 }
+
+impl LifecycleReplayAuthorityV1 {
+    /// Return whether this canonical authority retains a certified body origin.
+    pub(super) fn is_certified_body_origin(&self) -> bool {
+        matches!(
+            &self.source,
+            LifecycleReplaySourceV1::BodyPipeline(BodyPipelineReplaySourceV1 {
+                origin: BodyPipelineOriginV1::Certified { .. },
+                ..
+            })
+        )
+    }
+}
+
+impl InstalledAuthenticatedGenesisReplayAuthorityV1 {
+    /// Install the only process-local genesis replay authority from the opaque
+    /// bootstrap seal and its exact frozen height-one context.
+    pub(in crate::sumeragi) fn install(
+        authenticated: &crate::sumeragi::v2_context::AuthenticatedGenesisBodyV1,
+        context: &wire::HeightContext,
+    ) -> Result<Self, &'static str> {
+        Self::install_signed_block(authenticated.signed_block(), context)
+    }
+    /// Install an equivalent synthetic authority for executor fixtures.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        authenticated: &iroha_data_model::block::SignedBlock,
+        context: &wire::HeightContext,
+    ) -> Option<Self> {
+        Self::install_signed_block(authenticated, context).ok()
+    }
+    fn install_signed_block(
+        authenticated: &iroha_data_model::block::SignedBlock,
+        context: &wire::HeightContext,
+    ) -> Result<Self, &'static str> {
+        if context.height != 1
+            || context.parent_commit_qc.is_some()
+            || context.snapshot_bootstrap.is_some()
+        {
+            return Err("authenticated genesis replay requires a fresh height-one context");
+        }
+        let proposal = authenticated.canonical_resultless_proposal();
+        if proposal.header().height().get() != 1
+            || proposal.header().view_change_index() != 0
+            || proposal.header().prev_block_hash().is_some()
+            || proposal.header().execution_context_hash().is_some()
+            || proposal.execution_context().is_some()
+            || !proposal.is_resultless_proposal()
+        {
+            return Err("authenticated genesis replay body is not canonical");
+        }
+        let canonical_wire: Arc<[u8]> = proposal
+            .encode_wire()
+            .map_err(|_| "authenticated genesis replay wire encoding failed")?
+            .into();
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: proposal.hash(),
+            payload_hash: Hash::new(canonical_wire.as_ref()),
+        };
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        crate::sumeragi::v2_chunks::encode_payload(
+            context,
+            round,
+            subject,
+            canonical_wire.as_ref(),
+        )
+        .map_err(|_| "authenticated genesis replay body does not fit the frozen DA layout")?;
+        Ok(Self {
+            context: context.clone(),
+            subject,
+            canonical_wire,
+        })
+    }
+    /// Borrow the exact canonical resultless genesis subject.
+    pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
+        self.subject
+    }
+    /// Borrow the exact canonical resultless genesis wire.
+    pub(in crate::sumeragi) fn canonical_wire(&self) -> &Arc<[u8]> {
+        &self.canonical_wire
+    }
+    /// Seal one exact certified Fetch under the installed local genesis body.
+    pub(super) fn seal_exact_fetch(
+        &self,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        manifest: &wire::PayloadManifest,
+    ) -> Option<AuthenticatedGenesisFetchReplayEvidenceV1> {
+        let coordinates = exact_certified_fetch_coordinates_from_manifest(effect, manifest)?;
+        let expected_sources = self
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let expected_manifest = crate::sumeragi::v2_chunks::encode_payload(
+            &self.context,
+            manifest.round,
+            self.subject,
+            self.canonical_wire.as_ref(),
+        )
+        .ok()?
+        .manifest()
+        .clone();
+        if self.context.height != 1
+            || self.context.parent_commit_qc.is_some()
+            || self.context.snapshot_bootstrap.is_some()
+            || coordinates.certificate.validate(&self.context).is_err()
+            || coordinates.certificate.round.context_id != self.context.id()
+            || coordinates.certificate.round.height != 1
+            || coordinates.certificate.proposal_round != manifest.round
+            || coordinates.certificate.subject != self.subject
+            || manifest.subject.parent_block_hash.is_some()
+            || manifest != &expected_manifest
+            || coordinates.manifest != expected_manifest
+            || coordinates.certified_sources != expected_sources
+            || !pending.exactly_binds_adapter_effect(effect)
+        {
+            return None;
+        }
+        let source = BodyPipelineReplaySourceV1 {
+            tag: coordinates.tag,
+            origin: BodyPipelineOriginV1::Certified {
+                certificate: coordinates.certificate.clone(),
+                manifest: coordinates.manifest.clone(),
+                fetch_manifest_present: coordinates.fetch_manifest_present,
+                certified_sources: coordinates.certified_sources.clone(),
+            },
+        };
+        canonical_replay_authority(
+            replay_context(coordinates.certificate.round),
+            LifecycleReplaySourceV1::BodyPipeline(source),
+            LifecycleStageKind::FetchBody,
+            ReplayPayloadBindingV1::None,
+        )?;
+        Some(AuthenticatedGenesisFetchReplayEvidenceV1 { coordinates })
+    }
+}
+
+impl AuthenticatedGenesisFetchReplayEvidenceV1 {
+    /// Recheck the exact certified Fetch coordinates without accepting a new body source.
+    pub(super) fn exactly_matches_fetch(&self, effect: &AdapterEffect) -> bool {
+        &certified_fetch_effect_from_coordinates(&self.coordinates) == effect
+    }
+    /// Recheck the exact Fetch together with its inherited runtime owner.
+    pub(super) fn exactly_matches_fetch_pending(
+        &self,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        self.exactly_matches_fetch(effect) && pending.exactly_binds_adapter_effect(effect)
+    }
+    #[allow(clippy::result_large_err)]
+    pub(super) fn project_store(
+        self,
+        fetch_effect: &AdapterEffect,
+        fetch_pending: &PendingRuntimeEffectBinding,
+        store_effect: &AdapterEffect,
+        store_pending: &PendingRuntimeEffectBinding,
+    ) -> Result<AuthenticatedGenesisStoreReplayEvidenceV1, Self> {
+        if !self.exactly_matches_fetch_pending(fetch_effect, fetch_pending)
+            || fetch_pending
+                .project_certified_fetch_store_successor(fetch_effect, store_effect)
+                .as_ref()
+                != Some(store_pending)
+        {
+            return Err(self);
+        }
+        let projected = fetch_pending
+            .project_certified_fetch_store_successor(fetch_effect, store_effect)
+            .expect("an exact authenticated-genesis Fetch has one Store successor");
+        Ok(AuthenticatedGenesisStoreReplayEvidenceV1 {
+            coordinates: self.coordinates,
+            store_pending: Arc::new(projected),
+        })
+    }
+}
+
+impl AuthenticatedGenesisStoreReplayEvidenceV1 {
+    /// Recheck the original certified Fetch after it has projected Store.
+    pub(super) fn exactly_matches_origin_fetch(&self, effect: &AdapterEffect) -> bool {
+        &certified_fetch_effect_from_coordinates(&self.coordinates) == effect
+    }
+    /// Recheck the exact Store together with its inherited runtime owner.
+    pub(super) fn exactly_matches_store_pending(
+        &self,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        &certified_store_effect_from_coordinates(&self.coordinates) == effect
+            && pending.exactly_binds_adapter_effect(effect)
+            && self.store_pending.as_ref() == pending
+    }
+    #[allow(clippy::result_large_err)]
+    pub(super) fn bind_durable_body(
+        self,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<AuthenticatedGenesisStoredReplayEvidenceV1, Self> {
+        if !self.exactly_matches_store_pending(effect, pending) {
+            return Err(self);
+        }
+        let Some(family) = exact_certified_body_pipeline_family(&self.coordinates, receipt) else {
+            return Err(self);
+        };
+        Ok(AuthenticatedGenesisStoredReplayEvidenceV1 {
+            family,
+            store_pending: self.store_pending,
+        })
+    }
+}
+
+impl AuthenticatedGenesisStoredReplayEvidenceV1 {
+    /// Recheck the original certified Fetch after the body became durable.
+    pub(super) fn exactly_matches_origin_fetch(&self, effect: &AdapterEffect) -> bool {
+        exact_certified_fetch_effect(&self.family).as_ref() == Some(effect)
+    }
+    /// Recheck the exact durable Store owner without releasing its replay family.
+    pub(super) fn exactly_matches_store_pending(
+        &self,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        certified_body_stage_matches(&self.family, effect, receipt, LifecycleStageKind::StoreBody)
+            && pending.exactly_binds_adapter_effect(effect)
+            && self.store_pending.as_ref() == pending
+    }
+    /// Preflight the only authority-monotone Store-to-Validate projection.
+    pub(super) fn exactly_projects_validate(
+        &self,
+        store_effect: &AdapterEffect,
+        store_pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        self.exactly_matches_store_pending(store_effect, receipt, store_pending)
+            && certified_body_stage_matches(
+                &self.family,
+                validate_effect,
+                receipt,
+                LifecycleStageKind::ValidateBody,
+            )
+            && store_pending
+                .project_store_validate_successor_with_authority_refinement(
+                    store_effect,
+                    validate_effect,
+                    validate_pending,
+                )
+                .as_ref()
+                == Some(validate_pending)
+    }
+    /// Consume the exact durable Store lineage into authenticated-genesis Validate evidence.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn project_validate(
+        self,
+        store_effect: &AdapterEffect,
+        store_pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+    ) -> Result<LocalValidateReplayEvidenceV1, Self> {
+        if !self.exactly_projects_validate(
+            store_effect,
+            store_pending,
+            receipt,
+            validate_effect,
+            validate_pending,
+        ) {
+            return Err(self);
+        }
+        let projected = store_pending
+            .project_store_validate_successor_with_authority_refinement(
+                store_effect,
+                validate_effect,
+                validate_pending,
+            )
+            .expect("an exact authenticated-genesis Store has one Validate successor");
+        Ok(LocalValidateReplayEvidenceV1 {
+            family: LocalValidateReplayFamilyV1::AuthenticatedGenesis(self.family),
+            validate_pending: Arc::new(projected),
+        })
+    }
+}
+
+impl LocalValidateReplayFamilyV1 {
+    #[cfg(test)]
+    fn assembled_body_frame_mut_for_test(&mut self) -> &mut BodyFrameBindingV1 {
+        let Self::Assembled(family) = self else {
+            panic!("assembled local-body fixture changed replay subtype")
+        };
+        &mut family.body_frame
+    }
+    #[cfg(test)]
+    fn is_exact_for_stage_for_test(&self, stage: LifecycleStageKind) -> bool {
+        match self {
+            Self::Assembled(family) => family.is_exact_for_stage(stage),
+            Self::AuthenticatedGenesis(family) => family.is_exact_for_stage(stage),
+        }
+    }
+    fn source_and_frame(&self) -> (&BodyPipelineReplaySourceV1, BodyFrameBindingV1) {
+        match self {
+            Self::Assembled(family) => (&family.source, family.body_frame),
+            Self::AuthenticatedGenesis(family) => (&family.source, family.body_frame),
+        }
+    }
+    fn source_mut(&mut self) -> &mut BodyPipelineReplaySourceV1 {
+        match self {
+            Self::Assembled(family) => &mut family.source,
+            Self::AuthenticatedGenesis(family) => &mut family.source,
+        }
+    }
+    fn exactly_matches_validate(
+        &self,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+    ) -> bool {
+        match self {
+            Self::Assembled(family) => {
+                local_body_stage_matches(family, effect, receipt, LifecycleStageKind::ValidateBody)
+            }
+            Self::AuthenticatedGenesis(family) => certified_body_stage_matches(
+                family,
+                effect,
+                receipt,
+                LifecycleStageKind::ValidateBody,
+            ),
+        }
+    }
+    fn exactly_matches_durable_body(&self, receipt: &DurableBodyReceipt) -> bool {
+        match self {
+            Self::Assembled(family) => {
+                exact_local_body_pipeline_family(&family.source, receipt)
+                    .is_some_and(|expected| expected == *family)
+                    && family.is_exact_for_stage(LifecycleStageKind::ValidateBody)
+            }
+            Self::AuthenticatedGenesis(family) => exact_family_coordinates(family)
+                .and_then(|coordinates| certified_body_pipeline_family(&coordinates, receipt))
+                .is_some_and(|expected| {
+                    expected == *family
+                        && family.is_exact_for_stage(LifecycleStageKind::ValidateBody)
+                }),
+        }
+    }
+    fn assembled_manifest(&self) -> Option<&wire::PayloadManifest> {
+        let Self::Assembled(family) = self else {
+            return None;
+        };
+        let BodyPipelineOriginV1::LocalBody(manifest) = &family.source.origin else {
+            return None;
+        };
+        Some(manifest)
+    }
+    fn authenticated_genesis_family(&self) -> Option<&CertifiedBodyPipelineReplayFamilyV1> {
+        match self {
+            Self::AuthenticatedGenesis(family) => Some(family),
+            Self::Assembled(_) => None,
+        }
+    }
+}
+
+impl LocalValidateReplayEvidenceV1 {
+    /// Report whether this closed test-only carrier may project a local-proposal handoff.
+    #[cfg(test)]
+    pub(super) fn projects_local_proposal_handoff_for_test(&self) -> bool {
+        matches!(self.family, LocalValidateReplayFamilyV1::Assembled(_))
+    }
+    /// Match only the replay authority canonically derived from this internal local subtype.
+    pub(super) fn exactly_authorizes_local_admission_authority(
+        &self,
+        active_context: LifecycleContext,
+        authority: &LifecycleReplayAuthorityV1,
+    ) -> bool {
+        let (source, body_frame) = self.family.source_and_frame();
+        let origin_class_is_exact = match &self.family {
+            LocalValidateReplayFamilyV1::Assembled(_) => authority.is_local_body_origin(),
+            LocalValidateReplayFamilyV1::AuthenticatedGenesis(_) => {
+                matches!(&source.origin, BodyPipelineOriginV1::Certified { .. })
+            }
+        };
+        origin_class_is_exact
+            && canonical_replay_authority(
+                active_context,
+                LifecycleReplaySourceV1::BodyPipeline(source.clone()),
+                LifecycleStageKind::ValidateBody,
+                ReplayPayloadBindingV1::BodyFrame(body_frame),
+            )
+            .as_ref()
+                == Some(authority)
+    }
+}
+
+fn remote_proposal_origin_matches_fetch(
+    authenticated: &crate::sumeragi::v2::AuthenticatedConsensusMessage,
+    ingress: &RuntimeIngressOwnershipEvidence,
+    source: &BodyPipelineReplaySourceV1,
+    effect: &AdapterEffect,
+) -> bool {
+    remote_proposal_fetch_effect(source).as_ref() == Some(effect)
+        && exact_remote_proposal_fetch(authenticated, ingress, effect).is_some()
+}
+
+impl RemoteProposalStoreReplayEvidenceV1 {
+    /// Recheck the exact ordinary Fetch which authenticated this later Store family.
+    pub(in crate::sumeragi) fn exactly_matches_origin_fetch(&self, effect: &AdapterEffect) -> bool {
+        remote_proposal_origin_matches_fetch(
+            &self.authenticated,
+            &self.ingress,
+            &self.source,
+            effect,
+        )
+    }
+}
+
+impl RemoteProposalStoredReplayEvidenceV1 {
+    /// Recheck the exact ordinary Fetch which authenticated this durable family.
+    pub(in crate::sumeragi) fn exactly_matches_origin_fetch(&self, effect: &AdapterEffect) -> bool {
+        self.family.exactly_matches_origin_fetch(effect)
+    }
+}
+
+impl RemoteProposalBodyPipelineReplayFamilyV1 {
+    fn exactly_matches_origin_fetch(&self, effect: &AdapterEffect) -> bool {
+        self.is_exact_for_stage(LifecycleStageKind::StoreBody)
+            && remote_proposal_origin_matches_fetch(
+                &self.authenticated,
+                &self.ingress,
+                &self.source,
+                effect,
+            )
+    }
+}
+
 impl AuthenticatedCertifiedFetchReplayOriginV1 {
     /// Bind the exact selector-authenticated response to its pending Fetch.
     pub(super) fn from_completion_authority(
@@ -471,11 +953,22 @@ where
     else {
         return Ok(None);
     };
-    if let BodyPipelineOriginV1::Proposal(proposal) = &source.source.origin {
-        let message = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
-            proposal.clone(),
-        ));
-        if verified.verify_consensus_message(&message).is_err() {
+    match &source.source.origin {
+        BodyPipelineOriginV1::Proposal(proposal) => {
+            let message = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
+                proposal.clone(),
+            ));
+            if verified.verify_consensus_message(&message).is_err() {
+                return Ok(None);
+            }
+        }
+        BodyPipelineOriginV1::Certified { .. }
+            if !authenticated_genesis_standalone_source(verified, &source.source) =>
+        {
+            return Ok(None);
+        }
+        BodyPipelineOriginV1::LocalBody(_) => {}
+        BodyPipelineOriginV1::Certified { .. } | BodyPipelineOriginV1::RecoveredDecision { .. } => {
             return Ok(None);
         }
     }
@@ -504,7 +997,7 @@ where
         return Ok(None);
     };
     let manifest = standalone_origin_manifest(&replay_evidence.source)
-        .expect("standalone recovery accepted only local or Proposal origins")
+        .expect("standalone recovery accepted only local, Proposal, or genesis origins")
         .clone();
     let tag = match &effect {
         AdapterEffect::ValidateBody { tag, .. } => *tag,
@@ -535,7 +1028,7 @@ where
     if matches!(
         &authority.source,
         LifecycleReplaySourceV1::BodyPipeline(BodyPipelineReplaySourceV1 {
-            origin: BodyPipelineOriginV1::Proposal(_),
+            origin: BodyPipelineOriginV1::Proposal(_) | BodyPipelineOriginV1::Certified { .. },
             ..
         })
     ) {
@@ -765,20 +1258,13 @@ impl RecoveredStandaloneValidateReplayEvidenceV1 {
             standalone_validate_stage_matches(&self.source, self.body_frame, &effect, receipt)
         })
     }
-    pub(super) fn exactly_matches_recovered_body_frame(
-        &self,
-        reference: &DurableBodyFrameReference,
-        manifest: &wire::PayloadManifest,
-        receipt: &DurableBodyReceipt,
-    ) -> bool {
-        standalone_origin_manifest(&self.source).is_some_and(|retained| retained == manifest)
-            && self.body_frame.durable_reference() == *reference
-            && durable_body_frame_reference(replay_context(receipt.round()), receipt)
-                == Some(*reference)
-            && self.exactly_matches_durable_body(receipt)
-    }
 }
 impl RecoveredStandaloneValidateSourceV1 {
+    /// Return whether this recovered source requires the private genesis body-store policy.
+    pub(super) fn requires_genesis_authority_body_store(&self) -> bool {
+        matches!(&self.source.origin, BodyPipelineOriginV1::Certified { .. })
+    }
+
     pub(super) fn exactly_matches_recovered_body_frame(
         &self,
         reference: &DurableBodyFrameReference,
@@ -800,10 +1286,42 @@ fn standalone_origin_manifest(
     match &source.origin {
         BodyPipelineOriginV1::Proposal(proposal) => Some(&proposal.manifest),
         BodyPipelineOriginV1::LocalBody(manifest) => Some(manifest),
-        BodyPipelineOriginV1::Certified { .. } | BodyPipelineOriginV1::RecoveredDecision { .. } => {
-            None
-        }
+        BodyPipelineOriginV1::Certified { manifest, .. } => Some(manifest),
+        BodyPipelineOriginV1::RecoveredDecision { .. } => None,
     }
+}
+
+fn authenticated_genesis_standalone_source(
+    verified: &VerifiedHeightContext,
+    source: &BodyPipelineReplaySourceV1,
+) -> bool {
+    let BodyPipelineOriginV1::Certified {
+        certificate,
+        manifest,
+        certified_sources,
+        ..
+    } = &source.origin
+    else {
+        return false;
+    };
+    let context = verified.context();
+    let expected_sources = context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<Vec<_>>();
+    context.height == 1
+        && context.parent_commit_qc.is_none()
+        && context.snapshot_bootstrap.is_none()
+        && certificate.round.context_id == context.id()
+        && certificate.round.height == 1
+        && certificate.proposal_round == manifest.round
+        && certificate.subject == manifest.subject
+        && manifest.subject.parent_block_hash.is_none()
+        && certificate.validate(context).is_ok()
+        && manifest.validate(context).is_ok()
+        && certified_sources == &expected_sources
+        && verified.verify_quorum_certificate(certificate).is_ok()
 }
 fn standalone_validate_effect(source: &BodyPipelineReplaySourceV1) -> Option<AdapterEffect> {
     let manifest = standalone_origin_manifest(source)?;
@@ -866,7 +1384,7 @@ impl DurableValidateReplayEvidenceV1 {
         let (source, body_frame) = match self {
             Self::Certified(evidence) => (&evidence.family.source, evidence.family.body_frame),
             Self::RemoteProposal(evidence) => (&evidence.family.source, evidence.family.body_frame),
-            Self::LocalBody(evidence) => (&evidence.family.source, evidence.family.body_frame),
+            Self::LocalBody(evidence) => evidence.family.source_and_frame(),
             Self::RecoveredStandalone(evidence) => (&evidence.source, evidence.body_frame),
         };
         body_stage_matches_recovered_record(
@@ -911,10 +1429,7 @@ impl DurableValidateReplayEvidenceV1 {
                 if !evidence.exactly_matches_validate_pending(effect, receipt, pending) {
                     return None;
                 }
-                let BodyPipelineOriginV1::LocalBody(manifest) = &evidence.family.source.origin
-                else {
-                    return None;
-                };
+                let manifest = evidence.family.assembled_manifest()?;
                 Some((evidence.clone(), manifest.clone()))
             }
             Self::RecoveredStandalone(evidence) => {
@@ -934,10 +1449,12 @@ impl DurableValidateReplayEvidenceV1 {
                 }
                 Some((
                     LocalValidateReplayEvidenceV1 {
-                        family: LocalBodyPipelineReplayFamilyV1 {
-                            source: evidence.source.clone(),
-                            body_frame: evidence.body_frame,
-                        },
+                        family: LocalValidateReplayFamilyV1::Assembled(
+                            LocalBodyPipelineReplayFamilyV1 {
+                                source: evidence.source.clone(),
+                                body_frame: evidence.body_frame,
+                            },
+                        ),
                         validate_pending: Arc::new(reconstructed),
                     },
                     manifest.clone(),
@@ -1011,7 +1528,7 @@ impl DurableValidateReplayEvidenceV1 {
         let source = match self {
             Self::Certified(evidence) => &mut evidence.family.source,
             Self::RemoteProposal(evidence) => &mut evidence.family.source,
-            Self::LocalBody(evidence) => &mut evidence.family.source,
+            Self::LocalBody(evidence) => evidence.family.source_mut(),
             Self::RecoveredStandalone(evidence) => &mut evidence.source,
         };
         let previous = source.tag;
@@ -1066,11 +1583,11 @@ impl DurableValidateReplayEvidenceV1 {
                 evidence.family.source.clone()
             }
             Self::LocalBody(evidence) => {
-                if payload_binding != ReplayPayloadBindingV1::BodyFrame(evidence.family.body_frame)
-                {
+                let (source, body_frame) = evidence.family.source_and_frame();
+                if payload_binding != ReplayPayloadBindingV1::BodyFrame(body_frame) {
                     return Err(AdapterEffectAdmissionError::InvalidCarrier);
                 }
-                evidence.family.source.clone()
+                source.clone()
             }
             Self::RecoveredStandalone(evidence) => {
                 if payload_binding != ReplayPayloadBindingV1::BodyFrame(evidence.body_frame) {
@@ -1434,15 +1951,35 @@ fn exact_invalid_body_report_authority(
             }
             (evidence.family.source.clone(), proposal.manifest.clone())
         }
-        DurableValidateReplayEvidenceV1::LocalBody(_) => return None,
-        DurableValidateReplayEvidenceV1::RecoveredStandalone(evidence) => {
-            let BodyPipelineOriginV1::Proposal(proposal) = &evidence.source.origin else {
-                return None;
-            };
-            if proposal.round != *round || proposal.subject != *subject {
+        DurableValidateReplayEvidenceV1::LocalBody(evidence) => {
+            let family = evidence.family.authenticated_genesis_family()?;
+            let coordinates = exact_family_coordinates(family)?;
+            if coordinates.certificate != *certificate {
                 return None;
             }
-            (evidence.source.clone(), proposal.manifest.clone())
+            (family.source.clone(), coordinates.manifest)
+        }
+        DurableValidateReplayEvidenceV1::RecoveredStandalone(evidence) => {
+            match &evidence.source.origin {
+                BodyPipelineOriginV1::Proposal(proposal) => {
+                    if proposal.round != *round || proposal.subject != *subject {
+                        return None;
+                    }
+                    (evidence.source.clone(), proposal.manifest.clone())
+                }
+                BodyPipelineOriginV1::Certified {
+                    certificate: origin_certificate,
+                    manifest,
+                    ..
+                } => {
+                    if origin_certificate != certificate {
+                        return None;
+                    }
+                    (evidence.source.clone(), manifest.clone())
+                }
+                BodyPipelineOriginV1::LocalBody(_)
+                | BodyPipelineOriginV1::RecoveredDecision { .. } => return None,
+            }
         }
     };
     if receipt.manifest_hash() != HashOf::new(&manifest) {
@@ -1468,6 +2005,12 @@ fn exact_certified_fetch_coordinates(
     effect: &AdapterEffect,
     response: &wire::CertifiedBodyResponse,
 ) -> Option<CertifiedBodyPipelineCoordinatesV1> {
+    exact_certified_fetch_coordinates_from_manifest(effect, &response.manifest)
+}
+fn exact_certified_fetch_coordinates_from_manifest(
+    effect: &AdapterEffect,
+    response_manifest: &wire::PayloadManifest,
+) -> Option<CertifiedBodyPipelineCoordinatesV1> {
     let AdapterEffect::FetchBody {
         tag,
         round,
@@ -1480,11 +2023,11 @@ fn exact_certified_fetch_coordinates(
         return None;
     };
     let certificate = certificate.as_ref()?;
-    if response.manifest.round != *round
-        || response.manifest.subject != *subject
+    if response_manifest.round != *round
+        || response_manifest.subject != *subject
         || manifest
             .as_ref()
-            .is_some_and(|expected| expected != &response.manifest)
+            .is_some_and(|expected| expected != response_manifest)
         || certificate.proposal_round != *round
         || certificate.subject != *subject
         || tag.height() != round.height
@@ -1495,7 +2038,7 @@ fn exact_certified_fetch_coordinates(
     Some(CertifiedBodyPipelineCoordinatesV1 {
         tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
         certificate: certificate.clone(),
-        manifest: response.manifest.clone(),
+        manifest: response_manifest.clone(),
         fetch_manifest_present: manifest.is_some(),
         certified_sources: match effect {
             AdapterEffect::FetchBody {
@@ -1810,7 +2353,12 @@ fn exact_certified_fetch_effect(
     family: &CertifiedBodyPipelineReplayFamilyV1,
 ) -> Option<AdapterEffect> {
     let coordinates = exact_family_coordinates(family)?;
-    Some(AdapterEffect::FetchBody {
+    Some(certified_fetch_effect_from_coordinates(&coordinates))
+}
+fn certified_fetch_effect_from_coordinates(
+    coordinates: &CertifiedBodyPipelineCoordinatesV1,
+) -> AdapterEffect {
+    AdapterEffect::FetchBody {
         tag: EventTag::new(
             coordinates.tag.height,
             coordinates.tag.view,
@@ -1820,10 +2368,23 @@ fn exact_certified_fetch_effect(
         subject: coordinates.certificate.subject,
         manifest: coordinates
             .fetch_manifest_present
-            .then_some(coordinates.manifest),
-        certified_sources: coordinates.certified_sources,
-        certificate: Some(coordinates.certificate),
-    })
+            .then_some(coordinates.manifest.clone()),
+        certified_sources: coordinates.certified_sources.clone(),
+        certificate: Some(coordinates.certificate.clone()),
+    }
+}
+fn certified_store_effect_from_coordinates(
+    coordinates: &CertifiedBodyPipelineCoordinatesV1,
+) -> AdapterEffect {
+    AdapterEffect::StoreBody {
+        tag: EventTag::new(
+            coordinates.tag.height,
+            coordinates.tag.view,
+            crate::sumeragi::v2_core::Generation::new(coordinates.tag.generation),
+        ),
+        round: coordinates.manifest.round,
+        subject: coordinates.manifest.subject,
+    }
 }
 fn durable_certified_fetch_projection(
     family: &CertifiedBodyPipelineReplayFamilyV1,

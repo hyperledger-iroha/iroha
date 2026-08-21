@@ -76,21 +76,19 @@ reviewed systemd drop-in; do not weaken the base unit or place credentials in
 Environment or EnvironmentFile entries. The base unit also sets `LimitCORE=0`
 so provider process memory is not written to a core image.
 
-Both checked-in Linux consumer dependencies are mandatory in an enabled
-production package:
-
-- Install the taira-irohad.service.d drop-in for the validator.
-- Install the sorafs-governance-dag@.service.d drop-in beside each
-  deployment-owned Governance DAG instance unit.
+The checked-in Linux Governance DAG consumer dependency is mandatory in an
+enabled production package. Install the sorafs-governance-dag@.service.d
+drop-in beside each deployment-owned Governance DAG instance unit. The
+repository no longer ships a validator service or validator-specific drop-in.
 
 The repository does not currently ship a base Governance DAG systemd unit
 because its instance config path, public chain identity, and exact `NetworkId`
-are deployment-specific. Both drop-ins use Requires and After, so an enabled
-consumer cannot start successfully without the ready broker unit. They also
+are deployment-specific. The drop-in uses Requires and After, so an enabled
+consumer cannot start successfully without the ready broker unit. It also
 pin User and Group to iroha so the stock Unix peer-credential check sees the
 same effective identity, and mount the broker runtime directory read-only in
 the consumer namespace so the client cannot mutate socket pathnames. Packages
-with runtime providers explicitly disabled omit both drop-ins and the fixed
+with runtime providers explicitly disabled omit the drop-in and the fixed
 catalog. The container validator unit is intentionally not covered: sharing
 this host socket into a container requires a separately reviewed UID and mount
 contract.

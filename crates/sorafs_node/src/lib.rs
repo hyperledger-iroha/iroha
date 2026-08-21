@@ -16480,6 +16480,30 @@ mod tests {
     };
     use tempfile::TempDir;
     include!("lib_early_test_support.rs");
+    macro_rules! assert_node_init_variant {
+        ($variant:ident => $result:expr) => {
+            assert!(matches!($result, Err(NodeInitError::$variant { .. })));
+        };
+    }
+    macro_rules! assert_checkpoint_component {
+        ($component:literal => $result:expr) => {
+            assert!(matches!(
+                $result,
+                Err(NodeInitError::Checkpoint {
+                    component: $component,
+                    ..
+                })
+            ));
+        };
+    }
+    macro_rules! gc_runtime_read {
+        ($runtime:expr, $context:literal => $($tail:tt)+) => {
+            $runtime.read().expect($context).$($tail)+
+        };
+    }
+    fn enabled_storage_builder(data_dir: PathBuf) -> config::StorageConfigBuilder {
+        StorageConfig::builder().enabled(true).data_dir(data_dir)
+    }
     fn startup_por_archive_binding(seed: u8) -> PorFinalizedReplayArchiveBindingV1 {
         let key_pair =
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("test Ed25519 key");
@@ -16508,9 +16532,7 @@ mod tests {
             iroha_config::parameters::defaults::sorafs::storage::por_replay_archive::MAX_SUCCESSOR_PROOF_BYTES,
         )
         .expect("valid replay-archive worker policy");
-        let config = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(root.join("storage"))
+        let config = enabled_storage_builder(root.join("storage"))
             .por_replay_archive_policy(Some(policy))
             .build();
         (config, temp_dir)
@@ -16747,15 +16769,14 @@ mod tests {
         let (config, _temp_dir) = storage_config_with_por_archive(binding);
         let mut archive = StartupPorReplayArchive::exact(binding);
         archive.current_head = Some(current_head);
-        assert!(matches!(
+        assert_node_init_variant!(PorReplayArchive =>
             NodeHandle::try_new_with_policies_and_runtime_deps(
                 config,
                 RepairConfig::default(),
                 GcConfig::default(),
                 NodeRuntimeDeps::default().with_por_finalized_replay_archive(Arc::new(archive)),
-            ),
-            Err(NodeInitError::PorReplayArchive { .. })
-        ));
+            )
+        );
     }
     #[test]
     fn node_archive_startup_reconciles_and_persists_an_exact_first_append_prefix() {
@@ -16824,17 +16845,16 @@ mod tests {
     fn node_archive_injection_rejects_missing_unrequested_substituted_and_stale_adapters() {
         let binding = startup_por_archive_binding(0xD2);
         let (missing_config, _missing_dir) = storage_config_with_por_archive(binding);
-        assert!(matches!(
+        assert_node_init_variant!(PorReplayArchive =>
             NodeHandle::try_new_with_policies_and_runtime_deps(
                 missing_config,
                 RepairConfig::default(),
                 GcConfig::default(),
                 NodeRuntimeDeps::default(),
-            ),
-            Err(NodeInitError::PorReplayArchive { .. })
-        ));
+            )
+        );
         let (unrequested_config, _unrequested_dir) = storage_config_with_temp_dir();
-        assert!(matches!(
+        assert_node_init_variant!(PorReplayArchive =>
             NodeHandle::try_new_with_policies_and_runtime_deps(
                 unrequested_config,
                 RepairConfig::default(),
@@ -16842,33 +16862,30 @@ mod tests {
                 NodeRuntimeDeps::default().with_por_finalized_replay_archive(Arc::new(
                     StartupPorReplayArchive::exact(binding),
                 )),
-            ),
-            Err(NodeInitError::PorReplayArchive { .. })
-        ));
+            )
+        );
         let (substituted_config, _substituted_dir) = storage_config_with_por_archive(binding);
         let mut substituted = StartupPorReplayArchive::exact(binding);
         substituted.handle = "hsm://sorafs/por-replay-archive/substituted";
-        assert!(matches!(
+        assert_node_init_variant!(PorReplayArchive =>
             NodeHandle::try_new_with_policies_and_runtime_deps(
                 substituted_config,
                 RepairConfig::default(),
                 GcConfig::default(),
                 NodeRuntimeDeps::default().with_por_finalized_replay_archive(Arc::new(substituted)),
-            ),
-            Err(NodeInitError::PorReplayArchive { .. })
-        ));
+            )
+        );
         let (stale_config, _stale_dir) = storage_config_with_por_archive(binding);
         let mut stale = StartupPorReplayArchive::exact(binding);
         stale.readiness_error = Some(PorFinalizedReplayArchiveExternalErrorV1::Rejected);
-        assert!(matches!(
+        assert_node_init_variant!(PorReplayArchive =>
             NodeHandle::try_new_with_policies_and_runtime_deps(
                 stale_config,
                 RepairConfig::default(),
                 GcConfig::default(),
                 NodeRuntimeDeps::default().with_por_finalized_replay_archive(Arc::new(stale)),
-            ),
-            Err(NodeInitError::PorReplayArchive { .. })
-        ));
+            )
+        );
     }
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
@@ -16903,10 +16920,7 @@ mod tests {
     fn storage_config_with_temp_dir() -> (StorageConfig, TempDir) {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let root = temp_dir.path().canonicalize().expect("canonical temp dir");
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(root.join("storage"))
-            .build();
+        let cfg = enabled_storage_builder(root.join("storage")).build();
         (cfg, temp_dir)
     }
     fn test_quarantine_key_provider_config()
@@ -16925,9 +16939,7 @@ mod tests {
     fn storage_config_with_temp_dir_and_quarantine_key_provider() -> (StorageConfig, TempDir) {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let root = temp_dir.path().canonicalize().expect("canonical temp dir");
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(root.join("storage"))
+        let cfg = enabled_storage_builder(root.join("storage"))
             .moderation_quarantine_key_provider(Some(test_quarantine_key_provider_config()))
             .build();
         (cfg, temp_dir)
@@ -17232,34 +17244,29 @@ mod tests {
     fn provider_ingest_startup_requires_exact_sealed_checkpoint_injection() {
         const HANDLE: &str = "sealed.sorafs.provider-ingest.startup";
         let (config, _temp_dir) = storage_config_with_provider_ingest_checkpoint(HANDLE, 0x61);
-        assert!(matches!(
-            NodeHandle::try_new(config.clone()),
-            Err(NodeInitError::ProviderIngestOutbox { .. })
-        ));
+        assert_node_init_variant!(ProviderIngestOutbox => NodeHandle::try_new(config.clone()));
         let substituted = Arc::new(StartupProviderIngestCheckpointRuntime::new(
             "sealed.sorafs.provider-ingest.substituted",
             0x61,
         ));
-        assert!(matches!(
+        assert_node_init_variant!(ProviderIngestOutbox =>
             NodeHandle::try_new_with_runtime_deps(
                 config,
                 NodeRuntimeDeps::default().with_provider_ingest_checkpoint_runtime(substituted),
-            ),
-            Err(NodeInitError::ProviderIngestOutbox { .. })
-        ));
+            )
+        );
     }
     #[test]
     fn provider_ingest_startup_rejects_unexpected_and_test_marked_checkpoint_providers() {
         const HANDLE: &str = "sealed.sorafs.provider-ingest.unexpected";
         let (config, _temp_dir) = storage_config_with_temp_dir();
         let unexpected = Arc::new(StartupProviderIngestCheckpointRuntime::new(HANDLE, 0x62));
-        assert!(matches!(
+        assert_node_init_variant!(ProviderIngestOutbox =>
             NodeHandle::try_new_with_runtime_deps(
                 config,
                 NodeRuntimeDeps::default().with_provider_ingest_checkpoint_runtime(unexpected),
-            ),
-            Err(NodeInitError::ProviderIngestOutbox { .. })
-        ));
+            )
+        );
         let (test_marked_config, _test_marked_temp_dir) =
             storage_config_with_provider_ingest_checkpoint(
                 "sealed.sorafs.provider-ingest.test",
@@ -17269,13 +17276,12 @@ mod tests {
             "sealed.sorafs.provider-ingest.test",
             0x63,
         ));
-        assert!(matches!(
+        assert_node_init_variant!(ProviderIngestOutbox =>
             NodeHandle::try_new_with_runtime_deps(
                 test_marked_config,
                 NodeRuntimeDeps::default().with_provider_ingest_checkpoint_runtime(test_marked),
-            ),
-            Err(NodeInitError::ProviderIngestOutbox { .. })
-        ));
+            )
+        );
     }
     fn install_finalized_provider_ingest_projection(
         handle: &NodeHandle,
@@ -18020,10 +18026,7 @@ mod tests {
     #[test]
     fn node_startup_rejects_quarantine_key_wrapper_without_configured_binding() {
         let temp_dir = tempfile::tempdir().expect("create unbound-wrapper temp dir");
-        let config = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(temp_dir.path().join("storage"))
-            .build();
+        let config = enabled_storage_builder(temp_dir.path().join("storage")).build();
         let error =
             NodeHandle::try_new_with_quarantine_key_wrapper(config, test_quarantine_key_wrapper())
                 .expect_err("runtime quarantine-key wrapper must have an exact configured binding");
@@ -18626,11 +18629,33 @@ mod tests {
     fn with_fresh_test_fenced_privacy_runtime(deps: NodeRuntimeDeps) -> NodeRuntimeDeps {
         with_test_fenced_privacy_runtime(deps, Arc::new(TestFencedTransparencyProvider::bound()))
     }
-    fn test_privacy_runtime_deps_without_fenced_target() -> NodeRuntimeDeps {
+    fn privacy_runtime_deps(
+        provider: Arc<dyn ProductionPrivacyCyclePrfProviderV1>,
+        anchor: Arc<dyn ProductionPrivacyReleaseAnchorV1>,
+    ) -> NodeRuntimeDeps {
         NodeRuntimeDeps::default()
-            .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-            .with_privacy_release_anchor(test_privacy_release_anchor())
+            .with_privacy_cycle_prf_provider(provider)
+            .with_privacy_release_anchor(anchor)
             .with_transparency_leader_lease_provider(test_transparency_leader_lease_provider())
+    }
+    fn test_privacy_runtime_deps(
+        anchor: Arc<dyn ProductionPrivacyReleaseAnchorV1>,
+    ) -> NodeRuntimeDeps {
+        privacy_runtime_deps(test_privacy_cycle_prf_provider(), anchor)
+    }
+    fn fresh_test_privacy_runtime_deps(
+        anchor: Arc<dyn ProductionPrivacyReleaseAnchorV1>,
+    ) -> NodeRuntimeDeps {
+        with_fresh_test_fenced_privacy_runtime(test_privacy_runtime_deps(anchor))
+    }
+    fn fenced_test_privacy_runtime_deps(
+        anchor: Arc<dyn ProductionPrivacyReleaseAnchorV1>,
+        provider: Arc<TestFencedTransparencyProvider>,
+    ) -> NodeRuntimeDeps {
+        with_test_fenced_privacy_runtime(test_privacy_runtime_deps(anchor), provider)
+    }
+    fn test_privacy_runtime_deps_without_fenced_target() -> NodeRuntimeDeps {
+        test_privacy_runtime_deps(test_privacy_release_anchor())
             .with_governance_dag_signer(Arc::new(TestGovernanceDagSigner::new()))
             .with_governance_dag_checkpoint_store(Arc::new(
                 TestGovernanceDagCheckpointStore::default(),
@@ -18686,9 +18711,7 @@ mod tests {
             .expect("encode reputation trust policy");
         write_local_checkpoint_atomic(&policy_path, &policy_bytes)
             .expect("write reputation trust policy");
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(root.join("storage"))
+        let cfg = enabled_storage_builder(root.join("storage"))
             .reputation_trust_policy_path(Some(policy_path))
             .build();
         (cfg, temp_dir)
@@ -19137,20 +19160,13 @@ mod tests {
             );
             let bytes = fs::read(&path).expect("read initialized checkpoint");
             fs::remove_file(&path).expect("remove initialized checkpoint");
-            assert!(matches!(
-                NodeHandle::try_new(cfg.clone()),
-                Err(NodeInitError::Checkpoint { .. })
-            ));
+            assert_node_init_variant!(Checkpoint => NodeHandle::try_new(cfg.clone()));
             write_local_checkpoint_atomic(&path, &bytes).expect("restore checkpoint for next case");
         }
         fs::remove_file(&marker).expect("remove initialization marker");
-        assert!(matches!(
-            NodeHandle::try_new(cfg),
-            Err(NodeInitError::Checkpoint {
-                component: "runtime initialization marker",
-                ..
-            })
-        ));
+        assert_checkpoint_component!("runtime initialization marker" =>
+            NodeHandle::try_new(cfg)
+        );
     }
     #[test]
     fn runtime_initialization_rejects_retired_markers_and_checkpoints() {
@@ -19367,9 +19383,7 @@ mod tests {
     #[test]
     fn auxiliary_runtime_checkpoint_restores_privacy_source_state() {
         let (base, _dir) = storage_config_with_temp_dir();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(base.data_dir().clone())
+        let cfg = enabled_storage_builder(base.data_dir().clone())
             .runtime_retention(RuntimeRetentionPolicy::new(4, 8, 1024 * 1024))
             .build();
         let source = NodeHandle::new(cfg.clone());
@@ -19401,9 +19415,7 @@ mod tests {
     #[test]
     fn concurrent_auxiliary_runtime_updates_survive_restart() {
         let (base, _dir) = storage_config_with_temp_dir();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(base.data_dir().clone())
+        let cfg = enabled_storage_builder(base.data_dir().clone())
             .runtime_retention(RuntimeRetentionPolicy::new(8, 32, 1024 * 1024))
             .build();
         let source = NodeHandle::new(cfg.clone());
@@ -19435,9 +19447,7 @@ mod tests {
     fn auxiliary_runtime_checkpoint_corruption_and_oversize_fail_startup() {
         let (base, _dir) = storage_config_with_temp_dir();
         let checkpoint_max_bytes = 64 * 1024;
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(base.data_dir().clone())
+        let cfg = enabled_storage_builder(base.data_dir().clone())
             .runtime_retention(RuntimeRetentionPolicy::new(4, 8, checkpoint_max_bytes))
             .build();
         drop(NodeHandle::new(cfg.clone()));
@@ -19671,9 +19681,7 @@ mod tests {
             .parent()
             .expect("authority fixture must have a parent")
             .join("storage");
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(storage_dir)
+        let cfg = enabled_storage_builder(storage_dir)
             .moderation_screening_enabled(true)
             .moderation_screening_authority_bundle_path(Some(path))
             .moderation_screening_authority_bundle_digest(Some(digest))
@@ -19717,28 +19725,22 @@ mod tests {
     fn moderation_screening_authority_startup_rejects_missing_mismatched_and_noncanonical_bundles()
     {
         let temp_dir = tempfile::tempdir().expect("temp dir");
-        let missing = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(temp_dir.path().join("missing-storage"))
+        let missing = enabled_storage_builder(temp_dir.path().join("missing-storage"))
             .moderation_screening_enabled(true)
             .build();
-        assert!(matches!(
-            NodeHandle::try_new(missing),
-            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
-        ));
-        let relative_path = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(temp_dir.path().join("relative-path-storage"))
+        assert_node_init_variant!(ModerationScreeningAuthorityBundle =>
+            NodeHandle::try_new(missing)
+        );
+        let relative_path = enabled_storage_builder(temp_dir.path().join("relative-path-storage"))
             .moderation_screening_enabled(true)
             .moderation_screening_authority_bundle_path(Some(PathBuf::from(
                 "relative-authority.to",
             )))
             .moderation_screening_authority_bundle_digest(Some([0xA5; 32]))
             .build();
-        assert!(matches!(
-            NodeHandle::try_new(relative_path),
-            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
-        ));
+        assert_node_init_variant!(ModerationScreeningAuthorityBundle =>
+            NodeHandle::try_new(relative_path)
+        );
         let now_unix = unix_now_secs();
         let bundle = moderation_screening_authority_bundle_fixture(
             now_unix,
@@ -19746,46 +19748,39 @@ mod tests {
             0xE3,
         );
         let (path, digest) = write_moderation_screening_authority_bundle(temp_dir.path(), &bundle);
-        let missing_digest = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(temp_dir.path().join("missing-digest-storage"))
-            .moderation_screening_enabled(true)
-            .moderation_screening_authority_bundle_path(Some(path.clone()))
-            .build();
-        assert!(matches!(
-            NodeHandle::try_new(missing_digest),
-            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
-        ));
-        let mismatched_digest = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(temp_dir.path().join("mismatch-storage"))
+        let missing_digest =
+            enabled_storage_builder(temp_dir.path().join("missing-digest-storage"))
+                .moderation_screening_enabled(true)
+                .moderation_screening_authority_bundle_path(Some(path.clone()))
+                .build();
+        assert_node_init_variant!(ModerationScreeningAuthorityBundle =>
+            NodeHandle::try_new(missing_digest)
+        );
+        let mismatched_digest = enabled_storage_builder(temp_dir.path().join("mismatch-storage"))
             .moderation_screening_enabled(true)
             .moderation_screening_authority_bundle_path(Some(path.clone()))
             .moderation_screening_authority_bundle_digest(Some([0xFF; 32]))
             .build();
-        assert!(matches!(
-            NodeHandle::try_new(mismatched_digest),
-            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
-        ));
+        assert_node_init_variant!(ModerationScreeningAuthorityBundle =>
+            NodeHandle::try_new(mismatched_digest)
+        );
         let mut noncanonical = fs::read(&path).expect("read canonical bundle");
         noncanonical.push(0);
         fs::write(&path, &noncanonical).expect("write noncanonical bundle");
         #[cfg(unix)]
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
             .expect("secure noncanonical bundle permissions");
-        let noncanonical_config = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(temp_dir.path().join("noncanonical-storage"))
-            .moderation_screening_enabled(true)
-            .moderation_screening_authority_bundle_path(Some(path))
-            .moderation_screening_authority_bundle_digest(Some(
-                *blake3::hash(&noncanonical).as_bytes(),
-            ))
-            .build();
-        assert!(matches!(
-            NodeHandle::try_new(noncanonical_config),
-            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
-        ));
+        let noncanonical_config =
+            enabled_storage_builder(temp_dir.path().join("noncanonical-storage"))
+                .moderation_screening_enabled(true)
+                .moderation_screening_authority_bundle_path(Some(path))
+                .moderation_screening_authority_bundle_digest(Some(
+                    *blake3::hash(&noncanonical).as_bytes(),
+                ))
+                .build();
+        assert_node_init_variant!(ModerationScreeningAuthorityBundle =>
+            NodeHandle::try_new(noncanonical_config)
+        );
         assert_ne!(digest, [0; 32]);
     }
     #[test]
@@ -19799,19 +19794,16 @@ mod tests {
         #[cfg(unix)]
         fs::set_permissions(&oversized_path, fs::Permissions::from_mode(0o600))
             .expect("secure oversized bundle permissions");
-        let oversized_config = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(temp_root.join("oversized-storage"))
+        let oversized_config = enabled_storage_builder(temp_root.join("oversized-storage"))
             .moderation_screening_enabled(true)
             .moderation_screening_authority_bundle_path(Some(oversized_path))
             .moderation_screening_authority_bundle_digest(Some(
                 *blake3::hash(&oversized).as_bytes(),
             ))
             .build();
-        assert!(matches!(
-            NodeHandle::try_new(oversized_config),
-            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
-        ));
+        assert_node_init_variant!(ModerationScreeningAuthorityBundle =>
+            NodeHandle::try_new(oversized_config)
+        );
         let now_unix = unix_now_secs();
         let mut sequence_bomb = moderation_screening_authority_bundle_fixture(
             now_unix,
@@ -19830,19 +19822,16 @@ mod tests {
         #[cfg(unix)]
         fs::set_permissions(&sequence_bomb_path, fs::Permissions::from_mode(0o600))
             .expect("secure sequence bomb permissions");
-        let sequence_bomb_config = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(temp_root.join("sequence-bomb-storage"))
+        let sequence_bomb_config = enabled_storage_builder(temp_root.join("sequence-bomb-storage"))
             .moderation_screening_enabled(true)
             .moderation_screening_authority_bundle_path(Some(sequence_bomb_path))
             .moderation_screening_authority_bundle_digest(Some(
                 *blake3::hash(&sequence_bomb_bytes).as_bytes(),
             ))
             .build();
-        assert!(matches!(
-            NodeHandle::try_new(sequence_bomb_config),
-            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
-        ));
+        assert_node_init_variant!(ModerationScreeningAuthorityBundle =>
+            NodeHandle::try_new(sequence_bomb_config)
+        );
         let mut duplicate_anchors = moderation_screening_authority_bundle_fixture(
             now_unix,
             now_unix.saturating_sub(50),
@@ -19859,19 +19848,17 @@ mod tests {
         #[cfg(unix)]
         fs::set_permissions(&duplicate_anchor_path, fs::Permissions::from_mode(0o600))
             .expect("secure duplicate-anchor permissions");
-        let duplicate_anchor_config = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(temp_root.join("duplicate-anchor-storage"))
-            .moderation_screening_enabled(true)
-            .moderation_screening_authority_bundle_path(Some(duplicate_anchor_path))
-            .moderation_screening_authority_bundle_digest(Some(
-                *blake3::hash(&duplicate_anchor_bytes).as_bytes(),
-            ))
-            .build();
-        assert!(matches!(
-            NodeHandle::try_new(duplicate_anchor_config),
-            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
-        ));
+        let duplicate_anchor_config =
+            enabled_storage_builder(temp_root.join("duplicate-anchor-storage"))
+                .moderation_screening_enabled(true)
+                .moderation_screening_authority_bundle_path(Some(duplicate_anchor_path))
+                .moderation_screening_authority_bundle_digest(Some(
+                    *blake3::hash(&duplicate_anchor_bytes).as_bytes(),
+                ))
+                .build();
+        assert_node_init_variant!(ModerationScreeningAuthorityBundle =>
+            NodeHandle::try_new(duplicate_anchor_config)
+        );
     }
     #[cfg(unix)]
     #[test]
@@ -19890,43 +19877,34 @@ mod tests {
             .expect("authority fixture must have a parent");
         let symlink_path = temp_root.join("symlink-authority.to");
         std::os::unix::fs::symlink(&source_path, &symlink_path).expect("create authority symlink");
-        let symlink_config = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(temp_root.join("symlink-storage"))
+        let symlink_config = enabled_storage_builder(temp_root.join("symlink-storage"))
             .moderation_screening_enabled(true)
             .moderation_screening_authority_bundle_path(Some(symlink_path))
             .moderation_screening_authority_bundle_digest(Some(digest))
             .build();
-        assert!(matches!(
-            NodeHandle::try_new(symlink_config),
-            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
-        ));
+        assert_node_init_variant!(ModerationScreeningAuthorityBundle =>
+            NodeHandle::try_new(symlink_config)
+        );
         let hardlink_path = temp_root.join("hardlink-authority.to");
         fs::hard_link(&source_path, &hardlink_path).expect("create authority hard link");
-        let hardlink_config = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(temp_root.join("hardlink-storage"))
+        let hardlink_config = enabled_storage_builder(temp_root.join("hardlink-storage"))
             .moderation_screening_enabled(true)
             .moderation_screening_authority_bundle_path(Some(hardlink_path))
             .moderation_screening_authority_bundle_digest(Some(digest))
             .build();
-        assert!(matches!(
-            NodeHandle::try_new(hardlink_config),
-            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
-        ));
+        assert_node_init_variant!(ModerationScreeningAuthorityBundle =>
+            NodeHandle::try_new(hardlink_config)
+        );
         let directory_path = temp_root.join("directory-authority");
         fs::create_dir(&directory_path).expect("create non-regular authority path");
-        let directory_config = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(temp_root.join("directory-storage"))
+        let directory_config = enabled_storage_builder(temp_root.join("directory-storage"))
             .moderation_screening_enabled(true)
             .moderation_screening_authority_bundle_path(Some(directory_path))
             .moderation_screening_authority_bundle_digest(Some(digest))
             .build();
-        assert!(matches!(
-            NodeHandle::try_new(directory_config),
-            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
-        ));
+        assert_node_init_variant!(ModerationScreeningAuthorityBundle =>
+            NodeHandle::try_new(directory_config)
+        );
     }
     fn adversarial_corpus_manifest_fixture() -> AdversarialCorpusManifestV1 {
         AdversarialCorpusManifestV1 {
@@ -21058,9 +21036,7 @@ mod tests {
             ModerationQuarantineObjectError::InvalidRange { .. }
         ));
         drop(source);
-        let rotated_cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(cfg.data_dir().clone())
+        let rotated_cfg = enabled_storage_builder(cfg.data_dir().clone())
             .moderation_quarantine_key_provider(Some(test_quarantine_key_provider_config_for(
                 TEST_ROTATED_QUARANTINE_KEY_PROVIDER_QUALIFICATION,
             )))
@@ -21245,13 +21221,9 @@ mod tests {
             norito::to_bytes(&envelope).expect("encode canonical tampered envelope"),
         )
         .expect("write tampered envelope");
-        assert!(matches!(
-            NodeHandle::try_new_with_quarantine_key_wrapper(cfg, test_quarantine_key_wrapper()),
-            Err(NodeInitError::Checkpoint {
-                component: "moderation quarantine object envelope",
-                ..
-            })
-        ));
+        assert_checkpoint_component!("moderation quarantine object envelope" =>
+            NodeHandle::try_new_with_quarantine_key_wrapper(cfg, test_quarantine_key_wrapper())
+        );
     }
     #[test]
     fn moderation_quarantine_store_requires_runtime_wrapper_and_rejects_unknown_orphans() {
@@ -21272,13 +21244,9 @@ mod tests {
         ));
         let orphan = moderation_quarantine_object_store_root(cfg.data_dir()).join("orphan.to");
         fs::write(&orphan, b"not indexed").expect("write orphan object");
-        assert!(matches!(
-            NodeHandle::try_new_with_quarantine_key_wrapper(cfg, test_quarantine_key_wrapper()),
-            Err(NodeInitError::Checkpoint {
-                component: "moderation quarantine object store",
-                ..
-            })
-        ));
+        assert_checkpoint_component!("moderation quarantine object store" =>
+            NodeHandle::try_new_with_quarantine_key_wrapper(cfg, test_quarantine_key_wrapper())
+        );
     }
     #[cfg(unix)]
     #[test]
@@ -21290,13 +21258,9 @@ mod tests {
         fs::write(&victim, b"victim").expect("write symlink victim");
         let link = moderation_quarantine_object_store_root(cfg.data_dir()).join("orphan-link.to");
         symlink(&victim, &link).expect("create object-store symlink");
-        assert!(matches!(
-            NodeHandle::try_new(cfg),
-            Err(NodeInitError::Checkpoint {
-                component: "moderation quarantine object store",
-                ..
-            })
-        ));
+        assert_checkpoint_component!("moderation quarantine object store" =>
+            NodeHandle::try_new(cfg)
+        );
         assert_eq!(fs::read(victim).expect("victim remains intact"), b"victim");
     }
     #[test]
@@ -21693,9 +21657,7 @@ mod tests {
             cycle_seconds: 100,
             publish_delay_seconds: 10,
         };
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(root.join("storage"))
+        let cfg = enabled_storage_builder(root.join("storage"))
             .moderation_quarantine_key_provider(Some(test_quarantine_key_provider_config()))
             .evidence_viewer_audit_schedule(Some(schedule))
             .build();
@@ -22049,9 +22011,7 @@ mod tests {
     #[test]
     fn moderation_object_viewer_limits_and_checkpoints_survive_restart() {
         let (base, _dir) = storage_config_with_temp_dir();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(base.data_dir().clone())
+        let cfg = enabled_storage_builder(base.data_dir().clone())
             .moderation_quarantine_key_provider(Some(test_quarantine_key_provider_config()))
             .runtime_retention(RuntimeRetentionPolicy::new(2, 2, 2 * 1024 * 1024))
             .build();
@@ -22272,10 +22232,7 @@ mod tests {
             .enabled(false)
             .reputation_trust_policy_path(Some(missing))
             .build();
-        assert!(matches!(
-            NodeHandle::try_new(missing_config),
-            Err(NodeInitError::ReputationTrustPolicy { .. })
-        ));
+        assert_node_init_variant!(ReputationTrustPolicy => NodeHandle::try_new(missing_config));
         let malformed = root.join("malformed-policy.to");
         write_local_checkpoint_atomic(&malformed, b"not canonical Norito")
             .expect("write malformed policy");
@@ -22283,10 +22240,7 @@ mod tests {
             .enabled(false)
             .reputation_trust_policy_path(Some(malformed))
             .build();
-        assert!(matches!(
-            NodeHandle::try_new(malformed_config),
-            Err(NodeInitError::ReputationTrustPolicy { .. })
-        ));
+        assert_node_init_variant!(ReputationTrustPolicy => NodeHandle::try_new(malformed_config));
         let oversized = root.join("oversized-policy.to");
         let oversized_bytes = vec![0_u8; MAX_REPUTATION_TRUST_POLICY_ENCODED_BYTES + 1];
         write_local_checkpoint_atomic(&oversized, &oversized_bytes)
@@ -22295,10 +22249,7 @@ mod tests {
             .enabled(false)
             .reputation_trust_policy_path(Some(oversized))
             .build();
-        assert!(matches!(
-            NodeHandle::try_new(oversized_config),
-            Err(NodeInitError::ReputationTrustPolicy { .. })
-        ));
+        assert_node_init_variant!(ReputationTrustPolicy => NodeHandle::try_new(oversized_config));
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
@@ -22316,10 +22267,9 @@ mod tests {
                 .enabled(false)
                 .reputation_trust_policy_path(Some(symlink_path))
                 .build();
-            assert!(matches!(
-                NodeHandle::try_new(symlink_config),
-                Err(NodeInitError::ReputationTrustPolicy { .. })
-            ));
+            assert_node_init_variant!(ReputationTrustPolicy =>
+                NodeHandle::try_new(symlink_config)
+            );
             let writable_path = root.join("writable-policy.to");
             write_local_checkpoint_atomic(
                 &writable_path,
@@ -22334,28 +22284,24 @@ mod tests {
                 .enabled(false)
                 .reputation_trust_policy_path(Some(writable_path))
                 .build();
-            assert!(matches!(
-                NodeHandle::try_new(writable_config),
-                Err(NodeInitError::ReputationTrustPolicy { .. })
-            ));
+            assert_node_init_variant!(ReputationTrustPolicy =>
+                NodeHandle::try_new(writable_config)
+            );
             let hardlink_path = root.join("policy-hardlink.to");
             fs::hard_link(&target, &hardlink_path).expect("create policy hard link");
             let hardlink_config = StorageConfig::builder()
                 .enabled(false)
                 .reputation_trust_policy_path(Some(hardlink_path))
                 .build();
-            assert!(matches!(
-                NodeHandle::try_new(hardlink_config),
-                Err(NodeInitError::ReputationTrustPolicy { .. })
-            ));
+            assert_node_init_variant!(ReputationTrustPolicy =>
+                NodeHandle::try_new(hardlink_config)
+            );
         }
     }
     #[test]
     fn reputation_snapshot_rejects_conflicting_ids_and_evicts_only_unreferenced_history() {
         let (base, _dir) = storage_config_with_reputation_policy();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(base.data_dir().clone())
+        let cfg = enabled_storage_builder(base.data_dir().clone())
             .reputation_trust_policy_path(base.reputation_trust_policy_path().cloned())
             .runtime_retention(RuntimeRetentionPolicy::new(1, 1, 1024 * 1024))
             .build();
@@ -22459,17 +22405,10 @@ mod tests {
             .publish_signed_reputation_snapshot(envelope)
             .expect("persist signed reputation envelope");
         drop(handle);
-        let no_policy_config = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(cfg.data_dir().clone())
-            .build();
-        assert!(matches!(
-            NodeHandle::try_new(no_policy_config),
-            Err(NodeInitError::Checkpoint {
-                component: "auxiliary runtime",
-                ..
-            })
-        ));
+        let no_policy_config = enabled_storage_builder(cfg.data_dir().clone()).build();
+        assert_checkpoint_component!("auxiliary runtime" =>
+            NodeHandle::try_new(no_policy_config)
+        );
         let policy_path = cfg
             .reputation_trust_policy_path()
             .expect("configured reputation policy");
@@ -22482,13 +22421,7 @@ mod tests {
                 .expect("encode changed policy"),
         )
         .expect("replace reputation policy");
-        assert!(matches!(
-            NodeHandle::try_new(cfg),
-            Err(NodeInitError::Checkpoint {
-                component: "auxiliary runtime",
-                ..
-            })
-        ));
+        assert_checkpoint_component!("auxiliary runtime" => NodeHandle::try_new(cfg));
     }
     #[test]
     fn reputation_restart_reuses_original_admission_time_for_freshness() {
@@ -22537,9 +22470,7 @@ mod tests {
     #[test]
     fn governance_outbox_deduplicates_pending_payloads_and_fails_closed_at_retention_limit() {
         let (base, _dir) = storage_config_with_temp_dir();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(base.data_dir().clone())
+        let cfg = enabled_storage_builder(base.data_dir().clone())
             .runtime_retention(RuntimeRetentionPolicy::new(1, 1, 1024 * 1024))
             .build();
         let handle = NodeHandle::new(cfg);
@@ -22614,13 +22545,9 @@ mod tests {
                 &norito::to_bytes(&checkpoint).expect("encode tampered checkpoint"),
             )
             .expect("write tampered checkpoint");
-            assert!(matches!(
-                NodeHandle::try_new(cfg.clone()),
-                Err(NodeInitError::Checkpoint {
-                    component: "auxiliary runtime",
-                    ..
-                })
-            ));
+            assert_checkpoint_component!("auxiliary runtime" =>
+                NodeHandle::try_new(cfg.clone())
+            );
         }
         write_local_checkpoint_atomic(&path, &original).expect("restore original checkpoint");
         assert!(NodeHandle::try_new(cfg).is_ok());
@@ -22667,13 +22594,7 @@ mod tests {
             &norito::to_bytes(&checkpoint).expect("encode tampered checkpoint"),
         )
         .expect("write tampered checkpoint");
-        assert!(matches!(
-            NodeHandle::try_new(cfg),
-            Err(NodeInitError::Checkpoint {
-                component: "auxiliary runtime",
-                ..
-            })
-        ));
+        assert_checkpoint_component!("auxiliary runtime" => NodeHandle::try_new(cfg));
     }
     #[test]
     fn reputation_checkpoint_rejects_event_snapshot_metadata_tampering() {
@@ -22693,13 +22614,7 @@ mod tests {
             &norito::to_bytes(&checkpoint).expect("encode tampered checkpoint"),
         )
         .expect("write tampered checkpoint");
-        assert!(matches!(
-            NodeHandle::try_new(cfg),
-            Err(NodeInitError::Checkpoint {
-                component: "auxiliary runtime",
-                ..
-            })
-        ));
+        assert_checkpoint_component!("auxiliary runtime" => NodeHandle::try_new(cfg));
     }
     #[test]
     fn reputation_checkpoint_rejects_envelope_admission_and_outbox_tampering() {
@@ -22755,13 +22670,9 @@ mod tests {
                 &norito::to_bytes(&checkpoint).expect("encode tampered checkpoint"),
             )
             .expect("write tampered checkpoint");
-            assert!(matches!(
-                NodeHandle::try_new(cfg.clone()),
-                Err(NodeInitError::Checkpoint {
-                    component: "auxiliary runtime",
-                    ..
-                })
-            ));
+            assert_checkpoint_component!("auxiliary runtime" =>
+                NodeHandle::try_new(cfg.clone())
+            );
         }
     }
     #[test]
@@ -22831,13 +22742,7 @@ mod tests {
             &norito::to_bytes(&checkpoint).expect("encode tampered governance checkpoint"),
         )
         .expect("write tampered governance checkpoint");
-        assert!(matches!(
-            NodeHandle::try_new(cfg),
-            Err(NodeInitError::Checkpoint {
-                component: "auxiliary runtime",
-                ..
-            })
-        ));
+        assert_checkpoint_component!("auxiliary runtime" => NodeHandle::try_new(cfg));
     }
     #[test]
     fn publish_transparency_ledger_publication_writes_governance_publisher() {
@@ -23555,14 +23460,10 @@ mod tests {
         let trait_provider: Arc<dyn ProductionPrivacyCyclePrfProviderV1> = provider.clone();
         let handle = NodeHandle::try_new_with_runtime_deps(
             cfg,
-            with_fresh_test_fenced_privacy_runtime(
-                NodeRuntimeDeps::default()
-                    .with_privacy_cycle_prf_provider(trait_provider)
-                    .with_privacy_release_anchor(test_privacy_release_anchor())
-                    .with_transparency_leader_lease_provider(
-                        test_transparency_leader_lease_provider(),
-                    ),
-            ),
+            with_fresh_test_fenced_privacy_runtime(privacy_runtime_deps(
+                trait_provider,
+                test_privacy_release_anchor(),
+            )),
         )
         .expect("initialise node with recording threshold PRF provider");
         for event in [
@@ -23688,12 +23589,7 @@ mod tests {
             assert!(!data_dir.exists());
             let error = NodeHandle::try_new_with_runtime_deps(
                 cfg,
-                NodeRuntimeDeps::default()
-                    .with_privacy_cycle_prf_provider(provider)
-                    .with_privacy_release_anchor(test_privacy_release_anchor())
-                    .with_transparency_leader_lease_provider(
-                        test_transparency_leader_lease_provider(),
-                    ),
+                privacy_runtime_deps(provider, test_privacy_release_anchor()),
             )
             .expect_err("invalid production threshold-PRF qualification must fail startup");
             assert!(matches!(
@@ -24033,14 +23929,10 @@ mod tests {
         );
         let handle = NodeHandle::try_new_with_runtime_deps(
             cfg,
-            with_fresh_test_fenced_privacy_runtime(
-                NodeRuntimeDeps::default()
-                    .with_privacy_cycle_prf_provider(provider)
-                    .with_privacy_release_anchor(test_privacy_release_anchor())
-                    .with_transparency_leader_lease_provider(
-                        test_transparency_leader_lease_provider(),
-                    ),
-            ),
+            with_fresh_test_fenced_privacy_runtime(privacy_runtime_deps(
+                provider,
+                test_privacy_release_anchor(),
+            )),
         )
         .expect("initialise node with error-injecting threshold PRF provider");
         for event in [
@@ -24188,15 +24080,7 @@ mod tests {
         let fused_provider = Arc::new(TestFencedTransparencyProvider::bound());
         let source = NodeHandle::try_new_with_runtime_deps(
             cfg.clone(),
-            with_test_fenced_privacy_runtime(
-                NodeRuntimeDeps::default()
-                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                    .with_privacy_release_anchor(anchor.clone())
-                    .with_transparency_leader_lease_provider(
-                        test_transparency_leader_lease_provider(),
-                    ),
-                fused_provider.clone(),
-            ),
+            fenced_test_privacy_runtime_deps(anchor.clone(), fused_provider.clone()),
         )
         .expect("initialise source node with shared release anchor");
         for event in [
@@ -24246,15 +24130,7 @@ mod tests {
         drop(source);
         let restored = NodeHandle::try_new_with_runtime_deps(
             cfg,
-            with_test_fenced_privacy_runtime(
-                NodeRuntimeDeps::default()
-                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                    .with_privacy_release_anchor(anchor)
-                    .with_transparency_leader_lease_provider(
-                        test_transparency_leader_lease_provider(),
-                    ),
-                fused_provider,
-            ),
+            fenced_test_privacy_runtime_deps(anchor, fused_provider),
         )
         .expect("restore node with shared release anchor");
         assert_eq!(restored.pending_governance_publication_count(), 0);
@@ -24302,15 +24178,7 @@ mod tests {
         let fused_provider = Arc::new(TestFencedTransparencyProvider::bound());
         let source = NodeHandle::try_new_with_runtime_deps(
             cfg.clone(),
-            with_test_fenced_privacy_runtime(
-                NodeRuntimeDeps::default()
-                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                    .with_privacy_release_anchor(anchor.clone())
-                    .with_transparency_leader_lease_provider(
-                        test_transparency_leader_lease_provider(),
-                    ),
-                fused_provider.clone(),
-            ),
+            fenced_test_privacy_runtime_deps(anchor.clone(), fused_provider.clone()),
         )
         .expect("initialise privacy receipt source node");
         assert!(matches!(
@@ -24345,15 +24213,7 @@ mod tests {
             .expect("write tampered privacy receipt checkpoint");
             let error = NodeHandle::try_new_with_runtime_deps(
                 cfg.clone(),
-                with_test_fenced_privacy_runtime(
-                    NodeRuntimeDeps::default()
-                        .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                        .with_privacy_release_anchor(anchor.clone())
-                        .with_transparency_leader_lease_provider(
-                            test_transparency_leader_lease_provider(),
-                        ),
-                    fused_provider.clone(),
-                ),
+                fenced_test_privacy_runtime_deps(anchor.clone(), fused_provider.clone()),
             )
             .expect_err("tampered privacy publish receipt must fail restart");
             assert!(matches!(
@@ -24368,15 +24228,7 @@ mod tests {
             .expect("restore canonical privacy receipt checkpoint");
         NodeHandle::try_new_with_runtime_deps(
             cfg,
-            with_test_fenced_privacy_runtime(
-                NodeRuntimeDeps::default()
-                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                    .with_privacy_release_anchor(anchor)
-                    .with_transparency_leader_lease_provider(
-                        test_transparency_leader_lease_provider(),
-                    ),
-                fused_provider,
-            ),
+            fenced_test_privacy_runtime_deps(anchor, fused_provider),
         )
         .expect("canonical privacy receipt checkpoint restores");
     }
@@ -24389,14 +24241,7 @@ mod tests {
         let anchor = Arc::new(TestPrivacyReleaseAnchor::default());
         let source = NodeHandle::try_new_with_runtime_deps(
             cfg.clone(),
-            with_fresh_test_fenced_privacy_runtime(
-                NodeRuntimeDeps::default()
-                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                    .with_privacy_release_anchor(anchor.clone())
-                    .with_transparency_leader_lease_provider(
-                        test_transparency_leader_lease_provider(),
-                    ),
-            ),
+            fresh_test_privacy_runtime_deps(anchor.clone()),
         )
         .expect("initialise privacy source-receipt node");
         source
@@ -24432,18 +24277,9 @@ mod tests {
             &norito::to_bytes(&checkpoint).expect("encode oversized receipt-only checkpoint"),
         )
         .expect("write oversized receipt-only checkpoint");
-        let error = NodeHandle::try_new_with_runtime_deps(
-            cfg,
-            with_fresh_test_fenced_privacy_runtime(
-                NodeRuntimeDeps::default()
-                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                    .with_privacy_release_anchor(anchor)
-                    .with_transparency_leader_lease_provider(
-                        test_transparency_leader_lease_provider(),
-                    ),
-            ),
-        )
-        .expect_err("oversized retained source-event receipt must fail restart");
+        let error =
+            NodeHandle::try_new_with_runtime_deps(cfg, fresh_test_privacy_runtime_deps(anchor))
+                .expect_err("oversized retained source-event receipt must fail restart");
         assert!(matches!(
             error,
             NodeInitError::Checkpoint {
@@ -24460,14 +24296,7 @@ mod tests {
         let anchor = Arc::new(TestPrivacyReleaseAnchor::default());
         let source = NodeHandle::try_new_with_runtime_deps(
             cfg,
-            with_fresh_test_fenced_privacy_runtime(
-                NodeRuntimeDeps::default()
-                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                    .with_privacy_release_anchor(anchor.clone())
-                    .with_transparency_leader_lease_provider(
-                        test_transparency_leader_lease_provider(),
-                    ),
-            ),
+            fresh_test_privacy_runtime_deps(anchor.clone()),
         )
         .expect("initialise privacy delay-lineage node");
         assert!(matches!(
@@ -24534,14 +24363,7 @@ mod tests {
             .build();
             let error = NodeHandle::try_new_with_runtime_deps(
                 rotated_cfg,
-                with_fresh_test_fenced_privacy_runtime(
-                    NodeRuntimeDeps::default()
-                        .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                        .with_privacy_release_anchor(anchor.clone())
-                        .with_transparency_leader_lease_provider(
-                            test_transparency_leader_lease_provider(),
-                        ),
-                ),
+                fresh_test_privacy_runtime_deps(anchor.clone()),
             )
             .expect_err("cadence rotation must fail the durable query lineage");
             assert!(
@@ -24571,14 +24393,7 @@ mod tests {
         let anchor = Arc::new(TestPrivacyReleaseAnchor::default());
         let source = NodeHandle::try_new_with_runtime_deps(
             cfg.clone(),
-            with_fresh_test_fenced_privacy_runtime(
-                NodeRuntimeDeps::default()
-                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                    .with_privacy_release_anchor(anchor.clone())
-                    .with_transparency_leader_lease_provider(
-                        test_transparency_leader_lease_provider(),
-                    ),
-            ),
+            fresh_test_privacy_runtime_deps(anchor.clone()),
         )
         .expect("initialise source node");
         for event in [
@@ -24610,18 +24425,9 @@ mod tests {
         drop(source);
         fs::write(&checkpoint_path, rolled_back_checkpoint)
             .expect("simulate checkpoint rollback behind finalized head");
-        let error = NodeHandle::try_new_with_runtime_deps(
-            cfg,
-            with_fresh_test_fenced_privacy_runtime(
-                NodeRuntimeDeps::default()
-                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                    .with_privacy_release_anchor(anchor)
-                    .with_transparency_leader_lease_provider(
-                        test_transparency_leader_lease_provider(),
-                    ),
-            ),
-        )
-        .expect_err("rollback behind the finalized release anchor must fail");
+        let error =
+            NodeHandle::try_new_with_runtime_deps(cfg, fresh_test_privacy_runtime_deps(anchor))
+                .expect_err("rollback behind the finalized release anchor must fail");
         assert!(
             error
                 .to_string()
@@ -24681,9 +24487,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("typed authority temp dir");
         let root = temp.path().canonicalize().expect("canonical temp root");
         let config = with_test_signed_governance_config(
-            StorageConfig::builder()
-                .enabled(true)
-                .data_dir(root.join("storage")),
+            enabled_storage_builder(root.join("storage")),
             &root,
         )
         .build();
@@ -24775,9 +24579,7 @@ mod tests {
             .path()
             .canonicalize()
             .expect("canonical missing identity root");
-        let missing_identity = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(missing_identity_root.join("storage"))
+        let missing_identity = enabled_storage_builder(missing_identity_root.join("storage"))
             .governance_dir(Some(missing_identity_root.join("governance")))
             .build();
         let error = NodeHandle::try_new(missing_identity)
@@ -24849,9 +24651,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("producer recovery temp dir");
         let root = temp.path().canonicalize().expect("canonical temp root");
         let config = with_test_signed_governance_config(
-            StorageConfig::builder()
-                .enabled(true)
-                .data_dir(root.join("storage")),
+            enabled_storage_builder(root.join("storage")),
             &root,
         )
         .build();
@@ -25030,9 +24830,7 @@ mod tests {
             let data_dir = root.join("storage");
             let governance_dir = root.join("governance");
             let signer = Arc::new(TestGovernanceDagSigner::new());
-            let mut builder = StorageConfig::builder()
-                .enabled(true)
-                .data_dir(data_dir.clone())
+            let mut builder = enabled_storage_builder(data_dir.clone())
                 .governance_dag_signer_handle(Some(signer.handle().to_owned()));
             if complete_binding {
                 builder = builder
@@ -25492,9 +25290,7 @@ mod tests {
     #[test]
     fn por_history_rolls_oldest_unprotected_entry_and_preserves_live_lifecycle_keys() {
         let (base, _dir) = storage_config_with_temp_dir();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(base.data_dir().clone())
+        let cfg = enabled_storage_builder(base.data_dir().clone())
             .runtime_retention(RuntimeRetentionPolicy::new(1, 1, 1024 * 1024))
             .build();
         let handle = NodeHandle::new(cfg);
@@ -25515,9 +25311,7 @@ mod tests {
         assert!(history.contains_key(&(replacement.manifest_digest, replacement.provider_id)));
         drop(history);
         let (base, _dir) = storage_config_with_temp_dir();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(base.data_dir().clone())
+        let cfg = enabled_storage_builder(base.data_dir().clone())
             .runtime_retention(RuntimeRetentionPolicy::new(1, 1, 1024 * 1024))
             .build();
         let protected = NodeHandle::new(cfg);
@@ -25631,14 +25425,7 @@ mod tests {
         assert!(handle.manifest_metadata(&manifest_id).is_ok());
         assert_eq!(handle.storage.as_ref().unwrap().gc_counters(), (0, 0));
         assert_eq!(handle.pending_governance_publication_count(), 0);
-        assert!(
-            handle
-                .gc_eviction_intents
-                .read()
-                .expect("intent lock")
-                .entries
-                .is_empty()
-        );
+        assert!(gc_runtime_read!(handle.gc_eviction_intents, "intent lock" => entries.is_empty()));
         assert!(handle.durability_failure_reason().is_none());
         fs::remove_dir(&checkpoint_path).expect("remove injected checkpoint directory");
         write_local_checkpoint_atomic(&checkpoint_path, &committed)
@@ -25676,12 +25463,7 @@ mod tests {
             assert_eq!(intent.reserved_outbox_slots, 1);
         }
         assert_eq!(
-            handle
-                .gc_eviction_intents
-                .read()
-                .expect("intent lock")
-                .entries
-                .len(),
+            gc_runtime_read!(handle.gc_eviction_intents, "intent lock" => entries.len()),
             1
         );
         assert_eq!(handle.pending_governance_publication_count(), 0);
@@ -25694,19 +25476,10 @@ mod tests {
         assert_eq!(restored.storage.as_ref().unwrap().gc_counters(), (0, 0));
         assert_eq!(restored.pending_governance_publication_count(), 0);
         assert!(
-            restored
-                .gc_eviction_intents
-                .read()
-                .expect("restored intent lock")
-                .entries
-                .is_empty()
+            gc_runtime_read!(restored.gc_eviction_intents, "restored intent lock" => entries.is_empty())
         );
         assert!(
-            restored
-                .gc_eviction_audit_links
-                .read()
-                .expect("restored link lock")
-                .is_empty()
+            gc_runtime_read!(restored.gc_eviction_audit_links, "restored link lock" => is_empty())
         );
     }
     #[test]
@@ -25753,12 +25526,7 @@ mod tests {
         assert_eq!(storage.gc_counters(), (0, 0));
         assert_eq!(handle.pending_governance_publication_count(), 0);
         assert_eq!(
-            handle
-                .gc_eviction_intents
-                .read()
-                .expect("intent lock")
-                .entries
-                .len(),
+            gc_runtime_read!(handle.gc_eviction_intents, "intent lock" => entries.len()),
             1
         );
         drop(drain_guard);
@@ -25813,20 +25581,11 @@ mod tests {
         assert!(restored.manifest_metadata(&manifest_id).is_err());
         assert_eq!(restored.pending_governance_publication_count(), 1);
         assert_eq!(
-            restored
-                .gc_eviction_audit_links
-                .read()
-                .expect("link lock")
-                .len(),
+            gc_runtime_read!(restored.gc_eviction_audit_links, "link lock" => len()),
             1
         );
         assert!(
-            restored
-                .gc_eviction_intents
-                .read()
-                .expect("intent lock")
-                .entries
-                .is_empty()
+            gc_runtime_read!(restored.gc_eviction_intents, "intent lock" => entries.is_empty())
         );
         let publisher = Arc::new(RecordingPublisher::default());
         restored
@@ -25848,11 +25607,7 @@ mod tests {
             (payload.len() as u64, 1)
         );
         assert_eq!(
-            acknowledged
-                .gc_eviction_audit_links
-                .read()
-                .expect("acknowledged link lock")
-                .len(),
+            gc_runtime_read!(acknowledged.gc_eviction_audit_links, "acknowledged link lock" => len()),
             1
         );
     }
@@ -25906,20 +25661,11 @@ mod tests {
         assert!(handle.durability_failure_reason().is_some());
         assert_eq!(handle.pending_governance_publication_count(), 0);
         assert_eq!(
-            handle
-                .gc_eviction_intents
-                .read()
-                .expect("rolled-back intent lock")
-                .entries
-                .len(),
+            gc_runtime_read!(handle.gc_eviction_intents, "rolled-back intent lock" => entries.len()),
             1
         );
         assert!(
-            handle
-                .gc_eviction_audit_links
-                .read()
-                .expect("rolled-back link lock")
-                .is_empty()
+            gc_runtime_read!(handle.gc_eviction_audit_links, "rolled-back link lock" => is_empty())
         );
         drop(drain_guard);
         drop(gc_guard);
@@ -25941,28 +25687,17 @@ mod tests {
         assert_eq!(restored.storage.as_ref().unwrap().gc_counters().1, 1);
         assert_eq!(restored.pending_governance_publication_count(), 1);
         assert!(
-            restored
-                .gc_eviction_intents
-                .read()
-                .expect("restored intent lock")
-                .entries
-                .is_empty()
+            gc_runtime_read!(restored.gc_eviction_intents, "restored intent lock" => entries.is_empty())
         );
         assert_eq!(
-            restored
-                .gc_eviction_audit_links
-                .read()
-                .expect("restored link lock")
-                .len(),
+            gc_runtime_read!(restored.gc_eviction_audit_links, "restored link lock" => len()),
             1
         );
     }
     #[test]
     fn gc_eviction_transaction_reservation_survives_full_outbox_restart() {
         let (base, _dir) = storage_config_with_temp_dir();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(base.data_dir().clone())
+        let cfg = enabled_storage_builder(base.data_dir().clone())
             .runtime_retention(RuntimeRetentionPolicy::new(1, 2, 2 * 1024 * 1024))
             .build();
         let handle = NodeHandle::new_with_policies(
@@ -26019,12 +25754,7 @@ mod tests {
         );
         assert_eq!(restored.pending_governance_publication_count(), 2);
         assert!(
-            restored
-                .gc_eviction_intents
-                .read()
-                .expect("restored intent lock")
-                .entries
-                .is_empty()
+            gc_runtime_read!(restored.gc_eviction_intents, "restored intent lock" => entries.is_empty())
         );
         let publisher = Arc::new(RecordingPublisher::default());
         restored
@@ -26211,11 +25941,7 @@ mod tests {
             NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
         assert_eq!(restored.storage.as_ref().unwrap().gc_counters().1, 1);
         assert_eq!(
-            restored
-                .gc_eviction_audit_links
-                .read()
-                .expect("restored link lock")
-                .len(),
+            gc_runtime_read!(restored.gc_eviction_audit_links, "restored link lock" => len()),
             1
         );
     }
@@ -26255,20 +25981,14 @@ mod tests {
         assert_eq!(storage.gc_counters(), (128, 4));
         assert_eq!(handle.pending_governance_publication_count(), 4);
         assert_eq!(
-            handle
-                .gc_eviction_audit_links
-                .read()
-                .expect("link lock")
-                .len(),
+            gc_runtime_read!(handle.gc_eviction_audit_links, "link lock" => len()),
             4
         );
     }
     #[test]
     fn gc_blocked_audit_full_outbox_is_reported_without_eviction() {
         let (base, _dir) = storage_config_with_temp_dir();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(base.data_dir().clone())
+        let cfg = enabled_storage_builder(base.data_dir().clone())
             .runtime_retention(RuntimeRetentionPolicy::new(1, 1, 2 * 1024 * 1024))
             .build();
         let handle =

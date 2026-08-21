@@ -40,20 +40,6 @@ _MAX_SOURCE_SEAL_BYTES = 16 * 1024 * 1024 * 1024
 _MAX_SOURCE_FILE_BYTES = 8 * 1024 * 1024 * 1024
 _MAX_SYMLINK_TARGET_BYTES = 1024 * 1024
 _COPY_CHUNK_BYTES = 1024 * 1024
-_SEALED_CONTEXT_FILES = frozenset(
-    {
-        b"Dockerfile",
-        b"context-control.sha256",
-        b"scripts/compute_workspace_source_manifest.py",
-        b"scripts/taira_image_smoke.sh",
-        b"source-archive.sha256",
-        b"source-path-list.sha256",
-        b"taira-workspace-source-paths-v1.bin",
-        b"taira-workspace-source-v1.seal",
-        b"workspace-source-manifest.sha256",
-    }
-)
-_SEALED_CONTEXT_DIRECTORIES = frozenset({b"scripts"})
 _STABLE_FILE_FIELDS = (
     "st_dev",
     "st_ino",
@@ -1502,48 +1488,6 @@ def workspace_source_manifest_from_exact_path_list(
     return _manifest_for_paths(root.resolve(), paths)
 
 
-def validate_sealed_context(root: Path) -> None:
-    """Require the unique minimal Taira BuildKit context inventory."""
-
-    root_descriptor, _ = _open_root_directory(root, "sealed build context")
-    files: set[bytes] = set()
-    directories: set[bytes] = set()
-
-    def visit(descriptor: int, prefix: bytes) -> None:
-        for entry in os.scandir(descriptor):
-            name = os.fsencode(entry.name)
-            member = name if not prefix else prefix + b"/" + name
-            metadata = entry.stat(follow_symlinks=False)
-            if stat.S_ISDIR(metadata.st_mode):
-                directories.add(member)
-                flags = os.O_RDONLY
-                if hasattr(os, "O_DIRECTORY"):
-                    flags |= os.O_DIRECTORY
-                if hasattr(os, "O_NOFOLLOW"):
-                    flags |= os.O_NOFOLLOW
-                child = os.open(name, flags, dir_fd=descriptor)
-                try:
-                    visit(child, member)
-                finally:
-                    os.close(child)
-            elif stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
-                files.add(member)
-            else:
-                raise SourceSealError(
-                    "sealed build context contains a symlink, hard link, "
-                    "device, FIFO, socket, or unsupported member"
-                )
-
-    try:
-        visit(root_descriptor, b"")
-    finally:
-        os.close(root_descriptor)
-    if files != _SEALED_CONTEXT_FILES or directories != _SEALED_CONTEXT_DIRECTORIES:
-        raise SourceSealError(
-            "sealed build context does not contain the exact minimal inventory"
-        )
-
-
 def extract_source_seal(
     archive: Path,
     path_list: Path,
@@ -1834,11 +1778,6 @@ def main() -> int:
         help="with --path-list, reject every extra or unsupported detached member",
     )
     parser.add_argument(
-        "--validate-sealed-context",
-        type=Path,
-        help="require the exact minimal Taira BuildKit context inventory",
-    )
-    parser.add_argument(
         "--create-sealed-archive",
         type=Path,
         help="create one deterministic source seal with O_EXCL",
@@ -1875,7 +1814,6 @@ def main() -> int:
     if args.release_identity_json and (
         args.write_path_list is not None
         or args.path_list is not None
-        or args.validate_sealed_context is not None
         or seal_modes
     ):
         parser.error(
@@ -1884,17 +1822,10 @@ def main() -> int:
         )
     if args.write_path_list is not None and (
         args.path_list is not None
-        or args.validate_sealed_context is not None
         or args.require_exact_closure
         or seal_modes
     ):
         parser.error("--write-path-list must be used by itself")
-    if args.validate_sealed_context is not None and (
-        args.path_list is not None
-        or args.require_exact_closure
-        or seal_modes
-    ):
-        parser.error("--validate-sealed-context must be used by itself")
     if args.require_exact_closure and (
         args.path_list is None or seal_modes
     ):
@@ -1943,9 +1874,6 @@ def main() -> int:
             paths = _git_source_paths(args.root.resolve())
             write_source_path_list(args.write_path_list, paths)
             print(_manifest_for_paths(args.root.resolve(), paths))
-        elif args.validate_sealed_context is not None:
-            validate_sealed_context(args.validate_sealed_context)
-            print("sealed context inventory verified")
         elif args.create_sealed_archive is not None:
             print(
                 create_source_seal(

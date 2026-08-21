@@ -1,6 +1,4 @@
 //! Payload-free immutable audit journal and crash recovery.
-#[cfg(feature = "taira-authority-bin")]
-use super::protocol::SoftwareSignerPublicBindingV1;
 use super::{
     envelope::SoftwareSignerKeyEnvelopeAadV1,
     protocol::{
@@ -89,8 +87,6 @@ pub(super) struct RecoveredSignCommitV1 {
     pub payload_digest: [u8; 32],
     pub signature: Vec<u8>,
     pub sequence: u64,
-    #[cfg(feature = "taira-authority-bin")]
-    pub predecessor_audit_head: [u8; 32],
     pub audit_head: [u8; 32],
 }
 #[derive(Clone, Copy, Debug)]
@@ -109,17 +105,6 @@ pub(super) struct RecoveredJournalV1 {
     record_bytes: u64,
 }
 
-/// Public-key-verifiable successor data extracted from one old-key-attested
-/// rotation journal record.
-#[cfg(feature = "taira-authority-bin")]
-pub(super) struct VerifiedRotationSuccessorV1 {
-    pub operation_id: [u8; 32],
-    pub request_digest: [u8; 32],
-    pub sequence: u64,
-    pub predecessor_audit_head: [u8; 32],
-    pub audit_head: [u8; 32],
-    pub new_key: SoftwareSignerKeyEnvelopeAadV1,
-}
 pub(super) struct SoftwareSignerAuditJournalV1 {
     directory: PathBuf,
     sequence: u64,
@@ -237,129 +222,6 @@ impl SoftwareSignerAuditJournalV1 {
     pub(super) const fn audit_head(&self) -> [u8; 32] {
         self.audit_head
     }
-
-    #[cfg(feature = "taira-authority-bin")]
-    pub(super) fn rotation_record_bytes(
-        &self,
-        operation_id: [u8; 32],
-    ) -> Result<Vec<u8>, SoftwareSignerJournalErrorV1> {
-        if operation_id == [0; 32] {
-            return Err(SoftwareSignerJournalErrorV1::Invalid);
-        }
-        for sequence in 2..=self.sequence {
-            let record = read_record(&self.directory.join(record_name(sequence)))?;
-            if matches!(
-                &record.body.event,
-                SoftwareSignerAuditEventV1::Rotated {
-                    operation_id: found,
-                    ..
-                } if found == &operation_id
-            ) {
-                return encode_record(&record);
-            }
-        }
-        Err(SoftwareSignerJournalErrorV1::Invalid)
-    }
-
-    #[cfg(feature = "taira-authority-bin")]
-    pub(super) fn rotation_record_bytes_from_previous(
-        &self,
-        previous: &SoftwareSignerPublicBindingV1,
-    ) -> Result<Vec<u8>, SoftwareSignerJournalErrorV1> {
-        let mut found = None;
-        for sequence in 2..=self.sequence {
-            let record = read_record(&self.directory.join(record_name(sequence)))?;
-            let bytes = encode_record(&record)?;
-            if verify_rotation_successor_record(&bytes, previous).is_ok()
-                && found.replace(bytes).is_some()
-            {
-                return Err(SoftwareSignerJournalErrorV1::Invalid);
-            }
-        }
-        found.ok_or(SoftwareSignerJournalErrorV1::Invalid)
-    }
-}
-
-#[cfg(feature = "taira-authority-bin")]
-pub(super) fn verify_rotation_successor_record(
-    bytes: &[u8],
-    previous: &SoftwareSignerPublicBindingV1,
-) -> Result<VerifiedRotationSuccessorV1, SoftwareSignerJournalErrorV1> {
-    previous
-        .validate()
-        .map_err(|()| SoftwareSignerJournalErrorV1::Invalid)?;
-    if bytes.is_empty() || bytes.len() > AUDIT_RECORD_MAX_BYTES_V1 {
-        return Err(SoftwareSignerJournalErrorV1::Invalid);
-    }
-    let record: SoftwareSignerAuditRecordV1 =
-        norito::decode_canonical(bytes).map_err(|_| SoftwareSignerJournalErrorV1::Invalid)?;
-    if encode_record(&record)? != bytes
-        || record.body.magic != SIGNER_AUDIT_MAGIC_V1
-        || record.body.version != SIGNER_PROTOCOL_VERSION_V1
-        || record.body.sequence <= 1
-        || record.body.predecessor_digest == [0; 32]
-        || record.record_digest == [0; 32]
-        || digest_canonical(AUDIT_RECORD_DIGEST_DOMAIN_V1, &record.body)
-            .map_err(|()| SoftwareSignerJournalErrorV1::Invalid)?
-            != record.record_digest
-    {
-        return Err(SoftwareSignerJournalErrorV1::Invalid);
-    }
-    let attestation = Signature::try_from_bytes(&record.attestation)
-        .map_err(|_| SoftwareSignerJournalErrorV1::Invalid)?;
-    attestation
-        .verify(
-            &previous.public_key,
-            &audit_attestation_message(record.record_digest, record.body.sequence),
-        )
-        .map_err(|_| SoftwareSignerJournalErrorV1::Invalid)?;
-    let sequence = record.body.sequence;
-    let predecessor_audit_head = record.body.predecessor_digest;
-    let audit_head = record.record_digest;
-    let SoftwareSignerAuditEventV1::Rotated {
-        operation_id,
-        request_digest,
-        previous_key_revision,
-        previous_policy_revision,
-        new_key,
-        new_envelope_digest,
-    } = record.body.event
-    else {
-        return Err(SoftwareSignerJournalErrorV1::Invalid);
-    };
-    new_key
-        .validate()
-        .map_err(|_| SoftwareSignerJournalErrorV1::Invalid)?;
-    if operation_id == [0; 32]
-        || request_digest == [0; 32]
-        || new_envelope_digest == [0; 32]
-        || previous_key_revision != previous.key_revision
-        || previous_policy_revision != previous.policy_revision
-        || new_key.key_revision <= previous.key_revision
-        || new_key.policy_revision <= previous.policy_revision
-        || new_key.public_key_digest == previous.public_key_digest
-        || new_key.backend != previous.backend
-        || new_key.handle != previous.handle
-        || new_key.service_id != previous.service_id
-        || new_key.administrator_id != previous.administrator_id
-        || new_key.service_uid != previous.service_uid
-        || new_key.client_uid != previous.client_uid
-        || new_key.administrator_uid != previous.administrator_uid
-        || new_key.role != previous.role
-        || new_key.purpose_binding != previous.purpose_binding
-        || new_key.domain != previous.domain
-        || new_key.max_request_bytes != previous.max_request_bytes
-    {
-        return Err(SoftwareSignerJournalErrorV1::Invalid);
-    }
-    Ok(VerifiedRotationSuccessorV1 {
-        operation_id,
-        request_digest,
-        sequence,
-        predecessor_audit_head,
-        audit_head,
-        new_key,
-    })
 }
 #[derive(Debug)]
 struct AuditDirectoryInventoryV1 {
@@ -466,8 +328,6 @@ fn validate_records_streaming(
                         payload_digest,
                         signature,
                         sequence: body.sequence,
-                        #[cfg(feature = "taira-authority-bin")]
-                        predecessor_audit_head: body.predecessor_digest,
                         audit_head: record_digest,
                     },
                 );

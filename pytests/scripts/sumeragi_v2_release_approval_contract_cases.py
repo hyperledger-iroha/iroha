@@ -159,7 +159,7 @@ def _case_release_approval_four_class_binding_and_path_free_archives() -> None:
             "offline-cargo-version",
             "offline-workspace-build",
             "g-unit-production-864",
-            "g-unit-focused-530",
+            "g-unit-focused-522",
             "offline-workspace-clippy",
             "offline-workspace-format",
             "offline-no-legacy-codec",
@@ -227,7 +227,6 @@ def _case_release_approval_four_class_binding_and_path_free_archives() -> None:
             "scale-five-paired-trials",
             "scale-evidence-validation",
             "network-chaos-100000-height",
-            "network-taira-24h-soak",
         ),
         "final-bootstrap-publication": (
             "final-protected-bootstrap",
@@ -242,13 +241,13 @@ def _case_release_approval_four_class_binding_and_path_free_archives() -> None:
     }
     expected_plan_digests = {
         "offline-toolchain-sdk": (
-            "aba5987e1a69dba70c8ef47478ecbf748165f13c3131045594473d47a5a9e95f"
+            "ec23b831d3c9359fc94952bbda3cccb92e84a39645bb14e5c19f130d01ded95b"
         ),
         "formal-proof-tools": (
             "eb9f0283898f09d23970f1d6511d250b17107a0ad80fc65e1adbe1ef0b1b19bb"
         ),
         "network-scale-soak": (
-            "e922b8afbfe4848e8b2b5f858654477a28d710c3afcf7698a77276a8294681cf"
+            "a72659ea6af739910412dfe36687d8f512cc699b63c566f941089f2fcb028663"
         ),
         "final-bootstrap-publication": (
             "76be51f1583e2d49c8b9ac85f9218a0a0b5a3334f1923dad39aa13ec8e7768fd"

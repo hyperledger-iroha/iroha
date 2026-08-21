@@ -81,6 +81,16 @@ pub(crate) fn reviewed_lifecycle_work_registry_source_for_test() -> &'static str
             let recovery_registry_impl =
                 include_str!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs")
                     .replacen(
+                        "include!(\"v2_lifecycle_work_registry_validate_completion_impl.rs\");\n",
+                        include_str!("v2_lifecycle_work_registry_validate_completion_impl.rs"),
+                        1,
+                    )
+                    .replacen(
+                        "include!(\"v2_lifecycle_work_registry_access_impl.rs\");\n",
+                        include_str!("v2_lifecycle_work_registry_access_impl.rs"),
+                        1,
+                    )
+                    .replacen(
                         "include!(\"v2_lifecycle_work_registry_validate_recovery_execution_impl.rs\");\n",
                         include_str!(
                             "v2_lifecycle_work_registry_validate_recovery_execution_impl.rs"
@@ -102,6 +112,21 @@ pub(crate) fn reviewed_lifecycle_work_registry_source_for_test() -> &'static str
                 .replacen(
                     "include!(\"v2_lifecycle_work_registry_pre_admission.rs\");\n",
                     include_str!("v2_lifecycle_work_registry_pre_admission.rs"),
+                    1,
+                )
+                .replacen(
+                    "include!(\"v2_lifecycle_work_registry_live_wal_sign.rs\");\n",
+                    include_str!("v2_lifecycle_work_registry_live_wal_sign.rs"),
+                    1,
+                )
+                .replacen(
+                    "include!(\"v2_lifecycle_work_registry_output.rs\");\n",
+                    include_str!("v2_lifecycle_work_registry_output.rs"),
+                    1,
+                )
+                .replacen(
+                    "include!(\"v2_lifecycle_work_registry_live_validate_children.rs\");\n",
+                    include_str!("v2_lifecycle_work_registry_live_validate_children.rs"),
                     1,
                 )
                 .replacen(
@@ -134,11 +159,48 @@ pub(crate) fn reviewed_v2_adapter_source_for_test() -> &'static str {
     static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SOURCE
         .get_or_init(|| {
-            include_str!("v2.rs").replacen(
-                "include!(\"v2_authenticated_recovered_adapter_startup_impl.rs\");\n",
-                include_str!("v2_authenticated_recovered_adapter_startup_impl.rs"),
-                1,
-            )
+            include_str!("v2.rs")
+                .replacen(
+                    "include!(\"v2_authenticated_recovered_adapter_startup_impl.rs\");\n",
+                    include_str!("v2_authenticated_recovered_adapter_startup_impl.rs"),
+                    1,
+                )
+                .replacen(
+                    "include!(\"v2_verified_height_context_recovered_output_auth.rs\");\n",
+                    include_str!("v2_verified_height_context_recovered_output_auth.rs"),
+                    1,
+                )
+                .replacen(
+                    "include!(\"v2_ready_durable_validate_adapter_preview.rs\");\n",
+                    include_str!("v2_ready_durable_validate_adapter_preview.rs"),
+                    1,
+                )
+                .replacen(
+                    "include!(\"v2_adapter_equivocation_evidence.rs\");\n",
+                    include_str!("v2_adapter_equivocation_evidence.rs"),
+                    1,
+                )
+        })
+        .as_str()
+}
+
+#[cfg(test)]
+/// Reconstruct the effect executor source exactly as Rust expands its reviewed providers.
+pub(crate) fn reviewed_v2_effects_source_for_test() -> &'static str {
+    static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SOURCE
+        .get_or_init(|| {
+            include_str!("v2_effects.rs")
+                .replacen(
+                    "include!(\"v2_effects_recovered_lifecycle_output_service.rs\");\n",
+                    include_str!("v2_effects_recovered_lifecycle_output_service.rs"),
+                    1,
+                )
+                .replacen(
+                    "include!(\"v2_effects_lifecycle_admission_settlement.rs\");\n",
+                    include_str!("v2_effects_lifecycle_admission_settlement.rs"),
+                    1,
+                )
         })
         .as_str()
 }
@@ -151,6 +213,11 @@ pub(crate) fn reviewed_v2_runtime_source_for_test() -> &'static str {
         .get_or_init(|| {
             include_str!("v2_runtime.rs")
                 .replacen(
+                    "include!(\"v2_runtime_durable_recovery_pending.rs\");\n",
+                    include_str!("v2_runtime_durable_recovery_pending.rs"),
+                    1,
+                )
+                .replacen(
                     "include!(\"v2_runtime_effect_ownership_core_impl.rs\");\n",
                     include_str!("v2_runtime_effect_ownership_core_impl.rs"),
                     1,
@@ -158,6 +225,11 @@ pub(crate) fn reviewed_v2_runtime_source_for_test() -> &'static str {
                 .replacen(
                     "include!(\"v2_runtime_effect_ownership_rebind_impl.rs\");\n",
                     include_str!("v2_runtime_effect_ownership_rebind_impl.rs"),
+                    1,
+                )
+                .replacen(
+                    "include!(\"v2_runtime_ready_validate_publication.rs\");\n",
+                    include_str!("v2_runtime_ready_validate_publication.rs"),
                     1,
                 )
         })
@@ -303,23 +375,42 @@ fn source(id: SourceId) -> String {
             include_str!("v2_lifecycle_concrete_admission.rs").to_owned()
         }
         SourceId::Coordinator => include_str!("v2_lifecycle_coordinator.rs").to_owned(),
-        SourceId::Effects => include_str!("v2_effects.rs").to_owned(),
+        SourceId::Effects => reviewed_v2_effects_source_for_test().to_owned(),
         SourceId::KuraTerminalOutcomes => {
             include_str!("../kura/autonomous_lifecycle_terminal_outcomes.rs").to_owned()
         }
         SourceId::LaneWork => include_str!("v2_lane_work.rs").to_owned(),
         SourceId::Launch => include_str!("v2_lifecycle_launch.rs").to_owned(),
         SourceId::Ledger => reviewed_lifecycle_ledger_source_for_test().to_owned(),
-        SourceId::LifecycleOpen => include_str!("v2_lifecycle_open.rs").to_owned(),
+        SourceId::LifecycleOpen => include_str!("v2_lifecycle_open.rs").replacen(
+            "include!(\"v2_lifecycle_open_output_recovery.rs\");\n",
+            include_str!("v2_lifecycle_open_output_recovery.rs"),
+            1,
+        ),
         SourceId::LifecycleRecovery => include_str!("v2_lifecycle_recovery.rs").to_owned(),
         SourceId::Projection => include_str!("v2_lifecycle_projection.rs").to_owned(),
         SourceId::Registry => reviewed_lifecycle_work_registry_source_for_test().to_owned(),
         SourceId::RegistryRecovery => {
             include_str!("v2_lifecycle_work_registry_validate_recovery.rs").to_owned()
         }
-        SourceId::RegistryRecoveryImpl => {
-            include_str!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs").to_owned()
-        }
+        SourceId::RegistryRecoveryImpl => include_str!(
+            "v2_lifecycle_work_registry_validate_recovery_registry_impl.rs"
+        )
+        .replacen(
+            "include!(\"v2_lifecycle_work_registry_validate_completion_impl.rs\");\n",
+            include_str!("v2_lifecycle_work_registry_validate_completion_impl.rs"),
+            1,
+        )
+        .replacen(
+            "include!(\"v2_lifecycle_work_registry_access_impl.rs\");\n",
+            include_str!("v2_lifecycle_work_registry_access_impl.rs"),
+            1,
+        )
+        .replacen(
+            "include!(\"v2_lifecycle_work_registry_validate_recovery_execution_impl.rs\");\n",
+            include_str!("v2_lifecycle_work_registry_validate_recovery_execution_impl.rs"),
+            1,
+        ),
         SourceId::ReplayAuthority => include_str!("v2_lifecycle_replay_authority.rs")
             .replacen(
                 "include!(\"v2_lifecycle_replay_authority_live_wal.rs\");\n",
@@ -339,6 +430,11 @@ fn source(id: SourceId) -> String {
             .replacen(
                 "include!(\"v2_lifecycle_replay_authority_payload_projection.rs\");\n",
                 include_str!("v2_lifecycle_replay_authority_payload_projection.rs"),
+                1,
+            )
+            .replacen(
+                "include!(\"v2_lifecycle_replay_authority_output_recovery.rs\");\n",
+                include_str!("v2_lifecycle_replay_authority_output_recovery.rs"),
                 1,
             ),
         SourceId::Runner => include_str!("v2_runner.rs").to_owned(),
@@ -577,9 +673,9 @@ fn parse_contracts() -> Result<Vec<Case>, String> {
             _ => return Err(format!("invalid source contract asset line {line_number}")),
         }
     }
-    if current.is_some() || cases.len() != 45 {
+    if current.is_some() || cases.len() != 46 {
         return Err(format!(
-            "source contract asset must contain exactly 45 closed cases"
+            "source contract asset must contain exactly 46 closed cases"
         ));
     }
     Ok(cases)
@@ -710,5 +806,8 @@ fn source_contract_case_ids_are_unique() {
         cases.iter().all(|case| ids.insert(case.id.as_str())),
         "source contract case IDs must be unique"
     );
-    assert_eq!(ids.len(), 45, "source contract inventory drifted");
+    assert_eq!(ids.len(), 46, "source contract inventory drifted");
+    for id in ids {
+        run_source_contract(id);
+    }
 }

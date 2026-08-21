@@ -541,23 +541,33 @@ mod tests {
     #[test]
     fn sumeragi_v2_lifecycle_geometry_uses_authenticated_ingress_sources() {
         assert_eq!(
-            sumeragi_v2_lifecycle_capacity_geometry(4, 256, 163, 2),
+            sumeragi_v2_lifecycle_capacity_geometry(
+                4,
+                256,
+                defaults::sumeragi::QUEUE_BODY_CAPACITY.get(),
+                2,
+            ),
             Ok(SumeragiV2LifecycleCapacityGeometry {
                 consensus: 16,
                 effect: 256,
-                serve: 660,
-                producer: 660,
-                total: 1_592,
+                serve: 652,
+                producer: 652,
+                total: 1_576,
             }),
         );
         assert_eq!(
-            sumeragi_v2_lifecycle_capacity_geometry(31, 256, 163, 2),
+            sumeragi_v2_lifecycle_capacity_geometry(
+                31,
+                256,
+                defaults::sumeragi::QUEUE_BODY_CAPACITY.get(),
+                2,
+            ),
             Ok(SumeragiV2LifecycleCapacityGeometry {
                 consensus: 16,
                 effect: 256,
-                serve: 714,
-                producer: 714,
-                total: 1_700,
+                serve: 706,
+                producer: 706,
+                total: 1_684,
             }),
         );
     }

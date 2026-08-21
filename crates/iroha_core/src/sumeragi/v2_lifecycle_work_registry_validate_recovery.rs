@@ -10,6 +10,7 @@ pub(crate) struct ReadyValidatedAdapterAuthority<'a> {
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
     receipt: &'a ValidatedBodyReceipt,
+    local_origin_manifest: Option<wire::PayloadManifest>,
 }
 /// Non-forgeable installed-Validate predecessor accepted only by the
 /// adapter's sealed WAL-sign binding step.
@@ -118,8 +119,15 @@ impl<'a> ReadyValidatedAdapterAuthority<'a> {
         wire::ConsensusRound,
         wire::BlockSubject,
         &'a ValidatedBodyReceipt,
+        Option<wire::PayloadManifest>,
     ) {
-        (self.tag, self.round, self.subject, self.receipt)
+        (
+            self.tag,
+            self.round,
+            self.subject,
+            self.receipt,
+            self.local_origin_manifest,
+        )
     }
 }
 /// Non-forgeable rejected-validation input accepted only by the adapter's
@@ -133,6 +141,7 @@ pub(crate) struct ReadyRejectedAdapterAuthority<'a> {
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
     receipt: &'a DurableBodyReceipt,
+    local_origin_manifest: Option<wire::PayloadManifest>,
 }
 impl<'a> ReadyRejectedAdapterAuthority<'a> {
     /// Consume the unforgeable registry authority inside the adapter module.
@@ -143,8 +152,15 @@ impl<'a> ReadyRejectedAdapterAuthority<'a> {
         wire::ConsensusRound,
         wire::BlockSubject,
         &'a DurableBodyReceipt,
+        Option<wire::PayloadManifest>,
     ) {
-        (self.tag, self.round, self.subject, self.receipt)
+        (
+            self.tag,
+            self.round,
+            self.subject,
+            self.receipt,
+            self.local_origin_manifest,
+        )
     }
 }
 /// Fixed dual-borrow result of joining one Ready Validate carrier to the
@@ -296,6 +312,7 @@ impl<'registry, 'adapter> LiveValidateSignRegistryPublicationError<'registry, 'a
 /// The replay module accepts this token only so no sibling can extract the
 /// effect or pending binding from the post-fsync seal.
 pub(in crate::sumeragi) struct LiveValidateSignWorkProjectionPermit {
+    candidate: CandidateAdmission,
     _linearity: LiveValidateSignWorkProjectionLinearity,
 }
 struct LiveValidateSignWorkProjectionLinearity;
@@ -303,8 +320,9 @@ impl Drop for LiveValidateSignWorkProjectionLinearity {
     fn drop(&mut self) {}
 }
 impl LiveValidateSignWorkProjectionPermit {
-    fn new() -> Self {
+    fn new(candidate: CandidateAdmission) -> Self {
         Self {
+            candidate,
             _linearity: LiveValidateSignWorkProjectionLinearity,
         }
     }
@@ -385,7 +403,7 @@ enum LiveValidateReportRegistryPublicationFailure<'registry, 'adapter> {
 pub(super) struct InvalidBodyReportReplayPreAdmissionError<'registry, 'adapter> {
     preview: PreparedReadyDurableValidateAdapterPreview<'registry, 'adapter>,
 }
-impl PreparedReadyDurableValidateAdapterPreview<'_, '_> {
+impl<'registry> PreparedReadyDurableValidateAdapterPreview<'registry, '_> {
     /// Return the closed publication branch without exposing adapter state.
     pub(in crate::sumeragi) fn publication_kind(
         &self,
@@ -395,6 +413,18 @@ impl PreparedReadyDurableValidateAdapterPreview<'_, '_> {
     /// Return the exact sampled reducer fence for a `Busy` branch.
     pub(in crate::sumeragi) fn busy_reducer_fence(&self) -> Option<(wire::HeightContextId, u64)> {
         self._adapter.busy_reducer_fence()
+    }
+    /// Drop the inert adapter preview and return the complete registry cut on a runtime fault.
+    pub(in crate::sumeragi) fn into_runtime_gate_error(
+        self,
+        error: crate::sumeragi::v2::AdapterError,
+    ) -> ReadyDurableValidateAdapterPreviewError<'registry> {
+        let Self {
+            _registry: registry,
+            _adapter: adapter,
+        } = self;
+        drop(adapter);
+        ReadyDurableValidateAdapterPreviewError::runtime_gate(registry, error)
     }
     /// Project one exact no-successor cut without exposing the retained body.
     ///
@@ -447,6 +477,7 @@ impl PreparedReadyDurableValidateAdapterPreview<'_, '_> {
             address,
             outcome_kind: _,
             lease,
+            validated_catalog_authority: _,
         } = prepared;
         assert_eq!(lease.ordinal(), address.ordinal);
         assert_eq!(lease.owner(), address.owner);
@@ -711,23 +742,25 @@ impl<'registry, 'adapter> PreparedInvalidBodyReportReplayPreAdmission<'registry,
         child_ordinal: u128,
         child_slot: PhysicalSlotId,
         child_digest: LifecycleDigest,
+        admission_candidate: CandidateAdmission,
     ) -> Result<
         PreparedLiveValidateReportRegistryPublication<'registry, 'adapter>,
         LiveValidateReportRegistryPublicationError<'registry, 'adapter>,
     > {
         let Self { registry, adapter } = self;
-        let adapter =
-            match adapter.prepare_registry_work(LiveValidateReportWorkProjectionPermit::new()) {
-                Ok(adapter) => adapter,
-                Err(adapter) => {
-                    return Err(LiveValidateReportRegistryPublicationError {
-                        _failure: LiveValidateReportRegistryPublicationFailure::AdapterWork {
-                            _registry: registry,
-                            _adapter: adapter,
-                        },
-                    });
-                }
-            };
+        let adapter = match adapter.prepare_registry_work(
+            LiveValidateReportWorkProjectionPermit::new(admission_candidate),
+        ) {
+            Ok(adapter) => adapter,
+            Err(adapter) => {
+                return Err(LiveValidateReportRegistryPublicationError {
+                    _failure: LiveValidateReportRegistryPublicationFailure::AdapterWork {
+                        _registry: registry,
+                        _adapter: adapter,
+                    },
+                });
+            }
+        };
         let child_address = ConcreteWorkAddress::new(lease.owner(), child_ordinal, child_slot);
         let coordinates_are_exact = registry.matches_exact_lease(lease)
             && registry.outcome_kind == ReadyDurableValidateOutcomeKind::Rejected
@@ -765,6 +798,7 @@ impl<'registry, 'adapter> PreparedInvalidBodyReportReplayPreAdmission<'registry,
             address: parent_address,
             outcome_kind: _,
             lease: _,
+            validated_catalog_authority: _,
         } = registry;
         let detached_parent = registry
             .entries
@@ -900,6 +934,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
         child_ordinal: u128,
         child_slot: PhysicalSlotId,
         child_digest: LifecycleDigest,
+        admission_candidate: CandidateAdmission,
     ) -> Result<
         PreparedLiveValidateApplyRegistryPublication<'registry, 'adapter>,
         LiveValidateApplyRegistryPublicationError<'registry, 'adapter>,
@@ -927,9 +962,10 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             });
         }
         let receipt = receipt.expect("validated Apply preflight retains its durable body");
-        let adapter = match adapter
-            .prepare_registry_work(LiveValidateApplyWorkProjectionPermit::new(), &receipt)
-        {
+        let adapter = match adapter.prepare_registry_work(
+            LiveValidateApplyWorkProjectionPermit::new(admission_candidate),
+            &receipt,
+        ) {
             Ok(adapter) => adapter,
             Err(adapter) => {
                 return Err(LiveValidateApplyRegistryPublicationError {
@@ -950,6 +986,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             address: parent_address,
             outcome_kind: _,
             lease: _,
+            validated_catalog_authority: _,
         } = registry;
         let detached_parent = registry
             .entries
@@ -1089,6 +1126,7 @@ impl<'registry, 'adapter>
         child_ordinal: u128,
         child_slot: PhysicalSlotId,
         child_digest: LifecycleDigest,
+        admission_candidate: CandidateAdmission,
     ) -> Result<
         PreparedLiveValidateSignRegistryPublication<'registry, 'adapter>,
         LiveValidateSignRegistryPublicationError<'registry, 'adapter>,
@@ -1097,15 +1135,16 @@ impl<'registry, 'adapter>
             _registry: registry,
             _adapter: adapter,
         } = self;
-        let adapter =
-            match adapter.prepare_registry_work(LiveValidateSignWorkProjectionPermit::new()) {
-                Ok(adapter) => adapter,
-                Err(adapter) => {
-                    return Err(LiveValidateSignRegistryPublicationError::adapter_work(
-                        registry, adapter,
-                    ));
-                }
-            };
+        let adapter = match adapter.prepare_registry_work(
+            LiveValidateSignWorkProjectionPermit::new(admission_candidate),
+        ) {
+            Ok(adapter) => adapter,
+            Err(adapter) => {
+                return Err(LiveValidateSignRegistryPublicationError::adapter_work(
+                    registry, adapter,
+                ));
+            }
+        };
         let child_address = ConcreteWorkAddress::new(lease.owner(), child_ordinal, child_slot);
         let coordinates_are_exact = registry.matches_exact_lease(lease)
             && registry.outcome_kind == ReadyDurableValidateOutcomeKind::Validated
@@ -1360,51 +1399,6 @@ pub(super) enum PublishedDurableValidateCompletion {
     Rejected(PublishedRejected),
 }
 // DURABLE_VALIDATE_VOLATILE_COMPLETION_DECLARATIONS_END
-/// Receipt-bound successful validation of one closed Validate carrier.
-///
-/// The live registry row remains untouched and exclusively borrowed. The
-/// deterministic completion digest is ready for a future same-address
-/// coordinator replacement, but this token deliberately exposes no registry
-/// installation, removal, or commit operation.
-#[must_use = "a validated body completion has not entered its atomic publication"]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(super) struct PreparedValidatedBodyCompletion<'a> {
-    _registry: &'a mut ConcreteLifecycleWorkRegistry,
-    address: ConcreteWorkAddress,
-    incumbent_digest: LifecycleDigest,
-    replacement_digest: LifecycleDigest,
-    validated_receipt: ValidatedBodyReceipt,
-    tag: EventTag,
-    round: wire::ConsensusRound,
-    subject: wire::BlockSubject,
-}
-/// Closed Apply-WAL replay preflight retained until future exact admission.
-///
-/// The exact receipt-bound Validate completion that supplied the Apply body
-/// frame remains attached. No field, effect, pending binding, receipt, or
-/// replay parts can be extracted, and dropping the token publishes no work.
-#[must_use = "live WAL replay evidence has not entered lifecycle admission"]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(super) struct PreparedLiveWalReplayPreAdmission<'a> {
-    _persisted: SealedLiveWalPersistedEffectV1,
-    _origin: LiveWalReplayPreAdmissionOrigin<'a>,
-}
-#[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
-enum LiveWalReplayPreAdmissionOrigin<'a> {
-    Apply(PreparedValidatedBodyCompletion<'a>),
-}
-#[allow(variant_size_differences, clippy::large_enum_variant)]
-enum LiveWalReplayPreAdmissionFailure<'a> {
-    Apply {
-        _completion: PreparedValidatedBodyCompletion<'a>,
-        _persisted: SealedLiveWalPersistedEffectV1,
-        _pending: PendingRuntimeEffectBinding,
-    },
-}
-/// Ownership-preserving failure from exact live-WAL replay preflight.
-pub(super) struct LiveWalReplayPreAdmissionError<'a> {
-    _failure: LiveWalReplayPreAdmissionFailure<'a>,
-}
 /// Move-only Validate projection sealed under its closed durable Store parent
 /// and the exact adapter preview which emitted that child.
 #[must_use = "a sealed Validate successor has not entered a parent-to-child transaction"]
@@ -1629,6 +1623,13 @@ pub(super) enum BoundAdapterRegistryPublicationErrorV1<E> {
     Install(RegistryError, BoundAdapterEffectV1),
     /// Durable publication failed and the exact bound owner was reconstructed.
     Publication(E, BoundAdapterEffectV1),
+}
+/// Failure from the live-WAL registry publication boundary.
+pub(super) enum LiveWalRegistryPublicationErrorV1<E> {
+    /// The prepared owner or exact-address installation failed before publication.
+    Install(RegistryError, PreparedLiveWalAdmissionV1),
+    /// Durable publication failed and the exact live-WAL owner was reconstructed.
+    Publication(E, PreparedLiveWalAdmissionV1),
 }
 /// Failure from the mandatory replay-bound durable Validate publication boundary.
 pub(super) enum DurableValidateRegistryPublicationErrorV1<E> {
@@ -2083,7 +2084,27 @@ impl<'adapter> PreparedDurableStoreValidateSuccessor<'_, 'adapter> {
 }
 // READY_DURABLE_VALIDATE_ADAPTER_JOIN_BEGIN
 #[allow(dead_code)]
+impl ReadyValidatedExecutorCatalogAuthorityV1 {
+    /// Consume the one-shot catalog authority into its exact fsynced receipt.
+    pub(in crate::sumeragi) fn into_validated_receipt(self) -> ValidatedBodyReceipt {
+        self.validated
+    }
+}
+
 impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
+    /// Take the sole executor-catalog authority from a successful completion.
+    pub(in crate::sumeragi) fn take_validated_catalog_authority(
+        &mut self,
+    ) -> Option<ReadyValidatedExecutorCatalogAuthorityV1> {
+        let expected = self
+            .validated_completion()?
+            .outcome
+            .validated_receipt()?
+            .clone();
+        let authority = self.validated_catalog_authority.take()?;
+        (authority.validated == expected).then_some(authority)
+    }
+
     fn completion(&self) -> Option<&DurableValidateCompletion> {
         let work = self.registry.entries.get(&self.address)?;
         let ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) = &work.kind else {
@@ -2123,6 +2144,44 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
         }
         Some(completion)
     }
+    /// Project the exact local-body success into its lifecycle-owned runtime handoff.
+    ///
+    /// Remote, certified, rejected, malformed, and sidecar-deferred outcomes
+    /// return `None`; no caller can supply a manifest or pending owner.
+    pub(in crate::sumeragi) fn project_local_proposal_ready(
+        &self,
+    ) -> Option<PreparedLifecycleLocalProposalReadyV1> {
+        let completion = self.validated_completion()?;
+        let validated = completion.outcome.validated_receipt()?;
+        let (replay, manifest) = completion
+            .incumbent
+            .replay_evidence
+            .project_local_completion_evidence(
+                &completion.incumbent.effect,
+                &completion.incumbent.durable_receipt,
+                &completion.incumbent.pending,
+            )?;
+        PreparedLifecycleLocalProposalReadyV1::new(
+            completion.incumbent.effect.clone(),
+            manifest,
+            validated.clone(),
+            self.lease.ordinal(),
+            replay,
+        )
+    }
+    fn local_origin_manifest(
+        completion: &DurableValidateCompletion,
+    ) -> Option<wire::PayloadManifest> {
+        completion
+            .incumbent
+            .replay_evidence
+            .project_local_completion_evidence(
+                &completion.incumbent.effect,
+                &completion.incumbent.durable_receipt,
+                &completion.incumbent.pending,
+            )
+            .map(|(_replay, manifest)| manifest)
+    }
     fn validated_authority(&self) -> Option<ReadyValidatedAdapterAuthority<'_>> {
         let completion = self.validated_completion()?;
         let AdapterEffect::ValidateBody {
@@ -2139,6 +2198,7 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
             round: *round,
             subject: *subject,
             receipt,
+            local_origin_manifest: Self::local_origin_manifest(completion),
         })
     }
     fn validate_sign_predecessor_authority(
@@ -2192,8 +2252,38 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
             round: *round,
             subject: *subject,
             receipt: completion.outcome.durable_body(),
+            local_origin_manifest: Self::local_origin_manifest(completion),
         })
     }
+
+    /// Run the complete adapter publication preflight without consuming the registry cut.
+    ///
+    /// This is used only to prove that a local-body completion reaches one of
+    /// the two terminal no-successor branches before its exact
+    /// `LocalProposalReady` command becomes observable in runtime ingress.
+    /// Dropping the returned adapter publication is inert.
+    pub(in crate::sumeragi) fn preflight_adapter_publication_kind(
+        &self,
+        adapter: &mut SumeragiV2Adapter,
+    ) -> Result<ReadyDurableValidateAdapterPublicationKind, crate::sumeragi::v2::AdapterError> {
+        let adapter_preview = match self.outcome_kind {
+            ReadyDurableValidateOutcomeKind::Validated => {
+                let authority = self.validated_authority().ok_or(
+                    crate::sumeragi::v2::AdapterError::ReadyDurableValidatePublicationContractViolation,
+                )?;
+                adapter.prepare_sealed_ready_durable_validate_succeeded(authority)
+            }
+            ReadyDurableValidateOutcomeKind::Rejected => {
+                let authority = self.rejected_authority().ok_or(
+                    crate::sumeragi::v2::AdapterError::ReadyDurableValidatePublicationContractViolation,
+                )?;
+                adapter.prepare_sealed_ready_durable_validate_failed(authority)
+            }
+        }?;
+        let publication = adapter_preview.preflight_publication()?;
+        Ok(publication.kind())
+    }
+
     /// Consume this exact registry cut into the adapter's sealed direct preview.
     ///
     /// The fixed join exposes no generic callback or raw receipt result. Every
@@ -2246,6 +2336,12 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
     }
 }
 // READY_DURABLE_VALIDATE_ADAPTER_JOIN_END
+#[cfg(test)]
+impl ReadyValidatedExecutorCatalogAuthorityV1 {
+    pub(in crate::sumeragi) fn for_test(validated: ValidatedBodyReceipt) -> Self {
+        Self { validated }
+    }
+}
 // RECOVERED_WAL_VALIDATE_REGISTRY_DETACH_BEGIN
 impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
     /// Detach the exact Ready/validated carrier for the fixed recovered-WAL join.
@@ -2272,6 +2368,7 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
             address: _,
             outcome_kind: _,
             lease: _,
+            validated_catalog_authority: _,
         } = self;
         Ok(RecoveredWalValidateRegistryCut {
             registry: Some(registry),
@@ -2489,7 +2586,7 @@ impl<'registry> PreparedRecoveredWalValidateRegistryJoin<'registry> {
 }
 // RECOVERED_WAL_VALIDATE_REGISTRY_JOIN_END
 #[allow(dead_code)]
-impl<'a> PreparedDurableValidateExecution<'a> {
+impl PreparedDurableValidateExecution<'_> {
     fn durable_validate(&self) -> &DurableValidateBody {
         let work = self
             .registry
@@ -2501,7 +2598,7 @@ impl<'a> PreparedDurableValidateExecution<'a> {
         };
         validate
     }
-    /// Return the exact reducer coordinates accepted by the future body
+    /// Return the exact reducer coordinates accepted by the lifecycle body
     /// validation preview.
     pub(super) fn adapter_preview_inputs(
         &self,
@@ -2637,170 +2734,5 @@ impl<'a> PreparedDurableValidateExecution<'a> {
             lifecycle_key,
             lifecycle_stage,
         }
-    }
-    /// Bind one store-minted successful-validation receipt to this exact
-    /// Validate carrier without changing the registry row.
-    ///
-    /// Existing Prepare or Commit authority must name the same deterministic
-    /// execution result. An ordinary body may acquire its first commitment,
-    /// but only the later receipt-bound Apply projection may use it.
-    pub(super) fn bind_validated_receipt(
-        self,
-        validated_receipt: ValidatedBodyReceipt,
-    ) -> Result<
-        PreparedValidatedBodyCompletion<'a>,
-        (DurableValidateExecutionError, ValidatedBodyReceipt),
-    > {
-        let (tag, round, subject, incumbent_digest, replacement_digest) = {
-            let validate = self.durable_validate();
-            let AdapterEffect::ValidateBody {
-                tag,
-                round,
-                subject,
-            } = &validate.effect
-            else {
-                return Err((
-                    DurableValidateExecutionError::InvalidValidateShape,
-                    validated_receipt,
-                ));
-            };
-            if let Err(error) = validate_validated_receipt_authority(validate, &validated_receipt) {
-                return Err((error, validated_receipt));
-            }
-            let incumbent_digest = self
-                .registry
-                .entries
-                .get(&self.address)
-                .expect("prepared durable Validate carrier remains installed")
-                .digest;
-            let replacement_digest = validated_body_completion_digest(
-                incumbent_digest,
-                validate.expected_manifest_hash,
-                &validated_receipt,
-            );
-            if replacement_digest == incumbent_digest {
-                return Err((
-                    DurableValidateExecutionError::InvalidValidationCompletionDigest,
-                    validated_receipt,
-                ));
-            }
-            (*tag, *round, *subject, incumbent_digest, replacement_digest)
-        };
-        Ok(PreparedValidatedBodyCompletion {
-            _registry: self.registry,
-            address: self.address,
-            incumbent_digest,
-            replacement_digest,
-            validated_receipt,
-            tag,
-            round,
-            subject,
-        })
-    }
-}
-#[cfg_attr(not(test), allow(dead_code))]
-impl<'a> PreparedValidatedBodyCompletion<'a> {
-    fn retained_validated_receipt_is_exact(&self) -> bool {
-        let Some(work) = self._registry.entries.get(&self.address) else {
-            return false;
-        };
-        let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &work.kind else {
-            return false;
-        };
-        work.digest == self.incumbent_digest
-            && validate.validates(self.incumbent_digest)
-            && validate_validated_receipt_authority(validate, &self.validated_receipt).is_ok()
-            && validated_body_completion_digest(
-                self.incumbent_digest,
-                validate.expected_manifest_hash,
-                &self.validated_receipt,
-            ) == self.replacement_digest
-    }
-    fn retained_apply_join_is_exact(&self, persisted: &SealedLiveWalPersistedEffectV1) -> bool {
-        let Some(work) = self._registry.entries.get(&self.address) else {
-            return false;
-        };
-        let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &work.kind else {
-            return false;
-        };
-        self.retained_validated_receipt_is_exact()
-            && persisted.exactly_binds_validated_apply_successor(
-                &validate.effect,
-                &validate.pending,
-                self.validated_receipt.durable(),
-            )
-    }
-    /// Join one exact live `Decision -> Apply` WAL seal to this retained Validate result.
-    ///
-    /// This is the sole production receipt-bearing completion surface. It
-    /// first revalidates the installed carrier and store-minted receipt, then
-    /// consumes the source-only WAL seal into its canonical body-frame-bound
-    /// replay envelope. Failure retains every move-only input.
-    #[allow(clippy::result_large_err)]
-    pub(super) fn seal_live_wal_apply(
-        self,
-        persisted: SealedLiveWalPersistedEffectV1,
-        pending: PendingRuntimeEffectBinding,
-    ) -> Result<PreparedLiveWalReplayPreAdmission<'a>, LiveWalReplayPreAdmissionError<'a>> {
-        if !self.retained_validated_receipt_is_exact() {
-            return Err(LiveWalReplayPreAdmissionError {
-                _failure: LiveWalReplayPreAdmissionFailure::Apply {
-                    _completion: self,
-                    _persisted: persisted,
-                    _pending: pending,
-                },
-            });
-        }
-        let (predecessor_effect, predecessor_pending) = {
-            let work = self
-                ._registry
-                .entries
-                .get(&self.address)
-                .expect("revalidated Apply join retains its installed Validate row");
-            let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &work.kind else {
-                unreachable!("revalidated Apply join retains its durable Validate carrier")
-            };
-            (&validate.effect, &validate.pending)
-        };
-        let persisted = match persisted.complete_exact_apply(
-            predecessor_effect,
-            predecessor_pending,
-            pending,
-            self.validated_receipt.durable(),
-        ) {
-            Ok(persisted) => persisted,
-            Err((persisted, pending)) => {
-                return Err(LiveWalReplayPreAdmissionError {
-                    _failure: LiveWalReplayPreAdmissionFailure::Apply {
-                        _completion: self,
-                        _persisted: persisted,
-                        _pending: pending,
-                    },
-                });
-            }
-        };
-        debug_assert!(self.retained_apply_join_is_exact(&persisted));
-        Ok(PreparedLiveWalReplayPreAdmission {
-            _persisted: persisted,
-            _origin: LiveWalReplayPreAdmissionOrigin::Apply(self),
-        })
-    }
-    /// Exact reducer coordinates retained by the completed Validate carrier.
-    pub(super) const fn adapter_preview_inputs(
-        &self,
-    ) -> (EventTag, wire::ConsensusRound, wire::BlockSubject) {
-        (self.tag, self.round, self.subject)
-    }
-    /// Borrow the exact store-minted deterministic validation result.
-    pub(super) const fn validated_receipt(&self) -> &ValidatedBodyReceipt {
-        &self.validated_receipt
-    }
-    /// Digest currently installed for the closed Validate work.
-    pub(super) const fn incumbent_digest(&self) -> LifecycleDigest {
-        self.incumbent_digest
-    }
-    /// Domain-separated physical digest for the receipt-bound completion.
-    pub(super) const fn replacement_digest(&self) -> LifecycleDigest {
-        self.replacement_digest
     }
 }

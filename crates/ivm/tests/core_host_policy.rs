@@ -24,9 +24,6 @@ const AXT_GAS_BASE: u64 = 16;
 fn axt_gas(payload_len: usize) -> u64 {
     AXT_GAS_BASE.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
 }
-fn axt_commit_gas(touches: usize, proofs: usize, handles: usize) -> u64 {
-    axt_gas(touches.saturating_add(proofs).saturating_add(handles))
-}
 #[test]
 fn core_host_rejects_noncanonical_policy_snapshot_without_panicking() {
     let snapshot = AxtPolicySnapshot {
@@ -99,6 +96,10 @@ fn make_handle(
     expiry_slot: u64,
 ) -> AssetHandle {
     AssetHandle {
+        asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+        ])
+        .expect("valid AXT fixture asset id"),
         scope: vec!["transfer".into()],
         subject: HandleSubject {
             account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
@@ -245,7 +246,7 @@ fn core_host_handles_axt_syscalls_with_valid_tlvs() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(100_u64)),
         },
     };
@@ -258,11 +259,11 @@ fn core_host_handles_axt_syscalls_with_valid_tlvs() {
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
         Ok(use_handle_gas(&handle, &intent, None))
     );
-    assert_eq!(
+    assert!(matches!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
-        Ok(axt_commit_gas(1, 0, 1))
-    );
-    // Follow-up calls without an active AXT sequence must be rejected.
+        Err(VMError::PermissionDenied)
+    ));
+    // Failed commit retains the active sequence; the duplicate touch remains rejected.
     vm.set_register(10, ds_ptr);
     vm.set_register(11, 0);
     assert!(matches!(
@@ -448,7 +449,7 @@ fn core_host_enforces_space_directory_policy_on_handles() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(50_u64)),
         },
     };
@@ -486,7 +487,7 @@ fn fixture_intent(dsid: DataSpaceId) -> RemoteSpendIntent {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(50_u64)),
         },
     }
@@ -507,6 +508,7 @@ fn convert_descriptor(model: &model::AxtDescriptor) -> axt::AxtDescriptor {
 }
 fn convert_handle(model: &model::AssetHandle) -> AssetHandle {
     AssetHandle {
+        asset_definition_id: model.asset_definition_id.clone(),
         scope: model.scope.clone(),
         subject: HandleSubject {
             account: model.subject.account.clone(),
@@ -527,7 +529,7 @@ fn convert_handle(model: &model::AssetHandle) -> AssetHandle {
         manifest_view_root: model.manifest_view_root.to_vec(),
         expiry_slot: model.expiry_slot,
         max_clock_skew_ms: model.max_clock_skew_ms,
-        issuer_context: Default::default(),
+        issuer_context: model.issuer_context,
         issuer_signature: model.issuer_signature.clone(),
     }
 }
@@ -596,7 +598,7 @@ fn run_policy_snapshot_case(
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(50_u64)),
         },
     };
@@ -715,7 +717,7 @@ fn run_wsv_policy_case(
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(50_u64)),
         },
     };
@@ -838,7 +840,7 @@ fn core_host_enforces_policy_snapshot() {
         Ok(axt_gas(ds_bytes.len().saturating_add(manifest_bytes.len())))
     );
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let mut handle = make_handle(binding, LaneId::new(1), manifest_root, 1, 10, 5);
+    let mut handle = make_handle(binding, LaneId::new(1), manifest_root, 1, 1, 5);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -848,7 +850,7 @@ fn core_host_enforces_policy_snapshot() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
@@ -856,12 +858,6 @@ fn core_host_enforces_policy_snapshot() {
         &mut vm,
         PointerType::NoritoBytes,
         &norito::to_bytes(&intent).expect("encode intent"),
-    );
-    let proof = proof_blob_for(dsid, manifest_root, vec![0xBB], 10);
-    let proof_ptr = store_tlv(
-        &mut vm,
-        PointerType::ProofBlob,
-        &norito::to_bytes(&proof).expect("encode proof"),
     );
     // Wrong lane -> reject
     let handle_ptr = store_tlv(
@@ -871,12 +867,13 @@ fn core_host_enforces_policy_snapshot() {
     );
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
-    vm.set_register(12, proof_ptr);
+    vm.set_register(12, 0);
     assert!(matches!(
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
         Err(VMError::PermissionDenied)
     ));
-    // Correct lane still fails closed when an inline proof requires a real verifier.
+    // The matching handle passes the policy gate; commit still fails closed
+    // because this policy-focused test deliberately supplies no proof.
     handle.target_lane = LaneId::new(2);
     let handle_ptr = store_tlv(
         &mut vm,
@@ -884,16 +881,14 @@ fn core_host_enforces_policy_snapshot() {
         &norito::to_bytes(&handle).expect("encode handle"),
     );
     vm.set_register(10, handle_ptr);
-    assert!(matches!(
+    assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
+        Ok(use_handle_gas(&handle, &intent, None))
+    );
+    assert!(matches!(
+        host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
         Err(VMError::PermissionDenied)
     ));
-    // No handle was accepted after the fail-closed inline proof, so commit only
-    // closes the standalone sequence.
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
-        Ok(axt_commit_gas(1, 0, 0))
-    );
 }
 #[test]
 fn core_host_rejects_inline_proof_manifest_mismatch() {
@@ -937,7 +932,7 @@ fn core_host_rejects_inline_proof_manifest_mismatch() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(2_u64)),
         },
     };
@@ -1050,7 +1045,7 @@ fn core_host_rejects_inline_proof_zero_expiry_slot() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
@@ -1493,10 +1488,10 @@ fn core_host_fails_closed_multi_dataspace_axt_flow_without_verifier() {
         assert!(!cache_status.0);
         assert_eq!(cache_status.1, Some(root));
     }
-    assert_eq!(
+    assert!(matches!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
-        Ok(axt_commit_gas(2, 0, 0))
-    );
+        Err(VMError::PermissionDenied)
+    ));
 }
 #[test]
 fn core_host_rejects_zero_manifest_root_policy() {

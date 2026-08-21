@@ -1279,12 +1279,6 @@ def _corridor_artifacts(
         "cross-sdk-rust": _CROSS_SDK_TESTS,
         "sumeragi-diagnostics-rust": _RUST_SDK_DIAGNOSTICS_TESTS,
     }
-    exact_cargo_tests.update(
-        {
-            f"taira-contract-{index}": (test,)
-            for index, test in enumerate(_TAIRA_CONTRACT_TESTS)
-        }
-    )
     # The exact-length equality above provides the same fail-closed guarantee
     # as ``zip(strict=True)`` while retaining the repository's Python 3.9
     # compatibility.

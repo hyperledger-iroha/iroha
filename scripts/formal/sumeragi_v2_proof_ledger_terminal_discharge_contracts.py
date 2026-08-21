@@ -449,7 +449,7 @@ _READINESS_TLA_SOURCE_SHA256 = {
 
 _READINESS_TOOL_SOURCE_SHA256 = {
     "ci/check_sumeragi_formal.sh": (
-        "2418c232995d04a0574abc4e386c1b214b677f8ffc5aaabcbba17ffa5b7f6714"
+        "41399c4e3c6e404f2f24512b444230ff11899782e20e2b5b3ec7c9559f72b78f"
     ),
     "scripts/formal/check_sumeragi_v2_begin_timeout_ready_contract.py": (
         "70676b4b572c1b6cbd420ffbcc3f638a151fa3cb60d094d52c27556e6cfee4da"
@@ -962,10 +962,10 @@ def _atomic_timeout_completion_source_fidelity_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "958e018eb74a0a42cf5835a2a352a7cae0a7184e33b698ea9e210218bc526bed"
+        "c0b5ef19fc5daec8d4d314668d33655e66c1dc7b20327f5ccb92ea2ca0b7603e"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "2c49ccb619002d185804b2fdd11d8b1bccf586157556b8580ea037a33039dee1"
+        "047871a2fbbc08306274a266a0592cae1f2fc360c66ff66f7e08386f1f4cffd2"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
         "8fd2bbface65035fe2acc59274c514f88233875161915e02229851a3d08852a0"
@@ -974,13 +974,13 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "b78fe6b65194ff48919c35f8423f31714fb6da4a172d8a004720e5b23f0b0d50"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "e6b475062844b5ce59169247298af412e62702f13935e67a335b74ec0e9c1b4b"
+        "92c68efed48f8c59f4f3e5abe567b11a68220708be22335cc0e36e7c457ebc67"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "7f06ff56307923598f212fae63cfae3c5159fab51d94f62805ddb66c091b7bec"
+        "093f112f182ade0fecfe6ed51342f4d4ad2558977ac78fafae550b45e06e5ced"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "ed40863dd1be76ee403f9a59f55a150d836ddd96ff0d93aa1ebeb05171d1d525"
+        "d961ff64ff4e3ea0193822f9ffce4da5ee5e58948c8b58bb2002103cc1229170"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
         "11f0d554e114b832ec31604a6fa3bb78e9ecbc965e0269be1bc5b3548ff8e519"

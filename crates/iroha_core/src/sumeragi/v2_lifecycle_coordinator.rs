@@ -45,6 +45,7 @@ pub(in crate::sumeragi) use projection::reducer_fence_wait_source;
 #[path = "v2_lifecycle_replay_authority.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
 mod replay_authority;
+pub(in crate::sumeragi) use replay_authority::InstalledAuthenticatedGenesisReplayAuthorityV1;
 /// Sealed production planner-input authentication.
 #[path = "v2_lifecycle_scheduler_inputs.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -81,6 +82,11 @@ pub(in crate::sumeragi) use body_pipeline_transition::{
     SealedValidateSignProjectionPermit,
 };
 pub(crate) use concrete_admission::LifecycleWorkRegistryHolder;
+pub(in crate::sumeragi) use concrete_admission::{
+    LifecycleOutputServiceDispositionV1, ProductionDurableValidateAdmissionSettlementV1,
+    ProductionLifecycleOutputAdmissionFailureV1, ProductionLifecycleOutputAdmissionSettlementV1,
+    ProductionLiveWalSignAdmissionFailureV1, ProductionLiveWalSignAdmissionSettlementV1,
+};
 #[cfg(test)]
 pub(in crate::sumeragi) use launch::ProductionPreparedCertifiedServeTestSettlementV1;
 #[allow(unused_imports)]
@@ -110,6 +116,7 @@ pub(in crate::sumeragi) use launch::{
     ProductionRecoveredLifecycleSignCompletionSelectionV1,
     ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1,
     ProductionV2CompletionObserverActivationPermitV1, RetainedRecoveredDecisionApplyDeferredV1,
+    settle_one_recovered_lifecycle_output,
 };
 pub(crate) use ledger::AuthenticatedRecoveredWalValidateLedgerParent;
 pub(crate) use ledger::ProductionLifecycleStartupErrorV1;
@@ -158,6 +165,7 @@ pub(in crate::sumeragi) use ledger::{
     install_non_timeout_broadcast_before_current_control_for_test,
     install_timeout_broadcasts_before_current_control_for_test,
 };
+pub(in crate::sumeragi) use open::RecoveredLifecycleOutputSettlementV1;
 pub(super) use open::TerminalValidateNoSuccessorClaim;
 #[allow(unused_imports, reason = "release-bound lifecycle error seam")]
 pub(crate) use open::{AuthenticatedLifecycleRecoveryCut, LifecycleOpenError};
@@ -185,10 +193,12 @@ pub(in crate::sumeragi) use replay_authority::RecoveredDecisionApplyCandidateLin
 pub(super) use replay_authority::SealedLiveWalPersistedEffectV1;
 #[allow(unused_imports, reason = "reviewed replay-evidence namespace")]
 pub(in crate::sumeragi) use replay_authority::{
-    DurableCertifiedFetchPendingMintPermit, DurableStandaloneValidatePendingMintPermit,
+    AuthenticatedRecoveredLifecycleOutputV1, DurableCertifiedFetchPendingMintPermit,
+    DurableLifecycleOutputPendingMintPermit, DurableStandaloneValidatePendingMintPermit,
     DurableValidateReplayEvidenceV1, InvalidBodyReportReplayEvidenceV1,
     LocalBodyPreIntentReplaySealV1, LocalProposalIntentReplayEvidenceV1,
     LocalProposalReadyReplayEvidenceV1, LocalValidateReplayEvidenceV1,
+    PreparedLifecycleLocalProposalReadyV1, PublishedLifecycleLocalProposalReadyV1,
     RecoveredDecisionApplyReplayLineageV1, RecoveredLifecycleNextWalVoteCandidateProjectionV1,
     RecoveredLifecycleNextWalVoteSealV1, RemoteProposalFetchReplayEvidenceV1,
     RemoteProposalStoreReplayEvidenceV1, RemoteProposalStoredReplayEvidenceV1,
@@ -314,6 +324,16 @@ pub(in crate::sumeragi) use work_registry::{
     LiveValidateSignWorkProjectionPermit, PreparedLiveValidateApplyRegistryWork,
     PreparedLiveValidateReportRegistryWork, PreparedLiveValidateSignRegistryWork,
     PreparedReadyDurableValidateAdapterPreview, ReadyDurableValidateAdapterPreviewError,
+    ReadyValidatedExecutorCatalogAuthorityV1,
+};
+pub(in crate::sumeragi) use work_registry::{
+    LifecycleOutputAdmissionKeyV1, PendingDurableValidateAdmissionV1,
+    PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
+    PreparedAuthenticatedGenesisFetchReplayPreAdmission,
+    PreparedAuthenticatedGenesisStoreReplayPreAdmission,
+    PreparedAuthenticatedGenesisStoredReplayPreAdmission,
+    PreparedLocalBodyValidateReplayPreAdmission, PreparedRemoteProposalFetchReplayPreAdmission,
+    PreparedRemoteProposalStoreReplayPreAdmission, PreparedRemoteProposalStoredReplayPreAdmission,
 };
 const MAX_PENDING_ADMISSION_WAITS: usize = 64;
 /// Sole allocator and writer of logical Sumeragi lifecycle state.
@@ -354,6 +374,7 @@ pub(crate) struct ProductionLifecycleOwnerV1 {
     verified: crate::sumeragi::v2::VerifiedHeightContext,
     coordinator: LifecycleCoordinator,
     registry: LifecycleWorkRegistryHolder,
+    recovered_lifecycle_outputs: Option<open::PreparedLifecycleOutputRecoveryV1>,
     payload_store: crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1,
     serve_payloads: crate::sumeragi::v2_certified_serve_payload_store::AuthenticatedCertifiedServePayloadRecoveryCut,
     body_store: Option<crate::sumeragi::v2_body_store::V2BodyStore>,

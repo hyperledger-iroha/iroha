@@ -13,15 +13,9 @@ on:
       - "ci/check_kagemusha_production_readiness_self_test.py"
       - "scripts/deploy_localnet.sh"
       - "scripts/tests/deploy_localnet_test.py"
-      - "scripts/deploy_taira_v21_reset.py"
-      - "scripts/prepare_taira_empty_reset_bundle.py"
       - "scripts/*taira*.py"
-      - "scripts/build_privacy_v1_boi_handoff.py"
       - "scripts/operator_http_headers.py"
       - "scripts/release_artifact_contract.py"
-      - "scripts/tests/deploy_taira_v21_reset_test.py"
-      - "scripts/tests/deploy_taira_v21_reset_authority_test.py"
-      - "scripts/tests/prepare_taira_empty_reset_bundle_test.py"
       - "scripts/tests/*taira*_test.py"
       - "crates/connect_norito_bridge/**"
       - "crates/iroha/src/client.rs"
@@ -856,13 +850,8 @@ jobs:
           scripts/tests/stage_kagemusha_candidate_android_lab_test.py
           pytests/scripts/run_kagemusha_v4_generation_test.py
           pytests/scripts/run_kagemusha_v4_generation_benchmark_test.py
-      - name: Run Kagemusha Taira reset and deploy regressions
-        run: >-
-          python -m pytest -q
-          scripts/tests/deploy_taira_v21_reset_test.py
-          scripts/tests/deploy_taira_v21_reset_authority_test.py
-          scripts/tests/prepare_taira_empty_reset_bundle_test.py
-          scripts/tests/seal_taira_release_controllers_test.py
+      - name: Run Taira devnet orchestration regressions
+        run: python -m pytest -q scripts/tests/taira_devnet_test.py
       - run: python -m pytest -q python/iroha_torii_client/tests/test_client.py
 
   rust:

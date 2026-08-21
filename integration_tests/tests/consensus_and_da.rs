@@ -28,8 +28,6 @@ mod sumeragi_rotation;
 mod sumeragi_vote_qc_commit;
 #[path = "taikai_da.rs"]
 mod taikai_da;
-#[path = "taira_public_localnet.rs"]
-mod taira_public_localnet;
 #[path = "zk_confidential_localnet.rs"]
 mod zk_confidential_localnet;
 #[path = "zk_stark_network.rs"]

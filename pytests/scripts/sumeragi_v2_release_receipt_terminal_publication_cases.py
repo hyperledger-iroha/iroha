@@ -290,9 +290,6 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "seed_matrix_localnet_manifest_index": "seed_localnet_manifest_index",
         "chaos_completion": "chaos_completion",
         "chaos_log": "chaos_log",
-        "taira_completion": "taira_completion",
-        "taira_evidence": "taira_evidence",
-        "taira_run_log": "taira_log",
     }
     for receipt_name, fixture_name in expected_artifacts.items():
         fixture_path = evidence[fixture_name]
@@ -625,10 +622,6 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
             ),
         ),
         ("chaos_completion", ("chaos_completion", "chaos_log")),
-        (
-            "taira_completion",
-            ("taira_completion", "taira_evidence", "taira_run_log"),
-        ),
     )
 
     def artifact_paths(value: object) -> list[Path]:

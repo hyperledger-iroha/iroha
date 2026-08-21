@@ -538,7 +538,6 @@ def build_receipt(
     formal_completion_path: Path,
     seed_completion_path: Path,
     chaos_completion_path: Path,
-    taira_completion_path: Path,
     g4p_completion_path: Path,
     g12_seed_completion_path: Path,
     g12_fault_soak_completion_path: Path,
@@ -907,101 +906,6 @@ def build_receipt(
     chaos_log_contract = _snapshot_contract(chaos_log)
     del chaos_log
 
-    taira_path, taira = _load_tsv(taira_completion_path, "Taira completion")
-    _require_fields(
-        taira,
-        {
-            "schema_version",
-            "head_commit",
-            "head_tree",
-            "source_manifest_sha256",
-            "cargo_lock_sha256",
-            "prebuilt_manifest_sha256",
-            "evidence_sha256",
-            "log_sha256",
-        },
-        "Taira completion",
-    )
-    if (
-        taira["schema_version"] != "1"
-        or taira["head_commit"] != sealed["head_commit"]
-        or taira["head_tree"] != sealed["head_tree"]
-        or taira["source_manifest_sha256"] != manifest
-        or taira["cargo_lock_sha256"] != sealed["cargo_lock_sha256"]
-        or taira["prebuilt_manifest_sha256"] != prebuilt_manifest_sha256
-    ):
-        raise ReceiptError("Taira completion is not bound to the exact release identity")
-    taira_evidence = _bounded_evidence_snapshot(
-        taira_path.path.with_name("taira_v2_24h_soak.json"),
-        "Taira evidence",
-        maximum_bytes=_MAX_RELEASE_JSON_BYTES,
-    )
-    if taira_evidence.sha256 != taira["evidence_sha256"]:
-        raise ReceiptError("Taira completion evidence digest mismatch")
-    taira_log = _bounded_evidence_snapshot(
-        taira_path.path.with_name("taira-v2-24h.log"),
-        "Taira run log",
-        maximum_bytes=_MAX_RELEASE_TEXT_BYTES,
-    )
-    if taira_log.sha256 != taira["log_sha256"]:
-        raise ReceiptError("Taira completion log digest mismatch")
-    taira_lines = _decode_lf_text(taira_log, "Taira run log").splitlines()
-    taira_results = [line for line in taira_lines if line.startswith("test result:")]
-    if (
-        taira_lines.count("running 1 test") != 1
-        or len(taira_results) != 1
-        or not re.fullmatch(
-            r"test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; "
-            r"[0-9]+ filtered out; finished in .+",
-            taira_results[0],
-        )
-        or sum(
-            "test taira_public_localnet::"
-            "taira_profile_24h_packet_impairment_and_restart_soak ... " in line
-            for line in taira_lines
-        )
-        != 1
-    ):
-        raise ReceiptError("Taira log does not prove its one exact passing soak")
-    taira_checker = repo_root / "scripts" / "check_taira_v2_soak_evidence.py"
-    with tempfile.TemporaryDirectory(
-        prefix="sumeragi-v2-taira-snapshot-replay-"
-    ) as temporary:
-        replay_evidence = (
-            Path(temporary).resolve(strict=True) / taira_evidence.path.name
-        )
-        try:
-            replay_evidence.write_bytes(taira_evidence.data)
-            replay_evidence.chmod(0o400)
-        except OSError as error:
-            raise ReceiptError(
-                "Taira snapshot replay could not materialize captured evidence"
-            ) from error
-        taira_status, _, _ = _run_bounded_python_validator(
-            taira_checker,
-            [
-                str(replay_evidence),
-                "--source-manifest",
-                manifest,
-                "--build-root",
-                str(
-                    prebuilt_artifact_root
-                    / "sumeragi-v2-release"
-                    / manifest
-                ),
-                "--repo-root",
-                str(repo_root),
-            ],
-            cwd=repo_root,
-            environment=checker_environment,
-            name="archived Taira evidence validator",
-        )
-        if taira_status != 0:
-            raise ReceiptError("archived Taira evidence failed release validation")
-    taira_evidence_contract = _snapshot_contract(taira_evidence)
-    taira_log_contract = _snapshot_contract(taira_log)
-    del taira_evidence, taira_log
-
     receipt = {
         "schema_version": 1,
         "protocol": "sumeragi-v2",
@@ -1075,9 +979,6 @@ def build_receipt(
             ],
             "chaos_completion": _artifact(chaos_path),
             "chaos_log": _artifact(chaos_log_contract),
-            "taira_completion": _artifact(taira_path),
-            "taira_evidence": _artifact(taira_evidence_contract),
-            "taira_run_log": _artifact(taira_log_contract),
             "multilane_scaling_bundle": scaling_bundle,
             "multilane_scaling_retained_validator": retained_scaling_validator,
             "multilane_scaling_trust_anchors": scaling_trust_anchors,
@@ -1683,11 +1584,6 @@ def _snapshot_receipt_inputs(
             "chaos_completion",
             ("chaos_completion", "chaos_log"),
         ),
-        (
-            "Taira",
-            "taira_completion",
-            ("taira_completion", "taira_evidence", "taira_run_log"),
-        ),
     )
     family_roots: set[Path] = set()
     family_directories: set[Path] = set()
@@ -2171,7 +2067,6 @@ def main() -> int:
     parser.add_argument("--formal-completion", type=Path, required=True)
     parser.add_argument("--seed-completion", type=Path, required=True)
     parser.add_argument("--chaos-completion", type=Path, required=True)
-    parser.add_argument("--taira-completion", type=Path, required=True)
     parser.add_argument("--g4p-completion", type=Path, required=True)
     parser.add_argument("--g12-seed-completion", type=Path, required=True)
     parser.add_argument("--g12-fault-soak-completion", type=Path, required=True)
@@ -2244,7 +2139,6 @@ def main() -> int:
             formal_completion_path=args.formal_completion,
             seed_completion_path=args.seed_completion,
             chaos_completion_path=args.chaos_completion,
-            taira_completion_path=args.taira_completion,
             g4p_completion_path=args.g4p_completion,
             g12_seed_completion_path=args.g12_seed_completion,
             g12_fault_soak_completion_path=args.g12_fault_soak_completion,
