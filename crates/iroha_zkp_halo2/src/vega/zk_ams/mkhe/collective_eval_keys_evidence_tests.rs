@@ -74,6 +74,7 @@ fn evidence_capability_fixture(
     for _ in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
         parties.push(ZkAmsMkheActivePartySecretV1::generate(&mut random).unwrap());
     }
+    parties.sort_by_key(|party| party.party().expect("generated party identifier"));
     let party_refs: [&ZkAmsMkheActivePartySecretV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] = parties
         .iter()
         .collect::<Vec<_>>()

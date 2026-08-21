@@ -156,8 +156,50 @@ mod phase23_rns_link_wire;
 )]
 #[path = "mkhe/receipt_capability_audit.rs"]
 mod receipt_capability_audit;
+#[path = "mkhe/release_evidence.rs"]
+mod release_evidence;
 #[path = "mkhe/resource.rs"]
 mod resource;
+#[path = "mkhe/rns_native_comparator_product.rs"]
+mod rns_native_comparator_product;
+#[path = "mkhe/rns_native_comparator_range_carry_product.rs"]
+mod rns_native_comparator_range_carry_product;
+#[path = "mkhe/rns_native_composite_verifier.rs"]
+mod rns_native_composite_verifier;
+#[path = "mkhe/rns_native_cross_field_inventory.rs"]
+mod rns_native_cross_field_inventory;
+#[path = "mkhe/rns_native_profile.rs"]
+mod rns_native_profile;
+#[path = "mkhe/rns_native_qpcs_fri_complete.rs"]
+mod rns_native_qpcs_fri_complete;
+#[path = "mkhe/rns_native_qpcs_initial.rs"]
+mod rns_native_qpcs_initial;
+#[path = "mkhe/rns_native_qpcs_prefix.rs"]
+mod rns_native_qpcs_prefix;
+#[allow(
+    dead_code,
+    reason = "the private source-statement prerequisite remains non-authorizing until the concrete RLWE/qPCS relation verifier consumes it"
+)]
+#[path = "mkhe/rns_native_rlwe_source_statement.rs"]
+mod rns_native_rlwe_source_statement;
+#[path = "mkhe/rns_native_section_codec.rs"]
+mod rns_native_section_codec;
+#[path = "mkhe/rns_native_source.rs"]
+mod rns_native_source;
+#[allow(
+    dead_code,
+    reason = "the private source/terminal prerequisite remains non-authorizing until the cross-field/global-lookup proof verifier consumes it"
+)]
+#[path = "mkhe/rns_native_source_terminal_cross_field.rs"]
+mod rns_native_source_terminal_cross_field;
+#[path = "mkhe/rns_native_terminal_cross_basis.rs"]
+mod rns_native_terminal_cross_basis;
+#[path = "mkhe/rns_native_transcript.rs"]
+mod rns_native_transcript;
+#[path = "mkhe/rns_native_wire.rs"]
+mod rns_native_wire;
+#[path = "mkhe/rns_native_zero_padding_commitment.rs"]
+mod rns_native_zero_padding_commitment;
 #[path = "mkhe/security.rs"]
 mod security;
 #[path = "mkhe/terminal.rs"]
@@ -353,9 +395,11 @@ pub(super) use manifest::require_release_ready_v1;
 pub use manifest::{
     ZkAmsMkheReadinessV1, ZkAmsMkheReleaseManifestV1, zk_ams_mkhe_manifest_digest_v1,
     zk_ams_mkhe_noise_certificate_v1, zk_ams_mkhe_readiness_digest_v1, zk_ams_mkhe_readiness_v1,
-    zk_ams_mkhe_release_manifest_v1, zk_ams_mkhe_resource_certificate_digest_v1,
-    zk_ams_mkhe_resource_certificate_v1, zk_ams_mkhe_security_candidate_input_digest_v1,
+    zk_ams_mkhe_release_kat_evidence_v1, zk_ams_mkhe_release_manifest_v1,
+    zk_ams_mkhe_resource_certificate_digest_v1, zk_ams_mkhe_resource_certificate_v1,
+    zk_ams_mkhe_resource_evidence_v1, zk_ams_mkhe_security_candidate_input_digest_v1,
     zk_ams_mkhe_security_candidate_v1, zk_ams_mkhe_security_certificate_v1,
+    zk_ams_mkhe_wire_evidence_v1,
 };
 pub use noise::ZkAmsMkheNoiseCertificateV1;
 pub use packing::{
@@ -415,7 +459,80 @@ pub use phase23_materialized_wire::{
     read_zk_ams_phase23_materialized_accumulators_canonical_exact_v1,
     write_zk_ams_phase23_materialized_accumulators_canonical_v1,
 };
+pub use release_evidence::{
+    ZK_AMS_MKHE_RELEASE_KAT_EVIDENCE_BYTES_V1, ZK_AMS_MKHE_RESOURCE_EVIDENCE_BYTES_V1,
+    ZK_AMS_MKHE_WIRE_EVIDENCE_BYTES_V1, ZkAmsMkheReleaseKatEvidenceV1, ZkAmsMkheResourceEvidenceV1,
+    ZkAmsMkheWireEvidenceV1,
+};
 pub use resource::ZkAmsMkheResourceCertificateV1;
+pub use rns_native_composite_verifier::{
+    ZK_AMS_MKHE_RNS_NATIVE_COMPOSITE_VERIFICATION_VERSION_V1,
+    ZkAmsMkheRnsNativeCompositeCandidateReceiptV1, ZkAmsMkheRnsNativeCompositeVerificationErrorV1,
+    ZkAmsMkheRnsNativeVerificationStageV1, verify_zk_ams_mkhe_rns_native_composite_v1,
+};
+pub use rns_native_profile::{
+    ZK_AMS_MKHE_RNS_NATIVE_CENTERED_CAPACITY_BITS_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_CORRELATED_FRI_MAX_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_CROSS_FIELD_POINT_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_FAMILY_COUNT_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_FAMILY_ORDER_V1, ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_HEADROOM_BITS_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_INITIAL_MULTIPROOF_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_IO_MAX_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1, ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, ZK_AMS_MKHE_RNS_NATIVE_MODULUS_BITS_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_PROFILE_MANIFEST_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_PROOF_MAX_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_QUOTIENT_BITS_V1, ZK_AMS_MKHE_RNS_NATIVE_RADIX_LOG2_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_RESIDUAL_BITS_V1, ZK_AMS_MKHE_RNS_NATIVE_RLWE_EQUATION_COUNT_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_SPOOL_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_SUMCHECK_ROUNDS_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_TARGET_SECURITY_BITS_V1, ZK_AMS_MKHE_RNS_NATIVE_WIDE_RESPONSE_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1, ZK_AMS_MKHE_RNS_NATIVE_WORKSPACE_MAX_BYTES_V1,
+    ZkAmsMkheRnsNativeFamilyV1, ZkAmsMkheRnsNativeProfileManifestV1, ZkAmsMkheRnsNativeProfileV1,
+    ZkAmsMkheRnsNativeTopologyV1, zk_ams_mkhe_rns_native_profile_manifest_v1,
+    zk_ams_mkhe_rns_native_profile_v1, zk_ams_mkhe_rns_native_release_candidate_digest_v1,
+    zk_ams_mkhe_rns_native_topology_v1,
+};
+pub use rns_native_section_codec::{
+    ZK_AMS_MKHE_RNS_NATIVE_SECTION_CODEC_VERSION_V1,
+    ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1, ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1,
+    ZkAmsMkheRnsNativeSectionCodecErrorV1, ZkAmsMkheRnsNativeTerminalBridgeSectionV1,
+    ZkAmsMkheRnsNativeZeroPaddingSectionV1,
+};
+pub use rns_native_source::{
+    ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_BLOCKS_PER_OPENING_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_FILE_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_PLAINTEXT_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_SLOTS_V1, ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_FILE_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_PLAINTEXT_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_SLOTS_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_SOURCE_TOTAL_FILE_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_SOURCE_VERSION_V1,
+    ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
+    ZkAmsMkheRnsNativeSourceErrorV1, ZkAmsMkheRnsNativeSourceLayoutV1,
+    ZkAmsMkheRnsNativeSourceProviderV1, ZkAmsMkheRnsNativeSourceReceiptV1,
+    ZkAmsMkheRnsNativeSourceSnapshotV1, ZkAmsMkheRnsNativeSourceWriterV1,
+};
+pub use rns_native_transcript::{
+    ZK_AMS_MKHE_RNS_NATIVE_QPCS_ROOT_COUNT_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_TRANSCRIPT_CHALLENGE_COUNT_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_TRANSCRIPT_VERSION_V1, ZkAmsMkheRnsNativeChallengeSeedsV1,
+    ZkAmsMkheRnsNativeCommitmentsBoundTranscriptV1, ZkAmsMkheRnsNativeOpeningCommitmentV1,
+    ZkAmsMkheRnsNativeOpeningCommitmentsV1, ZkAmsMkheRnsNativePublicContextV1,
+    ZkAmsMkheRnsNativeQpcsBoundTranscriptV1, ZkAmsMkheRnsNativeQpcsFriRootV1,
+    ZkAmsMkheRnsNativeQpcsRootsV1, ZkAmsMkheRnsNativeTerminalBoundTranscriptV1,
+    ZkAmsMkheRnsNativeTerminalBridgeV1, ZkAmsMkheRnsNativeTerminalRootsV1,
+    ZkAmsMkheRnsNativeTranscriptErrorV1, ZkAmsMkheRnsNativeTranscriptV1,
+};
+pub use rns_native_wire::{
+    ZK_AMS_MKHE_RNS_NATIVE_CROSS_FIELD_LOOKUP_SECTION_MAX_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_HEADER_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_MAX_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_VERSION_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_ORDER_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_RNS_RELATION_QPCS_SECTION_MAX_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_TERMINAL_BRIDGE_SECTION_MAX_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_ZERO_PADDING_SECTION_MAX_BYTES_V1, ZkAmsMkheRnsNativeProofEnvelopeV1,
+    ZkAmsMkheRnsNativeProofSectionDescriptorV1, ZkAmsMkheRnsNativeProofSectionKindV1,
+};
 pub use security::{
     ZkAmsMkheSecurityAttackRecordV1, ZkAmsMkheSecurityAttackV1, ZkAmsMkheSecurityCandidateV1,
     ZkAmsMkheSecurityCertificateV1, ZkAmsMkheSecurityEstimatorSuiteV1,

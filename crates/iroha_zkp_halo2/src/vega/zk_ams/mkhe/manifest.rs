@@ -10,6 +10,10 @@ use super::{
         zk_ams_phase23_equation_certificate_digest_v1, zk_ams_phase23_equation_certificate_v1,
     },
     receipt_capability_audit::zk_ams_mkhe_receipt_capability_audit_v1,
+    release_evidence::{
+        ZkAmsMkheReleaseKatEvidenceV1, ZkAmsMkheResourceEvidenceV1, ZkAmsMkheWireEvidenceV1,
+        frozen_release_kat_evidence_v1, frozen_resource_evidence_v1, frozen_wire_evidence_v1,
+    },
     resource::{ZkAmsMkheResourceCertificateV1, derive_resource_certificate_v1},
     security::{
         ZkAmsMkheSecurityCandidateV1, ZkAmsMkheSecurityCertificateV1, derive_security_candidate_v1,
@@ -192,8 +196,12 @@ pub struct ZkAmsMkheReleaseManifestV1 {
     pub security_certificate_digest: [u8; 32],
     /// Digest of the exact estimator inputs; this is not a security result.
     pub security_candidate_input_digest: [u8; 32],
-    /// Digest of exact static resource accounting and its open evidence bits.
+    /// Digest of exact static resource accounting; this is not runtime evidence.
     pub resource_certificate_digest: [u8; 32],
+    /// Digest of measured proof-size, transport, work, and peak-memory evidence.
+    pub resource_validation_evidence_digest: [u8; 32],
+    /// Digest of canonical positive/adversarial coverage for every MKHE codec.
+    pub wire_evidence_digest: [u8; 32],
     /// Digest of the exact release-degree positive and adversarial packing KAT.
     pub packing_certificate_digest: [u8; 32],
     /// Digest of Equations (6)--(11), finalization semantics, and closure bits.
@@ -210,6 +218,8 @@ pub struct ZkAmsMkheReleaseManifestV1 {
     pub receipt_capability_release_available: bool,
     /// Release-size execution KAT digest; zero means absent.
     pub release_kat_digest: [u8; 32],
+    /// Digest of the versioned release-KAT evidence record, including absence.
+    pub release_kat_evidence_digest: [u8; 32],
 }
 /// Native readiness result. Every field is bound by the readiness digest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -362,6 +372,30 @@ pub fn zk_ams_mkhe_resource_certificate_digest_v1() -> Result<[u8; 32], ZkAmsMkh
     ]);
     Ok(hash.finalize())
 }
+/// Return canonical coverage evidence for the complete MKHE wire surface.
+///
+/// The frozen record is structurally valid but incomplete until governed
+/// positive and adversarial fixture artifacts are installed together.
+pub fn zk_ams_mkhe_wire_evidence_v1() -> Result<ZkAmsMkheWireEvidenceV1, ZkAmsMkheErrorV1> {
+    frozen_wire_evidence_v1(&release_profile_v1())
+}
+/// Return canonical measured resource evidence for the release profile.
+///
+/// Static byte formulas do not populate this record. It closes only when the
+/// proof-size, SoraFS transport, Phase-II/III work, and peak-memory artifacts
+/// are all digest-bound to the same validator binary.
+pub fn zk_ams_mkhe_resource_evidence_v1() -> Result<ZkAmsMkheResourceEvidenceV1, ZkAmsMkheErrorV1> {
+    frozen_resource_evidence_v1(&release_profile_v1())
+}
+/// Return canonical release-size positive/adversarial KAT evidence.
+///
+/// A nonzero output digest alone is insufficient: fixture, expected and
+/// observed output, transcript, rejection counts, size, and validator identity
+/// must validate as one record.
+pub fn zk_ams_mkhe_release_kat_evidence_v1()
+-> Result<ZkAmsMkheReleaseKatEvidenceV1, ZkAmsMkheErrorV1> {
+    frozen_release_kat_evidence_v1(&release_profile_v1())
+}
 /// Return the exact frozen RLWE estimator inputs.
 pub fn zk_ams_mkhe_security_candidate_v1() -> Result<ZkAmsMkheSecurityCandidateV1, ZkAmsMkheErrorV1>
 {
@@ -394,6 +428,9 @@ pub fn zk_ams_mkhe_release_manifest_v1() -> Result<ZkAmsMkheReleaseManifestV1, Z
     let noise = zk_ams_mkhe_noise_certificate_v1()?;
     let security = zk_ams_mkhe_security_candidate_v1()?;
     let security_certificate = zk_ams_mkhe_security_certificate_v1()?;
+    let wire_evidence = zk_ams_mkhe_wire_evidence_v1()?;
+    let resource_evidence = zk_ams_mkhe_resource_evidence_v1()?;
+    let release_kat_evidence = zk_ams_mkhe_release_kat_evidence_v1()?;
     let active_exact_binding = exact_binding_release_state_v1(&profile)?;
     let decryption = zk_ams_mkhe_decryption_resource_evidence_v1()?;
     let receipt_capability = zk_ams_mkhe_receipt_capability_audit_v1();
@@ -459,6 +496,8 @@ pub fn zk_ams_mkhe_release_manifest_v1() -> Result<ZkAmsMkheReleaseManifestV1, Z
         security_certificate_digest: security_certificate.certificate_digest(),
         security_candidate_input_digest: zk_ams_mkhe_security_candidate_input_digest_v1()?,
         resource_certificate_digest: zk_ams_mkhe_resource_certificate_digest_v1()?,
+        resource_validation_evidence_digest: resource_evidence.evidence_digest,
+        wire_evidence_digest: wire_evidence.evidence_digest,
         packing_certificate_digest: zk_ams_t256_release_packing_certificate_v1()?.digest,
         phase23_equation_certificate_digest: zk_ams_phase23_equation_certificate_digest_v1(),
         active_exact_binding_audit_digest: active_exact_binding.audit_digest,
@@ -467,6 +506,7 @@ pub fn zk_ams_mkhe_release_manifest_v1() -> Result<ZkAmsMkheReleaseManifestV1, Z
         receipt_capability_blocker_mask: receipt_capability.blocker_mask,
         receipt_capability_release_available: receipt_capability.release_available,
         release_kat_digest: [0; 32],
+        release_kat_evidence_digest: release_kat_evidence.evidence_digest,
     })
 }
 /// Return the consensus digest of the exact release manifest and prime/root chain.
@@ -527,6 +567,8 @@ fn release_manifest_digest_v1(manifest: ZkAmsMkheReleaseManifestV1) -> [u8; 32] 
     hash.update(&manifest.security_certificate_digest);
     hash.update(&manifest.security_candidate_input_digest);
     hash.update(&manifest.resource_certificate_digest);
+    hash.update(&manifest.resource_validation_evidence_digest);
+    hash.update(&manifest.wire_evidence_digest);
     hash.update(&manifest.packing_certificate_digest);
     hash.update(&manifest.phase23_equation_certificate_digest);
     hash.update(&manifest.active_exact_binding_audit_digest);
@@ -535,13 +577,47 @@ fn release_manifest_digest_v1(manifest: ZkAmsMkheReleaseManifestV1) -> [u8; 32] 
     hash.update(&manifest.receipt_capability_blocker_mask.to_be_bytes());
     hash.update(&[manifest.receipt_capability_release_available.into()]);
     hash.update(&manifest.release_kat_digest);
+    hash.update(&manifest.release_kat_evidence_digest);
     hash.finalize()
+}
+fn resource_evidence_gate_v1(
+    manifest: ZkAmsMkheReleaseManifestV1,
+    certificate: ZkAmsMkheResourceCertificateV1,
+    evidence: ZkAmsMkheResourceEvidenceV1,
+    expected_certificate_digest: [u8; 32],
+) -> bool {
+    certificate.ciphertext_ceiling_met
+        && certificate.per_evaluated_key_ceiling_met
+        && certificate.workspace_ceiling_met
+        && certificate.composed_rotation_work_ceiling_met
+        && evidence.closes_gate(&release_profile_v1(), certificate)
+        && manifest.resource_certificate_digest == expected_certificate_digest
+        && manifest.resource_validation_evidence_digest == evidence.evidence_digest
+}
+fn wire_evidence_gate_v1(
+    manifest: ZkAmsMkheReleaseManifestV1,
+    evidence: ZkAmsMkheWireEvidenceV1,
+) -> bool {
+    evidence.validate_for_profile(&release_profile_v1()).is_ok()
+        && evidence.is_complete()
+        && manifest.wire_evidence_digest == evidence.evidence_digest
+}
+fn release_kat_evidence_gate_v1(
+    manifest: ZkAmsMkheReleaseManifestV1,
+    evidence: ZkAmsMkheReleaseKatEvidenceV1,
+) -> bool {
+    evidence.closes_gate(&release_profile_v1())
+        && manifest.release_kat_evidence_digest == evidence.evidence_digest
+        && manifest.release_kat_digest == evidence.observed_output_digest
 }
 /// Evaluate every release-readiness gate without silently downgrading.
 pub fn zk_ams_mkhe_readiness_v1() -> Result<ZkAmsMkheReadinessV1, ZkAmsMkheErrorV1> {
     let manifest = zk_ams_mkhe_release_manifest_v1()?;
     let noise = zk_ams_mkhe_noise_certificate_v1()?;
     let resource = zk_ams_mkhe_resource_certificate_v1()?;
+    let resource_evidence = zk_ams_mkhe_resource_evidence_v1()?;
+    let wire_evidence = zk_ams_mkhe_wire_evidence_v1()?;
+    let release_kat_evidence = zk_ams_mkhe_release_kat_evidence_v1()?;
     let packing = zk_ams_t256_release_packing_certificate_v1()?;
     let phase23 = zk_ams_phase23_equation_certificate_v1();
     let security = zk_ams_mkhe_security_certificate_v1()?;
@@ -593,12 +669,13 @@ pub fn zk_ams_mkhe_readiness_v1() -> Result<ZkAmsMkheReadinessV1, ZkAmsMkheError
                 == manifest.sampled_rlwe_error_max
                     - i16::from(manifest.natural_lift_upper_half_correction_min)
             && manifest.correctness_margin_bits >= 64,
-        resource_gate: resource.is_release_ready()
-            && manifest.resource_certificate_digest
-                == zk_ams_mkhe_resource_certificate_digest_v1()?,
-        // Static wire formulas and bounded toy-profile KATs are not a
-        // substitute for a pinned release-parameter positive/negative KAT.
-        wire_gate: false,
+        resource_gate: resource_evidence_gate_v1(
+            manifest,
+            resource,
+            resource_evidence,
+            zk_ams_mkhe_resource_certificate_digest_v1()?,
+        ),
+        wire_gate: wire_evidence_gate_v1(manifest, wire_evidence),
         malicious_party_gate: active_exact_binding_gate
             && active_exact_binding.audit_digest == manifest.active_exact_binding_audit_digest,
         decryption_share_gate: active_exact_binding_gate
@@ -614,7 +691,7 @@ pub fn zk_ams_mkhe_readiness_v1() -> Result<ZkAmsMkheReadinessV1, ZkAmsMkheError
                 == zk_ams_phase23_equation_certificate_digest_v1(),
         receipt_capability_gate,
         receipt_capability_blocker_mask: receipt_capability.blocker_mask,
-        release_kat_gate: manifest.release_kat_digest != [0; 32],
+        release_kat_gate: release_kat_evidence_gate_v1(manifest, release_kat_evidence),
     })
 }
 /// Return a consensus digest binding the manifest and every readiness bit.
@@ -827,6 +904,14 @@ mod tests {
                 ..manifest
             },
             ZkAmsMkheReleaseManifestV1 {
+                resource_validation_evidence_digest: [0; 32],
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                wire_evidence_digest: [0; 32],
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
                 active_exact_binding_audit_digest: [0; 32],
                 ..manifest
             },
@@ -844,6 +929,10 @@ mod tests {
             },
             ZkAmsMkheReleaseManifestV1 {
                 receipt_capability_release_available: true,
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                release_kat_evidence_digest: [0; 32],
                 ..manifest
             },
         ] {
@@ -896,6 +985,58 @@ mod tests {
             require_release_ready_v1(),
             Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
         );
+    }
+    #[test]
+    fn typed_wire_resource_and_kat_evidence_remain_fail_closed() {
+        let manifest = zk_ams_mkhe_release_manifest_v1().expect("release manifest");
+        let wire = zk_ams_mkhe_wire_evidence_v1().expect("wire evidence");
+        let resource = zk_ams_mkhe_resource_evidence_v1().expect("resource evidence");
+        let resource_certificate =
+            zk_ams_mkhe_resource_certificate_v1().expect("resource certificate");
+        let kat = zk_ams_mkhe_release_kat_evidence_v1().expect("release KAT evidence");
+
+        assert_ne!(wire.evidence_digest, [0; 32]);
+        assert_ne!(resource.evidence_digest, [0; 32]);
+        assert_ne!(kat.evidence_digest, [0; 32]);
+        assert_eq!(manifest.wire_evidence_digest, wire.evidence_digest);
+        assert_eq!(
+            manifest.resource_validation_evidence_digest,
+            resource.evidence_digest
+        );
+        assert_eq!(manifest.release_kat_evidence_digest, kat.evidence_digest);
+        assert!(!wire_evidence_gate_v1(manifest, wire));
+        let forged_wire = ZkAmsMkheWireEvidenceV1 {
+            covered_codec_count: wire.required_codec_count,
+            canonical_case_count: u32::from(wire.required_codec_count),
+            adversarial_case_count: u32::from(wire.required_codec_count),
+            max_observed_artifact_bytes: 1,
+            canonical_fixture_digest: [1; 32],
+            adversarial_fixture_digest: [2; 32],
+            validator_binary_digest: [3; 32],
+            evidence_digest: [4; 32],
+            ..wire
+        };
+        assert!(forged_wire.is_complete());
+        assert!(!wire_evidence_gate_v1(
+            ZkAmsMkheReleaseManifestV1 {
+                wire_evidence_digest: forged_wire.evidence_digest,
+                ..manifest
+            },
+            forged_wire,
+        ));
+        assert!(!resource_evidence_gate_v1(
+            manifest,
+            resource_certificate,
+            resource,
+            zk_ams_mkhe_resource_certificate_digest_v1().unwrap(),
+        ));
+        assert!(!release_kat_evidence_gate_v1(manifest, kat));
+
+        let nonzero_shortcut = ZkAmsMkheReleaseManifestV1 {
+            release_kat_digest: [7; 32],
+            ..manifest
+        };
+        assert!(!release_kat_evidence_gate_v1(nonzero_shortcut, kat));
     }
     #[test]
     fn readiness_derives_active_and_decryption_gates_from_exact_audits() {

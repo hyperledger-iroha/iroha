@@ -2,8 +2,9 @@
 //!
 //! This module is deliberately not a release capability.  Its production
 //! owner contains uninhabited source and packing bindings, while tests may use
-//! a local permit to exercise the cryptographic kernel.  In particular, no
-//! constructor accepts detached digests, commitments, or opening vectors.
+//! a local permit to exercise the cryptographic kernel.  A sibling may invoke
+//! a verifier-only detached kernel adapter, but its result cannot construct the
+//! production binding or claim source, packing, terminal, or release authority.
 //!
 //! The kernel uses a representation-equality Schnorr proof over the exact
 //! 1,025-coordinate terminal opening.  Its fresh 512-bit-reduced response
@@ -34,15 +35,16 @@ use core::{convert::Infallible, mem};
 use std::collections::BTreeSet;
 use thiserror::Error;
 const BRIDGE_VERSION_V2: u8 = 2;
-const BRIDGE_ROWS_V2: usize = ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1
+pub(super) const BRIDGE_ROWS_V2: usize = ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1
     + ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1;
 const BRIDGE_VALUE_COLUMNS_V2: usize = MASKED_RELAXED_COMMITMENT_COLUMNS_V1;
 const BRIDGE_BASIS_VIEW_V2: usize = BRIDGE_VALUE_COLUMNS_V2 + 1;
-const BRIDGE_POINT_BYTES_V2: usize = 33;
+pub(super) const BRIDGE_POINT_BYTES_V2: usize = 33;
 const BRIDGE_SCALAR_BYTES_V2: usize = 32;
 const BRIDGE_MASK_POINT_BYTES_V2: usize = 2 * BRIDGE_POINT_BYTES_V2;
 const BRIDGE_RESPONSE_BYTES_V2: usize = BRIDGE_BASIS_VIEW_V2 * BRIDGE_SCALAR_BYTES_V2;
-const BRIDGE_RAW_PROOF_BYTES_V2: usize = BRIDGE_MASK_POINT_BYTES_V2 + BRIDGE_RESPONSE_BYTES_V2;
+pub(super) const BRIDGE_RAW_PROOF_BYTES_V2: usize =
+    BRIDGE_MASK_POINT_BYTES_V2 + BRIDGE_RESPONSE_BYTES_V2;
 const BRIDGE_MAX_CHALLENGE_ATTEMPTS_V2: u16 = 128;
 const BRIDGE_MAX_MASK_ATTEMPTS_V2: u8 = 2;
 const BRIDGE_MASK_ENTROPY_BYTES_V2: usize = 64;
@@ -614,12 +616,29 @@ fn verify_representation_v2(
     if response.len() != BRIDGE_BASIS_VIEW_V2 {
         return Err(BridgeErrorV2::Shape);
     }
-    let hyrax_response = secret_commit_v2(&hyrax_basis.points, response.as_slice())?;
-    let bp_response = secret_commit_v2(&bp_basis.points, response.as_slice())?;
-    if !hyrax_response.equals(&(hyrax_mask + aggregate.hyrax_commitment.mul_scalar(challenge)))
-        || !bp_response.equals(&(bp_mask + aggregate.bp_commitment.mul_scalar(challenge)))
+    #[cfg(not(test))]
     {
-        return Err(BridgeErrorV2::Representation);
+        let hyrax_response = secret_commit_v2(&hyrax_basis.points, response.as_slice())?;
+        let bp_response = secret_commit_v2(&bp_basis.points, response.as_slice())?;
+        if !hyrax_response.equals(&(hyrax_mask + aggregate.hyrax_commitment.mul_scalar(challenge)))
+            || !bp_response.equals(&(bp_mask + aggregate.bp_commitment.mul_scalar(challenge)))
+        {
+            return Err(BridgeErrorV2::Representation);
+        }
+    }
+    #[cfg(test)]
+    {
+        // The response and fixed bases are public verifier inputs. The
+        // variable-time public MSM is algebraically identical to the secret
+        // prover MSM while keeping full-shape verifier tests tractable.
+        let hyrax_response =
+            public_commit_for_fixture_v2(&hyrax_basis.points, response.as_slice())?;
+        let bp_response = public_commit_for_fixture_v2(&bp_basis.points, response.as_slice())?;
+        if hyrax_response != hyrax_mask + aggregate.hyrax_commitment.mul_scalar(challenge)
+            || bp_response != bp_mask + aggregate.bp_commitment.mul_scalar(challenge)
+        {
+            return Err(BridgeErrorV2::Representation);
+        }
     }
     Ok(())
 }
@@ -744,6 +763,43 @@ fn verify_kernel_v2(
 ) -> Result<[u8; 32], BridgeErrorV2> {
     verify_kernel_with_bases_v2(statement, proof_bytes, &hyrax_basis_v2()?, &bp_basis_v2()?)
 }
+
+#[cfg(test)]
+fn public_commit_for_fixture_v2(
+    points: &[Point],
+    scalars: &[Scalar],
+) -> Result<Point, BridgeErrorV2> {
+    if points.len() != scalars.len() || points.is_empty() {
+        return Err(BridgeErrorV2::Shape);
+    }
+    let mut terms = Vec::new();
+    terms
+        .try_reserve_exact(points.len())
+        .map_err(|_| BridgeErrorV2::Arithmetic)?;
+    terms.extend(scalars.iter().copied().zip(points.iter().copied()));
+    Ok(multiexp::<ZkAmsT256BulletproofSuiteV1>(&terms))
+}
+
+/// Verify only the detached representation-equality kernel.
+///
+/// This adapter deliberately erases the kernel's internal error and returns
+/// only its bridge root.  Success is a prerequisite, not the uninhabited
+/// [`VerifiedBridgeBindingV2`], and conveys no source, packing, terminal, or
+/// release authority.
+pub(super) fn verify_detached_kernel_prerequisite_v2(
+    binding_digest: [u8; 32],
+    hyrax_commitments: &[Point],
+    bp_commitments: &[Point],
+    proof_bytes: &[u8],
+) -> Result<[u8; 32], ()> {
+    let statement = KernelStatementV2 {
+        binding_digest,
+        hyrax_commitments,
+        bp_commitments,
+    };
+    verify_kernel_v2(&statement, proof_bytes).map_err(|_| ())
+}
+
 #[cfg(test)]
 struct TestBridgePermitV2(());
 #[cfg(test)]
@@ -760,6 +816,186 @@ fn prove_with_test_permit_v2<R: MaskedRelaxedRandomSourceV1>(
 ) -> Result<RawBridgeProofV2, BridgeErrorV2> {
     prove_kernel_v2(random, rows)
 }
+
+/// Test-only detached kernel fixture for sibling transport/binding tests.
+#[cfg(test)]
+pub(super) struct DetachedKernelTestFixtureV2 {
+    /// Ordered Hyrax-basis commitments.
+    pub(super) hyrax_commitments: Vec<Point>,
+    /// Ordered Bulletproof-basis commitments to the same row openings.
+    pub(super) bp_commitments: Vec<Point>,
+    /// Exact raw representation-equality proof bytes.
+    pub(super) proof: Vec<u8>,
+    /// Bridge root returned by the first-party verifier.
+    pub(super) bridge_root: [u8; 32],
+}
+
+/// Build one valid, deterministic verifier-only kernel fixture for sibling tests.
+#[cfg(test)]
+pub(super) fn detached_kernel_test_fixture_v2(
+    binding_digest: [u8; 32],
+) -> Result<DetachedKernelTestFixtureV2, ()> {
+    detached_kernel_test_fixture_with_mask_v2(binding_digest, 0)
+}
+
+#[cfg(test)]
+fn detached_kernel_test_fixture_with_mask_v2(
+    binding_digest: [u8; 32],
+    mask_tweak: u64,
+) -> Result<DetachedKernelTestFixtureV2, ()> {
+    let hyrax_basis = hyrax_basis_v2().map_err(|_| ())?;
+    let bp_basis = bp_basis_v2().map_err(|_| ())?;
+    let mut first = ZeroizingT256ScalarVecV1::with_capacity(BRIDGE_BASIS_VIEW_V2);
+    let mut second = ZeroizingT256ScalarVecV1::with_capacity(BRIDGE_BASIS_VIEW_V2);
+    for _ in 0..BRIDGE_BASIS_VIEW_V2 {
+        first.push(Scalar::zero());
+        second.push(Scalar::zero());
+    }
+    first.as_mut_slice()[0] = Scalar::from_u64(3);
+    first.as_mut_slice()[BRIDGE_BASIS_VIEW_V2 - 1] = Scalar::from_u64(257);
+    second.as_mut_slice()[1] = Scalar::from_u64(5);
+    second.as_mut_slice()[BRIDGE_BASIS_VIEW_V2 - 1] = Scalar::from_u64(263);
+    let sparse_commit =
+        |basis: &CheckedBasisV2, first_index: usize, value: Scalar, blind: Scalar| -> Point {
+            basis.points[first_index].mul_scalar(value)
+                + basis.points[BRIDGE_BASIS_VIEW_V2 - 1].mul_scalar(blind)
+        };
+    let hyrax_first = sparse_commit(&hyrax_basis, 0, Scalar::from_u64(3), Scalar::from_u64(257));
+    let hyrax_second = sparse_commit(&hyrax_basis, 1, Scalar::from_u64(5), Scalar::from_u64(263));
+    let bp_first = sparse_commit(&bp_basis, 0, Scalar::from_u64(3), Scalar::from_u64(257));
+    let bp_second = sparse_commit(&bp_basis, 1, Scalar::from_u64(5), Scalar::from_u64(263));
+    if public_commit_for_fixture_v2(&hyrax_basis.points, first.as_slice()).map_err(|_| ())?
+        != hyrax_first
+        || public_commit_for_fixture_v2(&hyrax_basis.points, second.as_slice()).map_err(|_| ())?
+            != hyrax_second
+        || public_commit_for_fixture_v2(&bp_basis.points, first.as_slice()).map_err(|_| ())?
+            != bp_first
+        || public_commit_for_fixture_v2(&bp_basis.points, second.as_slice()).map_err(|_| ())?
+            != bp_second
+    {
+        return Err(());
+    }
+    let mut hyrax_commitments = Vec::new();
+    let mut bp_commitments = Vec::new();
+    hyrax_commitments
+        .try_reserve_exact(BRIDGE_ROWS_V2)
+        .map_err(|_| ())?;
+    bp_commitments
+        .try_reserve_exact(BRIDGE_ROWS_V2)
+        .map_err(|_| ())?;
+    for row in 0..BRIDGE_ROWS_V2 {
+        let (hyrax, bp) = if row.is_multiple_of(2) {
+            (hyrax_first, bp_first)
+        } else {
+            (hyrax_second, bp_second)
+        };
+        hyrax_commitments.push(hyrax);
+        bp_commitments.push(bp);
+    }
+    let statement = KernelStatementV2 {
+        binding_digest,
+        hyrax_commitments: &hyrax_commitments,
+        bp_commitments: &bp_commitments,
+    };
+    let (commitment_root, eta) =
+        prepare_kernel_v2(&statement, &hyrax_basis, &bp_basis).map_err(|_| ())?;
+    let mut first_weight = Scalar::zero();
+    let mut second_weight = Scalar::zero();
+    let mut weight = Scalar::one();
+    for row in 0..BRIDGE_ROWS_V2 {
+        if row.is_multiple_of(2) {
+            first_weight += weight;
+        } else {
+            second_weight += weight;
+        }
+        weight *= eta;
+    }
+    let mut aggregate_opening = ZeroizingT256ScalarVecV1::with_capacity(BRIDGE_BASIS_VIEW_V2);
+    for (first_value, second_value) in first.as_slice().iter().zip(second.as_slice()) {
+        aggregate_opening.push(first_weight * *first_value + second_weight * *second_value);
+    }
+    let aggregate = AggregatedRowsV2 {
+        opening: aggregate_opening,
+        hyrax_commitment: hyrax_first.mul_scalar(first_weight)
+            + hyrax_second.mul_scalar(second_weight),
+        bp_commitment: bp_first.mul_scalar(first_weight) + bp_second.mul_scalar(second_weight),
+    };
+    if aggregate.hyrax_commitment.is_identity()
+        || aggregate.bp_commitment.is_identity()
+        || public_commit_for_fixture_v2(&hyrax_basis.points, aggregate.opening.as_slice())
+            .map_err(|_| ())?
+            != aggregate.hyrax_commitment
+        || public_commit_for_fixture_v2(&bp_basis.points, aggregate.opening.as_slice())
+            .map_err(|_| ())?
+            != aggregate.bp_commitment
+    {
+        return Err(());
+    }
+    let expected_bridge_root = bridge_root_v2(
+        &statement,
+        commitment_root,
+        eta,
+        &aggregate,
+        hyrax_basis.digest,
+        bp_basis.digest,
+    )
+    .map_err(|_| ())?;
+    let mut mask = ZeroizingT256ScalarVecV1::with_capacity(BRIDGE_BASIS_VIEW_V2);
+    for _ in 0..BRIDGE_BASIS_VIEW_V2 {
+        mask.push(Scalar::zero());
+    }
+    let mask_value = 307_u64.checked_add(mask_tweak).ok_or(())?;
+    let mask_blind = 311_u64
+        .checked_add(mask_tweak.checked_mul(2).ok_or(())?)
+        .ok_or(())?;
+    mask.as_mut_slice()[2] = Scalar::from_u64(mask_value);
+    mask.as_mut_slice()[BRIDGE_BASIS_VIEW_V2 - 1] = Scalar::from_u64(mask_blind);
+    let hyrax_mask = hyrax_basis.points[2].mul_scalar(Scalar::from_u64(mask_value))
+        + hyrax_basis.points[BRIDGE_BASIS_VIEW_V2 - 1].mul_scalar(Scalar::from_u64(mask_blind));
+    let bp_mask = bp_basis.points[2].mul_scalar(Scalar::from_u64(mask_value))
+        + bp_basis.points[BRIDGE_BASIS_VIEW_V2 - 1].mul_scalar(Scalar::from_u64(mask_blind));
+    if hyrax_mask.is_identity()
+        || bp_mask.is_identity()
+        || public_commit_for_fixture_v2(&hyrax_basis.points, mask.as_slice()).map_err(|_| ())?
+            != hyrax_mask
+        || public_commit_for_fixture_v2(&bp_basis.points, mask.as_slice()).map_err(|_| ())?
+            != bp_mask
+    {
+        return Err(());
+    }
+    let challenge = schnorr_challenge_v2(
+        expected_bridge_root,
+        hyrax_basis.digest,
+        bp_basis.digest,
+        &hyrax_mask,
+        &bp_mask,
+    )
+    .map_err(|_| ())?;
+    let response = respond_v2(mask, &aggregate.opening, challenge).map_err(|_| ())?;
+    let mut writer = ProofWriterV2::new();
+    writer.point(&hyrax_mask).map_err(|_| ())?;
+    writer.point(&bp_mask).map_err(|_| ())?;
+    for scalar in response.as_slice() {
+        writer.scalar(*scalar).map_err(|_| ())?;
+    }
+    let proof = writer.finish().map_err(|_| ())?;
+    let bridge_root = verify_detached_kernel_prerequisite_v2(
+        binding_digest,
+        &hyrax_commitments,
+        &bp_commitments,
+        &proof.bytes,
+    )?;
+    if bridge_root != expected_bridge_root {
+        return Err(());
+    }
+    Ok(DetachedKernelTestFixtureV2 {
+        hyrax_commitments,
+        bp_commitments,
+        proof: proof.bytes.to_vec(),
+        bridge_root,
+    })
+}
+
 #[cfg(test)]
 #[path = "terminal_cross_basis_ipa_tests.rs"]
 mod tests;

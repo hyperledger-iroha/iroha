@@ -1,4 +1,6 @@
 //! Exact bounded Microsoft Vega-MC verifier-key codec and digest.
+use std::collections::BTreeSet;
+
 use super::super::{
     VegaMdlProofDimensionsV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
 };
@@ -251,9 +253,7 @@ impl McVerifierKeyWire {
         })
     }
     fn validate(&self) -> Result<(), McCodecError> {
-        validate_hyrax_key(&self.application_key)?;
         validate_hyrax_key(&self.evaluation_key)?;
-        validate_hyrax_key(&self.verifier_commitment_key)?;
         validate_hyrax_key(&self.verifier_evaluation_key)?;
         if self.application_key != self.evaluation_key
             || self.verifier_commitment_key != self.verifier_evaluation_key
@@ -261,39 +261,17 @@ impl McVerifierKeyWire {
         {
             return Err(McCodecError::InvalidEncoding);
         }
-        validate_split_shape(&self.step_shape)?;
-        validate_split_shape(&self.core_shape)?;
-        validate_multi_round_shape(&self.verifier_shape)?;
-        validate_regular_shape(&self.verifier_regular_shape)?;
-        if self.step_shape.shared != self.core_shape.shared
-            || self.step_shape.constraints != self.core_shape.constraints
-            || self.step_shape.variables()? != self.core_shape.variables()?
-            || self.application_key.columns != DEFAULT_COMMITMENT_WIDTH
-            || self.verifier_commitment_key.columns != self.verifier_shape.commitment_width
-            || self.verifier_shape.constraints != self.verifier_regular_shape.constraints
-            || self
-                .verifier_shape
-                .variables_per_round
-                .iter()
-                .try_fold(0_usize, |total, value| total.checked_add(*value))
-                .ok_or(McCodecError::InvalidEncoding)?
-                != self.verifier_regular_shape.variables
-            || self
-                .verifier_shape
-                .challenges_per_round
-                .iter()
-                .try_fold(self.verifier_shape.public_values, |total, value| {
-                    total.checked_add(*value)
-                })
-                .ok_or(McCodecError::InvalidEncoding)?
-                != self.verifier_regular_shape.public_values
-        {
-            return Err(McCodecError::InvalidEncoding);
-        }
-        Ok(())
+        validate_prover_components(
+            &self.application_key,
+            &self.step_shape,
+            &self.core_shape,
+            &self.verifier_shape,
+            &self.verifier_regular_shape,
+            &self.verifier_commitment_key,
+        )
     }
 }
-fn read_hyrax_key(reader: &mut Reader<'_>) -> Result<HyraxKeyWire, McCodecError> {
+pub(super) fn read_hyrax_key(reader: &mut Reader<'_>) -> Result<HyraxKeyWire, McCodecError> {
     let columns = reader.encoded_len()?;
     if columns == 0 || columns > MAX_KEY_COLUMNS {
         return Err(McCodecError::InvalidEncoding);
@@ -366,7 +344,7 @@ fn bounded_count(
     }
     Ok(count)
 }
-fn read_split_shape(reader: &mut Reader<'_>) -> Result<SplitShapeWire, McCodecError> {
+pub(super) fn read_split_shape(reader: &mut Reader<'_>) -> Result<SplitShapeWire, McCodecError> {
     let shape = SplitShapeWire {
         constraints: reader.encoded_len()?,
         constraints_unpadded: reader.encoded_len()?,
@@ -385,7 +363,9 @@ fn read_split_shape(reader: &mut Reader<'_>) -> Result<SplitShapeWire, McCodecEr
     validate_split_shape(&shape)?;
     Ok(shape)
 }
-fn read_multi_round_shape(reader: &mut Reader<'_>) -> Result<MultiRoundShapeWire, McCodecError> {
+pub(super) fn read_multi_round_shape(
+    reader: &mut Reader<'_>,
+) -> Result<MultiRoundShapeWire, McCodecError> {
     let constraints = reader.encoded_len()?;
     let constraints_unpadded = reader.encoded_len()?;
     let rounds = reader.encoded_len()?;
@@ -408,7 +388,9 @@ fn read_multi_round_shape(reader: &mut Reader<'_>) -> Result<MultiRoundShapeWire
     validate_multi_round_shape(&shape)?;
     Ok(shape)
 }
-fn read_regular_shape(reader: &mut Reader<'_>) -> Result<RegularShapeWire, McCodecError> {
+pub(super) fn read_regular_shape(
+    reader: &mut Reader<'_>,
+) -> Result<RegularShapeWire, McCodecError> {
     let shape = RegularShapeWire {
         constraints: reader.encoded_len()?,
         variables: reader.encoded_len()?,
@@ -438,19 +420,32 @@ fn validate_hyrax_key(key: &HyraxKeyWire) -> Result<(), McCodecError> {
     {
         return Err(McCodecError::InvalidEncoding);
     }
-    for (index, point) in key.generators.iter().copied().enumerate() {
-        if point.is_identity()
-            || key
-                .generators
-                .iter()
-                .copied()
-                .skip(index + 1)
-                .any(|other| other == point || other == point.negate())
-            || point == key.hiding_generator
-            || point == key.hiding_generator.negate()
+    let hiding = key
+        .hiding_generator
+        .to_non_identity_wire_bytes()
+        .map_err(|_| McCodecError::InvalidEncoding)?;
+    let hiding_negated = key
+        .hiding_generator
+        .negate()
+        .to_non_identity_wire_bytes()
+        .map_err(|_| McCodecError::InvalidEncoding)?;
+    let mut seen = BTreeSet::new();
+    for point in key.generators.iter().copied() {
+        let encoded = point
+            .to_non_identity_wire_bytes()
+            .map_err(|_| McCodecError::InvalidEncoding)?;
+        let negated = point
+            .negate()
+            .to_non_identity_wire_bytes()
+            .map_err(|_| McCodecError::InvalidEncoding)?;
+        if encoded == hiding
+            || encoded == hiding_negated
+            || seen.contains(&encoded)
+            || seen.contains(&negated)
         {
             return Err(McCodecError::InvalidEncoding);
         }
+        seen.insert(encoded);
     }
     Ok(())
 }
@@ -549,7 +544,50 @@ fn validate_regular_shape(shape: &RegularShapeWire) -> Result<(), McCodecError> 
     }
     Ok(())
 }
-fn write_hyrax_key(output: &mut Vec<u8>, key: &HyraxKeyWire) -> Result<(), McCodecError> {
+/// Validate the exact proving-key component relationships shared with the verifier key.
+pub(super) fn validate_prover_components(
+    application_key: &HyraxKeyWire,
+    step_shape: &SplitShapeWire,
+    core_shape: &SplitShapeWire,
+    verifier_shape: &MultiRoundShapeWire,
+    verifier_regular_shape: &RegularShapeWire,
+    verifier_commitment_key: &HyraxKeyWire,
+) -> Result<(), McCodecError> {
+    validate_hyrax_key(application_key)?;
+    validate_hyrax_key(verifier_commitment_key)?;
+    validate_split_shape(step_shape)?;
+    validate_split_shape(core_shape)?;
+    validate_multi_round_shape(verifier_shape)?;
+    validate_regular_shape(verifier_regular_shape)?;
+    if step_shape.shared != core_shape.shared
+        || step_shape.constraints != core_shape.constraints
+        || step_shape.variables()? != core_shape.variables()?
+        || application_key.columns != DEFAULT_COMMITMENT_WIDTH
+        || verifier_commitment_key.columns != verifier_shape.commitment_width
+        || verifier_shape.constraints != verifier_regular_shape.constraints
+        || verifier_shape
+            .variables_per_round
+            .iter()
+            .try_fold(0_usize, |total, value| total.checked_add(*value))
+            .ok_or(McCodecError::InvalidEncoding)?
+            != verifier_regular_shape.variables
+        || verifier_shape
+            .challenges_per_round
+            .iter()
+            .try_fold(verifier_shape.public_values, |total, value| {
+                total.checked_add(*value)
+            })
+            .ok_or(McCodecError::InvalidEncoding)?
+            != verifier_regular_shape.public_values
+    {
+        return Err(McCodecError::InvalidEncoding);
+    }
+    Ok(())
+}
+pub(super) fn write_hyrax_key(
+    output: &mut Vec<u8>,
+    key: &HyraxKeyWire,
+) -> Result<(), McCodecError> {
     write_usize(output, key.columns)?;
     write_len(output, key.generators.len())?;
     for point in &key.generators {
@@ -575,7 +613,10 @@ fn write_sparse_matrix(
     }
     write_usize(output, matrix.columns)
 }
-fn write_split_shape(output: &mut Vec<u8>, shape: &SplitShapeWire) -> Result<(), McCodecError> {
+pub(super) fn write_split_shape(
+    output: &mut Vec<u8>,
+    shape: &SplitShapeWire,
+) -> Result<(), McCodecError> {
     for value in split_dimensions(shape) {
         write_usize(output, value)?;
     }
@@ -583,7 +624,7 @@ fn write_split_shape(output: &mut Vec<u8>, shape: &SplitShapeWire) -> Result<(),
     write_sparse_matrix(output, &shape.b)?;
     write_sparse_matrix(output, &shape.c)
 }
-fn write_multi_round_shape(
+pub(super) fn write_multi_round_shape(
     output: &mut Vec<u8>,
     shape: &MultiRoundShapeWire,
 ) -> Result<(), McCodecError> {
@@ -599,7 +640,10 @@ fn write_multi_round_shape(
     write_sparse_matrix(output, &shape.b)?;
     write_sparse_matrix(output, &shape.c)
 }
-fn write_regular_shape(output: &mut Vec<u8>, shape: &RegularShapeWire) -> Result<(), McCodecError> {
+pub(super) fn write_regular_shape(
+    output: &mut Vec<u8>,
+    shape: &RegularShapeWire,
+) -> Result<(), McCodecError> {
     write_usize(output, shape.constraints)?;
     write_usize(output, shape.variables)?;
     write_usize(output, shape.public_values)?;
@@ -785,6 +829,37 @@ mod tests {
         bomb[8..16].copy_from_slice(&u64::MAX.to_le_bytes());
         assert_eq!(
             McVerifierKeyWire::decode(&bomb),
+            Err(McCodecError::InvalidEncoding)
+        );
+    }
+
+    #[test]
+    fn hyrax_key_validation_rejects_duplicate_negated_and_hiding_generators() {
+        let key = McVerifierKeyWire::decode(PYTHON_VK).expect("canonical Python key");
+        let mut candidate = key.application_key.clone();
+        candidate.generators[1] = candidate.generators[0];
+        assert_eq!(
+            validate_hyrax_key(&candidate),
+            Err(McCodecError::InvalidEncoding)
+        );
+
+        let mut candidate = key.application_key.clone();
+        candidate.generators[1] = candidate.generators[0].negate();
+        assert_eq!(
+            validate_hyrax_key(&candidate),
+            Err(McCodecError::InvalidEncoding)
+        );
+
+        let mut candidate = key.application_key.clone();
+        candidate.generators[0] = candidate.hiding_generator;
+        assert_eq!(
+            validate_hyrax_key(&candidate),
+            Err(McCodecError::InvalidEncoding)
+        );
+
+        candidate.generators[0] = candidate.hiding_generator.negate();
+        assert_eq!(
+            validate_hyrax_key(&candidate),
             Err(McCodecError::InvalidEncoding)
         );
     }

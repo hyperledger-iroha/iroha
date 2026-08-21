@@ -36,6 +36,9 @@ impl Commitment {
     pub(super) fn points(&self) -> &[Point] {
         &self.points
     }
+    pub(super) fn into_points(self) -> Vec<Point> {
+        self.points
+    }
     pub(super) fn len(&self) -> usize {
         self.points.len()
     }
@@ -185,6 +188,129 @@ impl CommitmentKey {
         })?;
         Commitment::from_points(points)
     }
+
+    /// Commit one exactly padded segment without materializing its zero suffix.
+    ///
+    /// `values` is the unpadded prefix and `padded_len` is the governed segment
+    /// length.  One blinding is required for every complete commitment row.
+    /// This is the Figure 9 application path's bounded alternative to allocating
+    /// hundreds of thousands of explicit zero scalars per split instance.
+    pub(super) fn commit_padded_prefix(
+        &self,
+        values: &[Scalar],
+        padded_len: usize,
+        row_blindings: &[Scalar],
+    ) -> Result<Commitment, CommitmentError> {
+        if padded_len == 0
+            || values.len() > padded_len
+            || !padded_len.is_multiple_of(self.columns())
+        {
+            return Err(CommitmentError::InvalidDimension);
+        }
+        let row_count = padded_len / self.columns();
+        if row_blindings.len() != row_count {
+            return Err(CommitmentError::InvalidDimension);
+        }
+        // Small sections (notably one-row precommitments) remain valid even
+        // when the proof-wide worker setting is larger than their row count.
+        let worker_count = self.worker_count.min(row_count);
+        let points = std::thread::scope(|scope| {
+            let mut workers = Vec::with_capacity(worker_count);
+            for worker_index in 0..worker_count {
+                let row_start = worker_index
+                    .checked_mul(row_count)
+                    .map(|value| value / worker_count)
+                    .ok_or(CommitmentError::InvalidDimension)?;
+                let row_end = worker_index
+                    .checked_add(1)
+                    .and_then(|index| index.checked_mul(row_count))
+                    .map(|value| value / worker_count)
+                    .ok_or(CommitmentError::InvalidDimension)?;
+                let worker = std::thread::Builder::new()
+                    .name(format!("vega-padded-msm-{worker_index}"))
+                    .stack_size(COMMITMENT_WORKER_STACK_BYTES)
+                    .spawn_scoped(scope, move || {
+                        #[cfg(test)]
+                        if self.panic_worker == Some(worker_index) {
+                            panic!("injected Vega commitment worker panic");
+                        }
+                        self.commit_padded_rows(
+                            values,
+                            &row_blindings[row_start..row_end],
+                            row_start,
+                        )
+                    });
+                match worker {
+                    Ok(worker) => workers.push(worker),
+                    Err(_) => {
+                        for worker in workers {
+                            let _ = worker.join();
+                        }
+                        return Err(CommitmentError::InvalidDimension);
+                    }
+                }
+            }
+            let mut points = Vec::with_capacity(row_count);
+            let mut worker_failed = false;
+            for worker in workers {
+                match worker.join() {
+                    Ok(Ok(worker_points)) if !worker_failed => points.extend(worker_points),
+                    Ok(Ok(_)) => {}
+                    Ok(Err(_)) | Err(_) => worker_failed = true,
+                }
+            }
+            if worker_failed {
+                return Err(CommitmentError::InvalidDimension);
+            }
+            Ok::<_, CommitmentError>(points)
+        })?;
+        Commitment::from_points(points)
+    }
+
+    fn commit_padded_rows(
+        &self,
+        values: &[Scalar],
+        row_blindings: &[Scalar],
+        first_row: usize,
+    ) -> Result<Vec<Point>, CommitmentError> {
+        let mut points = Vec::with_capacity(row_blindings.len());
+        for (offset, blinding) in row_blindings.iter().copied().enumerate() {
+            let row = first_row
+                .checked_add(offset)
+                .ok_or(CommitmentError::InvalidDimension)?;
+            let value_start = row
+                .checked_mul(self.columns())
+                .ok_or(CommitmentError::InvalidDimension)?;
+            let value_end = value_start
+                .checked_add(self.columns())
+                .map(|end| end.min(values.len()))
+                .ok_or(CommitmentError::InvalidDimension)?;
+            let populated = if value_start < values.len() {
+                &values[value_start..value_end]
+            } else {
+                &[]
+            };
+            let populated = populated
+                .iter()
+                .rposition(|value| !value.is_zero())
+                .map_or(&[][..], |last| &populated[..=last]);
+            let hiding = self.hiding_generator.mul_scalar(blinding);
+            let committed = if populated.is_empty() {
+                hiding
+            } else {
+                Point(msm_best(
+                    &populated.iter().map(|scalar| scalar.0).collect::<Vec<_>>(),
+                    &self.generator_affines[..populated.len()],
+                )) + hiding
+            };
+            if committed.is_identity() {
+                return Err(CommitmentError::InvalidDimension);
+            }
+            points.push(committed);
+        }
+        Ok(points)
+    }
+
     fn commit_rows(
         &self,
         values: &[Scalar],

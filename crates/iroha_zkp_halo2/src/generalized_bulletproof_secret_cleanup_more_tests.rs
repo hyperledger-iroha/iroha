@@ -825,7 +825,17 @@ fn scalar_commitment_opening_source_boundary_stays_private_and_zeroizing() {
     assert!(source.contains("for (value, mask) in &mut self.0"));
     assert!(source.contains("terms.push(&opening.value, &self.generators.g)?;"));
     assert!(source.contains("terms.push(&opening.mask, &self.generators.h)?;"));
-    assert!(source.contains("accumulate(&mut scalar_commitment_weights, &constraint.wv, -*z)"));
+    let scalar_commitment_weights = source
+        .split_once("let scalar_commitment_weights = if let Some(weights) = exact_v_weights")
+        .expect("scalar-commitment weight selection")
+        .1
+        .split_once("for (mut index, (opening, weights)) in witness")
+        .expect("scalar-commitment weight boundary")
+        .0;
+    assert!(scalar_commitment_weights.contains(
+        "let mut weights = ScalarVector::try_zero_exact_v1(self.scalar_commitments.len())?"
+    ));
+    assert!(scalar_commitment_weights.contains("accumulate(&mut weights, &constraint.wv, -*z)"));
     assert!(!fcmp_bulletproof.contains("new_with_scalar_commitments"));
     assert!(!fcmp_circuit.contains("new_with_scalar_commitments"));
 }

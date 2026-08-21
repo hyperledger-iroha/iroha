@@ -936,9 +936,9 @@ mod tests {
     fn streaming_source_keeps_one_record_and_checks_before_receipt() {
         let source = include_str!("cks_stream.rs");
         let implementation = source
-            .split("#[cfg(test)]")
-            .next()
-            .expect("implementation precedes tests");
+            .split_once("#[cfg(test)]\nmod tests {")
+            .expect("test module remains the final source section")
+            .0;
         assert!(implementation.lines().count() <= 1_000);
         let normalized_lines = implementation.lines().map(str::trim).collect::<Vec<_>>();
         assert!(
@@ -946,7 +946,6 @@ mod tests {
                 .windows(2)
                 .any(|lines| lines[0].starts_with("return Err(") && lines[0] == lines[1])
         );
-        assert!(implementation.contains("bytes != exact_contribution_bytes"));
         assert!(implementation.contains("ZeroizingByteVectorV1::read_exact"));
         assert!(implementation.contains("ZeroizingU64VectorV1::with_capacity_exact"));
         assert!(!normalized_lines.iter().any(|line| {
@@ -963,6 +962,7 @@ mod tests {
             .split("pub(super) fn decode_and_verify_cks_evidence_record_streaming")
             .nth(1)
             .expect("streaming decoder exists");
+        assert!(decoder.contains("bytes != exact_contribution_bytes"));
         let dropped_bytes = decoder
             .find("drop(encoded);")
             .expect("encoded record is dropped");

@@ -1,6 +1,6 @@
 //! Dependency-free SHA-256 used by the Microsoft Vega compatibility boundary.
 use thiserror::Error;
-const INITIAL_STATE: [u32; 8] = [
+pub(super) const INITIAL_STATE: [u32; 8] = [
     0x6a09_e667,
     0xbb67_ae85,
     0x3c6e_f372,
@@ -161,7 +161,7 @@ pub(super) fn sha256(input: &[u8]) -> Result<[u8; 32], Sha256Error> {
     state.update(input)?;
     Ok(state.finalize())
 }
-fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
+pub(super) fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
     let mut schedule = [0_u32; 64];
     for (word, bytes) in schedule.iter_mut().zip(block.chunks_exact(4)) {
         *word = u32::from_be_bytes(bytes.try_into().expect("four-byte SHA-256 word"));

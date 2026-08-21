@@ -1,9 +1,13 @@
 //! Canonical Kagemusha offline-cash models. The module exposes one lifecycle:
 //! exact online top-up, recursive offline split/spend, and exact online redemption.
 mod kagemusha_promotion_receipt;
+mod offline_cash_release_v1;
+mod offline_cash_v1;
 mod receiver_snapshot;
 mod status;
-pub use self::{kagemusha_promotion_receipt::*, model::*};
+pub use self::{
+    kagemusha_promotion_receipt::*, model::*, offline_cash_release_v1::*, offline_cash_v1::*,
+};
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{

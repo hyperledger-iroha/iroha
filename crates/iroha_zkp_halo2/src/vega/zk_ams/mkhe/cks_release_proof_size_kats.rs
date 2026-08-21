@@ -225,6 +225,7 @@ fn release_cks_proof_size_harness_stays_inert_and_capped() {
     let parent = include_str!("cks.rs");
     let resource = include_str!("resource.rs");
     let manifest = include_str!("manifest.rs");
+    let release_evidence = include_str!("release_evidence.rs");
     assert!(source.lines().count() <= 500 && source.len() <= 24 * 1024);
     assert!(harness.contains("#[ignore = \"release-shape CKS proof;"));
     assert!(harness.contains("prove_zk_ams_mkhe_cks_contribution_v1("));
@@ -233,6 +234,9 @@ fn release_cks_proof_size_harness_stays_inert_and_capped() {
     assert!(parent.contains("mod release_proof_size_kats"));
     assert!(resource.contains("contribution_proof_sizes_certified: false"));
     assert!(manifest.contains("release_kat_digest: [0; 32]"));
-    assert!(manifest.contains("wire_gate: false"));
+    assert!(manifest.contains("wire_gate: wire_evidence_gate_v1"));
+    assert!(manifest.contains("release_kat_gate: release_kat_evidence_gate_v1"));
+    assert!(release_evidence.contains("covered_codec_count: 0"));
+    assert!(release_evidence.contains("positive_case_count: 0"));
     assert!(!source.contains(concat!("const RELEASE_CKS_PINNED_", "KAT_DIGEST_V1")));
 }

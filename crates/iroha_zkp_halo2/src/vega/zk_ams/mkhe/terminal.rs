@@ -1281,7 +1281,7 @@ fn fold_history_to_protocol(
         .iter()
         .zip(strict_public_inputs)
         .map(|(commitment, public_inputs)| {
-            Ok(Instance {
+            Ok::<Instance, ZkAmsMkheErrorV1>(Instance {
                 witness_commitment: commitment_from_wire(commitment)?,
                 public_inputs,
             })
@@ -1291,7 +1291,7 @@ fn fold_history_to_protocol(
         .cross_term_commitments
         .iter()
         .map(|commitment| {
-            Ok(NovaNifs {
+            Ok::<NovaNifs, ZkAmsMkheErrorV1>(NovaNifs {
                 cross_term_commitment: commitment_from_wire(commitment)?,
             })
         })

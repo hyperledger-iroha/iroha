@@ -1642,7 +1642,7 @@ fn verifier_decode_and_streamed_limb_sources_use_only_zeroizing_owners() {
     assert!(secret_limb.contains("ZeroizingStagedU64VectorV1::new_zeroed"));
     assert!(!secret_limb.contains("Vec<u64>"));
     let read_limb = streaming
-        .split("fn read_limb(")
+        .split("fn read_limb<P>(")
         .nth(1)
         .expect("streamed RNS limb reader")
         .split("fn finish(")
@@ -1837,8 +1837,8 @@ fn staged_prover_source_is_capability_owned_semantic_and_fail_closed() {
         streaming
             .matches("derive_prepared_common_a_limb_v1(")
             .count(),
-        5,
-        "one narrow adapter plus all four staged common-a derivation sites"
+        4,
+        "one narrow adapter plus prefix, per-attempt mask, and semantic-replay derivation sites"
     );
     assert!(streaming.contains(".published_object_identity()"));
     assert!(streaming.contains("const STAGED_PROVER_MAXIMUM_FS_ATTEMPTS_V1: usize = 120;"));

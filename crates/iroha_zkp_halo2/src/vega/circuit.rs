@@ -121,6 +121,14 @@ struct Constraint {
     c: LinearCombination,
 }
 struct SecretCircuitValues(Vec<Scalar>);
+fn clear_secret_scalar_slice_v1(values: &mut [Scalar]) {
+    let values = core::hint::black_box(values);
+    for value in values.iter_mut() {
+        value.clear_secret();
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *values);
+}
 impl SecretCircuitValues {
     fn new() -> Self {
         Self(Vec::new())
@@ -152,11 +160,7 @@ impl SecretCircuitValues {
 }
 impl Drop for SecretCircuitValues {
     fn drop(&mut self) {
-        for value in &mut self.0 {
-            value.clear_secret();
-        }
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-        let _ = core::hint::black_box(&mut self.0);
+        clear_secret_scalar_slice_v1(&mut self.0);
     }
 }
 #[derive(Clone, Copy)]
@@ -282,11 +286,32 @@ pub(super) struct CircuitBuilder {
     private_values: SecretCircuitValues,
     mode: CircuitBuilderMode,
 }
-#[derive(Clone)]
 pub(super) struct CircuitAssignment {
     pub(super) shape: Arc<Shape>,
     pub(super) witness: Vec<Scalar>,
     pub(super) public_inputs: Vec<Scalar>,
+}
+impl Drop for CircuitAssignment {
+    fn drop(&mut self) {
+        clear_secret_scalar_slice_v1(&mut self.witness);
+        #[cfg(test)]
+        if self.witness.iter().all(|value| value.is_zero()) {
+            let _ = CIRCUIT_ASSIGNMENT_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+    }
+}
+#[cfg(test)]
+std::thread_local! {
+    static CIRCUIT_ASSIGNMENT_ZEROIZED_DROPS_V1: core::cell::Cell<usize> = const {
+        core::cell::Cell::new(0)
+    };
+}
+#[cfg(test)]
+pub(super) fn circuit_assignment_zeroized_drop_count_v1() -> usize {
+    CIRCUIT_ASSIGNMENT_ZEROIZED_DROPS_V1
+        .try_with(core::cell::Cell::get)
+        .unwrap_or(0)
 }
 impl CircuitBuilder {
     #[cfg(test)]
@@ -421,6 +446,27 @@ impl CircuitBuilder {
         (index < self.public_inputs.len())
             .then_some(Variable::Public(index))
             .ok_or(CircuitError::InvalidDimension)
+    }
+    /// Number of relation rows emitted in the current deterministic synthesis pass.
+    ///
+    /// This is deliberately independent of the power-of-two padded shape size.  The
+    /// Figure 9 Microsoft split adapter uses the count to retain the two exact SHA-256
+    /// row ranges while counting, compiling, and materializing a witness through the
+    /// same allocation schedule.
+    pub(super) fn emitted_constraint_count(&self) -> usize {
+        match &self.mode {
+            CircuitBuilderMode::Count {
+                emitted_constraint_count,
+                ..
+            }
+            | CircuitBuilderMode::Witness {
+                emitted_constraint_count,
+                ..
+            } => *emitted_constraint_count,
+            CircuitBuilderMode::Compile(state) => state.emitted_constraint_count,
+            #[cfg(test)]
+            CircuitBuilderMode::Shape(constraints) => constraints.len(),
+        }
     }
     pub(super) fn alloc(&mut self, value: Scalar) -> Result<Variable, CircuitError> {
         let limit = match &self.mode {
@@ -1023,6 +1069,37 @@ mod tests {
             CircuitProfile::new(shape, raw_private_value_count, raw_constraint_count)
                 .expect("canonical profile"),
         )
+    }
+    fn secret_assignment(value: u64) -> CircuitAssignment {
+        let mut builder = CircuitBuilder::new(vec![s(value)]).expect("public");
+        let public = builder.public(0).expect("public index");
+        let private = builder.alloc(s(value)).expect("private value");
+        builder
+            .enforce_equal(private.into(), public.into())
+            .expect("private/public equality");
+        builder.finalize().expect("secret assignment")
+    }
+    #[test]
+    fn assignment_witness_zeroizes_on_success_error_and_unwind() {
+        let before = circuit_assignment_zeroized_drop_count_v1();
+        drop(secret_assignment(7));
+        assert_eq!(circuit_assignment_zeroized_drop_count_v1(), before + 1);
+
+        fn fail_with_assignment() -> Result<(), ()> {
+            let _assignment = secret_assignment(11);
+            Err(())
+        }
+        let before = circuit_assignment_zeroized_drop_count_v1();
+        assert_eq!(fail_with_assignment(), Err(()));
+        assert_eq!(circuit_assignment_zeroized_drop_count_v1(), before + 1);
+
+        let before = circuit_assignment_zeroized_drop_count_v1();
+        let unwind = std::panic::catch_unwind(|| {
+            let _assignment = secret_assignment(13);
+            panic!("exercise assignment unwind cleanup");
+        });
+        assert!(unwind.is_err());
+        assert_eq!(circuit_assignment_zeroized_drop_count_v1(), before + 1);
     }
     #[test]
     fn builder_synthesizes_one_strict_fixed_shape_relation() {

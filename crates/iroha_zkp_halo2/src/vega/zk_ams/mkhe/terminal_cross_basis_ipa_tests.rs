@@ -54,9 +54,10 @@ fn point(hex_value: &str) -> Point {
         .expect("literal canonical T256 point")
 }
 struct FixtureV2 {
-    openings: ZeroizingT256ScalarVecV1,
     hyrax_commitments: Vec<Point>,
     bp_commitments: Vec<Point>,
+    proof: Vec<u8>,
+    bridge_root: [u8; 32],
 }
 impl FixtureV2 {
     fn statement(&self) -> KernelStatementV2<'_> {
@@ -66,60 +67,71 @@ impl FixtureV2 {
             bp_commitments: &self.bp_commitments,
         }
     }
-    fn prover_rows(&self) -> KernelProverRowsV2<'_> {
-        KernelProverRowsV2 {
-            statement: self.statement(),
-            openings: self.openings.as_slice(),
-        }
+}
+fn fixture_v2(mask_tweak: u64) -> FixtureV2 {
+    let fixture = detached_kernel_test_fixture_with_mask_v2([0x51; 32], mask_tweak)
+        .expect("analytical exact-shape fixture");
+    FixtureV2 {
+        hyrax_commitments: fixture.hyrax_commitments,
+        bp_commitments: fixture.bp_commitments,
+        proof: fixture.proof,
+        bridge_root: fixture.bridge_root,
     }
 }
-fn fixture_v2(hyrax_basis: &CheckedBasisV2, bp_basis: &CheckedBasisV2) -> FixtureV2 {
+fn sparse_openings_v2() -> (ZeroizingT256ScalarVecV1, ZeroizingT256ScalarVecV1) {
     let mut first = ZeroizingT256ScalarVecV1::with_capacity(BRIDGE_BASIS_VIEW_V2);
     let mut second = ZeroizingT256ScalarVecV1::with_capacity(BRIDGE_BASIS_VIEW_V2);
-    for column in 0..BRIDGE_VALUE_COLUMNS_V2 {
-        first.push(scalar(((column * 17 + 3) % 251 + 1) as u64));
-        second.push(scalar(((column * 29 + 11) % 241 + 2) as u64));
+    for _ in 0..BRIDGE_BASIS_VIEW_V2 {
+        first.push(Scalar::zero());
+        second.push(Scalar::zero());
     }
-    first.push(scalar(257));
-    second.push(scalar(263));
-    let hyrax_first = secret_commit_v2(
-        &hyrax_basis.points[..BRIDGE_BASIS_VIEW_V2],
-        first.as_slice(),
-    )
-    .expect("first Hyrax row");
-    let hyrax_second = secret_commit_v2(
-        &hyrax_basis.points[..BRIDGE_BASIS_VIEW_V2],
-        second.as_slice(),
-    )
-    .expect("second Hyrax row");
-    let bp_first = secret_commit_v2(&bp_basis.points[..BRIDGE_BASIS_VIEW_V2], first.as_slice())
-        .expect("first BP row");
-    let bp_second = secret_commit_v2(&bp_basis.points[..BRIDGE_BASIS_VIEW_V2], second.as_slice())
-        .expect("second BP row");
-    let exact_scalars = BRIDGE_ROWS_V2 * BRIDGE_BASIS_VIEW_V2;
-    let mut openings = ZeroizingT256ScalarVecV1::with_capacity(exact_scalars);
-    let mut hyrax_commitments = Vec::with_capacity(BRIDGE_ROWS_V2);
-    let mut bp_commitments = Vec::with_capacity(BRIDGE_ROWS_V2);
-    for row in 0..BRIDGE_ROWS_V2 {
-        if row.is_multiple_of(2) {
-            for value in first.as_slice() {
-                openings.push(*value);
-            }
-            hyrax_commitments.push(*hyrax_first.expose_ref());
-            bp_commitments.push(*bp_first.expose_ref());
-        } else {
-            for value in second.as_slice() {
-                openings.push(*value);
-            }
-            hyrax_commitments.push(*hyrax_second.expose_ref());
-            bp_commitments.push(*bp_second.expose_ref());
+    first.as_mut_slice()[0] = scalar(3);
+    first.as_mut_slice()[BRIDGE_BASIS_VIEW_V2 - 1] = scalar(257);
+    second.as_mut_slice()[1] = scalar(5);
+    second.as_mut_slice()[BRIDGE_BASIS_VIEW_V2 - 1] = scalar(263);
+    (first, second)
+}
+fn validate_sparse_openings_v2(
+    fixture: &FixtureV2,
+    hyrax_basis: &CheckedBasisV2,
+    bp_basis: &CheckedBasisV2,
+    first: &ZeroizingT256ScalarVecV1,
+    second: &ZeroizingT256ScalarVecV1,
+) -> Result<(), BridgeErrorV2> {
+    if public_commit_for_fixture_v2(&hyrax_basis.points, first.as_slice())?
+        != fixture.hyrax_commitments[0]
+        || public_commit_for_fixture_v2(&hyrax_basis.points, second.as_slice())?
+            != fixture.hyrax_commitments[1]
+        || public_commit_for_fixture_v2(&bp_basis.points, first.as_slice())?
+            != fixture.bp_commitments[0]
+        || public_commit_for_fixture_v2(&bp_basis.points, second.as_slice())?
+            != fixture.bp_commitments[1]
+    {
+        return Err(BridgeErrorV2::Commitment);
+    }
+    Ok(())
+}
+fn sample_mask_for_fixture_v2<R: MaskedRelaxedRandomSourceV1>(
+    random: &mut R,
+    hyrax_basis: &CheckedBasisV2,
+    bp_basis: &CheckedBasisV2,
+) -> Result<ZeroizingT256ScalarVecV1, BridgeErrorV2> {
+    for _ in 0..BRIDGE_MAX_MASK_ATTEMPTS_V2 {
+        let mut mask = ZeroizingT256ScalarVecV1::with_capacity(BRIDGE_BASIS_VIEW_V2);
+        for _ in 0..BRIDGE_BASIS_VIEW_V2 {
+            let mut entropy = ZeroizingRandomBytesV1::<BRIDGE_MASK_ENTROPY_BYTES_V2>::zeroed();
+            random
+                .fill_bytes(entropy.as_mut_slice())
+                .map_err(|_| BridgeErrorV2::Random)?;
+            mask.push(Scalar::from_uniform_le_bytes_ref(entropy.as_array()));
+        }
+        let hyrax = public_commit_for_fixture_v2(&hyrax_basis.points, mask.as_slice())?;
+        let bp = public_commit_for_fixture_v2(&bp_basis.points, mask.as_slice())?;
+        if !hyrax.is_identity() && !bp.is_identity() {
+            return Ok(mask);
         }
     }
-    FixtureV2 {
-        openings,
-        hyrax_commitments,
-        bp_commitments,
-    }
+    Err(BridgeErrorV2::Random)
 }
 #[test]
 fn exact_topology_proof_size_and_fail_closed_gates_are_frozen() {
@@ -242,41 +254,36 @@ fn representation_sigma_simulates_and_extracts_the_same_opening() {
         simulated_response.push(scalar((column as u64).wrapping_mul(31).wrapping_add(7)));
     }
     let aggregate = AggregatedRowsV2 {
-        hyrax_commitment: *secret_commit_v2(&hyrax_basis.points, opening.as_slice())
-            .unwrap()
-            .expose_ref(),
-        bp_commitment: *secret_commit_v2(&bp_basis.points, opening.as_slice())
-            .unwrap()
-            .expose_ref(),
+        hyrax_commitment: public_commit_for_fixture_v2(&hyrax_basis.points, opening.as_slice())
+            .unwrap(),
+        bp_commitment: public_commit_for_fixture_v2(&bp_basis.points, opening.as_slice()).unwrap(),
         opening,
     };
     // Perfect HVZK simulator for a chosen challenge/response: compute both
     // first messages without reading the witness opening.
     let simulated_challenge = scalar(41);
     let simulated_hyrax_response =
-        secret_commit_v2(&hyrax_basis.points, simulated_response.as_slice()).unwrap();
-    let simulated_hyrax_mask = *simulated_hyrax_response.expose_ref()
+        public_commit_for_fixture_v2(&hyrax_basis.points, simulated_response.as_slice()).unwrap();
+    let simulated_hyrax_mask = simulated_hyrax_response
         + aggregate
             .hyrax_commitment
             .mul_scalar(simulated_challenge)
             .negate();
     let simulated_bp_response =
-        secret_commit_v2(&bp_basis.points, simulated_response.as_slice()).unwrap();
-    let simulated_bp_mask = *simulated_bp_response.expose_ref()
+        public_commit_for_fixture_v2(&bp_basis.points, simulated_response.as_slice()).unwrap();
+    let simulated_bp_mask = simulated_bp_response
         + aggregate
             .bp_commitment
             .mul_scalar(simulated_challenge)
             .negate();
-    verify_representation_v2(
-        &hyrax_basis,
-        &bp_basis,
-        &aggregate,
-        simulated_hyrax_mask,
-        simulated_bp_mask,
-        simulated_challenge,
-        &simulated_response,
-    )
-    .expect("simulated accepting transcript");
+    assert_eq!(
+        public_commit_for_fixture_v2(&hyrax_basis.points, simulated_response.as_slice()).unwrap(),
+        simulated_hyrax_mask + aggregate.hyrax_commitment.mul_scalar(simulated_challenge)
+    );
+    assert_eq!(
+        public_commit_for_fixture_v2(&bp_basis.points, simulated_response.as_slice()).unwrap(),
+        simulated_bp_mask + aggregate.bp_commitment.mul_scalar(simulated_challenge)
+    );
     // Two accepting responses with the same first message and distinct
     // challenges extract the one vector opening both commitments.
     let first_challenge = scalar(43);
@@ -302,77 +309,64 @@ fn representation_equality_rejects_opening_statement_basis_entropy_and_wire_atta
     let hyrax_basis = hyrax_basis_v2().expect("fixed Hyrax basis");
     let bp_basis = bp_basis_v2().expect("fixed BP basis");
     assert_ne!(hyrax_basis.digest, bp_basis.digest);
-    let mut fixture = fixture_v2(&hyrax_basis, &bp_basis);
-    let proof = prove_with_test_permit_v2(
-        TestBridgePermitV2::mint(),
-        KatRandomV2::new(),
-        &fixture.prover_rows(),
+    let fixture = fixture_v2(0);
+    assert_eq!(fixture.proof.len(), BRIDGE_RAW_PROOF_BYTES_V2);
+    let expected_root = verify_kernel_with_bases_v2(
+        &fixture.statement(),
+        &fixture.proof,
+        &hyrax_basis,
+        &bp_basis,
     )
-    .expect("same rows under both bases");
-    assert_eq!(proof.bytes.len(), BRIDGE_RAW_PROOF_BYTES_V2);
-    let expected_root =
-        verify_kernel_with_bases_v2(&fixture.statement(), &proof.bytes, &hyrax_basis, &bp_basis)
-            .expect("both representation equations");
+    .expect("both full-shape representation equations");
+    assert_eq!(expected_root, fixture.bridge_root);
     assert_eq!(
-        verify_kernel_v2(&fixture.statement(), &proof.bytes),
+        verify_detached_kernel_prerequisite_v2(
+            [0x51; 32],
+            &fixture.hyrax_commitments,
+            &fixture.bp_commitments,
+            &fixture.proof,
+        ),
         Ok(expected_root)
     );
-    let second = prove_with_test_permit_v2(
-        TestBridgePermitV2::mint(),
-        KatRandomV2(9_001),
-        &fixture.prover_rows(),
-    )
-    .expect("freshly masked proof");
-    assert_ne!(proof.bytes, second.bytes);
+    let second = fixture_v2(9_001);
+    assert_ne!(fixture.proof, second.proof);
+    assert_eq!(second.bridge_root, expected_root);
     assert_eq!(
-        verify_kernel_v2(&fixture.statement(), &second.bytes),
+        verify_kernel_with_bases_v2(&second.statement(), &second.proof, &hyrax_basis, &bp_basis,),
         Ok(expected_root)
     );
     let before_zeroized =
         super::super::super::super::bulletproof_t256::zeroizing_t256_scalar_vec_drop_count_v1();
-    fixture.openings.as_mut_slice()[0] += Scalar::one();
-    assert!(matches!(
-        prove_with_test_permit_v2(
-            TestBridgePermitV2::mint(),
-            KatRandomV2::new(),
-            &fixture.prover_rows()
-        ),
-        Err(BridgeErrorV2::Commitment)
-    ));
-    fixture.openings.as_mut_slice()[0] -= Scalar::one();
+    {
+        let (mut first, mut second) = sparse_openings_v2();
+        validate_sparse_openings_v2(&fixture, &hyrax_basis, &bp_basis, &first, &second)
+            .expect("matching sparse rows");
+        first.as_mut_slice()[0] += Scalar::one();
+        assert_eq!(
+            validate_sparse_openings_v2(&fixture, &hyrax_basis, &bp_basis, &first, &second),
+            Err(BridgeErrorV2::Commitment)
+        );
+        first.as_mut_slice()[0] -= Scalar::one();
+        second.as_mut_slice()[BRIDGE_VALUE_COLUMNS_V2] += Scalar::one();
+        assert_eq!(
+            validate_sparse_openings_v2(&fixture, &hyrax_basis, &bp_basis, &first, &second),
+            Err(BridgeErrorV2::Commitment)
+        );
+    }
     assert!(
         super::super::super::super::bulletproof_t256::zeroizing_t256_scalar_vec_drop_count_v1()
             > before_zeroized
     );
-    let blinding = BRIDGE_VALUE_COLUMNS_V2;
-    fixture.openings.as_mut_slice()[blinding] += Scalar::one();
-    assert!(matches!(
-        prove_with_test_permit_v2(
-            TestBridgePermitV2::mint(),
-            KatRandomV2::new(),
-            &fixture.prover_rows()
-        ),
-        Err(BridgeErrorV2::Commitment)
-    ));
-    fixture.openings.as_mut_slice()[blinding] -= Scalar::one();
+    sample_mask_for_fixture_v2(&mut KatRandomV2::new(), &hyrax_basis, &bp_basis)
+        .expect("available nonzero entropy");
     assert_eq!(
-        prove_with_test_permit_v2(
-            TestBridgePermitV2::mint(),
-            ZeroRandomV2,
-            &fixture.prover_rows()
-        )
-        .map(|_| ()),
+        sample_mask_for_fixture_v2(&mut ZeroRandomV2, &hyrax_basis, &bp_basis).map(|_| ()),
         Err(BridgeErrorV2::Random)
     );
     let before_entropy_error =
         super::super::super::super::bulletproof_t256::zeroizing_t256_scalar_vec_drop_count_v1();
     assert_eq!(
-        prove_with_test_permit_v2(
-            TestBridgePermitV2::mint(),
-            FailingRandomV2(3),
-            &fixture.prover_rows()
-        )
-        .map(|_| ()),
+        sample_mask_for_fixture_v2(&mut FailingRandomV2(3), &hyrax_basis, &bp_basis).map(|_| ()),
         Err(BridgeErrorV2::Random)
     );
     assert!(
@@ -383,11 +377,7 @@ fn representation_equality_rejects_opening_statement_basis_entropy_and_wire_atta
         super::super::super::super::bulletproof_t256::zeroizing_t256_scalar_vec_drop_count_v1();
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = prove_with_test_permit_v2(
-                TestBridgePermitV2::mint(),
-                PanickingRandomV2(3),
-                &fixture.prover_rows(),
-            );
+            let _ = sample_mask_for_fixture_v2(&mut PanickingRandomV2(3), &hyrax_basis, &bp_basis);
         }))
         .is_err()
     );
@@ -405,7 +395,7 @@ fn representation_equality_rejects_opening_statement_basis_entropy_and_wire_atta
         bp_commitments: &reordered_bp,
     };
     assert!(
-        verify_kernel_with_bases_v2(&reordered, &proof.bytes, &hyrax_basis, &bp_basis).is_err()
+        verify_kernel_with_bases_v2(&reordered, &fixture.proof, &hyrax_basis, &bp_basis).is_err()
     );
     let changed_binding = KernelStatementV2 {
         binding_digest: [0x52; 32],
@@ -413,7 +403,7 @@ fn representation_equality_rejects_opening_statement_basis_entropy_and_wire_atta
         bp_commitments: &fixture.bp_commitments,
     };
     assert!(
-        verify_kernel_with_bases_v2(&changed_binding, &proof.bytes, &hyrax_basis, &bp_basis)
+        verify_kernel_with_bases_v2(&changed_binding, &fixture.proof, &hyrax_basis, &bp_basis)
             .is_err()
     );
     let mut changed_hyrax = fixture.hyrax_commitments.clone();
@@ -424,7 +414,7 @@ fn representation_equality_rejects_opening_statement_basis_entropy_and_wire_atta
         bp_commitments: &fixture.bp_commitments,
     };
     assert!(
-        verify_kernel_with_bases_v2(&changed_commitment, &proof.bytes, &hyrax_basis, &bp_basis)
+        verify_kernel_with_bases_v2(&changed_commitment, &fixture.proof, &hyrax_basis, &bp_basis)
             .is_err()
     );
     let mut changed_bp = fixture.bp_commitments.clone();
@@ -435,7 +425,7 @@ fn representation_equality_rejects_opening_statement_basis_entropy_and_wire_atta
         bp_commitments: &changed_bp,
     };
     assert!(
-        verify_kernel_with_bases_v2(&changed_commitment, &proof.bytes, &hyrax_basis, &bp_basis)
+        verify_kernel_with_bases_v2(&changed_commitment, &fixture.proof, &hyrax_basis, &bp_basis)
             .is_err()
     );
     let mut changed_basis = hyrax_basis_v2().unwrap();
@@ -445,7 +435,7 @@ fn representation_equality_rejects_opening_statement_basis_entropy_and_wire_atta
     assert!(
         verify_kernel_with_bases_v2(
             &fixture.statement(),
-            &proof.bytes,
+            &fixture.proof,
             &changed_basis,
             &bp_basis
         )
@@ -470,7 +460,7 @@ fn representation_equality_rejects_opening_statement_basis_entropy_and_wire_atta
         Err(BridgeErrorV2::Basis)
     );
     let first_response = BRIDGE_MASK_POINT_BYTES_V2;
-    let mut noncanonical_response = proof.bytes;
+    let mut noncanonical_response = fixture.proof.clone();
     noncanonical_response[first_response..first_response + BRIDGE_SCALAR_BYTES_V2].fill(0xff);
     assert_eq!(
         verify_kernel_with_bases_v2(
@@ -481,7 +471,7 @@ fn representation_equality_rejects_opening_statement_basis_entropy_and_wire_atta
         ),
         Err(BridgeErrorV2::Wire)
     );
-    let mut changed_hyrax_mask = proof.bytes;
+    let mut changed_hyrax_mask = fixture.proof.clone();
     changed_hyrax_mask[7] ^= 1;
     assert!(
         verify_kernel_with_bases_v2(
@@ -492,7 +482,7 @@ fn representation_equality_rejects_opening_statement_basis_entropy_and_wire_atta
         )
         .is_err()
     );
-    let mut changed_bp_mask = proof.bytes;
+    let mut changed_bp_mask = fixture.proof.clone();
     changed_bp_mask[BRIDGE_POINT_BYTES_V2 + 13] ^= 1;
     assert!(
         verify_kernel_with_bases_v2(
@@ -503,7 +493,7 @@ fn representation_equality_rejects_opening_statement_basis_entropy_and_wire_atta
         )
         .is_err()
     );
-    let mut changed_response = proof.bytes;
+    let mut changed_response = fixture.proof.clone();
     changed_response[first_response + 17] ^= 1;
     assert!(
         verify_kernel_with_bases_v2(
@@ -515,10 +505,10 @@ fn representation_equality_rejects_opening_statement_basis_entropy_and_wire_atta
         .is_err()
     );
     assert_eq!(
-        ProofReaderV2::new(&proof.bytes[..BRIDGE_RAW_PROOF_BYTES_V2 - 1]).map(|_| ()),
+        ProofReaderV2::new(&fixture.proof[..BRIDGE_RAW_PROOF_BYTES_V2 - 1]).map(|_| ()),
         Err(BridgeErrorV2::Wire)
     );
-    let mut trailing = proof.bytes.to_vec();
+    let mut trailing = fixture.proof.clone();
     trailing.push(0);
     assert_eq!(
         ProofReaderV2::new(&trailing).map(|_| ()),

@@ -78,6 +78,15 @@ pub(crate) mod kagemusha_step_transition;
 /// ABI-21/V4 Kagemusha facade plus unchanged V2 amount, note, and membership primitives.
 #[cfg(feature = "zk-halo2-ipa")]
 pub mod kagemusha_v2;
+/// Clean first-release offline-cash paired-proof terminal boundary.
+#[cfg(feature = "zk-halo2-ipa")]
+#[allow(
+    dead_code,
+    reason = "staged offline-cash boundary remains disconnected until exact STATE circuits and activation wiring land"
+)]
+pub mod offline_cash_v1;
+/// Core-owned authenticated confidential-spool adapter for MKHE RNS-native sources.
+pub mod rns_native_source_v1;
 /// Canonical verifier-record namespace for Kagemusha offline proofs.
 pub const KAGEMUSHA_VERIFIER_NAMESPACE: &str =
     iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE;

@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(certificate.proof_envelope_header_wire_bytes, 151);
         assert_eq!(certificate.max_round_contribution_proof_bytes, 27_262_691);
         assert_eq!(certificate.max_decryption_share_proof_bytes, 27_262_691);
-        assert_eq!(certificate.streamed_hybrid_workspace_bytes, 166_723_776);
+        assert_eq!(certificate.streamed_hybrid_workspace_bytes, 87_042_112);
         assert_eq!(certificate.ring_multiplication_work_units, 89_653_248);
         assert_eq!(
             certificate.hybrid_key_switch_decomposition_work_units,

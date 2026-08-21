@@ -249,24 +249,6 @@ impl SecretCircuitAssignmentsV1 {
         self.0.pop_front()
     }
 }
-#[cfg(test)]
-impl Drop for SecretCircuitAssignmentsV1 {
-    fn drop(&mut self) {
-        for assignment in &mut self.0 {
-            clear_secret_scalar_slice_v1(&mut assignment.witness);
-        }
-        #[cfg(test)]
-        if !self.0.is_empty()
-            && self
-                .0
-                .iter()
-                .all(|assignment| assignment.witness.iter().all(|value| value.is_zero()))
-        {
-            let _ = SECRET_ASSIGNMENT_WITNESS_ZEROIZED_DROPS_V1
-                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
-        }
-    }
-}
 /// Own the sole materialized strict witness for one streaming fold step.
 ///
 /// No later assignment is requested until this owner has transferred its
@@ -293,12 +275,6 @@ impl DerefMut for SecretCircuitAssignmentV1 {
 }
 impl Drop for SecretCircuitAssignmentV1 {
     fn drop(&mut self) {
-        clear_secret_scalar_slice_v1(&mut self.0.witness);
-        #[cfg(test)]
-        if self.0.witness.iter().all(|value| value.is_zero()) {
-            let _ = SECRET_ASSIGNMENT_WITNESS_ZEROIZED_DROPS_V1
-                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
-        }
         #[cfg(test)]
         note_streaming_assignment_dropped_v1();
     }
@@ -1172,9 +1148,6 @@ fn clear_secret_scalar_slice_v1(values: &mut [Scalar]) {
 }
 #[cfg(test)]
 std::thread_local! {
-    static SECRET_ASSIGNMENT_WITNESS_ZEROIZED_DROPS_V1: core::cell::Cell<usize> = const {
-        core::cell::Cell::new(0)
-    };
     static SECRET_SCALAR_ENTROPY_ZEROIZED_DROPS_V1: core::cell::Cell<usize> = const {
         core::cell::Cell::new(0)
     };
@@ -1232,9 +1205,7 @@ fn streaming_assignment_residency_v1() -> (usize, usize) {
 }
 #[cfg(test)]
 fn secret_assignment_witness_zeroized_drop_count_v1() -> usize {
-    SECRET_ASSIGNMENT_WITNESS_ZEROIZED_DROPS_V1
-        .try_with(core::cell::Cell::get)
-        .unwrap_or(0)
+    super::circuit::circuit_assignment_zeroized_drop_count_v1()
 }
 #[cfg(test)]
 fn secret_scalar_entropy_zeroized_drop_count_v1() -> usize {

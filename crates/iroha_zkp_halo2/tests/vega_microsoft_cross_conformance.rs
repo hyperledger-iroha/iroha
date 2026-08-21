@@ -1,13 +1,19 @@
 //! Exact-lock release guards for the first-party Microsoft Vega-MC boundary.
 use iroha_zkp_halo2::vega::{
-    VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1, VegaMdlProofErrorV1, vega_mdl_proof_dimensions_v1,
-    vega_mdl_verifier_digest_v1, vega_microsoft_fixture_conformance_v1,
+    VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1, VegaMdlProofErrorV1,
+    install_vega_mdl_figure9_prover_artifacts_v1, install_vega_mdl_figure9_verifier_key_v1,
+    vega_mdl_proof_dimensions_v1, vega_mdl_verifier_digest_v1,
+    vega_microsoft_fixture_conformance_v1,
 };
 const CRATE_MANIFEST: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
 const VEGA_FACADE: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/vega.rs"));
 const EXACT_BOUNDARY: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/src/vega/canonical_mc_exact.rs"
+));
+const MICROSOFT_MC: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/src/vega/microsoft_mc.rs"
 ));
 const PYTHON_VERIFIER_KEY: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -63,6 +69,41 @@ fn production_boundary_cannot_compile_or_route_the_oracle_crates() {
             "production boundary contains a substituted path: {forbidden_path}"
         );
     }
+}
+#[test]
+fn governed_figure9_key_install_is_explicit_strict_and_has_no_ambient_provider() {
+    assert_eq!(
+        install_vega_mdl_figure9_verifier_key_v1(PYTHON_VERIFIER_KEY),
+        Err(VegaMdlProofErrorV1::InvalidCompiledProfile)
+    );
+    assert_eq!(
+        install_vega_mdl_figure9_prover_artifacts_v1(&[], PYTHON_VERIFIER_KEY),
+        Err(VegaMdlProofErrorV1::InvalidCompiledProfile)
+    );
+    let production_boundary = EXACT_BOUNDARY
+        .split_once("#[cfg(test)]")
+        .expect("production/test boundary")
+        .0;
+    for forbidden_lookup in [
+        "std::env",
+        "std::fs",
+        "option_env!",
+        "reqwest",
+        "ureq",
+        "http://",
+        "https://",
+    ] {
+        assert!(
+            !production_boundary.contains(forbidden_lookup)
+                && !MICROSOFT_MC.contains(forbidden_lookup),
+            "governed key path gained an ambient lookup: {forbidden_lookup}"
+        );
+    }
+    assert!(MICROSOFT_MC.contains("static GOVERNED_FIGURE9_ARTIFACTS"));
+    assert!(MICROSOFT_MC.contains("OnceCell<verifier_key::McVerifierKeyWire>"));
+    assert!(MICROSOFT_MC.contains("OnceCell<prover_key::McProverKeyWire>"));
+    assert!(MICROSOFT_MC.contains("install_lock: Mutex<()>"));
+    assert!(!MICROSOFT_MC.contains("take(&mut self)"));
 }
 #[test]
 fn first_party_verifier_accepts_the_independent_python_fixture() {

@@ -249,7 +249,8 @@ pub struct VegaMdlProofDimensionsV1 {
 ///
 /// # Errors
 ///
-/// Fails closed if deterministic setup fails.
+/// Reserved for a future governed-profile derivation failure; the released V1
+/// dimensions are compiled into the profile and checked again at key install.
 pub fn vega_mdl_proof_dimensions_v1() -> Result<VegaMdlProofDimensionsV1, VegaMdlProofErrorV1> {
     super::canonical_mc::proof_dimensions()
 }
@@ -265,11 +266,56 @@ pub const fn vega_mdl_compiled_profile_digest_v1() -> [u8; 32] {
 }
 /// Return the SHA-256 digest of the canonical Microsoft Vega-MC verifier key.
 ///
+/// This returns the governed identity independently of process-local artifact
+/// installation. [`install_vega_mdl_figure9_verifier_key_v1`] checks supplied
+/// artifact bytes against this identity before verification can use them.
+///
 /// # Errors
 ///
-/// Fails closed if deterministic setup fails.
+/// Reserved for a future governed-profile derivation failure; the released V1
+/// identity is compiled into the profile.
 pub fn vega_mdl_verifier_digest_v1() -> Result<[u8; 32], VegaMdlProofErrorV1> {
     super::canonical_mc::verifier_digest()
+}
+/// Install the canonical Microsoft Figure 9 verifier-key artifact once.
+///
+/// Installation performs bounded strict decoding, byte-for-byte canonical
+/// re-encoding, and exact released digest and dimension checks. A successful
+/// installation is process-global, idempotent for the same artifact, and
+/// cannot be cleared or replaced. This function performs no filesystem or
+/// network lookup; governance must supply the artifact bytes explicitly.
+///
+/// # Errors
+///
+/// Returns [`VegaMdlProofErrorV1::InvalidCompiledProfile`] for a malformed,
+/// noncanonical, wrong-profile, or conflicting artifact.
+pub fn install_vega_mdl_figure9_verifier_key_v1(
+    verifier_key: &[u8],
+) -> Result<(), VegaMdlProofErrorV1> {
+    super::canonical_mc::install_figure9_verifier_key(verifier_key)
+}
+/// Install the canonical Microsoft Figure 9 proving-key/verifier-key pair once.
+///
+/// Both artifacts are bounded-decoded and canonically re-encoded, then every
+/// proving-key component and its embedded verifier digest are matched against
+/// the supplied VK and the released Figure 9 profile. Validation completes
+/// before either artifact becomes visible. Installation is process-global,
+/// idempotent only for the same pair, and neither artifact can be replaced.
+/// This API performs no filesystem lookup, setup, or key generation.
+///
+/// Installing the pair does not authorize proof production while the exact
+/// Microsoft split-witness adapter remains unavailable; the prover continues
+/// to fail closed without consuming caller randomness.
+///
+/// # Errors
+///
+/// Returns [`VegaMdlProofErrorV1::InvalidCompiledProfile`] for malformed,
+/// noncanonical, mismatched, wrong-profile, or conflicting artifacts.
+pub fn install_vega_mdl_figure9_prover_artifacts_v1(
+    proving_key: &[u8],
+    verifier_key: &[u8],
+) -> Result<(), VegaMdlProofErrorV1> {
+    super::canonical_mc::install_figure9_prover_artifacts(proving_key, verifier_key)
 }
 /// Validate one independent canonical Microsoft verifier-key/proof fixture.
 ///
@@ -286,7 +332,11 @@ pub fn vega_microsoft_fixture_conformance_v1(
 ) -> Result<([u8; 32], VegaMdlProofDimensionsV1, usize, usize), VegaMdlProofErrorV1> {
     super::canonical_mc::validate_microsoft_fixture(verifier_key, proof)
 }
-/// Prove the Figure 9 relation with the complete pinned Vega-MC pipeline.
+/// Attempt the pinned Figure 9 Vega-MC prover path.
+///
+/// The current dependency-locked implementation validates context and the
+/// installed PK/VK pair before caller randomness, then fails closed because it
+/// does not yet have the exact Microsoft split step/core witness adapter.
 ///
 /// # Errors
 ///

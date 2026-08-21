@@ -3,11 +3,14 @@ use crate::ErrorEnvelope;
 use iroha_crypto::Hash;
 pub use iroha_data_model::offline::{
     KagemushaRecursiveSpendRedeemRequestV4 as OfflineRedeemRequest,
-    KagemushaRecursiveSpendTopUpRequestV4 as OfflineTopUpRequest,
+    KagemushaRecursiveSpendTopUpRequestV4 as OfflineTopUpRequest, KagemushaValidationError,
+    OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1, OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
+    OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1, OFFLINE_CASH_WIRE_VERSION_V1,
     OFFLINE_REDEEM_REQUEST_SCHEMA_NAME, OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
     OfflineActiveRecursiveStepEpVerifier, OfflineActiveRecursiveStepEqVerifier,
     OfflineActiveTopUpShieldVerifier, OfflineActiveTransferVerifier, OfflineActiveUnshieldVerifier,
-    OfflineAuthenticatedArtifactSet, OfflineReadiness, OfflineReadinessBlocker, OfflineStatus,
+    OfflineAuthenticatedArtifactSet, OfflineCashAcknowledgementV1, OfflineCashPaymentRequestV1,
+    OfflineCashPaymentV1, OfflineReadiness, OfflineReadinessBlocker, OfflineStatus,
     OfflineVerifierId,
 };
 use iroha_data_model::{
@@ -23,6 +26,61 @@ use iroha_data_model::{
     },
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+
+/// Decode one exact first-release wallet payment request.
+///
+/// This is the public Torii/API decoding boundary for wallet-to-wallet request
+/// bytes. It delegates only to the clean-slate V1 decoder, which checks the
+/// outer request cap before reading a Norito header or allocating decoded
+/// collections. Legacy Kagemusha V4/V5 values are not compatibility-decoded.
+///
+/// # Errors
+///
+/// Returns an error when the body is oversized, malformed, non-canonical,
+/// invalid, or does not carry the exact Offline Cash V1 contract.
+pub fn decode_offline_cash_payment_request_v1(
+    bytes: &[u8],
+) -> Result<OfflineCashPaymentRequestV1, KagemushaValidationError> {
+    OfflineCashPaymentRequestV1::decode_canonical_exact(bytes)
+}
+
+/// Decode one exact first-release sender payment against its retained request.
+///
+/// The caller-retained request is mandatory context; the boundary does not
+/// infer it from transport state. The clean-slate V1 decoder caps the payment
+/// bytes before Norito can allocate and then verifies every request binding.
+/// Legacy Kagemusha V4/V5 values are not compatibility-decoded.
+///
+/// # Errors
+///
+/// Returns an error when the body is oversized, malformed, non-canonical,
+/// invalid, or is not bound to `request` under the exact Offline Cash V1 contract.
+pub fn decode_offline_cash_payment_v1(
+    bytes: &[u8],
+    request: &OfflineCashPaymentRequestV1,
+) -> Result<OfflineCashPaymentV1, KagemushaValidationError> {
+    OfflineCashPaymentV1::decode_canonical_exact_against(bytes, request)
+}
+
+/// Decode one exact first-release acknowledgement against its retained session.
+///
+/// Both prior messages are mandatory context. The clean-slate V1 decoder caps
+/// acknowledgement bytes before Norito can allocate and then verifies the
+/// request, payment, persistence-head, time, and signature bindings. Legacy
+/// Kagemusha V4/V5 values are not compatibility-decoded.
+///
+/// # Errors
+///
+/// Returns an error when the body is oversized, malformed, non-canonical,
+/// invalid, or is not bound to `request` and `payment` under Offline Cash V1.
+pub fn decode_offline_cash_acknowledgement_v1(
+    bytes: &[u8],
+    request: &OfflineCashPaymentRequestV1,
+    payment: &OfflineCashPaymentV1,
+) -> Result<OfflineCashAcknowledgementV1, KagemushaValidationError> {
+    OfflineCashAcknowledgementV1::decode_canonical_exact_against(bytes, request, payment)
+}
+
 /// Stable public Norito schema name for the request-independent lineage query.
 pub const OFFLINE_RECIPIENT_LINEAGE_REQUEST_SCHEMA_NAME: &str =
     "iroha.torii.v1.offline.recipient_lineage.request";
@@ -551,6 +609,9 @@ pub enum OfflineOperationStatus {
         error: ErrorEnvelope,
     },
 }
+#[cfg(test)]
+#[path = "offline_cash_v1_api_tests.rs"]
+mod offline_cash_v1_api_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

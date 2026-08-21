@@ -204,7 +204,9 @@ impl ZeroizingT256ScalarVecV1 {
     pub(super) fn with_capacity(capacity: usize) -> Self {
         Self(Vec::with_capacity(capacity))
     }
-    fn try_with_exact_capacity(capacity: usize) -> Result<Self, GeneralizedBulletproofErrorV1> {
+    pub(super) fn try_with_exact_capacity(
+        capacity: usize,
+    ) -> Result<Self, GeneralizedBulletproofErrorV1> {
         Ok(Self(try_exact_capacity_vec_v1(capacity)?))
     }
     pub(super) fn push(&mut self, mut value: Scalar) {

@@ -310,7 +310,6 @@ fn every_cas_is_reloaded_once_and_only_this_calls_exchange_succeeds() {
     assert_eq!((store.loads, store.compares), (1, 1));
     assert!(exchange_exact_v2(scope, key, &fresh, &published, &mut store).is_err());
     assert_eq!((store.loads, store.compares), (2, 2));
-
     store.value = Some(Stored::Lifecycle(proof));
     assert!(exchange_exact_v2(scope, key, &fresh, &published, &mut store).is_err());
     assert_eq!((store.loads, store.compares), (3, 3));
@@ -332,7 +331,6 @@ fn cas_error_or_panic_after_write_returns_no_successor_and_leaves_observation_on
         load_v2(scope, key, &mut lost_ack, &mut [0; RECORD_BYTES_V2]),
         Ok(LoadedV2::Lifecycle(DecodedStateV2::PublishedUnbound(_)))
     ));
-
     let mut error_before = TestStore {
         value: Some(Stored::Lifecycle(fresh)),
         cas_mode: MutationMode::ErrorBefore,
@@ -340,7 +338,6 @@ fn cas_error_or_panic_after_write_returns_no_successor_and_leaves_observation_on
     };
     assert!(exchange_exact_v2(scope, key, &fresh, &published, &mut error_before).is_err());
     assert_eq!((error_before.loads, error_before.compares), (1, 1));
-
     let mut reload_error = TestStore {
         value: Some(Stored::Lifecycle(fresh)),
         load_error_at: Some(1),

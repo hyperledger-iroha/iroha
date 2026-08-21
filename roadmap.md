@@ -5,6 +5,49 @@ Last updated: 2026-08-21
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## MKHE, Figure 9, and offline-cash evidence-gated completion
+
+- Join the implemented 40-limb qPCS/FRI, private RLWE/source-statement,
+  source-to-terminal/cross-field, terminal cross-basis, and authenticated
+  zero-padding prerequisites inside the production RNS-native composite. The
+  remaining verifier must prove the complete source mapping, terminal
+  materialization and packing seals, 40-limb cross-field/global lookup, and
+  ownership of every padding lane as one atomic path. Until then the composite
+  returns `StageUnavailable` and emits no receipt or readiness authority; no
+  parked 38-limb decoder or rejected scale-four proof may become an alternate
+  path.
+- Qualify that MKHE composite with the exact estimator transcript,
+  instantiated soundness/ZK review, canonical positive/adversarial wire
+  fixtures, full-size KAT, eight-party end-to-end execution, and authenticated
+  RSS/I/O/work measurements. Placeholder booleans, arbitrary nonzero digests,
+  static formulas, and mutable-tree unit tests are not release evidence.
+- Provision the exact governed full-shape Figure 9 PK/VK artifacts and an
+  independent full-shape proof vector, then run the completed first-party
+  semantic, random-Nova, relaxed-Spartan, final-opening, and self-verification
+  pipeline against them and cross-conform the output. The public prover and any
+  verifier without the installed governed key remain fail closed until those
+  artifacts and evidence are authenticated.
+- Complete recursive parent STATE/helper verification, recursive GuardBundle
+  evidence, and Eq/Ep reciprocal audits behind the implemented typed
+  fixed-two-parent relations. Core's one-intent/exact-next journal,
+  authenticated payment outbox, terminal recovery, and bounded Kotlin/Java/
+  Swift capability bridges are present, but they grant no release authority.
+  Keep every V4/V5 wire and bridge frame as a hard failure with no migration or
+  dual decoder.
+- Mint offline-cash runtime authority only from a signed, threshold-verified
+  release attestation that binds the source tree, unchanged `Cargo.lock`, all
+  artifacts, exact circuit/protocol identities, qualification receipt, and
+  hardware policy. Supply production native backends that meet all nine device
+  capability bits with no software fallback, then qualify the complete
+  1,024-handoff flow on the approved iPhone 12/iOS 15 and eligible Pixel
+  6/Android 12 profiles under the 128 MiB whole-process RSS and raw/text
+  transport caps. KeyMint/StrongBox signing or App Attest alone is insufficient;
+  unsupported and partially bridged devices stay online-only.
+- Run focused and workspace tests, strict all-target Clippy, four-validator
+  activation/restart/replay, deterministic rebuild parity, fuzz thresholds,
+  and every ignored release-size KAT from one immutable candidate before any
+  readiness or activation gate can close.
+
 ## First-release hard-cut closeout
 
 The current candidate has one canonical release profile and no `BuildLine` or
@@ -84,11 +127,13 @@ to:
   from that clean exact commit with truthful provenance, and commit the
   generated outputs in a descendant. Refresh SF1 rows and projections only
   with an authorized council re-sign over the current manifest digest.
-- Preserve the lock-compatible parking of the private confidential-spool ZKP
-  prototypes: locked offline dependency resolution succeeds for the merged
-  manifests while those incompatible roots remain unwired. Reconnect them only
-  with a reviewed lock-graph update supplied through the release process, and
-  keep `Cargo.lock` byte-identical for this release.
+- Preserve the lock-compatible parking of the ZKP crate's obsolete direct
+  confidential-spool dependency. Reconnect the private source through a
+  Core-owned adapter over the already locked
+  `iroha_crypto::confidential_spool` primitive, with a move-only authenticated
+  provider trait at the proof boundary. Do not add a new crate or alter
+  `Cargo.lock`; keep the path fail closed until source lineage, secret
+  lifecycle, and measured residency evidence are complete.
 - Finish borrowed, cache-/scratch-audited admission verification for default
   w3f BLS, GOST, and SM2, and replace PQClean's heap-backed SHAKE workspace.
   Extend the source-proven ordinary iterable adapter beyond `FindPeers` only

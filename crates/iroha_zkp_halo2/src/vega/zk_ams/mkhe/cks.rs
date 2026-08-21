@@ -1987,6 +1987,28 @@ mod tests {
     const TEST_MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
     const TEST_ROOTS: [u64; 2] = [1_400_279_418, 677_356_115];
     const TEST_SMUDGE_BITS: usize = 8;
+    fn immediate_outer_attributes(source: &str, item_offset: usize) -> &str {
+        let item_line_start = source[..item_offset]
+            .rfind('\n')
+            .map_or(0, |offset| offset + 1);
+        let mut attributes_start = item_line_start;
+        while attributes_start > 0 {
+            let previous_line_end = attributes_start - 1;
+            let previous_line_start = source[..previous_line_end]
+                .rfind('\n')
+                .map_or(0, |offset| offset + 1);
+            let previous_line = source[previous_line_start..previous_line_end].trim_start();
+            if previous_line.starts_with("#[")
+                || previous_line.starts_with("///")
+                || previous_line.starts_with("//!")
+            {
+                attributes_start = previous_line_start;
+            } else {
+                break;
+            }
+        }
+        &source[attributes_start..item_line_start]
+    }
     #[test]
     fn production_surface_keeps_only_bounded_cks_hooks() {
         let source = include_str!("cks.rs");
@@ -1996,11 +2018,9 @@ mod tests {
             .0;
         let assert_test_only = |signature: &str| {
             let position = production
-                .find(signature)
+                .rfind(signature)
                 .unwrap_or_else(|| panic!("missing dense CKS item: {signature}"));
-            let item_prefix = production[..position]
-                .rsplit_once("\n\n")
-                .map_or(&production[..position], |(_, value)| value);
+            let item_prefix = immediate_outer_attributes(production, position);
             assert!(
                 item_prefix.contains("#[cfg(test)]"),
                 "dense CKS item compiled in production: {signature}"
@@ -2046,9 +2066,7 @@ mod tests {
             let position = production
                 .find(signature)
                 .unwrap_or_else(|| panic!("missing bounded CKS hook: {signature}"));
-            let item_prefix = production[..position]
-                .rsplit_once("\n\n")
-                .map_or(&production[..position], |(_, value)| value);
+            let item_prefix = immediate_outer_attributes(production, position);
             assert!(
                 !item_prefix.contains("#[cfg(test)]"),
                 "bounded CKS hook became test-only: {signature}"

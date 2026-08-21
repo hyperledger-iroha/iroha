@@ -1230,6 +1230,38 @@ pub(super) fn visit_zk_ams_t256_packed_plaintext_used_slots_with_workspace_v1(
     validate_packed(layout, packed)?;
     visit_validated_packed_plaintext_used_slots_with_workspace_v1(packed, workspace, visit)
 }
+
+/// Rehydrate one authenticated-source coefficient owner into the canonical
+/// packed-chunk metadata and stream its used logical slots.
+///
+/// This sibling-private adapter exists so a confidential source snapshot can
+/// reuse the sole packing decoder without cloning its coefficient vector or
+/// exposing the private packed-artifact digest constructor. The temporary
+/// packed owner erases every coefficient on all return and unwind paths.
+pub(super) fn visit_rehydrated_t256_coefficients_used_slots_with_workspace_v1(
+    layout: ZkAmsT256PackingLayoutV1,
+    chunk_index: u32,
+    coefficients: Vec<[u8; 32]>,
+    workspace: &mut T256PackedPlaintextDecodeWorkspaceV1,
+    visit: impl FnMut(&[u8; 32]) -> Result<(), ZkAmsMkheErrorV1>,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    let mut packed = ZkAmsT256PackedPlaintextV1 {
+        version: PACKING_VERSION_V1,
+        profile_digest: layout.profile_digest,
+        layout_digest: layout.digest,
+        chunk_index,
+        used_slots: 0,
+        coefficients,
+        digest: [0; 32],
+    };
+    validate_layout(layout)?;
+    packed.used_slots = used_slots_for_chunk(layout, chunk_index)?;
+    packed.digest = packed_plaintext_digest(&packed)?;
+    visit_zk_ams_t256_packed_plaintext_used_slots_with_workspace_v1(
+        layout, &packed, workspace, visit,
+    )
+}
+
 fn visit_validated_packed_plaintext_used_slots_with_workspace_v1(
     packed: &ZkAmsT256PackedPlaintextV1,
     workspace: &mut T256PackedPlaintextDecodeWorkspaceV1,
@@ -2549,10 +2581,7 @@ pub(super) mod tests {
         assert!(corridor.contains("packed: &'packed ZkAmsT256PackedPlaintextV1"));
         assert!(corridor.contains("hash: Box<Keccak256>"));
         assert!(corridor.contains("self.hash.finalize_into(&mut digest)"));
-        assert!(
-            corridor
-                .contains("It is not a proof, MAC, authorization,\n    /// capability, or receipt")
-        );
+        assert!(corridor.contains("not a proof, MAC, authorization, capability, or receipt"));
         let artifact_validation = corridor
             .find("validate_packed(layout, packed)?")
             .expect("cheap exact artifact validation");

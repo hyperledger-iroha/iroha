@@ -347,7 +347,7 @@ fn privacy_api_and_source_budgets_are_fail_closed() {
         assert!(body.contains("Production"));
         assert!(body.contains("Infallible"));
     }
-    assert!(production.contains("auxiliary and\n//! non-authorizing"));
+    assert!(production.contains("auxiliary and non-authorizing"));
     assert!(production.contains("does not close persistent-decryption audit bit 7"));
     assert_eq!(production.matches("mod tests;").count(), 1);
 }

@@ -457,6 +457,28 @@ mod tests {
         panic::{AssertUnwindSafe, catch_unwind},
         rc::Rc,
     };
+    fn immediate_outer_attributes(source: &str, item_offset: usize) -> &str {
+        let item_line_start = source[..item_offset]
+            .rfind('\n')
+            .map_or(0, |offset| offset + 1);
+        let mut attributes_start = item_line_start;
+        while attributes_start > 0 {
+            let previous_line_end = attributes_start - 1;
+            let previous_line_start = source[..previous_line_end]
+                .rfind('\n')
+                .map_or(0, |offset| offset + 1);
+            let previous_line = source[previous_line_start..previous_line_end].trim_start();
+            if previous_line.starts_with("#[")
+                || previous_line.starts_with("///")
+                || previous_line.starts_with("//!")
+            {
+                attributes_start = previous_line_start;
+            } else {
+                break;
+            }
+        }
+        &source[attributes_start..item_line_start]
+    }
     type BeginStateOwnedOpeningsV1 =
         for<'a> fn(
             &'a ZkAmsPhase23PackedAccumulatorSetV1,
@@ -821,10 +843,8 @@ mod tests {
         let permit_offset = parent_source
             .find("pub(super) struct ZkAmsPhase23NativeBgvOpeningVerifierPermitV1")
             .expect("opaque opening-verifier permit");
-        let permit_attributes = parent_source[..permit_offset]
-            .rsplit("\n\n")
-            .next()
-            .expect("permit attribute block");
+        let permit_attributes = immediate_outer_attributes(parent_source, permit_offset);
+        assert!(permit_attributes.contains("#[cfg(test)]"));
         assert!(!permit_attributes.contains("#[derive"));
         for forbidden in [
             "impl Clone for ZkAmsPhase23NativeBgvOpeningVerifierPermitV1",

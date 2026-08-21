@@ -33,6 +33,12 @@ pub(super) fn verify(
     }
     let application_key = derive_and_match_key(&key.application_key)?;
     let verifier_key = derive_and_match_key(&key.verifier_commitment_key)?;
+    validate_application_instance_transcripts(
+        proof.shared_commitment.as_ref(),
+        &proof.step_instances,
+        &proof.core_instance,
+        key,
+    )?;
     let digest = key.digest()?;
     let mut step_instances = proof.step_instances.clone();
     for instance in &mut step_instances {
@@ -40,30 +46,6 @@ pub(super) fn verify(
     }
     let mut core_instance = proof.core_instance.clone();
     core_instance.shared.clone_from(&proof.shared_commitment);
-    for (index, instance) in step_instances.iter().enumerate() {
-        let mut transcript = VegaTranscriptV1::new_neutron_nova();
-        transcript
-            .absorb_raw(b"vk", &digest)
-            .map_err(|_| McCodecError::InvalidEncoding)?;
-        transcript
-            .absorb_scalar(b"num_circuits", scalar_from_usize(step_instances.len())?)
-            .map_err(|_| McCodecError::InvalidEncoding)?;
-        transcript
-            .absorb_scalar(b"circuit_index", scalar_from_usize(index)?)
-            .map_err(|_| McCodecError::InvalidEncoding)?;
-        transcript
-            .absorb_scalars(b"public_values", &instance.public_values)
-            .map_err(|_| McCodecError::InvalidEncoding)?;
-        validate_split_instance(instance, &key.step_shape, &mut transcript)?;
-    }
-    let mut core_transcript = VegaTranscriptV1::new_neutron_nova();
-    core_transcript
-        .absorb_raw(b"vk", &digest)
-        .map_err(|_| McCodecError::InvalidEncoding)?;
-    core_transcript
-        .absorb_scalars(b"public_values", &core_instance.public_values)
-        .map_err(|_| McCodecError::InvalidEncoding)?;
-    validate_split_instance(&core_instance, &key.core_shape, &mut core_transcript)?;
     let original_public_values = step_instances
         .iter()
         .map(|instance| instance.public_values.clone())
@@ -256,7 +238,7 @@ pub(super) fn verify(
     }
     Ok((original_public_values, core_public_values))
 }
-fn derive_and_match_key(wire: &HyraxKeyWire) -> Result<CommitmentKey, McCodecError> {
+pub(super) fn derive_and_match_key(wire: &HyraxKeyWire) -> Result<CommitmentKey, McCodecError> {
     let key =
         CommitmentKey::derive(b"ck", wire.columns).map_err(|_| McCodecError::InvalidEncoding)?;
     if key.generators() != wire.generators
@@ -267,8 +249,59 @@ fn derive_and_match_key(wire: &HyraxKeyWire) -> Result<CommitmentKey, McCodecErr
     }
     Ok(key)
 }
-fn validate_split_instance(
+
+/// Replay every split-instance transcript while the hoisted shared commitment
+/// remains represented exactly once outside the per-instance wire values.
+pub(super) fn validate_application_instance_transcripts(
+    shared: Option<&McCommitment>,
+    step_instances: &[SplitInstanceWire],
+    core_instance: &SplitInstanceWire,
+    key: &McVerifierKeyWire,
+) -> Result<(), McCodecError> {
+    if step_instances.is_empty()
+        || step_instances.len() != key.num_steps
+        || step_instances
+            .iter()
+            .any(|instance| instance.shared.is_some())
+        || core_instance.shared.is_some()
+    {
+        return invalid();
+    }
+    let digest = key.digest()?;
+    for (index, instance) in step_instances.iter().enumerate() {
+        let mut transcript = VegaTranscriptV1::new_neutron_nova();
+        transcript
+            .absorb_raw(b"vk", &digest)
+            .map_err(|_| McCodecError::InvalidEncoding)?;
+        transcript
+            .absorb_scalar(b"num_circuits", scalar_from_usize(step_instances.len())?)
+            .map_err(|_| McCodecError::InvalidEncoding)?;
+        transcript
+            .absorb_scalar(b"circuit_index", scalar_from_usize(index)?)
+            .map_err(|_| McCodecError::InvalidEncoding)?;
+        transcript
+            .absorb_scalars(b"public_values", &instance.public_values)
+            .map_err(|_| McCodecError::InvalidEncoding)?;
+        validate_split_instance_with_shared(instance, shared, &key.step_shape, &mut transcript)?;
+    }
+    let mut core_transcript = VegaTranscriptV1::new_neutron_nova();
+    core_transcript
+        .absorb_raw(b"vk", &digest)
+        .map_err(|_| McCodecError::InvalidEncoding)?;
+    core_transcript
+        .absorb_scalars(b"public_values", &core_instance.public_values)
+        .map_err(|_| McCodecError::InvalidEncoding)?;
+    validate_split_instance_with_shared(
+        core_instance,
+        shared,
+        &key.core_shape,
+        &mut core_transcript,
+    )
+}
+
+pub(super) fn validate_split_instance_with_shared(
     instance: &SplitInstanceWire,
+    shared: Option<&McCommitment>,
     shape: &SplitShapeWire,
     transcript: &mut VegaTranscriptV1,
 ) -> Result<(), McCodecError> {
@@ -277,12 +310,8 @@ fn validate_split_instance(
     {
         return invalid();
     }
-    validate_optional_segment(
-        instance.shared.as_ref(),
-        shape.shared,
-        DEFAULT_COMMITMENT_WIDTH,
-    )?;
-    if let Some(commitment) = &instance.shared {
+    validate_optional_segment(shared, shape.shared, DEFAULT_COMMITMENT_WIDTH)?;
+    if let Some(commitment) = shared {
         transcript
             .absorb_commitment(b"comm_W_shared", &commitment.to_local()?)
             .map_err(|_| McCodecError::InvalidEncoding)?;
@@ -313,7 +342,7 @@ fn validate_split_instance(
         .absorb_commitment(b"comm_W_rest", &instance.rest.to_local()?)
         .map_err(|_| McCodecError::InvalidEncoding)
 }
-fn validate_multi_round_instance(
+pub(super) fn validate_multi_round_instance(
     instance: &MultiRoundInstanceWire,
     shape: &MultiRoundShapeWire,
     transcript: &mut VegaTranscriptV1,
@@ -369,7 +398,7 @@ fn validate_commitment(
         Ok(())
     }
 }
-fn split_to_regular(instance: &SplitInstanceWire) -> Result<Instance, McCodecError> {
+pub(super) fn split_to_regular(instance: &SplitInstanceWire) -> Result<Instance, McCodecError> {
     let commitments = [
         instance.shared.as_ref(),
         instance.precommitted.as_ref(),
@@ -390,7 +419,9 @@ fn split_to_regular(instance: &SplitInstanceWire) -> Result<Instance, McCodecErr
         public_inputs,
     })
 }
-fn multi_round_to_regular(instance: &MultiRoundInstanceWire) -> Result<Instance, McCodecError> {
+pub(super) fn multi_round_to_regular(
+    instance: &MultiRoundInstanceWire,
+) -> Result<Instance, McCodecError> {
     let witness_commitment = concatenate_commitments(instance.commitments.iter())?;
     let challenge_count = instance
         .challenges_per_round
@@ -543,7 +574,7 @@ fn verify_nifs(
         relaxation: relaxed.relaxation + challenge,
     })
 }
-fn verify_relaxed_spartan(
+pub(super) fn verify_relaxed_spartan(
     proof: &RelaxedSpartanWire,
     shape: &RegularShapeWire,
     key: &CommitmentKey,
@@ -768,7 +799,7 @@ fn sparse_polynomial_evaluate(
             value * (Scalar::one() - coordinate)
         }))
 }
-fn verify_hyrax_opening(
+pub(super) fn verify_hyrax_opening(
     key: &HyraxKeyWire,
     evaluation_key: &HyraxKeyWire,
     transcript: &mut VegaTranscriptV1,

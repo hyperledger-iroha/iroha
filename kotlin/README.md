@@ -437,6 +437,18 @@ verification, and redemption builders through the fixed native surface. It also 
 scaled amounts, V4 artifact streaming and backend-capability checks, plus the sole current
 `DeviceAttestationRegistration` / `RegisterOfflineDeviceAttestation` transaction path. The latter
 validates finalized platform material and emits exactly one native registration instruction.
+
+The clean Offline Cash V1 lifecycle additionally requires one rollback-resistant
+intent slot, an exact-next monetary counter, trusted time, authenticated terminal
+recovery, and an authenticated staged-payment outbox. Android KeyMint's one-use
+key API does not provide that atomic state machine. Call
+`OfflineCashDeviceLifecycleBridgeV1.production()` to discover the complete
+optional native contract; missing symbols or any partial capability produce
+`ONLINE_ONLY`, with no KeyMint-only, TEE, or software fallback. The bridge accepts
+only the bounded V1 command frame and does not expose an old V4/V5 selector.
+See [`specs/offline_cash_device_bridge_v1.md`](../specs/offline_cash_device_bridge_v1.md)
+for exact frame offsets, feature bits, and optional native entry points.
+
 Artifact streaming installs
 exactly eight Pasta artifacts atomically: `ParamsIPA`, processed proving key, processed verifying
 key, and final-key selector-zero bootstrap witness for each Eq/Ep parity. Each profile's bounded

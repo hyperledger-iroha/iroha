@@ -27,17 +27,38 @@ use super::{
         sha256_with_trace,
     },
 };
-use core::fmt;
+use core::{fmt, ops::Range};
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 use thiserror::Error;
 /// Exact number of public T256 scalars in the released Figure 9 relation.
 pub const VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1: usize = 14;
 pub(super) const VEGA_MDL_FIGURE9_SHA256_STEPS_V1: usize = 8;
+/// Canonical variable and row provenance required by the Microsoft MC split.
+///
+/// This contains indices only.  Private scalar values remain owned exactly once by
+/// [`CircuitAssignment`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Figure9McTopology {
+    pub(super) issuer_byte_bits_le: Vec<[usize; 8]>,
+    pub(super) birth_byte_bits_le: Vec<[usize; 8]>,
+    pub(super) issuer_states_after_blocks_le: Vec<[[usize; 32]; 8]>,
+    pub(super) birth_states_after_blocks_le: Vec<[[usize; 32]; 8]>,
+    pub(super) excluded_sha256_rows: [Range<usize>; 2],
+}
+
+/// Move-only native assignment plus its immutable Microsoft split provenance.
 pub(super) struct Figure9McMaterial {
     pub(super) assignment: CircuitAssignment,
+    pub(super) topology: Figure9McTopology,
 }
-static FIGURE9_CANONICAL_PROFILE: Lazy<Result<Arc<CircuitProfile>, CircuitError>> =
+
+struct Figure9CanonicalProfile {
+    profile: Arc<CircuitProfile>,
+    topology: Figure9McTopology,
+}
+
+static FIGURE9_CANONICAL_PROFILE: Lazy<Result<Figure9CanonicalProfile, CircuitError>> =
     Lazy::new(build_canonical_profile);
 const ISSUER_X_INDEX: usize = 0;
 const ISSUER_Y_INDEX: usize = 1;
@@ -191,12 +212,16 @@ pub(super) fn synthesize_figure9_mc_material(
     {
         return Err(CircuitError::InvalidDimension);
     }
-    let profile = canonical_profile()?;
+    let canonical = canonical_profile()?;
     let mut builder =
-        CircuitBuilder::new_with_profile(public_inputs.to_vec(), Arc::clone(profile))?;
-    synthesize_figure9_inner(&mut builder, witness)?;
+        CircuitBuilder::new_with_profile(public_inputs.to_vec(), Arc::clone(&canonical.profile))?;
+    let topology = synthesize_figure9_inner(&mut builder, witness)?;
+    if topology != canonical.topology {
+        return Err(CircuitError::ShapeMismatch);
+    }
     Ok(Figure9McMaterial {
         assignment: builder.finalize_with_shape()?,
+        topology,
     })
 }
 /// Count first, then compile the fixed Figure 9 topology directly into CSR.
@@ -206,19 +231,22 @@ pub(super) fn synthesize_figure9_mc_material(
 fn synthesize_figure9_count_then_compile(
     public_inputs: &[Scalar; VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1],
     witness: &VegaMdlFigure9WitnessV1<'_>,
-) -> Result<(CircuitAssignment, CircuitDimensions), CircuitError> {
+) -> Result<(CircuitAssignment, CircuitDimensions, Figure9McTopology), CircuitError> {
     let public_scalars = public_inputs.to_vec();
     let mut counter = CircuitBuilder::new_counting(public_scalars.clone())?;
-    synthesize_figure9_inner(&mut counter, witness)?;
+    let counted_topology = synthesize_figure9_inner(&mut counter, witness)?;
     let dimensions = counter.finish_counting()?;
     let mut compiler = CircuitBuilder::new_compiling(public_scalars, dimensions)?;
-    synthesize_figure9_inner(&mut compiler, witness)?;
-    Ok((compiler.finalize_compiled()?, dimensions))
+    let compiled_topology = synthesize_figure9_inner(&mut compiler, witness)?;
+    if compiled_topology != counted_topology {
+        return Err(CircuitError::ShapeMismatch);
+    }
+    Ok((compiler.finalize_compiled()?, dimensions, compiled_topology))
 }
 fn synthesize_figure9_inner(
     builder: &mut CircuitBuilder,
     witness: &VegaMdlFigure9WitnessV1<'_>,
-) -> Result<(), CircuitError> {
+) -> Result<Figure9McTopology, CircuitError> {
     let layout = &*FIGURE9_LAYOUT;
     let issuer = allocate_profile_bytes(
         builder,
@@ -234,7 +262,9 @@ fn synthesize_figure9_inner(
     )?;
     // The disclosed birth item is bound to the exact digest entry in the
     // issuer-authenticated MSO bytes.
+    let birth_sha_start = builder.emitted_constraint_count();
     let (birth_digest, birth_trace) = sha256_with_trace(builder, &birth)?;
+    let birth_sha_rows = birth_sha_start..builder.emitted_constraint_count();
     bind_digest_to_bytes(
         builder,
         birth_digest,
@@ -267,7 +297,9 @@ fn synthesize_figure9_inner(
     enforce_not_before(builder, &presentation, &valid_from.date)?;
     enforce_strictly_after(builder, &valid_until.date, &presentation)?;
     enforce_completed_age(builder, &birth_date, &presentation, threshold)?;
+    let issuer_sha_start = builder.emitted_constraint_count();
     let (issuer_digest, issuer_trace) = sha256_with_trace(builder, &issuer)?;
+    let issuer_sha_rows = issuer_sha_start..builder.emitted_constraint_count();
     let issuer_key = public_point(builder, ISSUER_X_INDEX, ISSUER_Y_INDEX)?;
     verify_es256_low_s_from_inverse(
         builder,
@@ -288,16 +320,27 @@ fn synthesize_figure9_inner(
         *witness.device_r,
         *witness.device_s_inverse,
     )?;
-    byte_indices(&issuer)?;
-    byte_indices(&birth)?;
-    let issuer_state_count = state_indices(&issuer_trace)?.len();
-    let birth_state_count = state_indices(&birth_trace)?.len();
-    if issuer_state_count != 6 || birth_state_count != 2 {
+    let issuer_byte_bits_le = byte_indices(&issuer)?;
+    let birth_byte_bits_le = byte_indices(&birth)?;
+    let issuer_states_after_blocks_le = state_indices(&issuer_trace)?;
+    let birth_states_after_blocks_le = state_indices(&birth_trace)?;
+    if issuer_states_after_blocks_le.len() != 6
+        || birth_states_after_blocks_le.len() != 2
+        || birth_sha_rows.is_empty()
+        || issuer_sha_rows.is_empty()
+        || birth_sha_rows.end > issuer_sha_rows.start
+    {
         return Err(CircuitError::InvalidDimension);
     }
-    Ok(())
+    Ok(Figure9McTopology {
+        issuer_byte_bits_le,
+        birth_byte_bits_le,
+        issuer_states_after_blocks_le,
+        birth_states_after_blocks_le,
+        excluded_sha256_rows: [birth_sha_rows, issuer_sha_rows],
+    })
 }
-fn build_canonical_profile() -> Result<Arc<CircuitProfile>, CircuitError> {
+fn build_canonical_profile() -> Result<Figure9CanonicalProfile, CircuitError> {
     let layout = &*FIGURE9_LAYOUT;
     let one = [1_u8; 32];
     let witness = VegaMdlFigure9WitnessV1::new(
@@ -314,14 +357,18 @@ fn build_canonical_profile() -> Result<Arc<CircuitProfile>, CircuitError> {
     public_inputs[PRESENTATION_MONTH_INDEX] = Scalar::from_u64(7);
     public_inputs[PRESENTATION_DAY_INDEX] = Scalar::from_u64(26);
     public_inputs[AGE_THRESHOLD_INDEX] = Scalar::from_u64(18);
-    let (assignment, dimensions) = synthesize_figure9_count_then_compile(&public_inputs, &witness)?;
-    Ok(Arc::new(CircuitProfile::new(
-        assignment.shape,
-        dimensions.emitted_private_value_count,
-        dimensions.emitted_constraint_count,
-    )?))
+    let (assignment, dimensions, topology) =
+        synthesize_figure9_count_then_compile(&public_inputs, &witness)?;
+    Ok(Figure9CanonicalProfile {
+        profile: Arc::new(CircuitProfile::new(
+            Arc::clone(&assignment.shape),
+            dimensions.emitted_private_value_count,
+            dimensions.emitted_constraint_count,
+        )?),
+        topology,
+    })
 }
-fn canonical_profile() -> Result<&'static Arc<CircuitProfile>, CircuitError> {
+fn canonical_profile() -> Result<&'static Figure9CanonicalProfile, CircuitError> {
     match &*FIGURE9_CANONICAL_PROFILE {
         Ok(profile) => Ok(profile),
         Err(error) => Err(*error),
@@ -601,9 +648,10 @@ pub(super) mod tests {
             .split("#[cfg(test)]\npub(super) mod tests")
             .next()
             .expect("production Figure 9 source");
-        assert!(production.contains(
-            "static FIGURE9_CANONICAL_PROFILE: Lazy<Result<Arc<CircuitProfile>, CircuitError>>"
-        ));
+        assert!(production.contains("struct Figure9CanonicalProfile"));
+        assert!(production.contains("static FIGURE9_CANONICAL_PROFILE:"));
+        assert!(production.contains("topology != canonical.topology"));
+        assert!(production.contains("builder.emitted_constraint_count()"));
         assert!(production.contains("CircuitBuilder::new_counting("));
         assert!(production.contains("CircuitBuilder::new_compiling("));
         assert!(production.contains("CircuitBuilder::new_with_profile("));
@@ -611,6 +659,15 @@ pub(super) mod tests {
         assert!(!production.contains("CircuitBuilder::new("));
         assert!(!production.contains("builder.finalize()?"));
         assert!(!production.contains("#[derive(Clone)]\npub(super) struct Figure9McMaterial"));
+        let circuit_source = include_str!("circuit.rs");
+        let assignment_owner = circuit_source
+            .split("pub(super) struct CircuitAssignment")
+            .nth(1)
+            .and_then(|tail| tail.split("impl CircuitBuilder").next())
+            .expect("circuit assignment owner");
+        assert!(assignment_owner.contains("impl Drop for CircuitAssignment"));
+        assert!(assignment_owner.contains("clear_secret_scalar_slice_v1(&mut self.witness)"));
+        assert!(!circuit_source.contains("#[derive(Clone)]\npub(super) struct CircuitAssignment"));
         let public_validator = production
             .split("pub fn validate_vega_mdl_figure9_relation_v1")
             .nth(1)
@@ -696,8 +753,12 @@ pub(super) mod tests {
     #[test]
     fn independent_openssl_signed_figure9_vector_satisfies_the_complete_relation() {
         let fixture = baseline_signed_fixture();
+        let zeroized_before = super::super::circuit::circuit_assignment_zeroized_drop_count_v1();
         validate_vega_mdl_figure9_relation_v1(&fixture.public, &fixture.witness())
             .expect("complete signed relation");
+        assert!(
+            super::super::circuit::circuit_assignment_zeroized_drop_count_v1() > zeroized_before
+        );
     }
     #[test]
     fn issuer_and_device_high_s_counterparts_are_unsatisfied_in_the_circuit_relation() {

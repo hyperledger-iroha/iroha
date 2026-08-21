@@ -386,7 +386,12 @@ fn source_budget_and_uninhabited_api_boundary_are_static() {
     assert!(production.lines().count() <= 1_200);
     assert!(tests.lines().count() <= 700);
     assert_eq!(parent.matches("mod cross_field_v2;").count(), 1);
-    assert!(!production.contains("Vec<Point>"));
+    let code_lines = production
+        .lines()
+        .map(str::trim_start)
+        .filter(|line| !line.starts_with("//"))
+        .collect::<Vec<_>>();
+    assert!(!code_lines.iter().any(|line| line.contains("Vec<Point>")));
     assert!(!production.contains("pub struct BoundCommitmentViewV2"));
     assert!(!production.contains("impl Clone for BoundCommitmentViewV2"));
     assert!(!production.contains("impl Default for BoundCommitmentViewV2"));

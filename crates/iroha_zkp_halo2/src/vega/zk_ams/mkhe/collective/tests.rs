@@ -1336,7 +1336,6 @@ fn native_whole_owner_reference_surface_is_test_only() {
         "fn collective_lineage_digest",
         "fn collective_encryption_transcript_digest_v1",
         "fn scaled_public_error",
-        "fn bounded_error_polynomial",
         "fn derive_natural_lift_effective_error_zero",
     ] {
         let positions: Vec<_> = source

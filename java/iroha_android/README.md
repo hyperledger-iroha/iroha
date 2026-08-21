@@ -424,6 +424,18 @@ bundle digest; duplicate or conflicting exact-state branches fail closed. Peer r
 acknowledgement signing expose only strict P-256 device key/signature wrappers; callers never pass
 native wire discriminants.
 
+The clean Offline Cash V1 state machine has a stronger device boundary than a
+single-use KeyMint signing key: one rollback-resistant intent slot, an exact-next
+counter, trusted time, authenticated terminal recovery, and an authenticated
+staged-payment outbox must all be present. Use
+`OfflineCashDeviceLifecycleBridgeV1.production()` to discover the default Kotlin
+implementation through the Java facade. Missing native support or any partial
+capability returns `ONLINE_ONLY`; there is no TEE, KeyMint-only, or software
+fallback. Only the bounded V1 command frame is accepted, so old V4/V5 payloads
+cannot be selected through this API.
+See [`specs/offline_cash_device_bridge_v1.md`](../../specs/offline_cash_device_bridge_v1.md)
+for exact frame offsets, feature bits, and optional native entry points.
+
 Artifact installation requires the canonical candidate-bound promotion record through
 `ReleaseAuthentication`, in addition to the trusted policy, attestation, benchmark evidence, and
 cryptographic review. An authenticated-but-unpromoted release cannot become active.

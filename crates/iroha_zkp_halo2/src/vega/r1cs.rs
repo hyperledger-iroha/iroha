@@ -470,7 +470,6 @@ impl Shape {
         if constraint_count == 0
             || variable_count == 0
             || !constraint_count.is_power_of_two()
-            || !variable_count.is_power_of_two()
             || [(&a), (&b), (&c)]
                 .into_iter()
                 .any(|matrix| matrix.rows() != constraint_count || matrix.columns() != columns)
@@ -734,6 +733,20 @@ mod tests {
         let b = SparseMatrix::new(1, 3, &[(0, 0, s(1))]).expect("canonical B");
         let c = SparseMatrix::new(1, 3, &[(0, 2, s(1))]).expect("canonical C");
         Shape::new(1, 1, 1, a, b, c).expect("valid shape")
+    }
+    #[test]
+    fn regular_shape_admits_non_power_of_two_witness_width() {
+        // The governed Microsoft verifier circuit has 1,504 witness values;
+        // Spartan pads that width for its inner table instead of changing the
+        // committed R1CS assignment.
+        let columns = 3 + 1 + 1;
+        let a = SparseMatrix::new(1, columns, &[(0, 0, s(1))]).expect("canonical A");
+        let b = SparseMatrix::new(1, columns, &[(0, 1, s(1))]).expect("canonical B");
+        let c = SparseMatrix::new(1, columns, &[(0, 4, s(1))]).expect("canonical C");
+        let shape = Shape::new(1, 3, 1, a, b, c).expect("unpadded witness width");
+        shape
+            .validate_strict_assignment(&[s(2), s(3), s(5)], &[s(6)])
+            .expect("2 * 3 = 6");
     }
     #[test]
     fn strict_and_relaxed_assignments_are_checked_exactly() {

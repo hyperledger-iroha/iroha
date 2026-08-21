@@ -1485,6 +1485,7 @@ mod tests {
             .split("#[cfg(test)]\nmod tests")
             .next()
             .expect("production source prefix");
+        let normalized_production = production.replace("\n//! ", " ").replace("\n/// ", " ");
         assert!(source.lines().count() <= 1_700);
         assert!(source.len() <= 70_000);
         assert!(!production.contains("pub(super)"));
@@ -1537,7 +1538,7 @@ mod tests {
             "arithmetic/register/compiler temporaries and panic-abort are outside",
         ] {
             assert!(
-                production.contains(required),
+                normalized_production.contains(required),
                 "missing fail-closed pin: {required}"
             );
         }

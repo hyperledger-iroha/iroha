@@ -1093,9 +1093,9 @@ fn active_linear_source_drops_owned_tables_between_phases() {
         .expect("secret polynomial drop boundary");
     assert!(secret_drop.contains("coefficients.fill(0)"));
     let apply = source
-        .split("fn apply_linear_relation")
-        .nth(1)
+        .split_once("fn apply_linear_relation<T: LinearRelationRnsV1>(")
         .expect("linear application")
+        .1
         .split("fn linear_response_parameters")
         .next()
         .expect("linear application body");

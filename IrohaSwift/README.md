@@ -569,6 +569,17 @@ as extra files. The coordinator verifies lengths, offsets, and digests;
 serializes install, use, rotation, and uninstall; and fails stale leases closed.
 No network or artifact access belongs on the offline send or receive path.
 
+The clean Offline Cash V1 state machine additionally requires a platform service
+with one rollback-resistant intent slot, an exact-next monetary counter, trusted
+time, authenticated terminal recovery, and an authenticated staged-payment
+outbox. `OfflineCashDeviceLifecycleBridgeV1.production()` discovers that complete
+optional native contract. App Attest alone does not provide those primitives; if
+either native symbol or any required capability is absent, `availability` is
+`.onlineOnly` and execution fails without a Keychain or software fallback. The
+bridge accepts only bounded V1 command frames and rejects relabelled V4/V5 input.
+The exact offsets and optional symbol signatures are fixed in
+[`specs/offline_cash_device_bridge_v1.md`](../specs/offline_cash_device_bridge_v1.md).
+
 ### Push Devices
 
 `ToriiClient.registerPushDevice` and `unregisterPushDevice` wrap `/v1/notify/devices`. Apps obtain their FCM/APNs token from the platform SDK, then submit the token with canonical request auth for the owning account:

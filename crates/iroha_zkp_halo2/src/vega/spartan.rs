@@ -304,12 +304,15 @@ impl SpartanDimensions {
             return Err(SpartanError::InvalidDimension);
         }
         let outer_rounds = log2_exact(shape.constraint_count())?;
-        let witness_rounds = log2_exact(shape.variable_count())?;
+        let padded_variables = shape
+            .variable_count()
+            .checked_next_power_of_two()
+            .ok_or(SpartanError::InvalidDimension)?;
+        let witness_rounds = log2_exact(padded_variables)?;
         let inner_rounds = witness_rounds
             .checked_add(1)
             .ok_or(SpartanError::InvalidDimension)?;
-        let assignment_table_len = shape
-            .variable_count()
+        let assignment_table_len = padded_variables
             .checked_mul(2)
             .ok_or(SpartanError::InvalidDimension)?;
         if shape.columns() > assignment_table_len {
@@ -322,11 +325,7 @@ impl SpartanDimensions {
         }
         let witness_rows = shape.variable_count().div_ceil(key.columns());
         let error_rows = shape.constraint_count().div_ceil(key.columns());
-        if witness_rows == 0
-            || error_rows == 0
-            || !witness_rows.is_power_of_two()
-            || !error_rows.is_power_of_two()
-        {
+        if witness_rows == 0 || error_rows == 0 || !error_rows.is_power_of_two() {
             return Err(SpartanError::InvalidDimension);
         }
         Ok(Self {
