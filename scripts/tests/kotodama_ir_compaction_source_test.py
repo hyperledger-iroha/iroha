@@ -62,7 +62,7 @@ PUBLIC_API_SHA256 = "7680ab2ee86f8127d2f8b3184b4672d25497b82e1a21512438ade78d8f9
 INSTR_VARIANT_COUNT = 193
 INSTR_VARIANTS_SHA256 = "23584254a4bbda2d3a14c5ad5b55ab8168f70c9be9e4c4ff35c6593adcfc3b9c"
 MAIN_TEST_COUNT = 95
-MAIN_TESTS_NEWLINE_SHA256 = "62b42b27f09f84d320b2da03db99974ef8b6f0ca5ca6e3cb503a87b22920e530"
+MAIN_TESTS_NEWLINE_SHA256 = "7fbc4a176d3742729351a719009091235b08acc52c0987ba7d7e3d9cfb51d761"
 ALL_TEST_COUNT = 99
 ALL_TESTS_JSON_SHA256 = "86643e56fb23bd7356205c8e64e000998b89e2265d8bd8d2235d26b9e016e940"
 PUBLIC_LEAF_SHA256 = "9e7a57eb9ac866072caee317f2b5af503c300de58729e184305ba000e511c16b"
@@ -559,7 +559,7 @@ def _validate_candidate(
     _require(_sha256(tail_leaf) == TAIL_LEAF_SHA256, "tail test leaf changed")
     main_tests, all_tests = _test_inventory(source, public_leaf, tail_leaf)
     _require(len(main_tests) == MAIN_TEST_COUNT, "main test count changed")
-    _require(main_tests == _manifest_ir_names(), "main test IDs/order changed")
+    _require(all_tests == _manifest_ir_names(), "compiled test IDs/order changed")
     _require(len(all_tests) == ALL_TEST_COUNT, "compiled test count changed")
     _require(len(set(all_tests)) == ALL_TEST_COUNT, "duplicate compiled test ID")
     _require(_json_digest(all_tests) == ALL_TESTS_JSON_SHA256, "99 test IDs/order changed")

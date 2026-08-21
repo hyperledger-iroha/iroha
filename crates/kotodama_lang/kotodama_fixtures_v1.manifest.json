@@ -3988,6 +3988,7 @@
         "instruction_access_hints_reject_direct_concrete_instruction_frames",
         "codegen_rejects_noncanonical_or_invalid_literal_axt_touch_manifests",
         "codegen_rejects_noncanonical_or_invalid_literal_remote_spend_intents",
+        "asset_handle_access_hints_read_the_issuer_signed_asset_definition",
         "shared_host_requests_drive_canonical_roots_tally_and_vrf_access_hints",
         "default_max_cycles_matches_pipeline_bound",
         "expression_and_named_call_sugar_emit_identical_executable_bytecode",
@@ -4181,6 +4182,7 @@
         "manifest_trigger_decl_preserves_namespaced_callback",
         "trigger_callback_dispatches_only_through_cntr_entry_pc",
         "source_order_and_main_name_do_not_select_raw_dispatch",
+        "staged_mint_helper_keeps_state_map_base_literals_after_call_propagation",
         "manifest_trigger_decl_lowers_structured_data_filter",
         "manifest_trigger_decl_lowers_structured_data_filters_for_core_families",
         "manifest_trigger_decl_lowers_pipeline_filter",
@@ -4232,7 +4234,7 @@
         "compile_report_sidecars_are_hash_bound_and_preserve_locations",
         "legacy_source_facade_cannot_bypass_canonical_resolution_audits"
       ],
-      "test_names_sha256": "1f2bde0d6e6d83bfd1483dcf8db3d8093192f6dc696eabeae3c59c7027e3bb29"
+      "test_names_sha256": "a029d92be26369dd6b277acd55cbe88777b63e53373049a83f856c064b379f22"
     },
     {
       "fixture_directory": "crates/kotodama_lang/src/semantic/fixtures/v1",
@@ -4271,6 +4273,7 @@
         "decimal_literal_ignores_leading_zeroes_before_width_checks",
         "exact_constant_numeric_arithmetic_uses_runtime_primitives",
         "exact_literals_inherit_decimal_and_quantity_expression_context",
+        "rounded_decimal_division_supports_every_v1_rounding_mode",
         "unknown_rounding_spellings_are_rejected",
         "rounded_numeric_methods_reject_noncanonical_signatures",
         "named_numeric_conversions_preserve_failure_and_rounding_policy",
@@ -4443,9 +4446,10 @@
         "tail_sums_matches_if_let_and_propagation_type_check_together",
         "divergent_expression_arms_inhabit_the_sibling_value_type",
         "discarded_branch_tail_does_not_count_as_function_return_coverage",
-        "wholly_divergent_expression_without_a_type_context_fails_closed"
+        "wholly_divergent_expression_without_a_type_context_fails_closed",
+        "sum_and_expression_control_flow_fail_closed"
       ],
-      "test_names_sha256": "8ff4bba5f4adaba624ba15a0d93c6e2886ceece6dc5dc3515199f8f7aeaf74d9"
+      "test_names_sha256": "ff3a53dc61d53ef611556e17bde9eeac1ee8ba6e12a364a7edbae0c63300c852"
     },
     {
       "fixture_directory": "crates/kotodama_lang/src/ir/fixtures/v1",
@@ -4463,6 +4467,8 @@
         "require_lowers_declared_error_code_into_abort_ir",
         "test_mode_entrypoint_wrapper_checks_override_state_first",
         "single_json_entrypoint_uses_the_same_one_shot_argument_record",
+        "public_wrapper_decodes_one_complete_norito_argument_record",
+        "public_aggregate_arguments_cross_internal_calls_as_flat_words",
         "nested_aggregate_returns_use_every_flattened_abi_word",
         "inactive_sum_has_no_payload_construction_or_store",
         "tail_expression_lowers_identically_to_explicit_return",
@@ -4545,10 +4551,12 @@
         "missing_aggregate_map_entry_branches_before_typed_decode",
         "bytes_state_map_uses_the_schema_bound_record_codec",
         "checked_integer_constants_fold_without_wrapping",
-        "exact_decimal_constants_fold_and_invalid_arithmetic_is_diagnosed"
+        "exact_decimal_constants_fold_and_invalid_arithmetic_is_diagnosed",
+        "rounded_numeric_division_is_constant_folded_or_one_numeric_round_instruction",
+        "wrapping_builtins_have_distinct_ir"
       ],
-      "test_names_sha256": "62b42b27f09f84d320b2da03db99974ef8b6f0ca5ca6e3cb503a87b22920e530"
+      "test_names_sha256": "7fbc4a176d3742729351a719009091235b08acc52c0987ba7d7e3d9cfb51d761"
     }
   ],
-  "test_inventory_sha256": "08306c534338745856794803309f603bd48585c1367873819048e3d0dd7f73cf"
+  "test_inventory_sha256": "c62dbcbe37aeb3972a1f301af0676787c0dde2c22b9cd3ce3331d582ba07e884"
 }
