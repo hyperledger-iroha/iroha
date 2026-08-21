@@ -1548,11 +1548,23 @@ fn remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint() 
         "later Proposal stages omitted the single authenticated Fetch-origin oracle"
     );
     assert_eq!(
-        production
-            .matches("fn exactly_matches_origin_fetch(")
-            .count(),
+        remote.matches("fn exactly_matches_origin_fetch(").count(),
         3,
         "Store, Stored, and the retained family must all recheck one exact Fetch origin"
+    );
+    let authenticated_genesis = production
+        .split("pub(in crate::sumeragi) struct InstalledAuthenticatedGenesisReplayAuthorityV1")
+        .nth(1)
+        .expect("authenticated-genesis replay authority has one declaration")
+        .split("fn remote_proposal_origin_matches_fetch(")
+        .next()
+        .expect("remote Proposal origin matching follows authenticated genesis");
+    assert_eq!(
+        authenticated_genesis
+            .matches("fn exactly_matches_origin_fetch(")
+            .count(),
+        2,
+        "authenticated-genesis Store and Stored evidence must retain the exact sealed Fetch origin"
     );
     assert!(
         production.contains("remote_proposal_fetch_effect(source).as_ref() == Some(effect)")

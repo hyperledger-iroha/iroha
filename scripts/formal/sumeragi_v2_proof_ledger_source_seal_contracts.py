@@ -753,6 +753,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/state.rs': (
         'state/vpn_lease_validation.rs',
+        'state/axt_handle_budget.rs',
         'state/zk_asset_state.rs',
         'state/passive_lane_diagnostic_methods.rs',
         'state/lane_lifecycle_support.rs',
@@ -3675,8 +3676,8 @@ _PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {
     "ordinary_loop": "cf1175fb9703fb722dea4460957dd63847e4a6ec98b5394c66823f8aed0576cf",
     "pending_loop": "04cec89b8a40983a59dc0eaf425257a9bd9ff1a60f8ea6a2c870cb25c7601b05",
     "ordinary_finalize": "05a36cb47c73bd91e88590bfed1eb0f078a5c75915a5f314497fb89f352aa041",
-    "ordinary_active": "6e6e6ebbdfb4677790d7802cf3d377e2ec2fc4b487a975114cd65b3db3176064",
-    "pending_active": "c54b27bb132cd4403f76e459b30d32430b22318851ae2460a7845cc3162c6e27",
+    "ordinary_active": "8a93a2ae69c84618d44942bcbf9013c47d219630e56d8e5288af9336354d29b2",
+    "pending_active": "2c6ba74ed2d7a1893c41305aae5dd50a4722216320f5c403a70c2200ac407fb9",
 }
 _PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "7d0eba6d24cfdae5e7d626bf2cac132b3200bc35b3bb1ac85c8b4992a82c7b98"
 
@@ -3707,7 +3708,7 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "turn:LaunchedProductionLifecycleV1::drive_completion_pre_gate": "6f52d5f3a8f9a75b1997a0ba5e333322528a8ef47270de7306019ba52aa26d66",
     "turn:LaunchedProductionLifecycleV1::drive_ready_completion_turn": "d06433320e8a677bb1139f67da937b65d645f02c9a5aeb6fca5679ad603727b0",
     "turn:LaunchedProductionLifecycleV1::drive_completion_turn": "7ca0b1da70431c09a45682449db54d2fe752d62dbfde87ad8bfe28eadd91d15d",
-    "worker:LifecycleCertifiedServeTaskV1::from_dequeued_parts": "0c9f86b230960b4db64254028b54894adcc3ee29d7a09aff10df489f82830aa1",
+    "worker:LifecycleCertifiedServeTaskV1::from_dequeued_parts": "2fd97e5ef2efa718390f2b3aee03c357aae44562682f85288d973a4739e7cc7d",
     "worker:LifecycleIoCapacityReservation<'_>::preflight_lifecycle_certified_serve": "698cf37eefa08f22e3fc49a3bba6e04fce8c4e031e94ba6922cde786ce78556c",
     "worker:LifecycleIoCapacityReservation<'_>::commit_lifecycle_certified_serve": "f1edcfbd0f5c22919a05212cf7de00e5f914d551ca86f6b5b6156dc254e3d3f9",
     "worker:PreparedLifecycleCertifiedServeCompletionV1::settle_deliver_and_acknowledge": "1c91ff556738f1f0c0ba826da163173aaa8bea1d061356e4949c9bbe179d031a",
@@ -3716,12 +3717,12 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "body_store:V2BodyStore::read_durable_body_for_certified_serve": "c3e4d12afaa3f18ad1d5b0865eb3a54f4ad892eff4449b9d9d5b72bfd8f26c87",
     "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed": "77930bc25fa0078aba267238ba1f3e8016eaa28f9a2d3aa58b4199c3f3333d10",
     "projection:super::ProductionLifecycleOwnerV1::settle_producer_turn_advanced": "d15b6ada19aa19ddd64ce9a23ca4ec06518cb4eb99cfe386976f7f85bc6f3917",
-    "ordinary:run_lifecycle_active_height": "6e6e6ebbdfb4677790d7802cf3d377e2ec2fc4b487a975114cd65b3db3176064",
-    "pending:run_pending_active_height": "c54b27bb132cd4403f76e459b30d32430b22318851ae2460a7845cc3162c6e27",
-    "height:drain_lifecycle_v2_ingress": "4cd6d494cd330640918964e8d690e96bad6f72a74239deacdfa14ef6308dd619",
+    "ordinary:run_lifecycle_active_height": "8a93a2ae69c84618d44942bcbf9013c47d219630e56d8e5288af9336354d29b2",
+    "pending:run_pending_active_height": "2c6ba74ed2d7a1893c41305aae5dd50a4722216320f5c403a70c2200ac407fb9",
+    "height:drain_lifecycle_v2_ingress": "4470158942921ed2d8eb896129fa13f3689e8b6b39449fb9c6957d4d56386cd3",
     "launch:ProductionLeaderWireIngressBindingV1::bind": "a2c191a1ada7ec3b3dd00c36c4f495b1ed6c06e2527b2ca9e68b3729f8071f81",
     "launch:ProductionLeaderWireIngressBindingV1::retire": "b2aca6532fa807ad78a8cbd4d202152209c53dd5dd8c5a4fd5bba45f7df18c4d",
-    "launch:ProductionLifecycleOwnerV1::launch": "f0107f312d84e643a22a0590b87b4fa4b27bfad5f8eab5e5e4b40daa4eb025eb",
+    "launch:ProductionLifecycleOwnerV1::launch": "c408b2d4fd7585818f327d89bc39f8c56f77119405ef9a357bb99017def17e3a",
 }
 
 # Completion provenance remains separately sealed because the direct runtime

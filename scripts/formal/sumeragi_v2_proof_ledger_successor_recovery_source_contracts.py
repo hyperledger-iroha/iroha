@@ -6,20 +6,9 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
     errors: list[str] = []
 
     def load(relative: str) -> tuple[Path, str]:
-        return _read_reviewed_rust_source(
-            repo_root,
-            relative,
-            errors,
-            "production successor-refinement source",
-        )
+        return _read_reviewed_rust_source(repo_root, relative, errors, "production successor-refinement source")
 
-    def region(
-        path: Path,
-        source: str,
-        label: str,
-        start_marker: str,
-        end_marker: str,
-    ) -> str:
+    def region(path: Path, source: str, label: str, start_marker: str, end_marker: str) -> str:
         start = source.find(start_marker)
         end = source.find(end_marker, start + len(start_marker)) if start >= 0 else -1
         if start < 0 or end < 0:
@@ -49,13 +38,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 f"time(s); found {observed}"
             )
 
-    def require_literal_count(
-        path: Path,
-        label: str,
-        body: str,
-        literal: str,
-        expected: int,
-    ) -> None:
+    def require_literal_count(path: Path, label: str, body: str, literal: str, expected: int) -> None:
         observed = mask_rust_comments(body).count(literal)
         if observed != expected:
             errors.append(
@@ -63,12 +46,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 f"{literal!r} exactly {expected} time(s); found {observed}"
             )
 
-    def require_order(
-        path: Path,
-        label: str,
-        body: str,
-        markers: tuple[str, ...],
-    ) -> None:
+    def require_order(path: Path, label: str, body: str, markers: tuple[str, ...]) -> None:
         body_tokens = rust_code_tokens(body)
         cursor = 0
         for marker in markers:
@@ -91,12 +69,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 return
             cursor = position + len(marker_tokens)
 
-    def reject_tokens(
-        path: Path,
-        label: str,
-        body: str,
-        forbidden: tuple[str, ...],
-    ) -> None:
+    def reject_tokens(path: Path, label: str, body: str, forbidden: tuple[str, ...]) -> None:
         body_tokens = rust_code_tokens(body)
         observed = tuple(
             token
@@ -1441,7 +1414,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "self.apply_service.take()",
                     "V2EffectExecutor::open_with_body_store(",
                     "if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref()",
-                    "executor.install_authenticated_genesis_body(authenticated_genesis.signed_block())",
+                    "executor.install_authenticated_genesis_body(authenticated_genesis)",
                     "ProductionV2Services::start_with_apply_service(",
                     "ProductionLifecycleApplyServiceLaunchPermitV1",
                     "apply_service,",
@@ -1837,7 +1810,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 (
                     "authenticated_genesis: Option<AuthenticatedGenesisBodyV1>",
                     "if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref()",
-                    "authenticated_genesis.signed_block()",
+                    "executor.install_authenticated_genesis_body(authenticated_genesis)",
                 ),
             )
             reject_tokens(
@@ -4916,14 +4889,14 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 ),
             )
             finalization_registry = region(
-                registry_validate_impl_path,
-                registry_validate_impl_source,
+                registry_validate_path,
+                registry_validate_source,
                 "finalization-only recovered registry census",
                 "fn exactly_covers_finalization_work(",
                 "fn exactly_covers_ready_work_with_extra(",
             )
             require_tokens(
-                registry_validate_impl_path,
+                registry_validate_path,
                 "finalization-only recovered registry census",
                 finalization_registry,
                 (
@@ -4971,7 +4944,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 terminal_pair_link,
                 (
                     "LifecycleState::Terminal(outcome)",
-                    "exact_single_record_slot( next_record, LifecycleWorkClass::SignVote.capacity_class(), )",
+                    "exact_single_record_slot(",
+                    "LifecycleWorkClass::SignVote.capacity_class()",
                     "ConcreteWorkAddress::new(next_record.owner, next_record.ordinal, next_slot) == Some(next_address)",
                     "installed_digest == next_digest",
                     "coordinator.key_index.get(&next_record.key) == Some(&next_address.ordinal)",

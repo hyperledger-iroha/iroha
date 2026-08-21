@@ -1261,6 +1261,7 @@ fn authenticated_genesis_satisfies_later_view_fetch_through_normal_body_pipeline
 fn authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
+    executor.runtime.retain_body_available_effect_ownership = true;
     let mut services = fixture.services();
     executor
         .install_authenticated_genesis_body_for_test(&fixture.block)

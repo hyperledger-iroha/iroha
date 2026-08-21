@@ -134,6 +134,7 @@ struct FakeRuntime {
         crate::sumeragi::v2_runtime::RuntimeEffectOwnerAssignment,
     >,
     exact_effect_ownership: Option<(AdapterEffect, RuntimeEffectOwnership)>,
+    retain_body_available_effect_ownership: bool,
     live_proposal_intent_wal_sign: Option<(AdapterEffect, LiveProposalIntentWalSignHandoffV1)>,
     terminal_body_candidate_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
     terminal_body_candidate_commits: usize,
@@ -508,6 +509,31 @@ impl EffectRuntime for FakeRuntime {
         }
         let reservation = BodyAvailableReservation::reserved(tag, manifest);
         self.reserved_body_available = Some(reservation.clone());
+        Ok(reservation)
+    }
+    fn reserve_body_available_with_owner(
+        &mut self,
+        tag: EventTag,
+        manifest: wire::PayloadManifest,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<BodyAvailableReservation, EnqueueError> {
+        let store_effect = AdapterEffect::StoreBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        if self.retain_body_available_effect_ownership && self.exact_effect_ownership.is_some() {
+            return Err(EnqueueError::FailClosed);
+        }
+        let store_ownership = self
+            .retain_body_available_effect_ownership
+            .then(|| ownership.rebind_as_inherited_adapter_effect(&store_effect))
+            .transpose()
+            .map_err(|_| EnqueueError::FailClosed)?;
+        let reservation = self.reserve_body_available(tag, manifest)?;
+        if let Some(store_ownership) = store_ownership {
+            self.exact_effect_ownership = Some((store_effect, store_ownership));
+        }
         Ok(reservation)
     }
     fn commit_body_available(

@@ -342,7 +342,7 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
             "routes.semantic_target() != &recipient",
             "!ownership.validate_exact()",
             "!ownership.matches_message(inbound.message())",
-            "!ownership.matches_semantic_origin(Some(&recipient))",
+            "!ownership.matches_semantic_origin(&recipient)",
             "!ownership.matches_reply_routes(Some(routes))",
             "inbound.take_ingress_ownership()",
             "inbound.into_message_sender_and_reply_routes()",

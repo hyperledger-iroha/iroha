@@ -914,6 +914,25 @@ fn standalone_validate_cold_census_rejects_an_unauthenticated_proposal() {
 #[test]
 fn standalone_validate_cold_census_rejects_a_certified_origin() {
     let fixture = RecoveryFixture::new("standalone-validate-certified-origin", 0x65);
+    let as_standalone = |validate: LifecycleLedgerRecordV1| {
+        let ordinal = validate.ordinal();
+        let standalone_owner = OwnerId::new(validate.owner().causal_root(), ordinal);
+        LifecycleLedgerRecordV1::new(
+            validate.key().expect("certified Validate key"),
+            standalone_owner,
+            ordinal,
+            LifecycleWorkClass::Validate,
+            validate.stage().expect("certified Validate stage"),
+            None,
+            standalone_owner.causal_root().digest(),
+            validate
+                .durable_payload()
+                .expect("certified Validate body frame"),
+            validate.replay_authority,
+            DurableContinuation::None,
+        )
+        .expect("construct standalone certified-origin Validate row")
+    };
     let body_directory = TempDir::new().expect("temporary certified-origin Validate body store");
     let mut body_store = fixture.open_store(&body_directory);
     let fetch = fixture.fetch_record(&mut body_store, 0, 0x75, 1, None, false);
@@ -924,28 +943,35 @@ fn standalone_validate_cold_census_rejects_a_certified_origin() {
         .project_ready_validate_records_for_test(&fixture.verified)
         .expect("project certified Validate fixture");
     let validate = records.pop().expect("certified fixture has a Validate row");
-    let ordinal = validate.ordinal();
-    let standalone_owner = OwnerId::new(validate.owner().causal_root(), ordinal);
-    let standalone = LifecycleLedgerRecordV1::new(
-        validate.key().expect("certified Validate key"),
-        standalone_owner,
-        ordinal,
-        LifecycleWorkClass::Validate,
-        validate.stage().expect("certified Validate stage"),
-        None,
-        standalone_owner.causal_root().digest(),
-        validate
-            .durable_payload()
-            .expect("certified Validate body frame"),
-        validate.replay_authority,
-        DurableContinuation::None,
-    )
-    .expect("construct standalone certified-origin Validate row");
+    let standalone = as_standalone(validate);
     let ledger = fixture.ledger(vec![standalone]);
     assert!(matches!(
         ledger.authenticate_durable_certified_body_pipeline_census(&fixture.verified, &body_store,),
         Err(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow)
     ));
+
+    let genesis_directory = TempDir::new().expect("temporary authenticated-genesis body store");
+    let leader_index = usize::try_from(fixture.verified.context().leader(0))
+        .expect("height-one leader index fits usize");
+    let mut genesis_store = V2BodyStore::open_with_policy(
+        genesis_directory.path(),
+        fixture.verified.context().clone(),
+        BlockSignaturePolicy::GenesisAuthority(
+            fixture.keys[leader_index].public_key().clone(),
+        ),
+    )
+    .expect("open authenticated-genesis body store");
+    let fetch = fixture.fetch_record(&mut genesis_store, 0, 0x76, 1, None, false);
+    let seed = fixture.ledger(vec![fetch]);
+    let mut records = seed
+        .authenticate_durable_certified_body_pipeline_census(&fixture.verified, &genesis_store)
+        .expect("authenticate genesis-certified Fetch fixture")
+        .project_ready_validate_records_for_test(&fixture.verified)
+        .expect("project genesis-certified Validate fixture");
+    let validate = records
+        .pop()
+        .expect("genesis-certified fixture has a Validate row");
+    assert_cold_opens_standalone_validate(&fixture, genesis_store, as_standalone(validate));
 }
 
 #[test]

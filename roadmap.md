@@ -1211,9 +1211,9 @@ source inventory consistency, not execution evidence.
 Schema 5 machine-maps 34 conceptual multilane rows to 106 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending structural
-source check. The reviewed Rust include topology contains 58 parents and 371
+source check. The reviewed Rust include topology contains 58 parents and 372
 direct entries; its canonical payload SHA-256 is
-`57f78fbce0ece469dd6c7c821ebb727d5df0d14773dd497c2820452c335dd213`.
+`2473d6bdd7ace178461e9997a36168396e8034238d054b81955d9639c4872cb8`.
 The release-inventory contract is statically reconciled at 84/864/522, and the
 structural model/source contract suite passes. The aggregate proof-ledger
 checker and static Apalache-runner contract remain under current-source

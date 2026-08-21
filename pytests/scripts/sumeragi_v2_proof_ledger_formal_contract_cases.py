@@ -222,6 +222,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/state.rs'): (
         Path('state/vpn_lease_validation.rs'),
+        Path('state/axt_handle_budget.rs'),
         Path('state/zk_asset_state.rs'),
         Path('state/passive_lane_diagnostic_methods.rs'),
         Path('state/lane_lifecycle_support.rs'),

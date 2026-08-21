@@ -2213,8 +2213,8 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
         "pub(in crate::sumeragi) fn launch(\n        mut self,",
-        "authenticated_genesis.signed_block()",
-        "forged_genesis_body_for_mutation",
+        ".install_authenticated_genesis_body(authenticated_genesis)",
+        ".install_authenticated_genesis_body(forged_genesis_body_for_mutation)",
         "move-only authenticated genesis launch input omits production refinement tokens",
     ),
     (

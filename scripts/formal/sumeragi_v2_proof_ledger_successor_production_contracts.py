@@ -1602,6 +1602,9 @@ Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied)
     effects_path, effects_source = load(
         "crates/iroha_core/src/sumeragi/v2_effects.rs"
     )
+    lifecycle_selector_path, lifecycle_selector_source = load(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs"
+    )
     if effects_source:
         require_tokens(
             effects_path,
@@ -1619,23 +1622,21 @@ Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied)
             '"a non-Completion runner cursor cannot claim or mutate a recovered Sign owner"',
             1,
         )
-        certified = region(
+        certified_response_probe = region(
             effects_path,
             effects_source,
-            "accept_certified_body_response",
-            "pub(crate) fn accept_certified_body_response<",
-            "\n    /// Accept a durable application completion",
+            "probe_certified_response_priority",
+            "pub(in crate::sumeragi) fn probe_certified_response_priority(",
+            "\n    /// Re-probe one opaque response candidate",
         )
         require_order(
             effects_path,
-            "accept_certified_body_response",
-            certified,
+            "probe_certified_response_priority",
+            certified_response_probe,
             (
-                "self.outstanding_requests.authenticate_response(",
+                ".authenticate_response(",
                 "ReadyBody::derive(",
-                "self.plan_fetch_completion(",
-                "services.complete_certified_body_fetch(",
-                "self.commit_fetch_completion(plan)",
+                ".preflight_authenticated_response_claim(&authenticated)",
             ),
         )
         consume = region(
@@ -1654,6 +1655,30 @@ Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied)
                 "AdapterEffect::StoreBody",
                 "AdapterEffect::ValidateBody",
                 "AdapterEffect::Apply",
+            ),
+        )
+    if lifecycle_selector_source:
+        certified_fetch_persistence = region(
+            lifecycle_selector_path,
+            lifecycle_selector_source,
+            "complete_certified_fetch_body_persistence",
+            "pub(crate) fn complete_certified_fetch_body_persistence(",
+            "\n    /// Exercise the pure logical Ready reducer",
+        )
+        require_order(
+            lifecycle_selector_path,
+            "complete_certified_fetch_body_persistence",
+            certified_fetch_persistence,
+            (
+                ".prepare_selected_certified_fetch_completion(",
+                ".bind_durable_body_receipt(receipt)",
+                ".prepare_lifecycle_certified_fetch_completion(candidate, &authenticated)",
+                ".into_exact_certified_fetch_dequeue(executor, id, &authenticated)",
+                "exact_dequeue.commit(ingress)",
+                "durable_registry.commit_after_exact_dequeue(dequeued)",
+                "PreparedCertifiedFetchReadyTransition::Mutation(ready) => ready.commit()",
+                "executor.commit_lifecycle_certified_fetch_completion(executor_prepared, &authenticated)",
+                "service_prepared.commit(operation.permit())",
             ),
         )
     release_path = repo_root / "scripts" / "run_sumeragi_v2_release_gates.sh"

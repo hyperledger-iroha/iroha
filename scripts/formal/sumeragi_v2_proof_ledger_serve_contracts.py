@@ -1358,7 +1358,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "fabc9cf096cec0f7c03ea8a13ebbdb00c9f6556feec6544fa2f4b719662b62f8"
     ),
     "open_with_aggregator_and_publication_with_capacity": (
-        "d1eee2c7fcb9bd94d50e519f434b78d50d9887cc38bf77c1980e877822704571"
+        "61dab9fb549388aaff80edf3ae6b568c9d806b1d59469bff831ab85ae67b93b6"
     ),
     "dormant_producer_lifecycle": (
         "3103fd04b61950b06212a9e50f4ae43b4b8ad35949566680afb8f721c133155e"
@@ -1455,7 +1455,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "a9dcc40ab11d2af33c91c5449a24bd524289d8a00e89ea2cdfafe99b27ed2a86"
     ),
     "with_driver_and_lifecycle_ordinals": (
-        "42cf34f73d1e1293dd466cc4fea05b3195c7536df5b74e62fff30f50b8758511"
+        "9153d6ea1ec623e67ceb28226b5eaa65a36c0a7a5522e220f3e3646ccb41cc1e"
     ),
     "freeze_due_clock_owners": (
         "86b2abb4734419e69faafa8bd5fd0473626fb2441b94469a81a448e5f661c76e"
@@ -1493,7 +1493,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256 = {
-    "launch": "f0107f312d84e643a22a0590b87b4fa4b27bfad5f8eab5e5e4b40daa4eb025eb",
+    "launch": "c408b2d4fd7585818f327d89bc39f8c56f77119405ef9a357bb99017def17e3a",
     "into_serialized_runtime": "1afc003a9b27312c1d9b4868eb6dc1c42d6bd4f838b3ebe383131627c40972bd",
 }
 _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256 = {

@@ -67539,7 +67539,7 @@ let cleanup = cleanup_ready.finish_cleanup(Duration::ZERO, cleanup_supervisor);
 if reply_routes.semantic_target() != sender
     || !ownership.validate_exact()
     || !ownership.matches_message(inbound.message())
-    || !ownership.matches_semantic_origin(Some(sender))
+    || !ownership.matches_semantic_origin(sender)
     || !ownership.matches_reply_routes(Some(reply_routes))
 {
     return CurrentCertifiedServePreAdmissionV1::Service(
