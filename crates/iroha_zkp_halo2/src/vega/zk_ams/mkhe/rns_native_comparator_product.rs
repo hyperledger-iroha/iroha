@@ -905,6 +905,18 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self._binding_digest
     }
+
+    /// Consume statement-3 evidence and recover the exact claimed direct
+    /// successor carrier. This is the only ownership path back to the direct
+    /// frame retained by the comparator chain.
+    pub(super) fn into_previous_v1(
+        self,
+    ) -> RnsNativeClaimedSuccessorV1<
+        'proof,
+        RnsNativeCrossFieldRlweClaimedInventoryParentV1<'source, 'proof, S>,
+    > {
+        self._parent
+    }
 }
 
 struct VerifiedComparatorProductPartsV1<'proof> {

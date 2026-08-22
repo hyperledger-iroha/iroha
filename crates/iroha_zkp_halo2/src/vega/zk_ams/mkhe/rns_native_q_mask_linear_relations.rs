@@ -1098,6 +1098,14 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self._binding_digest
     }
+
+    /// Consume q-mask linear evidence and recover its exact statement-8
+    /// predecessor.
+    pub(super) fn into_previous_v1(
+        self,
+    ) -> RnsNativeSmallSignDisjointnessPrerequisiteV1<'source, 'proof, S> {
+        self._previous
+    }
 }
 
 /// Consume statement 8 and verify all 200 bounded q-mask linear cores

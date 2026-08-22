@@ -7,11 +7,12 @@
 //! and Ep P-256 signature entries below are role metadata only. They cannot
 //! authenticate a key or authorize proof acceptance.
 //!
-//! The private STATE child module freezes one acyclic source contract: a
+//! The private STATE child modules freeze one acyclic source contract: a
 //! parity-typed 576-byte public value is an aggregate predecessor lineage, not
 //! the current proof's terminal accumulator. It also freezes the exact
-//! 237-word/34-cell field-neutral ABI and fail-closed terminal order. It does
-//! not implement recursion, folding, artifacts, or a verifier.
+//! 237-word/34-cell field-neutral ABI, six-input fold order, and fail-closed
+//! terminal order. They do not implement recursion, folding, artifacts, or a
+//! verifier.
 //!
 //! Session framing, final-STATE pair qualification, V2 wire/release types,
 //! compact SHA-256, DER/KeyMint/root closure, recursion bootstrap,
@@ -21,8 +22,21 @@
 
 use core::fmt;
 
+#[path = "offline_cash_v2/attestation_registration.rs"]
+mod attestation_registration;
+#[cfg(test)]
+#[path = "offline_cash_v2/attestation_registration_tests.rs"]
+mod attestation_registration_tests;
+#[path = "offline_cash_v2/registered_platform_p256_circuit_source.rs"]
+mod registered_platform_p256_circuit_source;
+#[path = "offline_cash_v2/registered_platform_p256_statement.rs"]
+mod registered_platform_p256_statement;
 #[path = "offline_cash_v2_state_lineage.rs"]
 mod state_lineage;
+#[path = "offline_cash_v2/state_recursive_fold.rs"]
+mod state_recursive_fold;
+#[path = "offline_cash_v2/state_terminal_candidate.rs"]
+mod state_terminal_candidate;
 
 /// Halo2 domain exponent selected by the non-authorizing V2 profile.
 pub(super) const OFFLINE_CASH_HALO2_K_V2: u32 = 17;

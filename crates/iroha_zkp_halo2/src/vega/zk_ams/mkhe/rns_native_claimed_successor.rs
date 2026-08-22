@@ -41,6 +41,13 @@ impl<'proof, Parent> RnsNativeClaimedSuccessorV1<'proof, Parent> {
     pub(super) const fn successor(&self) -> &'proof [u8] {
         self.successor
     }
+
+    /// Consume the carrier and recover its exact owning predecessor together
+    /// with the sole successor borrow minted by the direct-frame preflight.
+    /// Neither component can be recovered without consuming this carrier.
+    pub(super) fn into_parts_v1(self) -> (Parent, &'proof [u8]) {
+        (self.parent, self.successor)
+    }
 }
 
 #[cfg(test)]

@@ -178,6 +178,12 @@ mod rns_native_cross_field_inventory;
 )]
 #[path = "mkhe/rns_native_cross_field_rlwe_direct.rs"]
 mod rns_native_cross_field_rlwe_direct;
+#[allow(
+    dead_code,
+    reason = "the private direct/membership handoff remains non-authorizing until authenticated numeric, replay, and mask owners exist"
+)]
+#[path = "mkhe/rns_native_direct_global_membership_handoff.rs"]
+mod rns_native_direct_global_membership_handoff;
 #[path = "mkhe/rns_native_existing_radix_commitment_view.rs"]
 mod rns_native_existing_radix_commitment_view;
 #[path = "mkhe/rns_native_global_lookup_z_commitment_view.rs"]

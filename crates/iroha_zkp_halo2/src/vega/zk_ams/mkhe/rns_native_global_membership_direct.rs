@@ -1327,6 +1327,16 @@ impl<'source, 'proof, S: super::super::ZkAmsMkheRnsNativeSourceSnapshotV1>
     pub(in super::super::super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self.binding_digest
     }
+
+    /// Consume membership evidence and recover its exact inverse-product
+    /// predecessor. The downstream residual remains borrowed from the sealed
+    /// membership frame and must be retained separately by the consuming
+    /// handoff before this transition.
+    pub(in super::super::super) fn into_previous_v1(
+        self,
+    ) -> super::RnsNativeGlobalInverseProductPrerequisiteV1<'source, 'proof, S> {
+        self.previous
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

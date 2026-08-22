@@ -404,6 +404,65 @@ fn state_abi_has_exact_order_parent_lineage_tail_and_zero_padding() {
 }
 
 #[test]
+fn state_abi_rejects_amount_scale_and_every_zero_digest_position() {
+    let lineage = OfflineCashEqParentLineageV2::live(
+        std::array::from_fn(|index| Fp::from((index + 301) as u64)),
+        EqAffine::generator(),
+    )
+    .expect("live Eq lineage");
+
+    let mut zero_amount = state_abi_fields();
+    zero_amount.amount = 0;
+    assert_eq!(
+        OfflineCashStatePublicInstancesV2::eq(zero_amount, &lineage),
+        Err(OfflineCashStateAbiErrorV2::InvalidLayout)
+    );
+
+    let mut over_scale = state_abi_fields();
+    over_scale.scale = iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
+        .checked_add(1)
+        .expect("scale maximum is below u32::MAX");
+    assert_eq!(
+        OfflineCashStatePublicInstancesV2::eq(over_scale, &lineage),
+        Err(OfflineCashStateAbiErrorV2::InvalidLayout)
+    );
+
+    let digest_names = [
+        "release",
+        "protocol",
+        "semantic",
+        "context",
+        "request",
+        "parent_0",
+        "parent_1",
+        "result",
+        "link",
+        "transition",
+    ];
+    for (index, digest_name) in digest_names.into_iter().enumerate() {
+        let mut invalid = state_abi_fields();
+        match index {
+            0 => invalid.release_digest = [0; 32],
+            1 => invalid.protocol_digest = [0; 32],
+            2 => invalid.semantic_digest = [0; 32],
+            3 => invalid.context_digest = [0; 32],
+            4 => invalid.request_digest = [0; 32],
+            5 => invalid.parent_0 = [0; 32],
+            6 => invalid.parent_1 = [0; 32],
+            7 => invalid.result = [0; 32],
+            8 => invalid.link = [0; 32],
+            9 => invalid.transition_digest = [0; 32],
+            _ => unreachable!("ten digest positions are exhaustive"),
+        }
+        assert_eq!(
+            OfflineCashStatePublicInstancesV2::eq(invalid, &lineage),
+            Err(OfflineCashStateAbiErrorV2::InvalidLayout),
+            "zero {digest_name} digest"
+        );
+    }
+}
+
+#[test]
 fn bootstrap_sentinel_requires_uninhabited_authenticated_mode() {
     let fields = OfflineCashStateAbiFieldsV2 {
         operation: OfflineCashStateOperationV2::ReceiveFold,
@@ -419,18 +478,6 @@ fn bootstrap_sentinel_requires_uninhabited_authenticated_mode() {
             &OfflineCashEqParentLineageV2::bootstrap(),
         ),
         Err(OfflineCashStateAbiErrorV2::UnauthenticatedBootstrap)
-    );
-
-    let mut invalid = state_abi_fields();
-    invalid.protocol_digest = [0; 32];
-    let live = OfflineCashEqParentLineageV2::live(
-        std::array::from_fn(|index| Fp::from((index + 1) as u64)),
-        EqAffine::generator(),
-    )
-    .expect("live Eq lineage");
-    assert_eq!(
-        OfflineCashStatePublicInstancesV2::eq(invalid, &live),
-        Err(OfflineCashStateAbiErrorV2::InvalidLayout)
     );
 }
 
@@ -619,13 +666,34 @@ fn helper_scaffold_and_activation_preflight_fail_closed() {
     assert!(lineage_source.contains("PastaIpaInstanceQueryV1::Direct => false"));
     assert!(lineage_source.contains("current proof accumulator is never"));
     assert!(lineage_source.contains("enum OfflineCashAuthenticatedBootstrapModeV2 {}"));
+    assert!(lineage_source.contains("enum OfflineCashStateRecursiveFoldImplementationV2 {}"));
+    assert!(lineage_source.contains("enum OfflineCashStateVerifiedReceiptV2 {}"));
     assert!(lineage_source.contains("match authorization {}"));
     assert!(
         lineage_source.contains("Err(OfflineCashStateTerminalErrorV2::VerificationUnavailable)")
     );
     assert!(!lineage_source.contains("VerifierIPA"));
     assert!(!lineage_source.contains("verify_proof"));
+    assert!(!lineage_source.contains("impl OfflineCashStateRecursiveFoldImplementationV2"));
+    assert!(!lineage_source.contains("Ok(OfflineCashStateVerifiedReceiptV2"));
     assert!(!lineage_source.contains("pub(super) current_accumulator:"));
+    assert!(!lineage_source.contains("current_accumulator_bytes:"));
+
+    let abi_fields = lineage_source
+        .split_once("pub(super) struct OfflineCashStateAbiFieldsV2 {")
+        .and_then(|(_, tail)| tail.split_once("\n}"))
+        .map(|(fields, _)| fields)
+        .expect("STATE ABI fields remain source-visible");
+    assert!(!abi_fields.contains("current_accumulator"));
+    assert!(!abi_fields.contains("current_proof"));
+
+    let public_instances = lineage_source
+        .split_once("pub(super) struct OfflineCashStatePublicInstancesV2 {")
+        .and_then(|(_, tail)| tail.split_once("\n}"))
+        .map(|(fields, _)| fields)
+        .expect("STATE public-instance fields remain source-visible");
+    assert!(!public_instances.contains("current_accumulator"));
+    assert!(!public_instances.contains("current_proof"));
 
     let backend = include_str!("offline_cash_v1/halo2_backend.rs");
     assert!(backend.contains("VerificationUnavailable"));

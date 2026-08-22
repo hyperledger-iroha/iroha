@@ -1271,6 +1271,15 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self.binding_digest
     }
+
+    /// Consume the sole post-z owner and recover its exact statement-4
+    /// predecessor. The live z capability is consumed with this owner and is
+    /// never returned separately.
+    pub(super) fn into_previous_v1(
+        self,
+    ) -> RnsNativeCenteringSubtractionPrerequisiteV1<'source, 'proof, S> {
+        self.previous
+    }
 }
 
 #[allow(

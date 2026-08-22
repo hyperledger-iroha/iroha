@@ -2235,6 +2235,13 @@ impl<'source, 'proof, S: super::ZkAmsMkheRnsNativeSourceSnapshotV1>
     pub(in super::super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self.binding_digest
     }
+
+    /// Consume inverse-product evidence and recover its exact post-z owner.
+    pub(in super::super) fn into_previous_v1(
+        self,
+    ) -> super::RnsNativeGlobalLookupPostZPrerequisiteV1<'source, 'proof, S> {
+        self.previous
+    }
 }
 
 /// Consume the sole post-`z` commitment owner and verify the compact inverse
@@ -2284,7 +2291,9 @@ where
 
 #[path = "rns_native_global_membership_direct.rs"]
 pub(super) mod rns_native_global_membership_direct;
-pub(in super::super) use rns_native_global_membership_direct::RNS_NATIVE_GLOBAL_MEMBERSHIP_RESIDUAL_MAX_BYTES_V1;
+pub(in super::super) use rns_native_global_membership_direct::{
+    RNS_NATIVE_GLOBAL_MEMBERSHIP_RESIDUAL_MAX_BYTES_V1, RnsNativeGlobalMembershipPrerequisiteV1,
+};
 
 #[cfg(test)]
 #[path = "rns_native_global_inverse_product_sumcheck_tests.rs"]

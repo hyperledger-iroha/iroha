@@ -7,6 +7,7 @@ use halo2_base::halo2_proofs::{
     poly::{Rotation, commitment::ParamsProver as _, ipa::commitment::ParamsIPA},
 };
 use halo2_base::utils::modulus;
+use sha2::{Digest as _, Sha256};
 use zeroize::Zeroize;
 
 use crate::zk::pasta_ipa_recursion::{PastaIpaInstanceQueryV1, pasta_ipa_augmented_proof_shape_v1};
@@ -45,6 +46,75 @@ fn rfc6979_sample() -> TestVector {
         digest,
         signature,
     }
+}
+
+fn zero_s_sample() -> TestVector {
+    let mut vector = rfc6979_sample();
+    vector.signature[32..].fill(0);
+    vector
+}
+
+fn canonical_tampered_signature_sample() -> TestVector {
+    let mut vector = rfc6979_sample();
+    // Preserve P1363 width, nonzero/canonical r and s, and low-S while changing
+    // the signed scalar. This reaches the actual ECDSA equality instead of a
+    // parser or policy shortcut.
+    vector.signature[63] ^= 1;
+    vector
+}
+
+fn host_scalar_multiply(mut scalar: BigUint, mut point: AffineValue) -> AffineValue {
+    let mut accumulator = AffineValue::identity();
+    while scalar != BigUint::from(0_u8) {
+        if (&scalar & BigUint::from(1_u8)) == BigUint::from(1_u8) {
+            accumulator = affine_add_value(&accumulator, &point).0;
+        }
+        point = affine_double_value(&point).0;
+        scalar >>= 1_usize;
+    }
+    accumulator
+}
+
+fn bounded_host_ecdsa_accepts(vector: &TestVector) -> bool {
+    let p = modulus_base();
+    let n = modulus_scalar();
+    let x = BigUint::from_bytes_be(&vector.sec1[1..33]);
+    let y = BigUint::from_bytes_be(&vector.sec1[33..]);
+    let r = BigUint::from_bytes_be(&vector.signature[..32]);
+    let s = BigUint::from_bytes_be(&vector.signature[32..]);
+    if vector.sec1[0] != 4
+        || x >= p
+        || y >= modulus_base()
+        || r == BigUint::from(0_u8)
+        || r >= n
+        || s == BigUint::from(0_u8)
+        || s > (modulus_scalar() >> 1_usize)
+    {
+        return false;
+    }
+
+    let x_squared = (&x * &x) % &p;
+    let x_cubed = (&x_squared * &x) % &p;
+    let three_x = (BigUint::from(3_u8) * &x) % &p;
+    if (&y * &y) % &p != modular_sub(&(x_cubed + curve_b()), &three_x, &p) {
+        return false;
+    }
+
+    let inverse = modular_inverse(&s, &n);
+    let z = BigUint::from_bytes_be(&vector.digest) % &n;
+    let u1 = (z * &inverse) % &n;
+    let u2 = (&r * inverse) % &n;
+    let left = host_scalar_multiply(u1, AffineValue::generator());
+    let right = host_scalar_multiply(
+        u2,
+        AffineValue {
+            x,
+            y,
+            infinity: false,
+        },
+    );
+    let result = affine_add_value(&left, &right).0;
+    !result.infinity && result.x % n == r
 }
 
 fn assert_configured_shape<F: BigPrimeField>() {
@@ -138,6 +208,33 @@ fn two_coordinate_typed_range_tuple_is_field_sound() {
     );
     assert_eq!(TABLE_ROWS, 65_365);
     assert!(TABLE_ROWS < K17_MAX_ASSIGNED_ROWS);
+}
+
+#[test]
+fn typed_range_table_helper_pins_sentinel_count_endpoints_and_order() {
+    assert_eq!(RANGE_CHUNK_BITS, [2, 4, 6, 8, 9, 10, 11, 12, 13, 14, 15]);
+    let rows = typed_range_table_rows_v3().collect::<Vec<_>>();
+    assert_eq!(rows.len(), TABLE_ROWS);
+    assert_eq!(rows.first(), Some(&(0_u64, 0_u64)));
+
+    let mut offset = 1_usize;
+    for bits in RANGE_CHUNK_BITS {
+        let tag = u64::try_from(bits).expect("range width fits u64");
+        let values = 1_usize << bits;
+        assert_eq!(rows[offset], (0, 0));
+        assert_eq!(rows[offset + 1], (tag, tag * tag));
+        let maximum = u64::try_from(values - 1).expect("typed range maximum fits u64");
+        assert_eq!(
+            rows[offset + values - 1],
+            (tag * maximum, tag * tag * maximum)
+        );
+        for (value, pair) in rows[offset..offset + values].iter().enumerate() {
+            let value = u64::try_from(value).expect("typed range value fits u64");
+            assert_eq!(*pair, (tag * value, tag * tag * value));
+        }
+        offset += values;
+    }
+    assert_eq!(offset, rows.len());
 }
 
 fn selector_value<F: BigPrimeField>(opcode: u64, roots: &[u64]) -> F {
@@ -473,6 +570,65 @@ fn exact_source_is_single_frame_and_failure_is_closed() {
         fail: true,
     };
     assert!(P256PackedAffineEcdsaCircuitV3::<Fp>::from_source(failing).is_err());
+}
+
+fn assert_invalid_signature_frames_stay_source_exact_and_row_bounded<F: BigPrimeField>() {
+    for (label, vector) in [
+        ("zero-s", zero_s_sample()),
+        (
+            "canonical tampered signature",
+            canonical_tampered_signature_sample(),
+        ),
+    ] {
+        let direct =
+            P256PackedAffineEcdsaCircuitV3::<F>::new(vector.sec1, vector.digest, vector.signature);
+        let sourced = P256PackedAffineEcdsaCircuitV3::<F>::from_source(ExactSource {
+            statement: direct.input_bytes(),
+            fail: false,
+        })
+        .unwrap_or_else(|_| panic!("{label} exact source frame"));
+        assert_eq!(
+            sourced, direct,
+            "{label} must not be rewritten by source IO"
+        );
+
+        let rows = direct
+            .trace_diagnostic_for_test()
+            .unwrap_or_else(|error| panic!("{label} bounded host trace: {error:?}"));
+        assert_eq!(rows.semantic_rows, P256_PACKED_AFFINE_V3_SEMANTIC_ROWS);
+        assert_eq!(rows.upper_rows, P256_PACKED_AFFINE_V3_UPPER_ROWS);
+        assert_eq!(rows.headroom_rows, P256_PACKED_AFFINE_V3_HEADROOM_ROWS);
+        assert!(rows.upper_rows <= K17_MAX_ASSIGNED_ROWS);
+        assert!(
+            direct.row_report().is_err(),
+            "{label} host trace is not backend-admission evidence"
+        );
+    }
+}
+
+#[test]
+fn zero_s_and_canonical_tamper_are_exact_bounded_frames_on_both_pasta_fields() {
+    let valid = rfc6979_sample();
+    let zero_s = zero_s_sample();
+    let tampered = canonical_tampered_signature_sample();
+    let scalar_modulus = modulus_scalar();
+
+    assert_eq!(
+        BigUint::from_bytes_be(&zero_s.signature[32..]),
+        BigUint::from(0_u8)
+    );
+    assert_ne!(tampered.signature, valid.signature);
+    let tampered_r = BigUint::from_bytes_be(&tampered.signature[..32]);
+    let tampered_s = BigUint::from_bytes_be(&tampered.signature[32..]);
+    assert!(tampered_r > BigUint::from(0_u8) && tampered_r < scalar_modulus);
+    assert!(tampered_s > BigUint::from(0_u8));
+    assert!(tampered_s <= (modulus_scalar() >> 1_usize));
+    assert!(bounded_host_ecdsa_accepts(&valid));
+    assert!(!bounded_host_ecdsa_accepts(&zero_s));
+    assert!(!bounded_host_ecdsa_accepts(&tampered));
+
+    assert_invalid_signature_frames_stay_source_exact_and_row_bounded::<Fp>();
+    assert_invalid_signature_frames_stay_source_exact_and_row_bounded::<Fq>();
 }
 
 fn reviewed_intervals(kind: ModularRelationKind) -> [IntegerInterval; 4] {
@@ -926,10 +1082,22 @@ fn row_preflight<F: BigPrimeField>() -> P256PackedAffineRowsV3 {
     assert_eq!(rows.upper_rows, P256_PACKED_AFFINE_V3_UPPER_ROWS);
     assert_eq!(rows.headroom_rows, P256_PACKED_AFFINE_V3_HEADROOM_ROWS);
     assert_eq!(rows.semantic_rows, 108_877);
+    assert_eq!(rows.reserved_rows, 16_384);
     assert_eq!(rows.upper_rows, 125_261);
     assert_eq!(rows.headroom_rows, 5_802);
     assert!(rows.upper_rows <= K17_MAX_ASSIGNED_ROWS);
     assert_eq!(K17_MAX_ASSIGNED_ROWS, 131_063);
+    assert_eq!(rows.binding_rows, 389);
+    assert_eq!(rows.range_rows, 16_884);
+    assert_eq!(rows.sparse_rows, 31_122);
+    assert_eq!(rows.lookup_only_rows, 1_746);
+    assert_eq!(rows.dense_rows, 43_612);
+    assert_eq!(rows.wide_rows, 4_020);
+    assert_eq!(rows.sign_rows, 4_129);
+    assert_eq!(rows.selection_rows, 6_975);
+    assert_eq!(rows.padding_rows, 0);
+    assert_eq!(rows.zero_tests, 3_214);
+    assert_eq!(rows.canonical_checks, 1_340);
     assert_eq!(
         rows.semantic_rows,
         rows.binding_rows
@@ -944,6 +1112,8 @@ fn row_preflight<F: BigPrimeField>() -> P256PackedAffineRowsV3 {
     );
     assert_eq!(rows.total_rows, rows.semantic_rows.max(rows.table_rows));
     assert_eq!(rows.table_rows, TABLE_ROWS);
+    assert_eq!(rows.table_rows, 65_365);
+    assert_eq!(rows.total_rows, 108_877);
     assert_eq!(rows.caller_instance_rows, PUBLIC_BYTES);
     assert_eq!(rows.constant_instance_rows, 228);
     assert_eq!(
@@ -1011,6 +1181,142 @@ fn instance_contract_is_161_caller_bytes_plus_exactly_228_derived_constants() {
     assert_eq!(default_fq.1, fq_tail);
 }
 
+#[test]
+fn privately_declared_source_hash_is_pinned_as_source_only_evidence() {
+    // This hard-coded pin was derived directly from the settled source bytes,
+    // without compiling or executing the circuit. It is source evidence only:
+    // it does not replace the canonical runtime topology/tail digest that the
+    // first authorized serialized run must record before backend admission.
+    const SOURCE_ONLY_SHA256_HEX: &str =
+        "d609e227d30a74dafacbc49fb3a507a3bf0853197d13dd08b23bb19bc7a05074";
+    let actual: [u8; 32] = Sha256::digest(include_bytes!("p256_packed_affine_v3.rs")).into();
+    assert_eq!(actual, decode_hex::<32>(SOURCE_ONLY_SHA256_HEX));
+}
+
+fn update_usize_identity(hasher: &mut Sha256, value: usize) {
+    hasher.update(
+        u64::try_from(value)
+            .expect("canonical identity value fits u64")
+            .to_le_bytes(),
+    );
+}
+
+fn canonical_runtime_topology_tail_digest<F: BigPrimeField>(
+    topology: &CanonicalTraceTopologyV3,
+    constant_tail: &[F],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"iroha.offline_cash.p256_packed_affine_v3.topology_tail.v2");
+    update_usize_identity(&mut hasher, topology.rows.len());
+    update_usize_identity(&mut hasher, topology.equality_classes);
+    for row in &topology.rows {
+        hasher.update((row.opcode as u64).to_le_bytes());
+        update_usize_identity(&mut hasher, row.range_bits);
+        for class in row.equality_alias_classes {
+            hasher.update(
+                class
+                    .map_or(u64::MAX, |class| {
+                        u64::try_from(class).expect("canonical equality class fits u64")
+                    })
+                    .to_le_bytes(),
+            );
+        }
+    }
+    hasher.update(b"typed-range-table");
+    update_usize_identity(&mut hasher, TABLE_ROWS);
+    let mut table_rows = 0_usize;
+    for (first, second) in typed_range_table_rows_v3() {
+        hasher.update(first.to_le_bytes());
+        hasher.update(second.to_le_bytes());
+        table_rows += 1;
+    }
+    assert_eq!(table_rows, TABLE_ROWS);
+    hasher.update(b"verifier-derived-constant-tail");
+    update_usize_identity(&mut hasher, constant_tail.len());
+    for value in constant_tail {
+        hasher.update(value.to_repr().as_ref());
+    }
+    hasher.finalize().into()
+}
+
+fn assert_without_witnesses_topology_and_constant_tail<F: BigPrimeField>()
+-> CanonicalTraceTopologyV3 {
+    let vector = rfc6979_sample();
+    let valid =
+        P256PackedAffineEcdsaCircuitV3::<F>::new(vector.sec1, vector.digest, vector.signature);
+    let without_witnesses = valid.without_witnesses();
+    let (valid_rows, valid_topology) = valid
+        .trace_and_topology_for_test()
+        .expect("valid witness has the reviewed full-trace topology");
+    let (empty_rows, empty_topology) = without_witnesses
+        .trace_and_topology_for_test()
+        .expect("without_witnesses has the reviewed full-trace topology");
+    assert_eq!(valid_rows, empty_rows);
+    assert_eq!(
+        valid_topology, empty_topology,
+        "every opcode, range tag, and canonical equality-alias class must match"
+    );
+    assert_eq!(valid_topology.rows.len(), valid_rows.total_rows);
+    assert_eq!(
+        valid_topology.rows.len(),
+        P256_PACKED_AFFINE_V3_SEMANTIC_ROWS
+    );
+    assert_eq!(
+        valid_topology
+            .rows
+            .iter()
+            .filter(|row| row.opcode == Opcode::Disabled)
+            .count(),
+        valid_rows.padding_rows,
+        "the descriptor must retain every disabled padding row"
+    );
+    let (_, valid_tail) = valid
+        .instance_partition_for_test()
+        .expect("valid constant tail is derivable");
+    let (empty_caller, empty_tail) = without_witnesses
+        .instance_partition_for_test()
+        .expect("without_witnesses constant tail is derivable");
+    assert!(empty_caller.iter().all(|value| *value == F::ZERO));
+    assert_eq!(valid_tail, empty_tail);
+    valid_topology
+}
+
+#[test]
+fn without_witnesses_preserves_topology_and_constant_tail_on_both_pasta_fields() {
+    let fp = assert_without_witnesses_topology_and_constant_tail::<Fp>();
+    let fq = assert_without_witnesses_topology_and_constant_tail::<Fq>();
+    assert_eq!(fp, fq, "the canonical full trace must be field-independent");
+}
+
+#[test]
+#[ignore = "remaining admission gate: first authorized serialized run must record and then hard-code both reviewed canonical digests"]
+fn record_canonical_runtime_topology_tail_digests_before_backend_admission() {
+    let vector = rfc6979_sample();
+    let fp =
+        P256PackedAffineEcdsaCircuitV3::<Fp>::new(vector.sec1, vector.digest, vector.signature);
+    let fq =
+        P256PackedAffineEcdsaCircuitV3::<Fq>::new(vector.sec1, vector.digest, vector.signature);
+    let (_, fp_topology) = fp
+        .trace_and_topology_for_test()
+        .expect("Fp canonical topology recording trace");
+    let (_, fq_topology) = fq
+        .trace_and_topology_for_test()
+        .expect("Fq canonical topology recording trace");
+    assert_eq!(fp_topology, fq_topology);
+    let (_, fp_tail) = fp
+        .instance_partition_for_test()
+        .expect("Fp canonical constant tail");
+    let (_, fq_tail) = fq
+        .instance_partition_for_test()
+        .expect("Fq canonical constant tail");
+    let fp_digest = canonical_runtime_topology_tail_digest(&fp_topology, &fp_tail);
+    let fq_digest = canonical_runtime_topology_tail_digest(&fq_topology, &fq_tail);
+    assert_ne!(fp_digest, [0_u8; 32]);
+    assert_ne!(fq_digest, [0_u8; 32]);
+    eprintln!("Fp topology/tail digest: {}", hex::encode(fp_digest));
+    eprintln!("Fq topology/tail digest: {}", hex::encode(fq_digest));
+}
+
 fn mock_verify<F: BigPrimeField>(circuit: &P256PackedAffineEcdsaCircuitV3<F>) -> bool {
     let Ok(instances) = circuit.instances() else {
         return false;
@@ -1019,6 +1325,12 @@ fn mock_verify<F: BigPrimeField>(circuit: &P256PackedAffineEcdsaCircuitV3<F>) ->
         return false;
     };
     prover.verify().is_ok()
+}
+
+fn assert_mock_rejects<F: BigPrimeField>(vector: &TestVector, label: &str) {
+    let circuit =
+        P256PackedAffineEcdsaCircuitV3::<F>::new(vector.sec1, vector.digest, vector.signature);
+    assert!(!mock_verify(&circuit), "{label} must fail verification");
 }
 
 #[test]
@@ -1038,9 +1350,11 @@ fn real_rfc6979_mock_prover_kat_passes_on_both_pasta_fields() {
 fn real_key_generation_accepts_the_exact_shape_on_both_pasta_curves() {
     let vector = rfc6979_sample();
     let fp =
-        P256PackedAffineEcdsaCircuitV3::<Fp>::new(vector.sec1, vector.digest, vector.signature);
+        P256PackedAffineEcdsaCircuitV3::<Fp>::new(vector.sec1, vector.digest, vector.signature)
+            .without_witnesses();
     let fq =
-        P256PackedAffineEcdsaCircuitV3::<Fq>::new(vector.sec1, vector.digest, vector.signature);
+        P256PackedAffineEcdsaCircuitV3::<Fq>::new(vector.sec1, vector.digest, vector.signature)
+            .without_witnesses();
     let eq_params = ParamsIPA::<EqAffine>::new(K);
     keygen_vk(&eq_params, &fp).expect("Fp keygen");
     let ep_params = ParamsIPA::<EpAffine>::new(K);
@@ -1049,55 +1363,102 @@ fn real_key_generation_accepts_the_exact_shape_on_both_pasta_curves() {
 
 #[test]
 #[ignore = "real 108877-row rejection KATs wait for the root serialized Cargo window"]
-fn real_semantic_attacks_reject_prefix_zero_scalar_high_s_and_off_curve_key() {
+fn real_semantic_attacks_reject_with_signature_negatives_on_both_pasta_fields() {
     let vector = rfc6979_sample();
 
     let mut bad_prefix = vector.clone();
     bad_prefix.sec1[0] = 3;
-    let circuit = P256PackedAffineEcdsaCircuitV3::<Fp>::new(
-        bad_prefix.sec1,
-        bad_prefix.digest,
-        bad_prefix.signature,
-    );
-    assert!(!mock_verify(&circuit));
+    assert_mock_rejects::<Fp>(&bad_prefix, "compressed SEC1 prefix");
 
     let mut zero_r = vector.clone();
     zero_r.signature[..32].fill(0);
-    let circuit =
-        P256PackedAffineEcdsaCircuitV3::<Fp>::new(zero_r.sec1, zero_r.digest, zero_r.signature);
-    assert!(!mock_verify(&circuit));
+    assert_mock_rejects::<Fp>(&zero_r, "zero-r");
 
     let mut high_s = vector.clone();
     let low_s = BigUint::from_bytes_be(&high_s.signature[32..]);
     let high = modulus_scalar() - low_s;
     high_s.signature[32..].copy_from_slice(&high.to_bytes_be());
-    let circuit =
-        P256PackedAffineEcdsaCircuitV3::<Fp>::new(high_s.sec1, high_s.digest, high_s.signature);
-    assert!(!mock_verify(&circuit));
+    assert_mock_rejects::<Fp>(&high_s, "high-S");
 
-    let mut off_curve = vector;
+    let mut off_curve = vector.clone();
     off_curve.sec1[1..].fill(0);
-    let circuit = P256PackedAffineEcdsaCircuitV3::<Fp>::new(
-        off_curve.sec1,
-        off_curve.digest,
-        off_curve.signature,
-    );
-    assert!(!mock_verify(&circuit));
+    assert_mock_rejects::<Fp>(&off_curve, "off-curve public key");
+
+    // Reuse the same bounded fixtures on both Pasta fields. The zero-s case
+    // reaches the explicit nonzero/inverse constraints; the tampered case is
+    // still canonical and low-S, so only the ECDSA equality can reject it.
+    let zero_s = zero_s_sample();
+    let tampered = canonical_tampered_signature_sample();
+    assert_mock_rejects::<Fp>(&zero_s, "Fp zero-s");
+    assert_mock_rejects::<Fp>(&tampered, "Fp canonical tampered signature");
+    assert_mock_rejects::<Fq>(&zero_s, "Fq zero-s");
+    assert_mock_rejects::<Fq>(&tampered, "Fq canonical tampered signature");
 }
 
 #[test]
-fn source_remains_undeclared_private_and_non_authorizing() {
+fn source_is_privately_declared_and_remains_non_authorizing() {
     let source = include_str!("p256_packed_affine_v3.rs");
     let parent = include_str!("../offline_cash_v1.rs");
     assert!(source.contains("Private, non-authorizing"));
-    assert!(!parent.contains("mod p256_packed_affine_v3"));
+    assert_eq!(
+        parent
+            .lines()
+            .filter(|line| line.trim() == "mod p256_packed_affine_v3;")
+            .count(),
+        1
+    );
+    assert!(!parent.contains("pub mod p256_packed_affine_v3"));
     assert!(!source.contains("VerificationAvailable"));
     assert!(!source.contains("GuardBundle::"));
     assert!(!source.contains("register_backend"));
     assert!(!source.contains("activate_backend"));
+    assert_eq!(source.matches("typed_range_table_rows_v3()").count(), 2);
+    assert!(
+        source.contains("for (offset, (first, second)) in typed_range_table_rows_v3().enumerate()")
+    );
     assert!(source.contains("inactive bounded witness was not zeroized"));
+    assert!(source.contains("fn uint_is_zero<F: BigPrimeField>"));
+    assert!(source.contains("fn uint_equal<F: BigPrimeField>"));
+    assert!(source.contains("fn gate_uint_zero<F: BigPrimeField>"));
+    assert_eq!(source.matches("uint_is_zero(builder,").count(), 7);
+    assert_eq!(source.matches("uint_equal(builder,").count(), 3);
+    assert_eq!(source.matches("gate_uint_zero(builder,").count(), 2);
+    assert!(source.contains("let s_zero = uint_is_zero(builder, &s);"));
+    assert!(source.contains("let s_nonzero = builder.bool_not(&s_zero);"));
+    assert!(source.contains("let s_inverse_value = modular_inverse(&s.value, &scalar_modulus);"));
+    assert!(source.contains("let r_matches = uint_equal(builder, &x_mod_n, &r);"));
+    assert_eq!(source.matches("s_nonzero,").count(), 1);
+    assert_eq!(source.matches("r_matches,").count(), 1);
+    assert_eq!(
+        source
+            .matches("let negative_zero = builder.mul(sign.cell, zero.cell);")
+            .count(),
+        1
+    );
+    assert_eq!(
+        source
+            .matches("builder.assert_zero(negative_zero);")
+            .count(),
+        1
+    );
     assert!(source.contains("terminal modular carry was nonzero"));
     assert!(source.contains("mandatory terminal equation c4=0"));
+    assert_eq!(
+        source
+            .matches("for coefficient in 0..2 * LIMBS - 1 {")
+            .count(),
+        1
+    );
+    assert_eq!(
+        source.matches("if coefficient < carries.len() {").count(),
+        1
+    );
+    assert_eq!(
+        source
+            .matches("builder.realize_zero_sum(&terms, witness)?;")
+            .count(),
+        1
+    );
     assert!(source.contains("family_coefficient_offset"));
     assert!(source.contains("REVIEWED_CARRY_INTERVALS_I128"));
     assert!(source.contains("Err(Error::Synthesis)"));

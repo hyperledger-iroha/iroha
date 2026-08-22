@@ -1027,6 +1027,14 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self.binding_digest
     }
+
+    /// Consume statement-2 evidence and recover its exact existing-radix
+    /// predecessor.
+    pub(super) fn into_previous_v1(
+        self,
+    ) -> RnsNativeExistingRadixCommitmentPrerequisiteV1<'source, 'proof, S> {
+        self.previous
+    }
 }
 
 /// Consume the existing-radix view and verify all 344 statement-2 cores

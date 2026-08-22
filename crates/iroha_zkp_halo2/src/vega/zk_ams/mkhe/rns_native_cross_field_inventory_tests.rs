@@ -1,5 +1,11 @@
 use super::*;
-use crate::vega::derive_t256_generators_v1;
+use crate::{
+    vega::derive_t256_generators_v1,
+    vega::zk_ams::mkhe::rns_native_cross_field_rlwe_direct::{
+        RnsNativeCrossFieldPreQpcsSafeAxesV1, RnsNativeCrossFieldRlweDirectErrorV1,
+        RnsNativeQMaskSCommitmentSourceV1, q_mask_s_root_v1,
+    },
+};
 
 fn point_bytes_v1() -> [u8; POINT_BYTES_V1] {
     let point =
@@ -21,10 +27,14 @@ fn canonical_inventory_v1() -> Vec<u8> {
     inventory
 }
 
-fn canonical_wire_v1(prior_context_digest: [u8; DIGEST_BYTES_V1], continuation: &[u8]) -> Vec<u8> {
-    let inventory = canonical_inventory_v1();
+fn canonical_wire_with_inventory_v1(
+    prior_context_digest: [u8; DIGEST_BYTES_V1],
+    continuation: &[u8],
+    inventory: &[u8],
+) -> Vec<u8> {
+    assert_eq!(inventory.len(), INVENTORY_BYTES_V1);
     let inventory_root =
-        canonical_inventory_root_v1(prior_context_digest, &inventory).expect("inventory root");
+        canonical_inventory_root_v1(prior_context_digest, inventory).expect("inventory root");
     let continuation_digest =
         canonical_continuation_digest_v1(prior_context_digest, inventory_root, continuation)
             .expect("continuation digest");
@@ -58,12 +68,20 @@ fn canonical_wire_v1(prior_context_digest: [u8; DIGEST_BYTES_V1], continuation: 
     bytes.extend_from_slice(&continuation_digest);
     bytes.extend_from_slice(&(continuation.len() as u32).to_be_bytes());
     assert_eq!(bytes.len(), HEADER_BYTES_V1);
-    bytes.extend_from_slice(&inventory);
+    bytes.extend_from_slice(inventory);
     bytes.extend_from_slice(continuation);
     let codec_digest = codec_digest_v1(&bytes);
     bytes.extend_from_slice(&codec_digest);
     assert_eq!(bytes.len(), total);
     bytes
+}
+
+fn canonical_wire_v1(prior_context_digest: [u8; DIGEST_BYTES_V1], continuation: &[u8]) -> Vec<u8> {
+    canonical_wire_with_inventory_v1(
+        prior_context_digest,
+        continuation,
+        &canonical_inventory_v1(),
+    )
 }
 
 #[test]
@@ -454,6 +472,182 @@ fn proof_body_codec_is_exact_capped_canonical_and_context_bound() {
 }
 
 #[test]
+fn provisional_preflight_is_one_pass_and_finalize_reuses_the_exact_allocation() {
+    let context = [0x44; DIGEST_BYTES_V1];
+    let bytes = canonical_wire_v1(context, b"one-pass-provisional-inventory");
+    let before = preflight_audit_counters_v1();
+    let lease = RnsNativePreQpcsCrossProofLeaseV1::from_raw_fixture_v1(&bytes);
+    let preflight = RnsNativePreQpcsQMaskInventoryPreflightV1::preflight_v1(lease)
+        .expect("self-consistent provisional preflight");
+    let after_preflight = preflight_audit_counters_v1();
+    assert_eq!(after_preflight.header_passes - before.header_passes, 1);
+    assert_eq!(
+        after_preflight.inventory_root_passes - before.inventory_root_passes,
+        1
+    );
+    assert_eq!(
+        after_preflight.point_validation_decodes - before.point_validation_decodes,
+        INVENTORY_POINTS_V1
+    );
+    assert_eq!(
+        after_preflight.continuation_hash_passes - before.continuation_hash_passes,
+        1
+    );
+    assert_eq!(
+        after_preflight.codec_hash_passes - before.codec_hash_passes,
+        1
+    );
+
+    let view = preflight
+        .into_exact_proof_view_v1(&bytes)
+        .expect("same allocation");
+    view.validate_expected_prior_context_v1(context)
+        .expect("final context");
+    assert_eq!(view.prior_context_digest, context);
+    assert_eq!(preflight_audit_counters_v1(), after_preflight);
+
+    let copied_equal = bytes.clone();
+    let copied_preflight = RnsNativePreQpcsQMaskInventoryPreflightV1::preflight_v1(
+        RnsNativePreQpcsCrossProofLeaseV1::from_raw_fixture_v1(&bytes),
+    )
+    .expect("second provisional fixture");
+    let before_copied_finalize = preflight_audit_counters_v1();
+    assert_eq!(
+        copied_preflight
+            .into_exact_proof_view_v1(&copied_equal)
+            .map(|_| ()),
+        Err(RnsNativeCrossFieldInventoryErrorV1::InvalidContext)
+    );
+    assert_eq!(preflight_audit_counters_v1(), before_copied_finalize);
+
+    let wrong_context_preflight = RnsNativePreQpcsQMaskInventoryPreflightV1::preflight_v1(
+        RnsNativePreQpcsCrossProofLeaseV1::from_raw_fixture_v1(&bytes),
+    )
+    .expect("wrong-context provisional fixture");
+    let before_wrong_context = preflight_audit_counters_v1();
+    let wrong_context_view = wrong_context_preflight
+        .into_exact_proof_view_v1(&bytes)
+        .expect("same allocation for wrong-context check");
+    assert_eq!(
+        wrong_context_view.validate_expected_prior_context_v1([0x45; DIGEST_BYTES_V1]),
+        Err(RnsNativeCrossFieldInventoryErrorV1::InvalidHeader)
+    );
+    assert_eq!(preflight_audit_counters_v1(), before_wrong_context);
+}
+
+#[test]
+fn provisional_q_mask_projection_has_exact_first_last_coordinates_and_6400_calls() {
+    let context = [0x46; DIGEST_BYTES_V1];
+    let mut inventory = canonical_inventory_v1();
+    let points = derive_t256_generators_v1(b"rns-native-pre-qpcs-q-mask-projection", 3)
+        .expect("projection points");
+    let write_point = |inventory: &mut [u8], ordinal: usize, point: Point| {
+        let mut encoded = [0_u8; POINT_BYTES_V1];
+        point
+            .write_non_identity_wire_bytes_ref(&mut encoded)
+            .expect("canonical projection point");
+        let offset = ordinal * POINT_BYTES_V1;
+        inventory[offset..offset + POINT_BYTES_V1].copy_from_slice(&encoded);
+    };
+    write_point(&mut inventory, Q_MASK_INVENTORY_FIRST_ORDINAL_V1, points[0]);
+    write_point(
+        &mut inventory,
+        PRE_QPCS_Q_MASK_LAST_INVENTORY_ORDINAL_V1,
+        points[1],
+    );
+    write_point(
+        &mut inventory,
+        Q_MASK_INVENTORY_FIRST_ORDINAL_V1 + Q_MASK_DIGITS_V1,
+        points[2],
+    );
+    let bytes = canonical_wire_with_inventory_v1(context, b"q-mask-coordinate-map", &inventory);
+    let mut first_encoded = [0_u8; POINT_BYTES_V1];
+    points[0]
+        .write_non_identity_wire_bytes_ref(&mut first_encoded)
+        .expect("first point encoding");
+    let mut last_encoded = [0_u8; POINT_BYTES_V1];
+    points[1]
+        .write_non_identity_wire_bytes_ref(&mut last_encoded)
+        .expect("last point encoding");
+    assert_eq!(
+        &bytes[PRE_QPCS_Q_MASK_FIRST_PROOF_OFFSET_V1
+            ..PRE_QPCS_Q_MASK_FIRST_PROOF_OFFSET_V1 + POINT_BYTES_V1],
+        first_encoded.as_slice()
+    );
+    assert_eq!(
+        &bytes[PRE_QPCS_Q_MASK_LAST_PROOF_OFFSET_V1
+            ..PRE_QPCS_Q_MASK_LAST_PROOF_OFFSET_V1 + POINT_BYTES_V1],
+        last_encoded.as_slice()
+    );
+    let preflight = RnsNativePreQpcsQMaskInventoryPreflightV1::preflight_v1(
+        RnsNativePreQpcsCrossProofLeaseV1::from_raw_fixture_v1(&bytes),
+    )
+    .expect("q-mask provisional preflight");
+    assert!(
+        preflight
+            .q_mask_s_digit_commitment_v1(0, 0, 0, 0)
+            .expect("first q-mask digit")
+            == points[0]
+    );
+    assert!(
+        preflight
+            .q_mask_s_digit_commitment_v1(
+                ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 - 1,
+                REPETITIONS_V1 - 1,
+                BLOCKS_PER_RECORD_V1 - 1,
+                Q_MASK_DIGITS_V1 - 1,
+            )
+            .expect("last q-mask digit")
+            == points[1]
+    );
+    for invalid in [
+        preflight.q_mask_s_digit_commitment_v1(ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, 0, 0, 0),
+        preflight.q_mask_s_digit_commitment_v1(0, REPETITIONS_V1, 0, 0),
+        preflight.q_mask_s_digit_commitment_v1(0, 0, BLOCKS_PER_RECORD_V1, 0),
+        preflight.q_mask_s_digit_commitment_v1(0, 0, 0, Q_MASK_DIGITS_V1),
+    ] {
+        assert_eq!(
+            invalid.map(|_| ()),
+            Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry)
+        );
+    }
+
+    let before_root = preflight_audit_counters_v1();
+    let axes = RnsNativeCrossFieldPreQpcsSafeAxesV1 {
+        profile_manifest_digest: [1; DIGEST_BYTES_V1],
+        source_binding_digest: [2; DIGEST_BYTES_V1],
+        source_formula_digest: [3; DIGEST_BYTES_V1],
+        source_mapping_digest: [4; DIGEST_BYTES_V1],
+        rns_aggregation_challenge_seed: [5; DIGEST_BYTES_V1],
+        qpcs_parameter_digest: [6; DIGEST_BYTES_V1],
+        qpcs_pre_relation_transcript_digest: [7; DIGEST_BYTES_V1],
+    };
+    assert_ne!(
+        q_mask_s_root_v1(axes, &preflight).expect("exact provisional q-mask root"),
+        [0; DIGEST_BYTES_V1]
+    );
+    let after_root = preflight_audit_counters_v1();
+    assert_eq!(
+        after_root.q_mask_digit_projections - before_root.q_mask_digit_projections,
+        PRE_QPCS_Q_MASK_S_POINTS_V1
+    );
+    assert_eq!(after_root.header_passes, before_root.header_passes);
+    assert_eq!(
+        after_root.point_validation_decodes,
+        before_root.point_validation_decodes
+    );
+    assert_eq!(
+        after_root.inventory_root_passes,
+        before_root.inventory_root_passes
+    );
+    assert_eq!(
+        after_root.continuation_hash_passes,
+        before_root.continuation_hash_passes
+    );
+    assert_eq!(after_root.codec_hash_passes, before_root.codec_hash_passes);
+}
+
+#[test]
 fn proof_body_rejects_geometry_point_and_continuation_substitution() {
     let context = [0x52; DIGEST_BYTES_V1];
     let bytes = canonical_wire_v1(context, b"continuation");
@@ -510,6 +704,140 @@ fn production_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
     assert!(stage.contains("terminal_transcript_digest: [u8; DIGEST_BYTES_V1]"));
     assert!(source.contains("terminal_transcript_digest: transcript.transcript_digest()"));
     assert!(source.contains("pub(super) const fn terminal_transcript_digest_v1(&self)"));
+
+    let lease_declaration = source
+        .split_once("pub(super) struct RnsNativePreQpcsCrossProofLeaseV1")
+        .expect("pre-qPCS exact proof lease")
+        .1
+        .split_once("impl<'proof> RnsNativePreQpcsCrossProofLeaseV1")
+        .expect("pre-qPCS exact proof lease boundary")
+        .0;
+    assert!(!lease_declaration.contains("derive(Clone"));
+    assert!(!lease_declaration.contains("derive(Copy"));
+    assert!(lease_declaration.contains("proof: &'proof [u8]"));
+    assert!(source.contains(
+        "#[must_use = \"the exact proof-slice lease must be consumed by its provisional preflight\"]"
+    ));
+    let lease_impl = source
+        .split_once("impl<'proof> RnsNativePreQpcsCrossProofLeaseV1")
+        .expect("pre-qPCS proof lease implementation")
+        .1
+        .split_once("pub(super) struct RnsNativePreQpcsQMaskInventoryPreflightV1")
+        .expect("pre-qPCS proof lease implementation boundary")
+        .0;
+    let raw_fixture = lease_impl
+        .find("pub(super) const fn from_raw_fixture_v1")
+        .expect("test-only raw lease fixture");
+    assert!(lease_impl[raw_fixture.saturating_sub(32)..raw_fixture].contains("#[cfg(test)]"));
+    assert!(source.contains("unavailable: Infallible"));
+
+    let preflight_declaration = source
+        .split_once("pub(super) struct RnsNativePreQpcsQMaskInventoryPreflightV1")
+        .expect("move-only provisional preflight")
+        .1
+        .split_once("impl<'proof> RnsNativePreQpcsQMaskInventoryPreflightV1")
+        .expect("move-only provisional preflight boundary")
+        .0;
+    assert!(!preflight_declaration.contains("derive(Clone"));
+    assert!(!preflight_declaration.contains("derive(Copy"));
+    assert!(source.contains(
+        "#[must_use = \"the provisional q-mask owner must be consumed by final inventory authentication\"]"
+    ));
+    let preflight_impl = source
+        .split_once("impl<'proof> RnsNativePreQpcsQMaskInventoryPreflightV1")
+        .expect("provisional preflight implementation")
+        .1
+        .split_once("fn canonical_inventory_root_v1")
+        .expect("provisional preflight implementation boundary")
+        .0;
+    assert_eq!(preflight_impl.matches("pub(super) fn ").count(), 2);
+    assert!(preflight_impl.contains("pub(super) fn preflight_v1("));
+    assert!(preflight_impl.contains("pub(super) fn project_q_mask_s_digit_v1("));
+    for forbidden_escape in [
+        "pub(super) fn proof",
+        "pub(super) fn bytes",
+        "pub(super) fn digest",
+        "pub(super) fn root",
+        "pub(super) fn continuation",
+        "pub(super) fn points",
+        "AsRef",
+        "Deref",
+    ] {
+        assert!(
+            !preflight_impl.contains(forbidden_escape),
+            "provisional preflight escape present: {forbidden_escape}"
+        );
+    }
+    for exact_identity_check in [
+        "core::ptr::eq(lease.proof.as_ptr(), exact_proof.as_ptr())",
+        "lease.proof.len() == exact_proof.len()",
+        "lease.proof == exact_proof",
+    ] {
+        assert!(
+            preflight_impl.contains(exact_identity_check),
+            "missing exact proof identity check: {exact_identity_check}"
+        );
+    }
+
+    let shared_typed_parser = source
+        .split_once("fn from_canonical_bytes_exact_v1(")
+        .expect("typed compatibility parser")
+        .1
+        .split_once("fn canonical_inventory_root_v1")
+        .expect("typed compatibility parser boundary")
+        .0;
+    assert!(shared_typed_parser.contains("from_self_consistent_canonical_bytes_exact_v1(bytes)"));
+    assert!(shared_typed_parser.contains("validate_expected_prior_context_v1"));
+    let consuming_finalize = source
+        .split_once(
+            "pub(super) fn authenticate_rns_native_cross_field_inventory_from_pre_qpcs_preflight_v1",
+        )
+        .expect("consuming typed preflight finalizer")
+        .1
+        .split_once("#[cfg(test)]")
+        .expect("consuming typed preflight finalizer boundary")
+        .0;
+    assert!(consuming_finalize.contains("preflight.into_exact_proof_view_v1(cross.proof())"));
+    assert!(consuming_finalize.contains("view.validate_expected_prior_context_v1("));
+    let exact_identity = consuming_finalize
+        .find("preflight.into_exact_proof_view_v1(cross.proof())")
+        .expect("exact proof identity first");
+    let linked_source = consuming_finalize
+        .find("linked.source().qpcs().evaluations()")
+        .expect("linked source authentication");
+    assert!(exact_identity < linked_source);
+    for forbidden_second_pass in [
+        "from_self_consistent_canonical_bytes_exact_v1",
+        "from_canonical_bytes_exact_v1",
+        "canonical_inventory_root_v1",
+        "canonical_continuation_digest_v1",
+        "codec_digest_v1",
+        "DecoderV1",
+    ] {
+        assert!(
+            !consuming_finalize.contains(forbidden_second_pass),
+            "typed finalizer repeats provisional work: {forbidden_second_pass}"
+        );
+    }
+    for false_gate in [
+        "PRE_QPCS_Q_MASK_PRODUCTION_LEASE_AVAILABLE_V1: bool = false",
+        "PRE_QPCS_Q_MASK_PREFLIGHT_LIVE_V1: bool = false",
+        "PRE_QPCS_Q_MASK_SOURCE_INTEGRATED_V1: bool = false",
+        "PRE_QPCS_Q_MASK_DIRECT_INTEGRATED_V1: bool = false",
+        "PRE_QPCS_Q_MASK_COMPOSITE_INTEGRATED_V1: bool = false",
+        "PRE_QPCS_Q_MASK_RESOURCE_EVIDENCE_QUALIFIED_V1: bool = false",
+        "PRE_QPCS_Q_MASK_READINESS_V1: bool = false",
+        "PRE_QPCS_Q_MASK_RELEASE_READY_V1: bool = false",
+    ] {
+        assert!(
+            source.contains(false_gate),
+            "live gate changed: {false_gate}"
+        );
+    }
+    assert!(source.contains("PROOF_MAX_BYTES_V1 == 8_385_797"));
+    assert!(
+        source.contains("RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1 == 6_780_245")
+    );
 
     let parent = include_str!("../mkhe.rs");
     assert_eq!(

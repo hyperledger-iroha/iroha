@@ -267,12 +267,26 @@ fn claim_equality_pending_fixture_v1<'a>(
     let verified_cross_field_core_root =
         RnsNativeCrossFieldRlweVerifiedCoreRootV1::test_fixture_v1(recomputed_root)
             .expect("direct-owned verified-root fixture");
+    let safe_core_projection = RnsNativeCrossFieldRlweSafeCoreProjectionV1 {
+        terminal_predecessor_context_binding_digest: digest_v1(5),
+        candidate_pre_direct_inventory_context_digest: digest_v1(6),
+        candidate_pre_direct_inventory_root: digest_v1(7),
+        existing_radix_candidate_root: digest_v1(8),
+        direct_core_safe_digest: direct_core_safe_digest_v1(
+            recomputed_root,
+            digest_v1(112),
+            digest_v1(113),
+            digest_v1(114),
+        )
+        .expect("successor-independent direct-core digest"),
+    };
     RnsNativeCrossFieldRlweClaimEqualityPendingVerifiedV1 {
         successor,
         binding_digest: digest_v1(111),
         q_mask_s_root: digest_v1(112),
         numeric_root: digest_v1(113),
         commitment_root: digest_v1(114),
+        safe_core_projection,
         cross_field_root_equality_obligation,
         verified_cross_field_core_root,
     }
@@ -369,7 +383,7 @@ impl RnsNativeQMaskSCommitmentSourceV1 for TouchSourceV1<'_> {
     }
 }
 
-impl RnsNativeCrossFieldAuthoritativeSourceV1 for TouchSourceV1<'_> {
+impl RnsNativeCrossFieldNumericCursorV1 for TouchSourceV1<'_> {
     fn authoritative_binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
         self.touches.set(self.touches.get() + 1);
         [0; DIGEST_BYTES_V1]
@@ -383,7 +397,9 @@ impl RnsNativeCrossFieldAuthoritativeSourceV1 for TouchSourceV1<'_> {
     ) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1> {
         self.fail_v1()
     }
+}
 
+impl RnsNativeCrossFieldAuthenticatedPublicPointSourceV1 for TouchSourceV1<'_> {
     fn message_radix_digit_commitment_v1(
         &self,
         _record: usize,
@@ -455,6 +471,11 @@ impl ProofRandomSource for UntouchedRandomV1 {
 #[test]
 fn exact_four_core_geometry_and_cap_are_settled() {
     assert_eq!(EVALUATIONS_V1, 200);
+    assert_eq!(Q_MASK_S_POINTS_V1, 6_400);
+    assert_eq!(Q_MASK_ROOT_DOMAIN_V1.len(), 71);
+    assert_eq!(Q_MASK_ROOT_BYTES_PER_POINT_V1, 41);
+    assert_eq!(Q_MASK_ROOT_FIXED_ABSORPTION_BYTES_V1, 108);
+    assert_eq!(Q_MASK_ROOT_TOTAL_ABSORPTION_BYTES_V1, 262_508);
     assert_eq!(ACTIVE_GATES_PER_CORE_V1, 10_300);
     assert_eq!(PADDED_GATES_PER_CORE_V1, 16_384);
     assert_eq!(VECTOR_COMMITMENTS_PER_CORE_V1, 100);
@@ -757,7 +778,7 @@ impl RnsNativeQMaskSCommitmentSourceV1 for FullZeroSourceV1 {
     }
 }
 
-impl RnsNativeCrossFieldAuthoritativeSourceV1 for FullZeroSourceV1 {
+impl RnsNativeCrossFieldNumericCursorV1 for FullZeroSourceV1 {
     fn authoritative_binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
         axes_v1().source_binding_digest
     }
@@ -788,7 +809,9 @@ impl RnsNativeCrossFieldAuthoritativeSourceV1 for FullZeroSourceV1 {
         };
         Ok(())
     }
+}
 
+impl RnsNativeCrossFieldAuthenticatedPublicPointSourceV1 for FullZeroSourceV1 {
     fn message_radix_digit_commitment_v1(
         &self,
         record: usize,
@@ -1052,6 +1075,24 @@ fn claimed_cross_field_root_mismatch_rejects_and_obligation_is_consumed() {
 }
 
 #[test]
+fn direct_core_safe_digest_has_exact_domain_and_framing_kat() {
+    assert_eq!(
+        direct_core_safe_digest_v1(
+            [1; DIGEST_BYTES_V1],
+            [2; DIGEST_BYTES_V1],
+            [3; DIGEST_BYTES_V1],
+            [4; DIGEST_BYTES_V1],
+        )
+        .expect("direct-core safe digest KAT"),
+        [
+            0x6c, 0x76, 0x23, 0x43, 0x2f, 0x20, 0x18, 0x28, 0x59, 0xba, 0xb7, 0x09, 0xfc, 0x2a,
+            0x7b, 0xa5, 0x38, 0xcb, 0xc4, 0x44, 0x45, 0x3c, 0x7d, 0x89, 0xa2, 0x04, 0x93, 0xc7,
+            0xf1, 0xd0, 0x38, 0xa5,
+        ]
+    );
+}
+
+#[test]
 fn concrete_direct_root_bridge_is_matching_mismatch_and_one_shot() {
     let claimed_root = digest_v1(95);
     let successor = [0x5a, 0xa5, 0x33];
@@ -1063,6 +1104,22 @@ fn concrete_direct_root_bridge_is_matching_mismatch_and_one_shot() {
     assert_eq!(terminal.q_mask_s_root(), digest_v1(112));
     assert_eq!(terminal.numeric_root(), digest_v1(113));
     assert_eq!(terminal.commitment_root(), digest_v1(114));
+    assert_eq!(
+        terminal.safe_core_projection_v1(),
+        RnsNativeCrossFieldRlweSafeCoreProjectionV1 {
+            terminal_predecessor_context_binding_digest: digest_v1(5),
+            candidate_pre_direct_inventory_context_digest: digest_v1(6),
+            candidate_pre_direct_inventory_root: digest_v1(7),
+            existing_radix_candidate_root: digest_v1(8),
+            direct_core_safe_digest: direct_core_safe_digest_v1(
+                claimed_root,
+                digest_v1(112),
+                digest_v1(113),
+                digest_v1(114),
+            )
+            .expect("expected safe projection"),
+        }
+    );
 
     assert!(matches!(
         claim_equality_pending_fixture_v1(claimed_root, digest_v1(96), &successor, 726)
@@ -1711,10 +1768,153 @@ fn claimed_relation_surface_is_atomic_move_only_and_source_ordered() {
 }
 
 #[test]
+fn membership_backed_point_projection_has_exact_boundary_owners_and_no_join() {
+    assert_eq!(direct_group_v1(0, 0), Ok(0));
+    assert_eq!(
+        direct_group_v1(RECORDS_V1 - 1, BLOCKS_PER_RECORD_V1 - 1),
+        Ok(343)
+    );
+    assert_eq!(direct_small_owner_v1(0, 0, 0), Ok(0));
+    assert_eq!(
+        direct_small_owner_v1(
+            RECORDS_V1 - 1,
+            SMALL_SOURCE_ROLES_V1 - 1,
+            BLOCKS_PER_RECORD_V1 - 1,
+        ),
+        Ok(1_031)
+    );
+    assert_eq!(direct_q_mask_owner_v1(0, 0, 0), Ok(0));
+    assert_eq!(
+        direct_q_mask_owner_v1(LIMBS_V1 - 1, REPETITIONS_V1 - 1, BLOCKS_PER_RECORD_V1 - 1),
+        Ok(1_599)
+    );
+    for invalid in [
+        direct_group_v1(RECORDS_V1, 0),
+        direct_group_v1(0, BLOCKS_PER_RECORD_V1),
+        direct_small_owner_v1(0, SMALL_SOURCE_ROLES_V1, 0),
+        direct_q_mask_owner_v1(LIMBS_V1, 0, 0),
+        direct_q_mask_owner_v1(0, REPETITIONS_V1, 0),
+    ] {
+        assert_eq!(
+            invalid,
+            Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry)
+        );
+    }
+
+    let source = include_str!("rns_native_cross_field_rlwe_direct.rs");
+    let provisional_q_mask_projection = source
+        .split_once(
+            "impl RnsNativeQMaskSCommitmentSourceV1 for RnsNativePreQpcsQMaskInventoryPreflightV1",
+        )
+        .expect("provisional q-mask inventory projection")
+        .1
+        .split_once("/// Ephemeral adapter")
+        .expect("provisional q-mask inventory projection boundary")
+        .0;
+    for exact_projection_step in [
+        "if digit >= Q_MASK_DIGITS_V1",
+        "direct_q_mask_owner_v1(limb, repetition, block)?",
+        "self.project_q_mask_s_digit_v1(",
+        ".ok_or(RnsNativeCrossFieldRlweDirectErrorV1::InvalidPoint)",
+    ] {
+        assert!(
+            provisional_q_mask_projection.contains(exact_projection_step),
+            "missing provisional q-mask projection step: {exact_projection_step}"
+        );
+    }
+    for forbidden_authority in [
+        "RnsNativeCrossFieldAuthenticatedPublicPointSourceV1",
+        "RnsNativeCrossFieldAuthoritativeSourceV1",
+        "RnsNativeCrossFieldNumericCursorV1",
+        "schedule",
+        "lineage",
+        "from_raw",
+    ] {
+        assert!(
+            !provisional_q_mask_projection.contains(forbidden_authority),
+            "provisional q-mask owner gained authority: {forbidden_authority}"
+        );
+    }
+    let normalized_source = source.split_whitespace().collect::<Vec<_>>().join(" ");
+    for forbidden_impl in [
+        "impl RnsNativeCrossFieldAuthenticatedPublicPointSourceV1 for RnsNativePreQpcsQMaskInventoryPreflightV1",
+        "impl RnsNativeCrossFieldAuthoritativeSourceV1 for RnsNativePreQpcsQMaskInventoryPreflightV1",
+        "impl RnsNativeCrossFieldNumericCursorV1 for RnsNativePreQpcsQMaskInventoryPreflightV1",
+    ] {
+        assert!(
+            !normalized_source.contains(forbidden_impl),
+            "provisional q-mask owner gained a forbidden impl: {forbidden_impl}"
+        );
+    }
+    let q_mask_projection = source
+        .split_once("impl<S, N> RnsNativeQMaskSCommitmentSourceV1")
+        .expect("q-mask membership projection")
+        .1
+        .split_once("impl<S, N> RnsNativeCrossFieldAuthenticatedPublicPointSourceV1")
+        .expect("q-mask projection boundary")
+        .0;
+    assert!(q_mask_projection.contains("q_mask_linear_commitments"));
+    assert!(q_mask_projection.contains("direct_q_mask_owner_v1"));
+    assert!(q_mask_projection.contains("commitments.digits[digit]"));
+
+    let public_projection = source
+        .split_once("impl<S, N> RnsNativeCrossFieldAuthenticatedPublicPointSourceV1")
+        .expect("public-point membership projection")
+        .1
+        .split_once("/// Prover extension")
+        .expect("public-point projection boundary")
+        .0;
+    for exact_owner in [
+        "difference_low_commitment_v1(group, digit)",
+        "comparator_top_commitments(group)",
+        "commitments.signed",
+        "commitments.negative_magnitude",
+        "commitments.borrows[RADIX_DIGITS_V1 - 1]",
+    ] {
+        assert!(
+            public_projection.contains(exact_owner),
+            "missing exact public-point owner: {exact_owner}"
+        );
+    }
+    for forbidden_substitute in [
+        "slack",
+        "complement",
+        "inverse",
+        "commitments.positive",
+        "from_raw",
+        "from_bytes",
+    ] {
+        assert!(
+            !public_projection.contains(forbidden_substitute),
+            "detached or wrong-role point substitute present: {forbidden_substitute}"
+        );
+    }
+    assert!(!source.contains("verify_rns_native_cross_field_rlwe_claimed_carrier_with_numeric_v1"));
+    assert!(!source.contains("direct_membership_numeric_join_v2"));
+    let membership_handoff = include_str!("rns_native_direct_global_membership_handoff.rs");
+    for unavailable_join_surface in [
+        "RnsNativeCrossFieldNumericCursorV1",
+        "RnsNativeExistingRadixDirectAliasV1",
+        "into_previous_with_direct_alias_v1",
+        "with_numeric",
+        "finish_v2",
+    ] {
+        assert!(
+            !membership_handoff.contains(unavailable_join_surface),
+            "incomplete join leaked into membership handoff: {unavailable_join_surface}"
+        );
+    }
+    assert!(!SINGLE_OWNER_NUMERIC_MEMBERSHIP_CHRONOLOGY_AVAILABLE_V1);
+    assert!(!VERIFIER_NUMERIC_MEMBERSHIP_JOIN_AVAILABLE_V1);
+}
+
+#[test]
 fn source_and_transcript_privacy_invariants_are_source_settled() {
     let source = include_str!("rns_native_cross_field_rlwe_direct.rs");
     for needle in [
         "pub(super) trait RnsNativeQMaskSCommitmentSourceV1",
+        "pub(super) trait RnsNativeCrossFieldNumericCursorV1: Sized",
+        "pub(super) trait RnsNativeCrossFieldAuthenticatedPublicPointSourceV1:",
         "pub(super) trait RnsNativeCrossFieldAuthoritativeSourceV1:",
         "fn take_numeric_evaluation_v1(",
         "pub(super) trait RnsNativeCrossFieldQuotientOpeningSourceV1:",
@@ -1746,6 +1946,9 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
         "pub(super) fn seal_v1(",
         "const PRE_QPCS_Q_MASK_TOKEN_INTEGRATED_V1: bool = false;",
         "const POST_CORE_INVENTORY_LINK_INTEGRATED_V1: bool = false;",
+        "const MEMBERSHIP_BACKED_PUBLIC_POINT_ADAPTER_DECLARED_V1: bool = true;",
+        "const SINGLE_OWNER_NUMERIC_MEMBERSHIP_CHRONOLOGY_AVAILABLE_V1: bool = false;",
+        "const VERIFIER_NUMERIC_MEMBERSHIP_JOIN_AVAILABLE_V1: bool = false;",
         "const PRE_DIRECT_CANDIDATE_AXIS_CONTRACT_SETTLED_V1: bool = true;",
         "const PRODUCTION_PRE_DIRECT_INVENTORY_AXES_INTEGRATED_V1: bool = false;",
         "const STAGED_TERMINAL_TRANSCRIPT_API_AVAILABLE_V1: bool = true;",
@@ -1754,6 +1957,8 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
         "const COMPOSITE_ACCEPTANCE_AVAILABLE_V1: bool = false;",
         "const MEASURED_RSS_QUALIFIED_V1: bool = false;",
         "const RELEASE_READY_V1: bool = false;",
+        "numeric-cursor-exposes-no-schedule-or-lineage",
+        "digest-equality-must-not-substitute-for-ownership",
     ] {
         assert!(source.contains(needle), "missing invariant: {needle}");
     }
@@ -1764,6 +1969,22 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
     assert!(!source.contains("pub(super) const fn core_transcript_digest("));
     assert!(!source.contains("ZkAmsMkheRnsNativeVerifiedCrossFieldCoreRootCapabilityV1"));
     assert!(!source.contains("ZkAmsMkheRnsNativeVerifiedCrossFieldCoreRootV1"));
+    assert!(!source.contains("verify_rns_native_cross_field_rlwe_claimed_carrier_with_numeric_v1"));
+    assert!(!source.contains("same_lineage_v1"));
+    assert!(!source.contains("RnsNativeMembershipBackedDirectSourceV1 {"));
+
+    let numeric_cursor = source
+        .split_once("pub(super) trait RnsNativeCrossFieldNumericCursorV1: Sized")
+        .expect("split numeric cursor")
+        .1
+        .split_once("/// Authenticated public-point source")
+        .expect("numeric cursor boundary")
+        .0;
+    assert!(numeric_cursor.contains("take_numeric_evaluation_v1"));
+    assert!(!numeric_cursor.contains("relation_schedule"));
+    assert!(!numeric_cursor.contains("lineage"));
+    assert!(!numeric_cursor.contains("finish"));
+    assert!(!numeric_cursor.contains("Point"));
     let root_capability = source
         .split_once("pub(super) struct RnsNativeCrossFieldRlweCoreRootV1(")
         .expect("opaque root capability")

@@ -1,7 +1,7 @@
 //! Private, non-authorizing packed affine P-256 ECDSA prototype.
 //!
-//! This file is intentionally undeclared. It is pre-settlement evidence for a
-//! fail-closed k=17 candidate, not a backend or GuardBundle eligibility path.
+//! This privately declared module is source-settled evidence for a fail-closed
+//! k=17 candidate, not a backend or GuardBundle eligibility path.
 //! The circuit keeps the reviewed current-query proof shape (eight equality
 //! advice columns, one direct instance column, four fixed queries, two lookup
 //! arguments, degree seven, and 3,264 augmented IPA bytes) while replacing the
@@ -50,6 +50,16 @@ const PUBLIC_BYTES: usize = 65 + 32 + 64;
 const LOOKUP_BITS: usize = 15;
 const RANGE_CHUNK_BITS: [usize; 11] = [2, 4, 6, 8, 9, 10, 11, 12, 13, 14, 15];
 const TABLE_ROWS: usize = 65_365;
+
+/// Canonical fixed-table order: the disabled sentinel, then every typed width
+/// in [`RANGE_CHUNK_BITS`] order with its values in ascending integer order.
+fn typed_range_table_rows_v3() -> impl Iterator<Item = (u64, u64)> {
+    std::iter::once((0_u64, 0_u64)).chain(RANGE_CHUNK_BITS.into_iter().flat_map(|bits| {
+        let tag = u64::try_from(bits).expect("range width fits u64");
+        (0_u64..(1_u64 << bits)).map(move |value| (tag * value, tag * tag * value))
+    }))
+}
+
 const LIMB_BITS: usize = 86;
 const LIMB_WIDTHS: [usize; 3] = [86, 86, 84];
 const LIMBS: usize = 3;
@@ -274,6 +284,16 @@ impl<F: BigPrimeField> P256PackedAffineEcdsaCircuitV3<F> {
             Err(P256PackedAffineFailureV3::RowCapacityExceeded { rows, .. }) => Ok(*rows),
             Err(error) => Err(error),
         }
+    }
+
+    #[cfg(test)]
+    fn trace_and_topology_for_test(
+        &self,
+    ) -> Result<(P256PackedAffineRowsV3, CanonicalTraceTopologyV3), P256PackedAffineFailureV3> {
+        let trace = self.build_trace_diagnostic()?;
+        let rows = trace.rows;
+        let topology = trace.canonical_topology_descriptor()?;
+        Ok((rows, topology))
     }
 
     #[cfg(test)]
@@ -545,6 +565,21 @@ struct AssignedRow<F> {
     aliases: Vec<(usize, usize)>,
     opcode: Opcode,
     range_bits: usize,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CanonicalTopologyRowV3 {
+    opcode: Opcode,
+    range_bits: usize,
+    equality_alias_classes: [Option<usize>; ADVICE_COLUMNS],
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CanonicalTraceTopologyV3 {
+    rows: Vec<CanonicalTopologyRowV3>,
+    equality_classes: usize,
 }
 
 impl<F: BigPrimeField> AssignedRow<F> {
@@ -1617,7 +1652,7 @@ enum QuotientWitness<F> {
 
 const EXPECTED_CARRY_SIGNED_BITS: [[usize; 4]; ModularRelationKind::COUNT] = [
     [88, 89, 89, 87],
-    [87, 87, 87, 85],
+    [86, 87, 87, 85],
     [87, 88, 87, 86],
     [1, 1, 0, 0],
     [86, 87, 87, 85],
@@ -1873,6 +1908,43 @@ fn quotient_interval(kind: ModularRelationKind, modulus: &BigUint) -> IntegerInt
             lower: -&modulus + 2,
             upper: modulus,
         },
+    }
+}
+
+fn uint_is_zero<F: BigPrimeField>(
+    builder: &mut PackedBuilder<F>,
+    value: &UintVar<F>,
+) -> BoolVar<F> {
+    let mut result = builder.constant_bool(true);
+    for limb in &value.limbs {
+        let zero = builder.is_zero_cell(limb.cell, limb.integer == BigUint::from(0_u8));
+        result = builder.bool_and(&result, &zero);
+    }
+    result
+}
+
+fn uint_equal<F: BigPrimeField>(
+    builder: &mut PackedBuilder<F>,
+    left: &UintVar<F>,
+    right: &UintVar<F>,
+) -> BoolVar<F> {
+    let mut result = builder.constant_bool(true);
+    for (left, right) in left.limbs.iter().zip(&right.limbs) {
+        let difference = builder.subtract(left.cell, right.cell);
+        let equal = builder.is_zero_cell(difference, left.integer == right.integer);
+        result = builder.bool_and(&result, &equal);
+    }
+    result
+}
+
+fn gate_uint_zero<F: BigPrimeField>(
+    builder: &mut PackedBuilder<F>,
+    gate: &BoolVar<F>,
+    value: &UintVar<F>,
+) {
+    for limb in &value.limbs {
+        let product = builder.mul(gate.cell, limb.cell);
+        builder.assert_zero(product);
     }
 }
 
@@ -3589,6 +3661,57 @@ struct PackedTrace<F> {
 }
 
 impl<F: BigPrimeField> PackedTrace<F> {
+    #[cfg(test)]
+    fn canonical_topology_descriptor(
+        &self,
+    ) -> Result<CanonicalTraceTopologyV3, P256PackedAffineFailureV3> {
+        if self.rows_data.len() != self.rows.total_rows {
+            return Err(P256PackedAffineFailureV3::Source(
+                "canonical topology descriptor omitted padded trace rows",
+            ));
+        }
+
+        let mut canonical_by_variable = HashMap::<usize, usize>::new();
+        let mut equality_classes = 0_usize;
+        let mut rows = Vec::with_capacity(self.rows_data.len());
+        for row in &self.rows_data {
+            let mut variables_by_column = [None; ADVICE_COLUMNS];
+            for (variable, column) in &row.aliases {
+                let Some(slot) = variables_by_column.get_mut(*column) else {
+                    return Err(P256PackedAffineFailureV3::Source(
+                        "canonical topology descriptor saw an invalid advice column",
+                    ));
+                };
+                if slot.replace(*variable).is_some() {
+                    return Err(P256PackedAffineFailureV3::Source(
+                        "canonical topology descriptor saw two aliases for one advice cell",
+                    ));
+                }
+            }
+            let equality_alias_classes = variables_by_column.map(|variable| {
+                variable.map(|variable| {
+                    if let Some(class) = canonical_by_variable.get(&variable) {
+                        *class
+                    } else {
+                        let class = equality_classes;
+                        equality_classes += 1;
+                        canonical_by_variable.insert(variable, class);
+                        class
+                    }
+                })
+            });
+            rows.push(CanonicalTopologyRowV3 {
+                opcode: row.opcode,
+                range_bits: row.range_bits,
+                equality_alias_classes,
+            });
+        }
+        Ok(CanonicalTraceTopologyV3 {
+            rows,
+            equality_classes,
+        })
+    }
+
     fn assign(
         &self,
         config: &P256PackedAffineConfigV3,
@@ -3630,24 +3753,13 @@ impl<F: BigPrimeField> PackedTrace<F> {
                     }
                 }
 
-                raw_assign_fixed(&mut region, config.table_first, 0, F::ZERO);
-                raw_assign_fixed(&mut region, config.table_second, 0, F::ZERO);
-                let mut offset = 1_usize;
-                for bits in RANGE_CHUNK_BITS {
-                    let tag = F::from(u64::try_from(bits).expect("range width fits u64"));
-                    for value in 0..(1_usize << bits) {
-                        let value = F::from(u64::try_from(value).expect("range value fits u64"));
-                        raw_assign_fixed(&mut region, config.table_first, offset, tag * value);
-                        raw_assign_fixed(
-                            &mut region,
-                            config.table_second,
-                            offset,
-                            tag * tag * value,
-                        );
-                        offset += 1;
-                    }
+                let mut assigned_table_rows = 0_usize;
+                for (offset, (first, second)) in typed_range_table_rows_v3().enumerate() {
+                    raw_assign_fixed(&mut region, config.table_first, offset, F::from(first));
+                    raw_assign_fixed(&mut region, config.table_second, offset, F::from(second));
+                    assigned_table_rows = offset + 1;
                 }
-                debug_assert_eq!(offset, TABLE_ROWS);
+                debug_assert_eq!(assigned_table_rows, TABLE_ROWS);
                 Ok(())
             },
         )

@@ -1102,6 +1102,13 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self._binding_digest
     }
+
+    /// Consume statement-5 evidence and recover its exact statement-3 owner.
+    pub(super) fn into_previous_v1(
+        self,
+    ) -> RnsNativeComparatorProductPrerequisiteV1<'source, 'proof, S> {
+        self._previous
+    }
 }
 
 /// Consume statement 3 and verify every bounded statement-5 core

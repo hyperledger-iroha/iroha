@@ -57,6 +57,74 @@ const SIGNED_BLOCKS_PER_POLYNOMIAL_V1: usize =
 const MAIN_BLOCKS_PER_RECORD_V1: usize =
     CANONICAL_BLOCKS_PER_RECORD_V1 + 3 * SIGNED_BLOCKS_PER_POLYNOMIAL_V1;
 const PUBLIC_LIMB_DIGEST_COUNT_V1: usize = OPENING_COUNT_V1 * ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1;
+pub(super) const RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ARTIFACT_DIGESTS_V1: usize =
+    2 * ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 + 2 * PUBLIC_LIMB_DIGEST_COUNT_V1;
+pub(super) const RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ARTIFACT_DIGEST_BYTES_V1: usize =
+    RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ARTIFACT_DIGESTS_V1 * DIGEST_BYTES_V1;
+pub(super) const RNS_NATIVE_PRETRANSCRIPT_SOURCE_READS_V1: u64 =
+    ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_SLOTS_V1 + ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_SLOTS_V1;
+pub(super) const RNS_NATIVE_PRETRANSCRIPT_SOURCE_PLAINTEXT_BYTES_V1: u64 =
+    ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_SLOTS_V1
+        * ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_PLAINTEXT_BYTES_V1
+        + ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_SLOTS_V1
+            * ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_PLAINTEXT_BYTES_V1;
+pub(super) const RNS_NATIVE_PRETRANSCRIPT_CANONICAL_CHECKS_V1: u64 = OPENING_COUNT_V1 as u64
+    * CANONICAL_BLOCKS_PER_RECORD_V1 as u64
+    * CANONICAL_COEFFICIENTS_PER_BLOCK_V1 as u64;
+pub(super) const RNS_NATIVE_PRETRANSCRIPT_SIGNED_CHECKS_V1: u64 = OPENING_COUNT_V1 as u64
+    * 3
+    * SIGNED_BLOCKS_PER_POLYNOMIAL_V1 as u64
+    * SIGNED_COEFFICIENTS_PER_BLOCK_V1 as u64;
+pub(super) const RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ALIAS_DIGESTS_V1: usize =
+    3 + RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ARTIFACT_DIGESTS_V1 + 2 * OPENING_COUNT_V1;
+pub(super) const RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ALIAS_BYTES_V1: usize =
+    RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ALIAS_DIGESTS_V1 * DIGEST_BYTES_V1;
+pub(super) const RNS_NATIVE_PRETRANSCRIPT_GLOBAL_ALIAS_DIGESTS_V1: usize = 20
+    + 2 * OPENING_COUNT_V1
+    + EQUATION_COUNT_V1
+    + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1
+    + 2 * ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1
+    + 2 * PUBLIC_LIMB_DIGEST_COUNT_V1
+    + 2 * OPENING_COUNT_V1;
+pub(super) const RNS_NATIVE_PRETRANSCRIPT_GLOBAL_ALIAS_BYTES_V1: usize =
+    RNS_NATIVE_PRETRANSCRIPT_GLOBAL_ALIAS_DIGESTS_V1 * DIGEST_BYTES_V1;
+const RNS_NATIVE_PRETRANSCRIPT_PUBLIC_KEY_HASH_BYTES_V1: u64 = PUBLIC_KEY_DOMAIN_V1.len() as u64
+    + 1
+    + 6 * DIGEST_BYTES_V1 as u64
+    + 8
+    + DIGEST_BYTES_V1 as u64
+    + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 as u64 * (1 + 8 + 2 * DIGEST_BYTES_V1 as u64);
+const RNS_NATIVE_PRETRANSCRIPT_NONCE_HASH_BYTES_V1: u64 = NONCE_BINDING_DOMAIN_V1.len() as u64
+    + 1
+    + 6 * DIGEST_BYTES_V1 as u64
+    + 8
+    + 2 * DIGEST_BYTES_V1 as u64
+    + 4
+    + 4
+    + 8
+    + ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_PLAINTEXT_BYTES_V1;
+const RNS_NATIVE_PRETRANSCRIPT_RECORD_HASH_BYTES_V1: u64 = PUBLIC_RECORD_DOMAIN_V1.len() as u64
+    + 1
+    + DIGEST_BYTES_V1 as u64
+    + 4
+    + 4
+    + 8
+    + DIGEST_BYTES_V1 as u64
+    + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 as u64 * (1 + 8 + 2 * DIGEST_BYTES_V1 as u64);
+const RNS_NATIVE_PRETRANSCRIPT_BUNDLE_HASH_BYTES_V1: u64 = PUBLIC_BUNDLE_DOMAIN_V1.len() as u64
+    + 1
+    + 6 * DIGEST_BYTES_V1 as u64
+    + 8
+    + 2 * DIGEST_BYTES_V1 as u64
+    + OPENING_COUNT_V1 as u64 * (3 + 8 + 2 * DIGEST_BYTES_V1 as u64);
+/// Exact bytes absorbed by the existing public-key, 43 nonce-binding, 43
+/// record, and public-bundle digest languages during the pre-transcript pass.
+pub(super) const RNS_NATIVE_PRETRANSCRIPT_PUBLIC_DIGEST_HASH_BYTES_V1: u64 =
+    RNS_NATIVE_PRETRANSCRIPT_PUBLIC_KEY_HASH_BYTES_V1
+        + OPENING_COUNT_V1 as u64
+            * (RNS_NATIVE_PRETRANSCRIPT_NONCE_HASH_BYTES_V1
+                + RNS_NATIVE_PRETRANSCRIPT_RECORD_HASH_BYTES_V1)
+        + RNS_NATIVE_PRETRANSCRIPT_BUNDLE_HASH_BYTES_V1;
 const QPCS_EVALUATION_BYTES_V1: usize =
     ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * REPETITION_COUNT_V1 * ROWS_PER_REPETITION_V1 * 8;
 const MAX_CHALLENGE_ATTEMPTS_V1: u16 = 256;
@@ -173,6 +241,21 @@ const _: () = {
     assert!(QPCS_EVALUATION_BYTES_V1 == 3_200);
     assert!(ROWS_PER_LIMB_V1 == 10);
     assert!(PUBLIC_LIMB_DIGEST_COUNT_V1 == 1_720);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ARTIFACT_DIGESTS_V1 == 3_520);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ARTIFACT_DIGEST_BYTES_V1 == 112_640);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_SOURCE_READS_V1 == 38_571);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_SOURCE_PLAINTEXT_BYTES_V1 == 315_622_752);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_CANONICAL_CHECKS_V1 == 5_636_096);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_SIGNED_CHECKS_V1 == 16_908_288);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ALIAS_DIGESTS_V1 == 3_609);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ALIAS_BYTES_V1 == 115_488);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_GLOBAL_ALIAS_DIGESTS_V1 == 3_754);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_GLOBAL_ALIAS_BYTES_V1 == 120_128);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_PUBLIC_KEY_HASH_BYTES_V1 == 3_207);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_NONCE_HASH_BYTES_V1 == 370);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_RECORD_HASH_BYTES_V1 == 3_058);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_BUNDLE_HASH_BYTES_V1 == 3_547);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_PUBLIC_DIGEST_HASH_BYTES_V1 == 154_158);
     assert!(ANCHOR_HEADER_BYTES_V1 == 34);
     assert!(ANCHOR_FIXED_BYTES_V1 == 770);
     assert!(RNS_NATIVE_RLWE_SOURCE_DOWNSTREAM_MAX_BYTES_V1 == 3_783);
@@ -1147,9 +1230,21 @@ fn validate_public_artifact_v1(
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
     public: RnsNativePublicArtifactViewV1<'_>,
 ) -> Result<ValidatedPublicArtifactV1, RnsNativeRlweSourceStatementErrorV1> {
-    if public.epoch == 0
-        || public.governed_roster_digest != transcript.governed_roster_digest()
+    if public.governed_roster_digest != transcript.governed_roster_digest()
         || public.public_bundle_digest != transcript.public_ciphertext_digest()
+    {
+        return Err(RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact);
+    }
+    validate_public_artifact_without_transcript_v1(layout, public)
+}
+
+fn validate_public_artifact_without_transcript_v1(
+    layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+    public: RnsNativePublicArtifactViewV1<'_>,
+) -> Result<ValidatedPublicArtifactV1, RnsNativeRlweSourceStatementErrorV1> {
+    if public.epoch == 0
+        || public.governed_roster_digest == [0; DIGEST_BYTES_V1]
+        || public.public_bundle_digest == [0; DIGEST_BYTES_V1]
         || public.public_a_limb_digests.len() != ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1
         || public.public_b_limb_digests.len() != ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1
         || public.ciphertext_c0_limb_digests.len() != PUBLIC_LIMB_DIGEST_COUNT_V1
@@ -1232,6 +1327,211 @@ fn validate_public_artifact_v1(
         public_key_digest,
         public_bundle_digest: expected_bundle,
     })
+}
+
+/// Revalidate public facts without constructing a transcript or returning a
+/// reusable borrowed view.  This is a pure hash/facts check; it grants no
+/// source, preflight, verification, readiness, or release authority.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn validate_rns_native_pre_transcript_public_facts_v1(
+    layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+    epoch: u64,
+    governed_roster_digest: [u8; DIGEST_BYTES_V1],
+    public_a_limb_digests: &[[u8; DIGEST_BYTES_V1]],
+    public_b_limb_digests: &[[u8; DIGEST_BYTES_V1]],
+    ciphertext_c0_limb_digests: &[[u8; DIGEST_BYTES_V1]],
+    ciphertext_c1_limb_digests: &[[u8; DIGEST_BYTES_V1]],
+    records: &[RnsNativePublicRecordMetadataV1],
+    public_key_digest: [u8; DIGEST_BYTES_V1],
+    public_bundle_digest: [u8; DIGEST_BYTES_V1],
+) -> Result<(), RnsNativeRlweSourceStatementErrorV1> {
+    layout
+        .validate()
+        .map_err(|_| RnsNativeRlweSourceStatementErrorV1::InvalidContext)?;
+    let public = RnsNativePublicArtifactViewV1::new(
+        epoch,
+        governed_roster_digest,
+        public_a_limb_digests,
+        public_b_limb_digests,
+        ciphertext_c0_limb_digests,
+        ciphertext_c1_limb_digests,
+        records,
+        public_bundle_digest,
+    );
+    let validated = validate_public_artifact_without_transcript_v1(layout, public)?;
+    if validated.public_key_digest != public_key_digest
+        || validated.public_bundle_digest != public_bundle_digest
+    {
+        return Err(RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact);
+    }
+    Ok(())
+}
+
+/// Perform the one bounded source/hash pass that derives the exact 43 record
+/// facts and two aggregate digests.  The caller must keep the same snapshot
+/// and the complete artifact inventory by value; this narrow helper returns no
+/// transcript constructor, public-context authority, or retained borrow.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn derive_rns_native_pre_transcript_record_facts_v1<S>(
+    snapshot: &mut S,
+    layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+    epoch: u64,
+    governed_roster_digest: [u8; DIGEST_BYTES_V1],
+    public_a_limb_digests: &[[u8; DIGEST_BYTES_V1]],
+    public_b_limb_digests: &[[u8; DIGEST_BYTES_V1]],
+    ciphertext_c0_limb_digests: &[[u8; DIGEST_BYTES_V1]],
+    ciphertext_c1_limb_digests: &[[u8; DIGEST_BYTES_V1]],
+) -> Result<
+    (
+        [RnsNativePublicRecordMetadataV1; 43],
+        [u8; DIGEST_BYTES_V1],
+        [u8; DIGEST_BYTES_V1],
+    ),
+    RnsNativeRlweSourceStatementErrorV1,
+>
+where
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+{
+    layout
+        .validate()
+        .map_err(|_| RnsNativeRlweSourceStatementErrorV1::InvalidContext)?;
+    if snapshot.layout() != layout
+        || epoch == 0
+        || governed_roster_digest == [0; DIGEST_BYTES_V1]
+        || public_a_limb_digests.len() != ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1
+        || public_b_limb_digests.len() != ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1
+        || ciphertext_c0_limb_digests.len() != PUBLIC_LIMB_DIGEST_COUNT_V1
+        || ciphertext_c1_limb_digests.len() != PUBLIC_LIMB_DIGEST_COUNT_V1
+    {
+        return Err(RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact);
+    }
+
+    let public_key_digest = public_key_digest_v1(
+        layout,
+        epoch,
+        governed_roster_digest,
+        public_a_limb_digests,
+        public_b_limb_digests,
+    )?;
+    // Reject every caller-independent public alias before the 315,622,752-byte
+    // source pass. Nonce/record/bundle identities join this same exact
+    // 3,609-entry registry as they are derived.
+    let mut registry =
+        DigestRegistryV1::with_capacity_v1(RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ALIAS_DIGESTS_V1)?;
+    registry.insert_v1(governed_roster_digest)?;
+    registry.insert_v1(public_key_digest)?;
+    for digest in public_a_limb_digests
+        .iter()
+        .chain(public_b_limb_digests.iter())
+        .chain(ciphertext_c0_limb_digests.iter())
+        .chain(ciphertext_c1_limb_digests.iter())
+    {
+        registry.insert_v1(*digest)?;
+    }
+
+    let empty_record = RnsNativePublicRecordMetadataV1::new(
+        0,
+        ZkAmsMkheRnsNativeFamilyV1::X,
+        0,
+        0,
+        [0; DIGEST_BYTES_V1],
+        [0; DIGEST_BYTES_V1],
+    );
+    let mut records = [empty_record; OPENING_COUNT_V1];
+    for ordinal in 0..OPENING_COUNT_V1 {
+        let position = record_position_v1(ordinal)
+            .ok_or(RnsNativeRlweSourceStatementErrorV1::InvalidSourceOrder)?;
+        let mut ephemeral_nonzero = false;
+        for component in SOURCE_COMPONENT_ORDER_V1 {
+            for block in 0..component.block_count() {
+                let slot = absolute_main_slot_v1(ordinal, component, block)?;
+                let chunk = snapshot
+                    .read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Main, slot)
+                    .map_err(|_| RnsNativeRlweSourceStatementErrorV1::SourceUnavailable)?;
+                if chunk.arena() != ZkAmsMkheRnsNativeSourceArenaV1::Main {
+                    return Err(RnsNativeRlweSourceStatementErrorV1::InvalidSourceOrder);
+                }
+                match component {
+                    SourceComponentV1::CanonicalPlaintext => {
+                        validate_canonical_plaintext_chunk_v1(chunk.as_slice())?;
+                    }
+                    SourceComponentV1::Ephemeral
+                    | SourceComponentV1::ErrorZero
+                    | SourceComponentV1::ErrorOne => {
+                        validate_signed_chunk_v1(
+                            chunk.as_slice(),
+                            component,
+                            &mut ephemeral_nonzero,
+                        )?;
+                    }
+                }
+            }
+        }
+        if !ephemeral_nonzero {
+            return Err(RnsNativeRlweSourceStatementErrorV1::InvalidEphemeral);
+        }
+        let nonce_chunk = snapshot
+            .read_slot(
+                ZkAmsMkheRnsNativeSourceArenaV1::Nonce,
+                u64::try_from(ordinal)
+                    .map_err(|_| RnsNativeRlweSourceStatementErrorV1::ArithmeticOverflow)?,
+            )
+            .map_err(|_| RnsNativeRlweSourceStatementErrorV1::SourceUnavailable)?;
+        if nonce_chunk.arena() != ZkAmsMkheRnsNativeSourceArenaV1::Nonce
+            || nonce_chunk.as_slice().len()
+                != ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_PLAINTEXT_BYTES_V1 as usize
+        {
+            return Err(RnsNativeRlweSourceStatementErrorV1::InvalidSourceEncoding);
+        }
+        let sample_index = u64::from(position.ordinal);
+        let nonce_binding_digest = nonce_binding_digest_v1(
+            layout,
+            epoch,
+            governed_roster_digest,
+            public_key_digest,
+            position,
+            sample_index,
+            nonce_chunk.as_slice(),
+        )?;
+        let start = ordinal
+            .checked_mul(ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1)
+            .ok_or(RnsNativeRlweSourceStatementErrorV1::ArithmeticOverflow)?;
+        let end = start
+            .checked_add(ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1)
+            .ok_or(RnsNativeRlweSourceStatementErrorV1::ArithmeticOverflow)?;
+        let record_digest = public_record_digest_v1(
+            public_key_digest,
+            position,
+            sample_index,
+            nonce_binding_digest,
+            ciphertext_c0_limb_digests
+                .get(start..end)
+                .ok_or(RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact)?,
+            ciphertext_c1_limb_digests
+                .get(start..end)
+                .ok_or(RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact)?,
+        )?;
+        registry.insert_v1(nonce_binding_digest)?;
+        registry.insert_v1(record_digest)?;
+        records[ordinal] = RnsNativePublicRecordMetadataV1::new(
+            position.ordinal,
+            position.family,
+            position.family_index,
+            sample_index,
+            nonce_binding_digest,
+            record_digest,
+        );
+    }
+    let public_bundle_digest = public_bundle_digest_v1(
+        layout,
+        epoch,
+        governed_roster_digest,
+        public_key_digest,
+        &records,
+    )?;
+    registry.insert_v1(public_bundle_digest)?;
+    drop(registry);
+    Ok((records, public_key_digest, public_bundle_digest))
 }
 
 fn map_challenge_candidate_v1(raw: u64, modulus: u64, used: &[u64]) -> Option<u64> {

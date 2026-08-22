@@ -3607,6 +3607,22 @@ where
         || Ok(|_: &[[u8; 32]], _: &[i64], _: &[i64], _: &[i64], _: &[u8; 32]| Ok(())),
     )
 }
+// This additive 38-to-40-limb arithmetic child is private and non-authorizing.
+// Its pre-entropy caller, production owner, source adapter, integration, and
+// release gates remain false.
+#[path = "incremental_source_rns_native_basis_extension_v2.rs"]
+mod incremental_source_rns_native_basis_extension_v2;
+// This private child consumes the genuine basis-extension tails into exact
+// CAS publication receipts and a typed existing-reader contract. The live V1
+// callback/Phase-23 owner, provider integration, resource evidence, readiness,
+// and release gates all remain unavailable.
+#[path = "incremental_source_rns_native_tail_publication_v2.rs"]
+mod incremental_source_rns_native_tail_publication_v2;
+// This V2 assembler is deliberately private and non-authorizing. Its live
+// owner/provider/reader adapters remain uninhabited and every integration,
+// readiness, and release flag stays false.
+#[path = "incremental_source_rns_native_publication_assembler_v2.rs"]
+mod incremental_source_rns_native_publication_assembler_v2;
 // TODO: Reconnect the private Phase-23 source prototype after its confidential
 // spool dependency can enter the authorized workspace lock graph.
 #[cfg(any())]

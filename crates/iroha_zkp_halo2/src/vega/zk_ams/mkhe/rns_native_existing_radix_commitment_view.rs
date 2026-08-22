@@ -46,6 +46,7 @@ const LOW_DIGITS_V1: usize = 17;
 const POINTS_PER_GROUP_V1: usize = ROLES_V1 * LOW_DIGITS_V1;
 const INVENTORY_POINTS_V1: usize = GROUPS_V1 * POINTS_PER_GROUP_V1;
 const INVENTORY_BYTES_V1: usize = INVENTORY_POINTS_V1 * POINT_BYTES_V1;
+const DIRECT_ALIAS_COPIED_DIGEST_BYTES_V1: usize = 2 * DIGEST_BYTES_V1;
 const UPSTREAM_DIGESTS_V1: usize = 10;
 
 // Fixed geometry prefix (26 bytes), ten transport-only predecessor axes, the
@@ -90,6 +91,7 @@ const _: () = {
     assert!(POINTS_PER_GROUP_V1 == 34);
     assert!(INVENTORY_POINTS_V1 == 11_696);
     assert!(INVENTORY_BYTES_V1 == 385_968);
+    assert!(DIRECT_ALIAS_COPIED_DIGEST_BYTES_V1 == 64);
     assert!(UPSTREAM_DIGESTS_V1 == 10);
     assert!(HEADER_BYTES_V1 == 414);
     assert!(MIN_WIRE_BYTES_V1 == 386_415);
@@ -530,6 +532,56 @@ pub(super) struct ExistingRadixCommitmentsV1 {
     pub(super) slack_top: Point,
 }
 
+/// Move-only verifier alias to the exact authenticated `D`-low point bytes.
+///
+/// Construction is available only by consuming the authenticated
+/// existing-radix prerequisite below. The alias borrows the already-owned
+/// 385,968-byte point inventory, copies only its candidate root and binding
+/// digest, exposes no raw byte slice, and cannot be built from detached
+/// points. `D`-top remains under the original cross-field inventory owner.
+#[allow(
+    missing_copy_implementations,
+    dead_code,
+    reason = "the verifier-only direct handoff consumes this exact alias once"
+)]
+pub(super) struct RnsNativeExistingRadixDirectAliasV1<'proof> {
+    inventory: &'proof [u8],
+    pre_z_candidate_root: [u8; DIGEST_BYTES_V1],
+    binding_digest: [u8; DIGEST_BYTES_V1],
+}
+
+#[allow(
+    dead_code,
+    reason = "the constructor-less verifier point adapter is preparatory and non-authorizing"
+)]
+impl RnsNativeExistingRadixDirectAliasV1<'_> {
+    pub(super) const fn pre_z_candidate_root_v1(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.pre_z_candidate_root
+    }
+
+    pub(super) const fn binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.binding_digest
+    }
+
+    pub(super) const fn borrowed_point_bytes_v1(&self) -> usize {
+        self.inventory.len()
+    }
+
+    /// Decode only the authenticated `D`-low role. Slack points and raw bytes
+    /// are intentionally unavailable through this direct-verifier alias.
+    pub(super) fn difference_low_commitment_v1(&self, group: usize, digit: usize) -> Option<Point> {
+        ExistingRadixProofViewV1 {
+            inventory: self.inventory,
+            residual: &[],
+            pre_z_candidate_root: self.pre_z_candidate_root,
+            residual_digest: [0; DIGEST_BYTES_V1],
+            codec_digest: [0; DIGEST_BYTES_V1],
+        }
+        .point_v1(group, ROLE_DIFFERENCE_LOW_V1, digit)
+        .ok()
+    }
+}
+
 fn existing_radix_commitments_v1<F>(
     view: ExistingRadixProofViewV1<'_>,
     group: usize,
@@ -639,6 +691,34 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 
     pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self.binding_digest
+    }
+
+    /// Consume the authenticated existing-radix view and recover its exact
+    /// q-mask predecessor.
+    pub(super) fn into_previous_v1(
+        self,
+    ) -> RnsNativeQMaskLinearRelationsPrerequisiteV1<'source, 'proof, S> {
+        self.previous
+    }
+
+    /// Consume the authenticated stage while retaining one purpose-bound,
+    /// no-copy alias for the direct verifier's `D`-low commitments.
+    #[allow(
+        dead_code,
+        reason = "the single-owner numeric/membership chronology remains deliberately unavailable"
+    )]
+    pub(super) fn into_previous_with_direct_alias_v1(
+        self,
+    ) -> (
+        RnsNativeQMaskLinearRelationsPrerequisiteV1<'source, 'proof, S>,
+        RnsNativeExistingRadixDirectAliasV1<'proof>,
+    ) {
+        let alias = RnsNativeExistingRadixDirectAliasV1 {
+            inventory: self.inventory,
+            pre_z_candidate_root: self.pre_z_candidate_root,
+            binding_digest: self.binding_digest,
+        };
+        (self.previous, alias)
     }
 
     pub(super) fn existing_radix_commitments(

@@ -856,3 +856,32 @@ fn source_inventory_keeps_the_tranche_private_move_only_and_fail_closed() {
     assert!(source.contains("CAS publication remain"));
     assert!(source.contains("cannot prove that a future parent call site"));
 }
+
+#[test]
+fn parent_declares_exactly_one_private_basis_extension_child_v2() {
+    let parent_source = include_str!("incremental_source.rs");
+    let path_attribute = "#[path = \"incremental_source_rns_native_basis_extension_v2.rs\"]";
+    let private_declaration = "mod incremental_source_rns_native_basis_extension_v2;";
+
+    assert_eq!(
+        parent_source
+            .lines()
+            .filter(|line| line.trim() == path_attribute)
+            .count(),
+        1
+    );
+    assert_eq!(
+        parent_source
+            .lines()
+            .filter(|line| line.trim() == private_declaration)
+            .count(),
+        1
+    );
+    assert!(!parent_source.lines().any(|line| {
+        let line = line.trim();
+        line.contains("incremental_source_rns_native_basis_extension_v2")
+            && (line.starts_with("pub mod ")
+                || line.starts_with("pub(")
+                || line.starts_with("pub "))
+    }));
+}

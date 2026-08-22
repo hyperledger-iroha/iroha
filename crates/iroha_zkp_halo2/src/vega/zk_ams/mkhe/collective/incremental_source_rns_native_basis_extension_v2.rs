@@ -1,7 +1,7 @@
 //! Private, non-authorizing 38-to-40-limb basis-extension arithmetic.
 //!
-//! This file is intentionally undeclared. It specifies only the additive V2
-//! arithmetic boundary needed to preserve every frozen release-38 object while
+//! This privately declared, non-authorizing child specifies only the additive
+//! V2 arithmetic boundary needed to preserve every frozen release-38 object while
 //! computing the two genuine replacement-profile tail residues. It does not
 //! publish an object, construct a source adapter, mint a receipt/capability, or
 //! authorize the 40-limb profile. In particular, it never reconstructs a tail
@@ -10,20 +10,21 @@
 //! `C[38..40]` is computed only while the V1 encryption callback still borrows
 //! the exact `m,r,e0,e1` opening.
 //!
-//! If this module is declared in a later tranche, it must be a child of
-//! `collective::incremental_source`. That placement is part of the contract:
+//! This module is declared as a child of `collective::incremental_source`.
+//! That placement is part of the contract:
 //! it grants access to the existing two-limb negacyclic kernel and lets only
 //! the parent encryption implementation construct the synchronous opening.
 //! The 43-record lifecycle added here returns only a non-authorizing checksum.
-//! Binding it to V1 authority/receipts and implementing CAS publication remain
-//! explicit blockers outside this source-only tranche. This API makes an
-//! allocation-free live kernel constructor possible, but the undeclared module
-//! cannot prove that a future parent call site allocates the workspace before
-//! entropy; that chronology gate remains explicitly false.
+//! Its private tail-publication sibling consumes the arithmetic owner into
+//! actual CAS receipts and an opaque whole-V1 owner contract. The live
+//! Phase-23 owner and callback remain absent. This API makes an allocation-free
+//! live kernel constructor possible, but this private module cannot prove that
+//! a future parent call site allocates the workspace before entropy; that
+//! chronology gate remains explicitly false.
 
 #![allow(
     dead_code,
-    reason = "the undeclared non-authorizing V2 arithmetic contract has no production caller"
+    reason = "the private non-authorizing V2 arithmetic contract has no production caller"
 )]
 
 use super::super::super::{
@@ -31,6 +32,7 @@ use super::super::super::{
     active::ZkAmsMkheGovernedActiveRosterV1,
     bytes_mod_u64,
     cpk_ceremony::ZkAmsMkheAdmittedCpkPartyV1,
+    direct_object_transport::ZkAmsMkheDirectObjectKindV1,
     manifest::{
         RELEASE_MODULI_V1, RELEASE_NEGACYCLIC_ROOTS_V1, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
         ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1,
@@ -44,7 +46,10 @@ use super::super::super::{
     signed_mod, t256_centered_residue_with_modulus_residue,
 };
 use super::super::release_security_certificate_digest;
-use super::negacyclic_multiply_signed_rhs_two_limb_v1;
+use super::{
+    ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
+    negacyclic_multiply_signed_rhs_two_limb_v1,
+};
 use crate::vega::{
     VEGA_T256_SCALAR_MODULUS_BE_V1,
     sponge::{Keccak256, Shake256Reader},
@@ -128,7 +133,7 @@ pub(super) const RNS_NATIVE_BASIS_EXTENSION_FAKE_TAIL_LIFT_ALLOWED_V2: bool = fa
 pub(super) const RNS_NATIVE_BASIS_EXTENSION_PRODUCTION_OWNER_AVAILABLE_V2: bool = false;
 /// There is deliberately no public-polynomial source adapter in this tranche.
 pub(super) const RNS_NATIVE_BASIS_EXTENSION_SOURCE_ADAPTER_AVAILABLE_V2: bool = false;
-/// No V1 encryption or Phase-23 bridge invokes this undeclared module.
+/// No V1 encryption or Phase-23 bridge invokes this private module.
 pub(super) const RNS_NATIVE_BASIS_EXTENSION_INTEGRATED_V2: bool = false;
 /// The open 40-limb evidence pins remain non-authorizing.
 pub(super) const RNS_NATIVE_BASIS_EXTENSION_RELEASE_AUTHORIZED_V2: bool = false;
@@ -175,7 +180,7 @@ const _: () = {
     assert!(!RNS_NATIVE_BASIS_EXTENSION_RELEASE_AUTHORIZED_V2);
 };
 
-/// Closed error vocabulary for the undeclared arithmetic contract.
+/// Closed error vocabulary for the private arithmetic contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeBasisExtensionErrorV2 {
     Dependency,
@@ -634,7 +639,7 @@ impl Drop for ZeroizingWorkspaceLeaseV2<'_> {
 /// unwinding kernel clears both release-degree limbs through their zeroizing
 /// owners. The neutral allocator below does not attest chronology: actual
 /// before-entropy ordering remains a false V1 integration gate because this
-/// undeclared source-only tranche does not edit the parent entropy path.
+/// private source-only tranche does not edit the parent entropy path.
 pub(super) struct RnsNativeCiphertextTailWorkspaceOwnerV2 {
     workspace: ZeroizingTwoLimbWorkspaceV2,
 }
@@ -907,7 +912,7 @@ impl RnsNativeCollectiveKeyTailOwnerV2 {
         }
     }
 
-    pub(super) fn visit_key_tail_coefficients_v2<V: RnsNativeTailCoefficientVisitorV2 + ?Sized>(
+    fn visit_key_tail_coefficients_v2<V: RnsNativeTailCoefficientVisitorV2 + ?Sized>(
         &self,
         visitor: &mut V,
     ) -> Result<(), RnsNativeBasisExtensionErrorV2> {
@@ -925,6 +930,99 @@ impl RnsNativeCollectiveKeyTailOwnerV2 {
             }
         }
         Ok(())
+    }
+
+    /// Consume the sole arithmetic owner into the publication boundary.
+    ///
+    /// The returned wrapper exposes no coefficient visitor, so neither a
+    /// successful publication nor a consuming failure can replay the four key
+    /// tail objects from the same owner. The wrapper retains the arithmetic
+    /// owner only because the 43 same-opening ciphertext tails still need to
+    /// borrow it.
+    pub(super) fn publish_key_tail_once_v2<V: RnsNativeTailCoefficientVisitorV2 + ?Sized>(
+        self,
+        visitor: &mut V,
+    ) -> Result<RnsNativePublishedCollectiveKeyTailOwnerV2, RnsNativeBasisExtensionErrorV2> {
+        self.visit_key_tail_coefficients_v2(visitor)?;
+        Ok(RnsNativePublishedCollectiveKeyTailOwnerV2 { key_tail: self })
+    }
+}
+
+/// Move-only key-tail arithmetic owner after its sole publication visit.
+///
+/// No method exposes the retained coefficient vectors or permits a second key
+/// publication pass. All remaining operations are exact forward transitions
+/// needed by the record-local same-opening lifecycle.
+pub(super) struct RnsNativePublishedCollectiveKeyTailOwnerV2 {
+    key_tail: RnsNativeCollectiveKeyTailOwnerV2,
+}
+
+impl RnsNativePublishedCollectiveKeyTailOwnerV2 {
+    pub(super) const fn integrity_digest_v2(&self) -> [u8; 32] {
+        self.key_tail.integrity_digest
+    }
+
+    /// Bind the retained arithmetic owner to the exact finalized V1 key
+    /// authority before any prefix or tail descriptor may enter a manifest.
+    /// This compares the governed axes rather than accepting copied digests
+    /// from a caller.
+    pub(super) fn validate_v1_authority_binding_v2(
+        &self,
+        authority: &ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
+    ) -> Result<(), RnsNativeBasisExtensionErrorV2> {
+        self.key_tail.axes.validate_v2()?;
+        if authority.profile_digest() != self.key_tail.axes.release_profile_digest
+            || authority.security_certificate_digest()
+                != self.key_tail.axes.security_certificate_digest
+            || authority.roster_digest() != self.key_tail.axes.roster_digest
+            || authority.key_material_digest() != self.key_tail.axes.key_material_digest
+            || authority.epoch() != self.key_tail.axes.epoch
+            || authority.transcript_digest() != self.key_tail.axes.cpk_transcript_digest
+            || authority.authority_digest() == [0; 32]
+        {
+            return Err(RnsNativeBasisExtensionErrorV2::InvalidAxes);
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn bind_v1_synchronous_callback_v2<'opening>(
+        &self,
+        workspace: RnsNativeCiphertextTailWorkspaceOwnerV2,
+        record_ordinal: u8,
+        sample_index: u64,
+        canonical_plaintext: &'opening [[u8; 32]],
+        ephemeral: &'opening [i64],
+        error_zero: &'opening [i64],
+        error_one: &'opening [i64],
+        encryption_nonce: &'opening [u8; 32],
+    ) -> Result<RnsNativeSynchronousSameOpeningBorrowV2<'opening>, RnsNativeBasisExtensionErrorV2>
+    {
+        RnsNativeSynchronousSameOpeningBorrowV2::from_v1_synchronous_callback_v2(
+            &self.key_tail,
+            workspace,
+            record_ordinal,
+            sample_index,
+            canonical_plaintext,
+            ephemeral,
+            error_zero,
+            error_one,
+            encryption_nonce,
+        )
+    }
+
+    pub(super) fn emit_ciphertext_tail_once_v2<V: RnsNativeTailCoefficientVisitorV2 + ?Sized>(
+        &self,
+        opening: RnsNativeSynchronousSameOpeningBorrowV2<'_>,
+        visitor: &mut V,
+    ) -> Result<RnsNativeCiphertextTailCompletionV2, RnsNativeBasisExtensionErrorV2> {
+        RnsNativeCiphertextTailKernelV2::new_v2(&self.key_tail, opening)?.emit_v2(visitor)
+    }
+
+    pub(super) fn begin_ciphertext_tail_lifecycle_v2(
+        &self,
+    ) -> Result<RnsNativeCiphertextTailLifecycleV2, RnsNativeBasisExtensionErrorV2> {
+        RnsNativeCiphertextTailLifecycleV2::new_v2(&self.key_tail)
     }
 }
 
@@ -1032,6 +1130,21 @@ impl RnsNativeTailSourcePositionV2 {
 
     pub(super) const fn limb_v2(self) -> u8 {
         self.limb
+    }
+
+    pub(super) const fn object_kind_v2(self) -> ZkAmsMkheDirectObjectKindV1 {
+        match self.role {
+            RnsNativeTailObjectRoleV2::PublicA => ZkAmsMkheDirectObjectKindV1::CollectivePublicA,
+            RnsNativeTailObjectRoleV2::CollectivePublicB => {
+                ZkAmsMkheDirectObjectKindV1::CollectivePublicB
+            }
+            RnsNativeTailObjectRoleV2::CiphertextC0 => {
+                ZkAmsMkheDirectObjectKindV1::CollectiveCiphertextC0
+            }
+            RnsNativeTailObjectRoleV2::CiphertextC1 => {
+                ZkAmsMkheDirectObjectKindV1::CollectiveCiphertextC1
+            }
+        }
     }
 
     pub(super) fn tail_ordinal_v2(self) -> Result<usize, RnsNativeBasisExtensionErrorV2> {
@@ -1302,6 +1415,24 @@ pub(super) struct RnsNativeCiphertextTailCompletionV2 {
     coefficient_digest: [u8; 32],
 }
 
+impl RnsNativeCiphertextTailCompletionV2 {
+    pub(super) const fn record_ordinal_v2(&self) -> u8 {
+        self.record_ordinal
+    }
+
+    pub(super) const fn sample_index_v2(&self) -> u64 {
+        self.sample_index
+    }
+
+    pub(super) const fn emitted_limb_count_v2(&self) -> u8 {
+        self.emitted_limb_count
+    }
+
+    pub(super) const fn coefficient_digest_v2(&self) -> [u8; 32] {
+        self.coefficient_digest
+    }
+}
+
 impl<'key, 'opening> RnsNativeCiphertextTailKernelV2<'key, 'opening> {
     pub(super) fn new_v2(
         key_tail: &'key RnsNativeCollectiveKeyTailOwnerV2,
@@ -1438,6 +1569,12 @@ pub(super) struct RnsNativeCiphertextTailAggregateChecksumV2 {
     pub(super) record_count: u8,
     pub(super) emitted_limb_count: u16,
     pub(super) completion_digest: [u8; 32],
+}
+
+impl RnsNativeCiphertextTailAggregateChecksumV2 {
+    pub(super) const fn completion_digest_v2(&self) -> [u8; 32] {
+        self.completion_digest
+    }
 }
 
 impl RnsNativeCiphertextTailLifecycleV2 {

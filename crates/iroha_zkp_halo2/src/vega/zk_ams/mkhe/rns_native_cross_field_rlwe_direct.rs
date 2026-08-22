@@ -58,17 +58,29 @@
 //! terminal-bound owner only on equality. The core transcript-set digest
 //! remains private.
 //!
-//! Production remains unavailable.  The transcript/qPCS schedule is now
-//! source-settled, but integration must (1) implement the source from the
-//! authenticated source/packing and inventory owners, (2) move the retained
-//! qPCS schedule through that adapter into this kernel, (3) compare each
-//! supplied qPCS pair with the inventory prerequisite, (4) connect the pending
-//! core owner to the now-available staged terminal transcript, and (5) admit
-//! cross-link, inventory-binding, and successor-membership identities only
-//! after all direct cores verify. It must also introduce a dedicated pre-direct
-//! inventory candidate context/root; no current inventory accessor satisfies
-//! that contract. Structural wire/successor preflight always precedes traversal
-//! of an authoritative source.
+//! A move-only provisional inventory preflight can now lend exactly the 6,400
+//! proof-carried q-mask digits to the early root. It is self-consistent but
+//! explicitly non-authorizing, exposes no raw proof or aggregate point owner,
+//! and must later be consumed against the identical typed proof allocation and
+//! linked final context. Its production proof-slice lease issuer is
+//! uninhabited, so this does not make the chronology live.
+//!
+//! Production remains unavailable. The live numeric handoff and claimed
+//! relation currently retain separate move-only qPCS schedules and final
+//! transcript owners; public digest equality cannot prove sole lineage. The
+//! declarations below therefore provide only a non-authorizing numeric cursor
+//! split and a constructor-less membership-backed point projection. They do
+//! not expose a schedule from numeric state or create a callable join.
+//! Integration requires a top-level carrier established before the qPCS/direct
+//! cycle: it must retain source-preflight and numeric/public owners, move the
+//! sole lineaged schedule exactly once through a pre-auth claimed-qPCS state,
+//! provisionally bind the claimed roots to obtain final challenge seeds,
+//! authenticate qPCS while retaining that same ownership chain, discharge the
+//! direct root obligations, and only then reach membership. It must also
+//! introduce a dedicated pre-direct inventory candidate context/root; no
+//! current inventory accessor satisfies that contract. Structural
+//! wire/successor preflight always precedes traversal of an authoritative
+//! source.
 //! This kernel mints no composite, readiness, receipt, or release authority.
 
 use core::{fmt, marker::PhantomData};
@@ -80,8 +92,9 @@ use super::{
     rns_native_claimed_successor::RnsNativeClaimedSuccessorV1,
     rns_native_cross_field_inventory::{
         RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1,
-        RnsNativeCrossFieldInventoryPrerequisiteV1,
+        RnsNativeCrossFieldInventoryPrerequisiteV1, RnsNativePreQpcsQMaskInventoryPreflightV1,
     },
+    rns_native_existing_radix_commitment_view::RnsNativeExistingRadixDirectAliasV1,
     rns_native_profile::ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1,
     rns_native_qpcs_fri_complete::{
         RnsNativeQpcsCompletedLineageV1, RnsNativeQpcsFriCompleteErrorV1,
@@ -129,6 +142,11 @@ const SMALL_SOURCE_ROLES_V1: usize = 3;
 const Q_MASK_DIGITS_V1: usize = 4;
 const Q_MASK_OWNERS_V1: usize = EVALUATIONS_V1 * BLOCKS_PER_RECORD_V1;
 const Q_MASK_S_POINTS_V1: usize = Q_MASK_OWNERS_V1 * Q_MASK_DIGITS_V1;
+const Q_MASK_ROOT_BYTES_PER_POINT_V1: usize = 4 + 4 + POINT_BYTES_V1;
+const Q_MASK_ROOT_FIXED_ABSORPTION_BYTES_V1: usize =
+    Q_MASK_ROOT_DOMAIN_V1.len() + 1 + DIGEST_BYTES_V1 + 4;
+const Q_MASK_ROOT_TOTAL_ABSORPTION_BYTES_V1: usize =
+    Q_MASK_ROOT_FIXED_ABSORPTION_BYTES_V1 + Q_MASK_S_POINTS_V1 * Q_MASK_ROOT_BYTES_PER_POINT_V1;
 const QUOTIENT_BITS_V1: usize = 103;
 const GATES_PER_EVALUATION_V1: usize = 2 * QUOTIENT_BITS_V1;
 const CONSTRAINTS_PER_EVALUATION_V1: usize = 2 * GATES_PER_EVALUATION_V1 + 1;
@@ -212,6 +230,8 @@ const CORE_TRANSCRIPT_SET_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-cross-field-rlwe-direct.core-transcript-set";
 const CROSS_FIELD_CORE_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-cross-field-rlwe-direct.cross-field-core-root";
+const DIRECT_CORE_SAFE_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.rns-native-cross-field-direct-core-safe";
 const SUCCESSOR_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-cross-field-rlwe-direct.successor";
 const CODEC_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-cross-field-rlwe-direct.codec";
@@ -223,14 +243,17 @@ const NO_WRAP_LANGUAGE_V1: &[u8] = b"Vplus<7256*(B-1)*(qmax-1)<2^88;Vminus<1376*
 const SOUNDNESS_LANGUAGE_V1: &[u8] = b"aggregate-discrepancy-degree=(2*131072-2)+42+1=262185;union-over-40-limbs-and-five-independent-repetitions<=40*(262185/qmin)^5<2^-204.67;qmin=1152921504396869633;plus-bounded-unbiased-q-rejection,GBP-knowledge-soundness,binding,and-Keccak-ROM-terms";
 const SOURCE_LANGUAGE_V1: &[u8] = b"minimal-pre-qpcs-source-exposes-only-actual-q-mask-S-commitment-points;move-only-by-value-post-qpcs-authoritative-source;source-independent-successor-and-wire-structure/header/codec/cap-preflight-before-any-authoritative-source-call;take-a-A-B-C0[43]-C1[43]-qpcs-product-qpcs-opening-quotient-exactly-once-per-evaluation;read-actual-upstream-commitment-points;take-positive-and-negative-16384-coordinate-openings,masks,and-103-bit-owners-exactly-once;caller-zeroizing-destinations-precede-every-fallible-opening-call;drop-clears-retained-secret-copies;no-digest-only-evaluation-or-opening-source";
 const TRANSCRIPT_LANGUAGE_V1: &[u8] = b"retain-exact-rns-native-rlwe-source-gamma/beta-schedule;hash-actual-6400-q-mask-S-digit-points-with-only-profile,source-binding,source-formula,source-mapping,rns-seed,qpcs-parameter,and-state-after-initial;exclude-source-terminal,packing,inventory,and-all-post-qpcs-results-from-S-root;derive-a-only-after-that-root-with-the-qpcs-prefix-rejection-map;after-qpcs-combine-only-terminal-predecessor,future-candidate-pre-direct-inventory-context,future-candidate-pre-direct-inventory-root,and-existing-radix-candidate axes;current-inventory-prior-context-and-canonical-root-are-prohibited-because-they-inherit-final-terminal-and-continuation-state;candidate-pre-direct-inventory-axes-must-exclude-cross/global/zero-roots,final-transcript-and-challenges,cross-section-and-zero-padding-digests,continuation-state,and-direct-proof-bindings;exclude-cross-proof,cross-link,inventory-binding,continuation-digest,packing-binding,radix-binding,and-successor-membership-from-direct-core-challenges;each-a-is-nonzero,distinct-across-five-same-limb-repetitions,a^131072+1!=0,and-a^524288!=1;core-challenges-bind-manifest,candidate-fixed-axes,S-root,direct-schedule-binding,relation-seed,numeric-root,derived-commitment-root,core-index,evaluation-range,actual-Cplus-Cminus,and-bp-basis;four-core-pending-owner-binds-proof-set-and-private-core-transcript-set-into-opaque-successor-independent-cross-field-root-capability;consuming-typed-bind-moves-root-into-staged-terminal-before-global-challenge;only-terminal-bound-pending-owner-may-seal-later-nonempty-successor;exclude-successor,codec,final-binding-from-core-root;admit-excluded-values-only-after-four-core-verification";
-const INTEGRATION_LANGUAGE_V1: &[u8] = b"qpcs-source-settled:rns_native_transcript-enforces-initial,S,relation,quotient,batching,each-FRI-root/fold,query-order;rns_native_qpcs_prefix-prover-replay-verifier-consume-and-return-one-move-only-relation-schedule;staged-terminal-transcript-api-available:bind-cross-field-root,derive-global-challenge,bind-global-root,derive-zero-padding-challenge,bind-zero-padding-root;concrete-direct-verified-root/transcript-obligation-bridge-integrated;direct-activation-no-go-until:rns_native_cross_field_inventory-provides-a-dedicated-pre-direct-candidate-context-and-root-that-exclude-cross/global/zero-roots,final-transcript-and-challenges,cross-section-and-zero-padding-digests,continuation-state,and-direct-proof-bindings;current-inventory-prior-context-and-canonical-root-must-not-be-adapted;then-an-adapter-moves-the-qpcs-schedule-after-qpcs,consumes-authenticated-source/packing/inventory-owners,checks-all-200-qpcs-pairs,moves-pending-core-root-through-staged-terminal,then-seals-successor,consumes-the-concrete-root-equality-transition,and-admits-cross-link/inventory-binding/successor-membership-only-post-core;40-modulus-table-is-release-pinned;positive/negative-commitments-derived-only-by-this-formula;global-lookup-consumes-nonempty-successor;composite-recomputes-final-root-and-digest;production-source,pre-direct-inventory-axes,direct-staged-adapter,padding,global-lookup,composite,readiness-remain-unavailable";
+const INTEGRATION_LANGUAGE_V1: &[u8] = b"qpcs-source-settled:rns_native_transcript-enforces-initial,S,relation,quotient,batching,each-FRI-root/fold,query-order;rns_native_qpcs_prefix-prover-replay-verifier-consume-and-return-one-move-only-relation-schedule;staged-terminal-transcript-api-available:bind-cross-field-root,derive-global-challenge,bind-global-root,derive-zero-padding-challenge,bind-zero-padding-root;concrete-direct-verified-root/transcript-obligation-bridge-integrated;direct-activation-no-go-until:rns_native_cross_field_inventory-provides-a-dedicated-pre-direct-candidate-context-and-root-that-exclude-cross/global/zero-roots,final-transcript-and-challenges,cross-section-and-zero-padding-digests,continuation-state,and-direct-proof-bindings;current-inventory-prior-context-and-canonical-root-must-not-be-adapted;single-top-level-carrier-retains-source-preflight-and-numeric/public-owners,moves-the-sole-lineaged-schedule-once-into-a-pre-auth-claimed-qpcs-owner,provisionally-binds-claimed-roots-to-obtain-final-seeds,authenticates-qpcs-with-the-same-owner-chain,retains-authenticated-numeric-rows-for-later-direct-traversal,discharges-direct-root-obligations,and-only-then-reaches-membership;numeric-cursor-exposes-no-schedule-or-lineage;digest-equality-must-not-substitute-for-ownership;40-modulus-table-is-release-pinned;positive/negative-commitments-derived-only-by-this-formula;global-lookup-consumes-nonempty-successor;composite-recomputes-final-root-and-digest;production-source,pre-direct-inventory-axes,single-owner-chronology,direct-staged-adapter,padding,global-lookup,composite,readiness-remain-unavailable";
 
 const DIRECT_RLWE_RELATION_KERNEL_AVAILABLE_V1: bool = true;
 const PRE_DIRECT_CANDIDATE_AXIS_CONTRACT_SETTLED_V1: bool = true;
+const MEMBERSHIP_BACKED_PUBLIC_POINT_ADAPTER_DECLARED_V1: bool = true;
 const PRODUCTION_PRE_DIRECT_INVENTORY_AXES_INTEGRATED_V1: bool = false;
 const PRE_QPCS_Q_MASK_TOKEN_INTEGRATED_V1: bool = false;
 const AUTHORITATIVE_NUMERIC_SOURCE_INTEGRATED_V1: bool = false;
 const POST_CORE_INVENTORY_LINK_INTEGRATED_V1: bool = false;
+const SINGLE_OWNER_NUMERIC_MEMBERSHIP_CHRONOLOGY_AVAILABLE_V1: bool = false;
+const VERIFIER_NUMERIC_MEMBERSHIP_JOIN_AVAILABLE_V1: bool = false;
 const STAGED_TERMINAL_TRANSCRIPT_API_AVAILABLE_V1: bool = true;
 const DIRECT_VERIFIED_ROOT_TYPE_BRIDGE_INTEGRATED_V1: bool = true;
 const DIRECT_STAGED_TERMINAL_ADAPTER_INTEGRATED_V1: bool = false;
@@ -243,6 +266,10 @@ const _: () = {
     assert!(EVALUATIONS_V1 == 200);
     assert!(RING_DEGREE_V1 == 131_072);
     assert!(Q_MASK_S_POINTS_V1 == 6_400);
+    assert!(Q_MASK_ROOT_DOMAIN_V1.len() == 71);
+    assert!(Q_MASK_ROOT_BYTES_PER_POINT_V1 == 41);
+    assert!(Q_MASK_ROOT_FIXED_ABSORPTION_BYTES_V1 == 108);
+    assert!(Q_MASK_ROOT_TOTAL_ABSORPTION_BYTES_V1 == 262_508);
     assert!(GATES_PER_EVALUATION_V1 == 206);
     assert!(CONSTRAINTS_PER_EVALUATION_V1 == 413);
     assert!(EVALUATIONS_PER_CORE_V1 == 50);
@@ -287,10 +314,13 @@ const _: () = {
     assert!(Q_MIN_V1 <= Q_MAX_V1);
     assert!(DIRECT_RLWE_RELATION_KERNEL_AVAILABLE_V1);
     assert!(PRE_DIRECT_CANDIDATE_AXIS_CONTRACT_SETTLED_V1);
+    assert!(MEMBERSHIP_BACKED_PUBLIC_POINT_ADAPTER_DECLARED_V1);
     assert!(!PRODUCTION_PRE_DIRECT_INVENTORY_AXES_INTEGRATED_V1);
     assert!(!PRE_QPCS_Q_MASK_TOKEN_INTEGRATED_V1);
     assert!(!AUTHORITATIVE_NUMERIC_SOURCE_INTEGRATED_V1);
     assert!(!POST_CORE_INVENTORY_LINK_INTEGRATED_V1);
+    assert!(!SINGLE_OWNER_NUMERIC_MEMBERSHIP_CHRONOLOGY_AVAILABLE_V1);
+    assert!(!VERIFIER_NUMERIC_MEMBERSHIP_JOIN_AVAILABLE_V1);
     assert!(STAGED_TERMINAL_TRANSCRIPT_API_AVAILABLE_V1);
     assert!(DIRECT_VERIFIED_ROOT_TYPE_BRIDGE_INTEGRATED_V1);
     assert!(!DIRECT_STAGED_TERMINAL_ADAPTER_INTEGRATED_V1);
@@ -824,15 +854,12 @@ pub(super) trait RnsNativeQMaskSCommitmentSourceV1 {
     ) -> Result<Point, RnsNativeCrossFieldRlweDirectErrorV1>;
 }
 
-/// One-shot authoritative source for all post-qPCS numeric values and points.
+/// One-shot cursor for authenticated public numeric values.
 ///
-/// The source is passed to the kernel by value and dropped after one traversal.
-/// Its implementation must be backed by authenticated source/packing and
-/// inventory owners.  Returning a digest without the requested numeric values
-/// or points does not satisfy this interface.
-pub(super) trait RnsNativeCrossFieldAuthoritativeSourceV1:
-    RnsNativeQMaskSCommitmentSourceV1 + Sized
-{
+/// It deliberately has no point, secret-opening, schedule, lineage, or
+/// completion surface. This split is preparatory and non-authorizing: the live
+/// handoff may implement it, but no production numeric/membership join exists.
+pub(super) trait RnsNativeCrossFieldNumericCursorV1: Sized {
     fn authoritative_binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1];
 
     fn take_numeric_evaluation_v1(
@@ -841,7 +868,14 @@ pub(super) trait RnsNativeCrossFieldAuthoritativeSourceV1:
         repetition: usize,
         destination: &mut RnsNativeCrossFieldNumericEvaluationV1,
     ) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1>;
+}
 
+/// Authenticated public-point source used by deterministic `C+`/`C-`
+/// derivation. Production construction is internal to the membership handoff:
+/// callers cannot supply detached points or a raw inventory slice.
+pub(super) trait RnsNativeCrossFieldAuthenticatedPublicPointSourceV1:
+    RnsNativeQMaskSCommitmentSourceV1 + Sized
+{
     fn message_radix_digit_commitment_v1(
         &self,
         record: usize,
@@ -868,6 +902,221 @@ pub(super) trait RnsNativeCrossFieldAuthoritativeSourceV1:
         record: usize,
         block: usize,
     ) -> Result<Point, RnsNativeCrossFieldRlweDirectErrorV1>;
+}
+
+/// Full verifier-side source. Numeric traversal and authenticated public
+/// points remain distinct ownership surfaces and can be combined only inside
+/// the exact membership-backed adapter once a real single-owner chronology
+/// exists.
+pub(super) trait RnsNativeCrossFieldAuthoritativeSourceV1:
+    RnsNativeCrossFieldNumericCursorV1 + RnsNativeCrossFieldAuthenticatedPublicPointSourceV1 + Sized
+{
+}
+
+impl<T> RnsNativeCrossFieldAuthoritativeSourceV1 for T where
+    T: RnsNativeCrossFieldNumericCursorV1
+        + RnsNativeCrossFieldAuthenticatedPublicPointSourceV1
+        + Sized
+{
+}
+
+fn direct_group_v1(
+    record: usize,
+    block: usize,
+) -> Result<usize, RnsNativeCrossFieldRlweDirectErrorV1> {
+    if record >= RECORDS_V1 || block >= BLOCKS_PER_RECORD_V1 {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry);
+    }
+    record
+        .checked_mul(BLOCKS_PER_RECORD_V1)
+        .and_then(|value| value.checked_add(block))
+        .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::ArithmeticOverflow)
+}
+
+fn direct_small_owner_v1(
+    record: usize,
+    role: usize,
+    block: usize,
+) -> Result<usize, RnsNativeCrossFieldRlweDirectErrorV1> {
+    if record >= RECORDS_V1 || role >= SMALL_SOURCE_ROLES_V1 || block >= BLOCKS_PER_RECORD_V1 {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry);
+    }
+    record
+        .checked_mul(SMALL_SOURCE_ROLES_V1)
+        .and_then(|value| value.checked_add(role))
+        .and_then(|value| value.checked_mul(BLOCKS_PER_RECORD_V1))
+        .and_then(|value| value.checked_add(block))
+        .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::ArithmeticOverflow)
+}
+
+fn direct_q_mask_owner_v1(
+    limb: usize,
+    repetition: usize,
+    block: usize,
+) -> Result<usize, RnsNativeCrossFieldRlweDirectErrorV1> {
+    if limb >= LIMBS_V1 || repetition >= REPETITIONS_V1 || block >= BLOCKS_PER_RECORD_V1 {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry);
+    }
+    limb.checked_mul(REPETITIONS_V1)
+        .and_then(|value| value.checked_add(repetition))
+        .and_then(|value| value.checked_mul(BLOCKS_PER_RECORD_V1))
+        .and_then(|value| value.checked_add(block))
+        .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::ArithmeticOverflow)
+}
+
+/// Early verifier-only projection from the move-only provisional inventory
+/// preflight.  This is intentionally only the minimal q-mask source trait: it
+/// does not implement either authenticated public-point or authoritative
+/// source ownership.
+impl RnsNativeQMaskSCommitmentSourceV1 for RnsNativePreQpcsQMaskInventoryPreflightV1<'_> {
+    fn q_mask_s_digit_commitment_v1(
+        &self,
+        limb: usize,
+        repetition: usize,
+        block: usize,
+        digit: usize,
+    ) -> Result<Point, RnsNativeCrossFieldRlweDirectErrorV1> {
+        if digit >= Q_MASK_DIGITS_V1 {
+            return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry);
+        }
+        self.project_q_mask_s_digit_v1(direct_q_mask_owner_v1(limb, repetition, block)?, digit)
+            .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::InvalidPoint)
+    }
+}
+
+/// Ephemeral adapter assembled only after recovering the exact inventory from
+/// the membership-owned claimed carrier. It owns the authenticated radix alias
+/// and borrows both the inventory and live numeric cursor for one direct
+/// traversal; no point bytes, numeric arrays, or raw owner parts escape it.
+///
+/// This declaration has no production constructor. In particular, the
+/// current numeric handoff and claimed relation retain separate move-only qPCS
+/// schedule/final-transcript owners, so they cannot truthfully construct this
+/// adapter. A future top-level carrier must move the sole lineage through a
+/// pre-auth claimed-qPCS state and retain only already-authenticated numeric
+/// rows for this later borrow.
+#[allow(
+    dead_code,
+    reason = "the single-owner numeric/membership chronology is deliberately not constructible"
+)]
+struct RnsNativeMembershipBackedDirectSourceV1<
+    'owner,
+    'source,
+    'proof,
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+    N: RnsNativeCrossFieldNumericCursorV1,
+> {
+    numeric: &'owner mut N,
+    existing_radix: RnsNativeExistingRadixDirectAliasV1<'proof>,
+    inventory: &'owner RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
+}
+
+impl<S, N> RnsNativeCrossFieldNumericCursorV1
+    for RnsNativeMembershipBackedDirectSourceV1<'_, '_, '_, S, N>
+where
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+    N: RnsNativeCrossFieldNumericCursorV1,
+{
+    fn authoritative_binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.numeric.authoritative_binding_digest_v1()
+    }
+
+    fn take_numeric_evaluation_v1(
+        &mut self,
+        limb: usize,
+        repetition: usize,
+        destination: &mut RnsNativeCrossFieldNumericEvaluationV1,
+    ) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1> {
+        self.numeric
+            .take_numeric_evaluation_v1(limb, repetition, destination)
+    }
+}
+
+impl<S, N> RnsNativeQMaskSCommitmentSourceV1
+    for RnsNativeMembershipBackedDirectSourceV1<'_, '_, '_, S, N>
+where
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+    N: RnsNativeCrossFieldNumericCursorV1,
+{
+    fn q_mask_s_digit_commitment_v1(
+        &self,
+        limb: usize,
+        repetition: usize,
+        block: usize,
+        digit: usize,
+    ) -> Result<Point, RnsNativeCrossFieldRlweDirectErrorV1> {
+        if digit >= Q_MASK_DIGITS_V1 {
+            return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry);
+        }
+        self.inventory
+            .q_mask_linear_commitments(direct_q_mask_owner_v1(limb, repetition, block)?)
+            .map(|commitments| commitments.digits[digit])
+            .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::InvalidPoint)
+    }
+}
+
+impl<S, N> RnsNativeCrossFieldAuthenticatedPublicPointSourceV1
+    for RnsNativeMembershipBackedDirectSourceV1<'_, '_, '_, S, N>
+where
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+    N: RnsNativeCrossFieldNumericCursorV1,
+{
+    fn message_radix_digit_commitment_v1(
+        &self,
+        record: usize,
+        block: usize,
+        digit: usize,
+    ) -> Result<Point, RnsNativeCrossFieldRlweDirectErrorV1> {
+        if digit >= RADIX_DIGITS_V1 {
+            return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry);
+        }
+        let group = direct_group_v1(record, block)?;
+        if digit + 1 == RADIX_DIGITS_V1 {
+            return self
+                .inventory
+                .comparator_top_commitments(group)
+                .map(|(difference_top, _)| difference_top)
+                .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::InvalidPoint);
+        }
+        self.existing_radix
+            .difference_low_commitment_v1(group, digit)
+            .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::InvalidPoint)
+    }
+
+    fn small_signed_commitment_v1(
+        &self,
+        record: usize,
+        role: usize,
+        block: usize,
+    ) -> Result<Point, RnsNativeCrossFieldRlweDirectErrorV1> {
+        self.inventory
+            .small_source_product_commitments(direct_small_owner_v1(record, role, block)?)
+            .map(|commitments| commitments.signed)
+            .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::InvalidPoint)
+    }
+
+    fn small_negative_magnitude_commitment_v1(
+        &self,
+        record: usize,
+        role: usize,
+        block: usize,
+    ) -> Result<Point, RnsNativeCrossFieldRlweDirectErrorV1> {
+        self.inventory
+            .small_source_product_commitments(direct_small_owner_v1(record, role, block)?)
+            .map(|commitments| commitments.negative_magnitude)
+            .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::InvalidPoint)
+    }
+
+    fn comparator_final_borrow_commitment_v1(
+        &self,
+        record: usize,
+        block: usize,
+    ) -> Result<Point, RnsNativeCrossFieldRlweDirectErrorV1> {
+        self.inventory
+            .comparator_range_carry_commitments(direct_group_v1(record, block)?)
+            .map(|commitments| commitments.borrows[RADIX_DIGITS_V1 - 1])
+            .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::InvalidPoint)
+    }
 }
 
 /// Prover extension that moves each positive/negative vector opening and its
@@ -2286,6 +2535,53 @@ impl RnsNativeCrossFieldRlweVerifiedCoreRootV1 {
     }
 }
 
+fn direct_core_safe_digest_v1(
+    private_cross_field_core_root: [u8; DIGEST_BYTES_V1],
+    q_mask_s_root: [u8; DIGEST_BYTES_V1],
+    numeric_root: [u8; DIGEST_BYTES_V1],
+    commitment_root: [u8; DIGEST_BYTES_V1],
+) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeCrossFieldRlweDirectErrorV1> {
+    if !nonzero_distinct_digests_v1(&[
+        private_cross_field_core_root,
+        q_mask_s_root,
+        numeric_root,
+        commitment_root,
+    ]) {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
+    }
+    let mut hash = Keccak256::new();
+    hash.update(DIRECT_CORE_SAFE_DOMAIN_V1);
+    hash.update(&private_cross_field_core_root);
+    hash.update(&q_mask_s_root);
+    hash.update(&numeric_root);
+    hash.update(&commitment_root);
+    let digest = hash.finalize();
+    if digest == [0; DIGEST_BYTES_V1]
+        || [
+            private_cross_field_core_root,
+            q_mask_s_root,
+            numeric_root,
+            commitment_root,
+        ]
+        .contains(&digest)
+    {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
+    }
+    Ok(digest)
+}
+
+/// Non-authorizing projection of the direct verifier's successor-independent
+/// core. The private verified root is one input to the final digest but is not
+/// exposed by this value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RnsNativeCrossFieldRlweSafeCoreProjectionV1 {
+    pub(super) terminal_predecessor_context_binding_digest: [u8; DIGEST_BYTES_V1],
+    pub(super) candidate_pre_direct_inventory_context_digest: [u8; DIGEST_BYTES_V1],
+    pub(super) candidate_pre_direct_inventory_root: [u8; DIGEST_BYTES_V1],
+    pub(super) existing_radix_candidate_root: [u8; DIGEST_BYTES_V1],
+    pub(super) direct_core_safe_digest: [u8; DIGEST_BYTES_V1],
+}
+
 fn cross_field_core_root_v1(
     inputs: &PreparedInputsV1,
     proof_set_digest: [u8; DIGEST_BYTES_V1],
@@ -2981,6 +3277,7 @@ pub(super) struct RnsNativeCrossFieldRlweClaimEqualityPendingVerifiedV1<'a> {
     q_mask_s_root: [u8; DIGEST_BYTES_V1],
     numeric_root: [u8; DIGEST_BYTES_V1],
     commitment_root: [u8; DIGEST_BYTES_V1],
+    safe_core_projection: RnsNativeCrossFieldRlweSafeCoreProjectionV1,
     cross_field_root_equality_obligation: ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1,
     verified_cross_field_core_root: RnsNativeCrossFieldRlweVerifiedCoreRootV1,
 }
@@ -3000,6 +3297,7 @@ impl<'a> RnsNativeCrossFieldRlweClaimEqualityPendingVerifiedV1<'a> {
             q_mask_s_root,
             numeric_root,
             commitment_root,
+            safe_core_projection,
             cross_field_root_equality_obligation,
             verified_cross_field_core_root,
         } = self;
@@ -3012,6 +3310,7 @@ impl<'a> RnsNativeCrossFieldRlweClaimEqualityPendingVerifiedV1<'a> {
             q_mask_s_root,
             numeric_root,
             commitment_root,
+            safe_core_projection,
         })
     }
 
@@ -3053,6 +3352,7 @@ pub(super) struct RnsNativeCrossFieldRlweTerminalBoundVerifiedV1<'a> {
     q_mask_s_root: [u8; DIGEST_BYTES_V1],
     numeric_root: [u8; DIGEST_BYTES_V1],
     commitment_root: [u8; DIGEST_BYTES_V1],
+    safe_core_projection: RnsNativeCrossFieldRlweSafeCoreProjectionV1,
 }
 
 impl<'a> RnsNativeCrossFieldRlweTerminalBoundVerifiedV1<'a> {
@@ -3074,6 +3374,12 @@ impl<'a> RnsNativeCrossFieldRlweTerminalBoundVerifiedV1<'a> {
 
     pub(super) const fn commitment_root(&self) -> [u8; DIGEST_BYTES_V1] {
         self.commitment_root
+    }
+
+    pub(super) const fn safe_core_projection_v1(
+        &self,
+    ) -> RnsNativeCrossFieldRlweSafeCoreProjectionV1 {
+        self.safe_core_projection
     }
 }
 
@@ -3164,6 +3470,32 @@ where
     let cross_field_core_root =
         cross_field_core_root_v1(&inputs, view.proof_set_digest, core_transcript_digest)?;
     let binding_digest = final_binding_digest_v1(&inputs, &view, &transcript_digests)?;
+    let safe_core_projection = RnsNativeCrossFieldRlweSafeCoreProjectionV1 {
+        terminal_predecessor_context_binding_digest: inputs
+            .schedule
+            .bound
+            .axes
+            .terminal_predecessor_binding_digest,
+        candidate_pre_direct_inventory_context_digest: inputs
+            .schedule
+            .bound
+            .axes
+            .candidate_inventory_axes
+            .context_digest,
+        candidate_pre_direct_inventory_root: inputs
+            .schedule
+            .bound
+            .axes
+            .candidate_inventory_axes
+            .inventory_root,
+        existing_radix_candidate_root: inputs.schedule.bound.axes.existing_radix_candidate_root,
+        direct_core_safe_digest: direct_core_safe_digest_v1(
+            cross_field_core_root.0,
+            inputs.schedule.bound.q_mask_s_root,
+            inputs.numeric_root,
+            inputs.commitment_root,
+        )?,
+    };
     let verified_cross_field_core_root =
         RnsNativeCrossFieldRlweVerifiedCoreRootV1(cross_field_core_root);
     let cross_field_root_equality_obligation = inputs
@@ -3175,6 +3507,7 @@ where
         q_mask_s_root: inputs.schedule.bound.q_mask_s_root,
         numeric_root: inputs.numeric_root,
         commitment_root: inputs.commitment_root,
+        safe_core_projection,
         cross_field_root_equality_obligation,
         verified_cross_field_core_root,
     })
@@ -3234,6 +3567,106 @@ where
     P: RnsNativeCrossFieldAuthoritativeSourceV1,
 {
     verify_kernel_for_suite_v1::<ZkAmsT256BulletproofSuiteV1, P>(schedule, source, wire)
+}
+
+fn same_borrowed_slice_identity_v1(left: &[u8], right: &[u8]) -> bool {
+    left.len() == right.len() && core::ptr::eq(left.as_ptr(), right.as_ptr())
+}
+
+fn validate_claimed_handoff_fixed_axes_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
+    claimed_relation: &RnsNativeCrossFieldRlweClaimedRelationV1,
+    inventory: &RnsNativeCrossFieldInventoryPrerequisiteV1<'_, '_, S>,
+    expected_existing_radix_candidate_root: [u8; DIGEST_BYTES_V1],
+) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1> {
+    validate_claimed_inventory_transcript_v1(
+        claimed_relation,
+        inventory.terminal_transcript_digest_v1(),
+    )?;
+    validate_relation_schedule_v1(&claimed_relation.schedule)?;
+    let axes = &claimed_relation.schedule.bound.axes;
+    let final_transcript = &claimed_relation.final_challenge_seeds;
+    let linked = inventory.linked();
+    if axes.profile_manifest_digest != final_transcript.profile_manifest_digest()
+        || axes.source_binding_digest != final_transcript.source_binding_digest()
+        || axes.source_formula_digest != linked.source().formula_digest()
+        || axes.source_mapping_digest != linked.source().mapping_digest()
+        || axes.terminal_predecessor_binding_digest != linked.terminal().binding_digest()
+        || axes.existing_radix_candidate_root != expected_existing_radix_candidate_root
+        || axes.rns_aggregation_challenge_seed != final_transcript.rns_aggregation_challenge_seed()
+        || axes.qpcs_parameter_digest != linked.source().qpcs().parameter_digest()
+        || axes.qpcs_pre_relation_transcript_digest
+            != final_transcript.qpcs_pre_relation_transcript_digest()
+        || claimed_relation.schedule.bound.q_mask_s_root != final_transcript.q_mask_s_root()
+    {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
+    }
+    Ok(())
+}
+
+/// Consume the exact direct parent recovered from the membership chain,
+/// verify the already-preflighted four-core frame with an internal
+/// authoritative source, and discharge its claimed-root equality.
+///
+/// This is deliberately crate-private and generic only over the still-private
+/// source trait. No production source implementation, staged adapter,
+/// composite capability, readiness, or release authority is created here.
+#[allow(
+    dead_code,
+    reason = "the generic verifier handoff remains internal until an authenticated production source adapter exists"
+)]
+pub(super) fn verify_rns_native_cross_field_rlwe_claimed_carrier_v1<'source, 'proof, S, P>(
+    parent: RnsNativeCrossFieldRlweClaimedInventoryParentV1<'source, 'proof, S>,
+    exact_claimed_successor: &'proof [u8],
+    expected_existing_radix_candidate_root: [u8; DIGEST_BYTES_V1],
+    source: P,
+) -> Result<
+    (
+        RnsNativeCrossFieldRlweTerminalBoundVerifiedV1<'proof>,
+        RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
+    ),
+    RnsNativeCrossFieldRlweDirectErrorV1,
+>
+where
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+    P: RnsNativeCrossFieldAuthoritativeSourceV1,
+{
+    let RnsNativeCrossFieldRlweClaimedInventoryParentV1 {
+        frame_core,
+        inventory,
+    } = parent;
+    let RnsNativeCrossFieldRlweClaimedFrameCoreV1 {
+        claimed_relation,
+        preflight,
+    } = frame_core;
+    validate_claimed_handoff_fixed_axes_v1(
+        &claimed_relation,
+        &inventory,
+        expected_existing_radix_candidate_root,
+    )?;
+    preflight.validate_schedule_v1(&claimed_relation.schedule)?;
+    if !same_borrowed_slice_identity_v1(preflight.successor, exact_claimed_successor) {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
+    }
+    let RnsNativeCrossFieldRlweClaimedRelationV1 {
+        schedule,
+        pre_global_capability: _,
+        final_challenge_seeds: _,
+    } = claimed_relation;
+    drop(preflight);
+
+    let equality_pending = verify_kernel_for_suite_v1::<ZkAmsT256BulletproofSuiteV1, P>(
+        schedule,
+        source,
+        inventory.continuation(),
+    )?;
+    if !same_borrowed_slice_identity_v1(equality_pending.successor(), exact_claimed_successor) {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
+    }
+    let terminal_bound = equality_pending.discharge_claimed_root_equality_v1()?;
+    if !same_borrowed_slice_identity_v1(terminal_bound.successor(), exact_claimed_successor) {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
+    }
+    Ok((terminal_bound, inventory))
 }
 
 #[cfg(test)]

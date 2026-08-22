@@ -228,6 +228,68 @@ fn low_commitments_decode_exactly_while_top_commitments_are_aliased() {
 }
 
 #[test]
+fn direct_alias_is_no_copy_difference_only_and_exact_at_both_boundaries() {
+    let upstream = upstream_v1();
+    let wire = canonical_wire_v1(upstream, b"downstream");
+    let view = ExistingRadixProofViewV1::from_components_v1(&wire, upstream)
+        .expect("canonical existing-radix view");
+    let alias = RnsNativeExistingRadixDirectAliasV1 {
+        inventory: view.inventory,
+        pre_z_candidate_root: view.pre_z_candidate_root,
+        binding_digest: [0xbc; DIGEST_BYTES_V1],
+    };
+
+    assert_eq!(alias.borrowed_point_bytes_v1(), INVENTORY_BYTES_V1);
+    assert_eq!(
+        alias.difference_low_commitment_v1(0, 0),
+        view.point_v1(0, ROLE_DIFFERENCE_LOW_V1, 0).ok()
+    );
+    assert_eq!(
+        alias.difference_low_commitment_v1(GROUPS_V1 - 1, LOW_DIGITS_V1 - 1),
+        view.point_v1(GROUPS_V1 - 1, ROLE_DIFFERENCE_LOW_V1, LOW_DIGITS_V1 - 1,)
+            .ok()
+    );
+    assert!(alias.difference_low_commitment_v1(GROUPS_V1, 0).is_none());
+    assert!(
+        alias
+            .difference_low_commitment_v1(0, LOW_DIGITS_V1)
+            .is_none()
+    );
+    assert_eq!(alias.pre_z_candidate_root_v1(), view.pre_z_candidate_root);
+    assert_eq!(alias.binding_digest_v1(), [0xbc; DIGEST_BYTES_V1]);
+    assert_eq!(DIRECT_ALIAS_COPIED_DIGEST_BYTES_V1, 64);
+
+    let source = include_str!("rns_native_existing_radix_commitment_view.rs");
+    let alias_declaration = source
+        .find("pub(super) struct RnsNativeExistingRadixDirectAliasV1")
+        .expect("purpose-bound direct alias");
+    let alias_prefix = &source[alias_declaration.saturating_sub(320)..alias_declaration];
+    assert!(!alias_prefix.contains("derive(Clone"));
+    assert!(!alias_prefix.contains("derive(Copy"));
+    let alias_surface = source[alias_declaration..]
+        .split_once("fn existing_radix_commitments_v1")
+        .expect("direct alias surface boundary")
+        .0;
+    assert!(!alias_surface.contains("fn from_raw"));
+    assert!(!alias_surface.contains("fn from_points"));
+    assert!(!alias_surface.contains("fn inventory_v1"));
+    assert!(!alias_surface.contains("-> &'proof [u8]"));
+    let transition = source
+        .split_once("pub(super) fn into_previous_with_direct_alias_v1(")
+        .expect("purpose-bound alias transition")
+        .1
+        .split_once("pub(super) fn existing_radix_commitments(")
+        .expect("alias transition boundary")
+        .0;
+    assert!(transition.contains("RnsNativeExistingRadixDirectAliasV1 {"));
+    assert!(transition.contains("inventory: self.inventory"));
+    assert!(transition.contains("pre_z_candidate_root: self.pre_z_candidate_root"));
+    assert!(transition.contains("binding_digest: self.binding_digest"));
+    assert!(!transition.contains("to_vec("));
+    assert!(!transition.contains("Box::"));
+}
+
+#[test]
 fn sole_z_candidate_root_excludes_transport_and_post_z_axes() {
     let inventory = canonical_inventory_v1();
     let root = canonical_pre_z_candidate_root_v1(&inventory).expect("candidate-only root");

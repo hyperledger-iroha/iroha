@@ -1145,6 +1145,13 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self.binding_digest
     }
+
+    /// Consume statement-4 evidence and recover its exact statement-2 owner.
+    pub(super) fn into_previous_v1(
+        self,
+    ) -> RnsNativeRadixComplementLinearPrerequisiteV1<'source, 'proof, S> {
+        self.previous
+    }
 }
 
 /// Consume statement 2 and verify all 344 statement-4 subtraction cores
