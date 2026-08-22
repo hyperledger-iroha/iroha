@@ -12,6 +12,243 @@ pub(crate) struct AutonomousLaneAttemptFixture {
     _root: TempDir,
 }
 
+/// Exact certified autonomous lane slot used by startup lock-order regressions.
+pub(crate) struct CertifiedAutonomousLaneStartupFixture {
+    /// Kura containing the payload, READY certificate, and Commit certificate.
+    pub(crate) kura: Arc<Kura>,
+    /// Producer-authenticated payload bound to the certified proposal once
+    /// [`Self::certify_for_carrier`] has been called.
+    pub(crate) payload: LaneExecutablePayloadV1,
+}
+
+impl CertifiedAutonomousLaneStartupFixture {
+    fn certify_with_hint(
+        &mut self,
+        signer: &KeyPair,
+        hint: iroha_data_model::block::consensus::LaneBlockProposalPayloadHintV1,
+    ) {
+        let payload = self
+            .payload
+            .attach_global_hint_exact(hint, self.payload.network_id, self.payload.epoch)
+            .expect("bind startup fixture payload to its canonical carrier");
+        let proposal = &payload.origin_proposal;
+        let descriptor = &proposal.descriptor;
+        self.kura
+            .persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
+            .expect("persist startup fixture payload");
+        let recovered = self
+            .kura
+            .recover_autonomous_lane_block_payload(proposal, payload.network_id, payload.epoch)
+            .expect("recover startup fixture execution input");
+        self.kura
+            .persist_lane_block_execution_input(&recovered)
+            .expect("persist startup fixture execution input");
+        let availability = durable_lane_payload_availability_for_kura(&payload, proposal, signer);
+        self.kura
+            .persist_lane_payload_availability_certificate(
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+                availability.clone(),
+                payload.network_id,
+                payload.epoch,
+            )
+            .expect("persist startup fixture READY certificate");
+        let (mut session, signer_pops) =
+            committed_lane_block_session_for_kura_proposal(proposal, signer);
+        session.prepare_qc = availability.certificate;
+        self.kura
+            .persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist startup fixture Commit certificate");
+        self.payload = payload;
+    }
+
+    /// Persist the exact autonomous proposal owned by `carrier`.
+    pub(crate) fn certify_for_carrier(&mut self, signer: &KeyPair, carrier: &SignedBlock) {
+        self.certify_with_hint(
+            signer,
+            iroha_data_model::block::consensus::LaneBlockProposalPayloadHintV1 {
+                proposal_height: carrier.header().height().get(),
+                proposal_view: carrier.header().view_change_index(),
+                proposal_block_hash: carrier.hash(),
+            },
+        );
+    }
+}
+
+fn startup_two_lane_catalog() -> LaneCatalog {
+    let lane0 = ModelLaneConfig::default();
+    let lane1 = ModelLaneConfig {
+        id: LaneId::from(1),
+        alias: "beta".to_owned(),
+        ..ModelLaneConfig::default()
+    };
+    LaneCatalog::new(nonzero!(2_u32), vec![lane0, lane1]).expect("startup fixture lane catalog")
+}
+
+/// Return the exact pre-genesis Nexus geometry used by startup lane fixtures.
+pub(crate) fn startup_two_lane_nexus() -> iroha_config::parameters::actual::Nexus {
+    iroha_config::parameters::actual::Nexus {
+        lane_catalog: startup_two_lane_catalog(),
+        ..Default::default()
+    }
+}
+
+fn hint_free_autonomous_lane_startup_payload(
+    signer: &KeyPair,
+    network_id: iroha_data_model::NetworkId,
+    epoch: u64,
+    proposal_height: u64,
+    lane_config: &RuntimeLaneConfig,
+    lane_incarnation: Hash,
+) -> LaneExecutablePayloadV1 {
+    let lane_id = LaneId::new(1);
+    let lane_entry = lane_config.entry(lane_id).expect("configured fixture lane");
+    let (_, _, seed_payload) =
+        autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, signer);
+    let reproposed =
+        repropose_autonomous_lane_payload_for_kura(&seed_payload, proposal_height, signer);
+    let mut proposal = reproposed.origin_proposal.clone();
+    proposal.payload_block_hint = None;
+    proposal.descriptor.lane_incarnation = lane_incarnation;
+    proposal.descriptor.subject_hash = Hash::new(b"startup-autonomous-lane-subject");
+    proposal.descriptor.payload_ownership_hash =
+        Hash::new(b"startup-autonomous-lane-payload-ownership");
+    proposal.descriptor.rbc_instance_hash = Hash::new(b"startup-autonomous-lane-rbc");
+    proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    let reservation_keys = reproposed
+        .reservation_keys
+        .iter()
+        .zip(&reproposed.entrypoint_hashes)
+        .map(|(source, entrypoint_hash)| {
+            let mut reservation = *source;
+            reservation.lane_incarnation = lane_incarnation;
+            reservation.proposal_identity_hash = proposal.proposal_hash;
+            reservation.reservation_owner_hash = Hash::new_from_chunks(&[
+                b"iroha:kura:startup-autonomous-reservation-owner:v1\0",
+                proposal.proposal_hash.as_ref(),
+                entrypoint_hash.as_ref(),
+            ]);
+            reservation
+        })
+        .collect();
+    LaneExecutablePayloadV1::new_signed_with_reservations(
+        network_id,
+        epoch,
+        proposal,
+        reproposed.entrypoints.clone(),
+        reservation_keys,
+        reproposed.routing_plans.clone(),
+        reproposed.native_amx_receipts.clone(),
+        PeerId::new(signer.public_key().clone()),
+        signer.private_key(),
+    )
+    .expect("construct hint-free startup fixture payload")
+}
+
+/// Prepare a hint-free autonomous payload on a State-owned two-lane Kura.
+///
+/// The returned fixture deliberately has not published the payload or its
+/// certificates yet. The caller first puts the hint-free payload in a global
+/// carrier and then calls [`CertifiedAutonomousLaneStartupFixture::certify_for_carrier`].
+pub(crate) fn autonomous_lane_startup_fixture_for_carrier(
+    state: &State,
+    signer: &KeyPair,
+    epoch: u64,
+    proposal_height: u64,
+) -> CertifiedAutonomousLaneStartupFixture {
+    let nexus = state.nexus_snapshot();
+    assert_eq!(
+        nexus.lane_catalog,
+        startup_two_lane_catalog(),
+        "startup fixture State must be born from the exact two-lane catalog"
+    );
+    let lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
+    assert_eq!(
+        nexus.lane_config, lane_config,
+        "startup fixture State catalog and runtime geometry must agree"
+    );
+    let state_incarnations = state.lane_incarnations_snapshot();
+    let expected_incarnations = crate::state::derive_static_lane_incarnations(&nexus.lane_catalog);
+    assert_eq!(
+        state_incarnations, expected_incarnations,
+        "startup fixture State must retain the exact static two-lane incarnations"
+    );
+    let kura = state.kura_handle();
+    for lane_id in [LaneId::SINGLE, LaneId::new(1)] {
+        let entry = lane_config
+            .entry(lane_id)
+            .expect("startup fixture lane exists");
+        assert_eq!(
+            kura.lane_storage_entry(lane_id)
+                .expect("startup fixture Kura lane storage exists"),
+            entry.clone(),
+            "State and Kura must own identical active lane storage geometry"
+        );
+        assert_eq!(
+            kura.active_lane_incarnation_marker(entry)
+                .expect("startup fixture Kura active lane marker exists"),
+            (state_incarnations[&lane_id], 0),
+            "State and Kura must own the same active lane incarnation"
+        );
+    }
+    let payload = hint_free_autonomous_lane_startup_payload(
+        signer,
+        state.network_id,
+        epoch,
+        proposal_height,
+        &lane_config,
+        state_incarnations[&LaneId::new(1)],
+    );
+    CertifiedAutonomousLaneStartupFixture { kura, payload }
+}
+
+/// Persist one certified autonomous lane slot without any canonical blocks.
+pub(crate) fn certified_autonomous_lane_startup_fixture(
+    signer: &KeyPair,
+) -> CertifiedAutonomousLaneStartupFixture {
+    let network_id = test_network_id(b"kura-autonomous-genesis");
+    let epoch = 7;
+    let proposal_height = 42;
+    let lane_catalog = startup_two_lane_catalog();
+    let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
+    let lane_incarnation =
+        crate::state::derive_static_lane_incarnations(&lane_catalog)[&LaneId::new(1)];
+    let payload = hint_free_autonomous_lane_startup_payload(
+        signer,
+        network_id,
+        epoch,
+        proposal_height,
+        &lane_config,
+        lane_incarnation,
+    );
+    let kura = Kura::blank_kura_for_testing_with_lane_config(&lane_config);
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+    let mut fixture = CertifiedAutonomousLaneStartupFixture { kura, payload };
+    fixture.certify_with_hint(
+        signer,
+        iroha_data_model::block::consensus::LaneBlockProposalPayloadHintV1 {
+            proposal_height,
+            proposal_view: 3,
+            proposal_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"kura-autonomous-view-anchor",
+            )),
+        },
+    );
+    fixture
+}
+
+/// Install one verified canonical block/finality boundary for startup-session tests.
+pub(crate) fn install_minimal_startup_finality_inventory_for_test(kura: &Kura) {
+    let block = DummyBlocks::new().next();
+    kura.store_block(block)
+        .expect("store startup inventory block");
+    let _ = persist_v2_finality_chain_through(
+        kura,
+        NonZeroUsize::new(1).expect("fixture height is non-zero"),
+    );
+}
+
 /// Persist and retire one proposal-height-one autonomous attempt.
 fn autonomous_lane_attempt_fixture(signer: &KeyPair, retire: bool) -> AutonomousLaneAttemptFixture {
     let root = TempDir::new().expect("create retired autonomous attempt root");

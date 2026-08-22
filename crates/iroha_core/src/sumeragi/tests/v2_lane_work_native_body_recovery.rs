@@ -1093,6 +1093,7 @@ fn merge_native_projection_execution(
         results,
         settlement_commitment: settlement,
         settlement_hash,
+        fastpq_transcripts: Vec::new().into(),
     }
 }
 fn merge_native_projection_batch(

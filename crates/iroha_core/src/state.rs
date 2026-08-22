@@ -71,7 +71,7 @@ use iroha_data_model::{
         trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     },
     executor::ExecutorDataModel,
-    fastpq::{TransferDeltaTranscript, TransferTranscript},
+    fastpq::{TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle},
     governance::types::{ParliamentBody, ProposalKind},
     identifier::{IdentifierClaimRecord, IdentifierPolicy, IdentifierPolicyId},
     isi::{
@@ -30348,6 +30348,8 @@ impl State {
         state_block: &mut StateBlock<'_>,
         sources: Vec<MergeExecutionSource>,
     ) -> Result<Vec<MergeLaneExecution>, MergeLedgerCommitError> {
+        let _witness_suppression =
+            crate::sumeragi::witness::suppress_recording_for_current_thread();
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let mut seen_entrypoints = BTreeSet::new();
         let mut seen_reservations = BTreeSet::new();
@@ -30524,14 +30526,18 @@ impl State {
                     "executor returned a different entrypoint order".to_owned(),
                 ));
             }
-            let results = raw_results
+            let mut results = raw_results
                 .into_iter()
                 .map(|(_, _, result)| TransactionResult::new(result))
                 .collect::<Vec<_>>();
+            state_block
+                .take_merge_lane_batch_transfer_outcomes(&source.input.entrypoints, &mut results)?;
             let result_hashes = results
                 .iter()
                 .map(|result| Hash::from(result.hash()))
                 .collect::<Vec<_>>();
+            let fastpq_transcripts =
+                state_block.take_merge_lane_fastpq_transcripts(&source.input.entrypoints)?;
             state_block.stage_direct_committed_entrypoints(
                 StateBlock::merge_execution_entrypoint_hashes(&source.input.entrypoints),
             );
@@ -30598,6 +30604,7 @@ impl State {
                 results,
                 settlement_hash: canonical_merge_settlement_hash(&placeholder)?,
                 settlement_commitment: placeholder,
+                fastpq_transcripts: fastpq_transcripts.into(),
             };
             let commitment = state_block.drain_merge_lane_settlement_commitment(&execution)?;
             execution.settlement_hash = canonical_merge_settlement_hash(&commitment)?;
@@ -37458,6 +37465,40 @@ impl State {
                 if Hash::from(result.hash()) != expected_hash {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                         "embedded transaction result hash mismatch".to_owned(),
+                    ));
+                }
+            }
+            let execution_entrypoints = execution
+                .entrypoints
+                .iter()
+                .map(|entrypoint| {
+                    (
+                        Hash::from(entrypoint.hash()),
+                        StateBlock::merge_execution_call_hash(entrypoint),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            if execution
+                .fastpq_transcripts
+                .windows(2)
+                .any(|pair| pair[0].entry_hash >= pair[1].entry_hash)
+            {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "FASTPQ transcript bundles are not unique and canonically ordered".to_owned(),
+                ));
+            }
+            for bundle in &execution.fastpq_transcripts {
+                let expected_call_hash = execution_entrypoints.get(&bundle.entry_hash);
+                if bundle.transcripts.is_empty()
+                    || expected_call_hash.is_none()
+                    || bundle
+                        .transcripts
+                        .iter()
+                        .any(|transcript| Some(&transcript.batch_hash) != expected_call_hash)
+                {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "FASTPQ transcript bundle is empty or not bound to its lane entrypoint"
+                            .to_owned(),
                     ));
                 }
             }
@@ -46961,6 +47002,7 @@ impl<'state> StateBlock<'state> {
             || self.world.parameters.is_dirty()
             || !self.axt_envelopes.is_empty()
             || !self.fastpq_transcripts.is_empty()
+            || !self.batch_transfer_outcomes.is_empty()
             || !self.settlement_accumulator.is_empty()
             || self.exec_witness.is_some()
             || finalized_event_surface_invalid
@@ -47271,6 +47313,105 @@ impl<'state> StateBlock<'state> {
         entrypoints: &[TransactionEntrypoint],
     ) -> Vec<HashOf<TransactionEntrypoint>> {
         committed_entrypoint_hashes(entrypoints)
+    }
+    fn merge_execution_call_hash(entrypoint: &TransactionEntrypoint) -> Hash {
+        Hash::from(entrypoint.execution_call_hash())
+    }
+    fn take_merge_lane_batch_transfer_outcomes(
+        &mut self,
+        entrypoints: &[TransactionEntrypoint],
+        results: &mut [TransactionResult],
+    ) -> Result<(), MergeLedgerCommitError> {
+        if entrypoints.len() != results.len() {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "lane execution cannot align batch-transfer outcomes with transaction results"
+                    .to_owned(),
+            ));
+        }
+        let mut seen_call_hashes = BTreeSet::new();
+        for (entrypoint, result) in entrypoints.iter().zip(results) {
+            let call_hash = Self::merge_execution_call_hash(entrypoint);
+            if !seen_call_hashes.insert(call_hash) {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "lane execution produced duplicate batch-transfer outcome call-hash bindings"
+                        .to_owned(),
+                ));
+            }
+            let outcome_key = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(call_hash);
+            let Some(outcomes) = self.batch_transfer_outcomes.remove(&outcome_key) else {
+                continue;
+            };
+            if outcomes.is_empty() {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "lane execution produced an empty batch-transfer outcome binding".to_owned(),
+                ));
+            }
+            result.set_batch_transfer_outcomes(outcomes);
+        }
+        Ok(())
+    }
+    fn take_merge_lane_fastpq_transcripts(
+        &mut self,
+        entrypoints: &[TransactionEntrypoint],
+    ) -> Result<Vec<TransferTranscriptBundle>, MergeLedgerCommitError> {
+        let mut selected_by_call_hash = BTreeMap::new();
+        let mut entrypoint_bindings = Vec::new();
+        for entrypoint in entrypoints {
+            let entrypoint_hash = Hash::from(entrypoint.hash());
+            let call_hash = Self::merge_execution_call_hash(entrypoint);
+            if entrypoint_bindings
+                .iter()
+                .any(|(_, existing_call_hash)| *existing_call_hash == call_hash)
+            {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "lane execution produced duplicate FASTPQ transcript call-hash bindings"
+                        .to_owned(),
+                ));
+            }
+            entrypoint_bindings.push((entrypoint_hash, call_hash));
+            let Some(transcripts) = self.fastpq_transcripts.remove(&call_hash) else {
+                continue;
+            };
+            if transcripts.is_empty()
+                || transcripts
+                    .iter()
+                    .any(|transcript| transcript.batch_hash != call_hash)
+                || selected_by_call_hash
+                    .insert(call_hash, transcripts)
+                    .is_some()
+            {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "lane execution produced malformed or duplicate FASTPQ transcript evidence"
+                        .to_owned(),
+                ));
+            }
+        }
+        crate::fastpq::finalize_transfer_transcript_digests_in_map(&mut selected_by_call_hash);
+        let mut selected = BTreeMap::new();
+        for (entry_hash, call_hash) in entrypoint_bindings {
+            let Some(transcripts) = selected_by_call_hash.remove(&call_hash) else {
+                continue;
+            };
+            if selected.insert(entry_hash, transcripts).is_some() {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "lane execution produced duplicate FASTPQ transcript entrypoint bindings"
+                        .to_owned(),
+                ));
+            }
+        }
+        if !selected_by_call_hash.is_empty() {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "lane execution left selected FASTPQ transcripts without an entrypoint binding"
+                    .to_owned(),
+            ));
+        }
+        Ok(selected
+            .into_iter()
+            .map(|(entry_hash, transcripts)| TransferTranscriptBundle {
+                entry_hash,
+                transcripts,
+            })
+            .collect())
     }
     fn drain_merge_lane_settlement_commitment(
         &mut self,

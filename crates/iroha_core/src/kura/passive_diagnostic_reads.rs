@@ -726,10 +726,17 @@ impl Kura {
                     artifact,
                     repair_missing_sidecars,
                 ),
-            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => self
-                .lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
-                    artifact,
-                ),
+            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
+                if repair_missing_sidecars {
+                    self.lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
+                        artifact,
+                    )
+                } else {
+                    self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair_under_prune_and_canonical_guards(
+                        artifact,
+                    )
+                }
+            }
         }
     }
 }

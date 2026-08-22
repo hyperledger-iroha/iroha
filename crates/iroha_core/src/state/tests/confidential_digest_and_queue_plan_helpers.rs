@@ -544,10 +544,13 @@ fn configured_single_lane_merge_state() -> (State, Vec<KeyPair>, Vec<KeyPair>, S
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::zero();
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
     state
-        .set_nexus(iroha_config::parameters::actual::Nexus {
-            ..iroha_config::parameters::actual::Nexus::default()
-        })
+        .set_nexus(nexus)
         .expect("enable single-lane Nexus merge fixture");
     let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &validator_keypairs);
@@ -580,12 +583,29 @@ fn queue_plan_admission_certificate_for_state_test(
     authority_height: u64,
     tag: u8,
 ) -> (crate::torii_proxy::QueuePlanAdmissionBindingV2, Vec<u8>) {
+    let entrypoint = queue_plan_entrypoint_for_state_test(state, tag);
+    queue_plan_admission_certificate_for_entrypoint_state_test(
+        state,
+        routing_plan,
+        validator_keypairs,
+        authority_height,
+        tag,
+        &entrypoint,
+    )
+}
+fn queue_plan_admission_certificate_for_entrypoint_state_test(
+    state: &State,
+    routing_plan: crate::queue::RoutingPlan,
+    validator_keypairs: &[KeyPair],
+    authority_height: u64,
+    tag: u8,
+    entrypoint: &TransactionEntrypoint,
+) -> (crate::torii_proxy::QueuePlanAdmissionBindingV2, Vec<u8>) {
     let_row! { proposal_height = authority_height .checked_add(1) .expect("fixture proposal height") };
     let_row! { predecessor_block_hash = if authority_height == 0 { None } else { usize::try_from(authority_height) .ok() .and_then(|height| height.checked_sub(1)) .and_then(|index| state.block_hashes.view().get(index).copied()) } };
     let_row! { route_incarnations = routing_plan .legs() .into_iter() .map(|leg| { let validator_set = crate::queue::queue_plan_authoritative_peers_in_view_at_height( &state.view(), leg.route, proposal_height, ) .expect("fixture route authority"); assert!( !validator_set.is_empty(), "fixture route must have authoritative validators" ); crate::queue::QueuePlanRouteIncarnationV2 { leg, lane_incarnation: state .lane_incarnation(leg.route.lane_id) .expect("fixture route has an active incarnation"), validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1, validator_set_hash: HashOf::new(&validator_set), validator_count: u16::try_from(validator_set.len()) .expect("fixture validator count"), durability_threshold: u16::try_from(validator_set.len().div_ceil(3)) .expect("fixture durability threshold"), validator_set, } }) .collect::<Vec<_>>() };
     let_row! { admission_context = crate::queue::QueuePlanAdmissionContextV2 { version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2, authority_height, proposal_height, predecessor_block_hash, routing_plan_digest: routing_plan.digest(), route_incarnations, } };
-    let entrypoint = queue_plan_entrypoint_for_state_test(state, tag);
-    let_row! { binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new( &state.network_id, &entrypoint, &routing_plan, admission_context, u64::from(tag).saturating_add(100), ) .expect("canonical QueuePlan admission binding") };
+    let_row! { binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new( &state.network_id, entrypoint, &routing_plan, admission_context, u64::from(tag).saturating_add(100), ) .expect("canonical QueuePlan admission binding") };
     let_row! { certificate = queue_plan_admission_certificate_bytes_for_state_test(&binding, validator_keypairs) };
     (binding, certificate)
 }

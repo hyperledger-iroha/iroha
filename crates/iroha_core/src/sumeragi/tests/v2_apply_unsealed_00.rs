@@ -1733,6 +1733,7 @@ fn merge_entry_with_reservations(
         settlement_hash: iroha_data_model::nexus::compute_settlement_hash(&settlement_commitment)
             .expect("fixture settlement hashes canonically"),
         settlement_commitment,
+        fastpq_transcripts: Vec::new().into(),
     };
     let lanes = vec![execution];
     let base_state_hash =

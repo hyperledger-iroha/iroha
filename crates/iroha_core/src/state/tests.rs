@@ -49,7 +49,7 @@ use iroha_data_model::{
     },
     isi::{
         Burn, Mint, Register, RemoveAssetKeyValue, SetAssetKeyValue, SetKeyValue, Transfer,
-        Unregister, error::InstructionExecutionError,
+        TransferAssetBatch, TransferAssetBatchEntry, Unregister, error::InstructionExecutionError,
     },
     merge::MergeQuorumCertificate,
     musubi::{

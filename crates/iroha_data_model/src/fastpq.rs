@@ -278,7 +278,7 @@ pub struct FastpqRolePermissionDelta {
     /// Epoch at which the change becomes effective (little-endian u64).
     pub epoch: u64,
 }
-/// Bundle of transcripts keyed by the transaction entrypoint hash.
+/// Bundle of transcripts keyed by the lane transaction-entrypoint identity.
 #[derive(
     Debug,
     Clone,
@@ -293,7 +293,12 @@ pub struct FastpqRolePermissionDelta {
     IntoSchema,
 )]
 pub struct TransferTranscriptBundle {
-    /// Entry hash (`hash_as_entrypoint`) associated with the transcripts.
+    /// Entry identity associated with the transcripts on the enclosing evidence surface.
+    ///
+    /// Ordinary execution witnesses use the FASTPQ execution-call identity (the inner signed
+    /// transaction hash for a sealed reveal). Autonomous merge-lane carriers instead bind this
+    /// field to their canonical outer entrypoint identity; each transcript's `batch_hash` remains
+    /// the execution-call hash emitted by execution.
     pub entry_hash: Hash,
     /// Recorded transcripts for the entry.
     pub transcripts: Vec<TransferTranscript>,

@@ -7197,6 +7197,21 @@ impl Executor {
             instruction,
             is_genesis,
         )?;
+        if instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::TransferAssetBatch>()
+            .is_some()
+            && !valid_contract_runtime_subject(
+                &state_transaction.world,
+                authority,
+                contract_runtime_context,
+            )
+        {
+            return Err(ValidationFail::NotPermitted(
+                "Can't transfer asset batch from an inactive or inconsistent contract subject"
+                    .to_owned(),
+            ));
+        }
         if let Some(register_role) = extract_register_role(instruction) {
             if is_reserved_multisig_role_id(register_role.object().id()) {
                 return Err(ValidationFail::NotPermitted(
@@ -9252,6 +9267,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         RevokeBox,
         SetKeyValueBox,
         TransferBox,
+        iroha_data_model::isi::TransferAssetBatch,
         UnregisterBox,
         iroha_data_model::isi::Upgrade,
         iroha_data_model::isi::register::RegisterPeerWithPop,
@@ -10256,16 +10272,8 @@ fn can_transfer_asset(
     contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     transfer: &Transfer<Asset, Quantity, Account>,
 ) -> Result<bool, ValidationFail> {
-    if let Some(context) = contract_runtime_context {
-        let live_subject =
-            code::bound_contract_subject_from_world(world, &context.contract_address);
-        if context.contract_subject != *authority
-            || context.contract_address.subject_id() != context.contract_subject
-            || live_subject.as_ref() != Some(authority)
-            || world.contract_subject_addresses().get(authority) != Some(&context.contract_address)
-        {
-            return Ok(false);
-        }
+    if !valid_contract_runtime_subject(world, authority, contract_runtime_context) {
+        return Ok(false);
     }
     if transfer.source().account() == authority {
         return Ok(true);
@@ -10283,6 +10291,20 @@ fn can_transfer_asset(
     }
     .into();
     authority_has_permission(world, authority, &by_definition)
+}
+fn valid_contract_runtime_subject(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+) -> bool {
+    let Some(context) = contract_runtime_context else {
+        return true;
+    };
+    let live_subject = code::bound_contract_subject_from_world(world, &context.contract_address);
+    context.contract_subject == *authority
+        && context.contract_address.subject_id() == context.contract_subject
+        && live_subject.as_ref() == Some(authority)
+        && world.contract_subject_addresses().get(authority) == Some(&context.contract_address)
 }
 fn normalize_role_permission_for_initial_executor(
     state_transaction: &StateTransaction<'_, '_>,
@@ -10862,8 +10884,12 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         asset::{AssetTransferAvailability, AssetTransferControlWindow},
+        events::data::prelude::{AssetBatchTransferLegStatus, AssetBatchTransferRejectionCode},
         executor::{self as data_model_executor, ExecutorDataModel},
-        isi::{Grant, SetAssetTransferAvailability, SetAssetTransferControl},
+        isi::{
+            Grant, SetAssetTransferAvailability, SetAssetTransferControl,
+            transfer::{TransferAssetBatch, TransferAssetBatchEntry},
+        },
         name::Name,
         parameter::{CustomParameter, CustomParameterId},
         prelude::*,
@@ -10972,6 +10998,71 @@ mod tests {
         world
             .asset_definitions
             .insert(asset_definition_id.clone(), definition);
+    }
+    struct InitialBatchFixture {
+        world: World,
+        source: AccountId,
+        foreign_source: AccountId,
+        delegate: AccountId,
+        first_destination: AccountId,
+        second_destination: AccountId,
+        asset_definition: AssetDefinitionId,
+        source_asset: AssetId,
+        foreign_source_asset: AssetId,
+    }
+    fn initial_batch_fixture() -> InitialBatchFixture {
+        let source = checked_account_id();
+        let foreign_source = checked_account_id();
+        let delegate = checked_account_id();
+        let first_destination = checked_account_id();
+        let second_destination = checked_account_id();
+        let domain_id = DomainId::try_new("batch_assets", "universal").expect("domain id");
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "coin".parse().expect("asset name"),
+        );
+        let source_asset = AssetId::new(asset_definition.clone(), source.clone());
+        let foreign_source_asset = AssetId::new(asset_definition.clone(), foreign_source.clone());
+        let mut world = World::with_assets(
+            [Domain::new(domain_id).build(&source)],
+            [
+                Account::new(source.clone()).build(&source),
+                Account::new(foreign_source.clone()).build(&foreign_source),
+                Account::new(delegate.clone()).build(&delegate),
+                Account::new(first_destination.clone()).build(&first_destination),
+                Account::new(second_destination.clone()).build(&second_destination),
+            ],
+            [AssetDefinition::numeric(
+                asset_definition.clone(),
+                "batch coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&source)],
+            [
+                Asset::new(source_asset.clone(), Quantity::from(20_u32)),
+                Asset::new(foreign_source_asset.clone(), Quantity::from(20_u32)),
+            ],
+            [],
+        );
+        seed_test_asset_supply(&mut world, &asset_definition);
+        InitialBatchFixture {
+            world,
+            source,
+            foreign_source,
+            delegate,
+            first_destination,
+            second_destination,
+            asset_definition,
+            source_asset,
+            foreign_source_asset,
+        }
+    }
+    fn initial_batch_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
+        world
+            .asset(asset_id)
+            .map(|asset| asset.value().clone().into_inner())
+            .unwrap_or_else(|_| Quantity::zero())
     }
     fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
@@ -17016,6 +17107,382 @@ mod tests {
                 result.is_ok(),
                 "{case} must authorize only its exact asset transfer: {result:?}"
             );
+        }
+    }
+    #[test]
+    fn initial_executor_transfer_asset_batch_classifies_owner_atomic_and_rolls_back_mixed_sources()
+    {
+        let fixture = initial_batch_fixture();
+        let instruction: InstructionBox = TransferAssetBatch::new(vec![
+            TransferAssetBatchEntry::with_leg_id(
+                "owner-a",
+                fixture.source.clone(),
+                fixture.first_destination.clone(),
+                fixture.asset_definition.clone(),
+                3_u32,
+            ),
+            TransferAssetBatchEntry::with_leg_id(
+                "owner-b",
+                fixture.source.clone(),
+                fixture.second_destination.clone(),
+                fixture.asset_definition.clone(),
+                4_u32,
+            ),
+        ])
+        .into();
+        assert!(
+            initial_native_instruction_is_explicitly_admitted(&instruction),
+            "the concrete batch must be admitted to Core's per-leg authorization"
+        );
+        let state = state_for_testing(fixture.world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut transaction = block.transaction();
+        transaction.tx_call_hash = Some(Hash::new(b"initial-owner-atomic-batch"));
+        super::Executor::Initial
+            .execute_instruction(&mut transaction, &fixture.source, instruction)
+            .expect("the source owner must be able to execute an atomic batch");
+        assert_eq!(
+            initial_batch_balance(&transaction.world, &fixture.source_asset),
+            Quantity::from(13_u32)
+        );
+        assert_eq!(
+            initial_batch_balance(
+                &transaction.world,
+                &AssetId::new(
+                    fixture.asset_definition.clone(),
+                    fixture.first_destination.clone(),
+                ),
+            ),
+            Quantity::from(3_u32)
+        );
+        assert_eq!(
+            initial_batch_balance(
+                &transaction.world,
+                &AssetId::new(
+                    fixture.asset_definition.clone(),
+                    fixture.second_destination.clone(),
+                ),
+            ),
+            Quantity::from(4_u32)
+        );
+
+        let fixture = initial_batch_fixture();
+        let state = state_for_testing(fixture.world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut transaction = block.transaction();
+        transaction.tx_call_hash = Some(Hash::new(b"initial-mixed-atomic-batch"));
+        let error = super::Executor::Initial
+            .execute_instruction(
+                &mut transaction,
+                &fixture.source,
+                TransferAssetBatch::new(vec![
+                    TransferAssetBatchEntry::with_leg_id(
+                        "authorized-first",
+                        fixture.source.clone(),
+                        fixture.first_destination.clone(),
+                        fixture.asset_definition.clone(),
+                        3_u32,
+                    ),
+                    TransferAssetBatchEntry::with_leg_id(
+                        "foreign-second",
+                        fixture.foreign_source.clone(),
+                        fixture.second_destination.clone(),
+                        fixture.asset_definition.clone(),
+                        4_u32,
+                    ),
+                ])
+                .into(),
+            )
+            .expect_err("one unauthorized source must reject the whole atomic batch");
+        assert!(
+            format!("{error:?}").contains("lacks authority to transfer source asset"),
+            "the classified batch must reach Core's exact source check: {error:?}"
+        );
+        assert_eq!(
+            initial_batch_balance(&transaction.world, &fixture.source_asset),
+            Quantity::from(20_u32)
+        );
+        assert_eq!(
+            initial_batch_balance(&transaction.world, &fixture.foreign_source_asset),
+            Quantity::from(20_u32)
+        );
+        for destination in [&fixture.first_destination, &fixture.second_destination] {
+            assert_eq!(
+                initial_batch_balance(
+                    &transaction.world,
+                    &AssetId::new(fixture.asset_definition.clone(), destination.clone()),
+                ),
+                Quantity::zero(),
+                "atomic source rejection must leave every destination untouched"
+            );
+        }
+    }
+    #[test]
+    fn initial_executor_transfer_asset_batch_independent_isolates_unauthorized_source_receipt() {
+        let fixture = initial_batch_fixture();
+        let state = state_for_testing(fixture.world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut transaction = block.transaction();
+        transaction.tx_call_hash = Some(Hash::new(b"initial-mixed-independent-batch"));
+        super::Executor::Initial
+            .execute_instruction(
+                &mut transaction,
+                &fixture.source,
+                TransferAssetBatch::independent(vec![
+                    TransferAssetBatchEntry::with_leg_id(
+                        "authorized-first",
+                        fixture.source.clone(),
+                        fixture.first_destination.clone(),
+                        fixture.asset_definition.clone(),
+                        3_u32,
+                    ),
+                    TransferAssetBatchEntry::with_leg_id(
+                        "foreign-second",
+                        fixture.foreign_source.clone(),
+                        fixture.second_destination.clone(),
+                        fixture.asset_definition.clone(),
+                        4_u32,
+                    ),
+                ])
+                .into(),
+            )
+            .expect("independent settlement must isolate a per-leg source rejection");
+        assert_eq!(
+            initial_batch_balance(&transaction.world, &fixture.source_asset),
+            Quantity::from(17_u32)
+        );
+        assert_eq!(
+            initial_batch_balance(&transaction.world, &fixture.foreign_source_asset),
+            Quantity::from(20_u32)
+        );
+        assert_eq!(
+            initial_batch_balance(
+                &transaction.world,
+                &AssetId::new(
+                    fixture.asset_definition.clone(),
+                    fixture.first_destination.clone(),
+                ),
+            ),
+            Quantity::from(3_u32)
+        );
+        assert_eq!(
+            initial_batch_balance(
+                &transaction.world,
+                &AssetId::new(
+                    fixture.asset_definition.clone(),
+                    fixture.second_destination.clone(),
+                ),
+            ),
+            Quantity::zero()
+        );
+        transaction.apply();
+        let mut outcome_rows = block.drain_batch_transfer_outcomes().into_values();
+        let outcomes = outcome_rows.next().expect("one transaction receipt row");
+        assert!(
+            outcome_rows.next().is_none(),
+            "one batch must produce exactly one keyed receipt row"
+        );
+        assert_eq!(outcomes.len(), 2);
+        assert!(matches!(
+            &outcomes[0].status,
+            AssetBatchTransferLegStatus::Applied
+        ));
+        assert!(matches!(
+            &outcomes[1].status,
+            AssetBatchTransferLegStatus::Rejected(rejection)
+                if rejection.code == AssetBatchTransferRejectionCode::PolicyRejected
+                    && rejection.message.contains("lacks authority to transfer source asset")
+        ));
+        assert_eq!(outcomes[0].leg_index, 0);
+        assert_eq!(outcomes[0].leg_id, "authorized-first");
+        assert_eq!(outcomes[1].leg_index, 1);
+        assert_eq!(outcomes[1].leg_id, "foreign-second");
+    }
+    #[test]
+    fn initial_executor_transfer_asset_batch_accepts_direct_definition_and_role_delegation() {
+        for permission_case in ["direct asset", "direct definition", "role definition"] {
+            let mut fixture = initial_batch_fixture();
+            let permission = match permission_case {
+                "direct asset" => Permission::from(executor_permission::asset::CanTransferAsset {
+                    asset: fixture.source_asset.clone(),
+                }),
+                "direct definition" | "role definition" => {
+                    Permission::from(executor_permission::asset::CanTransferAssetWithDefinition {
+                        asset_definition: fixture.asset_definition.clone(),
+                    })
+                }
+                _ => unreachable!("fixed permission cases"),
+            };
+            if permission_case == "role definition" {
+                let role_id: RoleId = "batch_transfer_delegate".parse().expect("role id");
+                let role = Role::new(role_id.clone(), fixture.delegate.clone())
+                    .add_permission(permission)
+                    .build(&fixture.delegate);
+                fixture.world.roles.insert(role_id.clone(), role);
+                fixture.world.account_roles.insert(
+                    crate::role::RoleIdWithOwner::new(fixture.delegate.clone(), role_id),
+                    (),
+                );
+            } else {
+                fixture
+                    .world
+                    .account_permissions
+                    .insert(fixture.delegate.clone(), BTreeSet::from([permission]));
+            }
+            let state = state_for_testing(fixture.world);
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+            let mut transaction = block.transaction();
+            transaction.tx_call_hash = Some(Hash::new(permission_case.as_bytes()));
+            let result = super::Executor::Initial.execute_instruction(
+                &mut transaction,
+                &fixture.delegate,
+                TransferAssetBatch::new(vec![TransferAssetBatchEntry::with_leg_id(
+                    "delegated",
+                    fixture.source.clone(),
+                    fixture.first_destination.clone(),
+                    fixture.asset_definition.clone(),
+                    5_u32,
+                )])
+                .into(),
+            );
+            assert!(
+                result.is_ok(),
+                "{permission_case} must authorize the exact batch source: {result:?}"
+            );
+            assert_eq!(
+                initial_batch_balance(&transaction.world, &fixture.source_asset),
+                Quantity::from(15_u32)
+            );
+        }
+    }
+    #[test]
+    fn initial_executor_transfer_asset_batch_requires_active_canonical_contract_context_for_both_modes()
+     {
+        #[derive(Clone, Copy, core::fmt::Debug)]
+        enum Provenance {
+            Active,
+            MissingReverse,
+            InactiveAddress,
+        }
+        for independent in [false, true] {
+            for provenance in [
+                Provenance::Active,
+                Provenance::MissingReverse,
+                Provenance::InactiveAddress,
+            ] {
+                let deployer = checked_account_id();
+                let destination = checked_account_id();
+                let network_id = executor_test_network_id(b"initial-contract-batch-context");
+                let contract_address =
+                    ContractAddress::derive(&network_id, &deployer, 810, DataSpaceId::UNIVERSAL)
+                        .expect("contract address");
+                let contract_subject = contract_address.subject_id();
+                let asset_definition = AssetDefinitionId::from_uuid_bytes([
+                    0xb8, 0xb8, 0xb8, 0xb8, 0xb8, 0xb8, 0x48, 0xb8, 0xb8, 0xb8, 0xb8, 0xb8, 0xb8,
+                    0xb8, 0xb8, 0xb8,
+                ])
+                .expect("opaque asset definition");
+                let source_asset = AssetId::new(asset_definition.clone(), contract_subject.clone());
+                let mut world = World::with_assets(
+                    [],
+                    [
+                        Account::new(deployer.clone()).build(&deployer),
+                        Account::new(contract_subject.clone()).build(&contract_subject),
+                        Account::new(destination.clone()).build(&destination),
+                    ],
+                    [AssetDefinition::numeric(
+                        asset_definition.clone(),
+                        "contract batch coin".to_owned(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
+                    .build(&deployer)],
+                    [Asset::new(source_asset.clone(), Quantity::from(10_u32))],
+                    [],
+                );
+                seed_test_asset_supply(&mut world, &asset_definition);
+                world
+                    .contract_instances
+                    .insert(contract_address.clone(), Hash::new(b"contract-batch-code"));
+                world.contract_subject_bindings.insert(
+                    contract_address.clone(),
+                    crate::smartcontracts::code::ContractSubjectBinding::new(&contract_address),
+                );
+                world
+                    .contract_subject_addresses
+                    .insert(contract_subject.clone(), contract_address.clone());
+                let context_address = if matches!(provenance, Provenance::InactiveAddress) {
+                    ContractAddress::derive(&network_id, &deployer, 811, DataSpaceId::UNIVERSAL)
+                        .expect("inactive contract address")
+                } else {
+                    contract_address
+                };
+                let context = ContractRuntimeExecutionContext {
+                    contract_address: context_address,
+                    contract_subject: contract_subject.clone(),
+                    contract_alias: None,
+                    entrypoint: "execute_batch".to_owned(),
+                };
+                let state = State::new_with_chain_and_network_id_for_testing(
+                    world,
+                    Kura::blank_kura_for_testing(),
+                    query::store::LiveQueryStore::start_test(),
+                    iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                    network_id,
+                );
+                let mut block =
+                    state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+                let mut transaction = block.transaction();
+                if matches!(provenance, Provenance::MissingReverse) {
+                    transaction
+                        .world
+                        .contract_subject_addresses
+                        .remove(contract_subject.clone());
+                }
+                transaction.tx_call_hash = Some(Hash::new(
+                    format!("contract-batch-{independent}-{provenance:?}").as_bytes(),
+                ));
+                let entries = vec![TransferAssetBatchEntry::with_leg_id(
+                    "contract-owned",
+                    contract_subject.clone(),
+                    destination.clone(),
+                    asset_definition.clone(),
+                    2_u32,
+                )];
+                let batch = if independent {
+                    TransferAssetBatch::independent(entries)
+                } else {
+                    TransferAssetBatch::new(entries)
+                };
+                let result = super::Executor::Initial
+                    .execute_instruction_with_contract_runtime_context(
+                        &mut transaction,
+                        &contract_subject,
+                        batch.into(),
+                        Some(&context),
+                    );
+                if matches!(provenance, Provenance::Active) {
+                    result.unwrap_or_else(|error| {
+                        panic!(
+                            "active contract batch (independent={independent}) was rejected: {error:?}"
+                        )
+                    });
+                    assert_eq!(
+                        initial_batch_balance(&transaction.world, &source_asset),
+                        Quantity::from(8_u32)
+                    );
+                } else {
+                    assert!(
+                        matches!(result, Err(ValidationFail::NotPermitted(_))),
+                        "invalid {provenance:?} context (independent={independent}) must reject the whole batch: {result:?}"
+                    );
+                    assert_eq!(
+                        initial_batch_balance(&transaction.world, &source_asset),
+                        Quantity::from(10_u32),
+                        "provenance rejection must precede either settlement mode"
+                    );
+                }
+            }
         }
     }
     #[test]

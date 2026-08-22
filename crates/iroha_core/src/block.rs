@@ -11277,24 +11277,29 @@ pub(crate) mod valid {
             }
             let fastpq_digest_batch = state_block.submit_transfer_transcript_digest_batch();
             let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
-            for (idx, entry_hash) in ordered_hashes.iter().enumerate() {
+            let mut fastpq_execution_hashes =
+                Vec::with_capacity(entrypoints.len() + time_hashes.len());
+            for (idx, entrypoint) in entrypoints.iter().enumerate() {
+                let execution_hash = entrypoint.execution_call_hash();
                 fastpq_entry_dataspaces.insert(
-                    iroha_crypto::Hash::from(*entry_hash),
+                    iroha_crypto::Hash::from(execution_hash),
                     routing_decisions[idx].dataspace_id,
                 );
+                fastpq_execution_hashes.push(execution_hash);
             }
             for entry_hash in &time_hashes {
                 fastpq_entry_dataspaces.insert(
                     iroha_crypto::Hash::from(*entry_hash),
                     DataSpaceId::UNIVERSAL,
                 );
+                fastpq_execution_hashes.push(*entry_hash);
             }
             ordered_hashes.append(&mut time_hashes);
             ordered_results.append(&mut time_results);
-            let mut tx_set_hashes = ordered_hashes.clone();
-            tx_set_hashes.sort_unstable();
-            let tx_set_hash =
-                crate::fastpq::tx_set_hash_from_ordered_hashes(tx_set_hashes.iter().copied());
+            fastpq_execution_hashes.sort_unstable();
+            let tx_set_hash = crate::fastpq::tx_set_hash_from_ordered_hashes(
+                fastpq_execution_hashes.iter().copied(),
+            );
             state_block.set_fastpq_tx_set_hash(tx_set_hash);
             state_block.set_fastpq_entry_dataspaces(fastpq_entry_dataspaces);
             let fastpq_transcripts =
@@ -15212,7 +15217,19 @@ pub(crate) mod valid {
             }
             let dataspaces_start = timings.as_ref().map(|_| Instant::now());
             let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
-            for (idx, entry_hash) in call_hashes.iter().enumerate() {
+            let mut fastpq_execution_hashes = block
+                .external_entrypoints_slice()
+                .iter()
+                .map(TransactionEntrypoint::execution_call_hash)
+                .collect::<Vec<_>>();
+            if fastpq_execution_hashes.len() != routing_decisions.len() {
+                return Err(Self::execution_context_error(format!(
+                    "FASTPQ execution-call identities do not align with routing decisions: {} identities, {} routes",
+                    fastpq_execution_hashes.len(),
+                    routing_decisions.len(),
+                )));
+            }
+            for (idx, entry_hash) in fastpq_execution_hashes.iter().enumerate() {
                 fastpq_entry_dataspaces.insert(
                     iroha_crypto::Hash::from(*entry_hash),
                     routing_decisions[idx].dataspace_id,
@@ -15223,6 +15240,7 @@ pub(crate) mod valid {
                     iroha_crypto::Hash::from(*entry_hash),
                     DataSpaceId::UNIVERSAL,
                 );
+                fastpq_execution_hashes.push(*entry_hash);
             }
             hashes.append(&mut time_trg_hashes);
             ordered_results.append(&mut time_trg_results);
@@ -15230,10 +15248,10 @@ pub(crate) mod valid {
                 timings.execution_tx_finalize_dataspaces_ms = to_ms(start.elapsed());
             }
             let tx_set_start = timings.as_ref().map(|_| Instant::now());
-            let mut tx_set_hashes = hashes.clone();
-            tx_set_hashes.sort_unstable();
-            let tx_set_hash =
-                crate::fastpq::tx_set_hash_from_ordered_hashes(tx_set_hashes.iter().copied());
+            fastpq_execution_hashes.sort_unstable();
+            let tx_set_hash = crate::fastpq::tx_set_hash_from_ordered_hashes(
+                fastpq_execution_hashes.iter().copied(),
+            );
             state_block.set_fastpq_tx_set_hash(tx_set_hash);
             state_block.set_fastpq_entry_dataspaces(fastpq_entry_dataspaces);
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), tx_set_start) {
@@ -30335,6 +30353,332 @@ seiyaku DynamicTarget {
             })
             .expect("authority account exists");
         assert_eq!(metadata_value, Some(Json::new("revealed")));
+    }
+    #[test]
+    fn block_pipeline_finalizes_sealed_reveal_batch_receipts_on_outer_result_once() {
+        let (authority, keypair) = gen_account_in("wonderland");
+        let (destination, _destination_keypair) = gen_account_in("wonderland");
+        let sealed_dataspace = DataSpaceId::new(7);
+        let sealed_dataspace_alias = "sealed-dataspace-7";
+        let domain_id = DomainId::try_new("wonderland", sealed_dataspace_alias).expect("domain id");
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "sealed_coin".parse().expect("asset name"),
+        );
+        let source_asset_id = AssetId::with_scope(
+            asset_definition_id.clone(),
+            authority.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(sealed_dataspace),
+        );
+        let destination_asset_id = AssetId::with_scope(
+            asset_definition_id.clone(),
+            destination.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(sealed_dataspace),
+        );
+        let world = test_world_with_assets(
+            [Domain::new(domain_id.clone()).build(&authority)],
+            [
+                Account::new(authority.clone()).build(&authority),
+                Account::new(destination.clone()).build(&destination),
+            ],
+            [AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                "sealed batch coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
+            )
+            .build(&authority)],
+            [Asset::new(source_asset_id.clone(), Quantity::from(10_u32))],
+            [],
+        );
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(1_u32),
+            vec![LaneConfig {
+                id: LaneId::SINGLE,
+                dataspace_id: sealed_dataspace,
+                alias: "sealed-default".to_owned(),
+                ..LaneConfig::default()
+            }],
+        )
+        .expect("sealed test lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata {
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: sealed_dataspace,
+                alias: sealed_dataspace_alias.to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("sealed test dataspace catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.lane_catalog = lane_catalog;
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        nexus.dataspace_catalog = dataspace_catalog;
+        nexus.routing_policy.default_lane = LaneId::SINGLE;
+        nexus.routing_policy.default_dataspace = sealed_dataspace;
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
+        // Open the isolated test Kura at the authoritative pre-genesis geometry. Installing this
+        // catalog through `set_nexus` would instead model a lifecycle relabel of the already-open
+        // synthetic primary lane and correctly refuse to archive that active block store.
+        let state = State::new_with_pre_genesis_nexus_for_testing(
+            world,
+            nexus,
+            LiveQueryStore::start_test(),
+        );
+        assert_eq!(
+            state
+                .world
+                .view()
+                .asset_definition_domains()
+                .get(&asset_definition_id),
+            Some(&domain_id),
+            "the fixture asset must be authoritative on the sealed execution dataspace"
+        );
+        install_test_lane_manifests(&state);
+
+        let mut transaction_builder = TransactionBuilder::new(
+            state.network_id,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        transaction_builder.set_creation_time(Duration::ZERO);
+        let signed = transaction_builder
+            .with_instructions([TransferAssetBatch::independent(vec![
+                TransferAssetBatchEntry::with_leg_id(
+                    "sealed-batch-leg",
+                    authority.clone(),
+                    destination.clone(),
+                    asset_definition_id,
+                    3_u32,
+                ),
+            ])])
+            .sign(keypair.private_key());
+        let inner_call_hash = signed.hash_as_entrypoint();
+        let salt = [0x5B; 32];
+        let commitment = compute_sealed_transaction_commitment(&state.network_id, &signed, salt, 4);
+        let commitment_entrypoint =
+            TransactionEntrypoint::SealedCommitment(SignedSealedTransactionCommitment::sign(
+                SealedTransactionCommitmentPayload::new(
+                    state.network_id,
+                    authority,
+                    commitment,
+                    2,
+                    4,
+                    None,
+                ),
+                keypair.private_key(),
+            ));
+        let reveal_entrypoint = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            commitment, signed, salt,
+        ));
+        let outer_reveal_hash = reveal_entrypoint.hash();
+
+        let accepted_commitment =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
+        let (_commit_clock, commit_time_source) = TimeSource::new_mock(Duration::from_millis(1));
+        let commitment_block =
+            BlockBuilder::new_with_time_source(vec![accepted_commitment], commit_time_source)
+                .chain(0, state.view().latest_block().as_deref())
+                .sign(keypair.private_key())
+                .unpack(|_| {});
+        let mut commitment_state_block = state.block(commitment_block.header);
+        let valid_commitment = commitment_block
+            .validate_and_record_transactions(&mut commitment_state_block)
+            .unpack(|_| {});
+        assert!(
+            valid_commitment.as_ref().errors().next().is_none(),
+            "the sealed commitment must finalize successfully"
+        );
+        commitment_state_block
+            .commit()
+            .expect("commit sealed batch commitment state");
+        let committed_parent: SignedBlock = valid_commitment.into();
+
+        let accepted_reveal =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(reveal_entrypoint));
+        let (_reveal_clock, reveal_time_source) = TimeSource::new_mock(Duration::from_millis(2));
+        let reveal_plan = {
+            let view = state.view();
+            crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                &view.nexus,
+                &accepted_reveal,
+                view.world(),
+                u64::try_from(reveal_time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
+                2,
+            )
+            .expect("sealed batch route resolves from the installed Nexus catalog")
+        };
+        assert_eq!(
+            reveal_plan.coordinator_route(),
+            crate::queue::RoutingDecision::new(LaneId::SINGLE, sealed_dataspace),
+            "the production router must select the authoritative sealed dataspace"
+        );
+        let reveal_builder =
+            BlockBuilder::new_with_time_source(vec![accepted_reveal], reveal_time_source)
+                .chain(0, Some(&committed_parent));
+        // The state-free block-builder test fallback is intentionally UNIVERSAL. Replace that
+        // scaffold with the exact policy-derived route so the ordinary finalizer is exercised
+        // against the same non-universal execution identity that production Sumeragi embeds.
+        let mut reveal_execution_context = default_test_execution_context(
+            &reveal_builder.0.transactions,
+            &reveal_builder.0.header,
+            PeerId::new(keypair.public_key().clone()),
+        );
+        reveal_execution_context.external[0] =
+            crate::queue::execution_context_for_routing_plan(outer_reveal_hash, &reveal_plan);
+        let ownership = &mut reveal_execution_context.lane_payload_ownerships[0];
+        ownership.dataspace_id = sealed_dataspace;
+        ownership.lane_incarnation =
+            crate::state::derive_static_lane_incarnations(&state.nexus_snapshot().lane_catalog)
+                .get(&LaneId::SINGLE)
+                .copied()
+                .expect("sealed test lane has an incarnation");
+        ownership.qc_mode_tag = LaneRelayEnvelope::lane_qc_mode_tag_for(
+            LaneId::SINGLE,
+            sealed_dataspace,
+            "block-builder-test",
+        );
+        let replay_hashes = ownership
+            .compute_replay_hashes()
+            .expect("sealed test ownership replay hashes compute");
+        ownership.subject_hash = replay_hashes.subject_hash;
+        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+        let reveal_block = reveal_builder
+            .with_execution_context(Some(reveal_execution_context))
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let mut reveal_state_block = state.block(reveal_block.header);
+        let valid_reveal = reveal_block
+            .validate_and_record_transactions(&mut reveal_state_block)
+            .unpack(|_| {});
+        let (_, result_entrypoint, result) = valid_reveal
+            .as_ref()
+            .entrypoint_results()
+            .next()
+            .expect("one sealed reveal result");
+        assert_eq!(result_entrypoint.hash(), outer_reveal_hash);
+        assert!(
+            result.0.is_ok(),
+            "the sealed native batch must execute successfully: {result:?}"
+        );
+        let outcomes = result.batch_transfer_outcomes();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].leg_index, 0);
+        assert_eq!(outcomes[0].leg_id, "sealed-batch-leg");
+        assert!(
+            matches!(outcomes[0].status, AssetBatchTransferLegStatus::Applied),
+            "the sealed batch leg must apply: {:?}",
+            outcomes[0]
+        );
+        assert_eq!(
+            valid_reveal
+                .as_ref()
+                .batch_transfer_outcomes_for(&outer_reveal_hash),
+            outcomes,
+            "the canonical outer entrypoint must query the inner execution receipts"
+        );
+        assert!(
+            valid_reveal
+                .as_ref()
+                .batch_transfer_outcomes_for(&inner_call_hash)
+                .is_empty(),
+            "committed receipt lookup remains keyed by the canonical outer entrypoint"
+        );
+        let inner_call_hash = Hash::from(inner_call_hash);
+        let outer_reveal_hash = Hash::from(outer_reveal_hash);
+        assert_eq!(
+            valid_reveal
+                .as_ref()
+                .fastpq_transcripts()
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![inner_call_hash],
+            "sealed FASTPQ evidence must retain the inner signed execution identity"
+        );
+        let witness = reveal_state_block
+            .take_exec_witness()
+            .expect("live sealed reveal captures its execution witness");
+        assert_eq!(witness.fastpq_transcripts.len(), 1);
+        assert_eq!(witness.fastpq_transcripts[0].entry_hash, inner_call_hash);
+        let fastpq_context = reveal_state_block
+            .take_fastpq_witness_context()
+            .expect("sealed numeric transfer captures FASTPQ context");
+        assert_eq!(
+            fastpq_context.entry_dataspaces.get(&inner_call_hash),
+            Some(&crate::fastpq::dataspace_id_bytes(sealed_dataspace))
+        );
+        assert!(
+            fastpq_context
+                .entry_dataspaces
+                .get(&outer_reveal_hash)
+                .is_none(),
+            "the outer reveal envelope must not replace the signed execution-call identity"
+        );
+        let expected_tx_set_hash = crate::fastpq::tx_set_hash_from_ordered_hashes(
+            [HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+                inner_call_hash,
+            )]
+            .into_iter(),
+        );
+        assert_eq!(fastpq_context.tx_set_hash, Some(expected_tx_set_hash));
+        assert_eq!(
+            reveal_state_block
+                .world
+                .asset(&source_asset_id)
+                .expect("source balance exists")
+                .value()
+                .clone()
+                .into_inner(),
+            Quantity::from(7_u32)
+        );
+        assert_eq!(
+            reveal_state_block
+                .world
+                .asset(&destination_asset_id)
+                .expect("destination balance exists")
+                .value()
+                .clone()
+                .into_inner(),
+            Quantity::from(3_u32)
+        );
+        reveal_state_block
+            .commit()
+            .expect("commit sealed batch reveal state exactly once");
+        assert_eq!(
+            state
+                .world
+                .view()
+                .asset(&source_asset_id)
+                .expect("committed source balance exists")
+                .value()
+                .clone()
+                .into_inner(),
+            Quantity::from(7_u32)
+        );
+        assert_eq!(
+            state
+                .world
+                .view()
+                .asset(&destination_asset_id)
+                .expect("committed destination balance exists")
+                .value()
+                .clone()
+                .into_inner(),
+            Quantity::from(3_u32)
+        );
     }
     #[test]
     fn prune_expired_sealed_commitments_removes_pending_state_after_deadline() {

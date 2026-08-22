@@ -24,7 +24,7 @@ use super::{
         production_durable_predecessor_identity_kernel,
     },
     v2_first_release_recovery::{LifecycleContext, LifecycleDigest},
-    v2_lane_work::durable_lane_completion_matches_finality,
+    v2_lane_work::durable_lane_completion_matches_finality_during_startup,
 };
 use crate::{
     kura::{
@@ -336,7 +336,10 @@ fn plan_v2_startup_replay_inner(
                             height,
                             reason: "durable-tip finality projection has no authenticated artifact",
                         })?;
-                    match durable_lane_completion_matches_finality(kura, artifact) {
+                    match durable_lane_completion_matches_finality_during_startup(
+                        startup_verification,
+                        artifact,
+                    ) {
                         Ok(true) => {}
                         Ok(false) => {
                             return Ok(V2StartupReplayPlan {
@@ -2570,9 +2573,12 @@ mod tests {
         io::Write,
         num::{NonZeroU16, NonZeroU64, NonZeroUsize},
         path::{Path, PathBuf},
+        process::Command,
         sync::Arc,
+        thread,
+        time::{Duration, Instant},
     };
-    fn verified_context() -> (VerifiedHeightContext, Vec<KeyPair>) {
+    fn verified_keys() -> Vec<KeyPair> {
         let mut keys = (1_u8..=4)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -2580,6 +2586,13 @@ mod tests {
             })
             .collect::<Vec<_>>();
         keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        keys
+    }
+    fn verified_context_for_policy_state(
+        policy_state: &State,
+        network_id: iroha_data_model::NetworkId,
+        keys: &[KeyPair],
+    ) -> VerifiedHeightContext {
         let roster = keys
             .iter()
             .map(|key| wire::ValidatorPower {
@@ -2587,9 +2600,6 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let network_id = crate::sumeragi::synthetic_network_id("sumeragi-v2-recovery-test");
-        let policy_kura = Kura::blank_kura_for_testing();
-        let policy_state = state_for(&policy_kura, network_id);
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -2603,7 +2613,7 @@ mod tests {
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"recovery fixture Nexus/AMX"),
-            execution_policy_hash: committed_execution_policy_hash(&policy_state)
+            execution_policy_hash: committed_execution_policy_hash(policy_state)
                 .expect("derive fixture execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::ReedSolomon16,
@@ -2622,8 +2632,15 @@ mod tests {
                     .expect("BLS proof of possession")
             })
             .collect();
+        VerifiedHeightContext::genesis(context, proofs).expect("verified context")
+    }
+    fn verified_context() -> (VerifiedHeightContext, Vec<KeyPair>) {
+        let keys = verified_keys();
+        let network_id = crate::sumeragi::synthetic_network_id("sumeragi-v2-recovery-test");
+        let policy_kura = Kura::blank_kura_for_testing();
+        let policy_state = state_for(&policy_kura, network_id);
         (
-            VerifiedHeightContext::genesis(context, proofs).expect("verified context"),
+            verified_context_for_policy_state(&policy_state, network_id, &keys),
             keys,
         )
     }
@@ -2687,11 +2704,7 @@ mod tests {
             network_id,
         )
     }
-    fn state_with_consensus_keys(
-        kura: &Arc<Kura>,
-        network_id: iroha_data_model::NetworkId,
-        keys: &[KeyPair],
-    ) -> State {
+    fn world_with_consensus_keys(keys: &[KeyPair]) -> World {
         let mut world = World::new();
         for (index, key) in keys.iter().enumerate() {
             let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, format!("validator{index}"));
@@ -2713,8 +2726,15 @@ mod tests {
                 .consensus_keys_by_pk
                 .insert(record.public_key.to_string(), vec![id]);
         }
+        world
+    }
+    fn state_with_consensus_keys(
+        kura: &Arc<Kura>,
+        network_id: iroha_data_model::NetworkId,
+        keys: &[KeyPair],
+    ) -> State {
         State::new_with_chain_and_network_id_for_testing(
-            world,
+            world_with_consensus_keys(keys),
             Arc::clone(kura),
             LiveQueryStore::start_test(),
             ChainId::from("sumeragi-v2-recovery-display-name"),
@@ -2734,13 +2754,51 @@ mod tests {
         parent: Option<HashOf<BlockHeader>>,
         creation_time_ms: u64,
     ) -> CommittedBlock {
-        let valid = ValidBlock::new_dummy_and_modify_header(key.private_key(), |header| {
+        let mut valid = ValidBlock::new_dummy_and_modify_header(key.private_key(), |header| {
             header.set_height(NonZeroU64::new(height).expect("non-zero height"));
             header.set_prev_block_hash(parent);
             header.creation_time_ms = creation_time_ms;
             header.merkle_root = None;
         });
+        valid
+            .as_mut()
+            .set_transaction_results(Vec::new(), &[], Vec::new())
+            .expect("attach required empty block result metadata");
         valid.commit_unchecked().unpack(|_| {})
+    }
+    fn autonomous_lane_carrier_block_for_recovery(
+        payload: &crate::lane_consensus::LaneExecutablePayloadV1,
+        context: &wire::HeightContext,
+        keys: &[KeyPair],
+        parent: Option<HashOf<BlockHeader>>,
+    ) -> CommittedBlock {
+        let envelope = crate::lane_consensus::autonomous_lane_payload_envelope(
+            payload,
+            context.network_id,
+            context.epoch,
+        )
+        .expect("encode exact autonomous startup carrier envelope");
+        let header = BlockHeader::new(
+            NonZeroU64::new(context.height).expect("non-zero carrier height"),
+            parent,
+            None,
+            None,
+            context.height,
+            0,
+        );
+        let mut builder = BlockBuilder::new(header);
+        builder.set_execution_context(Some(
+            BlockExecutionContextBundle::new(Vec::new())
+                .with_autonomous_lane_payloads(vec![envelope]),
+        ));
+        let leader = usize::try_from(context.leader(0)).expect("leader index fits usize");
+        let signed = builder.build_with_signature(
+            u64::try_from(leader).expect("leader index fits u64"),
+            keys[leader].private_key(),
+        );
+        ValidBlock::new_unverified_for_tests(signed)
+            .commit_unchecked()
+            .unpack(|_| {})
     }
     fn lane_owned_block_for_recovery(
         state: &State,
@@ -3811,6 +3869,133 @@ mod tests {
             "hash-vector substitution must fail before any storage publication"
         );
     }
+    const STARTUP_FINALITY_PLANNER_CHILD_ENV: &str =
+        "IROHA_STARTUP_FINALITY_PLANNER_DEADLOCK_CHILD";
+    const STARTUP_FINALITY_PLANNER_TIMEOUT: Duration = Duration::from_secs(30);
+
+    fn run_startup_finality_planner_deadlock_child() {
+        let keys = verified_keys();
+        let state = State::new_with_pre_genesis_nexus_for_testing(
+            world_with_consensus_keys(&keys),
+            crate::kura::tests::startup_two_lane_nexus(),
+            LiveQueryStore::start_test(),
+        );
+        let network_id = state.network_id;
+        let kura = state.kura_handle();
+        let mut fixture =
+            crate::kura::tests::autonomous_lane_startup_fixture_for_carrier(&state, &keys[0], 0, 4);
+        assert!(
+            Arc::ptr_eq(&kura, &fixture.kura),
+            "autonomous payload must use the State-owned two-lane Kura"
+        );
+        let mut verified = verified_context_for_policy_state(&state, network_id, &keys);
+        let store =
+            V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+        store
+            .persist(&PersistedHeightContext::from_verified(&verified))
+            .expect("persist height-one context");
+        let mut parent = None;
+        for height in 1..=4 {
+            let context = verified.context().clone();
+            assert_eq!(context.height, height);
+            let block = if height == 4 {
+                autonomous_lane_carrier_block_for_recovery(
+                    &fixture.payload,
+                    &context,
+                    &keys,
+                    parent,
+                )
+            } else {
+                dummy_block(&keys[0], height, parent)
+            };
+            parent = Some(block.as_ref().hash());
+            if height == 4 {
+                fixture.certify_for_carrier(&keys[0], block.as_ref());
+                let proposal = &fixture.payload.origin_proposal;
+                let descriptor = &proposal.descriptor;
+                assert_eq!(descriptor.proposal_height, 4);
+                assert_eq!(
+                    proposal
+                        .payload_block_hint
+                        .expect("certified proposal owns its global carrier")
+                        .proposal_block_hash,
+                    block.as_ref().hash(),
+                );
+                assert_eq!(
+                    kura.read_certified_lane_block_artifact(
+                        descriptor.lane_id,
+                        descriptor.lane_block_height,
+                    )
+                    .expect("read exact certified autonomous startup slot")
+                    .proposal,
+                    *proposal,
+                );
+            }
+            kura.store_block(block.clone())
+                .expect("persist canonical replay fixture block");
+            commit_to_state(&state, &block, &context);
+            let artifact = authenticated_artifact_for(context, block.as_ref(), &keys);
+            persist_complete_height(kura.as_ref(), &state, &artifact);
+            if height < 4 {
+                let (parent_artifact, parent_receipt) = kura
+                    .v2_finality_artifact_with_receipt(height)
+                    .expect("read parent finality")
+                    .expect("parent finality exists");
+                verified =
+                    build_verified_successor(&state, &store, &parent_artifact, &parent_receipt)
+                        .expect("derive exact successor context")
+                        .into_parts()
+                        .0;
+            }
+        }
+
+        let plan = plan_v2_startup_replay(kura.as_ref())
+            .expect("plan authenticated autonomous four-block replay fixture");
+        assert_eq!(plan.durable_height(), 4);
+        assert_eq!(plan.complete_prefix_height(), 4);
+        assert_eq!(plan.pending_tip_height(), None);
+        kura.finish_v2_startup_finality_verification();
+    }
+
+    #[test]
+    fn startup_finality_planner_deadlock_child() {
+        if std::env::var_os(STARTUP_FINALITY_PLANNER_CHILD_ENV).is_none() {
+            return;
+        }
+        run_startup_finality_planner_deadlock_child();
+    }
+
+    #[test]
+    fn startup_finality_planner_with_certified_autonomous_tip_does_not_deadlock() {
+        let mut child = Command::new(
+            std::env::current_exe().expect("resolve current iroha_core test executable"),
+        )
+        .arg("startup_finality_planner_deadlock_child")
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env(STARTUP_FINALITY_PLANNER_CHILD_ENV, "1")
+        .spawn()
+        .expect("spawn isolated startup planner regression");
+        let deadline = Instant::now() + STARTUP_FINALITY_PLANNER_TIMEOUT;
+        loop {
+            if let Some(status) = child
+                .try_wait()
+                .expect("poll isolated startup planner regression")
+            {
+                assert!(status.success(), "startup planner child exited {status}");
+                return;
+            }
+            if Instant::now() >= deadline {
+                let kill_result = child.kill();
+                let wait_result = child.wait();
+                panic!(
+                    "startup planner deadlocked for thirty seconds; kill={kill_result:?}, wait={wait_result:?}"
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     #[test]
     fn replay_body_preflight_rejects_a_later_unavailable_evicted_body_without_partial_state() {
         let (mut verified, keys) = verified_context();

@@ -87,7 +87,7 @@ use crate::{
         LaneBlockApplicationReceiptArtifact, LaneBlockApplicationReceiptRepairPreflight,
         LaneBlockAuxiliaryPersistenceOutcome, LaneBlockNewViewPersistenceOutcome,
         LaneBlockPayloadAvailability, LaneReadyAuthorization, STRICT_INIT_MAX_BLOCK_BYTES,
-        sumeragi_v2_validator_storage_supported,
+        V2StartupFinalityVerificationSession, sumeragi_v2_validator_storage_supported,
     },
     lane_consensus::{
         CommittedLaneBlockSession, DurableLaneBlockNewViewCertificateV1,
@@ -16762,6 +16762,95 @@ pub(crate) fn durable_lane_completion_matches_finality(
     kura: &Kura,
     finality_artifact: &wire::finality::V2FinalityArtifact,
 ) -> Result<bool, String> {
+    durable_lane_completion_matches_finality_with_readers(
+        DurableLaneCompletionReaders::Runtime(kura),
+        finality_artifact,
+    )
+}
+/// Verify durable lane completion through the exact mutation-closed startup
+/// session that owns Kura's prune and canonical-chain guards.
+pub(crate) fn durable_lane_completion_matches_finality_during_startup(
+    startup: &V2StartupFinalityVerificationSession<'_>,
+    finality_artifact: &wire::finality::V2FinalityArtifact,
+) -> Result<bool, String> {
+    durable_lane_completion_matches_finality_with_readers(
+        DurableLaneCompletionReaders::Startup(startup),
+        finality_artifact,
+    )
+}
+enum DurableLaneCompletionReaders<'a, 'k> {
+    Runtime(&'a Kura),
+    Startup(&'a V2StartupFinalityVerificationSession<'k>),
+}
+impl DurableLaneCompletionReaders<'_, '_> {
+    fn canonical_block(&self, height: NonZeroUsize) -> Result<Option<Arc<SignedBlock>>, String> {
+        match self {
+            Self::Runtime(kura) => Ok(kura.get_block(height)),
+            Self::Startup(startup) => startup
+                .canonical_block(height)
+                .map_err(|error| error.to_string()),
+        }
+    }
+    fn certified_lane_block_artifact(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Result<Option<CertifiedLaneBlockArtifact>, String> {
+        match self {
+            Self::Runtime(kura) => {
+                let descriptor = &proposal.descriptor;
+                Ok(kura.read_certified_lane_block_artifact(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                ))
+            }
+            Self::Startup(startup) => startup
+                .certified_lane_block_artifact(proposal)
+                .map_err(|error| error.to_string()),
+        }
+    }
+    fn lane_block_application_receipt(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Result<Option<LaneBlockApplicationReceiptArtifact>, String> {
+        match self {
+            Self::Runtime(kura) => {
+                let descriptor = &proposal.descriptor;
+                Ok(kura.read_lane_block_application_receipt(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                ))
+            }
+            Self::Startup(startup) => startup
+                .lane_block_application_receipt(proposal)
+                .map_err(|error| error.to_string()),
+        }
+    }
+    fn autonomous_lane_block_artifact(
+        &self,
+        proposal: &LaneBlockProposalV1,
+        expected_network_id: iroha_data_model::NetworkId,
+        expected_epoch: u64,
+    ) -> Result<Option<AutonomousLaneBlockArtifact>, String> {
+        match self {
+            Self::Runtime(kura) => {
+                let descriptor = &proposal.descriptor;
+                Ok(kura.read_autonomous_lane_block_artifact(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                    expected_network_id,
+                    expected_epoch,
+                ))
+            }
+            Self::Startup(startup) => startup
+                .autonomous_lane_block_artifact(proposal, expected_network_id, expected_epoch)
+                .map_err(|error| error.to_string()),
+        }
+    }
+}
+fn durable_lane_completion_matches_finality_with_readers(
+    readers: DurableLaneCompletionReaders<'_, '_>,
+    finality_artifact: &wire::finality::V2FinalityArtifact,
+) -> Result<bool, String> {
     finality_artifact
         .validate()
         .map_err(|error| error.to_string())?;
@@ -16769,8 +16858,8 @@ pub(crate) fn durable_lane_completion_matches_finality(
         .ok()
         .and_then(NonZeroUsize::new)
         .ok_or_else(|| "lane finality has an invalid zero height".to_owned())?;
-    let block = kura
-        .get_block(height)
+    let block = readers
+        .canonical_block(height)?
         .ok_or_else(|| "lane finality has no canonical block body".to_owned())?;
     let canonical_payload_hash = block
         .canonical_proposal_wire_hash()
@@ -16798,16 +16887,12 @@ pub(crate) fn durable_lane_completion_matches_finality(
         if !proposal_hashes.insert(proposal.proposal_hash) {
             return Err("canonical block contains duplicate lane proposal ownership".to_owned());
         }
-        let Some(certified) =
-            kura.read_certified_lane_block_artifact(ownership.lane_id, ownership.lane_block_height)
-        else {
+        let Some(certified) = readers.certified_lane_block_artifact(&proposal)? else {
             return Ok(false);
         };
         Kura::validate_certified_lane_block_artifact(&certified)
             .map_err(|message| format!("durable certified lane artifact is invalid: {message}"))?;
-        let Some(receipt) = kura
-            .read_lane_block_application_receipt(ownership.lane_id, ownership.lane_block_height)
-        else {
+        let Some(receipt) = readers.lane_block_application_receipt(&proposal)? else {
             return Ok(false);
         };
         let Some(receipt_global_artifact) = receipt.source.global_artifact() else {
@@ -16850,21 +16935,18 @@ pub(crate) fn durable_lane_completion_matches_finality(
         })
         .map_err(|error| format!("canonical autonomous lane anchor is invalid: {error}"))?;
         let proposal = &payload.origin_proposal;
-        let descriptor = &proposal.descriptor;
         if !proposal_hashes.insert(proposal.proposal_hash) {
             return Err("canonical block contains duplicate autonomous lane proposal".to_owned());
         }
-        let Some(autonomous) = kura.read_autonomous_lane_block_artifact(
-            descriptor.lane_id,
-            descriptor.lane_block_height,
+        let Some(autonomous) = readers.autonomous_lane_block_artifact(
+            proposal,
             network_id,
             finality_artifact.height_context.epoch,
-        ) else {
+        )?
+        else {
             return Ok(false);
         };
-        let Some(certified) = kura
-            .read_certified_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height)
-        else {
+        let Some(certified) = readers.certified_lane_block_artifact(proposal)? else {
             return Ok(false);
         };
         Kura::validate_certified_lane_block_artifact(&certified)
@@ -17179,6 +17261,118 @@ pub(super) mod tests {
             1,
         );
     }
+    const STARTUP_FINALITY_DEADLOCK_CHILD_CASE: &str = "IROHA_STARTUP_FINALITY_DEADLOCK_CHILD_CASE";
+    const STARTUP_FINALITY_DEADLOCK_TIMEOUT: Duration = Duration::from_secs(30);
+
+    fn run_startup_finality_deadlock_child(case: &str) {
+        let signer = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::BlsNormal)
+            .expect("derive startup deadlock fixture signer");
+        let fixture = crate::kura::tests::certified_autonomous_lane_startup_fixture(&signer);
+        let proposal = &fixture.payload.origin_proposal;
+        match case {
+            "autonomous" => {
+                crate::kura::tests::install_minimal_startup_finality_inventory_for_test(
+                    fixture.kura.as_ref(),
+                );
+                fixture
+                    .kura
+                    .refresh_v2_startup_finality_verification()
+                    .expect("audit autonomous startup fixture");
+                let session = fixture
+                    .kura
+                    .begin_v2_startup_finality_verification()
+                    .expect("open autonomous startup verification")
+                    .expect("autonomous startup inventory is reusable");
+                let autonomous = session
+                    .autonomous_lane_block_artifact(
+                        proposal,
+                        fixture.payload.network_id,
+                        fixture.payload.epoch,
+                    )
+                    .expect("read autonomous artifact under startup guards")
+                    .expect("autonomous startup artifact exists");
+                assert_eq!(autonomous.executable_payload, fixture.payload);
+                assert_eq!(
+                    session
+                        .certified_lane_block_artifact(proposal)
+                        .expect("read autonomous certificate under startup guards")
+                        .expect("autonomous startup certificate exists")
+                        .proposal,
+                    *proposal,
+                );
+            }
+            "merge-receipt" => {
+                let expected = crate::kura::tests::
+                    persist_merge_application_receipt_for_autonomous_payload_for_test(
+                        fixture.kura.as_ref(),
+                        &fixture.payload,
+                    );
+                fixture
+                    .kura
+                    .refresh_v2_startup_finality_verification()
+                    .expect("audit MergeExecution startup fixture");
+                let session = fixture
+                    .kura
+                    .begin_v2_startup_finality_verification()
+                    .expect("open MergeExecution startup verification")
+                    .expect("MergeExecution startup inventory is reusable");
+                assert_eq!(
+                    session
+                        .lane_block_application_receipt(proposal)
+                        .expect("read MergeExecution receipt under startup guards"),
+                    Some(expected),
+                );
+            }
+            other => panic!("unknown startup deadlock child case: {other}"),
+        }
+    }
+
+    #[test]
+    fn startup_finality_session_deadlock_child() {
+        let Ok(case) = std::env::var(STARTUP_FINALITY_DEADLOCK_CHILD_CASE) else {
+            return;
+        };
+        run_startup_finality_deadlock_child(&case);
+    }
+
+    fn assert_startup_finality_child_returns(case: &str) {
+        let mut child = std::process::Command::new(
+            std::env::current_exe().expect("resolve current iroha_core test executable"),
+        )
+        .arg("startup_finality_session_deadlock_child")
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env(STARTUP_FINALITY_DEADLOCK_CHILD_CASE, case)
+        .spawn()
+        .expect("spawn isolated startup deadlock regression");
+        let deadline = Instant::now() + STARTUP_FINALITY_DEADLOCK_TIMEOUT;
+        loop {
+            if let Some(status) = child
+                .try_wait()
+                .expect("poll isolated startup deadlock regression")
+            {
+                assert!(status.success(), "startup deadlock child exited {status}");
+                return;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("startup finality {case} reader deadlocked for thirty seconds");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn startup_finality_autonomous_session_does_not_deadlock() {
+        assert_startup_finality_child_returns("autonomous");
+    }
+
+    #[test]
+    fn startup_finality_merge_receipt_session_does_not_deadlock() {
+        assert_startup_finality_child_returns("merge-receipt");
+    }
+
     fn semantic_sequence(value: u64) -> CertifiedMergeSidecarSemanticSequenceV1 {
         CertifiedMergeSidecarSemanticSequenceV1(
             NonZeroU64::new(value).expect("test semantic sequence must be non-zero"),

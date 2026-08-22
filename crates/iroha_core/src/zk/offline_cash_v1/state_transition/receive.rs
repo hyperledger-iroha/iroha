@@ -1,6 +1,6 @@
 //! Deterministic fixed-two-parent `ReceiveFold` relation and committed ACK owner.
 
-use super::*;
+use super::{pending::UnsignedReceiveRequestV1, *};
 
 /// Prepared deterministic two-parent `(balance, credit) -> balance` fold.
 #[must_use]
