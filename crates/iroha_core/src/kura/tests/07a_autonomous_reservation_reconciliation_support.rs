@@ -62,10 +62,13 @@ fn two_reservation_autonomous_lane_payload_for_kura(
         .iter()
         .zip(&routing_plans)
         .enumerate()
-        .map(|(index, (entrypoint, routing_plan))| {
-
-            LaneQueueReservationKeyV2 {
+        .map(
+            |(index, (entrypoint, routing_plan))| LaneQueueReservationKeyV2 {
                 version: LaneQueueReservationKeyV2::VERSION,
+                signed_transaction_hash:
+                    LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
+                        entrypoint.hash(),
+                    ),
                 entrypoint_hash: entrypoint.hash(),
                 queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
                     b"two-reservation-strict-admission",
@@ -83,8 +86,8 @@ fn two_reservation_autonomous_lane_payload_for_kura(
                 lane_block_view: proposal.descriptor.lane_block_view,
                 reservation_owner_hash,
                 proposal_identity_hash: proposal.proposal_hash,
-            }
-        })
+            },
+        )
         .collect::<Vec<_>>();
     let validator = PeerId::new(signer.public_key().clone());
     let payload = LaneExecutablePayloadV1::new_signed_with_reservations(

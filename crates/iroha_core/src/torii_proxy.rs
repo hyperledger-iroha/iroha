@@ -1616,6 +1616,10 @@ mod tests {
             .expect("single-route fixture has a coordinator");
         let key = crate::queue::LaneQueueReservationKeyV2 {
             version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash:
+                crate::queue::LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
+                    binding.entrypoint_hash.clone(),
+                ),
             entrypoint_hash: binding.entrypoint_hash.clone(),
             queue_plan_admission_binding_hash: binding.canonical_hash(),
             routing_plan_digest: binding.routing_plan_digest,

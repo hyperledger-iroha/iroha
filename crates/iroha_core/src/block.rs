@@ -16491,6 +16491,10 @@ pub(crate) mod valid {
                 .expect("derive canonical autonomous reservation identity");
             let reservation = crate::queue::LaneQueueReservationKeyV2 {
                 version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+                signed_transaction_hash:
+                    crate::queue::LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
+                        entrypoint.hash(),
+                    ),
                 entrypoint_hash: entrypoint.hash(),
                 queue_plan_admission_binding_hash: Hash::new(
                     b"block-native-amx-queue-plan-admission-binding",
@@ -27986,6 +27990,10 @@ mod tests {
         let descriptor = &coordinator_proposal.descriptor;
         let reservation = crate::queue::LaneQueueReservationKeyV2 {
             version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash:
+                crate::queue::LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
+                    entrypoint_hash.clone(),
+                ),
             entrypoint_hash,
             queue_plan_admission_binding_hash: Hash::new(
                 b"historical-native-amx-queue-plan-admission",

@@ -443,6 +443,38 @@ pub(in crate::sumeragi) enum ProductionLifecycleOutputAdmissionSettlementV1<E> {
         pending: PendingLifecycleOutputAdmissionV1,
     },
 }
+
+fn uses_pre_release_taira_direct_output_compatibility(
+    network_id: &iroha_data_model::NetworkId,
+    height: u64,
+) -> bool {
+    crate::sumeragi::v2_context::uses_pre_release_taira_nexus_projection(network_id) && height == 5
+}
+
+fn settle_pre_release_direct_output<E>(
+    prepared: PreparedLifecycleAdmissionV1,
+    execution: PreparedLifecycleOutputExecutionV1,
+    execute: impl FnOnce(
+        &AdapterEffect,
+        &crate::sumeragi::v2_runtime::RuntimeEffectOwnership,
+    ) -> Result<LifecycleOutputServiceDispositionV1, E>,
+) -> ProductionLifecycleOutputAdmissionSettlementV1<E> {
+    match execution.execute_with(execute) {
+        Ok(LifecycleOutputServiceDispositionV1::Accepted) => {
+            ProductionLifecycleOutputAdmissionSettlementV1::Completed
+        }
+        Ok(LifecycleOutputServiceDispositionV1::SourceRetained) => {
+            ProductionLifecycleOutputAdmissionSettlementV1::Deferred(
+                PendingLifecycleOutputAdmissionV1::reclaim_returned(prepared, execution),
+            )
+        }
+        Err(error) => ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+            failure: ProductionLifecycleOutputAdmissionFailureV1::Service(error),
+            pending: PendingLifecycleOutputAdmissionV1::reclaim_returned(prepared, execution),
+        },
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AdmittedWorkLocation {
     address: ConcreteWorkAddress,
@@ -1138,6 +1170,18 @@ impl ProductionLifecycleOwnerV1 {
                     }
                 };
                 execution = returned_execution;
+                // Reset-11 was committed before genuinely direct lifecycle
+                // outputs acquired durable registry rows. Preserve that
+                // authenticated producer behavior only after the current
+                // projection has proved this is a direct signed output and
+                // only when no WAL/recovery row exists. Existing rows retain
+                // the durable current settlement path below.
+                if uses_pre_release_taira_direct_output_compatibility(
+                    &self.verified.context().network_id,
+                    self.verified.context().height,
+                ) {
+                    return settle_pre_release_direct_output(prepared, execution, execute);
+                }
                 match self
                     .coordinator
                     .admit_prepared_lifecycle(&mut self.registry, prepared)
@@ -1573,6 +1617,7 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
+        NetworkId,
         block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
         peer::PeerId,
     };
@@ -1673,7 +1718,8 @@ mod tests {
         }
         fn effect(&self, marker: u8) -> AdapterEffect {
             let subject = wire::BlockSubject {
-                parent_block_hash: None,
+                parent_block_hash: (self.context.height > 1)
+                    .then(|| HashOf::from_untyped_unchecked(Hash::new([marker, 0]))),
                 block_hash: HashOf::from_untyped_unchecked(Hash::new([marker, 1])),
                 payload_hash: Hash::new([marker, 2]),
             };
@@ -2094,6 +2140,57 @@ mod tests {
         if let Err(payload) = handle.join() {
             std::panic::resume_unwind(payload);
         }
+    }
+
+    #[test]
+    fn pre_release_taira_direct_output_compatibility_is_height_five_only() {
+        const RESET11_NETWORK_ID: [u8; Hash::LENGTH] = [
+            0x1e, 0x88, 0x19, 0xab, 0x7b, 0x55, 0xa4, 0xe7, 0xe4, 0x1e, 0xa3, 0xeb, 0x8e, 0x42,
+            0xae, 0xe6, 0x6d, 0x77, 0xcc, 0x07, 0x46, 0x1b, 0xa3, 0xb7, 0x01, 0x81, 0x42, 0x84,
+            0x25, 0x80, 0x92, 0x31,
+        ];
+        let reset11 = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed(RESET11_NETWORK_ID),
+        ));
+        let other = crate::sumeragi::synthetic_network_id("non-reset11-direct-output");
+
+        assert!(uses_pre_release_taira_direct_output_compatibility(
+            &reset11, 5
+        ));
+        assert!(!uses_pre_release_taira_direct_output_compatibility(
+            &reset11, 6
+        ));
+        assert!(!uses_pre_release_taira_direct_output_compatibility(
+            &other, 5
+        ));
+    }
+
+    #[test]
+    fn pre_release_direct_output_settlement_uses_service_without_registry_row() {
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            let owner = fixture.production_owner(64);
+            let effect = fixture.effect(0xCF);
+            let (prepared, execution) = fixture
+                .output_pending(effect.clone(), 0xCF)
+                .prepare_direct_signed(fixture.active_context(), &fixture.verified)
+                .expect("prepare exact direct lifecycle output");
+            let called = Cell::new(0_u8);
+            assert!(matches!(
+                settle_pre_release_direct_output(prepared, execution, |observed, _ownership| {
+                    assert_eq!(observed, &effect);
+                    called.set(called.get().saturating_add(1));
+                    Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                        LifecycleOutputServiceDispositionV1::Accepted,
+                    )
+                }),
+                ProductionLifecycleOutputAdmissionSettlementV1::Completed
+            ));
+            assert_eq!(called.get(), 1);
+            assert_eq!(owner.coordinator.high_water(), 0);
+            assert!(owner.coordinator.records.is_empty());
+            assert!(owner.registry.registry().is_empty());
+        });
     }
 
     #[test]

@@ -41,6 +41,9 @@ fn historical_capacity_payload_for_kura(
 
     let reservation = LaneQueueReservationKeyV2 {
         version: LaneQueueReservationKeyV2::VERSION,
+        signed_transaction_hash: LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
+            entrypoint.hash(),
+        ),
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
             b"iroha:kura:test:historical-capacity-admission:v1\0",

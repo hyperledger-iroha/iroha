@@ -1324,6 +1324,10 @@ fn exercise_canonical_autonomous_carrier_after_direct_decision(local_signer_quor
     ));
     let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
         version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+        signed_transaction_hash:
+            crate::queue::LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
+                entrypoint.hash(),
+            ),
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new(
             b"direct-decision-queue-plan-admission-binding",

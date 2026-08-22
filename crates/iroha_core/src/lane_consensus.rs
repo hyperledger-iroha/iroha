@@ -6060,6 +6060,8 @@ mod tests {
         ));
         let reservation = LaneQueueReservationKeyV2 {
             version: LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash:
+                LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(entrypoint.hash()),
             entrypoint_hash: entrypoint.hash(),
             queue_plan_admission_binding_hash: Hash::new(
                 b"lane-consensus-queue-plan-admission-binding",

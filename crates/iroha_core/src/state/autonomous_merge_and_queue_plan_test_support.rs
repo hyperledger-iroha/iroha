@@ -76,6 +76,10 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
 
     let reservation = crate::queue::LaneQueueReservationKeyV2 {
         version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+        signed_transaction_hash:
+            crate::queue::LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
+                entrypoint.hash(),
+            ),
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: binding.canonical_hash(),
         routing_plan_digest: routing_plan.digest(),
