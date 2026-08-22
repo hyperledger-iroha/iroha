@@ -4336,6 +4336,12 @@ struct ExpiredQueueTransaction {
     tx: AcceptedTransaction<'static>,
     routing: RoutingDecision,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PoppedGlobalAdmissionDisposition {
+    Ordinary,
+    Exact,
+    Retained,
+}
 struct QueueSelectionAttempt<'queue> {
     counter: &'queue AtomicUsize,
 }
@@ -16046,14 +16052,13 @@ impl Queue {
         let prev = self.inflight_guards.fetch_sub(1, Ordering::Relaxed);
         debug_assert!(prev > 0, "inflight guard counter underflow");
     }
-    /// Reconcile a popped admission; `select_exact` distinguishes selection from TTL retention.
+    /// Reconcile a popped admission against its canonical global owner.
     fn reconcile_popped_global_admission(
         &self,
         hash: EntrypointHash,
         state_view: &StateView,
-        select_exact: bool,
         telemetry: Option<&StateTelemetry>,
-    ) -> bool {
+    ) -> PoppedGlobalAdmissionDisposition {
         let restore = || {
             if let Err(reason) = self.restore_popped_globally_bound_hash(hash, telemetry) {
                 self.mark_accepted_work_validation_fault(
@@ -16065,12 +16070,11 @@ impl Queue {
             }
         };
         match self.global_admission_registry_match_for_hash(hash, state_view) {
-            Ok(None) => return true,
-            Ok(Some((_, QueuePlanAdmissionRegistryMatch::Exact))) if select_exact => return true,
-            Ok(Some((
-                _,
-                QueuePlanAdmissionRegistryMatch::Absent | QueuePlanAdmissionRegistryMatch::Exact,
-            ))) => restore(),
+            Ok(None) => return PoppedGlobalAdmissionDisposition::Ordinary,
+            Ok(Some((_, QueuePlanAdmissionRegistryMatch::Exact))) => {
+                return PoppedGlobalAdmissionDisposition::Exact;
+            }
+            Ok(Some((_, QueuePlanAdmissionRegistryMatch::Absent))) => restore(),
             Ok(Some((binding, QueuePlanAdmissionRegistryMatch::Conflict))) => {
                 match self.reject_exact_queue_plan_admission_claim(&binding) {
                     Ok(true) => {}
@@ -16090,7 +16094,7 @@ impl Queue {
                 telemetry,
             ),
         }
-        false
+        PoppedGlobalAdmissionDisposition::Retained
     }
     /// Pop one transaction, serializing Sumeragi selection with every pop and test-only return.
     fn pop_from_queue(
@@ -16130,20 +16134,30 @@ impl Queue {
                 warn!("Looks like we're experiencing a high load");
                 continue;
             };
-            if let Err(e) = self.check_tx(
+            let mut prechecked_global_admission = None;
+            let check_error = match self.check_tx(
                 tx_arc.as_ref(),
                 tx_arc.as_ref().is_in_blockchain(state_view),
             ) {
-                if matches!(e, Error::Expired)
-                    && !self.reconcile_popped_global_admission(
+                Ok(()) => None,
+                Err(Error::Expired) => {
+                    match self.reconcile_popped_global_admission(
                         hash,
                         state_view,
-                        false,
                         backpressure_telemetry,
-                    )
-                {
-                    return None;
+                    ) {
+                        PoppedGlobalAdmissionDisposition::Ordinary => Some(Error::Expired),
+                        PoppedGlobalAdmissionDisposition::Exact => {
+                            prechecked_global_admission =
+                                Some(PoppedGlobalAdmissionDisposition::Exact);
+                            None
+                        }
+                        PoppedGlobalAdmissionDisposition::Retained => return None,
+                    }
                 }
+                Err(error) => Some(error),
+            };
+            if let Some(e) = check_error {
                 iroha_logger::warn!(
                     tx = %hash,
                     ?e,
@@ -16199,12 +16213,10 @@ impl Queue {
                 }
                 continue;
             }
-            if !self.reconcile_popped_global_admission(
-                hash,
-                state_view,
-                true,
-                backpressure_telemetry,
-            ) {
+            let global_admission = prechecked_global_admission.unwrap_or_else(|| {
+                self.reconcile_popped_global_admission(hash, state_view, backpressure_telemetry)
+            });
+            if global_admission == PoppedGlobalAdmissionDisposition::Retained {
                 return None;
             }
             let routing_plan = match self.immutable_queued_routing_plan_with_view(
@@ -19762,6 +19774,9 @@ pub mod tests {
         }
     }
     fn globally_bound_guard_fixture() -> GloballyBoundGuardFixture {
+        globally_bound_guard_fixture_at_height(0)
+    }
+    fn globally_bound_guard_fixture_at_height(authority_height: u64) -> GloballyBoundGuardFixture {
         let dir = tempdir().expect("global guard fixture directory");
         let journal_path = dir.path().join("global_guard_queue_plan.norito");
         let mut state = State::new(
@@ -19770,6 +19785,7 @@ pub mod tests {
             LiveQueryStore::start_test(),
         );
         install_single_validator_topology_for_queue_test(&mut state, 0xB9);
+        seed_committed_height_for_queue_test(&state, authority_height);
         let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
