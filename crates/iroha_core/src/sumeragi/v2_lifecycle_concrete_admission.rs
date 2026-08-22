@@ -73,6 +73,16 @@ impl LifecycleWorkRegistryHolder {
         self.registry
             .lifecycle_output_terminal_is_exact(current, staged, prepared, execution)
     }
+    /// Recheck a volatile carrier installed at its exact terminal ledger address.
+    fn lifecycle_output_terminal_installed_is_exact(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        prepared: PreparedLifecycleOutputRegistryRetirementV1,
+        execution: &PreparedLifecycleOutputExecutionV1,
+    ) -> bool {
+        self.registry
+            .lifecycle_output_terminal_installed_is_exact(coordinator, prepared, execution)
+    }
     /// Remove one preflighted output carrier after its terminal row is durable.
     fn publish_lifecycle_output_terminal_after_fsync(
         &mut self,
@@ -410,7 +420,7 @@ pub(in crate::sumeragi) enum ProductionLifecycleOutputAdmissionFailureV1<E> {
     /// A genuinely direct output did not project in the active verified context.
     Projection(AdapterEffectAdmissionError),
     /// The exact concrete row or its staged terminal successor was invalid.
-    Registry,
+    Registry(RegistryError),
     /// The output service rejected or failed the exact effect.
     Service(E),
     /// LedgerV1 publication was attempted and the lifecycle owner is fail-closed.
@@ -1136,15 +1146,19 @@ impl ProductionLifecycleOwnerV1 {
             .join_lifecycle_output(&self.coordinator, &execution)
         {
             Ok(join) => join,
-            Err(_) => {
+            Err(error) => {
                 return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
-                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(error),
                     pending: execution.into_pending(),
                 };
             }
         };
         match initial_join {
             LifecycleOutputRegistryJoinV1::Ready(_) => {}
+            LifecycleOutputRegistryJoinV1::TerminalInstalledDuplicate(retirement) => {
+                return self
+                    .settle_terminal_installed_lifecycle_output_duplicate(execution, retirement);
+            }
             LifecycleOutputRegistryJoinV1::RecoveredBroadcastOwned
             | LifecycleOutputRegistryJoinV1::TerminalDirectOutputDuplicate => {
                 return ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted;
@@ -1195,7 +1209,9 @@ impl ProductionLifecycleOwnerV1 {
                     AdapterEffectAdmissionTransaction::Admitted(_)
                     | AdapterEffectAdmissionTransaction::Rebound(_) => {
                         return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
-                            failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                            failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                                RegistryError::InvalidAdmissionShape,
+                            ),
                             pending: execution.into_pending(),
                         };
                     }
@@ -1217,7 +1233,9 @@ impl ProductionLifecycleOwnerV1 {
                             | AdmissionDecision::Rejected(_)
                             | AdmissionDecision::FailClosed(_) => {
                                 ProductionLifecycleOutputAdmissionSettlementV1::Failed {
-                                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                                        RegistryError::InvalidAdmissionShape,
+                                    ),
                                     pending,
                                 }
                             }
@@ -1228,8 +1246,8 @@ impl ProductionLifecycleOwnerV1 {
                             prepared, execution,
                         );
                         let failure = match failure {
-                            AdapterEffectAdmissionFailure::Registry(_) => {
-                                ProductionLifecycleOutputAdmissionFailureV1::Registry
+                            AdapterEffectAdmissionFailure::Registry(error) => {
+                                ProductionLifecycleOutputAdmissionFailureV1::Registry(error)
                             }
                             AdapterEffectAdmissionFailure::Durability => {
                                 ProductionLifecycleOutputAdmissionFailureV1::Durability
@@ -1256,11 +1274,19 @@ impl ProductionLifecycleOwnerV1 {
             Ok(
                 LifecycleOutputRegistryJoinV1::Missing
                 | LifecycleOutputRegistryJoinV1::RecoveredBroadcastOwned
-                | LifecycleOutputRegistryJoinV1::TerminalDirectOutputDuplicate,
-            )
-            | Err(_) => {
+                | LifecycleOutputRegistryJoinV1::TerminalDirectOutputDuplicate
+                | LifecycleOutputRegistryJoinV1::TerminalInstalledDuplicate(_),
+            ) => {
                 return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
-                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                        RegistryError::CorruptWork,
+                    ),
+                    pending: execution.into_pending(),
+                };
+            }
+            Err(error) => {
+                return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(error),
                     pending: execution.into_pending(),
                 };
             }
@@ -1291,7 +1317,9 @@ impl ProductionLifecycleOwnerV1 {
             )
         {
             return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
-                failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                    RegistryError::CorruptWork,
+                ),
                 pending: execution.into_pending(),
             };
         }
@@ -1310,6 +1338,41 @@ impl ProductionLifecycleOwnerV1 {
             .publish_lifecycle_output_terminal_after_fsync(retirement);
         self.coordinator = staged;
         ProductionLifecycleOutputAdmissionSettlementV1::Completed
+    }
+
+    /// Confirm the already-durable terminal frame, then retire only the stray
+    /// process-local carrier installed at that same immutable address.
+    fn settle_terminal_installed_lifecycle_output_duplicate<E>(
+        &mut self,
+        execution: PreparedLifecycleOutputExecutionV1,
+        retirement: PreparedLifecycleOutputRegistryRetirementV1,
+    ) -> ProductionLifecycleOutputAdmissionSettlementV1<E> {
+        if !self.registry.lifecycle_output_terminal_installed_is_exact(
+            &self.coordinator,
+            retirement,
+            &execution,
+        ) {
+            return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                    RegistryError::CorruptWork,
+                ),
+                pending: execution.into_pending(),
+            };
+        }
+        if self
+            .coordinator
+            .persist_exact_staged_successor(&self.coordinator)
+            .is_err()
+        {
+            self.coordinator.fault = Some(CoordinatorFault::DurabilityFailure);
+            return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                failure: ProductionLifecycleOutputAdmissionFailureV1::Durability,
+                pending: execution.into_pending(),
+            };
+        }
+        self.registry
+            .publish_lifecycle_output_terminal_after_fsync(retirement);
+        ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
     }
 }
 fn waiting_durable_validate_record_is_exact(
@@ -1737,6 +1800,16 @@ mod tests {
                     phase: wire::GlobalPhase::Prepare,
                     subject,
                     execution_commitment: commitment,
+                    signer: 0,
+                    signature: vec![marker],
+                }),
+            ))
+        }
+        fn timeout_effect(&self, marker: u8) -> AdapterEffect {
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
+                    round: self.round,
+                    highest_prepare_qc: None,
                     signer: 0,
                     signature: vec![marker],
                 }),
@@ -2251,21 +2324,33 @@ mod tests {
                 .coordinator
                 .attach_empty_test_ledger(ledger.path())
                 .expect("attach terminal duplicate ledger");
-            let effect = fixture.effect(0xD6);
-            let calls = Cell::new(0_u8);
-            assert!(matches!(
-                owner.settle_lifecycle_output_admission(
-                    fixture.output_pending(effect.clone(), 0xD6),
-                    |_effect, _ownership| {
-                        calls.set(calls.get().saturating_add(1));
-                        Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
-                            LifecycleOutputServiceDispositionV1::Accepted,
-                        )
-                    },
-                ),
-                ProductionLifecycleOutputAdmissionSettlementV1::Completed
-            ));
-            assert_eq!(calls.get(), 1);
+            // H6 `InstallTimeout` recovery retransmits terminal timeout output,
+            // not a producer-gated block Vote.
+            let effect = fixture.timeout_effect(0xD6);
+            let (prepared, initial_execution) = fixture
+                .output_pending(effect.clone(), 0xD6)
+                .prepare_direct_signed(owner.coordinator.active_context(), &owner.verified)
+                .expect("prepare exact terminal TimeoutVote fixture");
+            let candidate = prepared.candidate().clone();
+            let AdmissionDecision::Admitted {
+                ordinal: terminal_ordinal,
+                producer_turn_ordinal: None,
+                ..
+            } = owner
+                .coordinator
+                .admit(AdmissionRequest::Candidate(candidate))
+            else {
+                panic!("terminal TimeoutVote fixture must admit one direct row")
+            };
+            owner
+                .coordinator
+                .finish_terminal(terminal_ordinal, super::super::TerminalOutcome::Advanced)
+                .expect("terminalize the already-serviced timeout output");
+            owner
+                .coordinator
+                .persist_durable_projection()
+                .expect("publish the terminal timeout fixture");
+            drop((prepared, initial_execution));
 
             let rebound_tag = EventTag::new(
                 fixture.tag.height(),
@@ -2279,9 +2364,47 @@ mod tests {
             .expect("bind byte-identical output under a fresh runtime root")
             .pop()
             .expect("one rebound output owner");
+            let rebound_pending = rebound_ownership
+                .exact_pending_adapter_effect_binding(&effect)
+                .expect("derive the rebound output's exact pending binding");
             let rebound =
                 PendingLifecycleOutputAdmissionV1::seal_exact(effect.clone(), rebound_ownership)
                     .unwrap_or_else(|_| panic!("seal byte-identical terminal output retry"));
+            let record = &owner.coordinator.records[&terminal_ordinal];
+            let (&slot, &digest) = record
+                .physical_slots
+                .first_key_value()
+                .expect("terminal output retains one physical slot");
+            assert_eq!(record.physical_slots.len(), 1);
+            let address = ConcreteWorkAddress::new(record.owner, record.ordinal, slot)
+                .expect("terminal output retains one exact address");
+            let replay_authority = owner.coordinator.durable_records[&terminal_ordinal]
+                .replay_authority
+                .clone();
+            let work = ConcreteLifecycleWork::from_candidate_for_test(
+                effect.clone(),
+                rebound_pending,
+                replay_authority,
+            )
+            .unwrap_or_else(|(error, _, _)| {
+                panic!("construct exact terminal-address carrier: {error:?}")
+            });
+            owner
+                .registry
+                .registry_for_test_mut()
+                .install(address, digest, work)
+                .unwrap_or_else(|(error, _)| {
+                    panic!("install exact terminal-address carrier: {error:?}")
+                });
+            let rebound_execution = rebound.into_existing_execution();
+            assert!(matches!(
+                owner
+                    .registry
+                    .join_lifecycle_output(&owner.coordinator, &rebound_execution),
+                Ok(LifecycleOutputRegistryJoinV1::TerminalInstalledDuplicate(retirement))
+                    if retirement.ordinal() == terminal_ordinal
+            ));
+            let rebound = rebound_execution.into_pending();
             assert!(matches!(
                 owner.settle_lifecycle_output_admission(
                     rebound,
@@ -2294,16 +2417,15 @@ mod tests {
                 ),
                 ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
             ));
-            assert_eq!(calls.get(), 1);
-            assert_eq!(owner.coordinator.high_water(), 1);
+            assert_eq!(owner.coordinator.high_water(), terminal_ordinal);
             assert!(owner.registry.registry().is_empty());
 
             let mut drifted = effect;
             let AdapterEffect::Broadcast(message) = &mut drifted else {
                 unreachable!("fixture output is one signed Broadcast")
             };
-            let wire::ConsensusMessageV2Payload::Vote(vote) = &mut message.payload else {
-                unreachable!("fixture output is one signed Vote")
+            let wire::ConsensusMessageV2Payload::TimeoutVote(vote) = &mut message.payload else {
+                unreachable!("fixture output is one TimeoutVote")
             };
             vote.signature.push(0xFF);
             let drifted_ownership = bind_adapter_effect_batch_ownership(
@@ -2326,11 +2448,11 @@ mod tests {
                     },
                 ),
                 ProductionLifecycleOutputAdmissionSettlementV1::Failed {
-                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(_),
                     ..
                 }
             ));
-            assert_eq!(owner.coordinator.high_water(), 1);
+            assert_eq!(owner.coordinator.high_water(), terminal_ordinal);
         });
     }
 
