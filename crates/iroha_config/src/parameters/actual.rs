@@ -48,9 +48,10 @@ use iroha_data_model::{
     merge::{MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
     name::Name,
     nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, FeeSponsorProgramId, LaneCatalog,
-        LaneConfig as LaneConfigMetadata, LaneId, LaneSchedulerPolicy, LaneSettlementBufferPolicy,
-        LaneStorageProfile, LaneVisibility, ShardId, UniversalAccountId,
+        AUTOSCALE_META_DRAIN_STATE, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
+        FeeSponsorProgramId, LaneCatalog, LaneConfig as LaneConfigMetadata, LaneId,
+        LaneSchedulerPolicy, LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility,
+        ShardId, UniversalAccountId,
     },
     oracle::KeyedHash,
     peer::{Peer, PeerId},
@@ -4868,7 +4869,7 @@ pub struct SumeragiV2LaneLifecycleEntry {
 /// scheduler, and settlement-buffer fields added to [`LaneConfigMetadata`].
 /// Re-encoding the current structure would therefore change its authenticated
 /// Nexus/AMX context even when every added field has its default value.
-#[derive(Encode)]
+#[derive(Clone, Encode)]
 struct SumeragiV2PreReleaseLaneConfig {
     id: LaneId,
     shard_id: Option<ShardId>,
@@ -4921,6 +4922,38 @@ impl From<&LaneConfigMetadata> for SumeragiV2PreReleaseLaneConfig {
             metadata,
         }
     }
+}
+fn sumeragi_v2_pre_release_static_lane_incarnations(nexus: &Nexus) -> BTreeMap<LaneId, Hash> {
+    const CATALOG_DOMAIN: &[u8] = b"iroha:nexus:lane-catalog:v1\0";
+    const STATIC_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:static:v2\0";
+
+    // The reset-11 producer derived generation-zero incarnations from the complete
+    // pre-release lane wire shape. Reusing current state incarnations here would
+    // retain hashes derived from the successor consensus projection instead.
+    let lanes = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .map(|lane| {
+            let mut lane = SumeragiV2PreReleaseLaneConfig::from(lane);
+            lane.metadata.remove(AUTOSCALE_META_DRAIN_STATE);
+            lane
+        })
+        .collect::<Vec<_>>();
+    let catalog_preimage = (nexus.lane_catalog.lane_count().get(), lanes.clone()).encode();
+    let catalog_hash = Hash::new_from_chunks(&[CATALOG_DOMAIN, catalog_preimage.as_slice()]);
+
+    lanes
+        .into_iter()
+        .map(|lane| {
+            let lane_id = lane.id;
+            let preimage = (catalog_hash, lane_id, lane).encode();
+            (
+                lane_id,
+                Hash::new_from_chunks(&[STATIC_INCARNATION_DOMAIN, preimage.as_slice()]),
+            )
+        })
+        .collect()
 }
 #[derive(Encode)]
 struct SumeragiV2PreReleaseLaneLifecycleEntry {
@@ -5010,6 +5043,7 @@ fn sumeragi_v2_nexus_amx_context_hash_with_projection(
             .map(SumeragiV2PreReleaseLaneConfig::from)
             .collect::<Vec<_>>();
         append(&mut preimage, "nexus.lane_catalog.lanes", &lanes);
+        let producer_static_incarnations = sumeragi_v2_pre_release_static_lane_incarnations(nexus);
         let mut lane_lifecycle = nexus
             .lane_catalog
             .lanes()
@@ -5021,7 +5055,13 @@ fn sumeragi_v2_nexus_amx_context_hash_with_projection(
                     .expect("validated state has every active lane lineage");
                 SumeragiV2PreReleaseLaneLifecycleEntry {
                     lane_id: entry.lane_id,
-                    incarnation: entry.incarnation,
+                    incarnation: if entry.generation == 0 && entry.activation_height == 0 {
+                        *producer_static_incarnations
+                            .get(&entry.lane_id)
+                            .expect("producer static incarnations cover every active lane")
+                    } else {
+                        entry.incarnation
+                    },
                     activation_height: entry.activation_height,
                 }
             })

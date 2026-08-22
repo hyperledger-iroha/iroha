@@ -1488,6 +1488,32 @@ mod tests {
         );
     }
     #[test]
+    fn pre_release_taira_nexus_hash_rederives_producer_static_lane_incarnations() {
+        let lineage = |incarnation| {
+            [SumeragiV2LaneLifecycleEntry {
+                lane_id: LaneId::SINGLE,
+                generation: 0,
+                incarnation,
+                activation_height: 0,
+            }]
+        };
+        let first = lineage(Hash::new(b"successor static lane incarnation a"));
+        let second = lineage(Hash::new(b"successor static lane incarnation b"));
+        let nexus = Nexus::default();
+        let pipeline = Pipeline::default();
+
+        assert_eq!(
+            sumeragi_v2_pre_release_nexus_amx_context_hash(&nexus, &pipeline, &[], &first),
+            sumeragi_v2_pre_release_nexus_amx_context_hash(&nexus, &pipeline, &[], &second),
+            "reset-11 commits the producer-derived static incarnation, not the successor value",
+        );
+        assert_ne!(
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &first),
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &second),
+            "current networks must continue committing the supplied retained lineage",
+        );
+    }
+    #[test]
     fn sumeragi_v2_nexus_amx_hash_canonicalizes_dataspace_catalog_order() {
         let universal = DataSpaceMetadata::default();
         let settlement = DataSpaceMetadata {
