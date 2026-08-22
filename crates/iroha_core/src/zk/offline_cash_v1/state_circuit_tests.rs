@@ -11,38 +11,39 @@ use iroha_data_model::offline::OFFLINE_CASH_HALO2_K_V1;
 use sha2::Digest as _;
 
 use super::{
-    OfflineCashHalo2ParityV1,
     protocol::{
-        OfflineCashHalo2CircuitRoleV1, OfflineCashRecursionActivationPreflightErrorV1,
-        preflight_offline_cash_recursion_activation_v1,
+        preflight_offline_cash_recursion_activation_v1, OfflineCashHalo2CircuitRoleV1,
+        OfflineCashRecursionActivationPreflightErrorV1,
     },
     state_abi::{
-        AMOUNT_WORD_START, CONTEXT_WORD_START, LINK_WORD_START, OfflineCashStateAbiErrorV1,
-        OfflineCashStateOperationV1, OfflineCashStatePublicInstancesV1, PARENT_0_WORD_START,
-        PARENT_1_WORD_START, RELEASE_WORD_START, REQUEST_WORD_START, RESULT_WORD_START, SCALE_WORD,
-        SEMANTIC_WORD_START, STATE_ABI_WORDS, STATE_INSTANCE_CELLS, STATE_INSTANCE_CELLS_MAX,
-        STATE_OPERATION_WORD, STATE_WORDS_PER_INSTANCE, TRANSITION_WORD_START, pack_words_as_field,
+        pack_words_as_field, OfflineCashStateAbiErrorV1, OfflineCashStateOperationV1,
+        OfflineCashStatePublicInstancesV1, AMOUNT_WORD_START, CONTEXT_WORD_START, LINK_WORD_START,
+        PARENT_0_WORD_START, PARENT_1_WORD_START, RELEASE_WORD_START, REQUEST_WORD_START,
+        RESULT_WORD_START, SCALE_WORD, SEMANTIC_WORD_START, STATE_ABI_WORDS, STATE_INSTANCE_CELLS,
+        STATE_INSTANCE_CELLS_MAX, STATE_OPERATION_WORD, STATE_WORDS_PER_INSTANCE,
+        TRANSITION_WORD_START,
     },
     state_circuit::{OfflineCashEpStateCircuitV1, OfflineCashEqStateCircuitV1},
     state_relation::{
-        BALANCE_HEAD_MESSAGE_BYTES_V1, CREDIT_HEAD_MESSAGE_BYTES_V1,
-        OfflineCashStatePrivateWitnessV1, RECEIVE_OPENING_MESSAGE_BYTES_V1,
-        RECEIVE_SEMANTIC_MESSAGE_BYTES_V1, RECEIVE_TRANSITION_MESSAGE_BYTES_V1,
-        SEND_SPLIT_RECEIVER_BRANCH_MESSAGE_BYTES_V1, SEND_SPLIT_RECEIVER_BRANCH_V1,
-        SEND_SPLIT_SEED_MESSAGE_BYTES_V1, SEND_SPLIT_SENDER_BRANCH_MESSAGE_BYTES_V1,
-        SEND_SPLIT_SENDER_BRANCH_V1, STATE_HEAD_FRAME_VERSION_V1, STATE_LINEAGE_MESSAGE_BYTES_V1,
         balance_head_message_v1, credit_head_message_v1, offline_cash_balance_head_v1,
         offline_cash_credit_head_v1, offline_cash_receive_opening_v1,
         offline_cash_receive_semantic_digest_v1, offline_cash_receive_transition_digest_v1,
         offline_cash_send_split_openings_v1, offline_cash_send_split_seed_v1,
         offline_cash_state_lineage_digest_v1, receive_opening_message_v1,
         receive_semantic_message_v1, receive_transition_message_v1, send_split_branch_message_v1,
-        send_split_seed_message_v1, state_lineage_message_v1,
+        send_split_seed_message_v1, state_lineage_message_v1, OfflineCashStatePrivateWitnessV1,
+        BALANCE_HEAD_MESSAGE_BYTES_V1, CREDIT_HEAD_MESSAGE_BYTES_V1,
+        RECEIVE_OPENING_MESSAGE_BYTES_V1, RECEIVE_SEMANTIC_MESSAGE_BYTES_V1,
+        RECEIVE_TRANSITION_MESSAGE_BYTES_V1, SEND_SPLIT_RECEIVER_BRANCH_MESSAGE_BYTES_V1,
+        SEND_SPLIT_RECEIVER_BRANCH_V1, SEND_SPLIT_SEED_MESSAGE_BYTES_V1,
+        SEND_SPLIT_SENDER_BRANCH_MESSAGE_BYTES_V1, SEND_SPLIT_SENDER_BRANCH_V1,
+        STATE_HEAD_FRAME_VERSION_V1, STATE_LINEAGE_MESSAGE_BYTES_V1,
     },
     state_transition::{OfflineCashStateContextV1, ReceiveFoldOutputV1},
+    OfflineCashHalo2ParityV1,
 };
 use crate::zk::pasta_ipa_recursion::{
-    PastaIpaInstanceQueryV1, PastaIpaProofShapeV1, pasta_ipa_augmented_proof_shape_v1,
+    pasta_ipa_augmented_proof_shape_v1, PastaIpaInstanceQueryV1, PastaIpaProofShapeV1,
 };
 
 fn configured_state_shape<F, C>(instance_query: PastaIpaInstanceQueryV1) -> PastaIpaProofShapeV1
@@ -513,16 +514,14 @@ fn circuit_rejects_closed_operation_parent_substitution_padding_and_224_bit_over
         invalid_operation_words,
         invalid_operation_witness,
     );
-    assert!(
-        MockProver::run(
-            OFFLINE_CASH_HALO2_K_V1,
-            &invalid_operation_circuit,
-            vec![invalid_operation_public],
-        )
-        .expect("invalid-operation synthesis")
-        .verify()
-        .is_err()
-    );
+    assert!(MockProver::run(
+        OFFLINE_CASH_HALO2_K_V1,
+        &invalid_operation_circuit,
+        vec![invalid_operation_public],
+    )
+    .expect("invalid-operation synthesis")
+    .verify()
+    .is_err());
 
     let (eq, parent_witness) = send_fixture(OfflineCashHalo2ParityV1::Eq);
     let valid_public = eq.field_instances::<Fp>().to_vec();
@@ -546,16 +545,14 @@ fn circuit_rejects_closed_operation_parent_substitution_padding_and_224_bit_over
     let mut nonzero_padding = valid_public.clone();
     let padding_coefficient = (0..5).fold(Fp::ONE, |value, _| value * Fp::from(1_u64 << 32));
     nonzero_padding[STATE_INSTANCE_CELLS - 1] += padding_coefficient;
-    assert!(
-        MockProver::run(
-            OFFLINE_CASH_HALO2_K_V1,
-            &padding_circuit,
-            vec![nonzero_padding],
-        )
-        .expect("padding-substitution synthesis")
-        .verify()
-        .is_err()
-    );
+    assert!(MockProver::run(
+        OFFLINE_CASH_HALO2_K_V1,
+        &padding_circuit,
+        vec![nonzero_padding],
+    )
+    .expect("padding-substitution synthesis")
+    .verify()
+    .is_err());
 
     let (eq, overflow_witness) = send_fixture(OfflineCashHalo2ParityV1::Eq);
     let overflow_circuit =

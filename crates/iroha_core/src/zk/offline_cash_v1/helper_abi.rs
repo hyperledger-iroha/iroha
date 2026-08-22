@@ -13,12 +13,12 @@ use halo2_proofs::halo2curves::ff::PrimeField;
 use iroha_data_model::offline::{OFFLINE_CASH_HALO2_K_V1, OFFLINE_CASH_WIRE_VERSION_V1};
 
 use super::{
-    OfflineCashHalo2ParityV1,
     protocol::{
+        offline_cash_halo2_protocol_identity_v1, OfflineCashHalo2CircuitRoleV1,
         OFFLINE_CASH_HELPER_ABI_WORDS_V1, OFFLINE_CASH_HELPER_INSTANCE_CELLS_MAX_V1,
         OFFLINE_CASH_HELPER_INSTANCE_CELLS_V1, OFFLINE_CASH_HELPER_WORDS_PER_INSTANCE_V1,
-        OfflineCashHalo2CircuitRoleV1, offline_cash_halo2_protocol_identity_v1,
     },
+    OfflineCashHalo2ParityV1,
 };
 
 const ABI_VERSION: u32 = 1;

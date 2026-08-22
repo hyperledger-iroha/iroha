@@ -64,9 +64,6 @@ pub mod kagemusha_finality;
 /// Fixed-shape ABI-21/V4 Eq/Ep recursive verifier and terminal IPA decisions.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod kagemusha_recursion_adapter;
-/// Shared fixed-profile accounting for Pasta IPA recursive proofs.
-#[cfg(feature = "zk-halo2-ipa")]
-pub(crate) mod pasta_ipa_recursion;
 /// Phase-zero serialized advice binding for the review-blocked V7 audit join.
 #[cfg(all(feature = "zk-halo2-ipa", feature = "kagemusha-generation-memory-lab"))]
 pub(crate) mod kagemusha_serialized_audit_v7;
@@ -88,6 +85,16 @@ pub mod kagemusha_v2;
     reason = "staged offline-cash boundary remains disconnected until exact STATE circuits and activation wiring land"
 )]
 pub mod offline_cash_v1;
+/// Non-authorizing k=17 Offline Cash profile scaffold and closure blockers.
+#[cfg(feature = "zk-halo2-ipa")]
+#[allow(
+    dead_code,
+    reason = "the V2 profile is metadata-only until every pinned activation blocker is closed"
+)]
+mod offline_cash_v2;
+/// Shared fixed-profile accounting for Pasta IPA recursive proofs.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod pasta_ipa_recursion;
 /// Core-owned authenticated confidential-spool adapter for MKHE RNS-native sources.
 pub mod rns_native_source_v1;
 /// Canonical verifier-record namespace for Kagemusha offline proofs.

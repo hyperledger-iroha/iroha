@@ -30,7 +30,12 @@ DEFAULT_MANIFEST_PATH = DEFAULT_RESOURCES_DIR / "transaction_fixtures.manifest.j
 DEFAULT_STATE_PATH = Path("artifacts/android_fixture_regen_state.json")
 MAX_TRANSACTION_NONCE = 0xFFFF_FFFF
 MAX_U64 = 0xFFFF_FFFF_FFFF_FFFF
+MAX_QUANTITY_SCALE = 28
+MAX_QUANTITY_TEXT_LENGTH = 155
+MAX_QUANTITY_MANTISSA_TEXT = str((1 << 511) - 1)
 NETWORK_ID_LITERAL = re.compile(r"hash:([0-9A-F]{64})#([0-9A-F]{4})")
+QUANTITY_LITERAL = re.compile(r"(0|[1-9][0-9]*)(?:\.([0-9]*[1-9]))?")
+FEE_CHARGE_KIND_ORDER = {"nexus": 0, "pipeline_gas": 1}
 
 PAYLOAD_FIXTURE_FIELDS = frozenset(
     {
@@ -119,6 +124,75 @@ def require_exact_fields(
         raise ValueError(
             f"{context} has invalid fields: missing={missing}, unexpected={unexpected}"
         )
+
+
+def require_positive_canonical_quantity(value: object, context: str) -> str:
+    """Require the exact positive Quantity spelling accepted by Numeric V1."""
+    if not isinstance(value, str) or len(value) > MAX_QUANTITY_TEXT_LENGTH:
+        raise ValueError(f"{context} must be a positive canonical Quantity string")
+    match = QUANTITY_LITERAL.fullmatch(value)
+    if match is None:
+        raise ValueError(f"{context} must be a positive canonical Quantity string")
+    fractional = match.group(2) or ""
+    mantissa = (match.group(1) + fractional).lstrip("0")
+    if (
+        len(fractional) > MAX_QUANTITY_SCALE
+        or not mantissa
+        or len(mantissa) > len(MAX_QUANTITY_MANTISSA_TEXT)
+        or (
+            len(mantissa) == len(MAX_QUANTITY_MANTISSA_TEXT)
+            and mantissa > MAX_QUANTITY_MANTISSA_TEXT
+        )
+    ):
+        raise ValueError(f"{context} must be a positive canonical Quantity string")
+    return value
+
+
+def validate_charge_limits(value: object, context: str) -> None:
+    """Validate the canonical authority fee limits shared with Rust."""
+    if not isinstance(value, list):
+        raise ValueError(f"{context} must be an array")
+    seen_kinds: set[str] = set()
+    previous_kind_order: Optional[int] = None
+    for index, limit in enumerate(value):
+        limit_context = f"{context}[{index}]"
+        if not isinstance(limit, dict):
+            raise ValueError(f"{limit_context} must be an object")
+        require_exact_fields(
+            limit,
+            frozenset({"asset_definition_id", "kind", "max_amount"}),
+            limit_context,
+        )
+        asset_definition_id = limit["asset_definition_id"]
+        if not isinstance(asset_definition_id, str) or not asset_definition_id.strip():
+            raise ValueError(
+                f"{limit_context}.asset_definition_id must be a non-empty string"
+            )
+        require_positive_canonical_quantity(
+            limit["max_amount"], f"{limit_context}.max_amount"
+        )
+        kind = limit["kind"]
+        if not isinstance(kind, dict):
+            raise ValueError(f"{limit_context}.kind must be an object")
+        require_exact_fields(
+            kind, frozenset({"kind", "value"}), f"{limit_context}.kind"
+        )
+        kind_name = kind["kind"]
+        if (
+            not isinstance(kind_name, str)
+            or kind_name not in FEE_CHARGE_KIND_ORDER
+            or kind["value"] is not None
+        ):
+            raise ValueError(
+                f"{limit_context}.kind must be exactly nexus/null or pipeline_gas/null"
+            )
+        if kind_name in seen_kinds:
+            raise ValueError(f"{context} contains duplicate kind {kind_name!r}")
+        kind_order = FEE_CHARGE_KIND_ORDER[kind_name]
+        if previous_kind_order is not None and kind_order < previous_kind_order:
+            raise ValueError(f"{context} is not in canonical fee-component order")
+        seen_kinds.add(kind_name)
+        previous_kind_order = kind_order
 
 
 def validate_executable(executable: object, context: str) -> bool:
@@ -218,8 +292,9 @@ def validate_fee_payment(value: object, context: str) -> Optional[int]:
         frozenset({"charge_limits", "gas_limit"}),
         f"{context}.value",
     )
-    if not isinstance(fee_value["charge_limits"], list):
-        raise ValueError(f"{context}.value.charge_limits must be an array")
+    validate_charge_limits(
+        fee_value["charge_limits"], f"{context}.value.charge_limits"
+    )
     gas_limit = fee_value["gas_limit"]
     if gas_limit is not None and (
         isinstance(gas_limit, bool)

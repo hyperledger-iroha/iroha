@@ -1477,6 +1477,7 @@ pub(super) fn validate_composite_section_set_exact_v1(
             transcript.terminal_hyrax_root(),
             transcript.cross_basis_bridge_root(),
             transcript.qpcs_initial_root(),
+            transcript.q_mask_s_root(),
             transcript.qpcs_quotient_root(),
             transcript.cross_field_root(),
             transcript.global_lookup_root(),

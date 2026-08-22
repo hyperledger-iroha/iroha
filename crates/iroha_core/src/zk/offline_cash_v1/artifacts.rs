@@ -3,15 +3,15 @@
 use std::{collections::BTreeSet, fmt, io::Read, sync::Arc};
 
 use iroha_data_model::offline::{
-    OFFLINE_CASH_ARTIFACT_SET_MAX_BYTES_V1, OfflineCashArtifactBindingV1,
-    OfflineCashArtifactRoleV1, OfflineCashAuthenticatedReleaseV1,
+    OfflineCashArtifactBindingV1, OfflineCashArtifactRoleV1, OfflineCashAuthenticatedReleaseV1,
+    OFFLINE_CASH_ARTIFACT_SET_MAX_BYTES_V1,
 };
 use sha2::{Digest as _, Sha256};
 
 use super::protocol::{
-    OfflineCashHalo2CircuitRoleV1, OfflineCashHalo2ParityV1,
     offline_cash_artifact_length_bounds_v1, offline_cash_artifact_protocol_v1,
     offline_cash_halo2_profile_digest_v1, offline_cash_halo2_protocol_identity_v1,
+    OfflineCashHalo2CircuitRoleV1, OfflineCashHalo2ParityV1,
 };
 
 const ARTIFACT_COUNT: usize = OfflineCashArtifactRoleV1::ALL.len();

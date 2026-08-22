@@ -8,33 +8,33 @@
 use core::fmt;
 use std::{
     io::{self, Cursor, Write},
-    panic::{AssertUnwindSafe, catch_unwind},
+    panic::{catch_unwind, AssertUnwindSafe},
 };
 
 use halo2_proofs::{
-    SerdeCurveAffine, SerdeFormat, SerdePrimeField,
     arithmetic::best_multiexp,
     halo2curves::{
-        CurveAffine,
         ff::{Field, FromUniformBytes, PrimeField, WithSmallOrderMulGroup},
         group::Curve as _,
         pasta::{EpAffine, EqAffine},
+        CurveAffine,
     },
     plonk::{
-        Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey,
-        verify_proof as halo2_verify_proof,
+        verify_proof as halo2_verify_proof, Circuit, ConstraintSystem, Error as PlonkError,
+        VerifyingKey,
     },
     poly::{
-        VerificationStrategy,
-        commitment::{MSM as _, Params as _, ParamsProver as _},
+        commitment::{Params as _, ParamsProver as _, MSM as _},
         ipa::{
             commitment::{IPACommitmentScheme, ParamsIPA},
             msm::MSMIPA,
             multiopen::VerifierIPA,
             strategy::{Accumulator, GuardIPA},
         },
+        VerificationStrategy,
     },
     transcript::{Blake2bRead, Challenge255, TranscriptReadBuffer as _},
+    SerdeCurveAffine, SerdeFormat, SerdePrimeField,
 };
 use iroha_data_model::offline::{
     OFFLINE_CASH_HALO2_K_V1, OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1,

@@ -22,17 +22,17 @@ use halo2_proofs::{
 };
 
 use super::{
-    OfflineCashHalo2ParityV1,
     helper_abi::{
+        fixed_helper_word_v1, pack_words_as_field, OfflineCashHelperAbiErrorV1,
         ANDROID_DIGEST_OFFSETS, CURRENT_GUARD_WORD_START, CURRENT_HEAD_WORD_START,
         HELPER_ABI_WORDS, HELPER_ANDROID_PRESENT_WORD, HELPER_FROM_HIGH_WORD, HELPER_FROM_LOW_WORD,
         HELPER_INSTANCE_CELLS, HELPER_INSTANCE_CELLS_MAX, HELPER_OPERATION_WORD,
         HELPER_TO_HIGH_WORD, HELPER_TO_LOW_WORD, HELPER_WORDS_PER_INSTANCE, NEXT_GUARD_WORD_START,
-        OfflineCashHelperAbiErrorV1, REQUIRED_DIGEST_OFFSETS, TRANSITION_WORD_START,
-        fixed_helper_word_v1, pack_words_as_field,
+        REQUIRED_DIGEST_OFFSETS, TRANSITION_WORD_START,
     },
     helper_relation::OfflineCashValidatedHelperRelationV1,
     protocol::OfflineCashHalo2CircuitRoleV1,
+    OfflineCashHalo2ParityV1,
 };
 
 const U32_BITS: usize = 32;

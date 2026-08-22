@@ -5,8 +5,8 @@ use halo2_proofs::halo2curves::{
     pasta::{EpAffine, EqAffine, Fp, Fq},
 };
 use iroha_data_model::offline::{
-    OFFLINE_CASH_HALO2_K_V1, OFFLINE_CASH_PARAMS_BYTES_V1, OfflineCashArtifactBindingV1,
-    OfflineCashArtifactRoleV1, OfflineCashAuthenticatedReleaseV1,
+    OfflineCashArtifactBindingV1, OfflineCashArtifactRoleV1, OfflineCashAuthenticatedReleaseV1,
+    OFFLINE_CASH_HALO2_K_V1, OFFLINE_CASH_PARAMS_BYTES_V1,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -479,45 +479,33 @@ fn wrong_role_protocol_and_all_proofs_remain_rejected() {
         .verify_eq_current(eq_vk, eq_protocol, semantic, &proof, &eq_history)
         .expect_err("skeleton must never accept a proof");
     assert!(unavailable.contains("verification is unavailable"));
-    assert!(
-        backend
-            .verify_ep_current(ep_vk, ep_protocol, semantic, &proof, &ep_history)
-            .expect_err("Ep skeleton must never accept a proof")
-            .contains("verification is unavailable")
-    );
-    assert!(
-        backend
-            .decide_eq_history(eq_vk, eq_protocol, &eq_history)
-            .expect_err("Eq history skeleton must never decide")
-            .contains("verification is unavailable")
-    );
-    assert!(
-        backend
-            .decide_ep_history(ep_vk, ep_protocol, &ep_history)
-            .expect_err("Ep history skeleton must never decide")
-            .contains("verification is unavailable")
-    );
+    assert!(backend
+        .verify_ep_current(ep_vk, ep_protocol, semantic, &proof, &ep_history)
+        .expect_err("Ep skeleton must never accept a proof")
+        .contains("verification is unavailable"));
+    assert!(backend
+        .decide_eq_history(eq_vk, eq_protocol, &eq_history)
+        .expect_err("Eq history skeleton must never decide")
+        .contains("verification is unavailable"));
+    assert!(backend
+        .decide_ep_history(ep_vk, ep_protocol, &ep_history)
+        .expect_err("Ep history skeleton must never decide")
+        .contains("verification is unavailable"));
 
-    assert!(
-        backend
-            .verify_eq_current(ep_vk, eq_protocol, semantic, &proof, &eq_history)
-            .expect_err("role substitution")
-            .contains("manifest")
-    );
+    assert!(backend
+        .verify_eq_current(ep_vk, eq_protocol, semantic, &proof, &eq_history)
+        .expect_err("role substitution")
+        .contains("manifest"));
     let mut wrong_protocol = eq_protocol;
     wrong_protocol[0] ^= 1;
-    assert!(
-        backend
-            .verify_eq_current(eq_vk, wrong_protocol, semantic, &proof, &eq_history)
-            .expect_err("protocol substitution")
-            .contains("protocol")
-    );
-    assert!(
-        backend
-            .verify_eq_current(eq_vk, eq_protocol, [0; 32], &proof, &eq_history)
-            .expect_err("zero semantic identity")
-            .contains("proof shape")
-    );
+    assert!(backend
+        .verify_eq_current(eq_vk, wrong_protocol, semantic, &proof, &eq_history)
+        .expect_err("protocol substitution")
+        .contains("protocol"));
+    assert!(backend
+        .verify_eq_current(eq_vk, eq_protocol, [0; 32], &proof, &eq_history)
+        .expect_err("zero semantic identity")
+        .contains("proof shape"));
 }
 
 #[test]
@@ -540,9 +528,9 @@ fn terminal_boundary_cannot_mint_receipt_from_backend_skeleton() {
 #[test]
 fn shared_pasta_profile_is_fixed_and_offline_cash_preflight_is_non_activating() {
     use crate::zk::pasta_ipa_recursion::{
-        PASTA_IPA_POSEIDON_FULL_ROUNDS_V1, PASTA_IPA_POSEIDON_PARTIAL_ROUNDS_V1,
-        PASTA_IPA_POSEIDON_RATE_V1, PASTA_IPA_POSEIDON_SECURE_MDS_V1, PASTA_IPA_POSEIDON_WIDTH_V1,
-        pasta_ipa_direct_instance_compile_config_v1,
+        pasta_ipa_direct_instance_compile_config_v1, PASTA_IPA_POSEIDON_FULL_ROUNDS_V1,
+        PASTA_IPA_POSEIDON_PARTIAL_ROUNDS_V1, PASTA_IPA_POSEIDON_RATE_V1,
+        PASTA_IPA_POSEIDON_SECURE_MDS_V1, PASTA_IPA_POSEIDON_WIDTH_V1,
     };
 
     assert_eq!(PASTA_IPA_POSEIDON_WIDTH_V1, 3);
@@ -572,11 +560,8 @@ fn shared_pasta_profile_is_fixed_and_offline_cash_preflight_is_non_activating() 
     let protocol = include_str!("protocol.rs");
     assert!(protocol.contains("preflight_offline_cash_recursion_activation_v1"));
     assert!(protocol.contains("Passing this gate is deliberately not proof authority"));
-    assert!(
-        protocol.contains(
-            "const TRANSCRIPT_REVISION: &[u8] = b\"Blake2bRead+Blake2bWrite/Challenge255\""
-        )
-    );
+    assert!(protocol
+        .contains("const TRANSCRIPT_REVISION: &[u8] = b\"Blake2bRead+Blake2bWrite/Challenge255\""));
     let backend = include_str!("halo2_backend.rs");
     assert!(backend.contains("VerificationUnavailable"));
     assert!(!backend.contains("preflight_offline_cash_recursion_activation_v1"));

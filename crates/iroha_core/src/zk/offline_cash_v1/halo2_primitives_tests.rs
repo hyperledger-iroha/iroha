@@ -1,14 +1,13 @@
 use halo2_proofs::{
-    SerdeFormat,
     circuit::{Layouter, SimpleFloorPlanner, Value},
     halo2curves::{
         ff::{Field, PrimeField},
-        group::{GroupEncoding as _, prime::PrimeCurveAffine as _},
+        group::{prime::PrimeCurveAffine as _, GroupEncoding as _},
         pasta::{EpAffine, EqAffine, Fp, Fq},
     },
     plonk::{
-        Advice, Circuit, Column, ConstraintSystem, Error as PlonkError, Instance, VerifyingKey,
-        create_proof as halo2_create_proof, keygen_pk, keygen_vk,
+        create_proof as halo2_create_proof, keygen_pk, keygen_vk, Advice, Circuit, Column,
+        ConstraintSystem, Error as PlonkError, Instance, VerifyingKey,
     },
     poly::{
         commitment::{Params as _, ParamsProver as _},
@@ -18,20 +17,21 @@ use halo2_proofs::{
         },
     },
     transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+    SerdeFormat,
 };
 use rand_core_06::OsRng;
 
-use super::OfflineCashHalo2ParityV1;
 use super::halo2_primitives::{
-    OfflineCashHalo2PrimitiveErrorV1, parse_offline_cash_ep_params_v1,
-    parse_offline_cash_eq_params_v1, parse_processed_verifier_key_v1,
+    parse_offline_cash_ep_params_v1, parse_offline_cash_eq_params_v1,
+    parse_processed_verifier_key_v1,
     test_support::{
         decide_claim_for_test, derive_claim, encode_history, history_from_ep_parts,
         history_from_eq_parts, parse_ep_history, parse_eq_history, parse_params_for_k,
         verify_augmented_claim_for_test,
     },
-    validate_offline_cash_history_v1,
+    validate_offline_cash_history_v1, OfflineCashHalo2PrimitiveErrorV1,
 };
+use super::OfflineCashHalo2ParityV1;
 
 const TEST_K: u32 = 4;
 

@@ -13,7 +13,7 @@
 use std::sync::Mutex;
 
 use halo2_proofs::{
-    circuit::{Layouter, V1, Value},
+    circuit::{Layouter, Value, V1},
     halo2curves::{
         ff::PrimeField,
         pasta::{Fp, Fq},
@@ -26,18 +26,18 @@ use halo2_proofs::{
 };
 
 use super::{
-    OfflineCashHalo2ParityV1,
     state_abi::{
-        OfflineCashStateAbiErrorV1, OfflineCashStatePublicInstancesV1, STATE_ABI_WORDS,
-        STATE_INSTANCE_CELLS, STATE_INSTANCE_CELLS_MAX, STATE_OPERATION_WORD,
-        STATE_WORDS_PER_INSTANCE, fixed_state_word_v1, pack_words_as_field,
+        fixed_state_word_v1, pack_words_as_field, OfflineCashStateAbiErrorV1,
+        OfflineCashStatePublicInstancesV1, STATE_ABI_WORDS, STATE_INSTANCE_CELLS,
+        STATE_INSTANCE_CELLS_MAX, STATE_OPERATION_WORD, STATE_WORDS_PER_INSTANCE,
     },
     state_relation::{
-        OfflineCashStatePrivateWitnessV1,
         circuit::{
-            OfflineCashStateRelationConfigV1, configure_relation_v1, synthesize_relation_v1,
+            configure_relation_v1, synthesize_relation_v1, OfflineCashStateRelationConfigV1,
         },
+        OfflineCashStatePrivateWitnessV1,
     },
+    OfflineCashHalo2ParityV1,
 };
 
 const U32_BITS: usize = 32;

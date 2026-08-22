@@ -18,7 +18,10 @@ use super::{
     rns_native_qpcs_initial::{
         RnsNativeQpcsInitialStageV1, authenticate_rns_native_qpcs_initial_v1,
     },
-    rns_native_transcript::ZkAmsMkheRnsNativeChallengeSeedsV1,
+    rns_native_transcript::{
+        ZkAmsMkheRnsNativeChallengeSeedsV1, ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,
+        ZkAmsMkheRnsNativeQpcsRelationBindingV1, ZkAmsMkheRnsNativeQpcsRelationLineageV1,
+    },
 };
 use crate::vega::sponge::Keccak256;
 
@@ -111,6 +114,8 @@ impl std::error::Error for RnsNativeQpcsPrefixErrorV1 {}
 struct PrefixContextV1 {
     parameter_digest: [u8; DIGEST_BYTES_V1],
     transcript_digest: [u8; DIGEST_BYTES_V1],
+    q_mask_s_root: [u8; DIGEST_BYTES_V1],
+    qpcs_pre_relation_transcript_digest: [u8; DIGEST_BYTES_V1],
     rns_aggregation_seed: [u8; DIGEST_BYTES_V1],
     relation_seed: [u8; DIGEST_BYTES_V1],
     batching_seed: [u8; DIGEST_BYTES_V1],
@@ -143,6 +148,8 @@ impl PrefixContextV1 {
             return Err(RnsNativeQpcsPrefixErrorV1::InvalidOrder);
         }
         let transcript_digest = transcript.transcript_digest();
+        let q_mask_s_root = transcript.q_mask_s_root();
+        let qpcs_pre_relation_transcript_digest = transcript.qpcs_pre_relation_transcript_digest();
         let rns_aggregation_seed = transcript.rns_aggregation_challenge_seed();
         let relation_seed = transcript.qpcs_relation_challenge_seed();
         let batching_seed = transcript.qpcs_batching_challenge_seed();
@@ -154,6 +161,8 @@ impl PrefixContextV1 {
         if [
             parameter_digest,
             transcript_digest,
+            q_mask_s_root,
+            qpcs_pre_relation_transcript_digest,
             rns_aggregation_seed,
             relation_seed,
             batching_seed,
@@ -182,6 +191,8 @@ impl PrefixContextV1 {
         Ok(Self {
             parameter_digest,
             transcript_digest,
+            q_mask_s_root,
+            qpcs_pre_relation_transcript_digest,
             rns_aggregation_seed,
             relation_seed,
             batching_seed,
@@ -194,6 +205,226 @@ impl PrefixContextV1 {
             equation_commitment_digests,
             limb_commitment_digests,
         })
+    }
+}
+
+/// Move-only owner of the exact 200 qPCS relation points.
+///
+/// The prover owner consumes the transcript's sole relation binding after the
+/// initial qPCS root and authenticated q-mask `S` root, but before the quotient
+/// or any FRI root exists. Legacy verification may deterministically reconstruct
+/// the same public points from final seeds, but that compatibility schedule has
+/// no private lineage and cannot authorize the direct handoff. qPCS borrows its
+/// points and returns the lineage-bearing owner through every later private
+/// stage; cross-field code must consume it rather than derive a parallel
+/// challenge schedule.
+#[allow(
+    missing_copy_implementations,
+    reason = "the qPCS/cross-field relation schedule must be threaded exactly once"
+)]
+pub(super) struct RnsNativeQpcsRelationScheduleV1 {
+    lineage: Option<ZkAmsMkheRnsNativeQpcsRelationLineageV1>,
+    parameter_digest: [u8; DIGEST_BYTES_V1],
+    q_mask_s_root: [u8; DIGEST_BYTES_V1],
+    qpcs_pre_relation_transcript_digest: [u8; DIGEST_BYTES_V1],
+    relation_seed: [u8; DIGEST_BYTES_V1],
+    points: [u64; RELATION_COUNT_V1],
+}
+
+#[allow(
+    dead_code,
+    reason = "some accessors are reserved for the undeclared typed qPCS/cross-field adapter"
+)]
+impl RnsNativeQpcsRelationScheduleV1 {
+    fn from_context_v1(context: PrefixContextV1) -> Result<Self, RnsNativeQpcsPrefixErrorV1> {
+        Self::from_bound_parts_v1(
+            None,
+            context.parameter_digest,
+            context.q_mask_s_root,
+            context.qpcs_pre_relation_transcript_digest,
+            context.relation_seed,
+        )
+    }
+
+    fn from_bound_parts_v1(
+        lineage: Option<ZkAmsMkheRnsNativeQpcsRelationLineageV1>,
+        parameter_digest: [u8; DIGEST_BYTES_V1],
+        q_mask_s_root: [u8; DIGEST_BYTES_V1],
+        qpcs_pre_relation_transcript_digest: [u8; DIGEST_BYTES_V1],
+        relation_seed: [u8; DIGEST_BYTES_V1],
+    ) -> Result<Self, RnsNativeQpcsPrefixErrorV1> {
+        let identities = [
+            parameter_digest,
+            q_mask_s_root,
+            qpcs_pre_relation_transcript_digest,
+            relation_seed,
+        ];
+        if identities.contains(&[0; DIGEST_BYTES_V1])
+            || identities
+                .iter()
+                .enumerate()
+                .any(|(index, digest)| identities[index + 1..].contains(digest))
+        {
+            return Err(RnsNativeQpcsPrefixErrorV1::InvalidContext);
+        }
+        Ok(Self {
+            lineage,
+            parameter_digest,
+            q_mask_s_root,
+            qpcs_pre_relation_transcript_digest,
+            relation_seed,
+            points: derive_relation_points_from_seed_v1(parameter_digest, relation_seed)?,
+        })
+    }
+
+    fn from_transcript_v1(
+        context: PrefixContextV1,
+        transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    ) -> Result<Self, RnsNativeQpcsPrefixErrorV1> {
+        if context.transcript_digest != transcript.transcript_digest()
+            || context.q_mask_s_root != transcript.q_mask_s_root()
+            || context.qpcs_pre_relation_transcript_digest
+                != transcript.qpcs_pre_relation_transcript_digest()
+            || context.relation_seed != transcript.qpcs_relation_challenge_seed()
+        {
+            return Err(RnsNativeQpcsPrefixErrorV1::InvalidContext);
+        }
+        Self::from_context_v1(context)
+    }
+
+    /// Consume the sole relation binding issued by the move-only pre-quotient
+    /// transcript stage.
+    #[allow(
+        dead_code,
+        reason = "the private qPCS prover adapter will mint this owner before quotient roots"
+    )]
+    pub(super) fn from_relation_binding_v1(
+        parameter_digest: [u8; DIGEST_BYTES_V1],
+        binding: ZkAmsMkheRnsNativeQpcsRelationBindingV1,
+    ) -> Result<Self, RnsNativeQpcsPrefixErrorV1> {
+        let q_mask_s_root = binding.q_mask_s_root();
+        let qpcs_pre_relation_transcript_digest = binding.qpcs_pre_relation_transcript_digest();
+        let relation_seed = binding.qpcs_relation_challenge_seed();
+        let lineage = binding.into_lineage_v1();
+        Self::from_bound_parts_v1(
+            Some(lineage),
+            parameter_digest,
+            q_mask_s_root,
+            qpcs_pre_relation_transcript_digest,
+            relation_seed,
+        )
+    }
+
+    /// Require the private one-shot relation lineage to match the supplied
+    /// qPCS-bound transcript.  Schedules reconstructed from final public seeds
+    /// intentionally fail this check.
+    pub(super) fn validate_qpcs_bound_lineage_v1(
+        &self,
+        transcript: &ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,
+    ) -> Result<(), RnsNativeQpcsPrefixErrorV1> {
+        let lineage = self
+            .lineage
+            .as_ref()
+            .ok_or(RnsNativeQpcsPrefixErrorV1::InvalidOrder)?;
+        if !transcript.matches_qpcs_relation_lineage_v1(lineage) {
+            return Err(RnsNativeQpcsPrefixErrorV1::InvalidContext);
+        }
+        Ok(())
+    }
+
+    pub(super) const fn has_qpcs_relation_lineage_v1(&self) -> bool {
+        self.lineage.is_some()
+    }
+
+    pub(super) fn validate_context_v1(
+        &self,
+        parameter_digest: [u8; DIGEST_BYTES_V1],
+        q_mask_s_root: [u8; DIGEST_BYTES_V1],
+        qpcs_pre_relation_transcript_digest: [u8; DIGEST_BYTES_V1],
+        relation_seed: [u8; DIGEST_BYTES_V1],
+    ) -> Result<(), RnsNativeQpcsPrefixErrorV1> {
+        if self.parameter_digest != parameter_digest
+            || self.q_mask_s_root != q_mask_s_root
+            || self.qpcs_pre_relation_transcript_digest != qpcs_pre_relation_transcript_digest
+            || self.relation_seed != relation_seed
+            || self.points.contains(&0)
+        {
+            return Err(RnsNativeQpcsPrefixErrorV1::InvalidContext);
+        }
+        Ok(())
+    }
+
+    pub(super) const fn parameter_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.parameter_digest
+    }
+
+    pub(super) const fn q_mask_s_root(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.q_mask_s_root
+    }
+
+    pub(super) const fn qpcs_pre_relation_transcript_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.qpcs_pre_relation_transcript_digest
+    }
+
+    pub(super) const fn relation_seed(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.relation_seed
+    }
+
+    pub(super) const fn points(&self) -> &[u64; RELATION_COUNT_V1] {
+        &self.points
+    }
+
+    pub(super) fn point(&self, limb: usize, repetition: usize) -> Option<u64> {
+        (limb < ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 && repetition < REPETITIONS_V1)
+            .then(|| self.points[limb * REPETITIONS_V1 + repetition])
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_fixture_v1(parameter_digest: [u8; DIGEST_BYTES_V1]) -> Self {
+        Self::test_fixture_with_binding_v1(
+            parameter_digest,
+            [0xc1; DIGEST_BYTES_V1],
+            [0xc2; DIGEST_BYTES_V1],
+            [0xc3; DIGEST_BYTES_V1],
+            [1; RELATION_COUNT_V1],
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) const fn test_fixture_with_binding_v1(
+        parameter_digest: [u8; DIGEST_BYTES_V1],
+        q_mask_s_root: [u8; DIGEST_BYTES_V1],
+        qpcs_pre_relation_transcript_digest: [u8; DIGEST_BYTES_V1],
+        relation_seed: [u8; DIGEST_BYTES_V1],
+        points: [u64; RELATION_COUNT_V1],
+    ) -> Self {
+        Self {
+            lineage: None,
+            parameter_digest,
+            q_mask_s_root,
+            qpcs_pre_relation_transcript_digest,
+            relation_seed,
+            points,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) const fn test_fixture_with_lineage_v1(
+        parameter_digest: [u8; DIGEST_BYTES_V1],
+        q_mask_s_root: [u8; DIGEST_BYTES_V1],
+        qpcs_pre_relation_transcript_digest: [u8; DIGEST_BYTES_V1],
+        relation_seed: [u8; DIGEST_BYTES_V1],
+        points: [u64; RELATION_COUNT_V1],
+        lineage: ZkAmsMkheRnsNativeQpcsRelationLineageV1,
+    ) -> Self {
+        Self {
+            lineage: Some(lineage),
+            parameter_digest,
+            q_mask_s_root,
+            qpcs_pre_relation_transcript_digest,
+            relation_seed,
+            points,
+        }
     }
 }
 
@@ -236,6 +467,7 @@ struct PrefixViewV1<'a> {
     reason = "qPCS substages must be consumed once and cannot be rewound"
 )]
 pub(super) struct RnsNativeQpcsFoldZeroStageV1<'a> {
+    relation_schedule: Option<RnsNativeQpcsRelationScheduleV1>,
     parameter_digest: [u8; DIGEST_BYTES_V1],
     transcript_digest: [u8; DIGEST_BYTES_V1],
     query_seed: [u8; DIGEST_BYTES_V1],
@@ -250,6 +482,14 @@ pub(super) struct RnsNativeQpcsFoldZeroStageV1<'a> {
 }
 
 impl<'a> RnsNativeQpcsFoldZeroStageV1<'a> {
+    pub(super) fn take_relation_schedule_v1(
+        &mut self,
+    ) -> Result<RnsNativeQpcsRelationScheduleV1, RnsNativeQpcsPrefixErrorV1> {
+        self.relation_schedule
+            .take()
+            .ok_or(RnsNativeQpcsPrefixErrorV1::InvalidOrder)
+    }
+
     pub(super) const fn parameter_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self.parameter_digest
     }
@@ -506,15 +746,44 @@ pub(super) fn authenticate_rns_native_qpcs_prefix_v1<'a>(
         limb_commitment_digests,
         query_opening_digests,
     )?;
-    verify_prefix_with_initial_v1(context, initial)
+    let relation_schedule =
+        RnsNativeQpcsRelationScheduleV1::from_transcript_v1(context, transcript)?;
+    verify_prefix_with_initial_v1(context, relation_schedule, initial)
+}
+
+/// Verify the qPCS prefix with the exact schedule minted before terminal roots.
+#[allow(
+    dead_code,
+    reason = "the typed qPCS/cross-field orchestration adapter is not declared yet"
+)]
+pub(super) fn authenticate_rns_native_qpcs_prefix_with_schedule_v1<'a>(
+    transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    relation_schedule: RnsNativeQpcsRelationScheduleV1,
+    equation_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
+    limb_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
+    query_opening_digests: &[[u8; DIGEST_BYTES_V1]],
+    proof: &'a [u8],
+) -> Result<RnsNativeQpcsFoldZeroStageV1<'a>, RnsNativeQpcsPrefixErrorV1> {
+    let initial = authenticate_rns_native_qpcs_initial_v1(transcript, query_opening_digests, proof)
+        .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidInitial)?;
+    let context = PrefixContextV1::from_transcript_v1(
+        transcript,
+        initial.parameter_digest(),
+        equation_commitment_digests,
+        limb_commitment_digests,
+        query_opening_digests,
+    )?;
+    verify_prefix_with_initial_v1(context, relation_schedule, initial)
 }
 
 fn verify_prefix_with_initial_v1<'a>(
     context: PrefixContextV1,
+    relation_schedule: RnsNativeQpcsRelationScheduleV1,
     initial: RnsNativeQpcsInitialStageV1<'a>,
 ) -> Result<RnsNativeQpcsFoldZeroStageV1<'a>, RnsNativeQpcsPrefixErrorV1> {
-    verify_prefix_parts_v1(
+    verify_prefix_parts_with_schedule_v1(
         context,
+        relation_schedule,
         initial.queries(),
         initial.indices(),
         initial.values(),
@@ -522,6 +791,7 @@ fn verify_prefix_with_initial_v1<'a>(
     )
 }
 
+#[cfg(test)]
 fn verify_prefix_parts_v1<'a>(
     context: PrefixContextV1,
     queries: &[u32; QUERY_COUNT_V1],
@@ -529,6 +799,31 @@ fn verify_prefix_parts_v1<'a>(
     initial_values: &[u8],
     continuation: &'a [u8],
 ) -> Result<RnsNativeQpcsFoldZeroStageV1<'a>, RnsNativeQpcsPrefixErrorV1> {
+    let relation_schedule = RnsNativeQpcsRelationScheduleV1::from_context_v1(context)?;
+    verify_prefix_parts_with_schedule_v1(
+        context,
+        relation_schedule,
+        queries,
+        initial_indices,
+        initial_values,
+        continuation,
+    )
+}
+
+fn verify_prefix_parts_with_schedule_v1<'a>(
+    context: PrefixContextV1,
+    relation_schedule: RnsNativeQpcsRelationScheduleV1,
+    queries: &[u32; QUERY_COUNT_V1],
+    initial_indices: &[u32],
+    initial_values: &[u8],
+    continuation: &'a [u8],
+) -> Result<RnsNativeQpcsFoldZeroStageV1<'a>, RnsNativeQpcsPrefixErrorV1> {
+    relation_schedule.validate_context_v1(
+        context.parameter_digest,
+        context.q_mask_s_root,
+        context.qpcs_pre_relation_transcript_digest,
+        context.relation_seed,
+    )?;
     preflight_prefix_v1(continuation)?;
     let quotient_indices = query_pair_indices_v1(queries, DOMAIN_SIZE_V1)?;
     if &quotient_indices.values[..quotient_indices.len] != initial_indices {
@@ -572,8 +867,9 @@ fn verify_prefix_parts_v1<'a>(
         context.parameter_digest,
         context.fri_one_root,
     )?;
-    verify_relations_openings_and_batch_v1(
+    verify_relations_openings_and_batch_with_schedule_v1(
         context,
+        &relation_schedule,
         initial_indices,
         initial_values,
         quotient_indices,
@@ -594,6 +890,7 @@ fn verify_prefix_parts_v1<'a>(
         return Err(RnsNativeQpcsPrefixErrorV1::InvalidHeader);
     }
     Ok(RnsNativeQpcsFoldZeroStageV1 {
+        relation_schedule: Some(relation_schedule),
         parameter_digest: context.parameter_digest,
         transcript_digest: context.transcript_digest,
         query_seed: context.query_seed,
@@ -961,8 +1258,38 @@ pub(super) fn authenticate_tree_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn verify_relations_openings_and_batch_v1(
     context: PrefixContextV1,
+    initial_indices: &[u32],
+    initial_values: &[u8],
+    quotient_indices: IndexSetV1,
+    quotient_values: &[u8],
+    fri_zero_indices: IndexSetV1,
+    fri_zero_values: &[u8],
+    evaluations: &[u8],
+) -> Result<(), RnsNativeQpcsPrefixErrorV1> {
+    let relation_schedule = RnsNativeQpcsRelationScheduleV1::from_context_v1(context)?;
+    verify_relations_openings_and_batch_with_schedule_v1(
+        context,
+        &relation_schedule,
+        initial_indices,
+        initial_values,
+        quotient_indices,
+        quotient_values,
+        fri_zero_indices,
+        fri_zero_values,
+        evaluations,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the authenticated tree openings and exact relation owner stay explicit"
+)]
+fn verify_relations_openings_and_batch_with_schedule_v1(
+    context: PrefixContextV1,
+    relation_schedule: &RnsNativeQpcsRelationScheduleV1,
     initial_indices: &[u32],
     initial_values: &[u8],
     quotient_indices: IndexSetV1,
@@ -974,7 +1301,13 @@ fn verify_relations_openings_and_batch_v1(
     if evaluations.len() != EVALUATION_BYTES_V1 {
         return Err(RnsNativeQpcsPrefixErrorV1::InvalidCount);
     }
-    let points = derive_relation_points_v1(context)?;
+    relation_schedule.validate_context_v1(
+        context.parameter_digest,
+        context.q_mask_s_root,
+        context.qpcs_pre_relation_transcript_digest,
+        context.relation_seed,
+    )?;
+    let points = relation_schedule.points();
     let fields = derive_fields_v1()?;
     for (limb, field) in fields.into_iter().enumerate() {
         let modulus = field.modulus;
@@ -1100,8 +1433,16 @@ fn verify_first_fold_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn derive_relation_points_v1(
     context: PrefixContextV1,
+) -> Result<[u64; RELATION_COUNT_V1], RnsNativeQpcsPrefixErrorV1> {
+    derive_relation_points_from_seed_v1(context.parameter_digest, context.relation_seed)
+}
+
+fn derive_relation_points_from_seed_v1(
+    parameter_digest: [u8; DIGEST_BYTES_V1],
+    relation_seed: [u8; DIGEST_BYTES_V1],
 ) -> Result<[u64; RELATION_COUNT_V1], RnsNativeQpcsPrefixErrorV1> {
     let mut points = [0_u64; RELATION_COUNT_V1];
     for (limb, &modulus) in ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1.iter().enumerate() {
@@ -1113,8 +1454,8 @@ fn derive_relation_points_v1(
             for attempt in 0..MAX_CHALLENGE_ATTEMPTS_V1 {
                 let candidate = derive_candidate_v1(
                     RELATION_POINT_DOMAIN_V1,
-                    context.parameter_digest,
-                    context.relation_seed,
+                    parameter_digest,
+                    relation_seed,
                     limb,
                     repetition,
                     0,

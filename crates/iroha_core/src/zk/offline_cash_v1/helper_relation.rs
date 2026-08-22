@@ -11,19 +11,19 @@ use core::fmt;
 
 use iroha_data_model::offline::{KagemushaDevicePublicKeyV2, KagemushaDeviceSignatureV2};
 use p256::ecdsa::{
-    Signature as P256Signature, VerifyingKey as P256VerifyingKey,
-    signature::hazmat::PrehashVerifier as _,
+    signature::hazmat::PrehashVerifier as _, Signature as P256Signature,
+    VerifyingKey as P256VerifyingKey,
 };
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroize;
 
 use super::{
-    OfflineCashHalo2ParityV1,
     helper_abi::{
         OfflineCashHelperAbiErrorV1, OfflineCashHelperOperationV1,
         OfflineCashHelperPublicInstancesV1, OfflineCashHelperStatementV1,
     },
     protocol::OfflineCashHalo2CircuitRoleV1,
+    OfflineCashHalo2ParityV1,
 };
 
 const CURRENT_GUARD_DOMAIN: &[u8] = b"iroha:offline-cash:v1:helper:current-guard";

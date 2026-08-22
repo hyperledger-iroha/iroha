@@ -3,8 +3,8 @@ use super::*;
 use std::{
     collections::BTreeMap,
     sync::{
-        Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        Mutex,
     },
 };
 
@@ -13,11 +13,11 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::DomainId,
     offline::{
+        offline_cash_receiver_key_reference_v1, OfflineCashPairedProofV1,
         OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1, OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
-        OfflineCashPairedProofV1, offline_cash_receiver_key_reference_v1,
     },
 };
-use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
+use p256::ecdsa::{signature::Signer as _, Signature, SigningKey};
 use sha2::Sha256;
 
 const DEVICE_ID: Digest = [0x31; 32];
@@ -1042,11 +1042,9 @@ fn staged_payment_survives_restart_but_is_exposed_only_after_hardware_cas() {
             AuthenticatedPaymentOutboxErrorV1::Unavailable
         ))
     ));
-    assert!(
-        hardware
-            .active_bound_digest(sender.wallet_binding)
-            .is_some()
-    );
+    assert!(hardware
+        .active_bound_digest(sender.wallet_binding)
+        .is_some());
 
     let replay_plan = prepare_send_split_v1(&sender, &request, ISSUED_AT_MS).unwrap();
     let (_published, recovered_payment) = recover_published_send_v1(

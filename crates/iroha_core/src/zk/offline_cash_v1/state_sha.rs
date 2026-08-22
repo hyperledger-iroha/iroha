@@ -13,12 +13,12 @@ use halo2_proofs::{
 };
 
 use super::protocol::{
-    OFFLINE_CASH_STATE_SHA_JOB_BLOCKS_V1, OFFLINE_CASH_STATE_SHA_JOBS_V1,
+    OFFLINE_CASH_STATE_SHA_JOBS_V1, OFFLINE_CASH_STATE_SHA_JOB_BLOCKS_V1,
     OFFLINE_CASH_STATE_SHA_LANES_V1, OFFLINE_CASH_STATE_SHA_TOTAL_BLOCKS_V1,
 };
 use crate::zk::kagemusha_sha256_table16_v4::{
-    AssignedByte, BLOCK_BYTE_SIZE, PaddedByte, Sha256Instructions, Table16Chip, Table16Config,
-    canonical_padding_suffix,
+    canonical_padding_suffix, AssignedByte, PaddedByte, Sha256Instructions, Table16Chip,
+    Table16Config, BLOCK_BYTE_SIZE,
 };
 
 pub(super) const STATE_SHA_LANES_V1: usize = OFFLINE_CASH_STATE_SHA_LANES_V1 as usize;

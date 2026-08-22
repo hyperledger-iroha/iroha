@@ -4,24 +4,24 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::DomainId,
     offline::{
-        KagemushaDevicePublicKeyV2, KagemushaDeviceSignatureV2,
+        offline_cash_artifact_set_digest_v1, offline_cash_receiver_key_reference_v1,
+        KagemushaDevicePublicKeyV2, KagemushaDeviceSignatureV2, OfflineCashAcknowledgementV1,
+        OfflineCashArtifactBindingV1, OfflineCashArtifactRoleV1,
+        OfflineCashInternalValidationReceiptV1, OfflineCashPairedProofV1,
+        OfflineCashPaymentRequestV1, OfflineCashPaymentV1, OfflineCashReleaseApprovalV1,
+        OfflineCashReleaseAttestationV1, OfflineCashReleaseAuthorityPolicyV1,
+        OfflineCashReleaseManifestV1, OfflineCashTransferStatementV1,
         OFFLINE_CASH_ARTIFACT_SET_MAX_BYTES_V1, OFFLINE_CASH_HALO2_K_V1,
         OFFLINE_CASH_HANDOFF_P95_MAX_MS_V1, OFFLINE_CASH_HELPER_PROVING_KEY_MAX_BYTES_V1,
         OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1, OFFLINE_CASH_MIN_FUZZ_CASES_V1,
         OFFLINE_CASH_MIN_QUALIFIED_HANDOFFS_V1, OFFLINE_CASH_PARAMS_BYTES_V1,
         OFFLINE_CASH_PROCESS_RSS_MAX_BYTES_V1, OFFLINE_CASH_PROVE_P95_MAX_MS_V1,
         OFFLINE_CASH_REPRODUCIBLE_BUILD_COUNT_V1, OFFLINE_CASH_STATE_PROVING_KEY_MAX_BYTES_V1,
-        OFFLINE_CASH_VALIDATOR_COUNT_V1, OFFLINE_CASH_VERIFY_P95_MAX_MS_V1,
-        OFFLINE_CASH_VERIFYING_KEY_MAX_BYTES_V1, OFFLINE_CASH_WIRE_VERSION_V1,
-        OfflineCashAcknowledgementV1, OfflineCashArtifactBindingV1, OfflineCashArtifactRoleV1,
-        OfflineCashInternalValidationReceiptV1, OfflineCashPairedProofV1,
-        OfflineCashPaymentRequestV1, OfflineCashPaymentV1, OfflineCashReleaseApprovalV1,
-        OfflineCashReleaseAttestationV1, OfflineCashReleaseAuthorityPolicyV1,
-        OfflineCashReleaseManifestV1, OfflineCashTransferStatementV1,
-        offline_cash_artifact_set_digest_v1, offline_cash_receiver_key_reference_v1,
+        OFFLINE_CASH_VALIDATOR_COUNT_V1, OFFLINE_CASH_VERIFYING_KEY_MAX_BYTES_V1,
+        OFFLINE_CASH_VERIFY_P95_MAX_MS_V1, OFFLINE_CASH_WIRE_VERSION_V1,
     },
 };
-use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
+use p256::ecdsa::{signature::Signer as _, Signature, SigningKey};
 use std::sync::Mutex;
 
 fn signing_key() -> SigningKey {
@@ -419,13 +419,11 @@ fn manifest_substitution_fails_before_artifact_dispatch() {
         Err(OfflineCashVerificationErrorV1::ReleaseMismatch)
     ));
     assert!(backend.calls.lock().expect("calls lock").is_empty());
-    assert!(
-        backend
-            .artifact_calls
-            .lock()
-            .expect("artifact calls lock")
-            .is_empty()
-    );
+    assert!(backend
+        .artifact_calls
+        .lock()
+        .expect("artifact calls lock")
+        .is_empty());
 }
 
 #[test]

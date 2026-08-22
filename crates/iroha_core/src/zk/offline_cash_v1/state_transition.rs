@@ -8,27 +8,28 @@
 use core::fmt;
 
 use iroha_data_model::{
-    NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
     offline::{
+        offline_cash_acknowledgement_signing_bytes_v1,
+        offline_cash_payment_request_signing_bytes_v1, KagemushaDevicePublicKeyV2,
+        KagemushaDeviceSignatureV2, OfflineCashAcknowledgementV1, OfflineCashPaymentRequestV1,
+        OfflineCashPaymentV1, OfflineCashTransferStatementV1,
         KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2, KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2,
-        KagemushaDevicePublicKeyV2, KagemushaDeviceSignatureV2, OFFLINE_CASH_WIRE_VERSION_V1,
-        OfflineCashAcknowledgementV1, OfflineCashPaymentRequestV1, OfflineCashPaymentV1,
-        OfflineCashTransferStatementV1, offline_cash_acknowledgement_signing_bytes_v1,
-        offline_cash_payment_request_signing_bytes_v1,
+        OFFLINE_CASH_WIRE_VERSION_V1,
     },
+    NetworkId,
 };
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
 use super::{
-    OfflineCashPairedProofVerifierV1, OfflineCashTerminalVerifierV1, VerifiedOfflineCashCreditV1,
     state_relation::{
         offline_cash_balance_head_v1, offline_cash_credit_head_v1, offline_cash_receive_opening_v1,
         offline_cash_receive_transition_digest_v1, offline_cash_send_split_openings_v1,
         offline_cash_send_split_seed_v1, offline_cash_state_lineage_digest_v1,
     },
+    OfflineCashPairedProofVerifierV1, OfflineCashTerminalVerifierV1, VerifiedOfflineCashCreditV1,
 };
 
 const CONTEXT_DOMAIN: &[u8] = b"iroha:offline-cash:v1:private-context";
@@ -85,33 +86,37 @@ mod receive;
 mod send;
 
 pub(crate) use balance::BalanceOwnerV1;
-use balance::{BalanceSnapshotV1, balance_head};
+use balance::{balance_head, BalanceSnapshotV1};
 pub(crate) use context::OfflineCashStateContextV1;
-pub(crate) use credit::{CreditOwnerV1, OutgoingCreditOwnerV1};
 use credit::{
-    DecryptedCreditOpeningOwnerV1, bind_verified_credit_v1, credit_commitment,
-    terminal_credit_matches,
+    bind_verified_credit_v1, credit_commitment, terminal_credit_matches,
+    DecryptedCreditOpeningOwnerV1,
+};
+pub(crate) use credit::{CreditOwnerV1, OutgoingCreditOwnerV1};
+#[cfg(test)]
+pub(crate) use guard::HardwareReceiveTerminalQueryV1;
+use guard::{
+    cancellation_authorization_matches, guard_authorization_matches, intent_authorization_matches,
+};
+#[cfg(test)]
+pub(crate) use guard::{
+    sealed, HardwareActiveIntentOutcomeV1, HardwareIntentCommitRequestV1, HardwareIntentRequestV1,
+    HardwareReceiveSigningResultV1,
 };
 pub(crate) use guard::{
-    ExactNextHardwareGuardBackendV1, HardwareGuardSessionV1, HardwareReceiveTerminalQueryV1,
-    HardwareTerminalOperationV1, HardwareTerminalOutcomeV1,
+    ExactNextHardwareGuardBackendV1, HardwareGuardSessionV1, HardwareTerminalOperationV1,
+    HardwareTerminalOutcomeV1,
 };
 pub(crate) use guard::{
     GuardChallengeV1, GuardOperationV1, HardwareGuardErrorV1, HardwareIntentAuthorizationOwnerV1,
     HardwareIntentCancellationOwnerV1, HardwareIntentChallengeV1, HardwareIntentKindV1,
 };
-#[cfg(test)]
-pub(crate) use guard::{
-    HardwareActiveIntentOutcomeV1, HardwareIntentCommitRequestV1, HardwareIntentRequestV1,
-    HardwareReceiveSigningResultV1, sealed,
-};
-use guard::{
-    cancellation_authorization_matches, guard_authorization_matches, intent_authorization_matches,
-};
 use outbox::authorize_publication;
+#[cfg(test)]
+pub(crate) use outbox::PaymentOutboxPublicationV1;
 pub(crate) use outbox::{
     AuthenticatedPaymentOutboxBackendV1, AuthenticatedPaymentOutboxErrorV1,
-    AuthenticatedPaymentOutboxRecordV1, PaymentOutboxKeyV1, PaymentOutboxPublicationV1,
+    AuthenticatedPaymentOutboxRecordV1, PaymentOutboxKeyV1,
 };
 pub(crate) use pending::PendingOwnerV1;
 #[cfg(test)]
@@ -125,18 +130,17 @@ use pending::{receive_intent_challenge, request_live};
 pub(super) use receive::ReceiveFoldOutputV1;
 #[cfg(test)]
 pub(crate) use receive::{
-    ReceiveFoldPlanV1, apply_receive_fold_v1, issue_receive_acknowledgement_v1,
-    prepare_receive_fold_v1, recover_committed_receive_fold_v1,
-    recover_receive_acknowledgement_owner_v1,
+    apply_receive_fold_v1, issue_receive_acknowledgement_v1, prepare_receive_fold_v1,
+    recover_committed_receive_fold_v1, recover_receive_acknowledgement_owner_v1, ReceiveFoldPlanV1,
 };
 #[cfg(test)]
 use send::verified_acknowledgement_for_test_v1;
 #[cfg(test)]
 pub(crate) use send::{
-    SendSplitPlanV1, UnpublishedPaymentOwnerV1, VerifiedAcknowledgementOwnerV1,
     finalize_send_split_v1, prepare_send_split_v1, publish_send_split_v1,
     recover_committed_send_split_v1, recover_published_send_v1,
-    recover_unpublished_send_payment_v1, stage_send_split_payment_v1,
+    recover_unpublished_send_payment_v1, stage_send_split_payment_v1, SendSplitPlanV1,
+    UnpublishedPaymentOwnerV1, VerifiedAcknowledgementOwnerV1,
 };
 
 /// Exact private-state transition failure.

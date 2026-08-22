@@ -12,8 +12,10 @@
 //!
 //! This prerequisite deliberately does not prove that the commitments are the
 //! padding lanes of the authenticated source, global lookup, or terminal
-//! materialization.  Its move-only result therefore grants no composite,
-//! readiness, or release authority.
+//! materialization. The live-source replay is the padding authority; this
+//! detached inventory is redundant, non-authoritative compatibility material
+//! pending schema retirement. Its move-only result therefore grants no
+//! composite, readiness, or release authority.
 
 use super::{
     manifest::ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1,
@@ -122,10 +124,11 @@ impl core::fmt::Display for RnsNativeZeroPaddingCommitmentErrorV1 {
 
 impl std::error::Error for RnsNativeZeroPaddingCommitmentErrorV1 {}
 
-/// Move-only evidence that only the committed zero-padding inventory passed.
+/// Move-only evidence that only the detached zero-padding inventory passed.
 ///
-/// The token carries no source/global-lookup/terminal linkage and cannot
-/// authorize composite verification, readiness, or release.
+/// The token is redundant and non-authoritative: it carries no
+/// source/global-lookup/terminal linkage and cannot authorize composite
+/// verification, readiness, or release.
 #[allow(
     missing_copy_implementations,
     reason = "the non-authorizing prerequisite is consumed by the future source-link stage"
@@ -356,11 +359,12 @@ impl DigestRegistryV1 {
     }
 }
 
-/// Authenticate the exact forty-limb committed zero-padding prerequisite.
+/// Authenticate the exact forty-limb detached zero-padding prerequisite.
 ///
 /// The section cap and exact width are checked before allocating point vectors.
 /// Success proves only the hiding-only aggregate equations for the committed
-/// padding inventory and intentionally conveys no source or composite authority.
+/// inventory. It is redundant compatibility evidence and intentionally conveys
+/// no source, padding, or composite authority.
 pub(super) fn authenticate_rns_native_zero_padding_commitments_v1(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     limb_padding_digests: &[[u8; 32]],

@@ -21469,6 +21469,20 @@ def test_effect_capacity_semantics_survive_pending_digest_refresh(
             "if retired_completion {",
             "pending Fetch retirement must release its token or restored stage-7 parent before local ownership",
         ),
+        (
+            "crates/iroha_core/src/sumeragi/tests/v2_effects_main_01.rs",
+            "production_capacity_saturation_admits_response_and_reconstructible_fetch",
+            None,
+            """            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(
+                error,
+            ) => panic!("A failed after the persistence commit: {error}"),""",
+            """            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(
+                error,
+            ) => {
+                let _ = error;
+            },""",
+            "the saturated response must complete through the current lifecycle Phase-B persistence adapter",
+        ),
     ),
 )
 def test_effect_capacity_lifecycle_semantics_survive_pending_digest_refresh(

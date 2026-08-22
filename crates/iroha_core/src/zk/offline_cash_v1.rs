@@ -12,8 +12,14 @@ mod helper_abi;
 mod helper_circuit;
 /// Private move-only GuardUse, PlatformBind, KeyCert, and bundle relation.
 mod helper_relation;
+/// Private, non-authorizing bounded affine P-256 child prototype.
+mod p256_affine_compact;
+/// Private, non-authorizing compact P-256 arithmetic prototype.
+mod p256_compact;
 /// Exact Offline Cash V1 Halo2 profile and protocol identities.
 mod protocol;
+/// Private, non-authorizing SHA-256 inventory and fail-closed shape evidence.
+mod sha256_compact;
 /// Exact 229-word / 33-cell field-neutral STATE public-instance ABI.
 mod state_abi;
 /// Exact Eq/Fp and Ep/Fq STATE relation circuit scaffolds.
@@ -34,17 +40,17 @@ pub(crate) use halo2_backend::OfflineCashHalo2VerifierBackendV1;
 pub(crate) use protocol::OfflineCashHalo2ParityV1;
 #[cfg(test)]
 pub(crate) use protocol::{
-    OfflineCashHalo2CircuitRoleV1, offline_cash_halo2_profile_digest_v1,
-    offline_cash_halo2_protocol_identity_v1,
+    offline_cash_halo2_profile_digest_v1, offline_cash_halo2_protocol_identity_v1,
+    OfflineCashHalo2CircuitRoleV1,
 };
 
 use iroha_data_model::{
-    NetworkId,
     asset::AssetDefinitionId,
     offline::{
         OfflineCashAcknowledgementV1, OfflineCashArtifactBindingV1, OfflineCashArtifactRoleV1,
         OfflineCashAuthenticatedReleaseV1, OfflineCashPaymentRequestV1, OfflineCashPaymentV1,
     },
+    NetworkId,
 };
 use sha2::{Digest as _, Sha256};
 

@@ -20,14 +20,15 @@
 use std::{fmt, sync::Arc};
 
 use iroha_data_model::offline::{
-    OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1, OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1,
-    OfflineCashArtifactBindingV1,
+    OfflineCashArtifactBindingV1, OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1,
+    OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1,
 };
 
 use super::{
+    halo2_primitives::validate_offline_cash_history_v1,
     OfflineCashAuthenticatedVerifierArtifactsV1, OfflineCashHalo2ArtifactErrorV1,
     OfflineCashHalo2ArtifactManifestV1, OfflineCashHalo2ArtifactSourceV1, OfflineCashHalo2ParityV1,
-    OfflineCashPairedProofVerifierV1, halo2_primitives::validate_offline_cash_history_v1,
+    OfflineCashPairedProofVerifierV1,
 };
 
 /// First-party backend which cannot accept proofs until semantic verification exists.

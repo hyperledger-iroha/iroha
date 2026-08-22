@@ -178,6 +178,7 @@ fn build_transcript(
     let qpcs = ZkAmsMkheRnsNativeQpcsRootsV1::new(
         transcript.binding_digest(),
         digest(b"qpcs-initial-root", context, 0),
+        digest(b"q-mask-s-root", context, 0),
         digest(b"qpcs-quotient-root", context, 0),
         fri_roots,
     )

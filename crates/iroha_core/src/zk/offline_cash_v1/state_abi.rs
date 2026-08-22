@@ -9,21 +9,20 @@
 use core::fmt;
 
 use super::{
-    OfflineCashHalo2ParityV1,
     halo2_primitives::validate_offline_cash_history_v1,
     protocol::{
+        offline_cash_halo2_protocol_identity_v1, OfflineCashHalo2CircuitRoleV1,
         OFFLINE_CASH_STATE_ABI_WORDS_V1, OFFLINE_CASH_STATE_INSTANCE_CELLS_MAX_V1,
         OFFLINE_CASH_STATE_INSTANCE_CELLS_V1, OFFLINE_CASH_STATE_WORDS_PER_INSTANCE_V1,
-        OfflineCashHalo2CircuitRoleV1, offline_cash_halo2_protocol_identity_v1,
     },
     state_relation::offline_cash_receive_semantic_digest_v1,
     state_transition::{OfflineCashStateContextV1, ReceiveFoldOutputV1},
+    OfflineCashHalo2ParityV1,
 };
 use halo2_proofs::halo2curves::ff::PrimeField;
 use iroha_data_model::offline::{
-    KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2, OFFLINE_CASH_HALO2_K_V1,
+    OfflineCashTransferStatementV1, KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2, OFFLINE_CASH_HALO2_K_V1,
     OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1, OFFLINE_CASH_WIRE_VERSION_V1,
-    OfflineCashTransferStatementV1,
 };
 
 const ABI_VERSION: u32 = 1;

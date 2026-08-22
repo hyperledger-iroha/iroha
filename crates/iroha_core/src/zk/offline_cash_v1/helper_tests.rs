@@ -10,19 +10,18 @@ use iroha_data_model::offline::{
     KagemushaDevicePublicKeyV2, KagemushaDeviceSignatureV2, OFFLINE_CASH_HALO2_K_V1,
 };
 use p256::ecdsa::{
+    signature::{hazmat::PrehashSigner as _, Signer as _},
     Signature as P256Signature, SigningKey,
-    signature::{Signer as _, hazmat::PrehashSigner as _},
 };
 
 use super::{
-    OfflineCashHalo2ParityV1,
     helper_abi::{
-        ANDROID_CERTIFICATE_WORD_START, CURRENT_GUARD_WORD_START, HELPER_ABI_WORDS,
-        HELPER_ANDROID_PRESENT_WORD, HELPER_INSTANCE_CELLS, HELPER_INSTANCE_CELLS_MAX,
-        HELPER_PROTOCOL_WORD_START, HELPER_ROLE_WORD, HELPER_TO_LOW_WORD,
-        HELPER_WORDS_PER_INSTANCE, NEXT_GUARD_WORD_START, OfflineCashHelperAbiErrorV1,
-        OfflineCashHelperOperationV1, OfflineCashHelperPublicInstancesV1, RELEASE_WORD_START,
-        pack_words_as_field,
+        pack_words_as_field, OfflineCashHelperAbiErrorV1, OfflineCashHelperOperationV1,
+        OfflineCashHelperPublicInstancesV1, ANDROID_CERTIFICATE_WORD_START,
+        CURRENT_GUARD_WORD_START, HELPER_ABI_WORDS, HELPER_ANDROID_PRESENT_WORD,
+        HELPER_INSTANCE_CELLS, HELPER_INSTANCE_CELLS_MAX, HELPER_PROTOCOL_WORD_START,
+        HELPER_ROLE_WORD, HELPER_TO_LOW_WORD, HELPER_WORDS_PER_INSTANCE, NEXT_GUARD_WORD_START,
+        RELEASE_WORD_START,
     },
     helper_circuit::{
         OfflineCashEpAndroidKeyCertBindingCircuitV1, OfflineCashEpGuardBundleBindingCircuitV1,
@@ -31,16 +30,17 @@ use super::{
         OfflineCashEqGuardUseBindingCircuitV1, OfflineCashEqPlatformBindBindingCircuitV1,
     },
     helper_relation::{
-        OfflineCashAndroidKeyCertWitnessV1, OfflineCashHelperRelationInputV1,
-        OfflineCashValidatedHelperRelationV1, guard_bindings_v1, platform_message_v1,
+        guard_bindings_v1, platform_message_v1, OfflineCashAndroidKeyCertWitnessV1,
+        OfflineCashHelperRelationInputV1, OfflineCashValidatedHelperRelationV1,
     },
     protocol::{
-        OfflineCashHalo2CircuitRoleV1, OfflineCashRecursionActivationPreflightErrorV1,
         offline_cash_halo2_protocol_identity_v1, preflight_offline_cash_recursion_activation_v1,
+        OfflineCashHalo2CircuitRoleV1, OfflineCashRecursionActivationPreflightErrorV1,
     },
+    OfflineCashHalo2ParityV1,
 };
 use crate::zk::pasta_ipa_recursion::{
-    PastaIpaInstanceQueryV1, PastaIpaProofShapeV1, pasta_ipa_augmented_proof_shape_v1,
+    pasta_ipa_augmented_proof_shape_v1, PastaIpaInstanceQueryV1, PastaIpaProofShapeV1,
 };
 
 fn configured_helper_shape<F, C>(instance_query: PastaIpaInstanceQueryV1) -> PastaIpaProofShapeV1
@@ -198,11 +198,9 @@ fn helper_abi_is_184_words_and_27_field_neutral_cells() {
         assert_eq!(&fq.as_ref()[..28], bytes);
         assert_eq!(&fp.as_ref()[..], &fq.as_ref()[..]);
     }
-    assert!(
-        packed.last().expect("last cell")[8..]
-            .iter()
-            .all(|byte| *byte == 0)
-    );
+    assert!(packed.last().expect("last cell")[8..]
+        .iter()
+        .all(|byte| *byte == 0));
     let mut noncanonical = packed;
     noncanonical[HELPER_INSTANCE_CELLS - 1][8] = 1;
     assert_eq!(
