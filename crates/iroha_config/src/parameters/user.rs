@@ -1025,6 +1025,9 @@ impl Root {
     /// `nexus.enabled = true` is accepted as a compatibility marker for
     /// already-rendered Taira configurations. Nexus no longer has a runtime
     /// disable switch, so `false` and non-boolean values remain invalid.
+    /// Legacy positive scheduler values stored in lane metadata are migrated
+    /// to the equivalent typed scheduler fields when no conflicting typed
+    /// value is present.
     ///
     /// # Errors
     ///
@@ -1056,6 +1059,59 @@ impl Root {
                 remove_path(child, tail);
             }
         }
+        fn migrate_legacy_lane_scheduler_metadata(table: &mut toml::Table) {
+            let Some(lanes) = table
+                .get_mut("nexus")
+                .and_then(toml::Value::as_table_mut)
+                .and_then(|nexus| nexus.get_mut("lane_catalog"))
+                .and_then(toml::Value::as_array_mut)
+            else {
+                return;
+            };
+            for lane in lanes {
+                let Some(lane) = lane.as_table_mut() else {
+                    continue;
+                };
+                for (legacy_key, typed_key) in [
+                    ("scheduler.teu_capacity", "teu_capacity"),
+                    ("scheduler.starvation_bound_slots", "starvation_bound_slots"),
+                ] {
+                    let Some(value) = lane
+                        .get("metadata")
+                        .and_then(toml::Value::as_table)
+                        .and_then(|metadata| metadata.get(legacy_key))
+                        .and_then(toml::Value::as_str)
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .filter(|value| *value > 0)
+                        .and_then(|value| i64::try_from(value).ok())
+                    else {
+                        continue;
+                    };
+                    let compatible = match lane.get("scheduler") {
+                        None => true,
+                        Some(toml::Value::Table(scheduler)) => scheduler
+                            .get(typed_key)
+                            .is_none_or(|typed| typed.as_integer() == Some(value)),
+                        Some(_) => false,
+                    };
+                    if !compatible {
+                        continue;
+                    }
+                    let scheduler = lane
+                        .entry("scheduler")
+                        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+                        .as_table_mut()
+                        .expect("compatible scheduler entry is a table");
+                    scheduler
+                        .entry(typed_key)
+                        .or_insert(toml::Value::Integer(value));
+                    lane.get_mut("metadata")
+                        .and_then(toml::Value::as_table_mut)
+                        .expect("legacy scheduler metadata came from a table")
+                        .remove(legacy_key);
+                }
+            }
+        }
         let reader = reader.rewrite_toml_sources(|sources| {
             const COMMANDS: &[&str] = &["torii", "kagemusha_commands"];
             const COMMANDS_ENABLED: &[&str] = &["torii", "kagemusha_commands", "enabled"];
@@ -1069,6 +1125,9 @@ impl Root {
                 for source in sources.iter_mut() {
                     remove_path(source.table_mut(), NEXUS_ENABLED);
                 }
+            }
+            for source in sources.iter_mut() {
+                migrate_legacy_lane_scheduler_metadata(source.table_mut());
             }
         });
         reader.read_and_complete::<Self>()
@@ -32233,6 +32292,78 @@ policy_digest_hex = "{policy_digest_hex}"
         let report = format!("{error:?}");
         assert!(report.contains("unknown parameter"), "{report}");
         assert!(report.contains("nexus.enabled"), "{report}");
+    }
+    #[test]
+    fn legacy_lane_scheduler_metadata_migrates_to_typed_policy() {
+        let mut table = base_table();
+        let nexus = nexus_table_mut(&mut table);
+        set_lane_count(nexus, 1);
+        let mut lane = lane_descriptor(0, "primary");
+        lane.as_table_mut()
+            .expect("lane descriptor table")
+            .get_mut("metadata")
+            .and_then(Value::as_table_mut)
+            .expect("lane metadata table")
+            .extend([
+                (
+                    "scheduler.teu_capacity".into(),
+                    Value::String("2048".into()),
+                ),
+                ("operator.note".into(), Value::String("preserved".into())),
+            ]);
+        nexus.insert("lane_catalog".into(), Value::Array(vec![lane]));
+
+        let actual = load_root(table);
+        let lane = actual
+            .nexus
+            .lane_catalog
+            .lanes()
+            .first()
+            .expect("configured lane");
+        assert_eq!(
+            lane.scheduler
+                .as_ref()
+                .and_then(|scheduler| scheduler.teu_capacity)
+                .map(NonZeroU64::get),
+            Some(2048)
+        );
+        assert_eq!(
+            lane.metadata.get("operator.note").map(String::as_str),
+            Some("preserved")
+        );
+        assert!(!lane.metadata.contains_key("scheduler.teu_capacity"));
+    }
+    #[test]
+    fn conflicting_legacy_and_typed_lane_scheduler_values_remain_invalid() {
+        let mut table = base_table();
+        let nexus = nexus_table_mut(&mut table);
+        set_lane_count(nexus, 1);
+        let mut lane = lane_descriptor(0, "primary");
+        let lane = lane.as_table_mut().expect("lane descriptor table");
+        lane.get_mut("metadata")
+            .and_then(Value::as_table_mut)
+            .expect("lane metadata table")
+            .insert(
+                "scheduler.teu_capacity".into(),
+                Value::String("2048".into()),
+            );
+        lane.insert(
+            "scheduler".into(),
+            Value::Table(Table::from_iter([(
+                "teu_capacity".into(),
+                Value::Integer(4096),
+            )])),
+        );
+        nexus.insert(
+            "lane_catalog".into(),
+            Value::Array(vec![Value::Table(lane.clone())]),
+        );
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("conflicting legacy and typed scheduler values must fail closed");
+        let report = format!("{error:?}");
+        assert!(report.contains("scheduler.teu_capacity"), "{report}");
+        assert!(report.contains("retired"), "{report}");
     }
     #[test]
     fn nexus_autoscale_parse_rejects_default_lane_inside_elastic_range() {
