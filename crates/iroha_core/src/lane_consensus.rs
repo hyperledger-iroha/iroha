@@ -1554,6 +1554,7 @@ fn validate_lane_executable_payload_body(
             entrypoint.clone(),
         ));
         if key.validate().is_err()
+            || key.signed_transaction_hash != accepted.hash()
             || key.entrypoint_hash != accepted.hash_as_entrypoint()
             || Hash::from(key.entrypoint_hash) != *entrypoint_hash
             || key.lane_id != descriptor.lane_id

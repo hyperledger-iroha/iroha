@@ -22254,6 +22254,101 @@ impl Kura {
             path,
         )
     }
+    fn decode_lane_block_execution_input_artifact(
+        bytes: &[u8],
+    ) -> std::result::Result<LaneBlockExecutionInputArtifact, norito::Error> {
+        match norito::decode_canonical::<LaneBlockExecutionInputArtifact>(bytes) {
+            Ok(artifact) => Ok(artifact),
+            Err(current_error) => {
+                // The producer and current artifact share the original public
+                // type name, so require that exact outer schema and CRC first.
+                // The private compatibility struct necessarily has a different
+                // Rust type-name fingerprint; substitute only that header field
+                // in a bounded copy so `decode_canonical` still proves every
+                // producer payload byte and canonical layout flag.
+                let view = norito::core::from_bytes_view(bytes)?;
+                if view.schema()
+                    != norito::core::type_name_schema_hash::<LaneBlockExecutionInputArtifact>()
+                {
+                    return Err(current_error);
+                }
+                let mut legacy_frame = bytes.to_vec();
+                const NORITO_SCHEMA_OFFSET: usize = 4 + 1 + 1;
+                const NORITO_SCHEMA_END: usize = NORITO_SCHEMA_OFFSET + 16;
+                let Some(schema) = legacy_frame.get_mut(NORITO_SCHEMA_OFFSET..NORITO_SCHEMA_END)
+                else {
+                    return Err(current_error);
+                };
+                schema.copy_from_slice(&norito::core::type_name_schema_hash::<
+                    PreReleaseLaneBlockExecutionInputArtifact,
+                >());
+                let legacy = match norito::decode_canonical::<
+                    PreReleaseLaneBlockExecutionInputArtifact,
+                >(&legacy_frame)
+                {
+                    Ok(legacy) => legacy,
+                    Err(legacy_error) => {
+                        return Err(norito::core::Error::Message(format!(
+                            "current execution input decode failed ({current_error}); pre-release decode failed ({legacy_error})"
+                        )));
+                    }
+                };
+                if !Self::lane_block_artifact_matches_descriptor(
+                    &legacy.artifact.ownership,
+                    &legacy.proposal.descriptor,
+                ) {
+                    return Err(norito::core::Error::Message(
+                        "pre-release execution input artifact does not match its proposal"
+                            .to_owned(),
+                    ));
+                }
+                let source = match (
+                    legacy.autonomous_network_id,
+                    legacy.autonomous_epoch,
+                    legacy.autonomous_payload_hash,
+                ) {
+                    (Some(network_id), Some(epoch), Some(payload_hash)) => {
+                        let (expected_block_hash, expected_view) =
+                            if let Some(hint) = legacy.proposal.payload_block_hint {
+                                (hint.proposal_block_hash, hint.proposal_view)
+                            } else {
+                                let synthetic = Hash::new_from_chunks(&[
+                                    b"iroha:lane:autonomous-execution-anchor:v1\0",
+                                    legacy.proposal.proposal_hash.as_ref(),
+                                    payload_hash.as_ref(),
+                                ]);
+                                (HashOf::from_untyped_unchecked(synthetic), 0)
+                            };
+                        if legacy.artifact.proposal_block_hash != expected_block_hash
+                            || legacy.artifact.ownership.proposal_view != expected_view
+                        {
+                            return Err(norito::core::Error::Message(
+                                "pre-release autonomous execution input anchor is invalid"
+                                    .to_owned(),
+                            ));
+                        }
+                        LaneBlockExecutionSourceV1::autonomous_lane(network_id, epoch, payload_hash)
+                    }
+                    (None, None, None) => LaneBlockExecutionSourceV1::global_block(legacy.artifact),
+                    _ => {
+                        return Err(norito::core::Error::Message(
+                            "pre-release execution input source binding is incomplete".to_owned(),
+                        ));
+                    }
+                };
+                Ok(LaneBlockExecutionInputArtifact {
+                    format: legacy.format,
+                    proposal: legacy.proposal,
+                    source,
+                    entrypoint_hashes: legacy.entrypoint_hashes,
+                    entrypoints: legacy.entrypoints,
+                    reservation_keys: legacy.reservation_keys,
+                    routing_plans: legacy.routing_plans,
+                    native_amx_receipts: legacy.native_amx_receipts,
+                })
+            }
+        }
+    }
     pub(crate) fn validate_lane_block_execution_input_artifact(
         artifact: &LaneBlockExecutionInputArtifact,
     ) -> std::result::Result<(), &'static str> {
@@ -33320,7 +33415,7 @@ impl Kura {
             lane_block_height,
             data_path,
             index_path,
-            norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
+            Self::decode_lane_block_execution_input_artifact,
             "lane block execution input",
             recover,
         )

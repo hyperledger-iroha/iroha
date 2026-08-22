@@ -219,7 +219,7 @@ impl Kura {
             lane_block_height,
             &data_path,
             &index_path,
-            norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
+            Self::decode_lane_block_execution_input_artifact,
             "lane block execution input",
             false,
         ) {
@@ -378,7 +378,7 @@ impl Kura {
             lane_block_height,
             &data_path,
             &index_path,
-            norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
+            Self::decode_lane_block_execution_input_artifact,
             "lane block execution input",
             false,
         )

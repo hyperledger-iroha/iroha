@@ -197,7 +197,12 @@ use tokio::{
     time::{MissedTickBehavior, interval},
 };
 type EntrypointHash = HashOf<TransactionEntrypoint>;
+type SignedTxHash = HashOf<iroha_data_model::transaction::SignedTransaction>;
 type QueuePlanJournalRemoval = (HashOf<TransactionEntrypoint>, Hash, Hash);
+
+fn compatibility_queue_hash(entrypoint_hash: HashOf<TransactionEntrypoint>) -> SignedTxHash {
+    HashOf::from_untyped_unchecked(Hash::from(entrypoint_hash))
+}
 #[cfg(test)]
 fn queue_test_network_id() -> iroha_data_model::NetworkId {
     // Match the exact genesis hash in `iroha_config/iroha_test_config.toml` so
@@ -799,6 +804,8 @@ impl LaneQueueReservationRoutingMode {
 pub struct LaneQueueReservationKeyV2 {
     /// Exact encoded reservation-key schema version.
     pub version: u16,
+    /// Compatibility hash retained in the pre-release reset-11 wire layout.
+    pub signed_transaction_hash: HashOf<iroha_data_model::transaction::SignedTransaction>,
     /// Canonical queue identity: the typed hash of the full transaction entrypoint.
     pub entrypoint_hash: HashOf<TransactionEntrypoint>,
     /// Exact globally committed QueuePlan admission binding authorizing economic ownership.
@@ -834,6 +841,13 @@ impl LaneQueueReservationKeyV2 {
             norito::encode_canonical(self).expect("lane queue reservation identity must encode"),
         )
     }
+    /// Derive the redundant reset-11 queue hash from the canonical entrypoint identity.
+    #[must_use]
+    pub fn compatibility_signed_transaction_hash(
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> HashOf<iroha_data_model::transaction::SignedTransaction> {
+        compatibility_queue_hash(entrypoint_hash)
+    }
     /// Validate the current schema version and complete reservation identity.
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         if self.version != Self::VERSION {
@@ -857,6 +871,11 @@ impl LaneQueueReservationKeyV2 {
             || hash_is_zero(self.proposal_identity_hash)
         {
             return Err("lane reservation cryptographic identity contains a zero hash");
+        }
+        if self.signed_transaction_hash != compatibility_queue_hash(self.entrypoint_hash) {
+            return Err(
+                "lane reservation compatibility transaction hash does not match its entrypoint",
+            );
         }
         Ok(())
     }
@@ -5561,6 +5580,7 @@ impl Queue {
             }
             let key = LaneQueueReservationKeyV2 {
                 version: LaneQueueReservationKeyV2::VERSION,
+                signed_transaction_hash: tx.as_accepted().hash(),
                 entrypoint_hash: tx.as_accepted().hash_as_entrypoint(),
                 queue_plan_admission_binding_hash,
                 routing_plan_digest: routing_plan.digest(),
