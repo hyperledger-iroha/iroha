@@ -665,9 +665,43 @@ pub(super) fn authenticated_committee_for_descriptor(
                 && ownership.validate_replay_material().is_ok()
         });
     let mut ownerships = ownerships.take(2);
-    let ownership = ownerships
-        .next()
-        .ok_or("finalized proposal-height block does not bind this lane descriptor")?;
+    let Some(ownership) = ownerships.next() else {
+        // Reset-11 was produced before global blocks persisted the complete
+        // lane-payload ownership projection.  Its one certified lane-zero
+        // block was nevertheless authorized with the producer's canonical
+        // proposal-height committee.  Retain that exact, narrow recovery
+        // corridor only while the immutable reset tip is still height four;
+        // every later block and every other network continues to require the
+        // globally finalized ownership record above.
+        if crate::sumeragi::v2_context::uses_pre_release_taira_nexus_projection(&state.network_id)
+            && state.committed_height() == 4
+            && descriptor.proposal_height == 1
+            && descriptor.lane_id == LaneId::SINGLE
+            && descriptor.dataspace_id == DataSpaceId::UNIVERSAL
+            && descriptor.previous_lane_block_height == 0
+            && descriptor.previous_lane_block_descriptor_hash.is_none()
+            && descriptor.lane_block_height == 1
+        {
+            let committee = state
+                .resolve_lane_committee_at_height(
+                    LaneAuthorityRoute::new(descriptor.lane_id, descriptor.dataspace_id),
+                    descriptor.proposal_height,
+                )
+                .map_err(|_| "reset-11 lane committee cannot be reconstructed")?
+                .into_validators();
+            if !committee.is_empty()
+                && descriptor.validator_set == committee
+                && descriptor.validator_set_hash == descriptor.computed_validator_set_hash()
+                && usize::try_from(descriptor.validator_count).ok() == Some(committee.len())
+                && descriptor.min_quorum != 0
+                && descriptor.min_quorum <= descriptor.validator_count
+            {
+                return Ok(committee);
+            }
+            return Err("reset-11 lane descriptor differs from its canonical committee");
+        }
+        return Err("finalized proposal-height block does not bind this lane descriptor");
+    };
     if ownerships.next().is_some() {
         return Err("finalized proposal-height block ambiguously binds this lane descriptor");
     }
