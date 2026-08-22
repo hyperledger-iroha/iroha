@@ -17,7 +17,7 @@ use iroha_data_model::{
     NetworkId,
     block::{SignedBlock, consensus_v2 as wire},
     isi::RegisterBox,
-    nexus::{LaneCatalog, LaneLifecycleParameterV1, PublicLaneValidatorStatus},
+    nexus::PublicLaneValidatorStatus,
     peer::PeerId,
     transaction::Executable,
 };
@@ -26,30 +26,6 @@ use mv::storage::StorageReadOnly;
 use norito::codec::Encode;
 use std::collections::BTreeMap;
 use thiserror::Error;
-const TAIRA_RESET11_NETWORK_ID: [u8; Hash::LENGTH] = [
-    0x1e, 0x88, 0x19, 0xab, 0x7b, 0x55, 0xa4, 0xe7, 0xe4, 0x1e, 0xa3, 0xeb, 0x8e, 0x42, 0xae, 0xe6,
-    0x6d, 0x77, 0xcc, 0x07, 0x46, 0x1b, 0xa3, 0xb7, 0x01, 0x81, 0x42, 0x84, 0x25, 0x80, 0x92, 0x31,
-];
-/// Return whether this is the exact pre-release Taira reset-11 lineage.
-#[must_use]
-pub(crate) fn uses_pre_release_taira_nexus_projection(network_id: &NetworkId) -> bool {
-    network_id.as_bytes() == &TAIRA_RESET11_NETWORK_ID
-}
-/// Compute the configured lane-catalog commitment for this network lineage.
-///
-/// Only the exact pre-release Taira reset-11 network retains the producer's
-/// legacy lane wire shape. Every other network uses the current commitment.
-#[must_use]
-pub fn configured_lane_catalog_hash_for_network(
-    network_id: &NetworkId,
-    catalog: &LaneCatalog,
-) -> Hash {
-    if uses_pre_release_taira_nexus_projection(network_id) {
-        iroha_config::parameters::actual::sumeragi_v2_pre_release_lane_catalog_hash(catalog)
-    } else {
-        LaneLifecycleParameterV1::catalog_hash(catalog)
-    }
-}
 /// Verified height-one inputs retained until the production reducer opens its
 /// safety WAL.
 pub struct GenesisV2Bootstrap {
@@ -124,6 +100,11 @@ impl GenesisV2Bootstrap {
     #[must_use]
     pub fn context(&self) -> &wire::HeightContext {
         self.verified_context.context()
+    }
+    /// Borrow the exact PoPs authenticated with the staged height-one roster.
+    #[must_use]
+    pub fn proofs_of_possession(&self) -> &[Vec<u8>] {
+        self.verified_context.proofs_of_possession()
     }
     pub(in crate::sumeragi) fn into_parts(
         self,
@@ -330,7 +311,8 @@ pub fn freeze_staged_genesis_v2(
         authenticated_genesis,
     })
 }
-fn signed_genesis_validator_pops(
+/// Extract the canonical voting identities and exact PoPs signed into genesis.
+pub fn signed_genesis_validator_pops(
     genesis: &GenesisBlock,
 ) -> Result<BTreeMap<PeerId, Vec<u8>>, V2GenesisBootstrapError> {
     let mut validators = BTreeMap::new();
@@ -387,21 +369,12 @@ pub fn staged_genesis_nexus_amx_context_hash(staged: &StateBlock<'_>) -> Hash {
             },
         )
         .collect::<Vec<_>>();
-    if uses_pre_release_taira_nexus_projection(&staged.network_id) {
-        iroha_config::parameters::actual::sumeragi_v2_pre_release_nexus_amx_context_hash(
-            &staged.nexus,
-            &staged.pipeline,
-            &active_validators,
-            &retained_lane_lineage,
-        )
-    } else {
-        iroha_config::parameters::actual::sumeragi_v2_nexus_amx_context_hash(
-            &staged.nexus,
-            &staged.pipeline,
-            &active_validators,
-            &retained_lane_lineage,
-        )
-    }
+    iroha_config::parameters::actual::sumeragi_v2_nexus_amx_context_hash(
+        &staged.nexus,
+        &staged.pipeline,
+        &active_validators,
+        &retained_lane_lineage,
+    )
 }
 fn verify_staged_nexus_amx_context_hash(
     staged: &StateBlock<'_>,
@@ -853,24 +826,6 @@ mod tests {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),
         ))
-    }
-    #[test]
-    fn pre_release_taira_projection_is_exactly_network_scoped() {
-        let taira = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::prehashed(TAIRA_RESET11_NETWORK_ID),
-        ));
-        assert!(uses_pre_release_taira_nexus_projection(&taira));
-        let successor = test_network_id(0);
-        assert!(!uses_pre_release_taira_nexus_projection(&successor));
-        let catalog = iroha_data_model::nexus::LaneCatalog::default();
-        assert_eq!(
-            configured_lane_catalog_hash_for_network(&taira, &catalog),
-            iroha_config::parameters::actual::sumeragi_v2_pre_release_lane_catalog_hash(&catalog),
-        );
-        assert_eq!(
-            configured_lane_catalog_hash_for_network(&successor, &catalog),
-            iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&catalog),
-        );
     }
     fn roster(powers: &[u64]) -> Vec<wire::ValidatorPower> {
         let mut entries = powers

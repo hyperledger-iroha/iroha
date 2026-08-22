@@ -370,12 +370,19 @@ impl SumeragiV2GenesisContextParameters {
     /// # Errors
     ///
     /// Returns [`ValidationError::InvalidDataAvailabilityLayout`] for a zero
-    /// limit or an encoding/shard mismatch, and rejects zero policy commitments.
+    /// limit or an encoding/shard mismatch, and rejects zero or non-canonical
+    /// policy commitments.
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.nexus_amx_context_hash == [0; 32] {
+        if self.nexus_amx_context_hash == [0; 32]
+            || <[u8; Hash::LENGTH]>::from(Hash::prehashed(self.nexus_amx_context_hash))
+                != self.nexus_amx_context_hash
+        {
             return Err(ValidationError::InvalidNexusAmxContextHash);
         }
-        if self.execution_policy_hash == [0; 32] {
+        if self.execution_policy_hash == [0; 32]
+            || <[u8; Hash::LENGTH]>::from(Hash::prehashed(self.execution_policy_hash))
+                != self.execution_policy_hash
+        {
             return Err(ValidationError::InvalidExecutionPolicyHash);
         }
         validate_data_availability_layout(self.da_layout)
@@ -3702,9 +3709,9 @@ pub enum ValidationError {
     InvalidSnapshotBootstrap,
     /// The mandatory data-availability layout is internally inconsistent.
     InvalidDataAvailabilityLayout,
-    /// The mandatory Nexus/AMX context commitment is all zero.
+    /// The mandatory Nexus/AMX context commitment is zero or non-canonical.
     InvalidNexusAmxContextHash,
-    /// The mandatory process-local execution-policy commitment is all zero.
+    /// The mandatory process-local execution-policy commitment is zero or non-canonical.
     InvalidExecutionPolicyHash,
     /// A certificate or message is bound to another height context.
     WrongHeightContext,

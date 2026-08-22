@@ -1,6 +1,6 @@
 use super::{SignedBlock, execution_context::BlockExecutionContextBundle, header::BlockHeader};
 use crate::{
-    consensus::{NposConsensusEffects, PreviousRosterEvidence},
+    consensus::NposConsensusEffects,
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -26,10 +26,7 @@ use std::{
 #[model]
 mod model {
     use super::*;
-    use crate::{
-        consensus::{NposConsensusEffects, PreviousRosterEvidence},
-        da::commitment::DaCommitmentBundle,
-    };
+    use crate::{consensus::NposConsensusEffects, da::commitment::DaCommitmentBundle};
     /// Core contents of a block.
     #[derive(Debug, Clone, Encode, IntoSchema, Decode)]
     #[cfg_attr(
@@ -41,35 +38,24 @@ mod model {
         /// Essential metadata for a block in the chain.
         pub header: BlockHeader,
         /// Canonical external transaction entrypoints in consensus order.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Vec::is_empty")]
         pub external_entrypoints: Vec<TransactionEntrypoint>,
         /// Optional DA commitment bundle embedded in this block.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(required)]
         pub da_commitments: Option<DaCommitmentBundle>,
         /// Optional DA proof policy bundle embedded in this block.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(required)]
         pub da_proof_policies: Option<DaProofPolicyBundle>,
         /// Optional DA pin intent bundle embedded in this block.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(required)]
         pub da_pin_intents: Option<DaPinIntentBundle>,
-        /// Optional previous-height roster evidence embedded in this block.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
-        pub previous_roster_evidence: Option<PreviousRosterEvidence>,
         /// Deterministic `NPoS` effects embedded in this block.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(required)]
         pub npos_consensus_effects: Option<NposConsensusEffects>,
         /// Durable execution context for external entrypoints.
         ///
         /// New committed blocks include this context so replay does not need to
         /// re-derive route-dependent execution inputs from the current WSV.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(required)]
         pub execution_context: Option<BlockExecutionContextBundle>,
     }
     /// Secondary block state resulting from execution.
@@ -104,7 +90,6 @@ mod model {
         ///
         /// This sticky set authenticates transient same-block rotations that the
         /// final policy snapshot alone cannot reconstruct during Kura replay.
-        #[norito(skip)]
         pub axt_transitioned_dataspaces: BTreeSet<crate::nexus::DataSpaceId>,
         /// Canonically ordered post-execution lane effects authenticated by the global `CommitQC`.
         ///
@@ -122,7 +107,6 @@ impl PartialEq for BlockPayload {
             && self.da_commitments == other.da_commitments
             && self.da_proof_policies == other.da_proof_policies
             && self.da_pin_intents == other.da_pin_intents
-            && self.previous_roster_evidence == other.previous_roster_evidence
             && self.npos_consensus_effects == other.npos_consensus_effects
     }
 }
@@ -145,7 +129,6 @@ impl Ord for BlockPayload {
             &self.da_commitments,
             &self.da_proof_policies,
             &self.da_pin_intents,
-            &self.previous_roster_evidence,
             &self_npos_effects_hash,
         )
             .cmp(&(
@@ -155,7 +138,6 @@ impl Ord for BlockPayload {
                 &other.da_commitments,
                 &other.da_proof_policies,
                 &other.da_pin_intents,
-                &other.previous_roster_evidence,
                 &other_npos_effects_hash,
             ))
     }
@@ -341,17 +323,6 @@ impl SignedBlock {
             .and_then(DaPinIntentBundle::merkle_commitment);
         self.payload.da_pin_intents = intents;
         self.payload.header.set_da_pin_intents_hash(hash);
-    }
-    /// Previous-height roster evidence embedded in this block.
-    #[inline]
-    pub fn previous_roster_evidence(&self) -> Option<&PreviousRosterEvidence> {
-        self.payload.previous_roster_evidence.as_ref()
-    }
-    /// Set or clear previous-height roster evidence and update the header hash.
-    pub fn set_previous_roster_evidence(&mut self, evidence: Option<PreviousRosterEvidence>) {
-        let hash = evidence.as_ref().map(HashOf::new);
-        self.payload.previous_roster_evidence = evidence;
-        self.payload.header.set_prev_roster_evidence_hash(hash);
     }
     /// Deterministic `NPoS` effects embedded in this block.
     #[inline]

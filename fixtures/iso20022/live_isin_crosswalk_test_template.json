@@ -1,0 +1,9 @@
+{
+                "version":"2024-05-01",
+                "source":"ANNA DSB sample",
+                "entries":[{
+                    "isin":"US0378331005",
+                    "cusip":"037833100",
+                    "asset_definition_id":"{asset_definition_id}"
+                }]
+            }

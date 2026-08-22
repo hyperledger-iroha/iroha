@@ -107,15 +107,23 @@ POST_GROUP_SHA256 = "67df42e03e9155d6e21353cdd5c609299d485aa7098a3d544d073e75b37
 POST_GROUP_BYTES = 1_993
 POST_GROUP_LINES = 62
 
-MANIFEST_BLOB = "c629283d5728fec9e900563c613a7a0df4d41642"
-MANIFEST_SHA256 = "e78ebe2ef7d33c41c39419b074dfef56a59394098e1e9c7e3ac7b0d5483d1232"
-MANIFEST_BYTES = 4_778
-MANIFEST_LINES = 231
+OPENING_MANIFEST_BLOB = "c629283d5728fec9e900563c613a7a0df4d41642"
+OPENING_MANIFEST_SHA256 = "e78ebe2ef7d33c41c39419b074dfef56a59394098e1e9c7e3ac7b0d5483d1232"
+OPENING_MANIFEST_BYTES = 4_778
+OPENING_MANIFEST_LINES = 231
+MANIFEST_BLOB = "32617b52ced72537c979c749d14adb3006b238a8"
+MANIFEST_SHA256 = "001921234ba49efed859155722186f8a3b1a52d48af593becd8724cb922b6912"
+MANIFEST_BYTES = 4_618
+MANIFEST_LINES = 226
 
-LOCK_BLOB = "bf7633694c3f2fdca07de4d99743a09bad2daa12"
-LOCK_SHA256 = "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
-LOCK_BYTES = 315_333
-LOCK_LINES = 13_758
+OPENING_LOCK_BLOB = "bf7633694c3f2fdca07de4d99743a09bad2daa12"
+OPENING_LOCK_SHA256 = "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
+OPENING_LOCK_BYTES = 315_333
+OPENING_LOCK_LINES = 13_758
+LOCK_BLOB = "5d04cef722cb695dd636110be01ff8de52ae7b45"
+LOCK_SHA256 = "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
+LOCK_BYTES = 311_172
+LOCK_LINES = 13_613
 
 RETIRED_MODULE_BLOCKS = (
     '#[path = "../temp_print_nested.rs"]\nmod temp_print_nested;\n',
@@ -353,9 +361,19 @@ def _authenticate_openings() -> tuple[bytes, bytes]:
             _require(source.count(pin.crate_cfg) == 1, f"feature gate changed: {pin.path}")
     group = _authenticate_blob(GROUP_ROOT, GROUP_BLOB, GROUP_SHA256, GROUP_BYTES, GROUP_LINES)
     manifest = _authenticate_blob(
-        MANIFEST, MANIFEST_BLOB, MANIFEST_SHA256, MANIFEST_BYTES, MANIFEST_LINES
+        MANIFEST,
+        OPENING_MANIFEST_BLOB,
+        OPENING_MANIFEST_SHA256,
+        OPENING_MANIFEST_BYTES,
+        OPENING_MANIFEST_LINES,
     )
-    _authenticate_blob(LOCKFILE, LOCK_BLOB, LOCK_SHA256, LOCK_BYTES, LOCK_LINES)
+    _authenticate_blob(
+        LOCKFILE,
+        OPENING_LOCK_BLOB,
+        OPENING_LOCK_SHA256,
+        OPENING_LOCK_BYTES,
+        OPENING_LOCK_LINES,
+    )
     for path, (blob, sha256, byte_count, line_count) in REPLACEMENT_SOURCE_PINS.items():
         _authenticate_blob(path, blob, sha256, byte_count, line_count)
     return group, manifest
@@ -423,7 +441,7 @@ def _snapshot() -> Snapshot:
     )
 
 
-def _validate(snapshot: Snapshot, opening_group: bytes, opening_manifest: bytes) -> None:
+def _validate(snapshot: Snapshot, opening_group: bytes, _opening_manifest: bytes) -> None:
     for pin in SOURCE_PINS:
         _require(snapshot.files[pin.path] is None, f"retired source resurrected: {pin.path}")
 
@@ -435,8 +453,10 @@ def _validate(snapshot: Snapshot, opening_group: bytes, opening_manifest: bytes)
 
     manifest = snapshot.files[MANIFEST]
     _require(manifest is not None, "Norito manifest is missing")
-    _require(manifest == opening_manifest, "Norito manifest differs from authenticated opening")
+    _require(len(manifest) == MANIFEST_BYTES, "Norito manifest byte count changed")
+    _require(manifest.count(b"\n") == MANIFEST_LINES, "Norito manifest line count changed")
     _require(_sha256(manifest) == MANIFEST_SHA256, "Norito manifest content changed")
+    _require(manifest == _git_blob(MANIFEST_BLOB), "Norito manifest differs from current authority")
     manifest_text = manifest.decode("utf-8")
     _require(len(re.findall(r"^autotests\s*=\s*false$", manifest_text, re.MULTILINE)) == 1, "autotests=false contract changed")
     _require(not re.search(r"^autoexamples\s*=", manifest_text, re.MULTILINE), "autoexample discovery contract changed")
@@ -451,7 +471,7 @@ def _validate(snapshot: Snapshot, opening_group: bytes, opening_manifest: bytes)
     _require(len(lock) == LOCK_BYTES, "Cargo.lock byte count changed")
     _require(lock.count(b"\n") == LOCK_LINES, "Cargo.lock line count changed")
     _require(_sha256(lock) == LOCK_SHA256, "Cargo.lock hash changed")
-    _require(lock == _git_blob(LOCK_BLOB), "Cargo.lock differs from authenticated opening")
+    _require(lock == _git_blob(LOCK_BLOB), "Cargo.lock differs from current authority")
 
     for path, markers in REPLACEMENT_MARKERS.items():
         data = snapshot.files[path]

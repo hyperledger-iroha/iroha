@@ -1,0 +1,6 @@
+
+[nexus.autoscale]
+scale_out_latency_ratio = inf
+scale_in_latency_ratio = nan
+scale_out_utilization_ratio = inf
+scale_in_utilization_ratio = nan

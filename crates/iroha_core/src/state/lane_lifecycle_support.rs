@@ -117,7 +117,6 @@ pub(crate) fn derive_static_lane_incarnations(catalog: &LaneCatalog) -> BTreeMap
         .collect()
 }
 fn configured_primary_replay_geometry(
-    network_id: &iroha_data_model::NetworkId,
     configured_lane_catalog: &LaneCatalog,
 ) -> Result<ConfiguredPrimaryReplayGeometry, LaneLifecycleError> {
     let primary = configured_lane_catalog
@@ -131,7 +130,7 @@ fn configured_primary_replay_geometry(
         })?;
     let catalog = LaneCatalog::new(configured_lane_catalog.lane_count(), vec![primary])
         .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?;
-    let incarnations = configured_lane_static_incarnations(network_id, &catalog);
+    let incarnations = derive_static_lane_incarnations(&catalog);
     let primary_incarnation = incarnations.get(&LaneId::SINGLE).copied().ok_or_else(|| {
         LaneLifecycleError::ConfiguredCatalogBaseline(
             "configured primary catalog does not contain lane zero".to_owned(),

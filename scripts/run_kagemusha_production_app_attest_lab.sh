@@ -925,8 +925,8 @@ if [[ ! -s "$SIGNED_ENTITLEMENTS" ]]; then
   echo "[kagemusha-app-attest-lab] ERROR: signed application entitlements are unavailable" >&2
   exit 1
 fi
-SIGNED_ENVIRONMENT="$($PLUTIL_BINARY -extract com.apple.developer.devicecheck.appattest-environment raw "$SIGNED_ENTITLEMENTS" 2>/dev/null || true)"
-SIGNED_TEAM="$($PLUTIL_BINARY -extract com.apple.developer.team-identifier raw "$SIGNED_ENTITLEMENTS" 2>/dev/null || true)"
+SIGNED_ENVIRONMENT="$($PLUTIL_BINARY -extract 'com\.apple\.developer\.devicecheck\.appattest-environment' raw "$SIGNED_ENTITLEMENTS" 2>/dev/null || true)"
+SIGNED_TEAM="$($PLUTIL_BINARY -extract 'com\.apple\.developer\.team-identifier' raw "$SIGNED_ENTITLEMENTS" 2>/dev/null || true)"
 SIGNED_APPLICATION_ID="$($PLUTIL_BINARY -extract application-identifier raw "$SIGNED_ENTITLEMENTS" 2>/dev/null || true)"
 if [[ "$SIGNED_ENVIRONMENT" != "production" ]]; then
   echo "[kagemusha-app-attest-lab] ERROR: signed app lost the production App Attest entitlement" >&2

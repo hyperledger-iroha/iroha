@@ -1,7 +1,9 @@
 //! Bounded readers and decoders for local startup trust-root artifacts.
 use super::{ConfigError, ReportResult, StartError};
 use error_stack::{Report, ResultExt as _};
-use iroha_genesis::{GenesisBlock, RawGenesisTransaction, read_signed_genesis};
+use iroha_genesis::{
+    GenesisBlock, RawGenesisTransaction, decode_signed_genesis, read_signed_genesis_bytes,
+};
 use std::{
     fs,
     io::{self, Read as _},
@@ -28,6 +30,13 @@ pub fn read_genesis_manifest(path: &Path) -> ReportResult<RawGenesisTransaction,
 }
 /// Read and decode one signed genesis artifact under fixed startup budgets.
 pub fn read_genesis_unlocked(path: &Path) -> ReportResult<GenesisBlock, ConfigError> {
+    read_genesis_unlocked_with_bytes(path).map(|(genesis, _bytes)| genesis)
+}
+/// Read and decode one signed genesis artifact while retaining the exact
+/// stable source buffer used by the decoder.
+pub fn read_genesis_unlocked_with_bytes(
+    path: &Path,
+) -> ReportResult<(GenesisBlock, Vec<u8>), ConfigError> {
     const PANIC_HELP: &str = concat!(
         "Genesis decode panicked. A common cause is an invalid `Name` (identifiers ",
         "must not contain whitespace or the characters `@`, `#`, `$`). ",
@@ -36,8 +45,14 @@ pub fn read_genesis_unlocked(path: &Path) -> ReportResult<GenesisBlock, ConfigEr
     // Tests may call this helper without the ordinary daemon initialization.
     super::init_genesis_instruction_registry();
     super::init_query_registry();
-    match read_signed_genesis(path) {
-        Ok(genesis) => Ok(GenesisBlock(genesis)),
+    let bytes = read_signed_genesis_bytes(path).map_err(|error| {
+        Report::new(ConfigError::ReadGenesis).attach(format!(
+            "failed to read signed genesis at {}: {error}",
+            path.display()
+        ))
+    })?;
+    match decode_signed_genesis(&bytes) {
+        Ok(genesis) => Ok((GenesisBlock(genesis), bytes)),
         Err(error) => {
             let error_chain = format!("{error:#}");
             let decode_panicked = error_chain.contains("panicked");

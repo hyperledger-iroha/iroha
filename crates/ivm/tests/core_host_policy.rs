@@ -271,6 +271,63 @@ fn core_host_handles_axt_syscalls_with_valid_tlvs() {
         Err(VMError::PermissionDenied)
     ));
 }
+
+#[test]
+fn core_host_failed_commit_retains_state_for_retry() {
+    let mut vm = IVM::new(1_000_000);
+    let dsid_a = DataSpaceId::new(71);
+    let dsid_b = DataSpaceId::new(72);
+    let descriptor = axt::AxtDescriptor {
+        dsids: vec![dsid_a, dsid_b],
+        touches: vec![
+            axt::AxtTouchSpec {
+                dsid: dsid_a,
+                read: vec!["orders".into()],
+                write: Vec::new(),
+            },
+            axt::AxtTouchSpec {
+                dsid: dsid_b,
+                read: Vec::new(),
+                write: vec!["ledger".into()],
+            },
+        ],
+    };
+    let mut host = CoreHost::new();
+    let descriptor_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
+    let descriptor_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &descriptor_bytes);
+    vm.set_register(10, descriptor_ptr);
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
+        Ok(axt_gas(descriptor_bytes.len()))
+    );
+
+    let touch = |host: &mut CoreHost, vm: &mut IVM, dsid| {
+        let dsid_bytes = norito::to_bytes(&dsid).expect("encode dataspace");
+        let dsid_ptr = store_tlv(vm, PointerType::DataSpaceId, &dsid_bytes);
+        vm.set_register(10, dsid_ptr);
+        vm.set_register(11, 0);
+        assert_eq!(
+            host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, vm),
+            Ok(axt_gas(dsid_bytes.len()))
+        );
+    };
+    touch(&mut host, &mut vm, dsid_a);
+    assert!(matches!(
+        host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
+        Err(VMError::PermissionDenied)
+    ));
+
+    // The failed commit must preserve the active sequence: supplying the
+    // missing touch would fail immediately if commit had discarded the state.
+    touch(&mut host, &mut vm, dsid_b);
+    assert!(matches!(
+        host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
+        // CoreHost's standalone shim has no FastPQ verifier, so neither
+        // dataspace can supply the required verified proof in this fixture.
+        Err(VMError::PermissionDenied)
+    ));
+}
+
 #[test]
 fn core_host_rejects_duplicate_touch() {
     let mut vm = IVM::new(1_000_000);
@@ -1139,6 +1196,12 @@ fn core_host_enforces_fixture_snapshot_fields() {
         norito::decode_from_bytes(axt_golden::AXT_POLICY).expect("decode snapshot");
     let model_handle: model::AssetHandle =
         norito::decode_from_bytes(axt_golden::AXT_HANDLE).expect("decode handle");
+    let counter: model::AxtHandleCounterRecord =
+        norito::decode_from_bytes(axt_golden::AXT_HANDLE_COUNTER).expect("decode counter");
+    counter.validate().expect("validate counter fixture");
+    let replay_key: model::AxtHandleReplayKey =
+        norito::decode_from_bytes(axt_golden::AXT_HANDLE_REPLAY_KEY).expect("decode replay key");
+    replay_key.validate().expect("validate replay-key fixture");
     let policy_entry = snapshot
         .entries
         .first()
@@ -1156,6 +1219,7 @@ fn core_host_enforces_fixture_snapshot_fields() {
             .copied()
             .expect("dataspace id present"),
     );
+    base_intent.op.asset_definition_id = base_handle.asset_definition_id.clone();
     base_intent.op.from = base_handle.subject.account.clone();
     {
         use axt::AxtPolicy;

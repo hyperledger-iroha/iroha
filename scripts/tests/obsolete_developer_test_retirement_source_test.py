@@ -85,6 +85,10 @@ class ManifestPin:
     post_sha256: str
     post_bytes: int
     post_lines: int
+    current_blob: str
+    current_sha256: str
+    current_bytes: int
+    current_lines: int
 
 
 MANIFEST_PINS = (
@@ -97,6 +101,10 @@ MANIFEST_PINS = (
         b"""#[path = "../streaming_access_contract.rs"]
 mod streaming_access_contract;
 """,
+        "9976b49482fdb087149d40bb05bbdb2c93116645",
+        "64a4df71cd6c9c0f792b41cf34543479bde1141ae451ced9741427e39a0bcabf",
+        1_918,
+        66,
         "9976b49482fdb087149d40bb05bbdb2c93116645",
         "64a4df71cd6c9c0f792b41cf34543479bde1141ae451ced9741427e39a0bcabf",
         1_918,
@@ -117,6 +125,10 @@ harness = false
         "99d9aba43f5e6aae77a818631f034d9465cf1c4e6963fc0b9719ae2016c7d0ab",
         4_723,
         227,
+        "32617b52ced72537c979c749d14adb3006b238a8",
+        "001921234ba49efed859155722186f8a3b1a52d48af593becd8724cb922b6912",
+        4_618,
+        226,
     ),
 )
 
@@ -137,12 +149,19 @@ IVM_MANIFEST_PIN = FilePin(
     8_846,
     324,
 )
-LOCK_PIN = FilePin(
+OPENING_LOCK_PIN = FilePin(
     LOCKFILE,
     "bf7633694c3f2fdca07de4d99743a09bad2daa12",
     "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222",
     315_333,
     13_758,
+)
+LOCK_PIN = FilePin(
+    LOCKFILE,
+    "5d04cef722cb695dd636110be01ff8de52ae7b45",
+    "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b",
+    311_172,
+    13_613,
 )
 REPLACEMENT_PINS = (
     FilePin(
@@ -426,7 +445,7 @@ def _authenticate_openings() -> dict[str, bytes]:
         openings[pin.path] = data
 
     _authenticate_file(IVM_MANIFEST_PIN, opening_tree=True)
-    _authenticate_file(LOCK_PIN, opening_tree=True)
+    _authenticate_file(OPENING_LOCK_PIN, opening_tree=True)
     for pin in REPLACEMENT_PINS:
         _authenticate_file(pin, opening_tree=True)
     return openings
@@ -525,7 +544,23 @@ def _validate(snapshot: Snapshot, openings: dict[str, bytes]) -> None:
     for pin in MANIFEST_PINS:
         data = snapshot.files[pin.path]
         _require(data is not None, f"declaration file missing: {pin.path}")
-        _require(data == _expected_post(pin, openings[pin.path]), "declaration postimage drifted")
+        _expected_post(pin, openings[pin.path])
+        _require(
+            len(data) == pin.current_bytes,
+            f"declaration postimage bytes changed: {pin.path}",
+        )
+        _require(
+            data.count(b"\n") == pin.current_lines,
+            f"declaration postimage lines changed: {pin.path}",
+        )
+        _require(
+            _sha256(data) == pin.current_sha256,
+            f"declaration postimage hash changed: {pin.path}",
+        )
+        _require(
+            data == _git_blob(pin.current_blob),
+            f"declaration postimage differs from current authority: {pin.path}",
+        )
 
     norito = snapshot.files["crates/norito/Cargo.toml"]
     ivm = snapshot.files[IVM_MANIFEST]
@@ -550,7 +585,7 @@ def _validate(snapshot: Snapshot, openings: dict[str, bytes]) -> None:
 
     lock = snapshot.files[LOCKFILE]
     assert lock is not None
-    _require(lock == _git_blob(LOCK_PIN.blob), "Cargo.lock differs from opening")
+    _require(lock == _git_blob(LOCK_PIN.blob), "Cargo.lock differs from current authority")
     for pin in REPLACEMENT_PINS:
         data = snapshot.files[pin.path]
         _require(data is not None, f"replacement missing: {pin.path}")

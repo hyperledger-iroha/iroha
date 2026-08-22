@@ -3113,7 +3113,7 @@ pub mod nexus {
         pub const AUTO_STORAGE_HEADROOM_BPS: u16 = 2_000;
         /// Block interval between disk budget enforcement scans (0 = every block).
         pub const BUDGET_ENFORCE_INTERVAL_BLOCKS: u64 = 10;
-        /// WSV hot-tier deterministic payload size budget (bytes).
+        /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
         pub const MAX_WSV_MEMORY_BYTES: Bytes<u64> = Bytes(8 * 1024 * 1024 * 1024);
         /// Budget share for Kura block storage (basis points).
         pub const KURA_BLOCKS_BPS: u16 = 3_000;
@@ -3568,7 +3568,7 @@ pub mod tiered_state {
     pub const ENABLED: bool = false;
     /// Keep all keys hot unless explicitly configured.
     pub const HOT_RETAINED_KEYS: usize = 0;
-    /// Hot-tier byte budget based on deterministic in-memory WSV sizing (0 = unlimited).
+    /// Hot-tier budget using canonical encoded-key bytes plus measured value bytes.
     pub const HOT_RETAINED_BYTES: Bytes<u64> = Bytes(0);
     /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
     pub const HOT_RETAINED_GRACE_SNAPSHOTS: u64 = 1;
@@ -4590,6 +4590,33 @@ pub mod settlement {
         /// No prequalified Kagemusha catalog is trusted unless an operator configures its seal.
         #[must_use]
         pub const fn kagemusha_catalog_qualification_seal_path() -> Option<PathBuf> {
+            None
+        }
+        /// No promotion controller is trusted unless an operator pins its public key.
+        #[must_use]
+        pub const fn kagemusha_promotion_controller_public_key() -> Option<iroha_crypto::PublicKey>
+        {
+            None
+        }
+        /// No catalog-revalidation authority key id is trusted unless explicitly configured.
+        #[must_use]
+        pub const fn kagemusha_catalog_revalidation_authority_key_id() -> Option<String> {
+            None
+        }
+        /// No catalog-revalidation authority key is trusted unless explicitly configured.
+        #[must_use]
+        pub const fn kagemusha_catalog_revalidation_authority_public_key()
+        -> Option<iroha_crypto::PublicKey> {
+            None
+        }
+        /// No root-custodied promotion reservation is read unless explicitly configured.
+        #[must_use]
+        pub const fn kagemusha_promotion_reservation_path() -> Option<PathBuf> {
+            None
+        }
+        /// No validator qualification seal is published unless explicitly configured.
+        #[must_use]
+        pub const fn kagemusha_validator_qualification_seal_path() -> Option<PathBuf> {
             None
         }
     }

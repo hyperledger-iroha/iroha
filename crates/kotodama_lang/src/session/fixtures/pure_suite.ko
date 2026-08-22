@@ -1,0 +1,5 @@
+seiyaku PureSuite {
+                fn helper() -> int { return 1; }
+                #[test]
+                fn smoke() { test::assert(helper() == 1); }
+            }

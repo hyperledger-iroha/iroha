@@ -48,6 +48,20 @@ fn candidate_binding_reviewed_source_closure(
 fn authenticated_candidate_binding_release() -> (
     KagemushaAuthenticatedReleaseV4,
     KagemushaRecursiveSpendPromotedReleaseV4,
+    iroha_data_model::offline::KagemushaRecursiveSpendReleaseRecordV4,
+) {
+    authenticated_candidate_binding_release_for_network(NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"candidate-binding-network"),
+        ),
+    ))
+}
+fn authenticated_candidate_binding_release_for_network(
+    network_id: NetworkId,
+) -> (
+    KagemushaAuthenticatedReleaseV4,
+    KagemushaRecursiveSpendPromotedReleaseV4,
+    iroha_data_model::offline::KagemushaRecursiveSpendReleaseRecordV4,
 ) {
     let benchmark = b"signed candidate-binding device benchmark";
     let source_commit = "0123456789abcdef0123456789abcdef01234567";
@@ -72,11 +86,7 @@ fn authenticated_candidate_binding_release() -> (
         reviewed_rustc_binary_sha256: [0x64; 32],
         generator_binary_sha256: [0x65; 32],
         sealed_candidate_build_report_sha256: [0x66; 32],
-        network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-            iroha_data_model::block::BlockHeader,
-        >::from_untyped_unchecked(iroha_crypto::Hash::new(
-            b"candidate-binding-network",
-        ))),
+        network_id,
         asset: AssetDefinitionId::derive_from_components(
             DomainId::try_new("candidate", "binding").expect("candidate-binding domain"),
             "asset".parse().expect("candidate-binding asset name"),
@@ -240,7 +250,14 @@ fn authenticated_candidate_binding_release() -> (
             .to_vec(),
         max_proof_bytes: manifest.max_proof_bytes,
     };
-    (authenticated, promotion)
+    let release_record = iroha_data_model::offline::KagemushaRecursiveSpendReleaseRecordV4 {
+        manifest: manifest.clone(),
+        release_attestation: attestation,
+        physical_device_benchmark_summary: benchmark.to_vec(),
+        cryptographic_review_summary: review,
+        promotion_record: promotion.clone(),
+    };
+    (authenticated, promotion, release_record)
 }
 #[cfg(all(
     unix,
@@ -281,19 +298,34 @@ fn qualification_seal_fixture(
     policy_path: &Path,
     artifact_dir: &Path,
 ) -> KagemushaCatalogQualificationSealV1 {
-    let (authenticated, promotion) = authenticated_candidate_binding_release();
+    let (authenticated, promotion, _) = authenticated_candidate_binding_release();
+    qualification_seal_fixture_for_release(policy_path, artifact_dir, &authenticated, &promotion)
+}
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
+fn qualification_seal_fixture_for_release(
+    policy_path: &Path,
+    artifact_dir: &Path,
+    authenticated: &KagemushaAuthenticatedReleaseV4,
+    promotion: &KagemushaRecursiveSpendPromotedReleaseV4,
+) -> KagemushaCatalogQualificationSealV1 {
     let manifest = authenticated.manifest();
     let executable =
         current_kagemusha_catalog_executable_path_v1().expect("fixture executable path");
+    let qualification_receipt_path = artifact_dir
+        .join(hex::encode(authenticated.manifest_sha256()))
+        .join(KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4);
     let mut paths = BTreeMap::new();
-    let fixture_stat = |inode, mode| KagemushaCatalogSealedStatV1 {
+    let fixture_stat = |inode, mode, length| KagemushaCatalogSealedStatV1 {
         device: 1,
         inode,
         mode,
         owner_uid: 0,
         owner_gid: 0,
         links: 1,
-        length: 1,
+        length,
         modified_seconds: 1,
         modified_nanoseconds: 1,
         changed_seconds: 1,
@@ -303,17 +335,22 @@ fn qualification_seal_fixture(
         (
             policy_path,
             KagemushaCatalogSealedPathKindV1::File,
-            fixture_stat(1, 0o100440),
+            fixture_stat(1, 0o100440, 1),
         ),
         (
             artifact_dir,
             KagemushaCatalogSealedPathKindV1::Directory,
-            fixture_stat(2, 0o040550),
+            fixture_stat(2, 0o040550, 1),
         ),
         (
             executable.as_path(),
             KagemushaCatalogSealedPathKindV1::File,
-            fixture_stat(3, 0o100550),
+            fixture_stat(3, 0o100550, 1),
+        ),
+        (
+            qualification_receipt_path.as_path(),
+            KagemushaCatalogSealedPathKindV1::File,
+            fixture_stat(4, 0o100440, 777),
         ),
     ] {
         let canonical_path =
@@ -382,7 +419,7 @@ fn qualification_seal_fixture(
             benchmark_evidence_sha256: manifest.benchmark_evidence_sha256,
             cryptographic_review_sha256: manifest.cryptographic_review_sha256,
             promotion_record_sha256: Sha256::digest(
-                norito::encode_canonical(&promotion).expect("canonical fixture promotion record"),
+                norito::encode_canonical(promotion).expect("canonical fixture promotion record"),
             )
             .into(),
             artifacts,

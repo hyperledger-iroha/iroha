@@ -1,7 +1,7 @@
 use super::execution_context::BlockExecutionContextBundle;
 use crate::{
     confidential::{ConfidentialFeatureDigest, DEFAULT_CONFIDENTIAL_FEATURE_DIGEST},
-    consensus::{NposConsensusEffects, PreviousRosterEvidence},
+    consensus::NposConsensusEffects,
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -71,14 +71,9 @@ mod model {
         #[getset(get_copy = "pub", set = "pub")]
         #[norito(required)]
         pub da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
-        /// Optional hash covering previous-height roster evidence embedded in the block payload.
-        #[getset(get_copy = "pub", set = "pub")]
-        #[norito(required)]
-        pub prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
         /// Optional hash covering deterministic `NPoS` effects embedded in the block payload.
         #[getset(get_copy = "pub", set = "pub")]
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(required)]
         pub npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
         /// Optional SCCP commitment root finalized before signing this block.
         #[getset(get_copy = "pub", set = "pub")]
@@ -96,8 +91,7 @@ mod model {
         pub confidential_features: Option<ConfidentialFeatureDigest>,
         /// Optional hash covering durable execution context embedded in the block payload.
         #[getset(get_copy = "pub", set = "pub")]
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(required)]
         pub execution_context_hash: Option<HashOf<BlockExecutionContextBundle>>,
     }
     /// The validator index and its corresponding signature on the block header.
@@ -141,8 +135,6 @@ pub mod wire {
         pub Option<[u8; 32]>,
         /// Optional V1 commitment to the pin-intent tree version, leaf count, and Merkle root.
         pub Option<[u8; 32]>,
-        /// Optional hash of previous-height roster evidence embedded in the block payload.
-        pub Option<[u8; 32]>,
         /// Optional hash of deterministic NPoS effects embedded in the block payload.
         pub Option<[u8; 32]>,
         /// Optional hash of durable execution context embedded in the block payload.
@@ -164,8 +156,7 @@ pub mod wire {
                 self.6,
                 self.7,
                 self.8,
-                self.9,
-                (self.10, self.11, self.12, self.13),
+                (self.9, self.10, self.11, self.12),
             );
             <(
                 NonZeroU64,
@@ -175,7 +166,6 @@ pub mod wire {
                 Option<[u8; 32]>,
                 u64,
                 u64,
-                Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 (
@@ -197,8 +187,7 @@ pub mod wire {
                 self.6,
                 self.7,
                 self.8,
-                self.9,
-                (self.10, self.11, self.12, self.13),
+                (self.9, self.10, self.11, self.12),
             );
             <(
                 NonZeroU64,
@@ -208,7 +197,6 @@ pub mod wire {
                 Option<[u8; 32]>,
                 u64,
                 u64,
-                Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 (
@@ -230,8 +218,7 @@ pub mod wire {
                 self.6,
                 self.7,
                 self.8,
-                self.9,
-                (self.10, self.11, self.12, self.13),
+                (self.9, self.10, self.11, self.12),
             );
             <(
                 NonZeroU64,
@@ -241,7 +228,6 @@ pub mod wire {
                 Option<[u8; 32]>,
                 u64,
                 u64,
-                Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 (
@@ -266,7 +252,6 @@ pub mod wire {
                 u64,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
-                Option<[u8; 32]>,
                 (
                     Option<[u8; 32]>,
                     Option<[u8; 32]>,
@@ -283,7 +268,6 @@ pub mod wire {
                 u64,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
-                Option<[u8; 32]>,
                 (
                     Option<[u8; 32]>,
                     Option<[u8; 32]>,
@@ -291,7 +275,7 @@ pub mod wire {
                     Option<ConfidentialFeatureDigestWire>,
                 ),
             ) as ncore::NoritoDeserialize>::deserialize(archived.cast());
-            let (h, p, m, r, proof_hash, t, v, d, pins, prev_roster, extensions) = tuple;
+            let (h, p, m, r, proof_hash, t, v, d, pins, extensions) = tuple;
             let (npos_effects, exec_ctx, sccp_root, f) = extensions;
             Self(
                 h,
@@ -303,7 +287,6 @@ pub mod wire {
                 v,
                 d,
                 pins,
-                prev_roster,
                 npos_effects,
                 exec_ctx,
                 sccp_root,
@@ -518,7 +501,6 @@ impl From<BlockHeader> for wire::BlockHeaderWire {
             b.view_change_index,
             opt_hash_to_bytes(b.da_commitments_hash),
             opt_hash_to_bytes(b.da_pin_intents_hash),
-            opt_hash_to_bytes(b.prev_roster_evidence_hash),
             opt_hash_to_bytes(b.npos_effects_hash),
             opt_hash_to_bytes(b.execution_context_hash),
             b.sccp_commitment_root,
@@ -547,11 +529,10 @@ impl From<wire::BlockHeaderWire> for BlockHeader {
         header.set_da_proof_policies_hash(opt_hash_from_bytes::<DaProofPolicyBundle>(w.4));
         header.set_da_commitments_hash(opt_hash_from_bytes::<DaCommitmentBundle>(w.7));
         header.set_da_pin_intents_hash(opt_hash_from_bytes::<DaPinIntentBundle>(w.8));
-        header.set_prev_roster_evidence_hash(opt_hash_from_bytes::<PreviousRosterEvidence>(w.9));
-        header.set_npos_effects_hash(opt_hash_from_bytes::<NposConsensusEffects>(w.10));
-        header.set_execution_context_hash(opt_hash_from_bytes::<BlockExecutionContextBundle>(w.11));
-        header.set_sccp_commitment_root(w.12);
-        header.set_confidential_features(digest_from_wire(w.13));
+        header.set_npos_effects_hash(opt_hash_from_bytes::<NposConsensusEffects>(w.9));
+        header.set_execution_context_hash(opt_hash_from_bytes::<BlockExecutionContextBundle>(w.10));
+        header.set_sccp_commitment_root(w.11);
+        header.set_confidential_features(digest_from_wire(w.12));
         header
     }
 }
@@ -582,51 +563,25 @@ fn checked_block_signature_from_wire(
     ))
 }
 #[derive(Encode)]
-struct BlockHeaderForConsensusLegacy {
+struct BlockHeaderConsensusProjectionV1 {
+    version: u16,
     height: NonZeroU64,
     prev_block_hash: Option<HashOf<BlockHeader>>,
     merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
     da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
     da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
     da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
-    prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
-    sccp_commitment_root: Option<[u8; 32]>,
-    creation_time_ms: u64,
-    view_change_index: u64,
-    confidential_features: Option<ConfidentialFeatureDigest>,
-}
-#[derive(Encode)]
-struct BlockHeaderForConsensus {
-    height: NonZeroU64,
-    prev_block_hash: Option<HashOf<BlockHeader>>,
-    merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
-    da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
-    da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
-    da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
-    prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
-    execution_context_hash: HashOf<BlockExecutionContextBundle>,
-    sccp_commitment_root: Option<[u8; 32]>,
-    creation_time_ms: u64,
-    view_change_index: u64,
-    confidential_features: Option<ConfidentialFeatureDigest>,
-}
-#[derive(Encode)]
-struct BlockHeaderForConsensusWithNposEffects {
-    height: NonZeroU64,
-    prev_block_hash: Option<HashOf<BlockHeader>>,
-    merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
-    da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
-    da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
-    da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
-    prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
-    npos_effects_hash: HashOf<NposConsensusEffects>,
+    npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
     execution_context_hash: Option<HashOf<BlockExecutionContextBundle>>,
     sccp_commitment_root: Option<[u8; 32]>,
     creation_time_ms: u64,
     view_change_index: u64,
     confidential_features: Option<ConfidentialFeatureDigest>,
 }
-impl From<&BlockHeader> for BlockHeaderForConsensusLegacy {
+impl BlockHeaderConsensusProjectionV1 {
+    const VERSION: u16 = 1;
+}
+impl From<&BlockHeader> for BlockHeaderConsensusProjectionV1 {
     fn from(value: &BlockHeader) -> Self {
         let BlockHeader {
             height,
@@ -636,22 +591,23 @@ impl From<&BlockHeader> for BlockHeaderForConsensusLegacy {
             da_proof_policies_hash,
             da_commitments_hash,
             da_pin_intents_hash,
-            prev_roster_evidence_hash,
-            npos_effects_hash: _,
+            npos_effects_hash,
+            execution_context_hash,
             sccp_commitment_root,
             creation_time_ms,
             view_change_index,
             confidential_features,
-            execution_context_hash: _,
         } = *value;
         Self {
+            version: Self::VERSION,
             height,
             prev_block_hash,
             merkle_root,
             da_proof_policies_hash,
             da_commitments_hash,
             da_pin_intents_hash,
-            prev_roster_evidence_hash,
+            npos_effects_hash,
+            execution_context_hash,
             sccp_commitment_root,
             creation_time_ms,
             view_change_index,
@@ -678,7 +634,6 @@ impl BlockHeader {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
-            prev_roster_evidence_hash: None,
             npos_effects_hash: None,
             execution_context_hash: None,
             sccp_commitment_root: None,
@@ -705,46 +660,13 @@ impl BlockHeader {
     pub fn hash(&self) -> HashOf<BlockHeader> {
         self.hash_without_execution_results()
     }
-    /// Computes the producer-compatible header hash used by consensus signatures.
+    /// Computes the header hash used by consensus signatures from the single
+    /// versioned V1 projection. Nullable commitments remain explicit in that
+    /// projection, so their absence does not select a different hash layout.
     #[inline]
     fn hash_without_execution_results(&self) -> HashOf<BlockHeader> {
-        let legacy = BlockHeaderForConsensusLegacy::from(self);
-        if let Some(npos_effects_hash) = self.npos_effects_hash {
-            let header = BlockHeaderForConsensusWithNposEffects {
-                height: legacy.height,
-                prev_block_hash: legacy.prev_block_hash,
-                merkle_root: legacy.merkle_root,
-                da_proof_policies_hash: legacy.da_proof_policies_hash,
-                da_commitments_hash: legacy.da_commitments_hash,
-                da_pin_intents_hash: legacy.da_pin_intents_hash,
-                prev_roster_evidence_hash: legacy.prev_roster_evidence_hash,
-                npos_effects_hash,
-                execution_context_hash: self.execution_context_hash,
-                sccp_commitment_root: legacy.sccp_commitment_root,
-                creation_time_ms: legacy.creation_time_ms,
-                view_change_index: legacy.view_change_index,
-                confidential_features: legacy.confidential_features,
-            };
-            return HashOf::from_untyped_unchecked(HashOf::new(&header).into());
-        }
-        let Some(execution_context_hash) = self.execution_context_hash else {
-            return HashOf::from_untyped_unchecked(HashOf::new(&legacy).into());
-        };
-        let header = BlockHeaderForConsensus {
-            height: legacy.height,
-            prev_block_hash: legacy.prev_block_hash,
-            merkle_root: legacy.merkle_root,
-            da_proof_policies_hash: legacy.da_proof_policies_hash,
-            da_commitments_hash: legacy.da_commitments_hash,
-            da_pin_intents_hash: legacy.da_pin_intents_hash,
-            prev_roster_evidence_hash: legacy.prev_roster_evidence_hash,
-            execution_context_hash,
-            sccp_commitment_root: legacy.sccp_commitment_root,
-            creation_time_ms: legacy.creation_time_ms,
-            view_change_index: legacy.view_change_index,
-            confidential_features: legacy.confidential_features,
-        };
-        HashOf::from_untyped_unchecked(HashOf::new(&header).into())
+        let projection = BlockHeaderConsensusProjectionV1::from(self);
+        HashOf::from_untyped_unchecked(HashOf::new(&projection).into())
     }
 }
 impl fmt::Display for BlockHeader {
@@ -944,9 +866,10 @@ mod tests {
             "da_proof_policies_hash",
             "da_commitments_hash",
             "da_pin_intents_hash",
-            "prev_roster_evidence_hash",
+            "npos_effects_hash",
             "sccp_commitment_root",
             "confidential_features",
+            "execution_context_hash",
         ];
 
         for field in nullable_fields {
@@ -1191,9 +1114,9 @@ mod tests {
         assert_sccp_commitment_root_captured_by_hash(with_npos);
     }
     #[test]
-    fn header_decodes_legacy_payload_without_execution_context_hash() {
+    fn header_rejects_pre_release_payload_without_execution_context_hash_field() {
         #[derive(norito::codec::Encode)]
-        struct LegacyBlockHeader {
+        struct PreReleaseBlockHeader {
             height: NonZeroU64,
             prev_block_hash: Option<HashOf<BlockHeader>>,
             merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
@@ -1201,14 +1124,13 @@ mod tests {
             da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
             da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
-            prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
             npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
             sccp_commitment_root: Option<[u8; 32]>,
             creation_time_ms: u64,
             view_change_index: u64,
             confidential_features: Option<ConfidentialFeatureDigest>,
         }
-        let legacy = LegacyBlockHeader {
+        let pre_release = PreReleaseBlockHeader {
             height: nonzero!(7_u64),
             prev_block_hash: None,
             merkle_root: None,
@@ -1216,26 +1138,23 @@ mod tests {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
-            prev_roster_evidence_hash: None,
             npos_effects_hash: None,
             sccp_commitment_root: Some([0x42; 32]),
             creation_time_ms: 123,
             view_change_index: 2,
             confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
         };
-        let bytes = legacy.encode();
+        let bytes = pre_release.encode();
         let mut cursor = bytes.as_slice();
-        let decoded = BlockHeader::decode_all(&mut cursor)
-            .expect("decode producer header without execution-context extension");
-        assert_eq!(decoded.height(), nonzero!(7_u64));
-        assert_eq!(decoded.prev_roster_evidence_hash(), None);
-        assert_eq!(decoded.execution_context_hash(), None);
-        assert_eq!(decoded.sccp_commitment_root(), Some([0x42; 32]));
+        assert!(
+            BlockHeader::decode_all(&mut cursor).is_err(),
+            "the first-release header decoder must require the explicit optional execution-context field"
+        );
     }
     #[test]
-    fn header_rejects_layout_omitting_nontrailing_extension_slots() {
+    fn header_rejects_pre_release_payload_without_npos_effects_hash_field() {
         #[derive(norito::codec::Encode)]
-        struct LegacyBlockHeader {
+        struct PreReleaseBlockHeader {
             height: NonZeroU64,
             prev_block_hash: Option<HashOf<BlockHeader>>,
             merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
@@ -1243,13 +1162,13 @@ mod tests {
             da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
             da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
-            prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
             sccp_commitment_root: Option<[u8; 32]>,
             creation_time_ms: u64,
             view_change_index: u64,
             confidential_features: Option<ConfidentialFeatureDigest>,
+            execution_context_hash: Option<HashOf<BlockExecutionContextBundle>>,
         }
-        let legacy = LegacyBlockHeader {
+        let pre_release = PreReleaseBlockHeader {
             height: nonzero!(7_u64),
             prev_block_hash: None,
             merkle_root: None,
@@ -1257,23 +1176,25 @@ mod tests {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
-            prev_roster_evidence_hash: None,
             sccp_commitment_root: Some([0x42; 32]),
             creation_time_ms: 123,
             view_change_index: 2,
             confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
+            execution_context_hash: None,
         };
-        let bytes = legacy.encode();
+        let bytes = pre_release.encode();
         let mut cursor = bytes.as_slice();
         assert!(
             BlockHeader::decode_all(&mut cursor).is_err(),
-            "a layout that removes extension slots from the middle must fail closed"
+            "the first-release header decoder must require the explicit optional NPoS-effects field"
         );
     }
     #[test]
-    fn header_accepts_producer_layout_with_previous_roster_slot() {
+    fn header_rejects_pre_release_layout_with_retired_roster_slot() {
+        struct RetiredLayoutTag;
+
         #[derive(norito::codec::Encode)]
-        struct ProducerBlockHeader {
+        struct PreReleaseBlockHeader {
             height: NonZeroU64,
             prev_block_hash: Option<HashOf<BlockHeader>>,
             merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
@@ -1281,7 +1202,7 @@ mod tests {
             da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
             da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
-            prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
+            retired_roster_slot: Option<HashOf<RetiredLayoutTag>>,
             npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
             sccp_commitment_root: Option<[u8; 32]>,
             creation_time_ms: u64,
@@ -1290,8 +1211,7 @@ mod tests {
             execution_context_hash: Option<HashOf<BlockExecutionContextBundle>>,
         }
 
-        let evidence_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0x91; Hash::LENGTH]));
-        let producer = ProducerBlockHeader {
+        let pre_release = PreReleaseBlockHeader {
             height: nonzero!(7_u64),
             prev_block_hash: None,
             merkle_root: None,
@@ -1299,7 +1219,9 @@ mod tests {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
-            prev_roster_evidence_hash: Some(evidence_hash),
+            retired_roster_slot: Some(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [0x91; Hash::LENGTH],
+            ))),
             npos_effects_hash: None,
             sccp_commitment_root: Some([0x42; 32]),
             creation_time_ms: 123,
@@ -1307,11 +1229,12 @@ mod tests {
             confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
             execution_context_hash: None,
         };
-        let bytes = producer.encode();
+        let bytes = pre_release.encode();
         let mut cursor = bytes.as_slice();
-        let decoded =
-            BlockHeader::decode_all(&mut cursor).expect("decode the producer header roster layout");
-        assert_eq!(decoded.prev_roster_evidence_hash(), Some(evidence_hash));
+        assert!(
+            BlockHeader::decode_all(&mut cursor).is_err(),
+            "the first-release header decoder must reject the longer pre-release roster layout"
+        );
     }
     #[test]
     fn header_hash_ignores_result_merkle_root_and_roundtrips() {

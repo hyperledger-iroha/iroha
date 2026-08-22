@@ -1,0 +1,5 @@
+module FirstTests {
+                koto_test { target: "../contracts/counter.ko" }
+                #[test]
+                fn observes_target_state() { test::assert(counter == 0); }
+            }

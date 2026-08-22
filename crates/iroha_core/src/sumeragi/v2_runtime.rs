@@ -110,16 +110,16 @@ pub(crate) struct RuntimeLifecycleOrdinalSource {
 }
 impl RuntimeLifecycleOrdinalSource {
     /// Construct a source strictly after a durable high-watermark.
+    ///
+    /// The runtime surface intentionally constructs only its restricted view;
+    /// coordinator handles cannot be injected through this type. The first
+    /// reservable ordinal is exactly one greater than `high_watermark`, unless
+    /// the watermark exhausts the `u128` namespace.
+    /// This keeps runtime callers within the runtime-restricted authority API.
     pub(crate) fn after_high_watermark(high_watermark: u128) -> Self {
         Self {
             authority: runtime_lifecycle_ordinal_authority_after_high_watermark(high_watermark),
         }
-    }
-    /// Wrap the runtime-restricted view of a shared launch authority.
-    pub(in crate::sumeragi) const fn from_authority(
-        authority: RuntimeLifecycleOrdinalAuthority,
-    ) -> Self {
-        Self { authority }
     }
     /// Reserve one globally unique ordinal.
     pub(crate) fn reserve_one(&self) -> Result<u128, String> {

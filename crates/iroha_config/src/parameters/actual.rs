@@ -48,10 +48,9 @@ use iroha_data_model::{
     merge::{MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
     name::Name,
     nexus::{
-        AUTOSCALE_META_DRAIN_STATE, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
-        FeeSponsorProgramId, LaneCatalog, LaneConfig as LaneConfigMetadata, LaneId,
-        LaneSchedulerPolicy, LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility,
-        ShardId, UniversalAccountId,
+        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, FeeSponsorProgramId, LaneCatalog,
+        LaneConfig as LaneConfigMetadata, LaneId, LaneSchedulerPolicy, LaneSettlementBufferPolicy,
+        LaneStorageProfile, LaneVisibility, ShardId, UniversalAccountId,
     },
     oracle::KeyedHash,
     peer::{Peer, PeerId},
@@ -2694,7 +2693,7 @@ pub struct NexusStorage {
     pub effective_local_budget_bytes: Option<Bytes<u64>>,
     /// Block interval between disk budget enforcement scans (0 = every block).
     pub budget_enforce_interval_blocks: u64,
-    /// WSV hot-tier deterministic payload size budget (bytes).
+    /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
     pub max_wsv_memory_bytes: Bytes<u64>,
     /// Budget weights for dividing the disk cap across subsystems.
     pub disk_budget_weights: NexusStorageWeights,
@@ -2901,32 +2900,6 @@ pub enum NexusConsensusPolicyDigestError {
 #[derive(Encode)]
 struct NexusConsensusPolicyPreimageV1 {
     version: u8,
-    configured_lane_catalog_hash: [u8; 32],
-    dataspaces: Vec<NexusConsensusDataspaceV1>,
-    dataspace_fee_sponsor_program_ids: Vec<(u64, FeeSponsorProgramId)>,
-    routing: NexusConsensusRoutingV1,
-    staking: NexusConsensusStakingV1,
-    fees: NexusConsensusFeesV1,
-    hf_shared_leases: NexusConsensusHfSharedLeasesV1,
-    uploaded_models: NexusConsensusUploadedModelsV1,
-    endorsement: NexusConsensusEndorsementV1,
-    axt: NexusConsensusAxtV1,
-    lane_relay_emergency: NexusConsensusLaneRelayEmergencyV1,
-    governance: NexusConsensusGovernanceV1,
-    compliance_enabled: bool,
-    compliance_audit_only: bool,
-    compliance_policy_digest: Option<[u8; 32]>,
-    lane_manifest_policy_digest: Option<[u8; 32]>,
-    fusion: NexusConsensusFusionV1,
-    autoscale: NexusConsensusAutoscaleV1,
-    commit_window_slots: u16,
-    da: NexusConsensusDaV1,
-}
-/// Nexus policy wire shape authenticated by the pre-release Taira reset-11 genesis.
-#[derive(Encode)]
-struct NexusConsensusPreReleasePolicyPreimageV1 {
-    version: u8,
-    enabled: bool,
     configured_lane_catalog_hash: [u8; 32],
     dataspaces: Vec<NexusConsensusDataspaceV1>,
     dataspace_fee_sponsor_program_ids: Vec<(u64, FeeSponsorProgramId)>,
@@ -3173,35 +3146,6 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
     compliance_policy_digest: Option<[u8; 32]>,
     lane_manifest_policy_digest: Option<[u8; 32]>,
 ) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
-    nexus_consensus_policy_digest_with_projection(
-        nexus,
-        compliance_policy_digest,
-        lane_manifest_policy_digest,
-        false,
-    )
-}
-/// Compute the producer-compatible Nexus policy digest for the pre-release Taira reset-11 lineage.
-///
-/// Callers must exact-network gate this projection. New networks use
-/// [`nexus_consensus_policy_digest_with_runtime_policies`].
-pub fn pre_release_taira_nexus_consensus_policy_digest_with_runtime_policies(
-    nexus: &Nexus,
-    compliance_policy_digest: Option<[u8; 32]>,
-    lane_manifest_policy_digest: Option<[u8; 32]>,
-) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
-    nexus_consensus_policy_digest_with_projection(
-        nexus,
-        compliance_policy_digest,
-        lane_manifest_policy_digest,
-        true,
-    )
-}
-fn nexus_consensus_policy_digest_with_projection(
-    nexus: &Nexus,
-    compliance_policy_digest: Option<[u8; 32]>,
-    lane_manifest_policy_digest: Option<[u8; 32]>,
-    pre_release_taira: bool,
-) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
     const DOMAIN: &[u8] = b"iroha:nexus:consensus-policy:v1\0";
     const CONFIGURED_LANE_CATALOG_DOMAIN: &[u8] = b"iroha:nexus:configured-lane-catalog:v1\0";
     const VERSION: u8 = 1;
@@ -3235,31 +3179,16 @@ fn nexus_consensus_policy_digest_with_projection(
         .iter()
         .map(|(id, program_id)| (id.as_u64(), program_id.clone()))
         .collect();
-    let mut successful_claim_fee_exempt_authorities = if pre_release_taira {
-        nexus
-            .fees
-            .successful_claim_fee_exempt_authorities
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-    } else {
-        nexus
-            .fees
-            .successful_claim_fee_exempt_authorities
-            .iter()
-            .map(|authority| {
-                authority
-                    .canonical_i105()
-                    .expect("validated Nexus fee-exempt authority must encode as canonical I105")
-            })
-            .collect::<Vec<_>>()
-    };
-    if pre_release_taira {
-        // The producer accepted these authorities as strings and canonicalized
-        // their textual order before committing the policy.
-        successful_claim_fee_exempt_authorities.sort_unstable();
-        successful_claim_fee_exempt_authorities.dedup();
-    }
+    let successful_claim_fee_exempt_authorities = nexus
+        .fees
+        .successful_claim_fee_exempt_authorities
+        .iter()
+        .map(|authority| {
+            authority
+                .canonical_i105()
+                .expect("validated Nexus fee-exempt authority must encode as canonical I105")
+        })
+        .collect();
     let endorsement_committee_keys = nexus
         .endorsement
         .committee_keys
@@ -3281,14 +3210,10 @@ fn nexus_consensus_policy_digest_with_projection(
         })
         .collect();
     let autoscale = &nexus.autoscale;
-    let configured_lane_catalog = if pre_release_taira {
-        sumeragi_v2_pre_release_lane_catalog_preimage(&nexus.configured_lane_catalog)
-    } else {
-        nexus
-            .configured_lane_catalog
-            .consensus_projection()
-            .encode()
-    };
+    let configured_lane_catalog = nexus
+        .configured_lane_catalog
+        .consensus_projection()
+        .encode();
     let preimage = NexusConsensusPolicyPreimageV1 {
         version: VERSION,
         configured_lane_catalog_hash: Hash::new_from_chunks(&[
@@ -3430,59 +3355,7 @@ fn nexus_consensus_policy_digest_with_projection(
             )?,
         },
     };
-    let encoded = if pre_release_taira {
-        let NexusConsensusPolicyPreimageV1 {
-            version,
-            configured_lane_catalog_hash,
-            dataspaces,
-            dataspace_fee_sponsor_program_ids,
-            routing,
-            staking,
-            fees,
-            hf_shared_leases,
-            uploaded_models,
-            endorsement,
-            axt,
-            lane_relay_emergency,
-            governance,
-            compliance_enabled,
-            compliance_audit_only,
-            compliance_policy_digest,
-            lane_manifest_policy_digest,
-            fusion,
-            autoscale,
-            commit_window_slots,
-            da,
-        } = preimage;
-        NexusConsensusPreReleasePolicyPreimageV1 {
-            version,
-            // Nexus was enabled in the authenticated reset-11 producer state.
-            enabled: true,
-            configured_lane_catalog_hash,
-            dataspaces,
-            dataspace_fee_sponsor_program_ids,
-            routing,
-            staking,
-            fees,
-            hf_shared_leases,
-            uploaded_models,
-            endorsement,
-            axt,
-            lane_relay_emergency,
-            governance,
-            compliance_enabled,
-            compliance_audit_only,
-            compliance_policy_digest,
-            lane_manifest_policy_digest,
-            fusion,
-            autoscale,
-            commit_window_slots,
-            da,
-        }
-        .encode()
-    } else {
-        preimage.encode()
-    };
+    let encoded = preimage.encode();
     Ok(Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()]).into())
 }
 #[derive(Encode)]
@@ -4989,154 +4862,6 @@ pub struct SumeragiV2LaneLifecycleEntry {
     /// Global carrier height that activated this incarnation.
     pub activation_height: u64,
 }
-/// Producer-compatible lane projection used by the pre-release Taira lineage.
-///
-/// The signed reset-11 genesis predates the manifest, confidential-compute,
-/// scheduler, and settlement-buffer fields added to [`LaneConfigMetadata`].
-/// Re-encoding the current structure would therefore change its authenticated
-/// Nexus/AMX context even when every added field has its default value.
-#[derive(Clone, Encode)]
-struct SumeragiV2PreReleaseLaneConfig {
-    id: LaneId,
-    shard_id: Option<ShardId>,
-    dataspace_id: DataSpaceId,
-    alias: String,
-    description: Option<String>,
-    visibility: LaneVisibility,
-    lane_type: Option<String>,
-    governance: Option<String>,
-    settlement: Option<String>,
-    storage: LaneStorageProfile,
-    proof_scheme: DaProofScheme,
-    metadata: BTreeMap<String, String>,
-}
-impl From<&LaneConfigMetadata> for SumeragiV2PreReleaseLaneConfig {
-    fn from(lane: &LaneConfigMetadata) -> Self {
-        let mut metadata = lane.metadata.clone();
-        if let Some(scheduler) = lane.scheduler {
-            for (key, value) in [
-                ("scheduler.teu_capacity", scheduler.teu_capacity),
-                (
-                    "scheduler.starvation_bound_slots",
-                    scheduler.starvation_bound_slots,
-                ),
-            ] {
-                let Some(value) = value else {
-                    continue;
-                };
-                let rendered = value.get().to_string();
-                if let Some(existing) = metadata.insert(key.to_owned(), rendered.clone()) {
-                    assert_eq!(
-                        existing, rendered,
-                        "validated pre-release scheduler metadata must match its typed value"
-                    );
-                }
-            }
-        }
-        Self {
-            id: lane.id,
-            shard_id: lane.shard_id,
-            dataspace_id: lane.dataspace_id,
-            alias: lane.alias.clone(),
-            description: lane.description.clone(),
-            visibility: lane.visibility,
-            lane_type: lane.lane_type.clone(),
-            governance: lane.governance.clone(),
-            settlement: lane.settlement.clone(),
-            storage: lane.storage,
-            proof_scheme: lane.proof_scheme,
-            metadata,
-        }
-    }
-}
-fn sumeragi_v2_pre_release_lane_configs(
-    catalog: &LaneCatalog,
-) -> Vec<SumeragiV2PreReleaseLaneConfig> {
-    catalog
-        .lanes()
-        .iter()
-        .map(SumeragiV2PreReleaseLaneConfig::from)
-        .collect()
-}
-fn sumeragi_v2_pre_release_lane_catalog_preimage(catalog: &LaneCatalog) -> Vec<u8> {
-    (
-        catalog.lane_count().get(),
-        sumeragi_v2_pre_release_lane_configs(catalog),
-    )
-        .encode()
-}
-/// Reproduce the configured lane-catalog commitment persisted by the
-/// pre-release Taira reset-11 producer.
-///
-/// The producer encoded the lane structure that predated manifest,
-/// confidential-compute, scheduler, and settlement-buffer fields. New
-/// networks must use [`iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash`].
-#[must_use]
-pub fn sumeragi_v2_pre_release_lane_catalog_hash(catalog: &LaneCatalog) -> Hash {
-    const DOMAIN: &[u8] = b"iroha:nexus:lane-catalog:v1\0";
-    let encoded = sumeragi_v2_pre_release_lane_catalog_preimage(catalog);
-    Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()])
-}
-/// Reproduce the generation-zero lane incarnations retained by the
-/// pre-release Taira reset-11 producer.
-///
-/// The producer expanded lanes 1 and above from the complete legacy catalog
-/// while retaining lane zero from its configured-primary bootstrap. New
-/// networks must derive incarnations from their current consensus projection.
-#[must_use]
-pub fn sumeragi_v2_pre_release_static_lane_incarnations(
-    catalog: &LaneCatalog,
-) -> BTreeMap<LaneId, Hash> {
-    const CATALOG_DOMAIN: &[u8] = b"iroha:nexus:lane-catalog:v1\0";
-    const STATIC_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:static:v2\0";
-    const RESET_11_PRIMARY_INCARNATION: [u8; Hash::LENGTH] = [
-        0xf5, 0x2c, 0x4a, 0x37, 0x76, 0x1d, 0x29, 0x2a, 0xb1, 0x64, 0x85, 0xcb, 0xc4, 0x0b, 0x32,
-        0x1e, 0x98, 0xa4, 0x07, 0x91, 0x45, 0x36, 0x8e, 0x55, 0x8c, 0x08, 0xee, 0xf7, 0xa9, 0x9f,
-        0x72, 0x03,
-    ];
-
-    // The reset-11 producer derived generation-zero incarnations from the complete
-    // pre-release lane wire shape. Reusing current state incarnations here would
-    // retain hashes derived from the successor consensus projection instead.
-    let lanes = sumeragi_v2_pre_release_lane_configs(catalog)
-        .into_iter()
-        .map(|mut lane| {
-            lane.metadata.remove(AUTOSCALE_META_DRAIN_STATE);
-            lane
-        })
-        .collect::<Vec<_>>();
-    let catalog_preimage = (catalog.lane_count().get(), lanes.clone()).encode();
-    let catalog_hash = Hash::new_from_chunks(&[CATALOG_DOMAIN, catalog_preimage.as_slice()]);
-
-    let mut incarnations = lanes
-        .into_iter()
-        .map(|lane| {
-            let lane_id = lane.id;
-            let preimage = (catalog_hash, lane_id, lane).encode();
-            (
-                lane_id,
-                Hash::new_from_chunks(&[STATIC_INCARNATION_DOMAIN, preimage.as_slice()]),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-
-    // The reset-11 signer anchored lane zero as the configured primary before
-    // expanding the runtime to the complete catalog. The subsequent expansion
-    // retained that incarnation and derived only the secondary lanes from the
-    // full catalog. Current lane encoding cannot reproduce the authenticated
-    // intermediate value, so keep that exact producer identity in this
-    // reset-11-only projection.
-    if let Some(primary) = incarnations.get_mut(&LaneId::SINGLE) {
-        *primary = Hash::prehashed(RESET_11_PRIMARY_INCARNATION);
-    }
-    incarnations
-}
-#[derive(Encode)]
-struct SumeragiV2PreReleaseLaneLifecycleEntry {
-    lane_id: LaneId,
-    incarnation: Hash,
-    activation_height: u64,
-}
 /// Compute the canonical Sumeragi v2 commitment to the Nexus and AMX inputs
 /// that can change proposal assembly or deterministic validation.
 ///
@@ -5156,42 +4881,6 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
     active_validators: &[GenesisActiveNexusLaneRecord],
     retained_lane_lineage: &[SumeragiV2LaneLifecycleEntry],
 ) -> Hash {
-    sumeragi_v2_nexus_amx_context_hash_with_projection(
-        nexus,
-        pipeline,
-        active_validators,
-        retained_lane_lineage,
-        false,
-    )
-}
-/// Reproduce the exact Nexus/AMX projection signed by the pre-release Taira
-/// reset-11 genesis and its existing Kura lineage.
-///
-/// This deliberately retains the producer's implicit `nexus.enabled = true`,
-/// active-only lane lifecycle, operator descriptions, and original lane wire
-/// shape. New networks must use [`sumeragi_v2_nexus_amx_context_hash`].
-#[must_use]
-pub fn sumeragi_v2_pre_release_nexus_amx_context_hash(
-    nexus: &Nexus,
-    pipeline: &Pipeline,
-    active_validators: &[GenesisActiveNexusLaneRecord],
-    retained_lane_lineage: &[SumeragiV2LaneLifecycleEntry],
-) -> Hash {
-    sumeragi_v2_nexus_amx_context_hash_with_projection(
-        nexus,
-        pipeline,
-        active_validators,
-        retained_lane_lineage,
-        true,
-    )
-}
-fn sumeragi_v2_nexus_amx_context_hash_with_projection(
-    nexus: &Nexus,
-    pipeline: &Pipeline,
-    active_validators: &[GenesisActiveNexusLaneRecord],
-    retained_lane_lineage: &[SumeragiV2LaneLifecycleEntry],
-    pre_release_taira: bool,
-) -> Hash {
     const DATASPACE_COUNT_TAG: &str = "nexus.dataspace_catalog.count";
     fn append<T: Encode>(out: &mut Vec<u8>, tag: &'static str, value: &T) {
         let bytes = value.encode();
@@ -5203,103 +4892,48 @@ fn sumeragi_v2_nexus_amx_context_hash_with_projection(
         out.extend_from_slice(&bytes);
     }
     let mut preimage = b"sumeragi-v2:nexus-amx-context\0v2".to_vec();
-    if pre_release_taira {
-        append(&mut preimage, "nexus.enabled", &true);
-    }
     append(
         &mut preimage,
         "nexus.lane_catalog.lane_count",
         &nexus.lane_catalog.lane_count().get(),
     );
-    if pre_release_taira {
-        let lanes = sumeragi_v2_pre_release_lane_configs(&nexus.lane_catalog);
-        append(&mut preimage, "nexus.lane_catalog.lanes", &lanes);
-        let producer_static_incarnations =
-            sumeragi_v2_pre_release_static_lane_incarnations(&nexus.lane_catalog);
-        let mut lane_lifecycle = nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| {
-                let entry = retained_lane_lineage
-                    .iter()
-                    .find(|entry| entry.lane_id == lane.id)
-                    .expect("validated state has every active lane lineage");
-                SumeragiV2PreReleaseLaneLifecycleEntry {
-                    lane_id: entry.lane_id,
-                    incarnation: if entry.generation == 0 && entry.activation_height == 0 {
-                        *producer_static_incarnations
-                            .get(&entry.lane_id)
-                            .expect("producer static incarnations cover every active lane")
-                    } else {
-                        entry.incarnation
-                    },
-                    activation_height: entry.activation_height,
-                }
-            })
-            .collect::<Vec<_>>();
-        lane_lifecycle.sort_unstable_by_key(|entry| entry.lane_id);
+    let (_, consensus_lanes) = nexus.lane_catalog.consensus_projection();
+    append(&mut preimage, "nexus.lane_catalog.lanes", &consensus_lanes);
+    let mut retained_lane_lineage = retained_lane_lineage.to_vec();
+    retained_lane_lineage.sort_unstable_by(|left, right| {
+        left.lane_id
+            .cmp(&right.lane_id)
+            .then_with(|| left.generation.cmp(&right.generation))
+            .then_with(|| left.incarnation.cmp(&right.incarnation))
+            .then_with(|| left.activation_height.cmp(&right.activation_height))
+    });
+    append(
+        &mut preimage,
+        "nexus.lane_lifecycle.count",
+        &u64::try_from(retained_lane_lineage.len())
+            .expect("retained lane lineage length fits in u64"),
+    );
+    for entry in retained_lane_lineage {
         append(
             &mut preimage,
-            "nexus.lane_lifecycle.count",
-            &u64::try_from(lane_lifecycle.len()).expect("lane lifecycle length fits in u64"),
+            "nexus.lane_lifecycle.lane_id",
+            &entry.lane_id,
         );
-        for entry in lane_lifecycle {
-            append(
-                &mut preimage,
-                "nexus.lane_lifecycle.lane_id",
-                &entry.lane_id,
-            );
-            append(
-                &mut preimage,
-                "nexus.lane_lifecycle.incarnation",
-                &entry.incarnation,
-            );
-            append(
-                &mut preimage,
-                "nexus.lane_lifecycle.activation_height",
-                &entry.activation_height,
-            );
-        }
-    } else {
-        let (_, consensus_lanes) = nexus.lane_catalog.consensus_projection();
-        append(&mut preimage, "nexus.lane_catalog.lanes", &consensus_lanes);
-        let mut retained_lane_lineage = retained_lane_lineage.to_vec();
-        retained_lane_lineage.sort_unstable_by(|left, right| {
-            left.lane_id
-                .cmp(&right.lane_id)
-                .then_with(|| left.generation.cmp(&right.generation))
-                .then_with(|| left.incarnation.cmp(&right.incarnation))
-                .then_with(|| left.activation_height.cmp(&right.activation_height))
-        });
         append(
             &mut preimage,
-            "nexus.lane_lifecycle.count",
-            &u64::try_from(retained_lane_lineage.len())
-                .expect("retained lane lineage length fits in u64"),
+            "nexus.lane_lifecycle.generation",
+            &entry.generation,
         );
-        for entry in retained_lane_lineage {
-            append(
-                &mut preimage,
-                "nexus.lane_lifecycle.lane_id",
-                &entry.lane_id,
-            );
-            append(
-                &mut preimage,
-                "nexus.lane_lifecycle.generation",
-                &entry.generation,
-            );
-            append(
-                &mut preimage,
-                "nexus.lane_lifecycle.incarnation",
-                &entry.incarnation,
-            );
-            append(
-                &mut preimage,
-                "nexus.lane_lifecycle.activation_height",
-                &entry.activation_height,
-            );
-        }
+        append(
+            &mut preimage,
+            "nexus.lane_lifecycle.incarnation",
+            &entry.incarnation,
+        );
+        append(
+            &mut preimage,
+            "nexus.lane_lifecycle.activation_height",
+            &entry.activation_height,
+        );
     }
     let mut dataspaces = nexus.dataspace_catalog.entries().iter().collect::<Vec<_>>();
     dataspaces.sort_unstable_by_key(|entry| entry.id);
@@ -5308,13 +4942,6 @@ fn sumeragi_v2_nexus_amx_context_hash_with_projection(
     for entry in dataspaces {
         append(&mut preimage, "nexus.dataspace.id", &entry.id);
         append(&mut preimage, "nexus.dataspace.alias", &entry.alias);
-        if pre_release_taira {
-            append(
-                &mut preimage,
-                "nexus.dataspace.description",
-                &entry.description,
-            );
-        }
         append(
             &mut preimage,
             "nexus.dataspace.fault_tolerance",
@@ -5353,13 +4980,6 @@ fn sumeragi_v2_nexus_amx_context_hash_with_projection(
             "nexus.routing.rule.instruction",
             &rule.matcher.instruction,
         );
-        if pre_release_taira {
-            append(
-                &mut preimage,
-                "nexus.routing.rule.description",
-                &rule.matcher.description,
-            );
-        }
     }
     let public_validator_mode = match nexus.staking.public_validator_mode {
         LaneValidatorMode::StakeElected => 0_u8,
@@ -5460,37 +5080,21 @@ fn sumeragi_v2_nexus_amx_context_hash_with_projection(
         "nexus.fees.settlement_mode",
         &settlement_mode,
     );
-    if pre_release_taira {
-        let mut successful_claim_fee_exempt_authorities = nexus
-            .fees
-            .successful_claim_fee_exempt_authorities
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
-        successful_claim_fee_exempt_authorities.sort_unstable();
-        successful_claim_fee_exempt_authorities.dedup();
-        append(
-            &mut preimage,
-            "nexus.fees.successful_claim_exempt_authorities",
-            &successful_claim_fee_exempt_authorities,
-        );
-    } else {
-        let successful_claim_fee_exempt_authorities = nexus
-            .fees
-            .successful_claim_fee_exempt_authorities
-            .iter()
-            .map(|authority| {
-                authority
-                    .canonical_i105()
-                    .expect("validated Nexus fee-exempt authority must encode as canonical I105")
-            })
-            .collect::<Vec<_>>();
-        append(
-            &mut preimage,
-            "nexus.fees.successful_claim_exempt_authorities",
-            &successful_claim_fee_exempt_authorities,
-        );
-    }
+    let successful_claim_fee_exempt_authorities = nexus
+        .fees
+        .successful_claim_fee_exempt_authorities
+        .iter()
+        .map(|authority| {
+            authority
+                .canonical_i105()
+                .expect("validated Nexus fee-exempt authority must encode as canonical I105")
+        })
+        .collect::<Vec<_>>();
+    append(
+        &mut preimage,
+        "nexus.fees.successful_claim_exempt_authorities",
+        &successful_claim_fee_exempt_authorities,
+    );
     append(
         &mut preimage,
         "nexus.dataspace_fee_sponsor_program_ids",
@@ -5704,8 +5308,8 @@ pub struct TieredState {
     pub enabled: bool,
     /// Maximum number of keys to keep hot (0 = unlimited).
     pub hot_retained_keys: usize,
-    /// Hot-tier byte budget based on deterministic in-memory WSV sizing (0 = unlimited).
-    /// Grace retention may temporarily exceed this budget.
+    /// Hot-tier byte budget using canonical encoded-key bytes plus measured value bytes
+    /// (0 = unlimited). Grace or unspillable retention may temporarily exceed this budget.
     pub hot_retained_bytes: Bytes<u64>,
     /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
     pub hot_retained_grace_snapshots: u64,
@@ -11867,34 +11471,7 @@ pub struct Settlement {
     /// Router configuration for XOR conversion.
     pub router: Router,
 }
-/// Universal Kagemusha execution state and optional proof-release cache parameters.
-#[derive(Debug, Clone)]
-pub struct Offline {
-    /// Lazily derived escrow accounts keyed by asset definition.
-    ///
-    /// This map is runtime state, not operator configuration and not an
-    /// enablement catalog. Every asset can use the offline instructions.
-    pub escrow_accounts: BTreeMap<AssetDefinitionId, AccountId>,
-    /// Canonical Norito policy authenticating promoted Kagemusha releases.
-    pub kagemusha_release_policy_path: Option<PathBuf>,
-    /// Directory containing manifest-digest-addressed Kagemusha release artifacts.
-    pub kagemusha_artifact_dir: Option<PathBuf>,
-    /// Root-trusted canonical seal for a fully qualified Kagemusha catalog.
-    pub kagemusha_catalog_qualification_seal_path: Option<PathBuf>,
-    /// Estimated decoded Kagemusha verifier budget under the 256 MiB safety ceiling.
-    pub kagemusha_max_decoded_bytes: u64,
-}
-impl_default!(Offline => {
-        Self {
-            escrow_accounts: BTreeMap::new(),
-            kagemusha_release_policy_path:
-                defaults::settlement::offline::kagemusha_release_policy_path(),
-            kagemusha_artifact_dir: defaults::settlement::offline::kagemusha_artifact_dir(),
-            kagemusha_catalog_qualification_seal_path:
-                defaults::settlement::offline::kagemusha_catalog_qualification_seal_path(),
-            kagemusha_max_decoded_bytes: defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES,
-        }
-});
+include!("actual/offline.rs");
 /// Router configuration controlling shadow-price and buffer guard rails.
 #[derive(Debug, Clone, Copy)]
 pub struct Router {

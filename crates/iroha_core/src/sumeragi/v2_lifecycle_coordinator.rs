@@ -488,23 +488,6 @@ impl LifecycleCoordinator {
     pub(crate) const fn fault(&self) -> Option<CoordinatorFault> {
         self.fault
     }
-    /// Bind the launch-restored scheduler ordinal authority before live admission opens.
-    fn bind_live_lifecycle_ordinal_authority(
-        &mut self,
-        authority: CoordinatorLifecycleOrdinalAuthority,
-    ) -> Result<(), String> {
-        if self.lifecycle_ordinal_authority.is_some()
-            || self.fault.is_some()
-            || self.ledger_store.is_none()
-            || !authority.recognizes_high_water(self.high_water)?
-        {
-            return Err(
-                "lifecycle coordinator rejected its launch-restored ordinal authority".to_owned(),
-            );
-        }
-        self.lifecycle_ordinal_authority = Some(authority);
-        Ok(())
-    }
     /// Project and atomically admit one post-fsync authenticated Certified-Serve request.
     ///
     /// Tests use this direct seam; production Serve admission reaches the same

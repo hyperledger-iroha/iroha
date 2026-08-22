@@ -2,6 +2,14 @@
 use base64::Engine as _;
 
 #[test]
+fn post_torii_mutation_rejects_invalid_url() {
+    let payload = norito::json!({ "noop": true });
+    let err = post_torii_soracloud_mutation("not-a-url", "v1/soracloud/deploy", &payload, None, 5)
+        .expect_err("invalid URL must fail");
+    assert!(err.to_string().contains("invalid --torii-url"));
+}
+
+#[test]
 fn build_soracloud_mutation_auth_headers_adds_single_sig_freshness_headers() {
     let config = crate::fallback_config();
     let endpoint =

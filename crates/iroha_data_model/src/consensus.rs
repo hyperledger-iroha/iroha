@@ -127,54 +127,6 @@ impl ValidatorSetCheckpoint {
         }
     }
 }
-/// Stake snapshot entry for a single validator in a commit roster.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct CommitStakeSnapshotEntry {
-    /// Peer identifier for the validator.
-    pub peer_id: crate::peer::PeerId,
-    /// Total stake attributed to the validator.
-    pub stake: Quantity,
-}
-/// Stake snapshot aligned to the validator set used for commit proof validation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct CommitStakeSnapshot {
-    /// Stable hash of the validator set the snapshot applies to.
-    pub validator_set_hash: HashOf<Vec<crate::peer::PeerId>>,
-    /// Stake entries aligned to validator roster order.
-    pub entries: Vec<CommitStakeSnapshotEntry>,
-}
-impl CommitStakeSnapshot {
-    /// Return `true` when this snapshot exactly and uniquely matches the roster.
-    #[must_use]
-    pub fn matches_roster(&self, roster: &[crate::peer::PeerId]) -> bool {
-        if self.validator_set_hash != HashOf::new(&roster.to_vec())
-            || self.entries.len() != roster.len()
-        {
-            return false;
-        }
-        let mut observed = std::collections::BTreeSet::new();
-        self.entries.iter().zip(roster).all(|(entry, expected)| {
-            &entry.peer_id == expected && !entry.stake.is_zero() && observed.insert(&entry.peer_id)
-        })
-    }
-}
-/// Canonical previous-height roster evidence embedded in block payloads.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct PreviousRosterEvidence {
-    /// Height of the block this evidence applies to.
-    pub height: u64,
-    /// Hash of the block this evidence applies to.
-    pub block_hash: HashOf<crate::block::BlockHeader>,
-    /// Signed validator checkpoint for the referenced block.
-    pub validator_checkpoint: ValidatorSetCheckpoint,
-    /// Optional `NPoS` stake snapshot aligned to the validator set.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub stake_snapshot: Option<CommitStakeSnapshot>,
-}
 /// Deterministic `NPoS` state effects embedded in a signed block.
 ///
 /// These effects are applied as part of the committed block transition so every

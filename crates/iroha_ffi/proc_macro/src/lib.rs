@@ -45,27 +45,7 @@ fn parse_attributes(ts: TokenStream) -> Vec<syn::Attribute> {
         .expect("Failed to parse attributes")
         .0
 }
-/// Replace struct/enum/union definition with opaque pointer. This applies to types that
-/// are converted to an opaque pointer when sent across FFI but does not affect any other
-/// item wrapped with this macro (e.g. fieldless enums). This is so that most of the time
-/// users can safely wrap all of their structs with this macro and not be concerned with the
-/// cognitive load of figuring out which structs are converted to opaque pointers.
-///
-/// ## A note on `#[derive(...)]` limitations
-///
-/// This proc-macro crate parses the `#[derive(...)]` attributes.
-/// Due to technical limitations of proc macros, it does not have access to the resolved path of the macro, only to what is written in the derive.
-/// As such, it cannot support derives that are used through aliases, such as
-///
-/// ```ignore
-/// use getset::Getters as GettersAlias;
-/// #[derive(GettersAlias)]
-/// pub struct Hello {
-///     // ...
-/// }
-/// ```
-///
-/// It assumes that the derive is imported and referred to by its original name.
+#[doc = include_str!("lib_docs/ffi.md")]
 #[manyhow]
 #[proc_macro]
 pub fn ffi(input: TokenStream) -> TokenStream {
@@ -127,62 +107,7 @@ pub fn ffi(input: TokenStream) -> TokenStream {
 // NOTE: `ffi_type(local)` should be reserved for enums that truly borrow stack-bound
 // data and therefore cannot implement `NonLocal`. Most data-carrying enums no longer
 // require this escape hatch.
-/// Derive implementations of traits required to convert to and from an FFI-compatible type
-///
-/// # Attributes
-///
-/// * `#[ffi_type(opaque)]`
-/// serialize the type as opaque. If automatically derived type doesn't work just
-/// attach this attribute and force the type to be serialized as opaque across FFI
-///
-/// * `#[ffi_type(unsafe {robust})]`
-/// serialize the type as transparent with respect to the wrapped type where every
-/// valid bit pattern of the underlying type must be valid for the wrapper type.
-///
-/// Only applicable to `#[repr(transparent)]` types
-///
-/// # Safety
-///
-/// type must not have trap representations in the serialized form
-///
-/// * `#[ffi_type(local)]`
-/// marks the type as local, meaning it contains references to the local frame. If a type
-/// contains references to the local frame you won't be able to return it from an FFI function
-/// because the frame is destroyed on function return which would invalidate your type's references.
-///
-/// Only applicable to data-carrying enums.
-///
-/// NOTE: This attribute is likely to be removed in future versions
-///
-/// * `#[ffi_type(unsafe {robust_non_owning})]`
-/// when a type contains a raw pointer (e.g. `*const T`/`*mut T`) it's not possible to figure out
-/// whether it carries ownership of the data pointed to. Place this attribute on the field to
-/// indicate pointer doesn't own the data and is robust in the type. Alternatively, if the type
-/// is carrying ownership mark entire type as opaque with `#[ffi_type(opaque)]`. If the type
-/// is not carrying ownership, but is not robust convert it into an equivalent `iroha_ffi::ReprC`
-/// type that is validated when crossing the FFI boundary. It is also ok to mark non-owning,
-/// non-robust type as opaque
-///
-/// # Safety
-///
-/// * wrapping type must allow for all possible values of the pointer including `null` (it's robust)
-/// * the wrapping types's field of the pointer type must not carry ownership (it's non owning)
-///
-/// ## A note on `#[derive(...)]` limitations
-///
-/// This proc-macro crate parses the `#[derive(...)]` attributes.
-/// Due to technical limitations of proc macros, it does not have access to the resolved path of the macro, only to what is written in the derive.
-/// As such, it cannot support derives that are used through aliases, such as
-///
-/// ```ignore
-/// use getset::Getters as GettersAlias;
-/// #[derive(GettersAlias)]
-/// pub struct Hello {
-///     // ...
-/// }
-/// ```
-///
-/// It assumes that the derive is imported and referred to by its original name.
+#[doc = include_str!("lib_docs/ffi_type.md")]
 #[manyhow]
 #[proc_macro_derive(FfiType, attributes(ffi_type))]
 pub fn ffi_type_derive(input: TokenStream) -> TokenStream {
@@ -196,75 +121,7 @@ pub fn ffi_type_derive(input: TokenStream) -> TokenStream {
     let result = derive_ffi_type(&mut emitter, &item);
     emitter.finish_token_stream_with(result)
 }
-/// Generate FFI functions
-///
-/// When placed on a structure, it integrates with `getset` to export derived getter/setter methods.
-/// To be visible this attribute must be placed before/on top of any `getset` derive macro attributes
-///
-/// It also works on impl blocks (by visiting all methods in the impl block) and on enums and unions (as a no-op)
-///
-/// # Example:
-/// ```rust
-/// use std::alloc::alloc;
-///
-/// use getset::Getters;
-///
-/// // For a struct such as:
-/// #[iroha_ffi::ffi_export]
-/// #[derive(iroha_ffi::FfiType, Clone, Getters)]
-/// #[getset(get = "pub")]
-/// pub struct Foo {
-///     /// Id of the struct
-///     id: u8,
-///     #[getset(skip)]
-///     bar: Vec<u8>,
-/// }
-///
-/// #[iroha_ffi::ffi_export]
-/// impl Foo {
-///     /// Construct new type
-///     pub fn new(id: u8) -> Self {
-///         Self {
-///             id,
-///             bar: Vec::new(),
-///         }
-///     }
-///     /// Return bar
-///     pub fn bar(&self) -> &[u8] {
-///         &self.bar
-///     }
-/// }
-///
-/// /* The following functions will be derived:
-/// extern "C" fn Foo__new(id: u8, output: *mut Foo) -> FfiReturn {
-///     /* function implementation */
-///     FfiReturn::Ok
-/// }
-/// extern "C" fn Foo__bar(handle: *const Foo, output: *mut RefSlice<u8>) -> FfiReturn {
-///     /* function implementation */
-///     FfiReturn::Ok
-/// }
-/// extern "C" fn Foo__id(handle: *const Foo, output: *mut u8) -> FfiReturn {
-///     /* function implementation */
-///     FfiReturn::Ok
-/// } */
-/// ```
-///
-/// ## A note on `#[derive(...)]` limitations
-///
-/// This proc-macro crate parses the `#[derive(...)]` attributes.
-/// Due to technical limitations of proc macros, it does not have access to the resolved path of the macro, only to what is written in the derive.
-/// As such, it cannot support derives that are used through aliases, such as
-///
-/// ```ignore
-/// use getset::Getters as GettersAlias;
-/// #[derive(GettersAlias)]
-/// pub struct Hello {
-///     // ...
-/// }
-/// ```
-///
-/// It assumes that the derive is imported and referred to by its original name.
+#[doc = include_str!("lib_docs/ffi_export.md")]
 #[manyhow]
 #[proc_macro_attribute]
 pub fn ffi_export(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -355,48 +212,7 @@ pub fn ffi_export(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
     emitter.finish_token_stream_with(result)
 }
-/// Replace the function's body with a call to FFI function. Counterpart of [`macro@ffi_export`]
-///
-/// When placed on a structure, it integrates with `getset` to import derived getter/setter methods.
-///
-/// # Example:
-/// ```rust
-/// #[iroha_ffi::ffi_import]
-/// pub fn return_first_elem_from_arr(arr: [u8; 8]) -> u8 {
-///     // The body of this function is replaced with something like the following:
-///     // let mut store = Default::default();
-///     // let arr = iroha_ffi::FfiConvert::into_ffi(arr, &mut store);
-///     // let output = MaybeUninit::uninit();
-///     //
-///     // let call_res = __return_first_elem_from_arr(arr, output.as_mut_ptr());
-///     // if iroha_ffi::FfiReturn::Ok != call_res {
-///     //     panic!("Function call failed");
-///     // }
-///     //
-///     // iroha_ffi::FfiOutPtrRead::try_read_out(output.assume_init()).expect("Invalid type")
-/// }
-///
-/// /* The following functions will be declared:
-/// extern {
-///     fn __return_first_elem_from_arr(arr: *const [u8; 8]) -> u8;
-/// } */
-/// ```
-///
-/// ## A note on `#[derive(...)]` limitations
-///
-/// This proc-macro crate parses the `#[derive(...)]` attributes.
-/// Due to technical limitations of proc macros, it does not have access to the resolved path of the macro, only to what is written in the derive.
-/// As such, it cannot support derives that are used through aliases, such as
-///
-/// ```ignore
-/// use getset::Getters as GettersAlias;
-/// #[derive(GettersAlias)]
-/// pub struct Hello {
-///     // ...
-/// }
-/// ```
-///
-/// It assumes that the derive is imported and referred to by its original name.
+#[doc = include_str!("lib_docs/ffi_import.md")]
 #[manyhow]
 #[proc_macro_attribute]
 pub fn ffi_import(attr: TokenStream, item: TokenStream) -> TokenStream {

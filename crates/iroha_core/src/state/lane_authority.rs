@@ -375,7 +375,7 @@ pub(super) fn ranked_stake_peer_pool(
 }
 
 /// Resolve validator accounts for test-only lane authority diagnostics.
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 pub(super) fn validator_accounts_with_inputs(
     world: &impl WorldReadOnly,
     lane_id: LaneId,

@@ -59,7 +59,7 @@ execution or release receipts.
 - The bound static inventory contains exactly 84 corridor legs, 864/864
   production tests across 43 modules, 522/522 G-UNIT rows, and four mandatory
   G-4P gates. The grouped fixture pin validates. The recursive SDK resolver
-  enumerates 1,399 grouped and 1,401 diagnostics paths at the exact hashes in
+  enumerates 1,400 grouped and 1,402 diagnostics paths at the exact hashes in
   the owning corpus and `G-SDK` rows below. These are source inventories, not
   execution receipts.
 - The reviewed closure has no remaining explicit in-scope multilane TODO. The
@@ -1639,7 +1639,7 @@ status/diagnostics payload negative. The development resolver
 `ci/resolve_sumeragi_v2_sdk_source_closure.py` and manifest
 `ci/sumeragi_v2_sdk_source_closure.json` cover transitive production sources
 and Kotlin/Java Native model dependencies. The current mutable-tree inventory
-  is exactly 1,399 grouped and 1,401 diagnostics records. Their canonical hashes
+  is exactly 1,400 grouped and 1,402 diagnostics records. Their canonical hashes
 are
 recorded once in the owning corpus row and once in the release gate. The
 release receipt must reproduce those values from its immutable candidate;
@@ -1731,12 +1731,12 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 63, JavaScript 61, Swift
 5, Kotlin 7, and Java 6 tests. The current recursive mutable-tree closure
-  contains exactly 1,399 grouped and 1,401 diagnostics records. Its grouped and
+  contains exactly 1,400 grouped and 1,402 diagnostics records. Its grouped and
 diagnostics
 suite-source SHA-256 values are
-  `1779c5ccb601b35849953ff62bfb49dc49aa405232cbc6aa1025c772c3d3bc15`
+  `fdc4c3fb9192277bc6a80018ecb62ed096f12cb41a4c40bde0681ee8f6478577`
 and
-  `973022b1bfa2aa35e988cefda749abfcaeaeb2e2795fb2fe31732ab07af8b7f8`.
+  `f2e7d3b79dd311b93f9ade26a846940dcd12b636c551a70800f63817a10bfa4c`.
 The checked-in grouped fixture has SHA-256
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
 The diagnostics closure directly includes the 48-line wire fixture whose
@@ -2041,11 +2041,11 @@ browser JavaScript distribution, SoraFS orderbook JavaScript implementation
 and types, the standalone Python orderbook module, Kotlin/Java Native models,
 grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The current
-  mutable-tree closure contains exactly 1,399 grouped and 1,401 diagnostics
+  mutable-tree closure contains exactly 1,400 grouped and 1,402 diagnostics
 records, with grouped and diagnostics suite-source SHA-256 values
-  `1779c5ccb601b35849953ff62bfb49dc49aa405232cbc6aa1025c772c3d3bc15`
+  `fdc4c3fb9192277bc6a80018ecb62ed096f12cb41a4c40bde0681ee8f6478577`
 and
-  `973022b1bfa2aa35e988cefda749abfcaeaeb2e2795fb2fe31732ab07af8b7f8`.
+  `f2e7d3b79dd311b93f9ade26a846940dcd12b636c551a70800f63817a10bfa4c`.
 The current grouped JSON and wire TSV SHA-256 values are
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`
 and

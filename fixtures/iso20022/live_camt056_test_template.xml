@@ -1,0 +1,31 @@
+<DataPDU>
+  <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+    <BizMsgIdr>{business_message_id}</BizMsgIdr>
+    <MsgDefIdr>{msg_def_id}</MsgDefIdr>
+    <BizSvc>{business_service}</BizSvc>
+    <CreDt>2025-01-01T12:00:00Z</CreDt>
+  </AppHdr>
+  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:{msg_def_id}">
+    <FIToFIPmtCxlReq>
+      <Assgnmt>
+        <Id>{business_message_id}-assignment</Id>
+        <CreDtTm>2025-01-01T12:03:00Z</CreDtTm>
+      </Assgnmt>
+      <Undrlyg>
+        <TxInf>
+          <OrgnlGrpInf>
+            <OrgnlMsgId>{business_message_id}-orig</OrgnlMsgId>
+            <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
+          </OrgnlGrpInf>
+          <OrgnlInstrId>{business_message_id}-instr</OrgnlInstrId>
+          <OrgnlEndToEndId>{business_message_id}-e2e</OrgnlEndToEndId>
+          <OrgnlTxId>{business_message_id}-tx</OrgnlTxId>
+          <CxlRsnInf>
+            <Rsn><Cd>DUPL</Cd></Rsn>
+            <AddtlInf>live profile cancellation fixture</AddtlInf>
+          </CxlRsnInf>
+        </TxInf>
+      </Undrlyg>
+    </FIToFIPmtCxlReq>
+  </Document>
+</DataPDU>

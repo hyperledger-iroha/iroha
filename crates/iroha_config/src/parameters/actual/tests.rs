@@ -91,153 +91,6 @@ mod tests {
         );
     }
     #[test]
-    fn pre_release_taira_nexus_policy_retains_the_producer_wire_shape() {
-        let baseline = Nexus::default();
-        let current = |nexus| {
-            nexus_consensus_policy_digest_with_runtime_policies(nexus, None, Some([0x21; 32]))
-                .expect("valid current Nexus policy")
-        };
-        let producer = |nexus| {
-            pre_release_taira_nexus_consensus_policy_digest_with_runtime_policies(
-                nexus,
-                None,
-                Some([0x21; 32]),
-            )
-            .expect("valid pre-release Nexus policy")
-        };
-
-        assert_ne!(
-            producer(&baseline),
-            current(&baseline),
-            "reset-11 authenticated the producer enabled flag and legacy catalog wire",
-        );
-
-        let mut described = baseline.clone();
-        let mut lane = described.configured_lane_catalog.lanes()[0].clone();
-        lane.description = Some("producer-authenticated configured lane".to_owned());
-        described.configured_lane_catalog = LaneCatalog::new(
-            NonZeroU32::new(1).expect("non-zero lane bound"),
-            vec![lane],
-        )
-        .expect("valid configured lane catalog");
-        assert_eq!(
-            current(&baseline),
-            current(&described),
-            "successor networks use the description-free consensus projection",
-        );
-        assert_ne!(
-            producer(&baseline),
-            producer(&described),
-            "reset-11 authenticated the complete pre-release lane wire shape",
-        );
-    }
-    #[test]
-    fn pre_release_taira_configured_catalog_hash_matches_reset_11_journal() {
-        let lane = |id,
-                    alias: &str,
-                    description: &str,
-                    dataspace_id,
-                    visibility,
-                    governance: Option<&str>,
-                    teu_capacity: Option<u64>| LaneConfigMetadata {
-            id: LaneId::new(id),
-            dataspace_id,
-            alias: alias.to_owned(),
-            description: Some(description.to_owned()),
-            visibility,
-            governance: governance.map(str::to_owned),
-            scheduler: teu_capacity.map(|capacity| {
-                LaneSchedulerPolicy::new(
-                    NonZeroU64::new(capacity),
-                    None,
-                )
-            }),
-            ..LaneConfigMetadata::default()
-        };
-        let catalog = LaneCatalog::new(
-            NonZeroU32::new(7).expect("non-zero reset-11 lane bound"),
-            vec![
-                lane(
-                    0,
-                    "core",
-                    "Primary execution lane",
-                    DataSpaceId::UNIVERSAL,
-                    LaneVisibility::Public,
-                    None,
-                    Some(50_000_000),
-                ),
-                lane(
-                    1,
-                    "governance",
-                    "Governance & parliament traffic",
-                    DataSpaceId::UNIVERSAL,
-                    LaneVisibility::Public,
-                    Some("parliament"),
-                    None,
-                ),
-                lane(
-                    2,
-                    "zk",
-                    "Zero-knowledge attachments",
-                    DataSpaceId::UNIVERSAL,
-                    LaneVisibility::Public,
-                    None,
-                    None,
-                ),
-                lane(
-                    3,
-                    "dpn",
-                    "Digital payments network traffic",
-                    DataSpaceId::new(10),
-                    LaneVisibility::Restricted,
-                    None,
-                    Some(25_000_000),
-                ),
-                lane(
-                    4,
-                    "external-poc",
-                    "External PoC traffic",
-                    DataSpaceId::new(6_647_857_470_246_403_404),
-                    LaneVisibility::Restricted,
-                    None,
-                    Some(25_000_000),
-                ),
-                lane(
-                    5,
-                    "boi-mobile",
-                    "Bank of Israel mobile-wallet traffic",
-                    DataSpaceId::new(8_477_022_798_449_861_195),
-                    LaneVisibility::Restricted,
-                    None,
-                    Some(25_000_000),
-                ),
-                lane(
-                    6,
-                    "cbsi",
-                    "Central-bank service integration traffic",
-                    DataSpaceId::new(20),
-                    LaneVisibility::Restricted,
-                    None,
-                    Some(25_000_000),
-                ),
-            ],
-        )
-        .expect("valid reset-11 configured catalog");
-
-        assert_eq!(
-            hex::encode(sumeragi_v2_pre_release_lane_catalog_hash(&catalog).as_ref()),
-            "6b8b9ea24d6e27cf480c43aa707bb969fd45add4830c34fa2b5215dffae38679",
-            "reset-11 Kura journal retains the producer configured-catalog commitment",
-        );
-        assert_eq!(
-            hex::encode(
-                iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&catalog).as_ref(),
-            ),
-            "020535c59f47512e849295679e4309f34b58c0162b42e88a93e5d2430e4c7bab",
-            "the successor wire shape remains distinct and stable",
-        );
-    }
-    #[test]
     fn nexus_consensus_policy_digest_excludes_operational_paths_and_worker_timing() {
         let baseline = Nexus::default();
         let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
@@ -644,6 +497,23 @@ mod tests {
         assert!(offline.kagemusha_release_policy_path.is_none());
         assert!(offline.kagemusha_artifact_dir.is_none());
         assert!(offline.kagemusha_catalog_qualification_seal_path.is_none());
+        assert!(offline.kagemusha_promotion_controller_public_key.is_none());
+        assert!(
+            offline
+                .kagemusha_catalog_revalidation_authority_key_id
+                .is_none()
+        );
+        assert!(
+            offline
+                .kagemusha_catalog_revalidation_authority_public_key
+                .is_none()
+        );
+        assert!(offline.kagemusha_promotion_reservation_path.is_none());
+        assert!(
+            offline
+                .kagemusha_validator_qualification_seal_path
+                .is_none()
+        );
         assert_eq!(
             offline.kagemusha_max_decoded_bytes,
             defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
@@ -1560,150 +1430,6 @@ mod tests {
             <[u8; 32]>::from(hash),
             iroha_data_model::block::consensus_v2::RECOMMENDED_NEXUS_AMX_CONTEXT_HASH,
             "data-model genesis defaults must track the canonical config projection",
-        );
-    }
-    #[test]
-    fn pre_release_taira_nexus_hash_retains_the_producer_lane_projection() {
-        let lineage = [SumeragiV2LaneLifecycleEntry {
-            lane_id: LaneId::SINGLE,
-            generation: 0,
-            incarnation: Hash::new(b"pre-release default lane incarnation"),
-            activation_height: 0,
-        }];
-        let baseline = Nexus::default();
-        let mut described = baseline.clone();
-        let mut lane = described.lane_catalog.lanes()[0].clone();
-        lane.description = Some("producer-authenticated description".to_owned());
-        described.lane_catalog =
-            LaneCatalog::new(NonZeroU32::new(1).expect("non-zero lane bound"), vec![lane])
-                .expect("valid described lane");
-
-        assert_ne!(
-            sumeragi_v2_pre_release_nexus_amx_context_hash(
-                &baseline,
-                &Pipeline::default(),
-                &[],
-                &lineage,
-            ),
-            sumeragi_v2_pre_release_nexus_amx_context_hash(
-                &described,
-                &Pipeline::default(),
-                &[],
-                &lineage,
-            ),
-            "the producer committed operator descriptions into reset-11",
-        );
-        assert_eq!(
-            sumeragi_v2_nexus_amx_context_hash(&baseline, &Pipeline::default(), &[], &lineage,),
-            sumeragi_v2_nexus_amx_context_hash(&described, &Pipeline::default(), &[], &lineage,),
-            "new networks retain the current description-free projection",
-        );
-    }
-    #[test]
-    fn pre_release_taira_nexus_hash_rehydrates_migrated_scheduler_metadata() {
-        let lineage = [SumeragiV2LaneLifecycleEntry {
-            lane_id: LaneId::SINGLE,
-            generation: 0,
-            incarnation: Hash::new(b"pre-release scheduler lane incarnation"),
-            activation_height: 0,
-        }];
-        let mut typed_lane = LaneConfigMetadata::default();
-        typed_lane.scheduler = Some(LaneSchedulerPolicy::new(
-            Some(core::num::NonZeroU64::new(50_000_000).expect("positive capacity")),
-            None,
-        ));
-        let projected = SumeragiV2PreReleaseLaneConfig::from(&typed_lane);
-        assert_eq!(
-            projected.metadata.get("scheduler.teu_capacity"),
-            Some(&"50000000".to_owned()),
-            "the producer encoded this policy in lane metadata",
-        );
-        let with_catalog = |lane| Nexus {
-            lane_catalog: LaneCatalog::new(
-                NonZeroU32::new(1).expect("non-zero lane bound"),
-                vec![lane],
-            )
-            .expect("valid lane catalog"),
-            ..Nexus::default()
-        };
-        let typed = with_catalog(typed_lane);
-        let baseline = Nexus::default();
-        assert_ne!(
-            sumeragi_v2_nexus_amx_context_hash(&typed, &Pipeline::default(), &[], &lineage,),
-            sumeragi_v2_nexus_amx_context_hash(&baseline, &Pipeline::default(), &[], &lineage,),
-            "current networks must continue committing the typed scheduler policy",
-        );
-    }
-    #[test]
-    fn pre_release_taira_nexus_hash_rederives_producer_static_lane_incarnations() {
-        let lineage = |incarnation| {
-            [SumeragiV2LaneLifecycleEntry {
-                lane_id: LaneId::SINGLE,
-                generation: 0,
-                incarnation,
-                activation_height: 0,
-            }]
-        };
-        let first = lineage(Hash::new(b"successor static lane incarnation a"));
-        let second = lineage(Hash::new(b"successor static lane incarnation b"));
-        let nexus = Nexus::default();
-        let pipeline = Pipeline::default();
-
-        assert_eq!(
-            sumeragi_v2_pre_release_nexus_amx_context_hash(&nexus, &pipeline, &[], &first),
-            sumeragi_v2_pre_release_nexus_amx_context_hash(&nexus, &pipeline, &[], &second),
-            "reset-11 commits the producer-derived static incarnation, not the successor value",
-        );
-        assert_ne!(
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &first),
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &second),
-            "current networks must continue committing the supplied retained lineage",
-        );
-    }
-    #[test]
-    fn pre_release_taira_static_incarnations_retain_the_producer_primary_anchor() {
-        let primary = LaneConfigMetadata::default();
-        let secondary = LaneConfigMetadata {
-            id: LaneId::new(1),
-            alias: "secondary".to_owned(),
-            ..LaneConfigMetadata::default()
-        };
-        let with_lanes = |lanes| Nexus {
-            lane_catalog: LaneCatalog::new(
-                NonZeroU32::new(2).expect("non-zero lane bound"),
-                lanes,
-            )
-            .expect("valid producer lane catalog"),
-            ..Nexus::default()
-        };
-        let baseline = with_lanes(vec![primary.clone(), secondary.clone()]);
-        let baseline_incarnations =
-            sumeragi_v2_pre_release_static_lane_incarnations(&baseline.lane_catalog);
-
-        assert_eq!(
-            hex::encode(baseline_incarnations[&LaneId::SINGLE].as_ref()),
-            "f52c4a37761d292ab16485cbc40b321e98a4079145368e558c08eef7a99f7203",
-            "reset-11 retained the producer's configured-primary anchor incarnation",
-        );
-
-        let changed = with_lanes(vec![
-            primary,
-            LaneConfigMetadata {
-                alias: "changed-secondary".to_owned(),
-                ..secondary
-            },
-        ]);
-        let changed_incarnations =
-            sumeragi_v2_pre_release_static_lane_incarnations(&changed.lane_catalog);
-        assert_eq!(
-            baseline_incarnations[&LaneId::SINGLE],
-            changed_incarnations[&LaneId::SINGLE],
-            "the authenticated primary anchor predates full-catalog expansion",
-        );
-        assert_ne!(
-            baseline_incarnations[&LaneId::new(1)],
-            changed_incarnations[&LaneId::new(1)],
-            "secondary lanes retain producer full-catalog derivation",
         );
     }
     #[test]

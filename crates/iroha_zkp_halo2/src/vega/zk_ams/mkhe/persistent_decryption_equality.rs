@@ -16,13 +16,11 @@
 //! digest can mint the authority.
 //!
 //! Equality remains the transitive short-solution claim for the shared CPK
-//! equation; it is not presented as a direct Pedersen cross-opening. Release
-//! readiness stays closed until that short-solution/SIS assumption has an
-//! independently pinned certificate and a replacement release-size KAT.
-#[path = "persistent_decryption_direct_equality_v1.rs"]
-mod persistent_decryption_direct_equality_v1;
-#[path = "persistent_decryption_response_link.rs"]
-mod persistent_decryption_response_link;
+//! equation; it is not presented as a direct Pedersen cross-opening. The
+//! retired direct-equality and response-link sketches were private,
+//! non-authorizing audit scaffolds. Release readiness stays closed until the
+//! short-solution/SIS assumption has an independently pinned certificate and a
+//! replacement release-size KAT.
 #[cfg(test)]
 use super::decryption::ZkAmsMkheDecryptionStatementV1;
 #[cfg(test)]

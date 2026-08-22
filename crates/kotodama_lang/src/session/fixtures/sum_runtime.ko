@@ -1,0 +1,22 @@
+seiyaku SumRuntime {
+                view fn exercise_sum_intrinsics(int fallback) -> int {
+                    let Option<int> present = Option::some(5);
+                    let Option<int> missing = Option::none;
+                    let Result<int, string> success = Result::ok(7);
+                    let Result<int, string> failure = Result::err("failed");
+                    let _present = present.is_some();
+                    let _missing = missing.is_none();
+                    let _success = success.is_ok();
+                    let _failure = failure.is_err();
+                    let value = present.unwrap_or(fallback);
+                    let error_value = failure.unwrap_err_or("fallback");
+                    if error_value == "failed" {
+                        return value + success.unwrap_or(fallback);
+                    }
+                    return fallback;
+                }
+                #[test]
+                fn exercises_sum_intrinsics() {
+                    test::assert(true);
+                }
+            }

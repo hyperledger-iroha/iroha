@@ -10528,7 +10528,7 @@ fn record_tiered_snapshot_metrics(backend: &TieredStateBackend, telemetry: &Stat
     };
     if let Some(manifest) = manifest {
         let hot_bytes = manifest.hot_entries.iter().fold(0u64, |acc, entry| {
-            acc.saturating_add(u64::try_from(entry.value_size_bytes()).unwrap_or(u64::MAX))
+            acc.saturating_add(entry.hot_budget_bytes())
         });
         crate::telemetry::record_state_tiered_snapshot(
             telemetry,
@@ -10539,13 +10539,13 @@ fn record_tiered_snapshot_metrics(backend: &TieredStateBackend, telemetry: &Stat
             manifest.cold_bytes_total,
             manifest.hot_promotions,
             manifest.hot_demotions,
-            manifest.hot_grace_overflow_keys,
-            manifest.hot_grace_overflow_bytes,
+            manifest.hot_budget_overflow_keys,
+            manifest.hot_budget_overflow_bytes,
             manifest.cold_reused_entries,
             manifest.cold_reused_bytes,
         );
         telemetry.record_storage_budget_usage("wsv_hot", hot_bytes, hot_limit);
-        if hot_limit > 0 && manifest.hot_grace_overflow_bytes > 0 {
+        if hot_limit > 0 && manifest.hot_budget_overflow_bytes > 0 {
             telemetry.inc_storage_budget_exceeded("wsv_hot");
         }
         if let Some(cold_used) = cold_store_bytes {
@@ -12542,13 +12542,21 @@ impl<'state> StateBlock<'state> {
             .world
             .axt_policies
             .iter()
+            .filter(|(dsid, _)| {
+                snapshot
+                    .entries
+                    .binary_search_by(|binding| binding.dsid.cmp(dsid))
+                    .is_err()
+            })
             .map(|(dsid, _)| *dsid)
             .collect();
         for dsid in stale {
             self.world.axt_policies.remove(dsid);
         }
         for binding in &snapshot.entries {
-            self.world.axt_policies.insert(binding.dsid, binding.policy);
+            if self.world.axt_policies.get(&binding.dsid) != Some(&binding.policy) {
+                self.world.axt_policies.insert(binding.dsid, binding.policy);
+            }
         }
         #[cfg(feature = "telemetry")]
         self.telemetry.set_axt_policy_snapshot_version(snapshot);
@@ -13594,15 +13602,6 @@ pub(crate) fn nexus_manifest_authority_eligible_lanes_at_height(
         })
         .map(|candidate| candidate.id)
         .collect()
-}
-fn axt_lane_map_from_lane_config(lane_config: &LaneConfig) -> BTreeMap<DataSpaceId, LaneId> {
-    let mut lane_for_dataspace = BTreeMap::new();
-    for entry in lane_config.entries() {
-        lane_for_dataspace
-            .entry(entry.dataspace_id)
-            .or_insert(entry.lane_id);
-    }
-    lane_for_dataspace
 }
 pub(crate) fn axt_active_lane_map_at_height(
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -14685,118 +14684,7 @@ mod stake_snapshot_tests {
         assert_eq!(mismatched.activation_epoch, None);
         assert_eq!(mismatched.activation_height, None);
     }
-    #[test]
-    fn state_block_does_not_activate_restored_non_owner_staking_rows() {
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state =
-            State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
-        let owner_lane = LaneId::SINGLE;
-        let sibling_lane = LaneId::new(1);
-        let lane_catalog = LaneCatalog::new(
-            NonZeroU32::new(2).expect("non-zero lane count"),
-            vec![
-                LaneConfig::default(),
-                LaneConfig {
-                    id: sibling_lane,
-                    alias: "restored-staking-sibling".to_owned(),
-                    dataspace_id: DataSpaceId::UNIVERSAL,
-                    visibility: LaneVisibility::Public,
-                    ..LaneConfig::default()
-                },
-            ],
-        )
-        .expect("shared-dataspace lane catalog");
-        let mut nexus = iroha_config::parameters::actual::Nexus {
-            lane_catalog,
-            ..iroha_config::parameters::actual::Nexus::default()
-        };
-        nexus.lane_config = DerivedLaneConfig::from_catalog(&nexus.lane_catalog);
-        state
-            .set_nexus(nexus)
-            .expect("apply shared-dataspace Nexus config");
-
-        let owner_kp = crate::state::checked_keypair();
-        let pending_sibling_kp = crate::state::checked_keypair();
-        let jailed_sibling_kp = crate::state::checked_keypair();
-        let owner_validator = DMAccountId::of(owner_kp.public_key().clone());
-        let pending_sibling_validator = DMAccountId::of(pending_sibling_kp.public_key().clone());
-        let jailed_sibling_validator = DMAccountId::of(jailed_sibling_kp.public_key().clone());
-        let record =
-            |lane_id, validator: DMAccountId, peer_key, status: PublicLaneValidatorStatus| {
-                lane_validator_record(lane_id, &validator, PeerId::from(peer_key), 10_u32, status)
-            };
-        {
-            let mut block = state.world.public_lane_validators.block();
-            block.insert(
-                (owner_lane, owner_validator.clone()),
-                record(
-                    owner_lane,
-                    owner_validator.clone(),
-                    owner_kp.public_key().clone(),
-                    PublicLaneValidatorStatus::PendingActivation(3),
-                ),
-            );
-            block.insert(
-                (sibling_lane, pending_sibling_validator.clone()),
-                record(
-                    sibling_lane,
-                    pending_sibling_validator.clone(),
-                    pending_sibling_kp.public_key().clone(),
-                    PublicLaneValidatorStatus::PendingActivation(3),
-                ),
-            );
-            block.insert(
-                (sibling_lane, jailed_sibling_validator.clone()),
-                record(
-                    sibling_lane,
-                    jailed_sibling_validator.clone(),
-                    jailed_sibling_kp.public_key().clone(),
-                    PublicLaneValidatorStatus::Jailed("vrf_penalty_epoch_2".to_owned()),
-                ),
-            );
-            block.commit();
-        }
-
-        let header = BlockHeader::new(
-            core::num::NonZeroU64::new(9).expect("non-zero height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let mut state_block = state.block(header);
-        state_block.activate_due_public_lane_validators(3);
-        state_block.clear_expired_vrf_public_lane_jails(3);
-
-        let owner = state_block
-            .world
-            .public_lane_validators
-            .get(&(owner_lane, owner_validator))
-            .expect("canonical owner validator remains present");
-        assert!(matches!(owner.status, PublicLaneValidatorStatus::Active));
-        let pending_sibling = state_block
-            .world
-            .public_lane_validators
-            .get(&(sibling_lane, pending_sibling_validator))
-            .expect("pending non-owner validator remains present");
-        assert!(matches!(
-            pending_sibling.status,
-            PublicLaneValidatorStatus::PendingActivation(3)
-        ));
-        let jailed_sibling = state_block
-            .world
-            .public_lane_validators
-            .get(&(sibling_lane, jailed_sibling_validator))
-            .expect("jailed non-owner validator remains present");
-        assert!(matches!(
-            jailed_sibling.status,
-            PublicLaneValidatorStatus::Jailed(ref reason)
-                if reason == "vrf_penalty_epoch_2"
-        ));
-    }
-
+    include!("state/restored_staking_owner_tests.rs");
     #[test]
     fn state_block_clears_only_expired_vrf_public_lane_jails() {
         let world = World::default();
@@ -18552,37 +18440,7 @@ mod confidential_policy_transition_index_tests {
         });
         policy
     }
-    #[test]
-    fn rebuild_uses_only_authoritative_pending_transitions() {
-        let policy = policy_with_transition(
-            ConfidentialPolicyMode::Convertible,
-            ConfidentialPolicyMode::ShieldedOnly,
-            41,
-            Some(7),
-            b"policy-index-rebuild",
-        );
-        let (definition_id, definition) = definition_with_policy("coin", policy);
-        let mut world = World::default();
-        world
-            .asset_definitions
-            .insert(definition_id.clone(), definition);
-        world
-            .confidential_policy_transition_index
-            .insert((99, definition_id.clone()), ());
-        world.confidential_policy_transition_counts.insert(99, 1);
-        world
-            .rebuild_confidential_policy_transition_index()
-            .expect("valid authoritative transition rebuilds");
-        let transition_index = world.confidential_policy_transition_index.view();
-        assert!(transition_index.get(&(99, definition_id.clone())).is_none());
-        assert_eq!(
-            transition_index.get(&(41, definition_id.clone())),
-            Some(&())
-        );
-        let transition_counts = world.confidential_policy_transition_counts.view();
-        assert!(transition_counts.get(&99).is_none());
-        assert_eq!(transition_counts.get(&41), Some(&1));
-    }
+    include!("state/confidential_policy_transition_index_tests.rs");
     #[test]
     fn track_and_untrack_keep_exact_keys_and_counts() {
         let domain_id = DomainId::try_new("policy-index", "universal").expect("valid domain");
@@ -38606,8 +38464,7 @@ impl State {
         network_id: &iroha_data_model::NetworkId,
         configured_lane_catalog: &LaneCatalog,
     ) -> Result<(), LaneLifecycleError> {
-        let configured_hash =
-            configured_lane_catalog_baseline_hash(network_id, configured_lane_catalog);
+        let configured_hash = LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog);
         let durable_hash = kura
             .configured_lane_catalog_baseline()
             .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?
@@ -38622,7 +38479,7 @@ impl State {
                 "configured-primary replay preflight mismatch: expected {durable_hash}, attempted {configured_hash}"
             )));
         }
-        let geometry = configured_primary_replay_geometry(network_id, configured_lane_catalog)?;
+        let geometry = configured_primary_replay_geometry(configured_lane_catalog)?;
         let lineage_root = lane_incarnation_lineage_root(network_id, &geometry.lineage);
         kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
             &geometry.lane_config,
@@ -38661,10 +38518,8 @@ impl State {
             &self.network_id,
             configured_lane_catalog,
         )?;
-        let configured_hash =
-            configured_lane_catalog_baseline_hash(&self.network_id, configured_lane_catalog);
-        let geometry =
-            configured_primary_replay_geometry(&self.network_id, configured_lane_catalog)?;
+        let configured_hash = LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog);
+        let geometry = configured_primary_replay_geometry(configured_lane_catalog)?;
         self.kura
             .establish_or_verify_configured_primary_geometry_anchor(
                 geometry.lane_config.primary(),
@@ -38700,8 +38555,7 @@ impl State {
                     .to_owned(),
             ));
         }
-        let configured_hash =
-            configured_lane_catalog_baseline_hash(&self.network_id, configured_lane_catalog);
+        let configured_hash = LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog);
         let durable_hash = self
             .kura
             .configured_lane_catalog_baseline()
@@ -38756,15 +38610,14 @@ impl State {
                     "restored Nexus runtime has no physical primary incarnation".to_owned(),
                 )
             })?;
-        let expected_incarnation =
-            configured_lane_static_incarnations(&self.network_id, &configured_primary_catalog)
-                .get(&LaneId::SINGLE)
-                .copied()
-                .ok_or_else(|| {
-                    LaneLifecycleError::ConfiguredCatalogBaseline(
-                        "configured primary catalog has no physical primary incarnation".to_owned(),
-                    )
-                })?;
+        let expected_incarnation = derive_static_lane_incarnations(&configured_primary_catalog)
+            .get(&LaneId::SINGLE)
+            .copied()
+            .ok_or_else(|| {
+                LaneLifecycleError::ConfiguredCatalogBaseline(
+                    "configured primary catalog has no physical primary incarnation".to_owned(),
+                )
+            })?;
         if incarnation != expected_incarnation {
             return Err(LaneLifecycleError::ConfiguredCatalogBaseline(format!(
                 "restored physical primary lane zero incarnation mismatch: expected {expected_incarnation}, restored {incarnation}"
@@ -38803,7 +38656,9 @@ impl State {
         nexus: iroha_config::parameters::actual::Nexus,
     ) -> Result<(), LaneLifecycleError> {
         let configured_catalog_hash =
-            configured_lane_catalog_baseline_hash(&self.network_id, &nexus.configured_lane_catalog);
+            iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(
+                &nexus.configured_lane_catalog,
+            );
         let durable_blocks = self
             .kura
             .exact_durable_blocks_count()
@@ -38868,7 +38723,8 @@ impl State {
                     .kura
                     .configured_lane_catalog_baseline()
                     .map_err(|err| LaneLifecycleError::ConfiguredCatalogBaseline(err.to_string()))?
-                && configured_lane_catalog_baseline_hash(&self.network_id, attempted) != expected
+                && iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(attempted)
+                    != expected
             {
                 return Err(LaneLifecycleError::ConfiguredCatalogBaseline(format!(
                     "pre-genesis lane catalog differs from immutable configured baseline {expected}"
@@ -39056,8 +38912,7 @@ impl State {
             &previous_lane_incarnation_activation_heights,
             &previous_lane_incarnation_lineage,
         )?;
-        let static_incarnations =
-            configured_lane_static_incarnations(&self.network_id, &nexus.lane_catalog);
+        let static_incarnations = derive_static_lane_incarnations(&nexus.lane_catalog);
         let updated_catalog_hash = merge_lane_consensus_catalog_hash(&nexus.lane_catalog);
         let mut updated_lane_incarnations = BTreeMap::new();
         let mut updated_lane_incarnation_activation_heights = BTreeMap::new();
@@ -41955,22 +41810,6 @@ fn merge_lane_catalog_hash(catalog: &LaneCatalog) -> Hash {
     let sanitized = LaneCatalog::new(catalog.lane_count(), lanes)
         .expect("removing reserved drain metadata cannot invalidate a lane catalog");
     iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&sanitized)
-}
-fn configured_lane_catalog_baseline_hash(
-    network_id: &iroha_data_model::NetworkId,
-    catalog: &LaneCatalog,
-) -> Hash {
-    crate::sumeragi::configured_lane_catalog_hash_for_network(network_id, catalog)
-}
-fn configured_lane_static_incarnations(
-    network_id: &iroha_data_model::NetworkId,
-    catalog: &LaneCatalog,
-) -> BTreeMap<LaneId, Hash> {
-    if crate::sumeragi::v2_context::uses_pre_release_taira_nexus_projection(network_id) {
-        iroha_config::parameters::actual::sumeragi_v2_pre_release_static_lane_incarnations(catalog)
-    } else {
-        derive_static_lane_incarnations(catalog)
-    }
 }
 fn autoscale_lane_drain_state_matches_context(
     lane: &iroha_data_model::nexus::LaneConfig,
@@ -45480,24 +45319,16 @@ fn compute_execution_policy_digest_v1(
     content: &iroha_config::parameters::actual::Content,
     settlement: &iroha_config::parameters::actual::Settlement,
     kagemusha_release_catalog: &crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
-    pre_release_taira_nexus: bool,
 ) -> core::result::Result<[u8; 32], iroha_config::parameters::actual::NexusConsensusPolicyDigestError>
 {
     let compliance_policy_digest =
         lane_compliance.map(LaneComplianceEngine::consensus_policy_digest);
-    let nexus_policy_digest = if pre_release_taira_nexus {
-        iroha_config::parameters::actual::pre_release_taira_nexus_consensus_policy_digest_with_runtime_policies(
-            nexus,
-            compliance_policy_digest,
-            Some(lane_manifests.consensus_policy_digest()),
-        )?
-    } else {
+    let nexus_policy_digest =
         iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
             nexus,
             compliance_policy_digest,
             Some(lane_manifests.consensus_policy_digest()),
-        )?
-    };
+        )?;
     Ok(
         iroha_config::parameters::actual::execution_policy_digest_v1(
             pipeline,
@@ -45549,7 +45380,6 @@ impl State {
             &self.content,
             &self.settlement,
             self.kagemusha_release_catalog.as_ref(),
-            crate::sumeragi::v2_context::uses_pre_release_taira_nexus_projection(&self.network_id),
         )
     }
 }
@@ -45578,7 +45408,6 @@ impl StateBlock<'_> {
             &self.content,
             &self.settlement,
             self.kagemusha_release_catalog.as_ref(),
-            crate::sumeragi::v2_context::uses_pre_release_taira_nexus_projection(&self.network_id),
         )
     }
 }

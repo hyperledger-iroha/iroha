@@ -1,8 +1,9 @@
 use super::*;
 use crate::offline::{
     KagemushaRecursiveSpendRedeemRequestV4, KagemushaRecursiveSpendReleaseActivationV4,
-    KagemushaRecursiveSpendTopUpRequestV4, OfflineDeviceAttestationPolicy,
-    OfflineDeviceAttestationRegistration,
+    KagemushaRecursiveSpendTopUpRequestV4, KagemushaV4PromotionBindingV1,
+    KagemushaV4TairaCanaryPermitV1, KagemushaV4TairaCanaryReservationV1,
+    OfflineDeviceAttestationPolicy, OfflineDeviceAttestationRegistration,
 };
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +61,8 @@ iroha_data_model_derive::model_single! {
         pub activation: KagemushaRecursiveSpendReleaseActivationV4,
         /// Exact governed device-attestation policy installed with the release.
         pub device_attestation_policy: OfflineDeviceAttestationPolicy,
+        /// Controller-signed promotion identity committed for post-activation verification.
+        pub promotion_binding: KagemushaV4PromotionBindingV1,
     }
 }
 impl PartialOrd for ActivateKagemushaRecursiveReleaseV4 {
@@ -68,6 +71,50 @@ impl PartialOrd for ActivateKagemushaRecursiveReleaseV4 {
     }
 }
 impl Ord for ActivateKagemushaRecursiveReleaseV4 {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.encode().cmp(&other.encode())
+    }
+}
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
+    /// Consume one controller-signed, activation-bound Taira canary permit.
+    pub struct RecordKagemushaTairaCanaryV4 {
+        /// Exact controller permit authenticated again during consensus execution.
+        pub permit: KagemushaV4TairaCanaryPermitV1,
+    }
+}
+impl PartialOrd for RecordKagemushaTairaCanaryV4 {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for RecordKagemushaTairaCanaryV4 {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.encode().cmp(&other.encode())
+    }
+}
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
+    /// Publish one controller-signed exact canary transaction authorization.
+    pub struct AuthorizeKagemushaTairaCanaryV4 {
+        /// Signed exact-hash projection that withholds the canary transaction wire.
+        pub reservation: KagemushaV4TairaCanaryReservationV1,
+    }
+}
+impl PartialOrd for AuthorizeKagemushaTairaCanaryV4 {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for AuthorizeKagemushaTairaCanaryV4 {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.encode().cmp(&other.encode())
     }
@@ -89,6 +136,8 @@ isi! {
 impl crate::seal::Instruction for TopUpKagemushaRecursiveV4 {}
 impl crate::seal::Instruction for RedeemKagemushaRecursiveV4 {}
 impl crate::seal::Instruction for ActivateKagemushaRecursiveReleaseV4 {}
+impl crate::seal::Instruction for RecordKagemushaTairaCanaryV4 {}
+impl crate::seal::Instruction for AuthorizeKagemushaTairaCanaryV4 {}
 impl crate::seal::Instruction for RegisterOfflineDeviceAttestation {}
 impl crate::seal::Instruction for SetOfflineDeviceAttestationPolicy {}
 impl TopUpKagemushaRecursiveV4 {
@@ -109,13 +158,53 @@ impl ActivateKagemushaRecursiveReleaseV4 {
     /// Construct an atomic device-policy and ABI-21 release activation instruction.
     #[must_use]
     pub fn new(
+        promotion_binding: KagemushaV4PromotionBindingV1,
         activation: KagemushaRecursiveSpendReleaseActivationV4,
         device_attestation_policy: OfflineDeviceAttestationPolicy,
     ) -> Self {
         Self {
             activation,
             device_attestation_policy,
+            promotion_binding,
         }
+    }
+
+    /// Return the promotion-run identity committed by this activation.
+    #[must_use]
+    pub const fn promotion_id(&self) -> &[u8; 32] {
+        &self.promotion_binding.promotion_id
+    }
+
+    /// Validate the promotion-run identity before consensus mutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the fixed-width identity is all zeroes.
+    pub fn validate_promotion_id(&self) -> Result<(), &'static str> {
+        if self.promotion_binding.promotion_id == [0; 32] {
+            return Err("Kagemusha V4 promotion id must be nonzero");
+        }
+        Ok(())
+    }
+}
+impl RecordKagemushaTairaCanaryV4 {
+    /// Stable wire identifier for the consensus canary record instruction.
+    pub const WIRE_ID: &'static str = "iroha.offline.kagemusha.taira_canary.record.v1";
+
+    /// Construct an exact controller-permitted Taira canary record.
+    #[must_use]
+    pub fn new(permit: KagemushaV4TairaCanaryPermitV1) -> Self {
+        Self { permit }
+    }
+}
+impl AuthorizeKagemushaTairaCanaryV4 {
+    /// Stable wire identifier for exact canary authorization publication.
+    pub const WIRE_ID: &'static str = "iroha.offline.kagemusha.taira_canary.authorize.v1";
+
+    /// Construct a publication for one controller-signed exact canary transaction.
+    #[must_use]
+    pub fn new(reservation: KagemushaV4TairaCanaryReservationV1) -> Self {
+        Self { reservation }
     }
 }
 impl RegisterOfflineDeviceAttestation {
@@ -174,6 +263,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivateKagemushaRecursiveRelease
         >(
             super::read_aos_field(bytes, &mut offset, flags)?, flags
         )?;
+        let promotion_binding = super::decode_aos_canonical_field::<KagemushaV4PromotionBindingV1>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         if offset != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
         }
@@ -182,6 +275,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivateKagemushaRecursiveRelease
             Self {
                 activation,
                 device_attestation_policy,
+                promotion_binding,
             },
             offset,
         ))
@@ -192,6 +286,12 @@ impl_decode_one_canonical_offline_field!(TopUpKagemushaRecursiveV4 {
 });
 impl_decode_one_canonical_offline_field!(RedeemKagemushaRecursiveV4 {
     request: KagemushaRecursiveSpendRedeemRequestV4
+});
+impl_decode_one_canonical_offline_field!(RecordKagemushaTairaCanaryV4 {
+    permit: KagemushaV4TairaCanaryPermitV1
+});
+impl_decode_one_canonical_offline_field!(AuthorizeKagemushaTairaCanaryV4 {
+    reservation: KagemushaV4TairaCanaryReservationV1
 });
 impl_decode_one_canonical_offline_field!(RegisterOfflineDeviceAttestation {
     registration: OfflineDeviceAttestationRegistration
