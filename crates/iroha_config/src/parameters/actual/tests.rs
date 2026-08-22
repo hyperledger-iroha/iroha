@@ -1416,6 +1416,78 @@ mod tests {
         );
     }
     #[test]
+    fn pre_release_taira_nexus_hash_retains_the_producer_lane_projection() {
+        let lineage = [SumeragiV2LaneLifecycleEntry {
+            lane_id: LaneId::SINGLE,
+            generation: 0,
+            incarnation: Hash::new(b"pre-release default lane incarnation"),
+            activation_height: 0,
+        }];
+        let baseline = Nexus::default();
+        let mut described = baseline.clone();
+        let mut lane = described.lane_catalog.lanes()[0].clone();
+        lane.description = Some("producer-authenticated description".to_owned());
+        described.lane_catalog =
+            LaneCatalog::new(NonZeroU32::new(1).expect("non-zero lane bound"), vec![lane])
+                .expect("valid described lane");
+
+        assert_ne!(
+            sumeragi_v2_pre_release_nexus_amx_context_hash(
+                &baseline,
+                &Pipeline::default(),
+                &[],
+                &lineage,
+            ),
+            sumeragi_v2_pre_release_nexus_amx_context_hash(
+                &described,
+                &Pipeline::default(),
+                &[],
+                &lineage,
+            ),
+            "the producer committed operator descriptions into reset-11",
+        );
+        assert_eq!(
+            sumeragi_v2_nexus_amx_context_hash(&baseline, &Pipeline::default(), &[], &lineage,),
+            sumeragi_v2_nexus_amx_context_hash(&described, &Pipeline::default(), &[], &lineage,),
+            "new networks retain the current description-free projection",
+        );
+    }
+    #[test]
+    fn pre_release_taira_nexus_hash_rehydrates_migrated_scheduler_metadata() {
+        let lineage = [SumeragiV2LaneLifecycleEntry {
+            lane_id: LaneId::SINGLE,
+            generation: 0,
+            incarnation: Hash::new(b"pre-release scheduler lane incarnation"),
+            activation_height: 0,
+        }];
+        let mut typed_lane = LaneConfigMetadata::default();
+        typed_lane.scheduler = Some(LaneSchedulerPolicy::new(
+            Some(core::num::NonZeroU64::new(50_000_000).expect("positive capacity")),
+            None,
+        ));
+        let projected = SumeragiV2PreReleaseLaneConfig::from(&typed_lane);
+        assert_eq!(
+            projected.metadata.get("scheduler.teu_capacity"),
+            Some(&"50000000".to_owned()),
+            "the producer encoded this policy in lane metadata",
+        );
+        let with_catalog = |lane| Nexus {
+            lane_catalog: LaneCatalog::new(
+                NonZeroU32::new(1).expect("non-zero lane bound"),
+                vec![lane],
+            )
+            .expect("valid lane catalog"),
+            ..Nexus::default()
+        };
+        let typed = with_catalog(typed_lane);
+        let baseline = Nexus::default();
+        assert_ne!(
+            sumeragi_v2_nexus_amx_context_hash(&typed, &Pipeline::default(), &[], &lineage,),
+            sumeragi_v2_nexus_amx_context_hash(&baseline, &Pipeline::default(), &[], &lineage,),
+            "current networks must continue committing the typed scheduler policy",
+        );
+    }
+    #[test]
     fn sumeragi_v2_nexus_amx_hash_canonicalizes_dataspace_catalog_order() {
         let universal = DataSpaceMetadata::default();
         let settlement = DataSpaceMetadata {

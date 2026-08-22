@@ -14,6 +14,7 @@ use super::{
     v2_context::{
         AuthenticatedGenesisBodyV1, GenesisV2Bootstrap, StagedGenesisNexusAmxContext,
         V2ContextBuildError, build_successor_height_context_from_state,
+        uses_pre_release_taira_nexus_projection,
     },
     v2_context_store::{PersistedHeightContext, V2ContextStore, V2ContextStoreError},
     v2_core::{
@@ -2316,12 +2317,21 @@ pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Hash {
             },
         )
         .collect::<Vec<_>>();
-    iroha_config::parameters::actual::sumeragi_v2_nexus_amx_context_hash(
-        &view.nexus,
-        &view.pipeline,
-        &active_validators,
-        &retained_lane_lineage,
-    )
+    if uses_pre_release_taira_nexus_projection(state.network_id_ref()) {
+        iroha_config::parameters::actual::sumeragi_v2_pre_release_nexus_amx_context_hash(
+            &view.nexus,
+            &view.pipeline,
+            &active_validators,
+            &retained_lane_lineage,
+        )
+    } else {
+        iroha_config::parameters::actual::sumeragi_v2_nexus_amx_context_hash(
+            &view.nexus,
+            &view.pipeline,
+            &active_validators,
+            &retained_lane_lineage,
+        )
+    }
 }
 pub(crate) fn committed_execution_policy_hash(state: &State) -> Result<Hash, V2RecoveryError> {
     state
