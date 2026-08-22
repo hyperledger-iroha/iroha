@@ -92,6 +92,8 @@ use credit::{
     DecryptedCreditOpeningOwnerV1, bind_verified_credit_v1, credit_commitment,
     terminal_credit_matches,
 };
+#[cfg(test)]
+pub(crate) use guard::HardwareReceiveTerminalQueryV1;
 pub(crate) use guard::{
     ExactNextHardwareGuardBackendV1, HardwareGuardSessionV1, HardwareTerminalOperationV1,
     HardwareTerminalOutcomeV1,
@@ -103,7 +105,7 @@ pub(crate) use guard::{
 #[cfg(test)]
 pub(crate) use guard::{
     HardwareActiveIntentOutcomeV1, HardwareIntentCommitRequestV1, HardwareIntentRequestV1,
-    HardwareReceiveSigningResultV1, HardwareReceiveTerminalQueryV1, sealed,
+    HardwareReceiveSigningResultV1, sealed,
 };
 use guard::{
     cancellation_authorization_matches, guard_authorization_matches, intent_authorization_matches,

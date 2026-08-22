@@ -387,12 +387,13 @@ pub trait CurveAffineExt: CurveAffine {
 impl<C: CurveAffine> CurveAffineExt for C {}
 
 mod scalar_field_impls {
-    use super::{ScalarField, decompose_u64_digits_to_limbs};
+    use super::{decompose_u64_digits_to_limbs, ScalarField};
     use crate::ff::PrimeField;
     use crate::halo2_proofs::halo2curves::{
         bn256::{Fq as bn254Fq, Fr as bn254Fr},
         pasta::{Fp as pastaFp, Fq as pastaFq},
         secp256k1::{Fp as secpFp, Fq as secpFq},
+        secp256r1::{Fp as p256Fp, Fq as p256Fq},
     };
 
     /// To ensure `ScalarField` is only implemented for `ff:Field` where `Repr` is little endian, we use the following macro
@@ -494,6 +495,10 @@ mod scalar_field_impls {
     impl_scalar_field_from_repr!(pastaFp);
     #[cfg(feature = "halo2-axiom")]
     impl_scalar_field_from_repr!(pastaFq);
+    #[cfg(feature = "halo2-axiom")]
+    impl_scalar_field_from_repr!(p256Fp);
+    #[cfg(feature = "halo2-axiom")]
+    impl_scalar_field_from_repr!(p256Fq);
 }
 
 /// Module for reading parameters for Halo2 proving system from the file system.
@@ -567,7 +572,10 @@ pub mod fs {
 
 #[cfg(test)]
 mod tests {
-    use crate::halo2_proofs::halo2curves::bn256::Fr;
+    use crate::halo2_proofs::halo2curves::{
+        bn256::Fr,
+        secp256r1::{Fp as P256Fp, Fq as P256Fq},
+    };
     use num_bigint::RandomBits;
     use rand::{
         Rng, SeedableRng,
@@ -576,6 +584,32 @@ mod tests {
     use std::ops::Shl;
 
     use super::*;
+
+    fn assert_p256_little_endian_adapter<F>()
+    where
+        F: BigPrimeField,
+    {
+        let integer = (BigUint::from(0x0123_4567_89ab_cdef_u64) << 64)
+            + BigUint::from(0xfedc_ba98_7654_3210_u64);
+        let value = biguint_to_fe::<F>(&integer);
+        let bytes = value.to_bytes_le();
+        assert_eq!(bytes.as_slice(), value.to_repr().as_ref());
+        assert_eq!(BigUint::from_bytes_le(&bytes), integer);
+
+        let limbs = value.to_u64_limbs(20, 13);
+        let recomposed = limbs.iter().rev().fold(BigUint::zero(), |acc, limb| {
+            (acc << 13) + BigUint::from(*limb)
+        });
+        assert_eq!(recomposed, integer);
+        assert_eq!(value.get_lower_32(), 0x7654_3210);
+        assert_eq!(value.get_lower_64(), 0xfedc_ba98_7654_3210);
+    }
+
+    #[test]
+    fn p256_fields_use_little_endian_scalar_field_adapter() {
+        assert_p256_little_endian_adapter::<P256Fp>();
+        assert_p256_little_endian_adapter::<P256Fq>();
+    }
 
     #[test]
     fn test_signed_roundtrip() {

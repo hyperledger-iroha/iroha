@@ -24,14 +24,17 @@
 use core::marker::PhantomData;
 
 use super::{
-    rns_native_cross_field_inventory::{
-        RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1,
-        RnsNativeCrossFieldInventoryPrerequisiteV1,
+    rns_native_claimed_successor::RnsNativeClaimedSuccessorV1,
+    rns_native_cross_field_inventory::RnsNativeCrossFieldInventoryPrerequisiteV1,
+    rns_native_cross_field_rlwe_direct::{
+        RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1,
+        RnsNativeCrossFieldRlweClaimedInventoryParentV1,
     },
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
     },
     rns_native_source::ZkAmsMkheRnsNativeSourceSnapshotV1,
+    rns_native_transcript::ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1,
 };
 use crate::{
     generalized_bulletproof::{
@@ -78,7 +81,7 @@ const CODEC_DIGEST_BYTES_V1: usize = DIGEST_BYTES_V1;
 const RECORD_SET_BYTES_V1: usize = GROUPS_V1 * RECORD_BYTES_V1;
 const MIN_WIRE_BYTES_V1: usize = HEADER_BYTES_V1 + RECORD_SET_BYTES_V1 + 1 + CODEC_DIGEST_BYTES_V1;
 pub(super) const RNS_NATIVE_COMPARATOR_PRODUCT_RESIDUAL_MAX_BYTES_V1: usize =
-    RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1
+    RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1
         - HEADER_BYTES_V1
         - RECORD_SET_BYTES_V1
         - CODEC_DIGEST_BYTES_V1;
@@ -119,8 +122,8 @@ const _: () = {
     assert!(RECORD_SET_BYTES_V1 == 567_256);
     assert!(HEADER_BYTES_V1 == 171);
     assert!(MIN_WIRE_BYTES_V1 == 567_460);
-    assert!(MIN_WIRE_BYTES_V1 <= RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1);
-    assert!(RNS_NATIVE_COMPARATOR_PRODUCT_RESIDUAL_MAX_BYTES_V1 > 0);
+    assert!(MIN_WIRE_BYTES_V1 <= RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1);
+    assert!(RNS_NATIVE_COMPARATOR_PRODUCT_RESIDUAL_MAX_BYTES_V1 == 6_180_515);
     assert!(COMPARATOR_BOOLEAN_DISJOINT_PRODUCT_VERIFIER_IMPLEMENTED_V1);
     assert!(!COMPARATOR_RANGE_AND_CARRY_PRODUCT_VERIFIED_V1);
     assert!(!SMALL_SIGNED_PRODUCT_VERIFIED_V1);
@@ -246,6 +249,8 @@ struct ComparatorProofSetViewV1<'a> {
 }
 
 impl<'a> ComparatorProofSetViewV1<'a> {
+    #[cfg(test)]
+    #[allow(dead_code, reason = "legacy raw-inventory parser is test-only")]
     fn from_inventory_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         inventory: &RnsNativeCrossFieldInventoryPrerequisiteV1<'_, 'a, S>,
     ) -> Result<Self, RnsNativeComparatorProductErrorV1> {
@@ -266,7 +271,7 @@ impl<'a> ComparatorProofSetViewV1<'a> {
     where
         F: FnMut(usize) -> Option<(Point, Point)>,
     {
-        if bytes.len() > RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1 {
+        if bytes.len() > RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1 {
             return Err(RnsNativeComparatorProductErrorV1::ProofCapExceeded);
         }
         if bytes.len() < MIN_WIRE_BYTES_V1 {
@@ -853,7 +858,10 @@ pub(super) struct RnsNativeComparatorProductPrerequisiteV1<
     'proof,
     S: ZkAmsMkheRnsNativeSourceSnapshotV1,
 > {
-    _inventory: RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
+    _parent: RnsNativeClaimedSuccessorV1<
+        'proof,
+        RnsNativeCrossFieldRlweClaimedInventoryParentV1<'source, 'proof, S>,
+    >,
     _residual: &'proof [u8],
     _proof_set_root: [u8; DIGEST_BYTES_V1],
     _verified_transcript_root: [u8; DIGEST_BYTES_V1],
@@ -864,10 +872,18 @@ pub(super) struct RnsNativeComparatorProductPrerequisiteV1<
 impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     RnsNativeComparatorProductPrerequisiteV1<'source, 'proof, S>
 {
+    /// Purpose-forward the opaque snapshot from the exact claimed direct
+    /// parent; no caller may substitute a free session capability.
+    pub(super) const fn pre_global_lookup_capability_v1(
+        &self,
+    ) -> &ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1 {
+        self._parent.parent().pre_global_lookup_capability_v1()
+    }
+
     pub(super) const fn inventory(
         &self,
     ) -> &RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S> {
-        &self._inventory
+        self._parent.parent().inventory()
     }
 
     pub(super) const fn residual(&self) -> &'proof [u8] {
@@ -891,22 +907,27 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     }
 }
 
-/// Consume the inventory and verify all 344 comparator boolean/disjoint
-/// product proofs sequentially.
-#[allow(
-    dead_code,
-    reason = "the sound private statement-3 entry awaits the remaining statement-5, statement-8, and lookup consumers"
-)]
-pub(super) fn verify_rns_native_comparator_product_v1<'source, 'proof, S>(
-    inventory: RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
-) -> Result<
-    RnsNativeComparatorProductPrerequisiteV1<'source, 'proof, S>,
-    RnsNativeComparatorProductErrorV1,
->
+struct VerifiedComparatorProductPartsV1<'proof> {
+    residual: &'proof [u8],
+    proof_set_root: [u8; DIGEST_BYTES_V1],
+    verified_transcript_root: [u8; DIGEST_BYTES_V1],
+    residual_digest: [u8; DIGEST_BYTES_V1],
+    binding_digest: [u8; DIGEST_BYTES_V1],
+}
+
+fn verify_comparator_product_parts_v1<'source, 'proof, S>(
+    inventory: &RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
+    successor: &'proof [u8],
+) -> Result<VerifiedComparatorProductPartsV1<'proof>, RnsNativeComparatorProductErrorV1>
 where
     S: ZkAmsMkheRnsNativeSourceSnapshotV1,
 {
-    let view = ComparatorProofSetViewV1::from_inventory_v1(&inventory)?;
+    let view = ComparatorProofSetViewV1::from_components_v1(
+        successor,
+        inventory.prior_context_digest(),
+        inventory.inventory_root(),
+        |group| inventory.comparator_top_commitments(group),
+    )?;
     let mut verified = Keccak256::new();
     verified.update(VERIFIED_TRANSCRIPTS_DOMAIN_V1);
     verified.update(&[VERSION_V1, STATEMENT_V1]);
@@ -944,16 +965,59 @@ where
     if verified_transcript_root == [0; DIGEST_BYTES_V1] {
         return Err(RnsNativeComparatorProductErrorV1::InvalidIntegrity);
     }
-    let binding_digest =
-        prerequisite_binding_digest_v1(&inventory, view, verified_transcript_root)?;
-    Ok(RnsNativeComparatorProductPrerequisiteV1 {
-        _inventory: inventory,
-        _residual: view.residual,
-        _proof_set_root: view.proof_set_root,
-        _verified_transcript_root: verified_transcript_root,
-        _residual_digest: view.residual_digest,
-        _binding_digest: binding_digest,
+    let binding_digest = prerequisite_binding_digest_v1(inventory, view, verified_transcript_root)?;
+    Ok(VerifiedComparatorProductPartsV1 {
+        residual: view.residual,
+        proof_set_root: view.proof_set_root,
+        verified_transcript_root,
+        residual_digest: view.residual_digest,
+        binding_digest,
     })
+}
+
+/// Consume the exact-preflighted direct successor claim and verify all 344
+/// comparator boolean/disjoint product proofs sequentially. This does not
+/// assert the retained direct algebra. A production caller cannot enter this
+/// stage from raw `inventory.continuation()` bytes.
+#[allow(
+    dead_code,
+    reason = "the sound private statement-3 entry awaits the remaining statement-5, statement-8, and lookup consumers"
+)]
+pub(super) fn verify_rns_native_comparator_product_v1<'source, 'proof, S>(
+    parent: RnsNativeClaimedSuccessorV1<
+        'proof,
+        RnsNativeCrossFieldRlweClaimedInventoryParentV1<'source, 'proof, S>,
+    >,
+) -> Result<
+    RnsNativeComparatorProductPrerequisiteV1<'source, 'proof, S>,
+    RnsNativeComparatorProductErrorV1,
+>
+where
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+{
+    let verified =
+        verify_comparator_product_parts_v1(parent.parent().inventory(), parent.successor())?;
+    Ok(RnsNativeComparatorProductPrerequisiteV1 {
+        _parent: parent,
+        _residual: verified.residual,
+        _proof_set_root: verified.proof_set_root,
+        _verified_transcript_root: verified.verified_transcript_root,
+        _residual_digest: verified.residual_digest,
+        _binding_digest: verified.binding_digest,
+    })
+}
+
+/// Test-only compatibility entry for the pre-direct raw-inventory chronology.
+#[cfg(test)]
+#[allow(dead_code, reason = "legacy raw-inventory entry is test-only")]
+fn verify_rns_native_comparator_product_from_inventory_v1<'source, 'proof, S>(
+    inventory: &RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
+) -> Result<(), RnsNativeComparatorProductErrorV1>
+where
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+{
+    let _ = verify_comparator_product_parts_v1(inventory, inventory.continuation())?;
+    Ok(())
 }
 
 #[cfg(test)]

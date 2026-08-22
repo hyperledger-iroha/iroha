@@ -141,7 +141,7 @@ const _: () = {
     assert!(HEADER_BYTES_V1 == 302);
     assert!(MIN_WIRE_BYTES_V1 == 527_945);
     assert!(MIN_WIRE_BYTES_V1 <= RNS_NATIVE_COMPARATOR_RANGE_CARRY_RESIDUAL_MAX_BYTES_V1);
-    assert!(RNS_NATIVE_SMALL_SIGN_DISJOINTNESS_RESIDUAL_MAX_BYTES_V1 == 2_619_526);
+    assert!(RNS_NATIVE_SMALL_SIGN_DISJOINTNESS_RESIDUAL_MAX_BYTES_V1 == 2_587_255);
     assert!(SMALL_SIGN_DISJOINTNESS_PRODUCT_VERIFIER_IMPLEMENTED_V1);
     assert!(!COMPARATOR_RADIX_RELATIONS_VERIFIED_V1);
     assert!(!SMALL_SIGNED_RANGE_AND_INVERSES_VERIFIED_V1);
@@ -179,13 +179,13 @@ impl From<GeneralizedBulletproofErrorV1> for RnsNativeSmallSignDisjointnessError
 }
 
 #[derive(Clone, Copy)]
-struct UpstreamBindingV1 {
-    prior_context_digest: [u8; DIGEST_BYTES_V1],
-    inventory_root: [u8; DIGEST_BYTES_V1],
-    statement3_proof_set_root: [u8; DIGEST_BYTES_V1],
-    statement3_verified_transcript_root: [u8; DIGEST_BYTES_V1],
-    statement5_proof_set_root: [u8; DIGEST_BYTES_V1],
-    statement5_verified_transcript_root: [u8; DIGEST_BYTES_V1],
+pub(super) struct UpstreamBindingV1 {
+    pub(super) prior_context_digest: [u8; DIGEST_BYTES_V1],
+    pub(super) inventory_root: [u8; DIGEST_BYTES_V1],
+    pub(super) statement3_proof_set_root: [u8; DIGEST_BYTES_V1],
+    pub(super) statement3_verified_transcript_root: [u8; DIGEST_BYTES_V1],
+    pub(super) statement5_proof_set_root: [u8; DIGEST_BYTES_V1],
+    pub(super) statement5_verified_transcript_root: [u8; DIGEST_BYTES_V1],
 }
 
 impl UpstreamBindingV1 {
@@ -626,7 +626,7 @@ where
     Ok(digest)
 }
 
-fn canonical_residual_digest_v1(
+pub(super) fn canonical_residual_digest_v1(
     upstream: UpstreamBindingV1,
     proof_set_root: [u8; DIGEST_BYTES_V1],
     residual: &[u8],
@@ -999,6 +999,36 @@ pub(super) struct RnsNativeSmallSignDisjointnessPrerequisiteV1<
     _verified_transcript_root: [u8; DIGEST_BYTES_V1],
     _residual_digest: [u8; DIGEST_BYTES_V1],
     _binding_digest: [u8; DIGEST_BYTES_V1],
+}
+
+impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
+    RnsNativeSmallSignDisjointnessPrerequisiteV1<'source, 'proof, S>
+{
+    pub(super) const fn previous(
+        &self,
+    ) -> &RnsNativeComparatorRangeCarryPrerequisiteV1<'source, 'proof, S> {
+        &self._previous
+    }
+
+    pub(super) const fn residual(&self) -> &'proof [u8] {
+        self._residual
+    }
+
+    pub(super) const fn proof_set_root(&self) -> [u8; DIGEST_BYTES_V1] {
+        self._proof_set_root
+    }
+
+    pub(super) const fn verified_transcript_root(&self) -> [u8; DIGEST_BYTES_V1] {
+        self._verified_transcript_root
+    }
+
+    pub(super) const fn residual_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+        self._residual_digest
+    }
+
+    pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+        self._binding_digest
+    }
 }
 
 /// Consume statement 5 and verify all 258 bounded statement-8 cores

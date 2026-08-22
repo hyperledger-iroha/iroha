@@ -17,12 +17,18 @@ use super::{
     rns_native_qpcs_prefix::{
         DIGEST_BYTES_V1, DOMAIN_SIZE_V1, Fq2ParametersV1, Fq2V1, IndexSetV1, LEAF_BYTES_V1,
         MAX_OPENED_LEAVES_V1, QUERY_COUNT_V1, ROWS_PER_LIMB_V1, RnsNativeQpcsFoldZeroStageV1,
-        TreeDescriptorV1, TreeRoleV1, TreeViewV1, authenticate_rns_native_qpcs_prefix_v1,
-        authenticate_tree_v1, derive_fields_v1, descriptor_for_indices_v1,
-        fold_value_with_inverse_x_v1, query_pair_indices_v1, read_value_v1,
-        validate_leaf_values_v1,
+        RnsNativeQpcsRelationScheduleV1, TreeDescriptorV1, TreeRoleV1, TreeViewV1,
+        authenticate_rns_native_qpcs_prefix_v1,
+        authenticate_rns_native_qpcs_prefix_with_schedule_v1, authenticate_tree_v1,
+        derive_fields_v1, descriptor_for_indices_v1, fold_value_with_inverse_x_v1,
+        query_pair_indices_v1, read_value_v1, validate_leaf_values_v1,
     },
-    rns_native_transcript::ZkAmsMkheRnsNativeChallengeSeedsV1,
+    rns_native_transcript::{
+        ZkAmsMkheRnsNativeChallengeSeedsV1, ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1,
+        ZkAmsMkheRnsNativeCrossFieldRootClaimV1,
+        ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1,
+        ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,
+    },
 };
 use crate::vega::sponge::Keccak256;
 
@@ -97,6 +103,7 @@ impl std::error::Error for RnsNativeQpcsFriCompleteErrorV1 {}
 struct FriClosureContextV1 {
     parameter_digest: [u8; DIGEST_BYTES_V1],
     transcript_digest: [u8; DIGEST_BYTES_V1],
+    qpcs_bound_transcript_state: [u8; DIGEST_BYTES_V1],
     query_seed: [u8; DIGEST_BYTES_V1],
     section_binding_digest: [u8; DIGEST_BYTES_V1],
     roots: [[u8; DIGEST_BYTES_V1]; ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 as usize],
@@ -118,6 +125,7 @@ impl FriClosureContextV1 {
         let fold_seeds = *transcript.qpcs_fri_fold_challenge_seeds();
         let parameter_digest = prefix.parameter_digest();
         let transcript_digest = transcript.transcript_digest();
+        let qpcs_bound_transcript_state = transcript.qpcs_bound_transcript_state_v1();
         let query_seed = transcript.qpcs_query_challenge_seed();
         let section_binding_digest = prefix.section_binding_digest();
         if transcript_digest != prefix.transcript_digest()
@@ -126,6 +134,7 @@ impl FriClosureContextV1 {
             || [
                 parameter_digest,
                 transcript_digest,
+                qpcs_bound_transcript_state,
                 query_seed,
                 section_binding_digest,
             ]
@@ -138,6 +147,7 @@ impl FriClosureContextV1 {
         let mut context = Self {
             parameter_digest,
             transcript_digest,
+            qpcs_bound_transcript_state,
             query_seed,
             section_binding_digest,
             roots,
@@ -224,6 +234,8 @@ impl<'a> DecoderV1<'a> {
     reason = "the following private RLWE/source milestone will consume this stage once"
 )]
 pub(super) struct RnsNativeQpcsFriCompleteStageV1<'a> {
+    relation_schedule: Option<RnsNativeQpcsRelationScheduleV1>,
+    qpcs_bound_transcript_state: [u8; DIGEST_BYTES_V1],
     parameter_digest: [u8; DIGEST_BYTES_V1],
     transcript_digest: [u8; DIGEST_BYTES_V1],
     query_seed: [u8; DIGEST_BYTES_V1],
@@ -235,11 +247,140 @@ pub(super) struct RnsNativeQpcsFriCompleteStageV1<'a> {
     rlwe_source_residual: &'a [u8],
 }
 
+/// Move-only joint owner proving that a completed qPCS relation schedule and
+/// a qPCS-bound transcript descend from the same one-shot relation lineage and
+/// have the exact post-FRI, pre-cross-field transcript state retained by this
+/// completed closure.
+///
+/// Construction is private to this module and occurs only by consuming the
+/// retained schedule from a successfully completed FRI stage.  In particular,
+/// the legacy schedule reconstructed from final public challenge seeds cannot
+/// construct this owner.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "the completed qPCS lineage and its sole transcript must move together"
+)]
+pub(super) struct RnsNativeQpcsCompletedLineageV1 {
+    relation_schedule: RnsNativeQpcsRelationScheduleV1,
+    qpcs_transcript: Option<ZkAmsMkheRnsNativeQpcsBoundTranscriptV1>,
+}
+
+#[allow(
+    dead_code,
+    reason = "the undeclared direct adapter consumes this completed qPCS owner"
+)]
+impl RnsNativeQpcsCompletedLineageV1 {
+    fn from_completed_fri_v1(
+        relation_schedule: RnsNativeQpcsRelationScheduleV1,
+        expected_qpcs_bound_transcript_state: [u8; DIGEST_BYTES_V1],
+        qpcs_transcript: ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,
+    ) -> Result<Self, RnsNativeQpcsFriCompleteErrorV1> {
+        relation_schedule
+            .validate_qpcs_bound_lineage_v1(&qpcs_transcript)
+            .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidContext)?;
+        if expected_qpcs_bound_transcript_state == [0; DIGEST_BYTES_V1]
+            || qpcs_transcript.binding_digest() != expected_qpcs_bound_transcript_state
+        {
+            return Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext);
+        }
+        Ok(Self {
+            relation_schedule,
+            qpcs_transcript: Some(qpcs_transcript),
+        })
+    }
+
+    pub(super) const fn relation_schedule_v1(&self) -> &RnsNativeQpcsRelationScheduleV1 {
+        &self.relation_schedule
+    }
+
+    pub(super) const fn has_unconsumed_qpcs_transcript_v1(&self) -> bool {
+        self.qpcs_transcript.is_some()
+    }
+
+    #[cfg(test)]
+    pub(super) fn qpcs_transcript_binding_digest_v1(
+        &self,
+    ) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsFriCompleteErrorV1> {
+        self.qpcs_transcript
+            .as_ref()
+            .map(ZkAmsMkheRnsNativeQpcsBoundTranscriptV1::binding_digest)
+            .ok_or(RnsNativeQpcsFriCompleteErrorV1::InvalidOrder)
+    }
+
+    pub(super) fn take_qpcs_transcript_v1(
+        &mut self,
+    ) -> Result<ZkAmsMkheRnsNativeQpcsBoundTranscriptV1, RnsNativeQpcsFriCompleteErrorV1> {
+        self.qpcs_transcript
+            .take()
+            .ok_or(RnsNativeQpcsFriCompleteErrorV1::InvalidOrder)
+    }
+
+    /// Consume the sole qPCS transcript against an authenticated claimed
+    /// cross-field root.  The returned transcript is provisional until the
+    /// opaque equality obligation is discharged by the direct verifier.
+    pub(super) fn bind_claimed_cross_field_root_v1(
+        &mut self,
+        claim: ZkAmsMkheRnsNativeCrossFieldRootClaimV1,
+    ) -> Result<
+        (
+            ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1,
+            ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1,
+        ),
+        RnsNativeQpcsFriCompleteErrorV1,
+    > {
+        self.take_qpcs_transcript_v1()?
+            .bind_claimed_cross_field_root_v1(claim)
+            .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidContext)
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_fixture_v1(
+        relation_schedule: RnsNativeQpcsRelationScheduleV1,
+        expected_qpcs_bound_transcript_state: [u8; DIGEST_BYTES_V1],
+        qpcs_transcript: ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,
+    ) -> Result<Self, RnsNativeQpcsFriCompleteErrorV1> {
+        Self::from_completed_fri_v1(
+            relation_schedule,
+            expected_qpcs_bound_transcript_state,
+            qpcs_transcript,
+        )
+    }
+}
+
 #[allow(
     dead_code,
     reason = "the private RLWE/source verifier will consume these retained bindings; the current composite boundary must remain fail-closed"
 )]
 impl<'a> RnsNativeQpcsFriCompleteStageV1<'a> {
+    pub(super) const fn has_relation_schedule_v1(&self) -> bool {
+        self.relation_schedule.is_some()
+    }
+
+    pub(super) fn take_relation_schedule_v1(
+        &mut self,
+    ) -> Result<RnsNativeQpcsRelationScheduleV1, RnsNativeQpcsFriCompleteErrorV1> {
+        self.relation_schedule
+            .take()
+            .ok_or(RnsNativeQpcsFriCompleteErrorV1::InvalidOrder)
+    }
+
+    /// Consume the retained one-shot schedule into a joint owner with the
+    /// matching exact qPCS-bound transcript. This transition is the only
+    /// production constructor for `RnsNativeQpcsCompletedLineageV1`.
+    pub(super) fn take_completed_qpcs_lineage_v1(
+        &mut self,
+        qpcs_transcript: ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,
+    ) -> Result<RnsNativeQpcsCompletedLineageV1, RnsNativeQpcsFriCompleteErrorV1> {
+        let expected_qpcs_bound_transcript_state = self.qpcs_bound_transcript_state;
+        let relation_schedule = self.take_relation_schedule_v1()?;
+        RnsNativeQpcsCompletedLineageV1::from_completed_fri_v1(
+            relation_schedule,
+            expected_qpcs_bound_transcript_state,
+            qpcs_transcript,
+        )
+    }
+
     pub(super) const fn parameter_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self.parameter_digest
     }
@@ -296,13 +437,42 @@ pub(super) fn authenticate_rns_native_qpcs_fri_complete_v1<'a>(
     authenticate_fri_after_fold_zero_v1(transcript, prefix)
 }
 
+/// Complete qPCS while preserving the exact pre-terminal relation schedule.
+#[allow(
+    dead_code,
+    reason = "the typed qPCS/cross-field orchestration adapter is not declared yet"
+)]
+pub(super) fn authenticate_rns_native_qpcs_fri_complete_with_schedule_v1<'a>(
+    transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    relation_schedule: RnsNativeQpcsRelationScheduleV1,
+    equation_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
+    limb_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
+    query_opening_digests: &[[u8; DIGEST_BYTES_V1]],
+    proof: &'a [u8],
+) -> Result<RnsNativeQpcsFriCompleteStageV1<'a>, RnsNativeQpcsFriCompleteErrorV1> {
+    let prefix = authenticate_rns_native_qpcs_prefix_with_schedule_v1(
+        transcript,
+        relation_schedule,
+        equation_commitment_digests,
+        limb_commitment_digests,
+        query_opening_digests,
+        proof,
+    )
+    .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidPrefix)?;
+    authenticate_fri_after_fold_zero_v1(transcript, prefix)
+}
+
 fn authenticate_fri_after_fold_zero_v1<'a>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
-    prefix: RnsNativeQpcsFoldZeroStageV1<'a>,
+    mut prefix: RnsNativeQpcsFoldZeroStageV1<'a>,
 ) -> Result<RnsNativeQpcsFriCompleteStageV1<'a>, RnsNativeQpcsFriCompleteErrorV1> {
     let context = FriClosureContextV1::from_transcript_v1(transcript, &prefix)?;
+    let relation_schedule = prefix
+        .take_relation_schedule_v1()
+        .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidPrefix)?;
     verify_closure_parts_with_retained_evaluations_v1(
         context,
+        relation_schedule,
         prefix.queries(),
         prefix.fri_one_indices(),
         prefix.fri_one_values(),
@@ -314,6 +484,7 @@ fn authenticate_fri_after_fold_zero_v1<'a>(
 
 fn verify_closure_parts_with_retained_evaluations_v1<'a>(
     context: FriClosureContextV1,
+    relation_schedule: RnsNativeQpcsRelationScheduleV1,
     queries: &[u32; QUERY_COUNT_V1],
     fri_one_indices: IndexSetV1,
     fri_one_values: &[u8],
@@ -376,6 +547,8 @@ fn verify_closure_parts_with_retained_evaluations_v1<'a>(
     verify_terminal_degree_v1(context, &fields, current_indices, current_values)?;
     let residual_digest = residual_digest_v1(context, view.downstream_residual)?;
     Ok(RnsNativeQpcsFriCompleteStageV1 {
+        relation_schedule: Some(relation_schedule),
+        qpcs_bound_transcript_state: context.qpcs_bound_transcript_state,
         parameter_digest: context.parameter_digest,
         transcript_digest: context.transcript_digest,
         query_seed: context.query_seed,
@@ -400,6 +573,7 @@ fn verify_closure_parts_v1<'a>(
         [0; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * 5 * 2 * 8];
     verify_closure_parts_with_retained_evaluations_v1(
         context,
+        RnsNativeQpcsRelationScheduleV1::test_fixture_v1(context.parameter_digest),
         queries,
         fri_one_indices,
         fri_one_values,
@@ -755,6 +929,7 @@ fn schedule_digest_v1(
     for digest in [
         context.parameter_digest,
         context.transcript_digest,
+        context.qpcs_bound_transcript_state,
         context.query_seed,
         context.section_binding_digest,
     ] {

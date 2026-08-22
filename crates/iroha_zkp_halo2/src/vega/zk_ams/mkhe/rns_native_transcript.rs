@@ -14,6 +14,7 @@
 )]
 
 use super::{
+    rns_native_cross_field_rlwe_direct::RnsNativeCrossFieldRlweVerifiedCoreRootV1,
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
         ZkAmsMkheRnsNativeFamilyV1, zk_ams_mkhe_rns_native_profile_manifest_v1,
@@ -29,11 +30,13 @@ const TRANSCRIPT_OPENING_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-tr
 const TRANSCRIPT_CHALLENGE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-transcript.challenge";
 const TRANSCRIPT_RATCHET_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-transcript.ratchet";
+const PRE_GLOBAL_CAPABILITY_BINDING_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.rns-native-transcript.pre-global-capability";
 
 const OPENING_COUNT_V1: usize = 43;
 const FRI_ROOT_COUNT_V1: usize = 18;
 const CHALLENGE_COUNT_U16_V1: u16 = 28;
-const INPUT_DIGEST_COUNT_V1: usize = 12 + 2 * OPENING_COUNT_V1 + 3 + 2 + FRI_ROOT_COUNT_V1 + 3;
+const INPUT_DIGEST_COUNT_V1: usize = 12 + 2 * OPENING_COUNT_V1 + 3 + 2 + 1 + FRI_ROOT_COUNT_V1 + 3;
 const MAX_REGISTERED_DIGESTS_V1: usize =
     INPUT_DIGEST_COUNT_V1 + ZK_AMS_MKHE_RNS_NATIVE_TRANSCRIPT_CHALLENGE_COUNT_V1;
 
@@ -48,8 +51,8 @@ const _: () = {
     assert!(OPENING_COUNT_V1 == 43);
     assert!(FRI_ROOT_COUNT_V1 == 18);
     assert!(ZK_AMS_MKHE_RNS_NATIVE_QPCS_ROOT_COUNT_V1 == 20);
-    assert!(INPUT_DIGEST_COUNT_V1 == 124);
-    assert!(MAX_REGISTERED_DIGESTS_V1 == 152);
+    assert!(INPUT_DIGEST_COUNT_V1 == 125);
+    assert!(MAX_REGISTERED_DIGESTS_V1 == 153);
 };
 
 /// Structural transcript failure.
@@ -365,7 +368,7 @@ impl ZkAmsMkheRnsNativeQpcsFriRootV1 {
     }
 }
 
-/// Exact qPCS root schedule: initial, quotient, then FRI layers zero through seventeen.
+/// Exact qPCS schedule: initial root, q-mask `S` root, quotient root, then FRI roots.
 #[allow(
     missing_copy_implementations,
     reason = "the qPCS root schedule is consumed by its sole transcript stage"
@@ -373,12 +376,13 @@ impl ZkAmsMkheRnsNativeQpcsFriRootV1 {
 pub struct ZkAmsMkheRnsNativeQpcsRootsV1 {
     prior_transcript_binding: [u8; 32],
     initial_root: [u8; 32],
+    q_mask_s_root: [u8; 32],
     quotient_root: [u8; 32],
     fri_roots: [ZkAmsMkheRnsNativeQpcsFriRootV1; FRI_ROOT_COUNT_V1],
 }
 
 impl ZkAmsMkheRnsNativeQpcsRootsV1 {
-    /// Construct the fixed-width qPCS root schedule for one terminal transcript.
+    /// Construct the fixed-width qPCS and pre-relation q-mask root schedule.
     ///
     /// # Errors
     ///
@@ -386,11 +390,17 @@ impl ZkAmsMkheRnsNativeQpcsRootsV1 {
     pub fn new(
         prior_transcript_binding: [u8; 32],
         initial_root: [u8; 32],
+        q_mask_s_root: [u8; 32],
         quotient_root: [u8; 32],
         fri_roots: [ZkAmsMkheRnsNativeQpcsFriRootV1; FRI_ROOT_COUNT_V1],
     ) -> Result<Self, ZkAmsMkheRnsNativeTranscriptErrorV1> {
         let mut digests = DigestRegistryV1::new();
-        for digest in [prior_transcript_binding, initial_root, quotient_root] {
+        for digest in [
+            prior_transcript_binding,
+            initial_root,
+            q_mask_s_root,
+            quotient_root,
+        ] {
             digests.insert(digest)?;
         }
         for (layer, root) in fri_roots.iter().enumerate() {
@@ -402,6 +412,7 @@ impl ZkAmsMkheRnsNativeQpcsRootsV1 {
         Ok(Self {
             prior_transcript_binding,
             initial_root,
+            q_mask_s_root,
             quotient_root,
             fri_roots,
         })
@@ -411,6 +422,12 @@ impl ZkAmsMkheRnsNativeQpcsRootsV1 {
     #[must_use]
     pub const fn initial_root(&self) -> [u8; 32] {
         self.initial_root
+    }
+
+    /// Return the authenticated root of all 6,400 q-mask `S` commitments.
+    #[must_use]
+    pub const fn q_mask_s_root(&self) -> [u8; 32] {
+        self.q_mask_s_root
     }
 
     /// Return the opening-quotient root.
@@ -477,6 +494,153 @@ impl ZkAmsMkheRnsNativeTerminalRootsV1 {
     #[must_use]
     pub const fn zero_padding_root(self) -> [u8; 32] {
         self.zero_padding_root
+    }
+
+    /// Split the encoded terminal roots into a move-only cross-field claim and
+    /// the two roots that follow it.  The claim remains tagged for the exact
+    /// qPCS-bound transcript and never exposes its digest through an accessor.
+    pub(super) const fn into_cross_field_claim_v1(
+        self,
+    ) -> (
+        ZkAmsMkheRnsNativeCrossFieldRootClaimV1,
+        ZkAmsMkheRnsNativeRemainingTerminalRootsV1,
+    ) {
+        (
+            ZkAmsMkheRnsNativeCrossFieldRootClaimV1 {
+                prior_transcript_binding: self.prior_transcript_binding,
+                claimed_root: self.cross_field_root,
+            },
+            ZkAmsMkheRnsNativeRemainingTerminalRootsV1 {
+                global_lookup_root: self.global_lookup_root,
+                zero_padding_root: self.zero_padding_root,
+            },
+        )
+    }
+}
+
+/// Move-only encoded claim for the cross-field root.
+///
+/// This is a transcript claim, not verification evidence.  Verification must
+/// later consume the accompanying equality obligation against an independently
+/// recomputed opaque direct root.
+#[allow(
+    missing_copy_implementations,
+    reason = "a claimed terminal root must be consumed once"
+)]
+pub(super) struct ZkAmsMkheRnsNativeCrossFieldRootClaimV1 {
+    prior_transcript_binding: [u8; 32],
+    claimed_root: [u8; 32],
+}
+
+/// Move-only remainder after the cross-field terminal claim is separated.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "the future successor verifier consumes these roots in order"
+)]
+pub(super) struct ZkAmsMkheRnsNativeRemainingTerminalRootsV1 {
+    global_lookup_root: [u8; 32],
+    zero_padding_root: [u8; 32],
+}
+
+#[cfg(test)]
+impl ZkAmsMkheRnsNativeRemainingTerminalRootsV1 {
+    pub(super) const fn global_lookup_root(&self) -> [u8; 32] {
+        self.global_lookup_root
+    }
+
+    pub(super) const fn zero_padding_root(&self) -> [u8; 32] {
+        self.zero_padding_root
+    }
+}
+
+/// Opaque move-only snapshot of the exact post-cross-field, pre-global-lookup
+/// transcript binding and its already-derived global-lookup challenge.
+///
+/// This is chronology evidence only. It exposes neither raw production
+/// accessors nor verification, composite, receipt, readiness, or release
+/// authority.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "the opaque pre-global chronology snapshot must remain move-only"
+)]
+#[must_use = "pre-global chronology evidence must remain paired with its claimed relation"]
+pub(super) struct ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1 {
+    post_cross_field_binding_digest: [u8; 32],
+    global_lookup_challenge_seed: [u8; 32],
+}
+
+impl ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1 {
+    /// Return only a domain-separated commitment to the exact post-cross
+    /// binding and global seed. Consumers never receive either raw value.
+    pub(super) fn sole_z_binding_digest_v1(
+        &self,
+    ) -> Result<[u8; 32], ZkAmsMkheRnsNativeTranscriptErrorV1> {
+        let mut hash = Keccak256::new();
+        hash.update(PRE_GLOBAL_CAPABILITY_BINDING_DOMAIN_V1);
+        hash.update(&[ZK_AMS_MKHE_RNS_NATIVE_TRANSCRIPT_VERSION_V1]);
+        hash.update(&self.post_cross_field_binding_digest);
+        hash.update(&self.global_lookup_challenge_seed);
+        let digest = hash.finalize();
+        if digest == [0; 32] {
+            return Err(ZkAmsMkheRnsNativeTranscriptErrorV1::InvalidChallenge);
+        }
+        Ok(digest)
+    }
+}
+
+#[cfg(test)]
+impl ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1 {
+    pub(super) fn test_fixture_v1(
+        post_cross_field_binding_digest: [u8; 32],
+        global_lookup_challenge_seed: [u8; 32],
+    ) -> Result<Self, ZkAmsMkheRnsNativeTranscriptErrorV1> {
+        validate_distinct_digests_v1(&[
+            post_cross_field_binding_digest,
+            global_lookup_challenge_seed,
+        ])?;
+        Ok(Self {
+            post_cross_field_binding_digest,
+            global_lookup_challenge_seed,
+        })
+    }
+
+    pub(super) const fn test_post_cross_field_binding_digest_v1(&self) -> [u8; 32] {
+        self.post_cross_field_binding_digest
+    }
+
+    pub(super) const fn test_global_lookup_challenge_seed_v1(&self) -> [u8; 32] {
+        self.global_lookup_challenge_seed
+    }
+}
+
+/// Opaque one-shot obligation equating an encoded cross-field root claim with
+/// the root independently recomputed by the direct verifier.
+#[allow(
+    missing_copy_implementations,
+    reason = "root equality must be discharged exactly once"
+)]
+#[must_use = "a provisional cross-field transcript is non-authorizing until this obligation is discharged"]
+pub(super) struct ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1 {
+    claimed_root: [u8; 32],
+    qpcs_bound_transcript_state: [u8; 32],
+}
+
+impl ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1 {
+    /// Consume the obligation against the concrete opaque root owned and
+    /// constructed only by the direct verifier.
+    pub(super) fn discharge_v1(
+        self,
+        recomputed_root: RnsNativeCrossFieldRlweVerifiedCoreRootV1,
+    ) -> Result<(), ZkAmsMkheRnsNativeTranscriptErrorV1> {
+        if !recomputed_root.matches_claimed_cross_field_root_v1(
+            self.claimed_root,
+            self.qpcs_bound_transcript_state,
+        ) {
+            return Err(ZkAmsMkheRnsNativeTranscriptErrorV1::ContextMismatch);
+        }
+        Ok(())
     }
 }
 
@@ -714,22 +878,111 @@ impl ZkAmsMkheRnsNativeTerminalBoundTranscriptV1 {
         self.state
     }
 
-    /// Consume the terminal stage and bind all twenty qPCS roots.
+    /// Consume this stage and bind only the initial qPCS codeword root.
+    ///
+    /// The returned move-only stage exposes the state after the initial root,
+    /// allowing the authoritative q-mask point source to hash its 6,400 `S`
+    /// commitments without previewing or rewinding this transcript.
+    pub(super) fn bind_qpcs_initial_root(
+        mut self,
+        initial_root: [u8; 32],
+    ) -> Result<ZkAmsMkheRnsNativeQpcsInitialBoundTranscriptV1, ZkAmsMkheRnsNativeTranscriptErrorV1>
+    {
+        self.digests.insert(initial_root)?;
+        self.state = absorb_digest_v1(self.state, AbsorbKindV1::QpcsInitial, 0, initial_root);
+        Ok(ZkAmsMkheRnsNativeQpcsInitialBoundTranscriptV1 {
+            state: self.state,
+            digests: self.digests,
+            context_identities: self.context_identities,
+            opening_commitments: self.opening_commitments,
+            mapping_root: self.mapping_root,
+            terminal_hyrax_root: self.terminal_hyrax_root,
+            cross_basis_bridge_root: self.cross_basis_bridge_root,
+            qpcs_initial_root: initial_root,
+            mapping_challenge_seed: self.mapping_challenge_seed,
+            cross_basis_challenge_seed: self.cross_basis_challenge_seed,
+            rns_aggregation_challenge_seed: self.rns_aggregation_challenge_seed,
+        })
+    }
+
+    /// Verifier convenience: bind the q-mask root and all twenty qPCS roots.
+    ///
+    /// This delegates to the same sequential producer stages; it does not
+    /// maintain a second challenge derivation path.
     ///
     /// # Errors
     ///
     /// Rejects roots tagged for another terminal transcript, cross-stage
     /// digest reuse, or an invalid derived challenge.
     pub fn bind_qpcs_roots(
-        mut self,
+        self,
         roots: ZkAmsMkheRnsNativeQpcsRootsV1,
     ) -> Result<ZkAmsMkheRnsNativeQpcsBoundTranscriptV1, ZkAmsMkheRnsNativeTranscriptErrorV1> {
         if roots.prior_transcript_binding != self.state {
             return Err(ZkAmsMkheRnsNativeTranscriptErrorV1::ContextMismatch);
         }
+        let mut relation = self
+            .bind_qpcs_initial_root(roots.initial_root)?
+            .bind_q_mask_s_root(roots.q_mask_s_root)?;
+        let _ = relation.take_qpcs_relation_binding()?;
+        let mut fri = relation.bind_qpcs_quotient_root(roots.quotient_root)?;
+        for root in roots.fri_roots {
+            fri = fri.bind_qpcs_fri_root(root)?;
+        }
+        fri.finish_qpcs_fri_roots()
+    }
+}
 
-        self.digests.insert(roots.initial_root)?;
-        self.state = absorb_digest_v1(self.state, AbsorbKindV1::QpcsInitial, 0, roots.initial_root);
+/// Move-only transcript after the initial qPCS root and before the q-mask root.
+#[allow(
+    missing_copy_implementations,
+    reason = "the state-after-initial capability must not be copied or rewound"
+)]
+pub(super) struct ZkAmsMkheRnsNativeQpcsInitialBoundTranscriptV1 {
+    state: [u8; 32],
+    digests: DigestRegistryV1,
+    context_identities: TranscriptContextIdentitiesV1,
+    opening_commitments: [ZkAmsMkheRnsNativeOpeningCommitmentV1; OPENING_COUNT_V1],
+    mapping_root: [u8; 32],
+    terminal_hyrax_root: [u8; 32],
+    cross_basis_bridge_root: [u8; 32],
+    qpcs_initial_root: [u8; 32],
+    mapping_challenge_seed: [u8; 32],
+    cross_basis_challenge_seed: [u8; 32],
+    rns_aggregation_challenge_seed: [u8; 32],
+}
+
+impl ZkAmsMkheRnsNativeQpcsInitialBoundTranscriptV1 {
+    /// State after the initial qPCS root, used by the acyclic q-mask root hash.
+    #[allow(
+        dead_code,
+        reason = "the undeclared q-mask point adapter consumes this producer-side state"
+    )]
+    pub(super) const fn binding_digest(&self) -> [u8; 32] {
+        self.state
+    }
+
+    /// Previously derived RNS aggregation seed used by the acyclic q-mask
+    /// root hash. Exposing it from this stage avoids any parallel transcript
+    /// derivation while the actual `S` commitment root is constructed.
+    #[allow(
+        dead_code,
+        reason = "the undeclared q-mask point adapter consumes this producer-side seed"
+    )]
+    pub(super) const fn rns_aggregation_challenge_seed(&self) -> [u8; 32] {
+        self.rns_aggregation_challenge_seed
+    }
+
+    /// Consume this stage, absorb the actual q-mask `S` root, and derive the
+    /// qPCS relation challenge before any quotient or FRI root exists.
+    pub(super) fn bind_q_mask_s_root(
+        mut self,
+        q_mask_s_root: [u8; 32],
+    ) -> Result<ZkAmsMkheRnsNativeQpcsPreRelationTranscriptV1, ZkAmsMkheRnsNativeTranscriptErrorV1>
+    {
+        let qpcs_pre_relation_transcript_digest = self.state;
+        self.digests.insert(q_mask_s_root)?;
+        self.state = absorb_digest_v1(self.state, AbsorbKindV1::QMaskS, 0, q_mask_s_root);
         let (state, qpcs_relation_challenge_seed) = derive_registered_challenge_v1(
             self.state,
             &mut self.digests,
@@ -737,15 +990,125 @@ impl ZkAmsMkheRnsNativeTerminalBoundTranscriptV1 {
             ChallengePurposeV1::QpcsRelation,
             0,
         )?;
-        self.state = state;
+        Ok(ZkAmsMkheRnsNativeQpcsPreRelationTranscriptV1 {
+            state,
+            digests: self.digests,
+            context_identities: self.context_identities,
+            opening_commitments: self.opening_commitments,
+            mapping_root: self.mapping_root,
+            terminal_hyrax_root: self.terminal_hyrax_root,
+            cross_basis_bridge_root: self.cross_basis_bridge_root,
+            qpcs_initial_root: self.qpcs_initial_root,
+            q_mask_s_root,
+            qpcs_pre_relation_transcript_digest,
+            mapping_challenge_seed: self.mapping_challenge_seed,
+            cross_basis_challenge_seed: self.cross_basis_challenge_seed,
+            rns_aggregation_challenge_seed: self.rns_aggregation_challenge_seed,
+            qpcs_relation_challenge_seed,
+            relation_binding_issued: false,
+        })
+    }
+}
 
-        self.digests.insert(roots.quotient_root)?;
-        self.state = absorb_digest_v1(
-            self.state,
-            AbsorbKindV1::QpcsQuotient,
-            0,
-            roots.quotient_root,
-        );
+/// One-shot transcript binding consumed by the exact qPCS relation schedule.
+#[allow(
+    missing_copy_implementations,
+    reason = "a relation binding can mint exactly one move-only point schedule"
+)]
+pub(super) struct ZkAmsMkheRnsNativeQpcsRelationBindingV1 {
+    q_mask_s_root: [u8; 32],
+    qpcs_pre_relation_transcript_digest: [u8; 32],
+    qpcs_relation_challenge_seed: [u8; 32],
+    lineage: ZkAmsMkheRnsNativeQpcsRelationLineageV1,
+}
+
+impl ZkAmsMkheRnsNativeQpcsRelationBindingV1 {
+    pub(super) const fn q_mask_s_root(&self) -> [u8; 32] {
+        self.q_mask_s_root
+    }
+
+    pub(super) const fn qpcs_pre_relation_transcript_digest(&self) -> [u8; 32] {
+        self.qpcs_pre_relation_transcript_digest
+    }
+
+    pub(super) const fn qpcs_relation_challenge_seed(&self) -> [u8; 32] {
+        self.qpcs_relation_challenge_seed
+    }
+
+    /// Consume the one-shot binding into its opaque relation lineage.
+    pub(super) fn into_lineage_v1(self) -> ZkAmsMkheRnsNativeQpcsRelationLineageV1 {
+        self.lineage
+    }
+}
+
+/// Opaque, move-only identity joining one relation schedule to the qPCS
+/// transcript instance that issued it.
+///
+/// The private state is the transcript ratchet immediately after the relation
+/// challenge.  It is not a wire digest and is never exposed as bytes.  A
+/// verifier may deterministically replay the same transcript, but it cannot
+/// attach a schedule reconstructed from final public seeds to this lineage.
+#[allow(
+    missing_copy_implementations,
+    reason = "the sole qPCS relation lineage must move with its schedule"
+)]
+pub(super) struct ZkAmsMkheRnsNativeQpcsRelationLineageV1 {
+    state: [u8; 32],
+}
+
+/// Move-only transcript after the q-mask root and relation challenge but
+/// before the quotient root exists.
+#[allow(
+    missing_copy_implementations,
+    reason = "the pre-relation transcript and its one-shot issuance flag must move together"
+)]
+pub(super) struct ZkAmsMkheRnsNativeQpcsPreRelationTranscriptV1 {
+    state: [u8; 32],
+    digests: DigestRegistryV1,
+    context_identities: TranscriptContextIdentitiesV1,
+    opening_commitments: [ZkAmsMkheRnsNativeOpeningCommitmentV1; OPENING_COUNT_V1],
+    mapping_root: [u8; 32],
+    terminal_hyrax_root: [u8; 32],
+    cross_basis_bridge_root: [u8; 32],
+    qpcs_initial_root: [u8; 32],
+    q_mask_s_root: [u8; 32],
+    qpcs_pre_relation_transcript_digest: [u8; 32],
+    mapping_challenge_seed: [u8; 32],
+    cross_basis_challenge_seed: [u8; 32],
+    rns_aggregation_challenge_seed: [u8; 32],
+    qpcs_relation_challenge_seed: [u8; 32],
+    relation_binding_issued: bool,
+}
+
+impl ZkAmsMkheRnsNativeQpcsPreRelationTranscriptV1 {
+    /// Issue the sole relation binding. A second call fails closed.
+    pub(super) fn take_qpcs_relation_binding(
+        &mut self,
+    ) -> Result<ZkAmsMkheRnsNativeQpcsRelationBindingV1, ZkAmsMkheRnsNativeTranscriptErrorV1> {
+        if self.relation_binding_issued {
+            return Err(ZkAmsMkheRnsNativeTranscriptErrorV1::InvalidChallenge);
+        }
+        self.relation_binding_issued = true;
+        Ok(ZkAmsMkheRnsNativeQpcsRelationBindingV1 {
+            q_mask_s_root: self.q_mask_s_root,
+            qpcs_pre_relation_transcript_digest: self.qpcs_pre_relation_transcript_digest,
+            qpcs_relation_challenge_seed: self.qpcs_relation_challenge_seed,
+            lineage: ZkAmsMkheRnsNativeQpcsRelationLineageV1 { state: self.state },
+        })
+    }
+
+    /// Consume the relation-bound stage, then absorb the quotient root and
+    /// derive the batching challenge before any FRI root exists.
+    pub(super) fn bind_qpcs_quotient_root(
+        mut self,
+        quotient_root: [u8; 32],
+    ) -> Result<ZkAmsMkheRnsNativeQpcsFriTranscriptV1, ZkAmsMkheRnsNativeTranscriptErrorV1> {
+        if !self.relation_binding_issued {
+            return Err(ZkAmsMkheRnsNativeTranscriptErrorV1::InvalidChallenge);
+        }
+        let qpcs_relation_lineage_state = self.state;
+        self.digests.insert(quotient_root)?;
+        self.state = absorb_digest_v1(self.state, AbsorbKindV1::QpcsQuotient, 0, quotient_root);
         let (state, qpcs_batching_challenge_seed) = derive_registered_challenge_v1(
             self.state,
             &mut self.digests,
@@ -753,29 +1116,119 @@ impl ZkAmsMkheRnsNativeTerminalBoundTranscriptV1 {
             ChallengePurposeV1::QpcsBatching,
             0,
         )?;
-        self.state = state;
+        Ok(ZkAmsMkheRnsNativeQpcsFriTranscriptV1 {
+            state,
+            digests: self.digests,
+            context_identities: self.context_identities,
+            opening_commitments: self.opening_commitments,
+            mapping_root: self.mapping_root,
+            terminal_hyrax_root: self.terminal_hyrax_root,
+            cross_basis_bridge_root: self.cross_basis_bridge_root,
+            qpcs_initial_root: self.qpcs_initial_root,
+            q_mask_s_root: self.q_mask_s_root,
+            qpcs_pre_relation_transcript_digest: self.qpcs_pre_relation_transcript_digest,
+            qpcs_quotient_root: quotient_root,
+            qpcs_fri_roots: [ZkAmsMkheRnsNativeQpcsFriRootV1 {
+                layer: 0,
+                root: [0; 32],
+            }; FRI_ROOT_COUNT_V1],
+            next_fri_layer: 0,
+            mapping_challenge_seed: self.mapping_challenge_seed,
+            cross_basis_challenge_seed: self.cross_basis_challenge_seed,
+            rns_aggregation_challenge_seed: self.rns_aggregation_challenge_seed,
+            qpcs_relation_challenge_seed: self.qpcs_relation_challenge_seed,
+            qpcs_relation_lineage_state,
+            qpcs_batching_challenge_seed,
+            qpcs_fri_fold_challenge_seeds: [[0; 32]; FRI_ROOT_COUNT_V1],
+        })
+    }
+}
 
-        let qpcs_fri_roots = roots.fri_roots;
-        let mut qpcs_fri_fold_challenge_seeds = [[0_u8; 32]; FRI_ROOT_COUNT_V1];
-        for (layer, root) in qpcs_fri_roots.into_iter().enumerate() {
-            self.digests.insert(root.root)?;
-            let layer_u8 = u8::try_from(layer)
-                .map_err(|_| ZkAmsMkheRnsNativeTranscriptErrorV1::InvalidRootOrder)?;
-            self.state = absorb_digest_v1(
-                self.state,
-                AbsorbKindV1::QpcsFri,
-                u16::from(layer_u8),
-                root.root,
-            );
-            let (state, seed) = derive_registered_challenge_v1(
-                self.state,
-                &mut self.digests,
-                5 + layer_u8,
-                ChallengePurposeV1::QpcsFriFold,
-                layer_u8,
-            )?;
-            self.state = state;
-            qpcs_fri_fold_challenge_seeds[layer] = seed;
+/// Runtime-ordered qPCS FRI transcript. Each call consumes the prior stage and
+/// accepts exactly the next layer root before exposing that layer's fold seed.
+#[allow(
+    missing_copy_implementations,
+    reason = "FRI roots and fold challenges must advance without rewind"
+)]
+pub(super) struct ZkAmsMkheRnsNativeQpcsFriTranscriptV1 {
+    state: [u8; 32],
+    digests: DigestRegistryV1,
+    context_identities: TranscriptContextIdentitiesV1,
+    opening_commitments: [ZkAmsMkheRnsNativeOpeningCommitmentV1; OPENING_COUNT_V1],
+    mapping_root: [u8; 32],
+    terminal_hyrax_root: [u8; 32],
+    cross_basis_bridge_root: [u8; 32],
+    qpcs_initial_root: [u8; 32],
+    q_mask_s_root: [u8; 32],
+    qpcs_pre_relation_transcript_digest: [u8; 32],
+    qpcs_quotient_root: [u8; 32],
+    qpcs_fri_roots: [ZkAmsMkheRnsNativeQpcsFriRootV1; FRI_ROOT_COUNT_V1],
+    next_fri_layer: u8,
+    mapping_challenge_seed: [u8; 32],
+    cross_basis_challenge_seed: [u8; 32],
+    rns_aggregation_challenge_seed: [u8; 32],
+    qpcs_relation_challenge_seed: [u8; 32],
+    qpcs_relation_lineage_state: [u8; 32],
+    qpcs_batching_challenge_seed: [u8; 32],
+    qpcs_fri_fold_challenge_seeds: [[u8; 32]; FRI_ROOT_COUNT_V1],
+}
+
+#[allow(
+    dead_code,
+    reason = "producer-side accessors are reserved for the undeclared qPCS prover adapter"
+)]
+impl ZkAmsMkheRnsNativeQpcsFriTranscriptV1 {
+    pub(super) const fn qpcs_batching_challenge_seed(&self) -> [u8; 32] {
+        self.qpcs_batching_challenge_seed
+    }
+
+    pub(super) const fn next_fri_layer(&self) -> u8 {
+        self.next_fri_layer
+    }
+
+    pub(super) fn qpcs_fri_fold_challenge_seed(&self, layer: u8) -> Option<[u8; 32]> {
+        (layer < self.next_fri_layer)
+            .then(|| self.qpcs_fri_fold_challenge_seeds[usize::from(layer)])
+    }
+
+    pub(super) fn bind_qpcs_fri_root(
+        mut self,
+        root: ZkAmsMkheRnsNativeQpcsFriRootV1,
+    ) -> Result<Self, ZkAmsMkheRnsNativeTranscriptErrorV1> {
+        if usize::from(self.next_fri_layer) >= FRI_ROOT_COUNT_V1
+            || root.layer != self.next_fri_layer
+        {
+            return Err(ZkAmsMkheRnsNativeTranscriptErrorV1::InvalidRootOrder);
+        }
+        let layer = self.next_fri_layer;
+        self.digests.insert(root.root)?;
+        self.state = absorb_digest_v1(
+            self.state,
+            AbsorbKindV1::QpcsFri,
+            u16::from(layer),
+            root.root,
+        );
+        let (state, seed) = derive_registered_challenge_v1(
+            self.state,
+            &mut self.digests,
+            5 + layer,
+            ChallengePurposeV1::QpcsFriFold,
+            layer,
+        )?;
+        self.state = state;
+        self.qpcs_fri_roots[usize::from(layer)] = root;
+        self.qpcs_fri_fold_challenge_seeds[usize::from(layer)] = seed;
+        self.next_fri_layer = layer
+            .checked_add(1)
+            .ok_or(ZkAmsMkheRnsNativeTranscriptErrorV1::InvalidRootOrder)?;
+        Ok(self)
+    }
+
+    pub(super) fn finish_qpcs_fri_roots(
+        mut self,
+    ) -> Result<ZkAmsMkheRnsNativeQpcsBoundTranscriptV1, ZkAmsMkheRnsNativeTranscriptErrorV1> {
+        if usize::from(self.next_fri_layer) != FRI_ROOT_COUNT_V1 {
+            return Err(ZkAmsMkheRnsNativeTranscriptErrorV1::InvalidRootOrder);
         }
         let (state, qpcs_query_challenge_seed) = derive_registered_challenge_v1(
             self.state,
@@ -800,15 +1253,18 @@ impl ZkAmsMkheRnsNativeTerminalBoundTranscriptV1 {
             mapping_root: self.mapping_root,
             terminal_hyrax_root: self.terminal_hyrax_root,
             cross_basis_bridge_root: self.cross_basis_bridge_root,
-            qpcs_initial_root: roots.initial_root,
-            qpcs_quotient_root: roots.quotient_root,
-            qpcs_fri_roots,
+            qpcs_initial_root: self.qpcs_initial_root,
+            q_mask_s_root: self.q_mask_s_root,
+            qpcs_pre_relation_transcript_digest: self.qpcs_pre_relation_transcript_digest,
+            qpcs_quotient_root: self.qpcs_quotient_root,
+            qpcs_fri_roots: self.qpcs_fri_roots,
             mapping_challenge_seed: self.mapping_challenge_seed,
             cross_basis_challenge_seed: self.cross_basis_challenge_seed,
             rns_aggregation_challenge_seed: self.rns_aggregation_challenge_seed,
-            qpcs_relation_challenge_seed,
-            qpcs_batching_challenge_seed,
-            qpcs_fri_fold_challenge_seeds,
+            qpcs_relation_challenge_seed: self.qpcs_relation_challenge_seed,
+            qpcs_relation_lineage_state: self.qpcs_relation_lineage_state,
+            qpcs_batching_challenge_seed: self.qpcs_batching_challenge_seed,
+            qpcs_fri_fold_challenge_seeds: self.qpcs_fri_fold_challenge_seeds,
             qpcs_query_challenge_seed,
             cross_field_challenge_seed,
         })
@@ -829,12 +1285,15 @@ pub struct ZkAmsMkheRnsNativeQpcsBoundTranscriptV1 {
     terminal_hyrax_root: [u8; 32],
     cross_basis_bridge_root: [u8; 32],
     qpcs_initial_root: [u8; 32],
+    q_mask_s_root: [u8; 32],
+    qpcs_pre_relation_transcript_digest: [u8; 32],
     qpcs_quotient_root: [u8; 32],
     qpcs_fri_roots: [ZkAmsMkheRnsNativeQpcsFriRootV1; FRI_ROOT_COUNT_V1],
     mapping_challenge_seed: [u8; 32],
     cross_basis_challenge_seed: [u8; 32],
     rns_aggregation_challenge_seed: [u8; 32],
     qpcs_relation_challenge_seed: [u8; 32],
+    qpcs_relation_lineage_state: [u8; 32],
     qpcs_batching_challenge_seed: [u8; 32],
     qpcs_fri_fold_challenge_seeds: [[u8; 32]; FRI_ROOT_COUNT_V1],
     qpcs_query_challenge_seed: [u8; 32],
@@ -848,27 +1307,84 @@ impl ZkAmsMkheRnsNativeQpcsBoundTranscriptV1 {
         self.state
     }
 
-    /// Consume the qPCS stage and finalize all terminal challenge bindings.
-    ///
-    /// # Errors
-    ///
-    /// Rejects roots tagged for another qPCS transcript, cross-stage digest
-    /// reuse, or an invalid derived challenge.
-    pub fn bind_terminal_roots(
-        mut self,
-        roots: ZkAmsMkheRnsNativeTerminalRootsV1,
-    ) -> Result<ZkAmsMkheRnsNativeChallengeSeedsV1, ZkAmsMkheRnsNativeTranscriptErrorV1> {
-        if roots.prior_transcript_binding != self.state {
+    /// Query seed available after all FRI roots and before query openings.
+    #[allow(
+        dead_code,
+        reason = "the undeclared qPCS prover adapter consumes this producer-side seed"
+    )]
+    pub(super) const fn qpcs_query_challenge_seed(&self) -> [u8; 32] {
+        self.qpcs_query_challenge_seed
+    }
+
+    /// Cross-field seed available before constructing the terminal proof root.
+    #[allow(
+        dead_code,
+        reason = "the undeclared cross-field prover adapter consumes this producer-side seed"
+    )]
+    pub(super) const fn cross_field_challenge_seed(&self) -> [u8; 32] {
+        self.cross_field_challenge_seed
+    }
+
+    /// Test whether an exact move-only relation lineage was issued by this
+    /// qPCS transcript.  Neither side exposes the private state bytes.
+    pub(super) fn matches_qpcs_relation_lineage_v1(
+        &self,
+        lineage: &ZkAmsMkheRnsNativeQpcsRelationLineageV1,
+    ) -> bool {
+        self.qpcs_relation_lineage_state == lineage.state
+    }
+
+    /// Mint a test-only semantic replay of this transcript's lineage.
+    /// Production obtains the sole token only from
+    /// `take_qpcs_relation_binding`.
+    #[cfg(test)]
+    pub(super) const fn test_qpcs_relation_lineage_v1(
+        &self,
+    ) -> ZkAmsMkheRnsNativeQpcsRelationLineageV1 {
+        ZkAmsMkheRnsNativeQpcsRelationLineageV1 {
+            state: self.qpcs_relation_lineage_state,
+        }
+    }
+
+    /// Consume a typed encoded claim, provisionally bind its cross-field root,
+    /// and return the sole equality obligation.  The returned cross-field
+    /// transcript exposes the successor challenge, but it is non-authorizing
+    /// until the direct verifier discharges the obligation.
+    pub(super) fn bind_claimed_cross_field_root_v1(
+        self,
+        claim: ZkAmsMkheRnsNativeCrossFieldRootClaimV1,
+    ) -> Result<
+        (
+            ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1,
+            ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1,
+        ),
+        ZkAmsMkheRnsNativeTranscriptErrorV1,
+    > {
+        if claim.prior_transcript_binding != self.state {
             return Err(ZkAmsMkheRnsNativeTranscriptErrorV1::ContextMismatch);
         }
+        let qpcs_bound_transcript_state = self.state;
+        let claimed_root = claim.claimed_root;
+        let transcript = self.bind_cross_field_root(claimed_root)?;
+        Ok((
+            transcript,
+            ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1 {
+                claimed_root,
+                qpcs_bound_transcript_state,
+            },
+        ))
+    }
 
-        self.digests.insert(roots.cross_field_root)?;
-        self.state = absorb_digest_v1(
-            self.state,
-            AbsorbKindV1::CrossField,
-            0,
-            roots.cross_field_root,
-        );
+    /// Consume the qPCS stage, bind the cross-field root, and derive the
+    /// global-lookup challenge before the global-lookup root exists.
+    pub(super) fn bind_cross_field_root(
+        mut self,
+        cross_field_root: [u8; 32],
+    ) -> Result<ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1, ZkAmsMkheRnsNativeTranscriptErrorV1>
+    {
+        self.digests.insert(cross_field_root)?;
+        let qpcs_bound_transcript_state = self.state;
+        self.state = absorb_digest_v1(self.state, AbsorbKindV1::CrossField, 0, cross_field_root);
         let (state, global_lookup_challenge_seed) = derive_registered_challenge_v1(
             self.state,
             &mut self.digests,
@@ -876,14 +1392,143 @@ impl ZkAmsMkheRnsNativeQpcsBoundTranscriptV1 {
             ChallengePurposeV1::GlobalLookup,
             0,
         )?;
-        self.state = state;
+        Ok(ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1 {
+            state,
+            digests: self.digests,
+            context_identities: self.context_identities,
+            opening_commitments: self.opening_commitments,
+            mapping_root: self.mapping_root,
+            terminal_hyrax_root: self.terminal_hyrax_root,
+            cross_basis_bridge_root: self.cross_basis_bridge_root,
+            qpcs_initial_root: self.qpcs_initial_root,
+            q_mask_s_root: self.q_mask_s_root,
+            qpcs_pre_relation_transcript_digest: self.qpcs_pre_relation_transcript_digest,
+            qpcs_bound_transcript_state,
+            qpcs_quotient_root: self.qpcs_quotient_root,
+            qpcs_fri_roots: self.qpcs_fri_roots,
+            cross_field_root,
+            mapping_challenge_seed: self.mapping_challenge_seed,
+            cross_basis_challenge_seed: self.cross_basis_challenge_seed,
+            rns_aggregation_challenge_seed: self.rns_aggregation_challenge_seed,
+            qpcs_relation_challenge_seed: self.qpcs_relation_challenge_seed,
+            qpcs_batching_challenge_seed: self.qpcs_batching_challenge_seed,
+            qpcs_fri_fold_challenge_seeds: self.qpcs_fri_fold_challenge_seeds,
+            qpcs_query_challenge_seed: self.qpcs_query_challenge_seed,
+            cross_field_challenge_seed: self.cross_field_challenge_seed,
+            global_lookup_challenge_seed,
+        })
+    }
 
-        self.digests.insert(roots.global_lookup_root)?;
+    /// Verifier convenience: consume the qPCS stage and bind all three
+    /// terminal roots through the sequential producer stages.
+    ///
+    /// # Errors
+    ///
+    /// Rejects roots tagged for another qPCS transcript, cross-stage digest
+    /// reuse, or an invalid derived challenge.
+    pub fn bind_terminal_roots(
+        self,
+        roots: ZkAmsMkheRnsNativeTerminalRootsV1,
+    ) -> Result<ZkAmsMkheRnsNativeChallengeSeedsV1, ZkAmsMkheRnsNativeTranscriptErrorV1> {
+        if roots.prior_transcript_binding != self.state {
+            return Err(ZkAmsMkheRnsNativeTranscriptErrorV1::ContextMismatch);
+        }
+
+        self.bind_cross_field_root(roots.cross_field_root)?
+            .bind_global_lookup_root(roots.global_lookup_root)?
+            .bind_zero_padding_root(roots.zero_padding_root)
+    }
+}
+
+/// Move-only transcript after the cross-field root and global-lookup
+/// challenge are bound, but before the global-lookup root exists.
+#[allow(
+    missing_copy_implementations,
+    reason = "the pre-global-lookup capability must not be copied or rewound"
+)]
+pub(super) struct ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1 {
+    state: [u8; 32],
+    digests: DigestRegistryV1,
+    context_identities: TranscriptContextIdentitiesV1,
+    opening_commitments: [ZkAmsMkheRnsNativeOpeningCommitmentV1; OPENING_COUNT_V1],
+    mapping_root: [u8; 32],
+    terminal_hyrax_root: [u8; 32],
+    cross_basis_bridge_root: [u8; 32],
+    qpcs_initial_root: [u8; 32],
+    q_mask_s_root: [u8; 32],
+    qpcs_pre_relation_transcript_digest: [u8; 32],
+    qpcs_bound_transcript_state: [u8; 32],
+    qpcs_quotient_root: [u8; 32],
+    qpcs_fri_roots: [ZkAmsMkheRnsNativeQpcsFriRootV1; FRI_ROOT_COUNT_V1],
+    cross_field_root: [u8; 32],
+    mapping_challenge_seed: [u8; 32],
+    cross_basis_challenge_seed: [u8; 32],
+    rns_aggregation_challenge_seed: [u8; 32],
+    qpcs_relation_challenge_seed: [u8; 32],
+    qpcs_batching_challenge_seed: [u8; 32],
+    qpcs_fri_fold_challenge_seeds: [[u8; 32]; FRI_ROOT_COUNT_V1],
+    qpcs_query_challenge_seed: [u8; 32],
+    cross_field_challenge_seed: [u8; 32],
+    global_lookup_challenge_seed: [u8; 32],
+}
+
+impl ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1 {
+    /// Binding available to the exact global-lookup root producer.
+    #[allow(
+        dead_code,
+        reason = "the pending global-lookup producer consumes this stage binding"
+    )]
+    #[must_use]
+    pub(super) const fn binding_digest(&self) -> [u8; 32] {
+        self.state
+    }
+
+    /// Global-lookup challenge derived before the dependent root exists.
+    #[allow(
+        dead_code,
+        reason = "the pending global-lookup producer consumes this challenge"
+    )]
+    #[must_use]
+    pub(super) const fn global_lookup_challenge_seed(&self) -> [u8; 32] {
+        self.global_lookup_challenge_seed
+    }
+
+    /// Snapshot the exact pre-global stage, then consume the remaining
+    /// terminal roots in canonical order and return the final non-authorizing
+    /// transcript result beside that opaque snapshot.
+    pub(super) fn bind_remaining_terminal_roots_v1(
+        self,
+        roots: ZkAmsMkheRnsNativeRemainingTerminalRootsV1,
+    ) -> Result<
+        (
+            ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1,
+            ZkAmsMkheRnsNativeChallengeSeedsV1,
+        ),
+        ZkAmsMkheRnsNativeTranscriptErrorV1,
+    > {
+        let pre_global_capability = ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1 {
+            post_cross_field_binding_digest: self.state,
+            global_lookup_challenge_seed: self.global_lookup_challenge_seed,
+        };
+        let final_challenge_seeds = self
+            .bind_global_lookup_root(roots.global_lookup_root)?
+            .bind_zero_padding_root(roots.zero_padding_root)?;
+        Ok((pre_global_capability, final_challenge_seeds))
+    }
+
+    /// Consume this stage, bind the global-lookup root, and derive the
+    /// zero-padding challenge before the zero-padding root exists.
+    pub(super) fn bind_global_lookup_root(
+        mut self,
+        global_lookup_root: [u8; 32],
+    ) -> Result<ZkAmsMkheRnsNativeGlobalLookupBoundTranscriptV1, ZkAmsMkheRnsNativeTranscriptErrorV1>
+    {
+        self.digests.insert(global_lookup_root)?;
         self.state = absorb_digest_v1(
             self.state,
             AbsorbKindV1::GlobalLookup,
             0,
-            roots.global_lookup_root,
+            global_lookup_root,
         );
         let (state, zero_padding_challenge_seed) = derive_registered_challenge_v1(
             self.state,
@@ -892,15 +1537,99 @@ impl ZkAmsMkheRnsNativeQpcsBoundTranscriptV1 {
             ChallengePurposeV1::ZeroPadding,
             0,
         )?;
-        self.state = state;
+        Ok(ZkAmsMkheRnsNativeGlobalLookupBoundTranscriptV1 {
+            state,
+            digests: self.digests,
+            context_identities: self.context_identities,
+            opening_commitments: self.opening_commitments,
+            mapping_root: self.mapping_root,
+            terminal_hyrax_root: self.terminal_hyrax_root,
+            cross_basis_bridge_root: self.cross_basis_bridge_root,
+            qpcs_initial_root: self.qpcs_initial_root,
+            q_mask_s_root: self.q_mask_s_root,
+            qpcs_pre_relation_transcript_digest: self.qpcs_pre_relation_transcript_digest,
+            qpcs_bound_transcript_state: self.qpcs_bound_transcript_state,
+            qpcs_quotient_root: self.qpcs_quotient_root,
+            qpcs_fri_roots: self.qpcs_fri_roots,
+            cross_field_root: self.cross_field_root,
+            global_lookup_root,
+            mapping_challenge_seed: self.mapping_challenge_seed,
+            cross_basis_challenge_seed: self.cross_basis_challenge_seed,
+            rns_aggregation_challenge_seed: self.rns_aggregation_challenge_seed,
+            qpcs_relation_challenge_seed: self.qpcs_relation_challenge_seed,
+            qpcs_batching_challenge_seed: self.qpcs_batching_challenge_seed,
+            qpcs_fri_fold_challenge_seeds: self.qpcs_fri_fold_challenge_seeds,
+            qpcs_query_challenge_seed: self.qpcs_query_challenge_seed,
+            cross_field_challenge_seed: self.cross_field_challenge_seed,
+            global_lookup_challenge_seed: self.global_lookup_challenge_seed,
+            zero_padding_challenge_seed,
+        })
+    }
+}
 
-        self.digests.insert(roots.zero_padding_root)?;
-        self.state = absorb_digest_v1(
-            self.state,
-            AbsorbKindV1::ZeroPadding,
-            0,
-            roots.zero_padding_root,
-        );
+/// Move-only transcript after the global-lookup root and zero-padding
+/// challenge are bound, but before the zero-padding root exists.
+#[allow(
+    missing_copy_implementations,
+    reason = "the pre-zero-padding capability must not be copied or rewound"
+)]
+pub(super) struct ZkAmsMkheRnsNativeGlobalLookupBoundTranscriptV1 {
+    state: [u8; 32],
+    digests: DigestRegistryV1,
+    context_identities: TranscriptContextIdentitiesV1,
+    opening_commitments: [ZkAmsMkheRnsNativeOpeningCommitmentV1; OPENING_COUNT_V1],
+    mapping_root: [u8; 32],
+    terminal_hyrax_root: [u8; 32],
+    cross_basis_bridge_root: [u8; 32],
+    qpcs_initial_root: [u8; 32],
+    q_mask_s_root: [u8; 32],
+    qpcs_pre_relation_transcript_digest: [u8; 32],
+    qpcs_bound_transcript_state: [u8; 32],
+    qpcs_quotient_root: [u8; 32],
+    qpcs_fri_roots: [ZkAmsMkheRnsNativeQpcsFriRootV1; FRI_ROOT_COUNT_V1],
+    cross_field_root: [u8; 32],
+    global_lookup_root: [u8; 32],
+    mapping_challenge_seed: [u8; 32],
+    cross_basis_challenge_seed: [u8; 32],
+    rns_aggregation_challenge_seed: [u8; 32],
+    qpcs_relation_challenge_seed: [u8; 32],
+    qpcs_batching_challenge_seed: [u8; 32],
+    qpcs_fri_fold_challenge_seeds: [[u8; 32]; FRI_ROOT_COUNT_V1],
+    qpcs_query_challenge_seed: [u8; 32],
+    cross_field_challenge_seed: [u8; 32],
+    global_lookup_challenge_seed: [u8; 32],
+    zero_padding_challenge_seed: [u8; 32],
+}
+
+impl ZkAmsMkheRnsNativeGlobalLookupBoundTranscriptV1 {
+    /// Binding available to the exact zero-padding root producer.
+    #[allow(
+        dead_code,
+        reason = "the pending zero-padding producer consumes this stage binding"
+    )]
+    #[must_use]
+    pub(super) const fn binding_digest(&self) -> [u8; 32] {
+        self.state
+    }
+
+    /// Zero-padding challenge derived before the dependent root exists.
+    #[allow(
+        dead_code,
+        reason = "the pending zero-padding producer consumes this challenge"
+    )]
+    #[must_use]
+    pub(super) const fn zero_padding_challenge_seed(&self) -> [u8; 32] {
+        self.zero_padding_challenge_seed
+    }
+
+    /// Consume this stage, bind the zero-padding root, and derive the final
+    /// composite-binding challenge.
+    pub(super) fn bind_zero_padding_root(
+        mut self,
+        zero_padding_root: [u8; 32],
+    ) -> Result<ZkAmsMkheRnsNativeChallengeSeedsV1, ZkAmsMkheRnsNativeTranscriptErrorV1> {
+        self.digests.insert(zero_padding_root)?;
+        self.state = absorb_digest_v1(self.state, AbsorbKindV1::ZeroPadding, 0, zero_padding_root);
         let (state, composite_binding_challenge_seed) = derive_registered_challenge_v1(
             self.state,
             &mut self.digests,
@@ -915,11 +1644,14 @@ impl ZkAmsMkheRnsNativeQpcsBoundTranscriptV1 {
             terminal_hyrax_root: self.terminal_hyrax_root,
             cross_basis_bridge_root: self.cross_basis_bridge_root,
             qpcs_initial_root: self.qpcs_initial_root,
+            q_mask_s_root: self.q_mask_s_root,
+            qpcs_pre_relation_transcript_digest: self.qpcs_pre_relation_transcript_digest,
+            qpcs_bound_transcript_state: self.qpcs_bound_transcript_state,
             qpcs_quotient_root: self.qpcs_quotient_root,
             qpcs_fri_roots: self.qpcs_fri_roots,
-            cross_field_root: roots.cross_field_root,
-            global_lookup_root: roots.global_lookup_root,
-            zero_padding_root: roots.zero_padding_root,
+            cross_field_root: self.cross_field_root,
+            global_lookup_root: self.global_lookup_root,
+            zero_padding_root,
             mapping_challenge_seed: self.mapping_challenge_seed,
             cross_basis_challenge_seed: self.cross_basis_challenge_seed,
             rns_aggregation_challenge_seed: self.rns_aggregation_challenge_seed,
@@ -928,8 +1660,8 @@ impl ZkAmsMkheRnsNativeQpcsBoundTranscriptV1 {
             qpcs_fri_fold_challenge_seeds: self.qpcs_fri_fold_challenge_seeds,
             qpcs_query_challenge_seed: self.qpcs_query_challenge_seed,
             cross_field_challenge_seed: self.cross_field_challenge_seed,
-            global_lookup_challenge_seed,
-            zero_padding_challenge_seed,
+            global_lookup_challenge_seed: self.global_lookup_challenge_seed,
+            zero_padding_challenge_seed: self.zero_padding_challenge_seed,
             composite_binding_challenge_seed,
             transcript_digest: state,
         })
@@ -952,6 +1684,9 @@ pub struct ZkAmsMkheRnsNativeChallengeSeedsV1 {
     terminal_hyrax_root: [u8; 32],
     cross_basis_bridge_root: [u8; 32],
     qpcs_initial_root: [u8; 32],
+    q_mask_s_root: [u8; 32],
+    qpcs_pre_relation_transcript_digest: [u8; 32],
+    qpcs_bound_transcript_state: [u8; 32],
     qpcs_quotient_root: [u8; 32],
     qpcs_fri_roots: [ZkAmsMkheRnsNativeQpcsFriRootV1; FRI_ROOT_COUNT_V1],
     cross_field_root: [u8; 32],
@@ -1074,6 +1809,23 @@ impl ZkAmsMkheRnsNativeChallengeSeedsV1 {
     #[must_use]
     pub const fn qpcs_initial_root(&self) -> [u8; 32] {
         self.qpcs_initial_root
+    }
+
+    /// Root of the 6,400 authenticated q-mask `S` commitments.
+    #[must_use]
+    pub const fn q_mask_s_root(&self) -> [u8; 32] {
+        self.q_mask_s_root
+    }
+
+    /// Transcript state after the initial qPCS root and before the q-mask root.
+    #[must_use]
+    pub const fn qpcs_pre_relation_transcript_digest(&self) -> [u8; 32] {
+        self.qpcs_pre_relation_transcript_digest
+    }
+
+    /// Exact private qPCS-bound state immediately before the cross-field root.
+    pub(super) const fn qpcs_bound_transcript_state_v1(&self) -> [u8; 32] {
+        self.qpcs_bound_transcript_state
     }
 
     /// qPCS quotient-opening root.
@@ -1206,6 +1958,7 @@ enum AbsorbKindV1 {
     TerminalMapping = 2,
     CrossBasisBridge = 3,
     QpcsInitial = 4,
+    QMaskS = 10,
     QpcsQuotient = 5,
     QpcsFri = 6,
     CrossField = 7,

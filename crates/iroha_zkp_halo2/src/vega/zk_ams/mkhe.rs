@@ -160,6 +160,10 @@ mod receipt_capability_audit;
 mod release_evidence;
 #[path = "mkhe/resource.rs"]
 mod resource;
+#[path = "mkhe/rns_native_centering_subtraction_relation.rs"]
+mod rns_native_centering_subtraction_relation;
+#[path = "mkhe/rns_native_claimed_successor.rs"]
+mod rns_native_claimed_successor;
 #[path = "mkhe/rns_native_comparator_product.rs"]
 mod rns_native_comparator_product;
 #[path = "mkhe/rns_native_comparator_range_carry_product.rs"]
@@ -168,14 +172,32 @@ mod rns_native_comparator_range_carry_product;
 mod rns_native_composite_verifier;
 #[path = "mkhe/rns_native_cross_field_inventory.rs"]
 mod rns_native_cross_field_inventory;
+#[allow(
+    dead_code,
+    reason = "the private direct kernel remains non-authorizing while source, inventory, successor, and composite adapters are fail-closed"
+)]
+#[path = "mkhe/rns_native_cross_field_rlwe_direct.rs"]
+mod rns_native_cross_field_rlwe_direct;
+#[path = "mkhe/rns_native_existing_radix_commitment_view.rs"]
+mod rns_native_existing_radix_commitment_view;
+#[path = "mkhe/rns_native_global_lookup_z_commitment_view.rs"]
+mod rns_native_global_lookup_z_commitment_view;
 #[path = "mkhe/rns_native_profile.rs"]
 mod rns_native_profile;
+#[path = "mkhe/rns_native_public_polynomial_publisher.rs"]
+mod rns_native_public_polynomial_publisher;
+#[path = "mkhe/rns_native_public_polynomial_reader.rs"]
+mod rns_native_public_polynomial_reader;
+#[path = "mkhe/rns_native_q_mask_linear_relations.rs"]
+mod rns_native_q_mask_linear_relations;
 #[path = "mkhe/rns_native_qpcs_fri_complete.rs"]
 mod rns_native_qpcs_fri_complete;
 #[path = "mkhe/rns_native_qpcs_initial.rs"]
 mod rns_native_qpcs_initial;
 #[path = "mkhe/rns_native_qpcs_prefix.rs"]
 mod rns_native_qpcs_prefix;
+#[path = "mkhe/rns_native_radix_complement_linear_relation.rs"]
+mod rns_native_radix_complement_linear_relation;
 #[allow(
     dead_code,
     reason = "the private source-statement prerequisite remains non-authorizing until the concrete RLWE/qPCS relation verifier consumes it"
@@ -188,6 +210,8 @@ mod rns_native_section_codec;
 mod rns_native_small_sign_disjointness_product;
 #[path = "mkhe/rns_native_source.rs"]
 mod rns_native_source;
+#[path = "mkhe/rns_native_source_packing_same_opening.rs"]
+mod rns_native_source_packing_same_opening;
 #[allow(
     dead_code,
     reason = "the private source/terminal prerequisite remains non-authorizing until the cross-field/global-lookup proof verifier consumes it"

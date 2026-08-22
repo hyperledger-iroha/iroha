@@ -18,7 +18,10 @@ use super::{
         ZkAmsMkheRnsNativeFamilyV1, zk_ams_mkhe_rns_native_profile_manifest_v1,
         zk_ams_mkhe_rns_native_release_candidate_digest_v1, zk_ams_mkhe_rns_native_topology_v1,
     },
-    rns_native_qpcs_fri_complete::RnsNativeQpcsFriCompleteStageV1,
+    rns_native_qpcs_fri_complete::{
+        RnsNativeQpcsFriCompleteErrorV1, RnsNativeQpcsFriCompleteStageV1,
+    },
+    rns_native_qpcs_prefix::RnsNativeQpcsRelationScheduleV1,
     rns_native_section_codec::RNS_QPCS_FIXED_BYTES_V1,
     rns_native_source::{
         ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_BLOCKS_PER_OPENING_V1,
@@ -1422,6 +1425,7 @@ fn aggregation_schedule_digest_v1(
 
 #[derive(Clone, Copy)]
 struct QpcsBindingsV1<'a> {
+    relation_schedule_present: bool,
     parameter_digest: [u8; DIGEST_BYTES_V1],
     transcript_digest: [u8; DIGEST_BYTES_V1],
     query_seed: [u8; DIGEST_BYTES_V1],
@@ -1436,6 +1440,7 @@ struct QpcsBindingsV1<'a> {
 impl<'a> QpcsBindingsV1<'a> {
     fn from_stage_v1(stage: &RnsNativeQpcsFriCompleteStageV1<'a>) -> Self {
         Self {
+            relation_schedule_present: stage.has_relation_schedule_v1(),
             parameter_digest: stage.parameter_digest(),
             transcript_digest: stage.transcript_digest(),
             query_seed: stage.query_seed(),
@@ -1461,7 +1466,8 @@ impl<'a> QpcsBindingsV1<'a> {
             self.evaluation_binding_digest,
             self.residual_digest,
         ];
-        if identities.contains(&[0; DIGEST_BYTES_V1])
+        if !self.relation_schedule_present
+            || identities.contains(&[0; DIGEST_BYTES_V1])
             || identities
                 .iter()
                 .enumerate()
@@ -2014,6 +2020,12 @@ where
     reason = "retained construction bindings are consumed by the next private RLWE relation stage"
 )]
 impl<'a, S: ZkAmsMkheRnsNativeSourceSnapshotV1> RnsNativeRlweSourceStatementStageV1<'a, S> {
+    pub(super) fn take_qpcs_relation_schedule_v1(
+        &mut self,
+    ) -> Result<RnsNativeQpcsRelationScheduleV1, RnsNativeQpcsFriCompleteErrorV1> {
+        self.qpcs.take_relation_schedule_v1()
+    }
+
     pub(super) const fn downstream(&self) -> &'a [u8] {
         self.downstream
     }

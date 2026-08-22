@@ -768,7 +768,14 @@ fn autonomous_merge_commit_authorization_fixture_inner(
         .expect("fixture autonomous execution candidate is valid");
     let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
     let entry = merge_entry_from_candidate(candidate, qc);
-    let carrier = certified_merge_carrier_after(&parent, &entry);
+    let mut carrier = certified_merge_carrier_after(&parent, &entry);
+    if let Some(fixture) = transfer_fixture {
+        let committed_fragments = match fixture {
+            QueuePlanTransferFixture::Single => 1,
+            QueuePlanTransferFixture::AtomicBatch | QueuePlanTransferFixture::IndependentBatch => 3,
+        };
+        carrier.set_committed_fragment_count(committed_fragments);
+    }
     state
         .kura
         .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)

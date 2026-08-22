@@ -162,6 +162,7 @@ fn transcript_fixture(context: u16) -> ZkAmsMkheRnsNativeChallengeSeedsV1 {
     let qpcs = ZkAmsMkheRnsNativeQpcsRootsV1::new(
         transcript.binding_digest(),
         digest(b"qpcs-initial", context, 0),
+        digest(b"q-mask-s-root", context, 0),
         digest(b"qpcs-quotient", context, 0),
         fri_roots,
     )
