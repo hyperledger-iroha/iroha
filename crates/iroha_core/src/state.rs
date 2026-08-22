@@ -45461,16 +45461,24 @@ fn compute_execution_policy_digest_v1(
     content: &iroha_config::parameters::actual::Content,
     settlement: &iroha_config::parameters::actual::Settlement,
     kagemusha_release_catalog: &crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
+    pre_release_taira_nexus: bool,
 ) -> core::result::Result<[u8; 32], iroha_config::parameters::actual::NexusConsensusPolicyDigestError>
 {
     let compliance_policy_digest =
         lane_compliance.map(LaneComplianceEngine::consensus_policy_digest);
-    let nexus_policy_digest =
+    let nexus_policy_digest = if pre_release_taira_nexus {
+        iroha_config::parameters::actual::pre_release_taira_nexus_consensus_policy_digest_with_runtime_policies(
+            nexus,
+            compliance_policy_digest,
+            Some(lane_manifests.consensus_policy_digest()),
+        )?
+    } else {
         iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
             nexus,
             compliance_policy_digest,
             Some(lane_manifests.consensus_policy_digest()),
-        )?;
+        )?
+    };
     Ok(
         iroha_config::parameters::actual::execution_policy_digest_v1(
             pipeline,
@@ -45522,6 +45530,7 @@ impl State {
             &self.content,
             &self.settlement,
             self.kagemusha_release_catalog.as_ref(),
+            crate::sumeragi::v2_context::uses_pre_release_taira_nexus_projection(&self.network_id),
         )
     }
 }
@@ -45550,6 +45559,7 @@ impl StateBlock<'_> {
             &self.content,
             &self.settlement,
             self.kagemusha_release_catalog.as_ref(),
+            crate::sumeragi::v2_context::uses_pre_release_taira_nexus_projection(&self.network_id),
         )
     }
 }

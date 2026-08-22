@@ -91,6 +91,47 @@ mod tests {
         );
     }
     #[test]
+    fn pre_release_taira_nexus_policy_retains_the_producer_wire_shape() {
+        let baseline = Nexus::default();
+        let current = |nexus| {
+            nexus_consensus_policy_digest_with_runtime_policies(nexus, None, Some([0x21; 32]))
+                .expect("valid current Nexus policy")
+        };
+        let producer = |nexus| {
+            pre_release_taira_nexus_consensus_policy_digest_with_runtime_policies(
+                nexus,
+                None,
+                Some([0x21; 32]),
+            )
+            .expect("valid pre-release Nexus policy")
+        };
+
+        assert_ne!(
+            producer(&baseline),
+            current(&baseline),
+            "reset-11 authenticated the producer enabled flag and legacy catalog wire",
+        );
+
+        let mut described = baseline.clone();
+        let mut lane = described.configured_lane_catalog.lanes()[0].clone();
+        lane.description = Some("producer-authenticated configured lane".to_owned());
+        described.configured_lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(1).expect("non-zero lane bound"),
+            vec![lane],
+        )
+        .expect("valid configured lane catalog");
+        assert_eq!(
+            current(&baseline),
+            current(&described),
+            "successor networks use the description-free consensus projection",
+        );
+        assert_ne!(
+            producer(&baseline),
+            producer(&described),
+            "reset-11 authenticated the complete pre-release lane wire shape",
+        );
+    }
+    #[test]
     fn nexus_consensus_policy_digest_excludes_operational_paths_and_worker_timing() {
         let baseline = Nexus::default();
         let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
@@ -1511,6 +1552,50 @@ mod tests {
             sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &first),
             sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &second),
             "current networks must continue committing the supplied retained lineage",
+        );
+    }
+    #[test]
+    fn pre_release_taira_static_incarnations_retain_the_producer_primary_anchor() {
+        let primary = LaneConfigMetadata::default();
+        let secondary = LaneConfigMetadata {
+            id: LaneId::new(1),
+            alias: "secondary".to_owned(),
+            ..LaneConfigMetadata::default()
+        };
+        let with_lanes = |lanes| Nexus {
+            lane_catalog: LaneCatalog::new(
+                NonZeroU32::new(2).expect("non-zero lane bound"),
+                lanes,
+            )
+            .expect("valid producer lane catalog"),
+            ..Nexus::default()
+        };
+        let baseline = with_lanes(vec![primary.clone(), secondary.clone()]);
+        let baseline_incarnations = sumeragi_v2_pre_release_static_lane_incarnations(&baseline);
+
+        assert_eq!(
+            hex::encode(baseline_incarnations[&LaneId::SINGLE].as_ref()),
+            "f52c4a37761d292ab16485cbc40b321e98a4079145368e558c08eef7a99f7203",
+            "reset-11 retained the producer's configured-primary anchor incarnation",
+        );
+
+        let changed = with_lanes(vec![
+            primary,
+            LaneConfigMetadata {
+                alias: "changed-secondary".to_owned(),
+                ..secondary
+            },
+        ]);
+        let changed_incarnations = sumeragi_v2_pre_release_static_lane_incarnations(&changed);
+        assert_eq!(
+            baseline_incarnations[&LaneId::SINGLE],
+            changed_incarnations[&LaneId::SINGLE],
+            "the authenticated primary anchor predates full-catalog expansion",
+        );
+        assert_ne!(
+            baseline_incarnations[&LaneId::new(1)],
+            changed_incarnations[&LaneId::new(1)],
+            "secondary lanes retain producer full-catalog derivation",
         );
     }
     #[test]

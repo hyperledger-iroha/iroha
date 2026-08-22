@@ -2922,6 +2922,32 @@ struct NexusConsensusPolicyPreimageV1 {
     commit_window_slots: u16,
     da: NexusConsensusDaV1,
 }
+/// Nexus policy wire shape authenticated by the pre-release Taira reset-11 genesis.
+#[derive(Encode)]
+struct NexusConsensusPreReleasePolicyPreimageV1 {
+    version: u8,
+    enabled: bool,
+    configured_lane_catalog_hash: [u8; 32],
+    dataspaces: Vec<NexusConsensusDataspaceV1>,
+    dataspace_fee_sponsor_program_ids: Vec<(u64, FeeSponsorProgramId)>,
+    routing: NexusConsensusRoutingV1,
+    staking: NexusConsensusStakingV1,
+    fees: NexusConsensusFeesV1,
+    hf_shared_leases: NexusConsensusHfSharedLeasesV1,
+    uploaded_models: NexusConsensusUploadedModelsV1,
+    endorsement: NexusConsensusEndorsementV1,
+    axt: NexusConsensusAxtV1,
+    lane_relay_emergency: NexusConsensusLaneRelayEmergencyV1,
+    governance: NexusConsensusGovernanceV1,
+    compliance_enabled: bool,
+    compliance_audit_only: bool,
+    compliance_policy_digest: Option<[u8; 32]>,
+    lane_manifest_policy_digest: Option<[u8; 32]>,
+    fusion: NexusConsensusFusionV1,
+    autoscale: NexusConsensusAutoscaleV1,
+    commit_window_slots: u16,
+    da: NexusConsensusDaV1,
+}
 #[derive(Encode)]
 struct NexusConsensusDataspaceV1 {
     id: u64,
@@ -3147,6 +3173,35 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
     compliance_policy_digest: Option<[u8; 32]>,
     lane_manifest_policy_digest: Option<[u8; 32]>,
 ) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
+    nexus_consensus_policy_digest_with_projection(
+        nexus,
+        compliance_policy_digest,
+        lane_manifest_policy_digest,
+        false,
+    )
+}
+/// Compute the producer-compatible Nexus policy digest for the pre-release Taira reset-11 lineage.
+///
+/// Callers must exact-network gate this projection. New networks use
+/// [`nexus_consensus_policy_digest_with_runtime_policies`].
+pub fn pre_release_taira_nexus_consensus_policy_digest_with_runtime_policies(
+    nexus: &Nexus,
+    compliance_policy_digest: Option<[u8; 32]>,
+    lane_manifest_policy_digest: Option<[u8; 32]>,
+) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
+    nexus_consensus_policy_digest_with_projection(
+        nexus,
+        compliance_policy_digest,
+        lane_manifest_policy_digest,
+        true,
+    )
+}
+fn nexus_consensus_policy_digest_with_projection(
+    nexus: &Nexus,
+    compliance_policy_digest: Option<[u8; 32]>,
+    lane_manifest_policy_digest: Option<[u8; 32]>,
+    pre_release_taira: bool,
+) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
     const DOMAIN: &[u8] = b"iroha:nexus:consensus-policy:v1\0";
     const CONFIGURED_LANE_CATALOG_DOMAIN: &[u8] = b"iroha:nexus:configured-lane-catalog:v1\0";
     const VERSION: u8 = 1;
@@ -3180,16 +3235,31 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
         .iter()
         .map(|(id, program_id)| (id.as_u64(), program_id.clone()))
         .collect();
-    let successful_claim_fee_exempt_authorities = nexus
-        .fees
-        .successful_claim_fee_exempt_authorities
-        .iter()
-        .map(|authority| {
-            authority
-                .canonical_i105()
-                .expect("validated Nexus fee-exempt authority must encode as canonical I105")
-        })
-        .collect();
+    let mut successful_claim_fee_exempt_authorities = if pre_release_taira {
+        nexus
+            .fees
+            .successful_claim_fee_exempt_authorities
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    } else {
+        nexus
+            .fees
+            .successful_claim_fee_exempt_authorities
+            .iter()
+            .map(|authority| {
+                authority
+                    .canonical_i105()
+                    .expect("validated Nexus fee-exempt authority must encode as canonical I105")
+            })
+            .collect::<Vec<_>>()
+    };
+    if pre_release_taira {
+        // The producer accepted these authorities as strings and canonicalized
+        // their textual order before committing the policy.
+        successful_claim_fee_exempt_authorities.sort_unstable();
+        successful_claim_fee_exempt_authorities.dedup();
+    }
     let endorsement_committee_keys = nexus
         .endorsement
         .committee_keys
@@ -3211,10 +3281,23 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
         })
         .collect();
     let autoscale = &nexus.autoscale;
-    let configured_lane_catalog = nexus
-        .configured_lane_catalog
-        .consensus_projection()
-        .encode();
+    let configured_lane_catalog = if pre_release_taira {
+        (
+            nexus.configured_lane_catalog.lane_count().get(),
+            nexus
+                .configured_lane_catalog
+                .lanes()
+                .iter()
+                .map(SumeragiV2PreReleaseLaneConfig::from)
+                .collect::<Vec<_>>(),
+        )
+            .encode()
+    } else {
+        nexus
+            .configured_lane_catalog
+            .consensus_projection()
+            .encode()
+    };
     let preimage = NexusConsensusPolicyPreimageV1 {
         version: VERSION,
         configured_lane_catalog_hash: Hash::new_from_chunks(&[
@@ -3356,7 +3439,59 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
             )?,
         },
     };
-    let encoded = preimage.encode();
+    let encoded = if pre_release_taira {
+        let NexusConsensusPolicyPreimageV1 {
+            version,
+            configured_lane_catalog_hash,
+            dataspaces,
+            dataspace_fee_sponsor_program_ids,
+            routing,
+            staking,
+            fees,
+            hf_shared_leases,
+            uploaded_models,
+            endorsement,
+            axt,
+            lane_relay_emergency,
+            governance,
+            compliance_enabled,
+            compliance_audit_only,
+            compliance_policy_digest,
+            lane_manifest_policy_digest,
+            fusion,
+            autoscale,
+            commit_window_slots,
+            da,
+        } = preimage;
+        NexusConsensusPreReleasePolicyPreimageV1 {
+            version,
+            // Nexus was enabled in the authenticated reset-11 producer state.
+            enabled: true,
+            configured_lane_catalog_hash,
+            dataspaces,
+            dataspace_fee_sponsor_program_ids,
+            routing,
+            staking,
+            fees,
+            hf_shared_leases,
+            uploaded_models,
+            endorsement,
+            axt,
+            lane_relay_emergency,
+            governance,
+            compliance_enabled,
+            compliance_audit_only,
+            compliance_policy_digest,
+            lane_manifest_policy_digest,
+            fusion,
+            autoscale,
+            commit_window_slots,
+            da,
+        }
+        .encode()
+    } else {
+        preimage.encode()
+    };
     Ok(Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()]).into())
 }
 #[derive(Encode)]
@@ -4926,6 +5061,11 @@ impl From<&LaneConfigMetadata> for SumeragiV2PreReleaseLaneConfig {
 fn sumeragi_v2_pre_release_static_lane_incarnations(nexus: &Nexus) -> BTreeMap<LaneId, Hash> {
     const CATALOG_DOMAIN: &[u8] = b"iroha:nexus:lane-catalog:v1\0";
     const STATIC_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:static:v2\0";
+    const RESET_11_PRIMARY_INCARNATION: [u8; Hash::LENGTH] = [
+        0xf5, 0x2c, 0x4a, 0x37, 0x76, 0x1d, 0x29, 0x2a, 0xb1, 0x64, 0x85, 0xcb, 0xc4, 0x0b, 0x32,
+        0x1e, 0x98, 0xa4, 0x07, 0x91, 0x45, 0x36, 0x8e, 0x55, 0x8c, 0x08, 0xee, 0xf7, 0xa9, 0x9f,
+        0x72, 0x03,
+    ];
 
     // The reset-11 producer derived generation-zero incarnations from the complete
     // pre-release lane wire shape. Reusing current state incarnations here would
@@ -4943,7 +5083,7 @@ fn sumeragi_v2_pre_release_static_lane_incarnations(nexus: &Nexus) -> BTreeMap<L
     let catalog_preimage = (nexus.lane_catalog.lane_count().get(), lanes.clone()).encode();
     let catalog_hash = Hash::new_from_chunks(&[CATALOG_DOMAIN, catalog_preimage.as_slice()]);
 
-    lanes
+    let mut incarnations = lanes
         .into_iter()
         .map(|lane| {
             let lane_id = lane.id;
@@ -4953,7 +5093,18 @@ fn sumeragi_v2_pre_release_static_lane_incarnations(nexus: &Nexus) -> BTreeMap<L
                 Hash::new_from_chunks(&[STATIC_INCARNATION_DOMAIN, preimage.as_slice()]),
             )
         })
-        .collect()
+        .collect::<BTreeMap<_, _>>();
+
+    // The reset-11 signer anchored lane zero as the configured primary before
+    // expanding the runtime to the complete catalog. The subsequent expansion
+    // retained that incarnation and derived only the secondary lanes from the
+    // full catalog. Current lane encoding cannot reproduce the authenticated
+    // intermediate value, so keep that exact producer identity in this
+    // reset-11-only projection.
+    if let Some(primary) = incarnations.get_mut(&LaneId::SINGLE) {
+        *primary = Hash::prehashed(RESET_11_PRIMARY_INCARNATION);
+    }
+    incarnations
 }
 #[derive(Encode)]
 struct SumeragiV2PreReleaseLaneLifecycleEntry {
