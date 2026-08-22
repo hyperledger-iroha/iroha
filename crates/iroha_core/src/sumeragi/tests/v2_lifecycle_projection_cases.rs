@@ -197,6 +197,43 @@ impl Fixture {
             CapacityGeometry::new(CapacityClass::ALL.map(|class| (class, 64))),
         )
     }
+    fn authenticated_timeout_certificate(
+        &self,
+        signers: Vec<wire::ValidatorIndex>,
+    ) -> wire::TimeoutCertificate {
+        let signer = signers[0];
+        let preimage = wire::TimeoutVote {
+            round: self.round,
+            highest_prepare_qc: None,
+            signer,
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let shares = signers
+            .iter()
+            .map(|signer| {
+                Signature::new(
+                    self.keys[usize::try_from(*signer).expect("small timeout signer")]
+                        .private_key(),
+                    &preimage,
+                )
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+            &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        )
+        .expect("aggregate authenticated timeout certificate");
+        wire::TimeoutCertificate {
+            round: self.round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers,
+                aggregate_signature,
+            }],
+        }
+    }
     fn authenticated_serve_request(
         &self,
         requester_index: usize,
@@ -2064,6 +2101,35 @@ fn every_adapter_effect_class_and_specialized_phase_projects_ready_one_slot_work
             assert!(coordinator.records.is_empty());
         }
     }
+}
+#[test]
+fn timeout_certificate_retransmit_key_binds_the_complete_valid_envelope() {
+    let fixture = Fixture::new();
+    let first_certificate = fixture.authenticated_timeout_certificate(vec![0, 1, 2]);
+    let revised_certificate = fixture.authenticated_timeout_certificate(vec![0, 1, 3]);
+    let first_effect = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(first_certificate),
+    ));
+    let revised_effect = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(revised_certificate),
+    ));
+    let first_owner = bound_ownership(&first_effect, fixture.tag, 20);
+    let revised_owner = bound_ownership(&revised_effect, fixture.tag, 21);
+    let first = candidate(&fixture, &first_effect, &first_owner);
+    let revised = candidate(&fixture, &revised_effect, &revised_owner);
+
+    assert_eq!(first.key.round(), revised.key.round());
+    assert_eq!(first.key.proposal_round(), revised.key.proposal_round());
+    assert_eq!(
+        first.key.execution_commitment(),
+        revised.key.execution_commitment()
+    );
+    assert_ne!(first.key.subject(), revised.key.subject());
+    assert_ne!(first.key, revised.key);
+    assert_ne!(
+        first.physical_geometry.initial[0].digest(),
+        revised.physical_geometry.initial[0].digest()
+    );
 }
 #[test]
 fn certified_store_and_validate_inherit_authority_but_require_receipt_bound_staging() {

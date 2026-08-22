@@ -505,6 +505,12 @@ impl LifecycleCoordinator {
         self.lifecycle_ordinal_authority = Some(authority);
         Ok(())
     }
+    #[cfg(test)]
+    pub(super) fn bind_test_lifecycle_ordinal_authority(&mut self) -> Result<(), String> {
+        let (_, authority) =
+            authority::lifecycle_ordinal_authorities_after_high_watermark(self.high_water);
+        self.bind_live_lifecycle_ordinal_authority(authority)
+    }
     /// Project and atomically admit one post-fsync authenticated Certified-Serve request.
     ///
     /// Tests use this direct seam; production Serve admission reaches the same

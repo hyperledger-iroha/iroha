@@ -1228,10 +1228,24 @@ impl ProductionLifecycleOwnerV1 {
                             | AdmissionDecision::StutterTerminal { .. } => {
                                 ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
                             }
+                            AdmissionDecision::Rejected(rejection) => {
+                                ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                                        RegistryError::LifecycleOutputAdmissionRejected(rejection),
+                                    ),
+                                    pending,
+                                }
+                            }
+                            AdmissionDecision::FailClosed(fault) => {
+                                ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                                        RegistryError::LifecycleOutputAdmissionFailClosed(fault),
+                                    ),
+                                    pending,
+                                }
+                            }
                             AdmissionDecision::Admitted { .. }
-                            | AdmissionDecision::NonCandidate
-                            | AdmissionDecision::Rejected(_)
-                            | AdmissionDecision::FailClosed(_) => {
+                            | AdmissionDecision::NonCandidate => {
                                 ProductionLifecycleOutputAdmissionSettlementV1::Failed {
                                     failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
                                         RegistryError::InvalidAdmissionShape,
@@ -1815,6 +1829,42 @@ mod tests {
                 }),
             ))
         }
+        fn timeout_certificate_effect(&self, signers: Vec<wire::ValidatorIndex>) -> AdapterEffect {
+            let signer = signers[0];
+            let preimage = wire::TimeoutVote {
+                round: self.round,
+                highest_prepare_qc: None,
+                signer,
+                signature: Vec::new(),
+            }
+            .signature_preimage();
+            let shares = signers
+                .iter()
+                .map(|signer| {
+                    Signature::new(
+                        self.keys[usize::try_from(*signer).expect("small timeout signer")]
+                            .private_key(),
+                        &preimage,
+                    )
+                    .payload()
+                    .to_vec()
+                })
+                .collect::<Vec<_>>();
+            let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+                &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            )
+            .expect("aggregate authenticated timeout certificate");
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(wire::TimeoutCertificate {
+                    round: self.round,
+                    groups: vec![wire::TimeoutVoteGroup {
+                        highest_prepare_qc: None,
+                        signers,
+                        aggregate_signature,
+                    }],
+                }),
+            ))
+        }
         fn pair(
             &self,
             effect: AdapterEffect,
@@ -2311,6 +2361,71 @@ mod tests {
                 ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
             ));
             assert_eq!(owner.coordinator.high_water(), 1);
+        });
+    }
+
+    #[test]
+    fn timeout_certificate_retransmit_services_each_distinct_valid_envelope_once() {
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            let mut owner = fixture.production_owner(64);
+            let ledger = TempDir::new().expect("temporary timeout retransmit ledger");
+            owner
+                .coordinator
+                .attach_empty_test_ledger(ledger.path())
+                .expect("attach timeout retransmit ledger");
+            owner
+                .coordinator
+                .bind_test_lifecycle_ordinal_authority()
+                .expect("bind launch-equivalent lifecycle ordinal authority");
+            let first = fixture.timeout_certificate_effect(vec![0, 1, 2]);
+            let revised = fixture.timeout_certificate_effect(vec![0, 1, 3]);
+            let called = Cell::new(0_u8);
+
+            for (effect, source_ordinal) in [(&first, 0xDA), (&revised, 0xDB)] {
+                assert!(matches!(
+                    owner.settle_lifecycle_output_admission(
+                        fixture.output_pending(effect.clone(), source_ordinal),
+                        |observed, _ownership| {
+                            assert_eq!(observed, effect);
+                            called.set(called.get().saturating_add(1));
+                            Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                                LifecycleOutputServiceDispositionV1::Accepted,
+                            )
+                        },
+                    ),
+                    ProductionLifecycleOutputAdmissionSettlementV1::Completed
+                ));
+            }
+
+            assert_eq!(called.get(), 2);
+            assert_eq!(owner.coordinator.high_water(), 2);
+            assert_eq!(owner.coordinator.records.len(), 2);
+            assert!(owner.coordinator.records.values().all(|record| matches!(
+                record.state,
+                LifecycleState::Terminal(super::super::TerminalOutcome::Advanced)
+            )));
+            assert_ne!(
+                owner.coordinator.records[&1].key,
+                owner.coordinator.records[&2].key
+            );
+            assert!(owner.registry.registry().is_empty());
+
+            assert!(matches!(
+                owner.settle_lifecycle_output_admission(
+                    fixture.output_pending(revised, 0xDC),
+                    |_effect, _ownership| -> Result<
+                        LifecycleOutputServiceDispositionV1,
+                        &'static str,
+                    > {
+                        panic!("exact timeout-certificate retry must terminal-stutter")
+                    },
+                ),
+                ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
+            ));
+            assert_eq!(called.get(), 2);
+            assert_eq!(owner.coordinator.high_water(), 2);
+            assert_eq!(owner.coordinator.records.len(), 2);
         });
     }
 

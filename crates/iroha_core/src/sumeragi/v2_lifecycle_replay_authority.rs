@@ -17,7 +17,7 @@ use super::{
     projection::{
         AdapterEffectAdmissionError, AuthenticatedDurableBodyFrameRecovery,
         DurableBodyFrameRecoveryError, block_subject, certified_serve_key_subject,
-        durable_body_frame_reference, execution_commitment,
+        durable_body_frame_reference, execution_commitment, timeout_certificate_envelope_subject,
     },
     schema::{
         CandidateAdmission, CausalRoot, DurableBodyFrameReference, DurableContinuationEdge,
@@ -419,7 +419,7 @@ impl LifecycleReplayAuthorityV1 {
             return Err(ReplayAuthorityValidationError::PayloadMismatch);
         }
         let expected = self.source.project(context, stage.kind(), &self.payload)?;
-        if expected.key != key
+        if (expected.key != key && expected.legacy_key != Some(key))
             || expected.work_class != work_class
             || expected.stage_kind != stage.kind()
             || !work_class.accepts_stage(key.phase(), stage)

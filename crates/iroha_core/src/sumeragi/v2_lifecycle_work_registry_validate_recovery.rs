@@ -1729,6 +1729,12 @@ pub(in crate::sumeragi) enum RegistryError {
     WrongWorkKind,
     /// The coordinator's admitted record did not name exactly one effect slot.
     InvalidAdmissionShape,
+    /// Direct lifecycle-output admission rejected the exact returned owner.
+    /// Keeping the deterministic reason visible avoids collapsing semantic
+    /// drift, foreign ownership, and capacity faults into one opaque crash.
+    LifecycleOutputAdmissionRejected(AdmissionRejection),
+    /// Direct lifecycle-output admission observed a latched coordinator fault.
+    LifecycleOutputAdmissionFailClosed(CoordinatorFault),
     /// More than one durable output owner, or more than one row in any output
     /// ownership class, matched the same runtime output. Exact counts remain
     /// visible at the production error boundary for restart diagnosis.
