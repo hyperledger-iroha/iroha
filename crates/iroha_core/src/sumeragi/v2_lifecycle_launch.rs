@@ -2525,9 +2525,17 @@ impl ProductionLifecycleOwnerV1 {
             .prepare_leader_wire_launch(launch_storage.wal_path())
             .map_err(|error| ProductionLifecycleLaunchErrorV1::LeaderWire(error.to_owned()))?;
         // First-release production has no worker-owned scheduler to restore.
-        // The one actor-global source starts empty and is advanced through all
-        // durable leader-wire high-watermarks before ingress opens.
-        let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
+        // The runtime and coordinator must retain restricted views over the
+        // same actor-global authority so durable admission and live ingress
+        // reserve from one ordinal namespace. Advance that shared authority
+        // through every restored leader-wire high-watermark before either
+        // owner can admit work.
+        let (runtime_lifecycle_ordinal_authority, coordinator_lifecycle_ordinal_authority) =
+            super::authority::lifecycle_ordinal_authorities_after_high_watermark(
+                self.coordinator.high_water,
+            );
+        let lifecycle_ordinals =
+            RuntimeLifecycleOrdinalSource::from_authority(runtime_lifecycle_ordinal_authority);
         if let Some(high_watermark) = leader_wire_launch.restored_producer_ordinal_high_watermark()
         {
             lifecycle_ordinals
@@ -2545,6 +2553,9 @@ impl ProductionLifecycleOwnerV1 {
                 .map_err(ProductionLifecycleLaunchErrorV1::LeaderWire)?;
         lifecycle_ordinals
             .advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())
+            .map_err(ProductionLifecycleLaunchErrorV1::LeaderWire)?;
+        self.coordinator
+            .bind_live_lifecycle_ordinal_authority(coordinator_lifecycle_ordinal_authority)
             .map_err(ProductionLifecycleLaunchErrorV1::LeaderWire)?;
         let leader_wire_ingress_binding = ProductionLeaderWireIngressBindingV1::bind(
             Arc::clone(&inputs.leader_wire_ingress),
