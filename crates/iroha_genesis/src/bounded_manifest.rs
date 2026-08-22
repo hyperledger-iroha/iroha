@@ -497,6 +497,45 @@ mod tests {
         assert_eq!(decoded.hash(), block.hash());
     }
     #[test]
+    fn diagnostic_signed_genesis_fixture_decodes() {
+        let Some(path) = std::env::var_os("IROHA_SIGNED_GENESIS_DIAGNOSTIC") else {
+            return;
+        };
+        let bytes = fs::read(path).expect("read diagnostic signed genesis fixture");
+        let block =
+            decode_signed_genesis(&bytes).expect("decode diagnostic signed genesis fixture");
+        assert!(
+            block.has_pre_release_empty_genesis_result_placeholder(),
+            "the compatibility corridor must recognize only the exact producer placeholder",
+        );
+        let normalized = block.canonical_resultless_proposal();
+        assert_eq!(normalized.hash(), block.hash());
+        assert_eq!(
+            normalized.signatures().cloned().collect::<Vec<_>>(),
+            block.signatures().cloned().collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            block.encode_wire().expect("re-encode diagnostic genesis"),
+            bytes,
+            "the live genesis must retain its exact canonical producer bytes"
+        );
+        let signer = block
+            .external_transactions()
+            .next()
+            .expect("live genesis transaction")
+            .authority()
+            .try_signatory()
+            .expect("single-key live genesis authority");
+        let mut signatures = block.signatures();
+        let signature = signatures.next().expect("live genesis block signature");
+        assert_eq!(signature.index(), 0);
+        assert!(signatures.next().is_none());
+        signature
+            .signature()
+            .verify_hash(signer, block.hash())
+            .expect("verify live genesis block signature with producer-compatible hash");
+    }
+    #[test]
     fn signed_genesis_reader_rejects_sparse_overflow_before_reading() {
         let directory = tempfile::tempdir().expect("create signed-genesis test directory");
         let path = directory.path().join("oversized-genesis.nrt");

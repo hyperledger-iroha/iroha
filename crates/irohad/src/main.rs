@@ -13771,9 +13771,23 @@ fn validate_config_for_check(
         )));
     }
     let genesis_account = AccountId::new(embedded_key);
-    iroha_core::validate_genesis_block(&genesis.0, &genesis_account)
-        .map_err(Report::new)
-        .change_context(MainError::Config)?;
+    let normalized_legacy_genesis;
+    let execution_genesis = if genesis.0.has_pre_release_empty_genesis_result_placeholder() {
+        // The pre-release Taira signer attached an all-default BlockResult placeholder while
+        // leaving the result root absent.  Authenticate its original signed intent exactly,
+        // then discard that unauthenticated placeholder and execute the canonical proposal
+        // from scratch in the disposable check-config state.
+        iroha_core::validate_genesis_block_intents(&genesis.0, &genesis_account)
+            .map_err(Report::new)
+            .change_context(MainError::Config)?;
+        normalized_legacy_genesis = GenesisBlock(genesis.0.canonical_resultless_proposal());
+        &normalized_legacy_genesis
+    } else {
+        iroha_core::validate_genesis_block(&genesis.0, &genesis_account)
+            .map_err(Report::new)
+            .change_context(MainError::Config)?;
+        genesis
+    };
     let (signed_mode, signed_parameters) = signed_v2_genesis_context_metadata(genesis)
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
     let config_caps =
@@ -13793,7 +13807,7 @@ fn validate_config_for_check(
     )?;
     validate_genesis_execution_offline(
         config,
-        genesis,
+        execution_genesis,
         &genesis_account,
         signed_mode,
         signed_parameters,

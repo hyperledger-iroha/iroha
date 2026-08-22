@@ -164,6 +164,8 @@ impl std::error::Error for SetTransactionResultsError {}
 pub enum SetLaneFinalityStatementsError {
     /// The block does not yet carry transaction results and therefore has no final header hash.
     MissingTransactionResults,
+    /// The producer-compatible result wire cannot authenticate a non-empty transition set.
+    UnsupportedAxtTransitionSet,
 }
 impl fmt::Display for SetLaneFinalityStatementsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -171,6 +173,9 @@ impl fmt::Display for SetLaneFinalityStatementsError {
             Self::MissingTransactionResults => {
                 f.write_str("cannot attach lane-finality statements before transaction results")
             }
+            Self::UnsupportedAxtTransitionSet => f.write_str(
+                "cannot attach a non-empty AXT transition set to the producer-compatible block wire",
+            ),
         }
     }
 }
@@ -255,6 +260,7 @@ impl SignedBlock {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -285,6 +291,7 @@ impl SignedBlock {
                 da_commitments,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -495,6 +502,9 @@ impl SignedBlock {
         &mut self,
         dataspaces: BTreeSet<crate::nexus::DataSpaceId>,
     ) -> Result<(), SetLaneFinalityStatementsError> {
+        if !dataspaces.is_empty() {
+            return Err(SetLaneFinalityStatementsError::UnsupportedAxtTransitionSet);
+        }
         let result = self
             .result
             .as_mut()
@@ -690,6 +700,31 @@ impl SignedBlock {
     #[must_use]
     pub fn has_results(&self) -> bool {
         self.result.is_some()
+    }
+    /// Whether this genesis carries the exact empty execution-result placeholder emitted by the
+    /// pre-release Taira signer.
+    ///
+    /// The placeholder is not trusted as an execution receipt.  Startup tooling may use this
+    /// predicate only to recognize the legacy, fully empty result container before authenticating
+    /// the signed genesis intent and executing its canonical resultless proposal from scratch.
+    #[inline]
+    #[must_use]
+    pub fn has_pre_release_empty_genesis_result_placeholder(&self) -> bool {
+        let expected_result = BlockResult {
+            merkle: self
+                .external_entrypoints_cloned()
+                .map(|entrypoint| entrypoint.hash())
+                .collect(),
+            ..BlockResult::default()
+        };
+        self.payload.header.is_genesis()
+            && self.payload.header.result_merkle_root.is_none()
+            && self.payload.header.prev_roster_evidence_hash.is_none()
+            && self.payload.previous_roster_evidence.is_none()
+            && self
+                .result
+                .as_ref()
+                .is_some_and(|result| result == &expected_result)
     }
     /// Whether this block is in the exact resultless shape accepted as a consensus proposal.
     ///
@@ -934,6 +969,7 @@ impl SignedBlock {
             da_proof_policies_hash: Some(proof_policy_hash),
             da_commitments_hash,
             da_pin_intents_hash: None,
+            prev_roster_evidence_hash: None,
             npos_effects_hash: None,
             execution_context_hash: None,
             creation_time_ms,
@@ -954,6 +990,7 @@ impl SignedBlock {
             da_commitments,
             da_proof_policies: Some(proof_policies),
             da_pin_intents: None,
+            previous_roster_evidence: None,
             npos_consensus_effects: None,
         };
         Ok(SignedBlock {
@@ -1625,7 +1662,7 @@ pub mod prelude {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::consensus::NposConsensusEffects;
+    use crate::consensus::{NposConsensusEffects, PreviousRosterEvidence};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
     use norito::codec::{DecodeAll as _, Encode};
@@ -1747,6 +1784,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -1762,6 +1800,7 @@ mod tests {
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
+            previous_roster_evidence: None,
             npos_consensus_effects: None,
         };
         let mut with_context = payload.clone();
@@ -1789,6 +1828,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -1841,6 +1881,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -1919,6 +1960,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -1957,6 +1999,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -1993,42 +2036,37 @@ mod tests {
         assert_eq!(decoded.external_transactions().next(), Some(&tx));
     }
     #[test]
-    fn block_payload_rejects_pre_release_layout_with_retired_roster_slot() {
+    fn block_payload_accepts_producer_layout_with_previous_roster_slot() {
         #[derive(norito::codec::Encode)]
-        struct PreReleaseBlockPayload {
+        struct ProducerBlockPayload {
             header: BlockHeader,
             external_entrypoints: Vec<TransactionEntrypoint>,
-            #[norito(required)]
             da_commitments: Option<DaCommitmentBundle>,
-            #[norito(required)]
             da_proof_policies: Option<DaProofPolicyBundle>,
-            #[norito(required)]
             da_pin_intents: Option<DaPinIntentBundle>,
-            #[norito(required)]
-            retired_roster_slot: Option<()>,
-            #[norito(required)]
+            previous_roster_evidence: Option<PreviousRosterEvidence>,
             npos_consensus_effects: Option<NposConsensusEffects>,
-            #[norito(required)]
             execution_context: Option<BlockExecutionContextBundle>,
         }
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 10, 0);
-        let pre_release = PreReleaseBlockPayload {
+        let producer = ProducerBlockPayload {
             header,
             external_entrypoints: Vec::new(),
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
-            // `None` has the exact retired option-slot encoding without reintroducing its type.
-            retired_roster_slot: None,
+            previous_roster_evidence: None,
             npos_consensus_effects: None,
             execution_context: None,
         };
-        let bytes = pre_release.encode();
+        let bytes = producer.encode();
         let mut cursor = bytes.as_slice();
-        assert!(
-            BlockPayload::decode_all(&mut cursor).is_err(),
-            "the first-release BlockPayload decoder must reject the longer pre-release roster layout"
-        );
+        let decoded = BlockPayload::decode_all(&mut cursor)
+            .expect("decode the producer BlockPayload roster layout");
+        assert_eq!(decoded.header, header);
+        assert_eq!(decoded.previous_roster_evidence, None);
+        assert_eq!(decoded.npos_consensus_effects, None);
+        assert_eq!(decoded.execution_context, None);
     }
     #[test]
     fn block_payload_current_layout_roundtrips_empty_required_values() {
@@ -2038,6 +2076,7 @@ mod tests {
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
+            previous_roster_evidence: None,
             npos_consensus_effects: None,
             execution_context: None,
         };
@@ -2093,7 +2132,6 @@ mod tests {
             axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
             trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
-            axt_transitioned_dataspaces: BTreeSet<crate::nexus::DataSpaceId>,
         }
         let omitted_lane_finality = BlockResultWithoutLaneFinalityStatements {
             time_triggers: Vec::new(),
@@ -2108,7 +2146,6 @@ mod tests {
                 version: 1,
                 entries: Vec::new(),
             },
-            axt_transitioned_dataspaces: BTreeSet::new(),
         };
         let bytes = omitted_lane_finality.encode();
         let mut cursor = bytes.as_slice();
@@ -2118,7 +2155,7 @@ mod tests {
         );
     }
     #[test]
-    fn block_result_rejects_wire_omitting_required_axt_transition_set() {
+    fn producer_block_result_wire_defaults_unencoded_axt_transition_set() {
         #[derive(norito::codec::Encode)]
         struct BlockResultWithoutAxtTransitionSet {
             time_triggers: Vec<crate::trigger::TimeTriggerEntrypoint>,
@@ -2149,10 +2186,9 @@ mod tests {
         };
         let bytes = omitted_transition_set.encode();
         let mut cursor = bytes.as_slice();
-        assert!(
-            BlockResult::decode_all(&mut cursor).is_err(),
-            "the sticky AXT transition set is a required V1 BlockResult wire field"
-        );
+        let decoded = BlockResult::decode_all(&mut cursor)
+            .expect("the producer wire omits the in-memory-only AXT transition set");
+        assert!(decoded.axt_transitioned_dataspaces.is_empty());
     }
     #[test]
     #[cfg(feature = "transparent_api")]
@@ -2165,6 +2201,7 @@ mod tests {
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
+            previous_roster_evidence: None,
             npos_consensus_effects: None,
         };
         let key_pair = checked_bls_keypair();
@@ -2198,6 +2235,7 @@ mod tests {
             da_commitments: Some(DaCommitmentBundle::default()),
             da_proof_policies: None,
             da_pin_intents: Some(DaPinIntentBundle::default()),
+            previous_roster_evidence: None,
             npos_consensus_effects: None,
         };
         let with_payload = SignedBlock::presigned_with_payload(signature, payload);
@@ -2224,6 +2262,7 @@ mod tests {
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
+            previous_roster_evidence: None,
             npos_consensus_effects: None,
         };
         let signature = checked_block_signature(0, &key_pair, &payload.header);
@@ -2278,6 +2317,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: Some(result),
@@ -2296,6 +2336,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2315,6 +2356,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2350,6 +2392,7 @@ mod tests {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
+            prev_roster_evidence_hash: None,
             npos_effects_hash: None,
             execution_context_hash: None,
             sccp_commitment_root: None,
@@ -2378,6 +2421,7 @@ mod tests {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
+            prev_roster_evidence_hash: None,
             npos_effects_hash: None,
             execution_context_hash: None,
             sccp_commitment_root: None,
@@ -2479,6 +2523,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2534,6 +2579,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2572,6 +2618,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2612,6 +2659,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2646,6 +2694,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2688,6 +2737,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2742,6 +2792,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2820,6 +2871,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2847,6 +2899,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2873,6 +2926,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2902,6 +2956,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -3108,6 +3163,41 @@ mod tests {
                 .expect("rehash normalized proposal wire"),
             proposal_hash,
             "execution-only mutations must leave the normalized proposal hash unchanged"
+        );
+    }
+    #[test]
+    fn pre_release_empty_genesis_result_placeholder_is_recognized_exactly() {
+        let keypair = checked_random_keypair();
+        let authority = crate::account::AccountId::new(keypair.public_key().clone());
+        let transaction = TransactionBuilder::new_genesis(
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
+        let mut block = SignedBlock::genesis(vec![transaction], keypair.private_key(), None, None);
+        let merkle = block
+            .external_entrypoints_cloned()
+            .map(|entrypoint| entrypoint.hash())
+            .collect();
+        block.result = Some(BlockResult {
+            merkle,
+            ..BlockResult::default()
+        });
+        assert!(block.has_pre_release_empty_genesis_result_placeholder());
+        assert_eq!(
+            block.canonical_resultless_proposal().result,
+            None,
+            "normalization must remove the placeholder without changing the signed payload",
+        );
+
+        block
+            .result
+            .as_mut()
+            .expect("fixture placeholder")
+            .committed_fragment_count = 1;
+        assert!(
+            !block.has_pre_release_empty_genesis_result_placeholder(),
+            "any non-default result field must leave the compatibility corridor",
         );
     }
     #[cfg(feature = "transparent_api")]

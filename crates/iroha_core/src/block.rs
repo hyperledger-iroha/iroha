@@ -3216,7 +3216,7 @@ pub fn check_genesis_block(
 /// genesis key must therefore authenticate the height-one header and its ordered transaction
 /// intents independently of whether those results have already been attached.
 #[allow(clippy::too_many_lines)]
-fn authenticate_genesis_block_intents(
+pub(crate) fn authenticate_genesis_block_intents(
     block: &SignedBlock,
     genesis_account: &iroha_data_model::account::AccountId,
 ) -> Result<(), InvalidGenesisError> {
@@ -3871,6 +3871,7 @@ mod new {
                     da_commitments: block.da_commitments,
                     da_proof_policies: block.da_proof_policies,
                     da_pin_intents: block.da_pin_intents,
+                    previous_roster_evidence: None,
                     npos_consensus_effects: block.npos_consensus_effects,
                 },
             )
@@ -16115,6 +16116,7 @@ pub(crate) mod valid {
                     da_commitments: None,
                     da_proof_policies: Some(policies),
                     da_pin_intents: None,
+                    previous_roster_evidence: None,
                     npos_consensus_effects: None,
                 },
             );
@@ -21442,6 +21444,7 @@ pub(crate) mod valid {
                     da_commitments: chained.0.da_commitments,
                     da_proof_policies: chained.0.da_proof_policies,
                     da_pin_intents: chained.0.da_pin_intents,
+                    previous_roster_evidence: None,
                     npos_consensus_effects: chained.0.npos_consensus_effects,
                 },
             );
@@ -23560,6 +23563,70 @@ pub(crate) mod valid {
             assert_eq!(
                 authenticate_genesis_block_intents(&forged, &genesis_account),
                 Err(InvalidGenesisError::InvalidSignature)
+            );
+        }
+        #[test]
+        fn pre_release_genesis_placeholder_authenticates_intent_but_not_execution_results() {
+            use iroha_data_model::{
+                block::{BlockPayload, BlockResult},
+                prelude::*,
+            };
+            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+            use norito::codec::DecodeAll as _;
+
+            #[derive(norito::codec::Encode)]
+            struct ProducerSignedBlock {
+                signatures: BTreeSet<BlockSignature>,
+                payload: BlockPayload,
+                result: Option<BlockResult>,
+            }
+
+            let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
+            let transaction = TransactionBuilder::new_genesis(
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let proposal = SignedBlock::genesis(
+                vec![transaction],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+                None,
+                None,
+            );
+            let result = BlockResult {
+                merkle: proposal
+                    .external_entrypoints_cloned()
+                    .map(|entrypoint| entrypoint.hash())
+                    .collect(),
+                ..BlockResult::default()
+            };
+            let wire = ProducerSignedBlock {
+                signatures: proposal.signatures().cloned().collect(),
+                payload: proposal.payload().clone(),
+                result: Some(result),
+            }
+            .encode();
+            let mut cursor = wire.as_slice();
+            let placeholder = SignedBlock::decode_all(&mut cursor)
+                .expect("decode exact producer-era result placeholder");
+            assert!(placeholder.has_pre_release_empty_genesis_result_placeholder());
+            authenticate_genesis_block_intents(&placeholder, &genesis_account)
+                .expect("the original signed intent remains authenticated");
+            assert_eq!(
+                check_genesis_block(&placeholder, &genesis_account),
+                Err(InvalidGenesisError::ResultCountMismatch {
+                    expected: 1,
+                    actual: 0,
+                }),
+                "strict genesis validation must never trust the placeholder as execution results",
+            );
+            let normalized = placeholder.canonical_resultless_proposal();
+            assert!(normalized.is_resultless_proposal());
+            assert_eq!(normalized.hash(), placeholder.hash());
+            assert_eq!(
+                normalized.signatures().cloned().collect::<BTreeSet<_>>(),
+                placeholder.signatures().cloned().collect::<BTreeSet<_>>(),
             );
         }
         #[test]

@@ -189,6 +189,19 @@ pub fn validate_genesis_block(
 ) -> Result<(), block::InvalidGenesisError> {
     block::check_genesis_block(block, genesis_account)
 }
+/// Authenticate a genesis block's immutable signed intent without trusting attached execution
+/// results.
+///
+/// This is the pre-execution half of [`validate_genesis_block`].  It validates the exact block
+/// signature, genesis header, transaction ordering, Merkle commitment, DA bundles, transaction
+/// domains, authorities, and transaction signatures.  Callers remain responsible for executing
+/// the authenticated canonical proposal and validating its deterministic results.
+pub fn validate_genesis_block_intents(
+    block: &iroha_data_model::block::SignedBlock,
+    genesis_account: &iroha_data_model::account::AccountId,
+) -> Result<(), block::InvalidGenesisError> {
+    block::authenticate_genesis_block_intents(block, genesis_account)
+}
 #[cfg(test)]
 /// Test-only helpers shared across core modules.
 pub mod test_alias {

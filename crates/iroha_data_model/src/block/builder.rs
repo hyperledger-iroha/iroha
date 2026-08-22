@@ -4,7 +4,7 @@ use super::{
     SignedBlock,
 };
 use crate::{
-    consensus::NposConsensusEffects,
+    consensus::{NposConsensusEffects, PreviousRosterEvidence},
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -32,6 +32,7 @@ pub struct BlockBuilder {
     da_commitments: Option<DaCommitmentBundle>,
     da_proof_policies: Option<DaProofPolicyBundle>,
     da_pin_intents: Option<DaPinIntentBundle>,
+    previous_roster_evidence: Option<PreviousRosterEvidence>,
     npos_consensus_effects: Option<NposConsensusEffects>,
     execution_context: Option<BlockExecutionContextBundle>,
 }
@@ -50,6 +51,7 @@ impl BlockBuilder {
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
+            previous_roster_evidence: None,
             npos_consensus_effects: None,
         }
     }
@@ -121,6 +123,10 @@ impl BlockBuilder {
             .take()
             .filter(|bundle| !bundle.is_empty());
     }
+    /// Attach previous-height roster evidence that will be embedded in the resulting block.
+    pub fn set_previous_roster_evidence(&mut self, evidence: Option<PreviousRosterEvidence>) {
+        self.previous_roster_evidence = evidence;
+    }
     /// Attach deterministic `NPoS` effects that will be embedded in the resulting block.
     pub fn set_npos_consensus_effects(&mut self, effects: Option<NposConsensusEffects>) {
         self.npos_consensus_effects = effects.filter(|bundle| !bundle.is_empty());
@@ -142,6 +148,7 @@ impl BlockBuilder {
         let da_commitments = self.da_commitments.clone();
         let da_proof_policies = self.da_proof_policies.clone();
         let da_pin_intents = self.da_pin_intents.clone();
+        let previous_roster_evidence = self.previous_roster_evidence.clone();
         let npos_consensus_effects = self.npos_consensus_effects.clone();
         self.header
             .set_execution_context_hash(self.execution_context.as_ref().map(HashOf::new));
@@ -152,6 +159,7 @@ impl BlockBuilder {
             da_commitments,
             da_proof_policies,
             da_pin_intents,
+            previous_roster_evidence,
             npos_consensus_effects,
         };
         let result = BlockResult {
@@ -181,6 +189,7 @@ impl BlockBuilder {
         block.set_da_proof_policies(self.da_proof_policies);
         block.set_da_commitments(self.da_commitments);
         block.set_da_pin_intents(self.da_pin_intents);
+        block.set_previous_roster_evidence(self.previous_roster_evidence);
         block.set_npos_consensus_effects(self.npos_consensus_effects);
         block.set_execution_context(self.execution_context);
         block
@@ -212,6 +221,8 @@ impl BlockBuilder {
             .da_pin_intents
             .as_ref()
             .and_then(DaPinIntentBundle::merkle_commitment);
+        self.header
+            .set_prev_roster_evidence_hash(self.previous_roster_evidence.as_ref().map(HashOf::new));
         self.header.set_npos_effects_hash(
             self.npos_consensus_effects
                 .as_ref()
