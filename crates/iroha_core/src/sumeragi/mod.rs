@@ -669,8 +669,8 @@ pub(crate) mod v2_context;
 pub(crate) mod v2_context_store;
 pub(crate) mod v2_core;
 pub use v2_context::{
-    GenesisV2Bootstrap, V2GenesisBootstrapError, freeze_staged_genesis_v2,
-    signed_genesis_voting_peers, staged_genesis_execution_policy_hash,
+    GenesisV2Bootstrap, V2GenesisBootstrapError, configured_lane_catalog_hash_for_network,
+    freeze_staged_genesis_v2, signed_genesis_voting_peers, staged_genesis_execution_policy_hash,
     staged_genesis_nexus_amx_context_hash, validate_signed_genesis_v2_authority,
 };
 pub use v2_core::{

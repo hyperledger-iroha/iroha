@@ -8,7 +8,10 @@ use core::{
 use iroha_config::{
     base::WithOrigin,
     kura::InitMode,
-    parameters::actual::{DaManifestPolicy, Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
+    parameters::actual::{
+        DaManifestPolicy, Kura as KuraConfig, LaneConfig as RuntimeLaneConfig,
+        SnapshotBootstrapPolicy, SumeragiV2RuntimeLimits,
+    },
 };
 #[cfg(feature = "sm")]
 use iroha_crypto::sm::Sm2PublicKey;
@@ -16847,6 +16850,69 @@ fn authenticated_startup_state_for_testing(
         .restore_kura_lane_segments_before_startup_replay()
         .expect("restore exact pre-replay primary geometry cursor");
     (kura, state)
+}
+#[test]
+fn reset_11_startup_retains_producer_catalog_and_incarnation_journal() {
+    const RESET_11_NETWORK_ID: [u8; Hash::LENGTH] = [
+        0x1e, 0x88, 0x19, 0xab, 0x7b, 0x55, 0xa4, 0xe7, 0xe4, 0x1e, 0xa3, 0xeb, 0x8e, 0x42, 0xae,
+        0xe6, 0x6d, 0x77, 0xcc, 0x07, 0x46, 0x1b, 0xa3, 0xb7, 0x01, 0x81, 0x42, 0x84, 0x25, 0x80,
+        0x92, 0x31,
+    ];
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(RESET_11_NETWORK_ID)),
+    );
+    let configured = configured_baseline_test_catalog("reset-11-secondary", None);
+    let expected_hash =
+        iroha_config::parameters::actual::sumeragi_v2_pre_release_lane_catalog_hash(&configured);
+    let expected_incarnations =
+        iroha_config::parameters::actual::sumeragi_v2_pre_release_static_lane_incarnations(
+            &configured,
+        );
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let kura_config = strict_kura_config_for_testing(temp_dir.path().join("reset-11-kura"));
+    let lane_config = RuntimeLaneConfig::from_catalog(&configured);
+    let (kura, _) =
+        Kura::new_with_configured_lane_catalog_hash_and_snapshot_bootstrap_and_sumeragi_limits(
+            &kura_config,
+            &lane_config,
+            &configured,
+            expected_hash,
+            &SnapshotBootstrapPolicy::default(),
+            &SumeragiV2RuntimeLimits::default(),
+        )
+        .expect("open reset-11 authenticated Kura");
+    let mut state = State::try_new_with_chain_and_network_id(
+        World::default(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+        (*DEFAULT_TEST_CHAIN_ID).clone(),
+        network_id,
+        #[cfg(feature = "telemetry")]
+        <_>::default(),
+    )
+    .expect("construct reset-11 State");
+
+    state
+        .prepare_configured_primary_geometry_anchor(&configured)
+        .expect("anchor producer primary geometry");
+    assert_eq!(
+        state.lane_incarnations_snapshot()[&LaneId::SINGLE],
+        expected_incarnations[&LaneId::SINGLE],
+    );
+    state
+        .restore_kura_lane_segments_before_startup_replay()
+        .expect("restore producer primary geometry");
+    state
+        .set_nexus_from_config(startup_nexus_for_catalog(configured.clone()))
+        .expect("publish producer configured geometry");
+
+    assert_eq!(state.lane_incarnations_snapshot(), expected_incarnations);
+    let (baseline, phases, has_temp) = kura
+        .lane_geometry_journal_state_for_test()
+        .expect("read reset-11 geometry journal");
+    assert_eq!(baseline, Some(expected_hash));
+    assert_eq!(phases, vec!["catalog_published"]);
+    assert!(!has_temp);
 }
 #[test]
 fn authenticated_startup_anchors_custom_primary_and_journals_secondaries_exactly_once() {

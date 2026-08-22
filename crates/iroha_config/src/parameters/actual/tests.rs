@@ -132,6 +132,112 @@ mod tests {
         );
     }
     #[test]
+    fn pre_release_taira_configured_catalog_hash_matches_reset_11_journal() {
+        let lane = |id,
+                    alias: &str,
+                    description: &str,
+                    dataspace_id,
+                    visibility,
+                    governance: Option<&str>,
+                    teu_capacity: Option<u64>| LaneConfigMetadata {
+            id: LaneId::new(id),
+            dataspace_id,
+            alias: alias.to_owned(),
+            description: Some(description.to_owned()),
+            visibility,
+            governance: governance.map(str::to_owned),
+            scheduler: teu_capacity.map(|capacity| {
+                LaneSchedulerPolicy::new(
+                    NonZeroU64::new(capacity),
+                    None,
+                )
+            }),
+            ..LaneConfigMetadata::default()
+        };
+        let catalog = LaneCatalog::new(
+            NonZeroU32::new(7).expect("non-zero reset-11 lane bound"),
+            vec![
+                lane(
+                    0,
+                    "core",
+                    "Primary execution lane",
+                    DataSpaceId::UNIVERSAL,
+                    LaneVisibility::Public,
+                    None,
+                    Some(50_000_000),
+                ),
+                lane(
+                    1,
+                    "governance",
+                    "Governance & parliament traffic",
+                    DataSpaceId::UNIVERSAL,
+                    LaneVisibility::Public,
+                    Some("parliament"),
+                    None,
+                ),
+                lane(
+                    2,
+                    "zk",
+                    "Zero-knowledge attachments",
+                    DataSpaceId::UNIVERSAL,
+                    LaneVisibility::Public,
+                    None,
+                    None,
+                ),
+                lane(
+                    3,
+                    "dpn",
+                    "Digital payments network traffic",
+                    DataSpaceId::new(10),
+                    LaneVisibility::Restricted,
+                    None,
+                    Some(25_000_000),
+                ),
+                lane(
+                    4,
+                    "external-poc",
+                    "External PoC traffic",
+                    DataSpaceId::new(6_647_857_470_246_403_404),
+                    LaneVisibility::Restricted,
+                    None,
+                    Some(25_000_000),
+                ),
+                lane(
+                    5,
+                    "boi-mobile",
+                    "Bank of Israel mobile-wallet traffic",
+                    DataSpaceId::new(8_477_022_798_449_861_195),
+                    LaneVisibility::Restricted,
+                    None,
+                    Some(25_000_000),
+                ),
+                lane(
+                    6,
+                    "cbsi",
+                    "Central-bank service integration traffic",
+                    DataSpaceId::new(20),
+                    LaneVisibility::Restricted,
+                    None,
+                    Some(25_000_000),
+                ),
+            ],
+        )
+        .expect("valid reset-11 configured catalog");
+
+        assert_eq!(
+            hex::encode(sumeragi_v2_pre_release_lane_catalog_hash(&catalog).as_ref()),
+            "6b8b9ea24d6e27cf480c43aa707bb969fd45add4830c34fa2b5215dffae38679",
+            "reset-11 Kura journal retains the producer configured-catalog commitment",
+        );
+        assert_eq!(
+            hex::encode(
+                iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&catalog).as_ref(),
+            ),
+            "020535c59f47512e849295679e4309f34b58c0162b42e88a93e5d2430e4c7bab",
+            "the successor wire shape remains distinct and stable",
+        );
+    }
+    #[test]
     fn nexus_consensus_policy_digest_excludes_operational_paths_and_worker_timing() {
         let baseline = Nexus::default();
         let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
@@ -1571,7 +1677,8 @@ mod tests {
             ..Nexus::default()
         };
         let baseline = with_lanes(vec![primary.clone(), secondary.clone()]);
-        let baseline_incarnations = sumeragi_v2_pre_release_static_lane_incarnations(&baseline);
+        let baseline_incarnations =
+            sumeragi_v2_pre_release_static_lane_incarnations(&baseline.lane_catalog);
 
         assert_eq!(
             hex::encode(baseline_incarnations[&LaneId::SINGLE].as_ref()),
@@ -1586,7 +1693,8 @@ mod tests {
                 ..secondary
             },
         ]);
-        let changed_incarnations = sumeragi_v2_pre_release_static_lane_incarnations(&changed);
+        let changed_incarnations =
+            sumeragi_v2_pre_release_static_lane_incarnations(&changed.lane_catalog);
         assert_eq!(
             baseline_incarnations[&LaneId::SINGLE],
             changed_incarnations[&LaneId::SINGLE],

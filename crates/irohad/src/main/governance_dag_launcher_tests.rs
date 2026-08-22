@@ -25,7 +25,7 @@ fn standard_launcher_qualifies_and_supervises_governance_dag_service_adapters() 
         .map(|offset| node_construction + offset)
         .expect("launcher eventually shares the embedded SoraFS node");
     let state_open = compact_source
-        .find("Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(")
+        .find("Kura::new_with_configured_lane_catalog_hash_and_snapshot_bootstrap_and_sumeragi_limits(")
         .expect("launcher contains the persistent-state startup corridor");
     assert!(
         qualification < state_open

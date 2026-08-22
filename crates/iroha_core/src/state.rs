@@ -38606,7 +38606,8 @@ impl State {
         network_id: &iroha_data_model::NetworkId,
         configured_lane_catalog: &LaneCatalog,
     ) -> Result<(), LaneLifecycleError> {
-        let configured_hash = LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog);
+        let configured_hash =
+            configured_lane_catalog_baseline_hash(network_id, configured_lane_catalog);
         let durable_hash = kura
             .configured_lane_catalog_baseline()
             .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?
@@ -38621,7 +38622,7 @@ impl State {
                 "configured-primary replay preflight mismatch: expected {durable_hash}, attempted {configured_hash}"
             )));
         }
-        let geometry = configured_primary_replay_geometry(configured_lane_catalog)?;
+        let geometry = configured_primary_replay_geometry(network_id, configured_lane_catalog)?;
         let lineage_root = lane_incarnation_lineage_root(network_id, &geometry.lineage);
         kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
             &geometry.lane_config,
@@ -38660,8 +38661,10 @@ impl State {
             &self.network_id,
             configured_lane_catalog,
         )?;
-        let configured_hash = LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog);
-        let geometry = configured_primary_replay_geometry(configured_lane_catalog)?;
+        let configured_hash =
+            configured_lane_catalog_baseline_hash(&self.network_id, configured_lane_catalog);
+        let geometry =
+            configured_primary_replay_geometry(&self.network_id, configured_lane_catalog)?;
         self.kura
             .establish_or_verify_configured_primary_geometry_anchor(
                 geometry.lane_config.primary(),
@@ -38697,7 +38700,8 @@ impl State {
                     .to_owned(),
             ));
         }
-        let configured_hash = LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog);
+        let configured_hash =
+            configured_lane_catalog_baseline_hash(&self.network_id, configured_lane_catalog);
         let durable_hash = self
             .kura
             .configured_lane_catalog_baseline()
@@ -38752,14 +38756,15 @@ impl State {
                     "restored Nexus runtime has no physical primary incarnation".to_owned(),
                 )
             })?;
-        let expected_incarnation = derive_static_lane_incarnations(&configured_primary_catalog)
-            .get(&LaneId::SINGLE)
-            .copied()
-            .ok_or_else(|| {
-                LaneLifecycleError::ConfiguredCatalogBaseline(
-                    "configured primary catalog has no physical primary incarnation".to_owned(),
-                )
-            })?;
+        let expected_incarnation =
+            configured_lane_static_incarnations(&self.network_id, &configured_primary_catalog)
+                .get(&LaneId::SINGLE)
+                .copied()
+                .ok_or_else(|| {
+                    LaneLifecycleError::ConfiguredCatalogBaseline(
+                        "configured primary catalog has no physical primary incarnation".to_owned(),
+                    )
+                })?;
         if incarnation != expected_incarnation {
             return Err(LaneLifecycleError::ConfiguredCatalogBaseline(format!(
                 "restored physical primary lane zero incarnation mismatch: expected {expected_incarnation}, restored {incarnation}"
@@ -38798,9 +38803,7 @@ impl State {
         nexus: iroha_config::parameters::actual::Nexus,
     ) -> Result<(), LaneLifecycleError> {
         let configured_catalog_hash =
-            iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(
-                &nexus.configured_lane_catalog,
-            );
+            configured_lane_catalog_baseline_hash(&self.network_id, &nexus.configured_lane_catalog);
         let durable_blocks = self
             .kura
             .exact_durable_blocks_count()
@@ -38865,8 +38868,7 @@ impl State {
                     .kura
                     .configured_lane_catalog_baseline()
                     .map_err(|err| LaneLifecycleError::ConfiguredCatalogBaseline(err.to_string()))?
-                && iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(attempted)
-                    != expected
+                && configured_lane_catalog_baseline_hash(&self.network_id, attempted) != expected
             {
                 return Err(LaneLifecycleError::ConfiguredCatalogBaseline(format!(
                     "pre-genesis lane catalog differs from immutable configured baseline {expected}"
@@ -39054,7 +39056,8 @@ impl State {
             &previous_lane_incarnation_activation_heights,
             &previous_lane_incarnation_lineage,
         )?;
-        let static_incarnations = derive_static_lane_incarnations(&nexus.lane_catalog);
+        let static_incarnations =
+            configured_lane_static_incarnations(&self.network_id, &nexus.lane_catalog);
         let updated_catalog_hash = merge_lane_consensus_catalog_hash(&nexus.lane_catalog);
         let mut updated_lane_incarnations = BTreeMap::new();
         let mut updated_lane_incarnation_activation_heights = BTreeMap::new();
@@ -41952,6 +41955,22 @@ fn merge_lane_catalog_hash(catalog: &LaneCatalog) -> Hash {
     let sanitized = LaneCatalog::new(catalog.lane_count(), lanes)
         .expect("removing reserved drain metadata cannot invalidate a lane catalog");
     iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&sanitized)
+}
+fn configured_lane_catalog_baseline_hash(
+    network_id: &iroha_data_model::NetworkId,
+    catalog: &LaneCatalog,
+) -> Hash {
+    crate::sumeragi::configured_lane_catalog_hash_for_network(network_id, catalog)
+}
+fn configured_lane_static_incarnations(
+    network_id: &iroha_data_model::NetworkId,
+    catalog: &LaneCatalog,
+) -> BTreeMap<LaneId, Hash> {
+    if crate::sumeragi::v2_context::uses_pre_release_taira_nexus_projection(network_id) {
+        iroha_config::parameters::actual::sumeragi_v2_pre_release_static_lane_incarnations(catalog)
+    } else {
+        derive_static_lane_incarnations(catalog)
+    }
 }
 fn autoscale_lane_drain_state_matches_context(
     lane: &iroha_data_model::nexus::LaneConfig,

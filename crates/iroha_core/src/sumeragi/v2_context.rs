@@ -17,7 +17,7 @@ use iroha_data_model::{
     NetworkId,
     block::{SignedBlock, consensus_v2 as wire},
     isi::RegisterBox,
-    nexus::PublicLaneValidatorStatus,
+    nexus::{LaneCatalog, LaneLifecycleParameterV1, PublicLaneValidatorStatus},
     peer::PeerId,
     transaction::Executable,
 };
@@ -34,6 +34,21 @@ const TAIRA_RESET11_NETWORK_ID: [u8; Hash::LENGTH] = [
 #[must_use]
 pub(crate) fn uses_pre_release_taira_nexus_projection(network_id: &NetworkId) -> bool {
     network_id.as_bytes() == &TAIRA_RESET11_NETWORK_ID
+}
+/// Compute the configured lane-catalog commitment for this network lineage.
+///
+/// Only the exact pre-release Taira reset-11 network retains the producer's
+/// legacy lane wire shape. Every other network uses the current commitment.
+#[must_use]
+pub fn configured_lane_catalog_hash_for_network(
+    network_id: &NetworkId,
+    catalog: &LaneCatalog,
+) -> Hash {
+    if uses_pre_release_taira_nexus_projection(network_id) {
+        iroha_config::parameters::actual::sumeragi_v2_pre_release_lane_catalog_hash(catalog)
+    } else {
+        LaneLifecycleParameterV1::catalog_hash(catalog)
+    }
 }
 /// Verified height-one inputs retained until the production reducer opens its
 /// safety WAL.
@@ -845,9 +860,17 @@ mod tests {
             Hash::prehashed(TAIRA_RESET11_NETWORK_ID),
         ));
         assert!(uses_pre_release_taira_nexus_projection(&taira));
-        assert!(!uses_pre_release_taira_nexus_projection(&test_network_id(
-            0
-        )));
+        let successor = test_network_id(0);
+        assert!(!uses_pre_release_taira_nexus_projection(&successor));
+        let catalog = iroha_data_model::nexus::LaneCatalog::default();
+        assert_eq!(
+            configured_lane_catalog_hash_for_network(&taira, &catalog),
+            iroha_config::parameters::actual::sumeragi_v2_pre_release_lane_catalog_hash(&catalog),
+        );
+        assert_eq!(
+            configured_lane_catalog_hash_for_network(&successor, &catalog),
+            iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&catalog),
+        );
     }
     fn roster(powers: &[u64]) -> Vec<wire::ValidatorPower> {
         let mut entries = powers

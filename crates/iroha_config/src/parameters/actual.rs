@@ -3282,16 +3282,7 @@ fn nexus_consensus_policy_digest_with_projection(
         .collect();
     let autoscale = &nexus.autoscale;
     let configured_lane_catalog = if pre_release_taira {
-        (
-            nexus.configured_lane_catalog.lane_count().get(),
-            nexus
-                .configured_lane_catalog
-                .lanes()
-                .iter()
-                .map(SumeragiV2PreReleaseLaneConfig::from)
-                .collect::<Vec<_>>(),
-        )
-            .encode()
+        sumeragi_v2_pre_release_lane_catalog_preimage(&nexus.configured_lane_catalog)
     } else {
         nexus
             .configured_lane_catalog
@@ -5058,7 +5049,44 @@ impl From<&LaneConfigMetadata> for SumeragiV2PreReleaseLaneConfig {
         }
     }
 }
-fn sumeragi_v2_pre_release_static_lane_incarnations(nexus: &Nexus) -> BTreeMap<LaneId, Hash> {
+fn sumeragi_v2_pre_release_lane_configs(
+    catalog: &LaneCatalog,
+) -> Vec<SumeragiV2PreReleaseLaneConfig> {
+    catalog
+        .lanes()
+        .iter()
+        .map(SumeragiV2PreReleaseLaneConfig::from)
+        .collect()
+}
+fn sumeragi_v2_pre_release_lane_catalog_preimage(catalog: &LaneCatalog) -> Vec<u8> {
+    (
+        catalog.lane_count().get(),
+        sumeragi_v2_pre_release_lane_configs(catalog),
+    )
+        .encode()
+}
+/// Reproduce the configured lane-catalog commitment persisted by the
+/// pre-release Taira reset-11 producer.
+///
+/// The producer encoded the lane structure that predated manifest,
+/// confidential-compute, scheduler, and settlement-buffer fields. New
+/// networks must use [`iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash`].
+#[must_use]
+pub fn sumeragi_v2_pre_release_lane_catalog_hash(catalog: &LaneCatalog) -> Hash {
+    const DOMAIN: &[u8] = b"iroha:nexus:lane-catalog:v1\0";
+    let encoded = sumeragi_v2_pre_release_lane_catalog_preimage(catalog);
+    Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()])
+}
+/// Reproduce the generation-zero lane incarnations retained by the
+/// pre-release Taira reset-11 producer.
+///
+/// The producer expanded lanes 1 and above from the complete legacy catalog
+/// while retaining lane zero from its configured-primary bootstrap. New
+/// networks must derive incarnations from their current consensus projection.
+#[must_use]
+pub fn sumeragi_v2_pre_release_static_lane_incarnations(
+    catalog: &LaneCatalog,
+) -> BTreeMap<LaneId, Hash> {
     const CATALOG_DOMAIN: &[u8] = b"iroha:nexus:lane-catalog:v1\0";
     const STATIC_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:static:v2\0";
     const RESET_11_PRIMARY_INCARNATION: [u8; Hash::LENGTH] = [
@@ -5070,17 +5098,14 @@ fn sumeragi_v2_pre_release_static_lane_incarnations(nexus: &Nexus) -> BTreeMap<L
     // The reset-11 producer derived generation-zero incarnations from the complete
     // pre-release lane wire shape. Reusing current state incarnations here would
     // retain hashes derived from the successor consensus projection instead.
-    let lanes = nexus
-        .lane_catalog
-        .lanes()
-        .iter()
-        .map(|lane| {
-            let mut lane = SumeragiV2PreReleaseLaneConfig::from(lane);
+    let lanes = sumeragi_v2_pre_release_lane_configs(catalog)
+        .into_iter()
+        .map(|mut lane| {
             lane.metadata.remove(AUTOSCALE_META_DRAIN_STATE);
             lane
         })
         .collect::<Vec<_>>();
-    let catalog_preimage = (nexus.lane_catalog.lane_count().get(), lanes.clone()).encode();
+    let catalog_preimage = (catalog.lane_count().get(), lanes.clone()).encode();
     let catalog_hash = Hash::new_from_chunks(&[CATALOG_DOMAIN, catalog_preimage.as_slice()]);
 
     let mut incarnations = lanes
@@ -5187,14 +5212,10 @@ fn sumeragi_v2_nexus_amx_context_hash_with_projection(
         &nexus.lane_catalog.lane_count().get(),
     );
     if pre_release_taira {
-        let lanes = nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(SumeragiV2PreReleaseLaneConfig::from)
-            .collect::<Vec<_>>();
+        let lanes = sumeragi_v2_pre_release_lane_configs(&nexus.lane_catalog);
         append(&mut preimage, "nexus.lane_catalog.lanes", &lanes);
-        let producer_static_incarnations = sumeragi_v2_pre_release_static_lane_incarnations(nexus);
+        let producer_static_incarnations =
+            sumeragi_v2_pre_release_static_lane_incarnations(&nexus.lane_catalog);
         let mut lane_lifecycle = nexus
             .lane_catalog
             .lanes()

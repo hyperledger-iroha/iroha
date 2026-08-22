@@ -1924,6 +1924,7 @@ impl Kura {
             config,
             lane_config,
             configured_lane_catalog,
+            LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog),
             None,
             false,
             PendingControlSidecarLimits::default(),
@@ -1967,6 +1968,35 @@ impl Kura {
         bootstrap_policy: &SnapshotBootstrapPolicy,
         sumeragi_limits: &SumeragiV2RuntimeLimits,
     ) -> Result<(Arc<Self>, BlockCount)> {
+        Self::new_with_configured_lane_catalog_hash_and_snapshot_bootstrap_and_sumeragi_limits(
+            config,
+            lane_config,
+            configured_lane_catalog,
+            LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog),
+            bootstrap_policy,
+            sumeragi_limits,
+        )
+    }
+    /// Initialize authenticated Kura with an explicit configured-catalog commitment.
+    ///
+    /// This startup boundary exists for a network lineage whose durable journal
+    /// predates the current lane wire shape. The caller must derive the hash
+    /// from an authenticated network identifier; lane storage geometry is still
+    /// validated from `configured_lane_catalog` before any Kura path is opened.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error under the same conditions as
+    /// [`Self::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits`],
+    /// or when the explicit commitment differs from the durable baseline.
+    pub fn new_with_configured_lane_catalog_hash_and_snapshot_bootstrap_and_sumeragi_limits(
+        config: &Config,
+        lane_config: &LaneConfig,
+        configured_lane_catalog: &LaneCatalog,
+        configured_lane_catalog_hash: Hash,
+        bootstrap_policy: &SnapshotBootstrapPolicy,
+        sumeragi_limits: &SumeragiV2RuntimeLimits,
+    ) -> Result<(Arc<Self>, BlockCount)> {
         bootstrap_policy.validate().map_err(|message| {
             Error::IO(
                 std::io::Error::new(ErrorKind::InvalidInput, message),
@@ -1987,6 +2017,7 @@ impl Kura {
             config,
             lane_config,
             configured_lane_catalog,
+            configured_lane_catalog_hash,
             provisional_hash_only_prefix,
             !bootstrap_policy.enabled,
             pending_control_sidecar_limits,
@@ -1996,6 +2027,7 @@ impl Kura {
         config: &Config,
         lane_config: &LaneConfig,
         configured_lane_catalog: &LaneCatalog,
+        configured_lane_catalog_hash: Hash,
         provisional_hash_only_prefix: Option<usize>,
         discover_signed_lineage_marker: bool,
         pending_control_sidecar_limits: PendingControlSidecarLimits,
@@ -2031,9 +2063,7 @@ impl Kura {
         Self::new_inner(
             config,
             &authenticated_lane_config,
-            Some(LaneLifecycleParameterV1::catalog_hash(
-                configured_lane_catalog,
-            )),
+            Some(configured_lane_catalog_hash),
             provisional_hash_only_prefix,
             discover_signed_lineage_marker,
             pending_control_sidecar_limits,

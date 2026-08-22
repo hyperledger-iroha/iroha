@@ -7391,11 +7391,17 @@ impl Iroha {
                 }
             }
         });
+        let configured_lane_catalog_hash =
+            iroha_core::sumeragi::configured_lane_catalog_hash_for_network(
+                &NetworkId::from_genesis_hash(config.genesis.expected_hash),
+                &config.nexus.configured_lane_catalog,
+            );
         let (kura, mut block_count) =
-            Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
+            Kura::new_with_configured_lane_catalog_hash_and_snapshot_bootstrap_and_sumeragi_limits(
                 &config.kura,
                 &config.nexus.lane_config,
                 &config.nexus.configured_lane_catalog,
+                configured_lane_catalog_hash,
                 &config.snapshot.bootstrap,
                 &config.sumeragi.limits,
             )
@@ -13932,11 +13938,17 @@ fn open_disposable_validation_kura(
 ) -> ReportResult<Arc<Kura>, MainError> {
     let mut kura_config = config.kura.clone();
     kura_config.store_dir = WithOrigin::inline(validation_root.path().join("kura"));
+    let configured_lane_catalog_hash =
+        iroha_core::sumeragi::configured_lane_catalog_hash_for_network(
+            &NetworkId::from_genesis_hash(config.genesis.expected_hash),
+            &config.nexus.configured_lane_catalog,
+        );
     let (kura, block_count) =
-        Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
+        Kura::new_with_configured_lane_catalog_hash_and_snapshot_bootstrap_and_sumeragi_limits(
             &kura_config,
             &config.nexus.lane_config,
             &config.nexus.configured_lane_catalog,
+            configured_lane_catalog_hash,
             &iroha_config::parameters::actual::SnapshotBootstrapPolicy::default(),
             &config.sumeragi.limits,
         )
@@ -15665,7 +15677,7 @@ mod tests {
             .filter(|character| !character.is_whitespace())
             .collect();
         let construct = compact_source
-            .find("Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(")
+            .find("Kura::new_with_configured_lane_catalog_hash_and_snapshot_bootstrap_and_sumeragi_limits(")
             .expect("standard launcher constructs Kura");
         let bind = compact_source
             .find(
