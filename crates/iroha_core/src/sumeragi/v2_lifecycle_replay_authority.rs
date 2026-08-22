@@ -5038,7 +5038,7 @@ pub(super) use tests::{
     durable_certified_fetch_waiting_record_fixture, exact_body_execution_commitment_fixture,
     exact_body_record_fixture, exact_durable_certified_fetch_record_fixture,
     exact_local_body_record_fixture, exact_pending_certified_fetch_candidate_fixture,
-    exact_record_fixture, exact_recovered_decision_terminal_family_fixture,
-    exact_replay_authority_for_payload_fixture, exact_timeout_sign_broadcast_fixture,
-    foreign_certified_serve_family_authority_fixture,
+    exact_prepare_sign_broadcast_fixture, exact_record_fixture,
+    exact_recovered_decision_terminal_family_fixture, exact_replay_authority_for_payload_fixture,
+    exact_timeout_sign_broadcast_fixture, foreign_certified_serve_family_authority_fixture,
 };
