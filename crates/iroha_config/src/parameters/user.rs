@@ -1022,6 +1022,10 @@ impl Root {
     /// values dormant. Offline application support has no node enable switch
     /// and is never inspected or rewritten here.
     ///
+    /// `nexus.enabled = true` is accepted as a compatibility marker for
+    /// already-rendered Taira configurations. Nexus no longer has a runtime
+    /// disable switch, so `false` and non-boolean values remain invalid.
+    ///
     /// # Errors
     ///
     /// Returns the ordinary collective configuration-reader error when an
@@ -1055,9 +1059,15 @@ impl Root {
         let reader = reader.rewrite_toml_sources(|sources| {
             const COMMANDS: &[&str] = &["torii", "kagemusha_commands"];
             const COMMANDS_ENABLED: &[&str] = &["torii", "kagemusha_commands", "enabled"];
+            const NEXUS_ENABLED: &[&str] = &["nexus", "enabled"];
             if let Some((_, Some(false))) = effective_bool_source(sources, COMMANDS_ENABLED) {
                 for source in sources.iter_mut() {
                     remove_path(source.table_mut(), COMMANDS);
+                }
+            }
+            if let Some((_, Some(true))) = effective_bool_source(sources, NEXUS_ENABLED) {
+                for source in sources.iter_mut() {
+                    remove_path(source.table_mut(), NEXUS_ENABLED);
                 }
             }
         });
@@ -32208,16 +32218,21 @@ policy_digest_hex = "{policy_digest_hex}"
         assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
     }
     #[test]
-    fn nexus_enabled_is_rejected_as_an_unknown_parameter() {
-        for enabled in [true, false] {
-            let mut table = base_table();
-            nexus_table_mut(&mut table).insert("enabled".into(), Value::Boolean(enabled));
-            let error = actual::Root::from_toml_source(TomlSource::inline(table))
-                .expect_err("the retired Nexus runtime switch must be unknown");
-            let report = format!("{error:?}");
-            assert!(report.contains("unknown parameter"), "{report}");
-            assert!(report.contains("nexus.enabled"), "{report}");
-        }
+    fn nexus_enabled_true_is_a_compatibility_marker() {
+        let mut table = base_table();
+        nexus_table_mut(&mut table).insert("enabled".into(), Value::Boolean(true));
+        actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect("the retired enabled=true marker must remain compatible");
+    }
+    #[test]
+    fn nexus_enabled_false_remains_invalid() {
+        let mut table = base_table();
+        nexus_table_mut(&mut table).insert("enabled".into(), Value::Boolean(false));
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("Nexus cannot be disabled through the retired marker");
+        let report = format!("{error:?}");
+        assert!(report.contains("unknown parameter"), "{report}");
+        assert!(report.contains("nexus.enabled"), "{report}");
     }
     #[test]
     fn nexus_autoscale_parse_rejects_default_lane_inside_elastic_range() {
