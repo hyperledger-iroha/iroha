@@ -1,0 +1,11 @@
+
+            {
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "pow": {
+                    "required": true,
+                    "difficulty": 5,
+                    "max_future_skew_secs": 0,
+                    "min_ticket_ttl_secs": 0
+                }
+            }

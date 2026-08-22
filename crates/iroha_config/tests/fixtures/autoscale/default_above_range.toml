@@ -1,0 +1,23 @@
+
+[nexus]
+lane_count = 3
+
+[[nexus.lane_catalog]]
+index = 0
+alias = "default"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 2
+alias = "high-default"
+metadata = {}
+
+[nexus.autoscale]
+enabled = true
+min_lanes = 1
+max_lanes = 2
+
+[nexus.routing_policy]
+default_lane = 2
+default_dataspace = "universal"
+rules = []

@@ -1,0 +1,4 @@
+
+                seiyaku Greeter {
+                    kotoage fn run() authorize("Run") {}
+                }

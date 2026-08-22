@@ -1,0 +1,5 @@
+module SecondTests {
+                koto_test { target: "../contracts/counter.ko" }
+                #[test]
+                fn calls_target_helper() { test::assert(current() == 0); }
+            }

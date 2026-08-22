@@ -6,7 +6,7 @@ NODE_OVERRIDE="${PRIVACY_JS_SDK_NODE_BIN:-}"
 PYTHON_BIN="${PRIVACY_JS_SDK_PYTHON_BIN:-python3}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-TRACKED_ROOT_CARGO_LOCK_SHA256="0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
+TRACKED_ROOT_CARGO_LOCK_SHA256="c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
 ABI22_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py"
 NATIVE_BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-js-native.XXXXXX")"
 
@@ -113,7 +113,7 @@ PRIVACY_RELEASE_CARGO_LOCK="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-}"
 [[ "$(sha256_file "${PRIVACY_RELEASE_CARGO_LOCK}")" == "${FROZEN_CARGO_LOCK_SHA256}" ]] \
   || { echo "error: privacy JavaScript external Cargo.lock is not the frozen release lock" >&2; exit 1; }
 echo \
-  "error: privacy JavaScript native tooling requires external-lock requalification before it can consume cd9e without replacing the tracked 0ddb root authority" \
+  "error: privacy JavaScript native tooling requires external-lock requalification before it can consume cd9e without replacing the tracked c90b root authority" \
   >&2
 exit 1
 

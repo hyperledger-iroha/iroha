@@ -364,7 +364,7 @@ fn streaming_large_owner_surface_is_move_only_redacted_and_zeroizing() {
     assert!(materialized_wire_source.lines().count() <= 5_000);
     assert!(mkhe_facade.lines().count() <= 5_000);
     assert!(!phase_source.contains("pub fn zk_ams_phase23_materialize_release_accumulators_v1"));
-    assert!(!phase_source.contains("pub struct ZkAmsPhase23PackedAccumulatorSetV1"));
+    assert!(!phase_source.contains("ZkAmsPhase23PackedAccumulatorSetV1"));
     assert!(!phase_source.contains("impl ZkAmsPhase23MaterializedAccumulatorsV1"));
     assert!(!mkhe_facade.contains("ZkAmsPhase23PackedAccumulatorSetV1,"));
     for facade in std::iter::once(mkhe_facade).chain(public_facades) {
@@ -470,9 +470,6 @@ fn streaming_large_owner_surface_is_move_only_redacted_and_zeroizing() {
         "#[cfg_attr(test, derive(Clone))]\n#[derive(PartialEq, Eq)]\npub struct ZkAmsT256PackedPlaintextV1"
     ));
     assert!(!packing_source.contains(".field(\"coefficients\", &self.coefficients)"));
-    assert!(phase_source.contains(
-        "#[cfg_attr(test, derive(Clone))]\n#[derive(PartialEq, Eq)]\npub(super) struct ZkAmsPhase23PackedAccumulatorSetV1"
-    ));
     assert!(phase_source.contains(
         "#[cfg_attr(test, derive(Clone))]\n#[derive(PartialEq, Eq)]\npub struct ZkAmsPhase23MaterializedAccumulatorsV1"
     ));

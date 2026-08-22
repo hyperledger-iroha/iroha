@@ -775,6 +775,8 @@ required|remote|LifecycleStageKind::ValidateBody|remote Proposal replay wrapper 
 required|remote|canonical_replay_authority(|remote Proposal replay wrapper omitted canonical_replay_authority(
 required|remote_certified_body|fn remote_proposal_origin_matches_fetch(|remote Proposal projected stages lost their exact signed Fetch-origin matcher
 count|remote_certified_body|fn exactly_matches_origin_fetch(|3|the certified family plus Store and Stored Proposal stages must retain exactly three origin-Fetch matchers
+required|production|remote_proposal_fetch_effect(source).as_ref() == Some(effect)|Proposal Fetch rediscovery must re-authenticate the projected effect
+required|production|exact_remote_proposal_fetch(authenticated, ingress, effect).is_some()|Proposal Fetch rediscovery must re-authenticate the signed ingress
 required|authenticated_genesis|pub(in crate::sumeragi) struct InstalledAuthenticatedGenesisReplayAuthorityV1|authenticated genesis replay lost its opaque installed authority
 required|authenticated_genesis|authenticated.signed_block()|authenticated genesis replay authority is no longer minted from the opaque launch-authenticated body
 required|authenticated_genesis|context.height != 1|authenticated genesis replay stopped requiring height one
@@ -1032,6 +1034,10 @@ end
 case|remote_proposal_replay_pre_admission_is_closed_exact_and_live
 region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|token|registry|after|pub(in crate::sumeragi) struct PreparedRemoteProposalFetchReplayPreAdmission {|before|/// Closed concrete form of one fsynced recovered WAL `Sign` successor.
+region|fetch_declaration|registry|after|PreparedRemoteProposalFetchReplayPreAdmission {|before|}
+region|store_declaration|registry|after|PreparedRemoteProposalStoreReplayPreAdmission {|before|}
+region|stored_declaration|registry|after|PreparedRemoteProposalStoredReplayPreAdmission {|before|}
+region|validate_declaration|registry|after|PreparedRemoteProposalValidateReplayPreAdmission {|before|}
 region|authenticated_genesis_token|registry|at|impl PreparedAuthenticatedGenesisFetchReplayPreAdmission {|before|impl PreparedRemoteProposalFetchReplayPreAdmission {
 region|callers|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|callers|selector|begin|-|end|-
@@ -1055,6 +1061,7 @@ required|token|pub(in crate::sumeragi) fn project_store(|remote Proposal replay 
 required|token|.project_exact_store(&effect, &pending)|remote Proposal replay token omitted {required}
 required|token|pub(in crate::sumeragi) fn bind_durable_body(|remote Proposal replay token omitted {required}
 required|token|.bind_durable_body(&effect, &durable_receipt)|remote Proposal replay token omitted {required}
+required|token|.exactly_matches_origin_fetch(effect)|remote Proposal replay token omitted {required}
 required|token|pub(in crate::sumeragi) fn project_validate(|remote Proposal replay token omitted {required}
 required|token|.project_exact_validate(|remote Proposal replay token omitted {required}
 required|token|fn exactly_retains_owned_store(|Stored Proposal replay token lost its exact runtime Store owner
@@ -1084,6 +1091,14 @@ forbidden|token|.entries|remote Proposal replay token exposed forbidden surface 
 forbidden|token|!= [0; 32]|remote Proposal replay token exposed forbidden surface {forbidden}
 forbidden|token|== [0; 32]|remote Proposal replay token exposed forbidden surface {forbidden}
 forbidden|token|is_zero()|remote Proposal replay token exposed forbidden surface {forbidden}
+forbidden|fetch_declaration|Option<|remote Proposal Fetch replay declaration regained optional authority
+forbidden|fetch_declaration|derive(Clone|remote Proposal Fetch replay declaration became cloneable
+forbidden|store_declaration|Option<|remote Proposal Store replay declaration regained optional authority
+forbidden|store_declaration|derive(Clone|remote Proposal Store replay declaration became cloneable
+forbidden|stored_declaration|Option<|remote Proposal Stored replay declaration regained optional authority
+forbidden|stored_declaration|derive(Clone|remote Proposal Stored replay declaration became cloneable
+forbidden|validate_declaration|Option<|remote Proposal Validate replay declaration regained optional authority
+forbidden|validate_declaration|derive(Clone|remote Proposal Validate replay declaration became cloneable
 count|production|PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(|0|the registry declaration must not self-invoke the remote Proposal mint
 count|callers|PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(|1|remote Proposal pre-admission must have exactly one production executor caller
 required|callers|durable_validate_retry_seals:|executor omitted inert post-admission Validate retry seals
@@ -1093,6 +1108,13 @@ required|callers|fn exactly_authenticates_fetch_rediscovery(&self, effect: &Adap
 required|callers|stage.exactly_authenticates_fetch_rediscovery(&exact_effect)|ordinary Proposal Fetch rediscovery stopped proving its retained signed origin
 required|callers|ordinary Proposal Fetch replay lost its exact in-flight task|Fetch-stage rediscovery stopped proving the original work ID remains live
 required|callers|ordinary Proposal Fetch rediscovery observed a transient Store admission|Fetch rediscovery stopped rejecting the transient Store-admission cut
+required|callers|RemoteProposalReplayStageV1::BodyAvailable(_)|live Proposal replay handoff omitted {required}
+required|callers|RemoteProposalReplayStageV1::Store { .. }|live Proposal replay handoff omitted {required}
+required|callers|RemoteProposalReplayStageV1::Stored { .. }|live Proposal replay handoff omitted {required}
+required|callers|.project_store(effect.clone(), ownership.clone())|live Proposal replay handoff omitted {required}
+required|callers|.bind_durable_body(receipt.clone())|live Proposal replay handoff omitted {required}
+required|callers|.project_validate(effect.clone(), validate_ownership.clone())|live Proposal replay handoff omitted {required}
+required|callers|.into_pending_durable_validate_admission()|live Proposal replay handoff omitted {required}
 required|callers|durable_validate_retry_seals_are_finalization_inert(|executor rollover stopped proving every surviving Validate retry seal belongs to the exact decided body
 required|callers|.chain(self.durable_validate_retry_seals.keys())|protected-lock retirement omitted inert Validate retry seals from its exact body census
 required|callers|.retain(\pkey, _\p !drain_decision_body && *key == decision_body)|Decision cleanup stopped retaining only the exact live decision-body Validate retry seal
@@ -1153,6 +1175,10 @@ region|callers|effects|begin|-|end|-
 region|callers|worker|begin|-|end|-
 region|callers|scheduler_inputs|begin|-|end|-
 region|callers|runner|begin|-|end|-
+region|scheduler|scheduler_inputs|begin|-|end|-
+region|outside|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|outside|worker|begin|-|end|-
+region|outside|runner|begin|-|end|-
 required|authority|_linearity: ReadyValidateSignPredecessorLinearity|Validate Sign predecessor authority omitted {required}
 required|authority|impl Drop for ReadyValidateSignPredecessorLinearity|Validate Sign predecessor authority omitted {required}
 required|authority|pub(in crate::sumeragi) fn project_successor(\n        self,|Validate Sign predecessor authority omitted {required}
@@ -1180,6 +1206,9 @@ forbidden|join|fn commit(|fixed live Sign join exposed {forbidden}
 forbidden|join|fn install(|fixed live Sign join exposed {forbidden}
 count|production|adapter.bind_validate_sign_predecessor(predecessor)|1|only the fixed Ready registry join binds the adapter Sign predecessor
 count|callers|.seal_live_wal_validate_sign()|1|live Validate Sign join must have exactly one production scheduler caller
+required|scheduler|preview.seal_live_wal_validate_sign()|the lifecycle scheduler must consume the sealed live-WAL Sign join
+forbidden|outside|seal_live_wal_validate_sign|the live Validate Sign join escaped its scheduler owner
+forbidden|outside|PreparedReadyDurableValidatePersistedSignPreAdmission|the persisted Sign pre-admission escaped its scheduler owner
 end
 case|registry_remains_inert_and_scheduler_free
 region|prefix|registry|begin|-|before|#[cfg(test)]
@@ -2695,4 +2724,649 @@ forbidden|effects|retained_certified_body_response|the retired ordinary response
 forbidden|effects|accept_certified_body_response_with_ingress_ownership|the legacy ordinary response admission path returned
 forbidden|runtime|retained_response_predecessor_target_ordinal|the legacy predecessor ordinal returned
 forbidden|runtime|retained_response_predecessor_retry_attempted|the legacy predecessor retry latch returned
+end
+case|recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired
+region|production|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|token|adapter|at|// RECOVERED_WAL_VOTE_SIGN_SEAL_BEGIN|before|// RECOVERED_WAL_VOTE_SIGN_SEAL_END
+region|phase_branch|adapter|after|fn open_recovered_phase_vote_branch(|before|\n#[cfg(test)]\nmod tests {
+region|cold_prepare|adapter|after|fn prepare_recovered_phase_vote_cold_adapter_stage|before|fn install_recovered_phase_vote_sign_stage
+region|production_open|adapter|after|fn open_production_owner_seals(|before|#[cfg(test)]\nimpl<'registry> AuthenticatedRecoveredWalLifecycleStartup
+region|open_signature|adapter|after|fn open_production_owner_seals(|before|) -> Result<
+region|recovered_vote_impl|adapter|after|impl RecoveredWalVoteSign {|before|\n}
+region|frontier|adapter|at|fn authenticate_recovered_wal_frontier(|before|// RECOVERED_WAL_VOTE_SIGN_MINT_BEGIN
+region|mint|adapter|at|// RECOVERED_WAL_VOTE_SIGN_MINT_BEGIN|before|// RECOVERED_WAL_VOTE_SIGN_MINT_END
+region|successor|runtime|at|pub(crate) struct RecoveredWalVoteSuccessor|before|fn pending_runtime_effect_binding_projection_hash
+region|projection|runtime|at|pub(crate) fn project_recovered_wal_vote_successor(|before|    fn project_recovered_ordinary_validate_commit_successor(
+region|commit_relation|runtime|at|enum CommitSuccessorTagRelation|before|\nimpl PendingRuntimeEffectBinding
+region|live_commit|runtime|after|pub(crate) fn project_validate_sign_commit_successor(|before|/// Project a Commit-vote successor for an ordinary Validate
+region|runtime_production|runtime|begin|-|before|#[cfg(test)]\nmod tests
+region|replay|replay_authority_base|begin|-|end|-
+region|replay|replay_authority_certified_body|begin|-|end|-
+region|reconstructed|runtime|at|pub(crate) fn reconstruct_recovered_wal_vote_successor(|before|\nimpl PendingRuntimeEffectBinding
+region|body_store|body_store|begin|-|end|-
+region|marker|body_store|at|pub(super) struct RecoveredValidatedBodyCut<'store>|before|// DURABLE_BODY_VALIDATION_SURFACE_END
+region|recovered_parent_detach|body_store|after|pub(super) fn detach_recovered_validated_parent(|before|/// Execute one exact-body persistence task
+region|decision_composite|body_store|after|struct RecoveredDecisionApplyAdapterPreviewV1<'store>|before|/// One-shot call capability for deriving
+region|decision_preview|adapter|after|fn prepare_recovered_decision_apply_fast_forward(|before|/// Preview a certified Fetch completion directly
+region|decision_fast_forward|adapter|after|fn prepare_recovered_decision_apply_fast_forward(|before|/// Preview a certified Fetch completion directly
+region|decision_fast_forward|wal_recovery|begin|-|end|-
+region|parent|ledger|at|pub(crate) struct AuthenticatedRecoveredWalValidateLedgerParent|before|    /// Purely stage one adapter-authenticated WAL-ahead
+region|exact_store|registry|after|pub(crate) struct OpenedRecoveredWalValidateLedger|before|/// Opaque failure from storage-authenticated recovered-parent reconstruction.
+region|owner_seal|registry|after|pub(crate) struct RecoveredWalProductionOwnerOpenV1|before|/// Opaque fail-stop coordinator-open error
+region|authenticated_open|registry|after|pub(crate) struct ProductionOpenedRecoveredWalSignLifecycleCut|before|/// No-lifetime exact-open seal
+region|owner_conversion|registry|after|impl ProductionOpenedRecoveredWalSignLifecycleCut<'_>|before|#[cfg(test)]\nimpl OpenedRecoveredWalSignLifecycleCut
+region|owner_conversion_signature|registry|after|fn into_production_owner_open(|before|) ->
+region|owner_assembly|ledger|after|pub(in crate::sumeragi) fn from_recovered_wal_open(|before|#[cfg(test)]\nimpl ProductionLifecycleOwnerV1
+region|wal_recovery|wal_recovery|begin|-|end|-
+region|recovered_projection|wal_recovery|at|impl AuthenticatedRecoveredWalVoteProjection|before|#[cfg_attr(not(test), allow(dead_code))]
+required|token|#[derive(Clone, Copy, Debug, PartialEq, Eq)]\npub(crate) struct RecoveredWalFrameIdentity|recovery token omitted {required}
+required|token|pub(crate) struct RecoveredWalFrameIdentity|recovery token omitted {required}
+required|token|frame_sequence: u64|recovery token omitted {required}
+required|token|persistence_id: u64|recovery token omitted {required}
+required|token|frame_hash: [u8; 32]|recovery token omitted {required}
+required|token|fn from_recovered_record(record: &RecoveredRecord, persistence_id: u64)|recovery token omitted {required}
+required|token|pub(crate) const fn is_exact(self) -> bool|recovery token omitted {required}
+required|token|pub(crate) const fn persisted_locator(self) -> PersistedWalFrameLocatorV1|recovery token omitted {required}
+required|token|pub(crate) struct PersistedWalFrameLocatorV1|recovery token omitted {required}
+required|token|Decoding this value establishes only a structural locator|recovery token omitted {required}
+required|token|pub(crate) struct RecoveredWalVoteSign|recovery token omitted {required}
+required|token|wal_identity: RecoveredWalFrameIdentity|recovery token omitted {required}
+required|token|replay_evidence: RecoveredWalVoteReplayEvidenceV1|recovery token omitted {required}
+required|token|pub(crate) fn replay_evidence_is_exact(&self) -> bool|recovery token omitted {required}
+required|token|tag: reducer::EventTag|recovery token omitted {required}
+required|token|vote: wire::Vote|recovery token omitted {required}
+required|token|prepare_certificate: Option<wire::QuorumCertificate>|recovery token omitted {required}
+required|token|pub(crate) struct RecoveredAdapterStartup|recovery token omitted {required}
+required|token|pub(crate) struct AuthenticatedRecoveredAdapterStartup|recovery token omitted {required}
+required|token|pub(crate) struct ProductionLifecycleAdapterStartupV1|recovery token omitted {required}
+required|token|struct AuthenticatedRecoveredWalLifecycleStartup<'registry>|recovery token omitted {required}
+required|token|struct StorageAuthenticatedRecoveredWalLifecycleStartup<'registry>|recovery token omitted {required}
+required|token|ledger: OpenedRecoveredWalValidateLedger|recovery token omitted {required}
+required|token|struct PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>|recovery token omitted {required}
+required|token|struct ColdPreparedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>|recovery token omitted {required}
+required|token|struct InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>|recovery token omitted {required}
+required|token|struct ProductionRecoveredLifecycleOwnerStartupV1|recovery token omitted {required}
+required|token|ProductionRecoveredLifecycleOwnerAssemblyPermitV1|recovery token omitted {required}
+required|token|struct DurableAuthenticatedRecoveredWalLifecycleStartup<'registry>|recovery token omitted {required}
+required|token|struct InstalledRecoveredWalLifecycleStartup<'registry>|recovery token omitted {required}
+required|token|struct RecoveredWalLifecycleLedgerPersistError<'registry>|recovery token omitted {required}
+required|token|struct RecoveredWalLifecycleSignInstallError<'registry>|recovery token omitted {required}
+required|token|repair: AuthenticatedRecoveredWalValidateLifecycleRepair<'registry>|recovery token omitted {required}
+required|token|repair: DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>|recovery token omitted {required}
+required|token|installed: InstalledRecoveredWalSignRegistryCut<'registry>|recovery token omitted {required}
+required|token|pub(crate) fn authenticate_final_wal_startup_authority(|recovery token omitted {required}
+required|token|pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(|recovery token omitted {required}
+required|token|if !self.effects.is_empty()|recovery token omitted {required}
+required|token|RecoveredLifecycleLocalProposalAttemptV1::from_authenticated_durable_current_round(|recovery token omitted {required}
+required|token|ProductionLifecycleAdapterStartupV1::recovered_with_local_proposal_attempt(|recovery token omitted {required}
+required|token|drop(local_proposal_attempt)|recovery token omitted {required}
+required|token|enum RecoveredWalStartupAuthorityV1|recovery token omitted {required}
+required|token|PhaseVote(RecoveredWalVoteSign)|recovery token omitted {required}
+required|token|ControlSign(RecoveredWalControlSign)|recovery token omitted {required}
+required|token|ProductionLifecycleOwnerV1::open_storage_only_recovered_startup(|recovery token omitted {required}
+required|token|.persist_repair()|recovery token omitted {required}
+required|token|fn authenticate_recovered_phase_vote_stage<'registry>(|recovery token omitted {required}
+required|token|fn persist_recovered_phase_vote_stage<'registry>(|recovery token omitted {required}
+required|token|fn prepare_recovered_phase_vote_cold_adapter_stage<'registry>(|recovery token omitted {required}
+required|token|fn install_recovered_phase_vote_sign_stage<'registry>(|recovery token omitted {required}
+required|token|fn open_recovered_phase_vote_seals_stage(|recovery token omitted {required}
+required|token|fn finish_recovered_phase_vote_owner_stage(|recovery token omitted {required}
+required|token|.install_recovered_sign()|recovery token omitted {required}
+required|token|.open_production_owner_seals(|recovery token omitted {required}
+required|token|.into_owner(registry, payload_store, body_store)|recovery token omitted {required}
+required|token|ProductionLifecycleOwnerV1::from_recovered_wal_open(|recovery token omitted {required}
+required|token|#[cfg(test)]\n    #[allow(clippy::result_large_err)]\n    fn finish_without_wal_vote(|recovery token omitted {required}
+required|token|fn authenticate_recovered_parent_from_storage<'registry, 'body>(|recovery token omitted {required}
+required|token|registry: &'registry mut LifecycleWorkRegistryHolder|recovery token omitted {required}
+required|token|body_store: &'body mut super::v2_body_store::V2BodyStore|recovery token omitted {required}
+required|token|registry.reconstruct_recovered_wal_validate_parent(|recovery token omitted {required}
+required|token|fn authenticate_recovered_validate<'registry>(|recovery token omitted {required}
+required|token|validate: RecoveredWalValidateRegistryCut<'registry>|recovery token omitted {required}
+required|token|validate.join_recovered_vote(&verified, recovered_vote)|recovery token omitted {required}
+required|token|parent_verification: self.adapter.parent_verification.clone()|recovery token omitted {required}
+required|token|fn persist_repair_for_test(|recovery token omitted {required}
+required|token|repair.persist_for_test(root)|recovery token omitted {required}
+required|token|fn persist_reopened_repair_for_test(|recovery token omitted {required}
+required|token|repair.persist_reopened_for_test(root)|recovery token omitted {required}
+required|token|fn install_recovered_sign_for_test(|recovery token omitted {required}
+required|token|repair.install_for_test(root)|recovery token omitted {required}
+required|token|mut self,|recovery token omitted {required}
+order|phase_branch|6|Self::authenticate_recovered_phase_vote_stage(|Self::persist_recovered_phase_vote_stage(authenticated)|Self::prepare_recovered_phase_vote_cold_adapter_stage(|Self::install_recovered_phase_vote_sign_stage(prepared)|Self::open_recovered_phase_vote_seals_stage(|Self::finish_recovered_phase_vote_owner_stage(|recovered phase-vote branch stage order drifted
+count|token|ProductionRecoveredLifecycleOwnerAssemblyPermitV1::mint_paired()|1|only the paired recovered startup may mint owner-assembly authority
+required|cold_prepare|context: adapter.wire_context.clone()|recovered phase-vote cold preparation omitted context
+required|cold_prepare|proofs_of_possession: adapter.proofs_of_possession.clone()|recovered phase-vote cold preparation omitted proofs of possession
+required|cold_prepare|parent_verification: adapter.parent_verification.clone()|recovered phase-vote cold preparation omitted parent verification
+required|cold_prepare|.prepare_cold_adapter_startup(&verified, adapter_startup, body_store)|recovered phase-vote cold preparation omitted cold startup
+forbidden|open_signature|verified: VerifiedHeightContext|paired production open accepts caller-supplied verified context
+required|production_open|ProductionRecoveredLifecycleOwnerStartupV1|paired production open omitted recovered owner startup
+forbidden|production_open|Ok((|paired production open returned an unsealed tuple
+forbidden|token|#[derive(Clone)]\npub(crate) struct RecoveredWalVoteSign|recovery token exposes forbidden surface {forbidden}
+forbidden|token|pub(crate) const fn frame_sequence(|recovery token exposes forbidden surface {forbidden}
+forbidden|token|pub(crate) const fn persistence_id(|recovery token exposes forbidden surface {forbidden}
+forbidden|token|pub(crate) const fn frame_hash(|recovery token exposes forbidden surface {forbidden}
+forbidden|token|pub frame_sequence:|recovery token exposes forbidden surface {forbidden}
+forbidden|token|pub persistence_id:|recovery token exposes forbidden surface {forbidden}
+forbidden|token|pub frame_hash:|recovery token exposes forbidden surface {forbidden}
+forbidden|token|pub tag:|recovery token exposes forbidden surface {forbidden}
+forbidden|token|pub vote:|recovery token exposes forbidden surface {forbidden}
+forbidden|token|pub prepare_certificate:|recovery token exposes forbidden surface {forbidden}
+forbidden|token|impl Clone for RecoveredAdapterStartup|recovery token exposes forbidden surface {forbidden}
+forbidden|token|FnOnce|recovery token exposes forbidden surface {forbidden}
+forbidden|token|LifecycleCoordinator|recovery token exposes forbidden surface {forbidden}
+forbidden|token|CandidateAdmission|recovery token exposes forbidden surface {forbidden}
+forbidden|token|wal.append(|recovery token exposes forbidden surface {forbidden}
+forbidden|token|pub(crate) fn into_parts(|recovery token exposes forbidden surface {forbidden}
+forbidden|token|validate_effect: AdapterEffect|recovery token exposes forbidden surface {forbidden}
+forbidden|token|validate_pending: PendingRuntimeEffectBinding|recovery token exposes forbidden surface {forbidden}
+forbidden|token|RuntimeLifecycleOrdinalSource|recovery token exposes forbidden surface {forbidden}
+forbidden|token|recovery: AuthenticatedLifecycleRecoveryCut|recovery token exposes forbidden surface {forbidden}
+forbidden|token|recovered_vote: Option<RecoveredWalVoteSign>,\n        recovery:|recovery token exposes forbidden surface {forbidden}
+forbidden|recovered_vote_impl|fn new(|the recovered WAL vote authority must have no caller-visible constructor
+count|production|fn authenticate_recovered_wal_vote_sign(|1|the sealed startup join owns one private recovery-token mint
+required|frontier|self.reducer.durable_state().last_id().get()|recovered WAL frontier omitted {required}
+required|frontier|self.wal.recovered_records().last()|recovered WAL frontier omitted {required}
+required|frontier|self.authenticate_recovered_wal_frame(frame)?|recovered WAL frontier omitted {required}
+required|frontier|envelope.persistence_id != durable_last_id|recovered WAL frontier omitted {required}
+required|mint|startup_effects.len() > MAX_ADAPTER_EFFECTS_PER_MACRO_STEP|recovery mint omitted {required}
+required|mint|self.reducer.awaiting_signature()|recovery mint omitted {required}
+required|mint|.unsigned_vote_to_wire(*awaiting_vote)?|recovery mint omitted {required}
+required|mint|vote.round != vote.proposal_round|recovery mint omitted {required}
+required|mint|vote.proposal_round.context_id != self.wire_context.id()|recovery mint omitted {required}
+required|mint|vote.proposal_round.height != self.wire_context.height|recovery mint omitted {required}
+required|mint|self.wal.recovered_records().iter().rev()|recovery mint omitted {required}
+required|mint|self.authenticate_recovered_wal_frame(frame)?|recovery mint omitted {required}
+required|mint|WalRecordV2::PrepareIntent(candidate)|recovery mint omitted {required}
+required|mint|WalRecordV2::LockAndCommit {|recovery mint omitted {required}
+required|mint|vote: candidate|recovery mint omitted {required}
+required|mint|prepare.round == prepare.proposal_round|recovery mint omitted {required}
+required|mint|commit_intent_for_lock(locked)|recovery mint omitted {required}
+required|mint|self.registry.reducer_qc_matches_wire(locked, &prepare)|recovery mint omitted {required}
+required|mint|prepare.execution_commitment|recovery mint omitted {required}
+required|mint|vote.execution_commitment|recovery mint omitted {required}
+required|mint|RecoveredWalVoteReplayEvidenceV1::from_sealed_recovered_vote|recovery mint omitted {required}
+required|mint|startup_effects.remove(effect_index)|recovery mint omitted {required}
+required|mint|RecoveredWalVoteSign {|recovery mint omitted {required}
+forbidden|mint|FnOnce|recovery mint invokes forbidden machinery {forbidden}
+forbidden|mint|LifecycleCoordinator|recovery mint invokes forbidden machinery {forbidden}
+forbidden|mint|CandidateAdmission|recovery mint invokes forbidden machinery {forbidden}
+forbidden|mint|wal.append(|recovery mint invokes forbidden machinery {forbidden}
+forbidden|mint|drive_effects(|recovery mint invokes forbidden machinery {forbidden}
+forbidden|mint|step_reducer(|recovery mint invokes forbidden machinery {forbidden}
+forbidden|mint|publish_status(|recovery mint invokes forbidden machinery {forbidden}
+forbidden|mint|for_test(|recovery mint invokes forbidden machinery {forbidden}
+forbidden|mint|pub(crate) fn authenticate_recovered_wal_vote_sign(|recovery mint invokes forbidden machinery {forbidden}
+forbidden|mint|self.wal.recovered_records().last()|recovery mint invokes forbidden machinery {forbidden}
+required|successor|wal_identity: RecoveredWalFrameIdentity|recovered successor omitted linear authority {required}
+required|successor|fn wal_identity_is_exact(&self) -> bool|recovered successor omitted linear authority {required}
+required|successor|replay_evidence: RecoveredWalVoteReplayEvidenceV1|recovered successor omitted linear authority {required}
+required|successor|fn replay_evidence_is_exact(&self) -> bool|recovered successor omitted linear authority {required}
+required|successor|predecessor_effect: AdapterEffect|recovered successor omitted linear authority {required}
+required|successor|predecessor_pending: PendingRuntimeEffectBinding|recovered successor omitted linear authority {required}
+required|successor|pending: PendingRuntimeEffectBinding|recovered successor omitted linear authority {required}
+required|successor|_prepare_certificate: Option<wire::QuorumCertificate>|recovered successor omitted linear authority {required}
+required|successor|CommitSuccessorTagRelation::RecoveredMonotone|recovered successor omitted linear authority {required}
+required|successor|fn into_ledger_lifecycle_projection(|recovered successor omitted linear authority {required}
+required|successor|fn into_durable_lifecycle_projection(|recovered successor omitted linear authority {required}
+required|successor|RecoveredWalCandidateProjectionPermit::new()|recovered successor omitted linear authority {required}
+required|successor|_linearity: RecoveredWalCandidateProjectionLinearity|recovered successor omitted linear authority {required}
+forbidden|successor|#[derive(Clone|recovered successor exposes forbidden escape {forbidden}
+forbidden|successor|into_effect_and_pending|recovered successor exposes forbidden escape {forbidden}
+forbidden|successor|into_parts|recovered successor exposes forbidden escape {forbidden}
+forbidden|successor|fn predecessor_effect(|recovered successor exposes forbidden escape {forbidden}
+forbidden|successor|fn predecessor_pending(|recovered successor exposes forbidden escape {forbidden}
+forbidden|successor|pub(crate) const fn effect(|recovered successor exposes forbidden escape {forbidden}
+forbidden|successor|pub(crate) const fn pending(|recovered successor exposes forbidden escape {forbidden}
+required|projection|        self,|recovered successor projection lost consuming self
+required|projection|Err((self, recovered))|recovered successor projection lost ownership-preserving failure
+required|projection|recovered.replay_evidence_is_exact()|recovered successor projection lost exact replay evidence
+required|projection|recovered.replay_evidence().clone()|recovered successor projection lost replay evidence transfer
+required|projection|predecessor_pending: self|recovered successor projection lost predecessor binding
+required|projection|recovered.prepare_certificate().and_then(\pprepare\p|recovered successor projection lost inherited Prepare handling
+required|projection|project_recovered_inherited_validate_commit_successor|recovered successor projection lost inherited Commit retag
+required|projection|project_recovered_ordinary_validate_commit_successor|recovered successor projection lost ordinary Commit retag
+required|commit_relation|LiveExact|bounded Commit tag relation omitted {required}
+required|commit_relation|RecoveredMonotone|bounded Commit tag relation omitted {required}
+required|commit_relation|predecessor == successor|bounded Commit tag relation omitted {required}
+required|commit_relation|successor.view() == vote_round.view|bounded Commit tag relation omitted {required}
+required|commit_relation|predecessor.generation() == successor.generation()|bounded Commit tag relation omitted {required}
+required|commit_relation|predecessor.view() >= vote_round.view|bounded Commit tag relation omitted {required}
+required|commit_relation|predecessor.view() <= successor.view()|bounded Commit tag relation omitted {required}
+required|commit_relation|recovered_prepare_matches_commit_vote|bounded Commit tag relation omitted {required}
+required|commit_relation|prepare.execution_commitment == vote.execution_commitment|bounded Commit tag relation omitted {required}
+required|live_commit|CommitSuccessorTagRelation::LiveExact|live Commit projection lost exact-tag relation
+count|runtime_production|project_recovered_inherited_validate_commit_successor(|2|recovered inherited-Prepare retag is called only by its sealed projection
+count|runtime_production|project_recovered_ordinary_validate_commit_successor(|2|recovered ordinary-Validate retag is called only by its sealed projection
+required|replay|pub(crate) struct RecoveredWalVoteReplayEvidenceV1|recovered replay evidence omitted {required}
+required|replay|locator: PersistedWalFrameLocatorV1|recovered replay evidence omitted {required}
+required|replay|fn from_sealed_recovered_vote(|recovered replay evidence omitted {required}
+required|replay|fn exactly_matches_recovered_vote(|recovered replay evidence omitted {required}
+required|replay|fn project_recovered_vote_candidate(|recovered replay evidence omitted {required}
+required|replay|source.locator.exactly_matches_runtime(locator)|recovered replay evidence omitted {required}
+required|replay|LifecycleReplayAuthorityV1::decode_canonical|recovered replay evidence omitted {required}
+required|replay|wire::GlobalPhase::Prepare => tag.view() == vote.round.view|recovered replay evidence omitted {required}
+required|replay|wire::GlobalPhase::Commit => tag.view() >= vote.round.view|recovered replay evidence omitted {required}
+required|replay|wire::GlobalPhase::Prepare => self.tag.view == vote.round.view|recovered replay evidence omitted {required}
+required|replay|wire::GlobalPhase::Commit => true|recovered replay evidence omitted {required}
+forbidden|replay|struct ReplayWalLocatorV1|recovered replay evidence exposes {forbidden}
+forbidden|replay|pub(crate) fn encoded(|recovered replay evidence exposes {forbidden}
+forbidden|replay|pub(crate) fn into_parts(|recovered replay evidence exposes {forbidden}
+forbidden|replay|pub(crate) fn locator(|recovered replay evidence exposes {forbidden}
+forbidden|replay|pub(crate) fn action(|recovered replay evidence exposes {forbidden}
+required|replay|struct RecoveredDecisionApplyReplayLineageV1|recovered Decision body lineage omitted {required}
+required|replay|fetch: LifecycleReplayAuthorityV1|recovered Decision body lineage omitted {required}
+required|replay|body: RecoveredDecisionBodyPipelineReplayFamilyV1|recovered Decision body lineage omitted {required}
+required|replay|apply: LifecycleReplayAuthorityV1|recovered Decision body lineage omitted {required}
+required|replay|BodyPipelineOriginV1::RecoveredDecision|recovered Decision body lineage omitted {required}
+required|replay|WalReplayActionV1::FetchDecision|recovered Decision body lineage omitted {required}
+required|replay|WalReplayActionV1::ApplyDecision|recovered Decision body lineage omitted {required}
+required|replay|fn is_stage_closed(&self, context: LifecycleContext) -> bool|recovered Decision body lineage omitted {required}
+required|replay|DurableContinuationEdge::FetchToStore|recovered Decision body lineage omitted {required}
+required|replay|DurableContinuationEdge::StoreToValidate|recovered Decision body lineage omitted {required}
+required|replay|DurableContinuationEdge::ValidateToApply|recovered Decision body lineage omitted {required}
+forbidden|replay|project_exact_body_candidate|recovered Decision body lineage exposes a raw candidate projector
+required|reconstructed|parent.exactly_matches_recovered_vote(&recovered)|storage-authenticated runtime reconstruction omitted {required}
+required|reconstructed|parent.runtime_causal_lifecycle_key()|storage-authenticated runtime reconstruction omitted {required}
+required|reconstructed|.inherited_prepare_authority()|storage-authenticated runtime reconstruction omitted {required}
+required|reconstructed|project_recovered_wal_vote_successor(&predecessor, recovered)|storage-authenticated runtime reconstruction omitted {required}
+count|reconstructed|.inherited_prepare_authority()|2|storage-authenticated reconstruction must bind both inherited Prepare fields
+forbidden|reconstructed|RuntimeEffectOwnership|storage-authenticated runtime reconstruction exposes {forbidden}
+forbidden|reconstructed|RuntimeLifecycleOrdinalSource|storage-authenticated runtime reconstruction exposes {forbidden}
+forbidden|reconstructed|lifecycle_ordinal|storage-authenticated runtime reconstruction exposes {forbidden}
+forbidden|reconstructed|fresh_for_test|storage-authenticated runtime reconstruction exposes {forbidden}
+forbidden|reconstructed|into_parts|storage-authenticated runtime reconstruction exposes {forbidden}
+forbidden|reconstructed|pub(crate) fn effect(|storage-authenticated runtime reconstruction exposes {forbidden}
+forbidden|reconstructed|pub(crate) fn pending(|storage-authenticated runtime reconstruction exposes {forbidden}
+required|marker|store: &'store mut V2BodyStore|body marker cut omitted {required}
+required|marker|impl Drop for RecoveredValidatedBodyCut<'_>|body marker cut omitted {required}
+required|marker|self.store.validated.insert(self.key, validated)|body marker cut omitted {required}
+required|marker|pub(super) fn exactly_matches_ledger_parent|body marker cut omitted {required}
+required|marker|pub(super) fn into_validation_outcome|body marker cut omitted {required}
+required|marker|pub(in crate::sumeragi) struct RecoveredDecisionApplyBodyCut<'store>|body marker cut omitted {required}
+required|marker|store_identity: V2BodyStoreInstanceIdentity|body marker cut omitted {required}
+required|marker|context: wire::HeightContext|body marker cut omitted {required}
+required|marker|envelope: StoredBodyEnvelope|body marker cut omitted {required}
+required|marker|impl Drop for RecoveredDecisionApplyBodyCut<'_>|body marker cut omitted {required}
+required|marker|a detached recovered Decision body cannot collide while restoring|body marker cut omitted {required}
+forbidden|marker|pub(crate) struct RecoveredValidatedBodyCut|body marker cut exposes forbidden surface {forbidden}
+forbidden|marker|fn receipt(|body marker cut exposes forbidden surface {forbidden}
+forbidden|marker|fn into_receipt(|body marker cut exposes forbidden surface {forbidden}
+forbidden|marker|into_parts|body marker cut exposes forbidden surface {forbidden}
+forbidden|marker|fn manifest(|body marker cut exposes forbidden surface {forbidden}
+forbidden|marker|fn body(|body marker cut exposes forbidden surface {forbidden}
+required|recovered_parent_detach|wire::GlobalPhase::Prepare => recovered.tag().view() == vote.round.view|recovered validated-parent detach omitted {required}
+required|recovered_parent_detach|wire::GlobalPhase::Commit => recovered.tag().view() >= vote.round.view|recovered validated-parent detach omitted {required}
+forbidden|body_store|#[derive(Clone)]\npub(super) struct RecoveredValidatedBodyCut|recovered validated-body cut became Clone
+required|body_store|pub(crate) struct RevalidatedV2BodyStore(V2BodyStore)|revalidated same-store startup cut omitted {required}
+required|body_store|pub(crate) fn into_revalidated_startup(|revalidated same-store startup cut omitted {required}
+required|body_store|self.ensure_recovered_markers_revalidated()?|revalidated same-store startup cut omitted {required}
+required|body_store|fn matches_context(&self, context: &wire::HeightContext)|revalidated same-store startup cut omitted {required}
+required|body_store|fn detach_recovered_decision_apply_body(|revalidated same-store startup cut omitted {required}
+required|body_store|fn into_lifecycle_owner_store(|revalidated same-store startup cut omitted {required}
+required|body_store|if &self.0.context != expected_context|revalidated same-store startup cut omitted {required}
+forbidden|body_store|impl Clone for RevalidatedV2BodyStore|revalidated same-store startup cut became Clone
+required|decision_composite|_fetch: AuthenticatedRecoveredWalDecisionFetchProjection|recovered Decision adapter composite omitted {required}
+required|decision_composite|_body: RecoveredDecisionApplyBodyCut<'store>|recovered Decision adapter composite omitted {required}
+required|decision_composite|RecoveredDecisionApplyReplayLineageV1|recovered Decision adapter composite omitted {required}
+required|decision_composite|_staged: super::v2::RecoveredDecisionApplyStagedAdapterV1|recovered Decision adapter composite omitted {required}
+required|decision_composite|RecoveredDecisionApplyAdapterPreviewFailure<'store>|recovered Decision adapter composite omitted {required}
+forbidden|decision_composite|fn effect(|recovered Decision adapter composite exposes {forbidden}
+forbidden|decision_composite|fn pending(|recovered Decision adapter composite exposes {forbidden}
+forbidden|decision_composite|fn candidate(|recovered Decision adapter composite exposes {forbidden}
+forbidden|decision_composite|fn body(|recovered Decision adapter composite exposes {forbidden}
+forbidden|decision_composite|fn replay(|recovered Decision adapter composite exposes {forbidden}
+forbidden|decision_composite|into_parts|recovered Decision adapter composite exposes {forbidden}
+required|decision_fast_forward|let mut comparison_registry = self.registry.clone()|recovered Decision fast-forward omitted {required}
+required|decision_fast_forward|prepare_direct_certified_body_available|recovered Decision fast-forward omitted {required}
+required|decision_fast_forward|prepare_direct_body_stored|recovered Decision fast-forward omitted {required}
+required|decision_fast_forward|prepare_direct_validation_succeeded|recovered Decision fast-forward omitted {required}
+required|decision_fast_forward|apply_certificate == &certificate|recovered Decision fast-forward omitted {required}
+required|decision_fast_forward|project_decision_apply_pending_lineage|recovered Decision fast-forward omitted {required}
+required|decision_fast_forward|project_certified_fetch_store_successor|recovered Decision fast-forward omitted {required}
+required|decision_fast_forward|project_store_validate_successor|recovered Decision fast-forward omitted {required}
+required|decision_fast_forward|project_validate_apply_successor|recovered Decision fast-forward omitted {required}
+required|decision_fast_forward|RecoveredDecisionApplyAdapterRollback|recovered Decision fast-forward omitted {required}
+required|decision_fast_forward|reducer_fence_generation|recovered Decision fast-forward omitted {required}
+required|decision_fast_forward|last_progress|recovered Decision fast-forward omitted {required}
+required|decision_fast_forward|rollback.restore(&mut adapter)|recovered Decision fast-forward omitted {required}
+forbidden|decision_preview|.commit()|recovered Decision fast-forward invokes {forbidden}
+forbidden|decision_preview|commit_recovered_decision_apply|recovered Decision fast-forward invokes {forbidden}
+forbidden|decision_preview|CandidateAdmission|recovered Decision fast-forward invokes {forbidden}
+forbidden|decision_preview|LifecycleCoordinator|recovered Decision fast-forward invokes {forbidden}
+forbidden|decision_preview|LifecycleWorkRegistry|recovered Decision fast-forward invokes {forbidden}
+forbidden|decision_preview|.wal.append(|recovered Decision fast-forward invokes {forbidden}
+forbidden|decision_preview|publish_status(|recovered Decision fast-forward invokes {forbidden}
+required|parent|fn authenticate_recovered_wal_validate_parent(|ledger parent seal omitted {required}
+required|parent|recovered.prepare_certificate().is_none()|ledger parent seal omitted {required}
+required|parent|prepare.execution_commitment == vote.execution_commitment|ledger parent seal omitted {required}
+required|parent|wire::GlobalPhase::Prepare => recovered.tag().view() == vote.round.view|ledger parent seal omitted {required}
+required|parent|wire::GlobalPhase::Commit => recovered.tag().view() >= vote.round.view|ledger parent seal omitted {required}
+required|parent|LifecycleStageKind::ValidateBody|ledger parent seal omitted {required}
+required|parent|DurableContinuation::None|ledger parent seal omitted {required}
+required|parent|TerminalOutcome::Advanced|ledger parent seal omitted {required}
+required|parent|pub(crate) fn matches_durable_receipt(|ledger parent seal omitted {required}
+required|parent|pub(in crate::sumeragi) fn project_recovered_candidate(|ledger parent seal omitted {required}
+required|parent|Hash::prehashed(*self.owner.causal_root().digest().as_bytes())|ledger parent seal omitted {required}
+forbidden|parent|into_parts|ledger parent seal exposes forbidden surface {forbidden}
+forbidden|parent|pub(crate) fn candidate(|ledger parent seal exposes forbidden surface {forbidden}
+forbidden|parent|pub(crate) fn ordinal(|ledger parent seal exposes forbidden surface {forbidden}
+forbidden|parent|RuntimeEffectOwnership|ledger parent seal exposes forbidden surface {forbidden}
+forbidden|parent|RuntimeLifecycleOrdinalSource|ledger parent seal exposes forbidden surface {forbidden}
+required|exact_store|store: super::ledger::LifecycleLedgerStoreV1|exact recovered-WAL store transaction omitted {required}
+required|exact_store|opened: super::ledger::LifecycleLedgerV1|exact recovered-WAL store transaction omitted {required}
+required|exact_store|struct PersistedRecoveredWalValidateLedger<'registry>|exact recovered-WAL store transaction omitted {required}
+required|exact_store|struct InstalledRecoveredWalSignStorage<'registry>|exact recovered-WAL store transaction omitted {required}
+required|exact_store|persist_recovered_wal_repair|exact recovered-WAL store transaction omitted {required}
+required|exact_store|install_recovered_wal_sign|exact recovered-WAL store transaction omitted {required}
+required|exact_store|authenticate_durable_certified_body_pipeline_startup(verified, body_store)|exact recovered-WAL store transaction omitted {required}
+required|exact_store|assemble_storage_only_with_recovered_wal_sign_and_body_pipeline_startup|exact recovered-WAL store transaction omitted {required}
+required|exact_store|install_alongside_recovered_wal_authority|exact recovered-WAL store transaction omitted {required}
+required|exact_store|open_with_exact_store_authority(authority, store, payload_store, recovery)|exact recovered-WAL store transaction omitted {required}
+required|exact_store|let body_store_identity = body_store.instance_identity()|exact recovered-WAL store transaction omitted {required}
+required|exact_store|let payload_store_identity = payload_store.instance_identity()|exact recovered-WAL store transaction omitted {required}
+required|exact_store|ProductionOpenedRecoveredWalSignLifecycleCut|exact recovered-WAL store transaction omitted {required}
+forbidden|exact_store|ledger_root|exact recovered-WAL store transaction exposed {forbidden}
+forbidden|exact_store|LifecycleLedgerStoreV1::open(|exact recovered-WAL store transaction exposed {forbidden}
+forbidden|exact_store|fn into_parts(|exact recovered-WAL store transaction exposed {forbidden}
+forbidden|exact_store|pub(crate) fn store(|exact recovered-WAL store transaction exposed {forbidden}
+forbidden|exact_store|pub(crate) fn ledger(|exact recovered-WAL store transaction exposed {forbidden}
+required|owner_seal|verified: VerifiedHeightContext|recovered-WAL owner seal omitted {required}
+required|owner_seal|registry_identity: ConcreteLifecycleWorkRegistryInstanceIdentity|recovered-WAL owner seal omitted {required}
+required|owner_seal|V2BodyStoreInstanceIdentity|recovered-WAL owner seal omitted {required}
+required|owner_seal|CertifiedServePayloadStoreInstanceIdentity|recovered-WAL owner seal omitted {required}
+required|authenticated_open|opened: OpenedRecoveredWalSignLifecycleCut<'registry>|store-authenticated recovered open omitted {required}
+required|authenticated_open|verified: VerifiedHeightContext|store-authenticated recovered open omitted {required}
+required|authenticated_open|V2BodyStoreInstanceIdentity|store-authenticated recovered open omitted {required}
+required|authenticated_open|CertifiedServePayloadStoreInstanceIdentity|store-authenticated recovered open omitted {required}
+required|owner_conversion|fn into_production_owner_open(\n        self,|store-authenticated owner conversion lost its consuming conversion
+forbidden|owner_conversion_signature|verified: VerifiedHeightContext,|owner conversion accepts caller-supplied authority {forbidden}
+forbidden|owner_conversion_signature|body_store_identity:|owner conversion accepts caller-supplied authority {forbidden}
+forbidden|owner_conversion_signature|payload_store_identity:|owner conversion accepts caller-supplied authority {forbidden}
+required|owner_assembly|_permit: ProductionRecoveredLifecycleOwnerAssemblyPermitV1|recovered owner assembly omitted paired permit
+required|wal_recovery|struct AuthenticatedRecoveredWalVoteProjection|recovered WAL lifecycle join omitted {required}
+required|wal_recovery|_permit: RecoveredWalCandidateProjectionPermit|recovered WAL lifecycle join omitted {required}
+required|wal_recovery|RecoveredValidatePayloadAuthority::Ledger(parent)|recovered WAL lifecycle join omitted {required}
+required|wal_recovery|RecoveredValidatePayloadAuthority::Durable|recovered WAL lifecycle join omitted {required}
+required|wal_recovery|successor.into_ledger_lifecycle_projection(verified, parent)|recovered WAL lifecycle join omitted {required}
+required|wal_recovery|successor.into_durable_lifecycle_projection(verified, receipt, replay_evidence)|recovered WAL lifecycle join omitted {required}
+forbidden|wal_recovery|projection::admission_request(|recovered WAL lifecycle join exposed raw projection surface {forbidden}
+forbidden|wal_recovery|bind_projected_candidate(|recovered WAL lifecycle join exposed raw projection surface {forbidden}
+forbidden|wal_recovery|predecessor_effect()|recovered WAL lifecycle join exposed raw projection surface {forbidden}
+forbidden|wal_recovery|predecessor_pending()|recovered WAL lifecycle join exposed raw projection surface {forbidden}
+forbidden|wal_recovery|successor.pending()|recovered WAL lifecycle join exposed raw projection surface {forbidden}
+forbidden|recovered_projection|pub(super) const fn parent(&self)|recovered WAL projection exposes candidate oracle {forbidden}
+forbidden|recovered_projection|pub(super) const fn child(&self)|recovered WAL projection exposes candidate oracle {forbidden}
+forbidden|recovered_projection|pub(in crate::sumeragi) const fn parent(&self)|recovered WAL projection exposes candidate oracle {forbidden}
+forbidden|recovered_projection|pub(in crate::sumeragi) const fn child(&self)|recovered WAL projection exposes candidate oracle {forbidden}
+end
+case|ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned
+region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|declaration|registry|after|pub(crate) struct PreparedReadyDurableValidateExecution<'a>|before|}
+region|preview_oracles|registry|after|impl<'registry> PreparedReadyDurableValidateAdapterPreview<'registry, '_>|before|impl<'registry, 'adapter> PreparedReadyDurableValidateAdapterPreview<'registry, 'adapter>
+region|preparation|registry|after|pub(super) fn prepare_ready_durable_validate_execution(|before|pub(super) fn reattach_durable_validate_execution(
+region|fixed_join|registry|after|// READY_DURABLE_VALIDATE_ADAPTER_JOIN_BEGIN|before|// READY_DURABLE_VALIDATE_ADAPTER_JOIN_END
+region|recovered_detach|registry|after|// RECOVERED_WAL_VALIDATE_REGISTRY_DETACH_BEGIN|before|// RECOVERED_WAL_VALIDATE_REGISTRY_DETACH_END
+region|live_publication|registry|after|impl<'registry, 'adapter>\n    PreparedReadyDurableValidatePersistedSignPreAdmission<'registry, 'adapter>|before|/// Ownership-preserving failure
+region|recovered_join|registry|after|// RECOVERED_WAL_VALIDATE_REGISTRY_JOIN_BEGIN|before|// RECOVERED_WAL_VALIDATE_REGISTRY_JOIN_END
+region|recovered_fsync|registry|after|// RECOVERED_WAL_VALIDATE_LEDGER_FSYNC_BEGIN|before|// RECOVERED_WAL_VALIDATE_LEDGER_FSYNC_END
+region|recovered_install|registry|after|// RECOVERED_WAL_SIGN_REGISTRY_INSTALL_BEGIN|before|// RECOVERED_WAL_SIGN_REGISTRY_INSTALL_END
+region|after_insert|registry|after|entry.insert(work);|before|    }
+region|carrier_inventory|registry|after|struct DurableRecoveredWalSignWork|before|/// Closed concrete carrier for one exact standalone recovered control Sign.
+region|carrier_inventory|registry|after|impl DurableRecoveredWalSignWork {|before|/// Whether one concrete registry row is still an executable adapter effect or
+region|work_kind_inventory|registry|after|enum ConcreteLifecycleWorkKind|before|/// One move-only concrete effect
+region|child_effect_borrow|wal_recovery|after|pub(super) const fn installed_child_effect(|before|    }
+region|generic_effect_borrow|registry|after|pub(super) const fn effect(&self) -> &AdapterEffect {|before|const fn is_pending_adapter(&self) -> bool
+region|recovered_sign_dispatch|registry|after|pub(super) fn prepare_recovered_lifecycle_sign_dispatch(|before|/// Attest one exact Ready recovered Decision Fetch and seal its request authority.
+region|frame_revalidation|ledger|after|pub(super) fn revalidates_durable_authenticated_wal_vote_repair(|before|pub(super) fn revalidates_authenticated_wal_control_sign(
+region|scheduler|scheduler_inputs|begin|-|end|-
+region|callers|adapter|begin|-|end|-
+region|callers|selector|begin|-|end|-
+region|callers|coordinator|begin|-|end|-
+region|callers|effects|begin|-|end|-
+region|callers|worker|begin|-|end|-
+region|callers|runner|begin|-|end|-
+required|declaration|registry: &'a mut ConcreteLifecycleWorkRegistry|Ready Validate declaration omitted registry borrow
+required|declaration|address: ConcreteWorkAddress|Ready Validate declaration omitted address
+required|declaration|outcome_kind: ReadyDurableValidateOutcomeKind|Ready Validate declaration omitted outcome kind
+required|declaration|lease: TurnLease|Ready Validate declaration omitted lease
+forbidden|declaration|PreparedReadyDurableValidateAdapterPublication|Ready Validate declaration exposed adapter publication
+forbidden|declaration|derive(Clone|Ready Validate declaration became cloneable
+required|preview_oracles|project_no_successor_for_body_transition|Ready Validate preview omitted sealed oracle {required}
+required|preview_oracles|self._registry.matches_exact_lease(lease)|Ready Validate preview omitted sealed oracle {required}
+required|preview_oracles|self._adapter.kind()|Ready Validate preview omitted sealed oracle {required}
+required|preview_oracles|SealedValidateNoSuccessorProjectionPermit|Ready Validate preview omitted sealed oracle {required}
+required|preview_oracles|sealed_validate_no_successor_reservation(|Ready Validate preview omitted sealed oracle {required}
+required|preview_oracles|durable_validate_body_payload(&completion.incumbent.durable_receipt)|Ready Validate preview omitted sealed oracle {required}
+required|preview_oracles|SealedValidateNoSuccessorProjection::from_registry|Ready Validate preview omitted sealed oracle {required}
+forbidden|preview_oracles|into_parts|Ready Validate preview exposed body authority {forbidden}
+forbidden|preview_oracles|-> &DurableBodyReceipt|Ready Validate preview exposed body authority {forbidden}
+forbidden|preview_oracles|-> Option<&DurableBodyReceipt>|Ready Validate preview exposed body authority {forbidden}
+forbidden|preview_oracles|fn durable_receipt(|Ready Validate preview exposed body authority {forbidden}
+forbidden|preview_oracles|fn receipt(|Ready Validate preview exposed body authority {forbidden}
+forbidden|preview_oracles|matches_exact_successor_effect|Ready Validate preview exposed body authority {forbidden}
+forbidden|preview_oracles|projection::admission_request|Ready Validate preview exposed body authority {forbidden}
+forbidden|preview_oracles|CandidateAdmission|Ready Validate preview exposed body authority {forbidden}
+count|production|pub(super) fn prepare_ready_durable_validate_execution(|1|the exact Ready completion has one registry entrypoint
+required|preparation|LifecycleWorkClass::Validate|Ready Validate preflight omitted {required}
+required|preparation|LifecyclePhase::Validate|Ready Validate preflight omitted {required}
+required|preparation|LifecycleStageKind::ValidateBody|Ready Validate preflight omitted {required}
+required|preparation|PredecessorScope::Independent|Ready Validate preflight omitted {required}
+required|preparation|validated_lease_address(lease, slot)|Ready Validate preflight omitted {required}
+required|preparation|ConcreteLifecycleWorkKind::DurableValidateCompletion|Ready Validate preflight omitted {required}
+required|preparation|completion.validates(work.digest)|Ready Validate preflight omitted {required}
+required|preparation|candidate_statement.context_id()|Ready Validate preflight omitted {required}
+required|preparation|candidate_statement.proposal_round()|Ready Validate preflight omitted {required}
+required|preparation|candidate_statement.subject()|Ready Validate preflight omitted {required}
+required|preparation|completion.incumbent.expected_manifest_hash|Ready Validate preflight omitted {required}
+required|preparation|BodyValidationRejectionIdentity::Rejected|Ready Validate preflight omitted {required}
+required|preparation|validate_validated_receipt_authority|Ready Validate preflight omitted {required}
+required|preparation|output_reservation()|Ready Validate preflight omitted {required}
+required|preparation|CapacityClass::Consensus|Ready Validate preflight omitted {required}
+required|preparation|.incumbent\n            .project_candidate(verified)|Ready Validate preflight omitted {required}
+required|preparation|durable_validate_body_payload(&completion.incumbent.durable_receipt)|Ready Validate preflight omitted {required}
+required|preparation|candidate.key != lease.key()|Ready Validate preflight omitted {required}
+required|preparation|candidate.payload != expected_payload|Ready Validate preflight omitted {required}
+required|preparation|projected_slots != incumbent_slots|Ready Validate preflight omitted {required}
+required|preparation|projected_universe != lease_slots|Ready Validate preflight omitted {required}
+required|preparation|projected_consumed != lease_slots|Ready Validate preflight omitted {required}
+forbidden|preparation|projection::admission_request(|Ready Validate preflight acquired forbidden authority projection::admission_request(
+forbidden|preparation|fn commit(|Ready Validate preflight acquired forbidden authority {forbidden}
+forbidden|preparation|.insert(|Ready Validate preflight acquired forbidden authority {forbidden}
+forbidden|preparation|.remove(|Ready Validate preflight acquired forbidden authority {forbidden}
+forbidden|preparation|into_parts|Ready Validate preflight acquired forbidden authority {forbidden}
+forbidden|preparation|rejection_reason|Ready Validate preflight acquired forbidden authority {forbidden}
+forbidden|preparation|EffectWorkId|Ready Validate preflight acquired forbidden authority {forbidden}
+forbidden|preparation|BodyValidationTask|Ready Validate preflight acquired forbidden authority {forbidden}
+forbidden|preparation|SchedulerRank|Ready Validate preflight acquired forbidden authority {forbidden}
+forbidden|preparation|TurnPlan|Ready Validate preflight acquired forbidden authority {forbidden}
+required|fixed_join|pub(crate) const fn outcome_kind|Ready Validate fixed join omitted {required}
+required|fixed_join|fn validated_authority|Ready Validate fixed join omitted {required}
+required|fixed_join|fn rejected_authority|Ready Validate fixed join omitted {required}
+required|fixed_join|pub(in crate::sumeragi) fn prepare_adapter_preview|Ready Validate fixed join omitted {required}
+required|fixed_join|adapter.prepare_sealed_ready_durable_validate_succeeded(authority)|Ready Validate fixed join omitted {required}
+required|fixed_join|adapter.prepare_sealed_ready_durable_validate_failed(authority)|Ready Validate fixed join omitted {required}
+required|fixed_join|adapter_preview.preflight_publication()|Ready Validate fixed join omitted {required}
+required|fixed_join|receipt.durable().manifest_hash()|Ready Validate fixed join omitted {required}
+required|fixed_join|completion.incumbent.expected_manifest_hash|Ready Validate fixed join omitted {required}
+required|fixed_join|BodyValidationRejectionIdentity::Rejected|Ready Validate fixed join omitted {required}
+required|fixed_join|validate_validated_receipt_authority|Ready Validate fixed join omitted {required}
+forbidden|fixed_join|with_validated_preview|Ready Validate fixed join exposed forbidden authority {forbidden}
+forbidden|fixed_join|with_rejected_preview|Ready Validate fixed join exposed forbidden authority {forbidden}
+forbidden|fixed_join|FnOnce|Ready Validate fixed join exposed forbidden authority {forbidden}
+forbidden|fixed_join|-> Option<R>|Ready Validate fixed join exposed forbidden authority {forbidden}
+forbidden|fixed_join|rejection_reason|Ready Validate fixed join exposed forbidden authority {forbidden}
+forbidden|fixed_join|fn commit(|Ready Validate fixed join exposed forbidden authority {forbidden}
+forbidden|fixed_join|.insert(|Ready Validate fixed join exposed forbidden authority {forbidden}
+forbidden|fixed_join|.remove(|Ready Validate fixed join exposed forbidden authority {forbidden}
+forbidden|fixed_join|into_parts|Ready Validate fixed join exposed forbidden authority {forbidden}
+forbidden|fixed_join|pub(crate) fn validated_receipt|Ready Validate fixed join exposed forbidden authority {forbidden}
+forbidden|fixed_join|pub(crate) fn durable_body_receipt|Ready Validate fixed join exposed forbidden authority {forbidden}
+forbidden|fixed_join|for_test|Ready Validate fixed join exposed forbidden authority {forbidden}
+required|recovered_detach|into_recovered_wal_validate_registry_cut|recovered WAL Validate detach omitted {required}
+required|recovered_detach|ReadyDurableValidateOutcomeKind::Validated|recovered WAL Validate detach omitted {required}
+required|recovered_detach|self.completion().is_none()|recovered WAL Validate detach omitted {required}
+required|recovered_detach|self.registry.entries.remove(&address)|recovered WAL Validate detach omitted {required}
+required|recovered_detach|work: Some(work)|recovered WAL Validate detach omitted {required}
+forbidden|recovered_detach|into_parts|recovered WAL Validate detach exposed forbidden authority {forbidden}
+forbidden|recovered_detach|Clone|recovered WAL Validate detach exposed forbidden authority {forbidden}
+forbidden|recovered_detach|pub(super) fn new(|recovered WAL Validate detach exposed forbidden authority {forbidden}
+forbidden|recovered_detach|for_test|recovered WAL Validate detach exposed forbidden authority {forbidden}
+required|live_publication|prepare_registry_work(|live Validate-to-Sign registry publication omitted {required}
+required|live_publication|LiveValidateSignWorkProjectionPermit::new(admission_candidate)|live Validate-to-Sign registry publication omitted {required}
+required|live_publication|ConcreteWorkAddress::new(lease.owner(), child_ordinal, child_slot)|live Validate-to-Sign registry publication omitted {required}
+required|live_publication|adapter.registry_work_matches(|live Validate-to-Sign registry publication omitted {required}
+required|live_publication|registry.into_recovered_wal_validate_registry_cut()|live Validate-to-Sign registry publication omitted {required}
+required|live_publication|.into_live_validate_sign_reservation()|live Validate-to-Sign registry publication omitted {required}
+required|live_publication|reservation.bind_exact_child(child_address, child_digest)|live Validate-to-Sign registry publication omitted {required}
+required|live_publication|PreparedLiveValidateSignRegistryPublication|live Validate-to-Sign registry publication omitted {required}
+required|live_publication|publish_after_ledger_fsync|live Validate-to-Sign registry publication omitted {required}
+required|live_publication|.install_registry_and_commit_adapter(self.reservation)|live Validate-to-Sign registry publication omitted {required}
+forbidden|live_publication|into_parts|live Validate-to-Sign registry publication exposes {forbidden}
+forbidden|live_publication|fn effect(|live Validate-to-Sign registry publication exposes {forbidden}
+forbidden|live_publication|fn pending(|live Validate-to-Sign registry publication exposes {forbidden}
+forbidden|live_publication|fn receipt(|live Validate-to-Sign registry publication exposes {forbidden}
+forbidden|live_publication|fn candidate(|live Validate-to-Sign registry publication exposes {forbidden}
+forbidden|live_publication|persist_durable_projection|live Validate-to-Sign registry publication exposes {forbidden}
+forbidden|live_publication|publish_status(|live Validate-to-Sign registry publication exposes {forbidden}
+required|recovered_join|pub(crate) fn join_recovered_vote|recovered WAL Validate join omitted {required}
+required|recovered_join|completion.outcome.validated_receipt()|recovered WAL Validate join omitted {required}
+required|recovered_join|receipt.execution_commitment() == recovered_commitment|recovered WAL Validate join omitted {required}
+required|recovered_join|pending.project_recovered_wal_vote_successor(&effect, recovered)|recovered WAL Validate join omitted {required}
+required|recovered_join|DetachedValidateReplayEvidenceV1::Retained(replay_evidence)|recovered WAL Validate join omitted {required}
+required|recovered_join|authenticate_recovered_wal_vote_lifecycle_from_durable_body(|recovered WAL Validate join omitted {required}
+required|recovered_join|completion.restore(effect, pending)|recovered WAL Validate join omitted {required}
+required|recovered_join|self.registry.take()|recovered WAL Validate join omitted {required}
+required|recovered_join|RecoveredWalValidateRegistryReservation|recovered WAL Validate join omitted {required}
+forbidden|recovered_join|into_parts|recovered WAL Validate join exposed forbidden authority {forbidden}
+forbidden|recovered_join|pub(crate) fn effect(|recovered WAL Validate join exposed forbidden authority {forbidden}
+forbidden|recovered_join|pub(crate) fn pending(|recovered WAL Validate join exposed forbidden authority {forbidden}
+forbidden|recovered_join|fresh_for_test|recovered WAL Validate join exposed forbidden authority {forbidden}
+forbidden|recovered_join|RuntimeEffectOwnership|recovered WAL Validate join exposed forbidden authority {forbidden}
+required|recovered_fsync|pub(crate) struct DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>|recovered WAL Validate fsync splice omitted {required}
+required|recovered_fsync|pub(crate) struct RecoveredWalValidateLedgerPersistError<'registry>|recovered WAL Validate fsync splice omitted {required}
+required|recovered_fsync|AuthenticatedRecoveredWalValidateLifecycleRepair<'registry>|recovered WAL Validate fsync splice omitted {required}
+required|recovered_fsync|RecoveredWalValidateRegistryReservation<'registry>|recovered WAL Validate fsync splice omitted {required}
+required|recovered_fsync|fn ledger_parent_core_identity_is_exact(|recovered WAL Validate fsync splice omitted {required}
+required|recovered_fsync|parent.owner() == self.validation.address.owner|recovered WAL Validate fsync splice omitted {required}
+required|recovered_fsync|parent.ordinal() == self.validation.address.ordinal|recovered WAL Validate fsync splice omitted {required}
+required|recovered_fsync|fn projected_child_address(|recovered WAL Validate fsync splice omitted {required}
+required|recovered_fsync|bind_child_if_vacant(child_address, child_digest)|recovered WAL Validate fsync splice omitted {required}
+required|recovered_fsync|pub(super) fn persist_in_opened_ledger(|recovered WAL Validate fsync splice omitted {required}
+required|recovered_fsync|opened.stage_authenticated_wal_vote_repair(&self.repair)|recovered WAL Validate fsync splice omitted {required}
+required|recovered_fsync|store.persist_authenticated_wal_vote_repair(opened, repair)|recovered WAL Validate fsync splice omitted {required}
+required|recovered_fsync|DurableAuthenticatedWalVoteLifecycleRepair|recovered WAL Validate fsync splice omitted {required}
+required|recovered_fsync|PostFsync|recovered WAL Validate fsync splice omitted {required}
+forbidden|recovered_fsync|into_parts|recovered WAL Validate fsync splice exposed forbidden authority {forbidden}
+forbidden|recovered_fsync|pub(crate) fn effect(|recovered WAL Validate fsync splice exposed forbidden authority {forbidden}
+forbidden|recovered_fsync|pub(crate) fn pending(|recovered WAL Validate fsync splice exposed forbidden authority {forbidden}
+forbidden|recovered_fsync|pub(crate) fn receipt(|recovered WAL Validate fsync splice exposed forbidden authority {forbidden}
+forbidden|recovered_fsync|FnOnce|recovered WAL Validate fsync splice exposed forbidden authority {forbidden}
+forbidden|recovered_fsync|RuntimeEffectOwnership|recovered WAL Validate fsync splice exposed forbidden authority {forbidden}
+forbidden|recovered_fsync|PendingRuntimeEffectBinding|recovered WAL Validate fsync splice exposed forbidden authority {forbidden}
+required|recovered_install|pub(super) fn install_recovered_sign(|recovered WAL Sign install omitted {required}
+required|recovered_install|self.post_fsync_authority_is_exact(store)|recovered WAL Sign install omitted {required}
+required|recovered_install|PhysicalSlotId::for_capacity(CapacityClass::Effect, 0)|recovered WAL Sign install omitted {required}
+required|recovered_install|.all(\paddress\p address.owner != child.owner)|recovered WAL Sign install omitted {required}
+required|recovered_install|store.revalidates_durable_authenticated_wal_vote_repair(|recovered WAL Sign install omitted {required}
+required|recovered_install|ConcreteLifecycleWorkKind::DurableRecoveredWalSign(|recovered WAL Sign install omitted {required}
+required|recovered_install|std::collections::btree_map::Entry::Vacant(entry)|recovered WAL Sign install omitted {required}
+required|recovered_install|entry.insert(work);|recovered WAL Sign install omitted {required}
+required|recovered_install|pub(crate) struct InstalledRecoveredWalSignRegistryCut<'registry>|recovered WAL Sign install omitted {required}
+required|recovered_install|pub(crate) struct RecoveredWalSignInstallError<'registry>|recovered WAL Sign install omitted {required}
+required|recovered_install|fn installed_entry_is_exact(|recovered WAL Sign install omitted {required}
+required|recovered_install|self.registry.entries.contains_key(&self.parent_address)|recovered WAL Sign install omitted {required}
+required|recovered_install|.filter(\paddress\p address.owner == self.child_address.owner)|recovered WAL Sign install omitted {required}
+required|recovered_install|sign.validates_in_store(|recovered WAL Sign install omitted {required}
+forbidden|recovered_install|into_parts|recovered WAL Sign install exposed forbidden authority {forbidden}
+forbidden|recovered_install|into_pair|recovered WAL Sign install exposed forbidden authority {forbidden}
+forbidden|recovered_install|pub(crate) fn effect(|recovered WAL Sign install exposed forbidden authority {forbidden}
+forbidden|recovered_install|pub(crate) fn pending(|recovered WAL Sign install exposed forbidden authority {forbidden}
+forbidden|recovered_install|pub(crate) fn receipt(|recovered WAL Sign install exposed forbidden authority {forbidden}
+forbidden|recovered_install|PendingRuntimeEffectBinding|recovered WAL Sign install exposed forbidden authority {forbidden}
+forbidden|recovered_install|RuntimeEffectOwnership|recovered WAL Sign install exposed forbidden authority {forbidden}
+forbidden|recovered_install|DurableWalVoteLedgerRepairReceipt {|recovered WAL Sign install exposed forbidden authority {forbidden}
+forbidden|recovered_install|DetachedRecoveredValidateCompletion {|recovered WAL Sign install exposed forbidden authority {forbidden}
+forbidden|recovered_install|FnOnce|recovered WAL Sign install exposed forbidden authority {forbidden}
+forbidden|recovered_install|LifecycleCoordinator|recovered WAL Sign install exposed forbidden authority {forbidden}
+forbidden|recovered_install|publish_status(|recovered WAL Sign install exposed forbidden authority {forbidden}
+forbidden|recovered_install|.remove(|recovered WAL Sign install exposed forbidden authority {forbidden}
+forbidden|after_insert|return Err|post-insert recovered Sign path acquired fallible check {forbidden}
+forbidden|after_insert|?|post-insert recovered Sign path acquired fallible check {forbidden}
+forbidden|after_insert|if |post-insert recovered Sign path acquired fallible check {forbidden}
+forbidden|after_insert|match |post-insert recovered Sign path acquired fallible check {forbidden}
+forbidden|after_insert|debug_assert|post-insert recovered Sign path acquired fallible check {forbidden}
+required|carrier_inventory|repair: DurableAuthenticatedWalVoteLifecycleRepair|closed recovered Sign carrier omitted {required}
+required|carrier_inventory|validation: DetachedRecoveredValidateCompletion|closed recovered Sign carrier omitted {required}
+required|carrier_inventory|fn validates_digest(|closed recovered Sign carrier omitted {required}
+required|carrier_inventory|fn validates_in_store(|closed recovered Sign carrier omitted {required}
+forbidden|carrier_inventory|derive(Clone|closed recovered Sign carrier exposes {forbidden}
+forbidden|carrier_inventory|into_parts|closed recovered Sign carrier exposes {forbidden}
+forbidden|carrier_inventory|into_pair|closed recovered Sign carrier exposes {forbidden}
+forbidden|carrier_inventory|PendingRuntimeEffectBinding|closed recovered Sign carrier exposes {forbidden}
+count|work_kind_inventory|DurableRecoveredWalSign(DurableRecoveredWalSignWork)|1|the durable recovered phase-vote handoff owns exactly one closed work variant
+required|child_effect_borrow|self.repair.projection.installed_child_effect()|durable WAL repair lost its narrow child-effect borrow
+forbidden|child_effect_borrow|pending|child-effect borrow exposed forbidden {forbidden}
+forbidden|child_effect_borrow|into_|child-effect borrow exposed forbidden {forbidden}
+forbidden|child_effect_borrow|clone|child-effect borrow exposed forbidden {forbidden}
+forbidden|child_effect_borrow|receipt|child-effect borrow exposed forbidden {forbidden}
+count|generic_effect_borrow|.installed_child_effect()|1|generic registry effect oracle must borrow the durable child effect once
+count|recovered_sign_dispatch|.installed_child_effect()|1|typed recovered Sign dispatch must borrow the durable child effect once
+count|production|.installed_child_effect()|2|only the generic effect oracle and typed recovered Sign dispatch may borrow the durable child effect
+required|frame_revalidation|let Ok(loaded) = self.load()|same-frame recovered Sign preflight omitted {required}
+required|frame_revalidation|durable.belongs_to_loaded(self, &loaded)|same-frame recovered Sign preflight omitted {required}
+required|frame_revalidation|loaded.stage_authenticated_wal_vote_repair(durable.repair())|same-frame recovered Sign preflight omitted {required}
+required|frame_revalidation|!changed|same-frame recovered Sign preflight omitted {required}
+required|frame_revalidation|observed_child_ordinal == durable.child_ordinal()|same-frame recovered Sign preflight omitted {required}
+required|frame_revalidation|staged == loaded|same-frame recovered Sign preflight omitted {required}
+count|frame_revalidation|self.load()|1|receipt hash and repaired-pair shape must share one loaded frame
+required|scheduler|.prepare_ready_durable_validate_execution(&lease, slot, &self.verified)|the lifecycle scheduler must enter the sealed Ready Validate execution
+forbidden|callers|installed_child_effect|installed child effect escaped its typed registry/WAL boundary
+end
+case|certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier
+region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|fetch|registry|after|struct CertifiedFetchCompletion {|before|/// Closed durable form of one admitted `StoreBody` effect.
+region|store|registry|after|struct DurableStoreBody {|before|/// Closed durable form of one admitted `ValidateBody` effect.
+region|validate|registry|after|struct DurableValidateBody {|before|/// Same-address closed result of one completed durable body validation.
+region|completion|registry|after|struct DurableValidateCompletion {|before|impl DurableValidateCompletion
+region|fetch_successor|registry|after|pub(super) struct PreparedCertifiedFetchStoreSuccessor<'registry, 'adapter> {|before|/// Closed recovered-WAL Fetch-to-Store registry/adapter successor.
+region|validate_successor|registry|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {|before|/// Move-only Store projection sealed under its closed Fetch parent
+region|fetch_projection|registry|after|pub(super) fn seal_store_successor<'adapter>(|before|impl<'a> PreparedDurableStoreExecution<'a>
+region|validate_projection|registry|after|pub(super) fn seal_validate_successor<'adapter>(|before|// READY_DURABLE_VALIDATE_ADAPTER_JOIN_BEGIN
+region|detached|registry|after|struct DetachedRecoveredValidateCompletion {|before|pub(crate) struct AuthenticatedRecoveredWalValidateLifecycleRepair
+region|recovered_join|registry|after|// RECOVERED_WAL_VALIDATE_REGISTRY_JOIN_BEGIN|before|// RECOVERED_WAL_VALIDATE_REGISTRY_JOIN_END
+region|restore|registry|after|impl DetachedRecoveredValidateCompletion {|before|/// Ownership-preserving failure
+required|fetch|replay_evidence: CertifiedFetchReplayEvidenceV1|certified Fetch carrier omitted {required}
+required|fetch|durable_receipt: DurableBodyReceipt|certified Fetch carrier omitted {required}
+required|fetch|.project_durable_ready_fetch(|certified Fetch carrier omitted {required}
+forbidden|fetch|CertifiedFetchDequeuedResponse|certified Fetch carrier retained its dequeued response
+required|store|replay_evidence: CertifiedStoreReplayEvidenceV1|Store carrier omitted {required}
+required|store|.exactly_matches_store(&self.effect, &self.durable_receipt)|Store carrier omitted {required}
+required|validate|replay_evidence: DurableValidateReplayEvidenceV1|Validate carrier omitted {required}
+required|validate|.exactly_matches_validate_pending(|Validate carrier omitted {required}
+required|validate|&self.effect,\n                &self.durable_receipt,\n                &self.pending|Validate carrier omitted {required}
+required|completion|incumbent: DurableValidateBody|Validate completion omitted its incumbent
+required|fetch_successor|replay_evidence: CertifiedStoreReplayEvidenceV1|Fetch-to-Store successor omitted replay evidence
+required|fetch_successor|PreparedCertifiedFetchStoreAdapterV1<'adapter>|Fetch-to-Store successor omitted adapter owner
+required|validate_successor|replay_evidence: CertifiedValidateReplayEvidenceV1|Store-to-Validate successor omitted replay evidence
+required|validate_successor|PreparedDurableStoreValidateAdapterV1<'adapter>|Store-to-Validate successor omitted adapter owner
+required|fetch_projection|completion.replay_evidence.project_store(|Fetch-to-Store projection omitted replay projection
+required|fetch_projection|replay_evidence,|Fetch-to-Store projection omitted replay evidence transfer
+required|fetch_projection|adapter,|Fetch-to-Store projection omitted adapter transfer
+required|validate_projection|store.replay_evidence.project_validate(|Store-to-Validate projection omitted replay projection
+required|validate_projection|&validate_pending|Store-to-Validate projection omitted pending binding
+required|validate_projection|replay_evidence,|Store-to-Validate projection omitted replay evidence transfer
+required|validate_projection|adapter,|Store-to-Validate projection omitted adapter transfer
+required|detached|replay_evidence: DetachedValidateReplayEvidenceV1|detached Validate replay evidence omitted {required}
+required|detached|#[allow(variant_size_differences, clippy::large_enum_variant)]|detached Validate replay evidence omitted {required}
+required|detached|Retained(DurableValidateReplayEvidenceV1)|detached Validate replay evidence omitted {required}
+required|detached|RecoveredBodyMarker(DurableBodyReceipt)|detached Validate replay evidence omitted {required}
+required|detached|Self::Retained(evidence) => evidence.exactly_matches_durable_body(receipt)|detached Validate replay evidence omitted {required}
+required|detached|Self::RecoveredBodyMarker(recovered) => recovered == receipt|detached Validate replay evidence omitted {required}
+forbidden|detached|=> true|detached recovery must not use a truth-sentinel provenance bypass
+required|production|replay_evidence: DetachedValidateReplayEvidenceV1::RecoveredBodyMarker(|recovered Validate completion lost its recovered marker
+required|recovered_join|replay_evidence: DetachedValidateReplayEvidenceV1::Retained(replay_evidence)|recovered Validate join dropped {required}
+required|recovered_join|let DurableValidateBody {|recovered Validate join dropped {required}
+required|recovered_join|replay_evidence,|recovered Validate join dropped {required}
+required|recovered_join|completion.restore(effect, pending)|recovered Validate join dropped {required}
+required|restore|let DetachedValidateReplayEvidenceV1::Retained(replay_evidence) = self.replay_evidence|detached Validate restore lost retained evidence
+required|restore|replay_evidence,|detached Validate restore omitted evidence transfer
 end

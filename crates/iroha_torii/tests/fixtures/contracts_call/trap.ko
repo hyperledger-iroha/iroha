@@ -1,0 +1,12 @@
+
+seiyaku ContractViewTrapTest {
+
+  error enum ViewError {
+    Boom = 1
+  }
+
+  view fn explode() -> int {
+    require(false, ViewError::Boom);
+    return 1;
+  }
+}

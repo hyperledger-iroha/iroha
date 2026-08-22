@@ -9,6 +9,11 @@ fn default_args() {
             .write_kagemusha_catalog_qualification_seal
             .is_none()
     );
+    assert!(
+        args.startup
+            .write_kagemusha_validator_qualification_seal
+            .is_none()
+    );
 }
 #[test]
 fn check_config_flag_is_opt_in() {
@@ -38,6 +43,60 @@ fn qualification_seal_writer_requires_check_config() {
         Some(PathBuf::from("/Library/SORA/Taira/seals/catalog.norito"))
     );
 }
+
+#[test]
+fn validator_seal_writer_requires_check_config_and_conflicts_with_catalog_writer() {
+    let validator_path = "/Library/SORA/Taira/seals/validator.norito";
+    assert!(
+        Args::try_parse_from([
+            "test",
+            "--write-kagemusha-validator-qualification-seal",
+            validator_path,
+        ])
+        .is_err()
+    );
+    let args = Args::try_parse_from([
+        "test",
+        "--check-config",
+        "--write-kagemusha-validator-qualification-seal",
+        validator_path,
+    ])
+    .expect("the validator writer is valid only with check-config");
+    assert_eq!(
+        args.startup.write_kagemusha_validator_qualification_seal,
+        Some(PathBuf::from(validator_path))
+    );
+    assert!(
+        Args::try_parse_from([
+            "test",
+            "--check-config",
+            "--write-kagemusha-catalog-qualification-seal",
+            "/Library/SORA/Taira/seals/catalog.norito",
+            "--write-kagemusha-validator-qualification-seal",
+            validator_path,
+        ])
+        .is_err(),
+        "one invocation must never publish both artifacts"
+    );
+}
+
+#[test]
+fn failed_full_check_never_invokes_validator_signing_action() {
+    use std::cell::Cell;
+
+    let invocations = Cell::new(0_u8);
+    let failed_check = Err(
+        Report::new(MainError::Config)
+            .attach("injected invalid genesis after catalog and reservation preparation"),
+    );
+    let result = continue_after_full_kagemusha_check(failed_check, |()| {
+        invocations.set(invocations.get() + 1);
+        Ok(())
+    });
+    assert!(result.is_err());
+    assert_eq!(invocations.get(), 0, "validator signer must remain untouched");
+}
+
 #[cfg(unix)]
 #[test]
 fn qualification_seal_path_must_be_canonical_and_source_separate() {
@@ -71,7 +130,8 @@ fn qualification_seal_path_must_be_canonical_and_source_separate() {
 #[test]
 fn qualification_seal_publication_is_immutable_and_exclusive() {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-    let temp = tempfile::tempdir().expect("private test root");
+    let temp = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("private test root");
     let canonical_temp = fs::canonicalize(temp.path()).expect("canonical private test root");
     let seal_dir = canonical_temp.join("seals");
     fs::create_dir(&seal_dir).expect("seal directory");
@@ -81,6 +141,8 @@ fn qualification_seal_publication_is_immutable_and_exclusive() {
     let expected_uid = rustix::process::geteuid().as_raw();
     let target = QualificationSealPublicationTarget::prepare_for_owner(&path, expected_uid)
         .expect("trusted absent destination");
+    // Regression: the generic post-rename custody confirmation must accept
+    // the destination directory timestamp change caused by its own rename.
     target
         .publish_bytes_and_verify(b"canonical-seal-v1", |published| {
             let bytes = fs::read(published)
@@ -90,7 +152,7 @@ fn qualification_seal_publication_is_immutable_and_exclusive() {
             }
             Ok(())
         })
-        .expect("exclusive immutable publication");
+        .expect("post-rename confirmation succeeds");
     let metadata = fs::symlink_metadata(&path).expect("published seal metadata");
     assert!(metadata.is_file());
     assert_eq!(metadata.uid(), expected_uid);
@@ -99,40 +161,177 @@ fn qualification_seal_publication_is_immutable_and_exclusive() {
     #[cfg(target_os = "macos")]
     require_no_macos_extended_acl(&path, "published qualification seal")
         .expect("published seal is ACL-free");
+    assert_eq!(
+        RootOwnedNoReplaceArtifactPublicationTarget::read_bounded_for_owner(
+            &path,
+            64,
+            expected_uid,
+            "test reservation",
+        )
+        .expect("read stable published bytes"),
+        b"canonical-seal-v1"
+    );
+    let bounded_error = RootOwnedNoReplaceArtifactPublicationTarget::read_bounded_for_owner(
+        &path,
+        8,
+        expected_uid,
+        "test reservation",
+    )
+    .expect_err("the descriptor read must enforce its byte bound");
+    assert!(bounded_error.contains("outside 1..=8 bytes"));
     let error = QualificationSealPublicationTarget::prepare_for_owner(&path, expected_uid)
         .err()
         .expect("an existing seal is never replaced");
     assert!(error.contains("already exists"));
     let rejected_path = seal_dir.join("rejected.norito");
-    let rejected_target =
-        QualificationSealPublicationTarget::prepare_for_owner(&rejected_path, expected_uid)
-            .expect("second trusted absent destination");
+    let rejected_target = RootOwnedNoReplaceArtifactPublicationTarget::prepare_for_owner(
+        &rejected_path,
+        expected_uid,
+        "injected test artifact",
+    )
+    .expect("second trusted absent destination");
     let error = rejected_target
         .publish_bytes_and_verify(b"canonical-seal-v1", |_| {
             Err("injected final verification failure".to_owned())
         })
-        .expect_err("failed final verification must roll back the new inode");
-    assert!(error.contains("removed the newly published seal"));
-    assert!(!rejected_path.exists());
+        .expect_err("post-rename verification failure is commit-uncertain");
+    assert!(error.to_string().contains("commit-uncertain"));
+    assert!(matches!(
+        error,
+        root_owned_artifact_publication::RootOwnedArtifactPublicationError::CommitUncertain { .. }
+    ));
+    assert_eq!(
+        fs::read(&rejected_path).expect("commit-uncertain final inode remains readable"),
+        b"canonical-seal-v1"
+    );
+    let metadata = fs::symlink_metadata(&rejected_path)
+        .expect("commit-uncertain final inode remains in place");
+    assert_eq!(metadata.uid(), expected_uid);
+    assert_eq!(metadata.nlink(), 1);
+    assert_eq!(metadata.mode() & 0o7777, 0o444);
+    let second = RootOwnedNoReplaceArtifactPublicationTarget::prepare_for_owner(
+        &rejected_path,
+        expected_uid,
+        "injected test artifact",
+    )
+    .expect_err("a commit-uncertain final name makes a second prepare terminal");
+    assert!(second.to_string().contains("already exists"));
+}
+#[cfg(unix)]
+#[test]
+fn root_owned_bounded_reader_rejects_unsafe_file_shapes() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    let temp = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("private reader test root");
+    let canonical_temp = fs::canonicalize(temp.path()).expect("canonical reader test root");
+    let artifact_dir = canonical_temp.join("artifacts");
+    fs::create_dir(&artifact_dir).expect("artifact directory");
+    fs::set_permissions(&artifact_dir, fs::Permissions::from_mode(0o700))
+        .expect("private artifact directory");
+    let expected_uid = rustix::process::geteuid().as_raw();
+
+    let writable = artifact_dir.join("writable.norito");
+    fs::write(&writable, b"artifact").expect("write writable artifact");
+    fs::set_permissions(&writable, fs::Permissions::from_mode(0o644))
+        .expect("set writable artifact mode");
+    let error = RootOwnedNoReplaceArtifactPublicationTarget::read_bounded_for_owner(
+        &writable,
+        64,
+        expected_uid,
+        "test reservation",
+    )
+    .expect_err("a writable artifact must fail closed");
+    assert!(error.contains("mode 0444"));
+
+    let source = artifact_dir.join("source.norito");
+    fs::write(&source, b"artifact").expect("write hard-link source");
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o444))
+        .expect("make hard-link source immutable");
+    let linked = artifact_dir.join("linked.norito");
+    fs::hard_link(&source, &linked).expect("create second hard link");
+    let error = RootOwnedNoReplaceArtifactPublicationTarget::read_bounded_for_owner(
+        &linked,
+        64,
+        expected_uid,
+        "test reservation",
+    )
+    .expect_err("a multiply-linked artifact must fail closed");
+    assert!(error.contains("single-link regular file"));
+
+    let symlinked = artifact_dir.join("symlinked.norito");
+    symlink(&source, &symlinked).expect("create artifact symlink");
+    let error = RootOwnedNoReplaceArtifactPublicationTarget::read_bounded_for_owner(
+        &symlinked,
+        64,
+        expected_uid,
+        "test reservation",
+    )
+    .expect_err("a symlinked artifact must fail closed");
+    assert!(error.contains("direct single-link regular file"));
+}
+#[cfg(target_os = "macos")]
+#[test]
+fn root_owned_bounded_reader_rejects_extended_attributes() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let temp = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("private xattr test root");
+    let artifact = fs::canonicalize(temp.path())
+        .expect("canonical xattr test root")
+        .join("reservation.norito");
+    fs::write(&artifact, b"artifact").expect("write xattr-bearing artifact");
+    let status = std::process::Command::new("/usr/bin/xattr")
+        .args(["-w", "com.sora.kagemusha-test", "present"])
+        .arg(&artifact)
+        .status()
+        .expect("run xattr");
+    assert!(status.success(), "test xattr must be installed");
+    fs::set_permissions(&artifact, fs::Permissions::from_mode(0o444))
+        .expect("make xattr-bearing artifact immutable");
+    let error = RootOwnedNoReplaceArtifactPublicationTarget::read_bounded_for_owner(
+        &artifact,
+        64,
+        rustix::process::geteuid().as_raw(),
+        "test reservation",
+    )
+    .expect_err("an xattr-bearing artifact must fail closed");
+    assert!(error.contains("xattr-free"));
 }
 #[cfg(target_os = "macos")]
 #[test]
 fn qualification_seal_publication_rejects_acl_writable_parent() {
-    let temp = tempfile::tempdir().expect("private ACL test root");
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let temp = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("private ACL test root");
     let canonical_temp = fs::canonicalize(temp.path()).expect("canonical ACL test root");
     let seal_dir = canonical_temp.join("seals");
     fs::create_dir(&seal_dir).expect("seal directory");
     let expected_uid = rustix::process::geteuid().as_raw();
-    let error = {
+    let artifact = seal_dir.join("reservation.norito");
+    fs::write(&artifact, b"artifact").expect("write reader artifact");
+    fs::set_permissions(&artifact, fs::Permissions::from_mode(0o444))
+        .expect("make reader artifact immutable");
+    let (publication_error, reader_error) = {
         let _acl = add_macos_acl(&seal_dir, "everyone allow write");
-        QualificationSealPublicationTarget::prepare_for_owner(
+        let publication_error = QualificationSealPublicationTarget::prepare_for_owner(
             &seal_dir.join("catalog.norito"),
             expected_uid,
         )
         .err()
-        .expect("ACL-writable publication parent must fail closed")
+        .expect("ACL-writable publication parent must fail closed");
+        let reader_error = RootOwnedNoReplaceArtifactPublicationTarget::read_bounded_for_owner(
+            &artifact,
+            64,
+            expected_uid,
+            "test reservation",
+        )
+        .expect_err("ACL-writable reader parent must fail closed");
+        (publication_error, reader_error)
     };
-    assert!(error.contains("extended ACL"));
+    assert!(publication_error.contains("extended ACL"));
+    assert!(reader_error.contains("extended ACL"));
 }
 #[test]
 #[allow(clippy::bool_assert_comparison)] // for expressiveness

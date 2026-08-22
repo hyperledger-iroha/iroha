@@ -1,0 +1,7 @@
+
+                bundle_name = "demo"
+
+                [[contracts]]
+                name = "demo.greeter"
+                alias = "greeter::universal"
+                source = "contracts/greeter.ko"

@@ -1,5 +1,13 @@
 // Resolved account and asset-definition scope routing regressions.
 
+stored_alias_permission_route_test!(
+    asset_home_coverage_unregister_asset_definition_permission_uses_stored_alias_dataspace,
+    Grant,
+    iroha_executor_data_model::permission::asset_definition::CanUnregisterAssetDefinition,
+    "unregister permission alias lookup should defer to state",
+    "stored alias unregister permission route must resolve with state",
+);
+
 #[test]
 fn confidential_policy_permission_uses_exact_asset_definition_dataspace() {
     let (alice_id, alice_keypair) = gen_account_in("wonderland");

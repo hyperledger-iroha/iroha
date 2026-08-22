@@ -4270,8 +4270,8 @@ run_artifact_set_negative_control symlink
 
 # JavaScript's native builder still requires a root-selected lock. Until it is
 # requalified for the distinct external cd9e authority, the gate must stop
-# before Cargo rather than replacing the tracked 0ddb root.
-grep -Fq 'TRACKED_ROOT_CARGO_LOCK_SHA256="0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+# before Cargo rather than replacing the tracked c90b root.
+grep -Fq 'TRACKED_ROOT_CARGO_LOCK_SHA256="c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 grep -Fq 'FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 grep -Fq 'external-lock requalification' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 ! grep -Eq '(install|rm -f --).*\$\{WORKSPACE_CARGO_LOCKFILE\}' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
@@ -4705,6 +4705,6 @@ PY
 [[ "$(grep -Ec 'install -m 600 .*Cargo\.lock.*Cargo\.lock' "${WORKFLOW_PATH}")" -eq 0 ]] && grep -Fxq '**/Cargo.lock' "${SOURCE_ROOT}/.gitignore" && grep -Fxq '!/Cargo.lock' "${SOURCE_ROOT}/.gitignore"
 ROOT_LOCK_INDEX_ENTRY="$(git -C "${SOURCE_ROOT}" ls-files --stage -- Cargo.lock)"; ROOT_LOCK_HEAD_ENTRY="$(git -C "${SOURCE_ROOT}" ls-tree HEAD -- Cargo.lock)"
 [[ "${ROOT_LOCK_INDEX_ENTRY}" =~ ^100644\ ([0-9a-f]{40})\ 0$'\t'Cargo\.lock$ ]]; ROOT_LOCK_INDEX_OID="${BASH_REMATCH[1]}"
-[[ "${ROOT_LOCK_HEAD_ENTRY}" =~ ^100644\ blob\ ([0-9a-f]{40})$'\t'Cargo\.lock$ ]]; ROOT_LOCK_HEAD_OID="${BASH_REMATCH[1]}"; [[ "${ROOT_LOCK_INDEX_OID}" == "${ROOT_LOCK_HEAD_OID}" && "$(git -C "${SOURCE_ROOT}" hash-object --no-filters -- Cargo.lock)" == "${ROOT_LOCK_INDEX_OID}" && "$(python3 -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SOURCE_ROOT}/Cargo.lock")" == "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222" ]]
+[[ "${ROOT_LOCK_HEAD_ENTRY}" =~ ^100644\ blob\ ([0-9a-f]{40})$'\t'Cargo\.lock$ ]]; ROOT_LOCK_HEAD_OID="${BASH_REMATCH[1]}"; [[ "${ROOT_LOCK_INDEX_OID}" == "${ROOT_LOCK_HEAD_OID}" && "$(git -C "${SOURCE_ROOT}" hash-object --no-filters -- Cargo.lock)" == "${ROOT_LOCK_INDEX_OID}" && "$(python3 -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SOURCE_ROOT}/Cargo.lock")" == "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b" ]]
 grep -Fq 'PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256=' "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" && grep -Fq 'PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256=' "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"
 printf '%s\n' "privacy SDK authenticated Cargo.lock guard tests passed"

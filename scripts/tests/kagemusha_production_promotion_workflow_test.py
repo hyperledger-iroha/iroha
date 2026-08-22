@@ -655,7 +655,7 @@ def test_runbook_carries_native_runtime_and_sealed_report_inputs() -> None:
         f"KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN={FIXED_CONTROLLER_PATH}"
     ) == 2
     assert "workflow is deliberately named as readiness verification" in runbook
-    assert "verification success is not promotion" in runbook
+    assert "Verification success is not promotion" in runbook
     assert PROMOTION_ID_DOMAIN in runbook
     assert f"{CATALOG_REVALIDATION_RECEIPT_ROOT}/<promotion-id>.json" in runbook
     assert re.search(
@@ -664,7 +664,11 @@ def test_runbook_carries_native_runtime_and_sealed_report_inputs() -> None:
     assert "invokes `revalidate-catalog`" in runbook
     assert "exact sixteen-file pre-promotion candidate" in runbook
     assert "full exact\nseventeen-file promoted-release verifier" in runbook
-    assert "workflow does not invoke `promote-release-v4`" in runbook
+    assert re.search(
+        r"workflow does not invoke the authenticated controller's\s+"
+        r"`promote-kagemusha-release-v4`",
+        runbook,
+    )
     assert "generic writable-file mode pre-creates outputs" in runbook
 
 
@@ -902,7 +906,7 @@ def test_native_builder_executes_pinned_descriptor_and_cleanup_pins_pgid() -> No
     captured = source.split("pub(super) fn run_captured", 1)[1].split(
         "pub(super) fn high_descriptor", 1
     )[0]
-    assert 'let builder_fd = high_descriptor(&builder.file, 71)?;' in builder
+    assert 'let builder_fd = high_descriptor(builder.file_mut(), 71)?;' in builder
     assert '.arg("/dev/fd/12")' in builder
     assert ".arg(&launch.builder)" not in builder
     assert "WNOWAIT" in captured
@@ -967,22 +971,27 @@ def test_source_contract_provider_executes_only_authenticated_exact_bytes() -> N
     """Promotion must never reopen the static provider after authenticating it."""
 
     gate = READINESS_GATE.read_text(encoding="utf-8")
+    provider_auth = gate.split(
+        "def pin_authenticated_reviewed_source_file(", 1
+    )[1].split("def authenticated_verifier_exited_without_reaping(", 1)[0]
+    custody = provider_auth.index("require_production_root_custody(descriptor, label)")
+    descriptor_read = provider_auth.index("payload = read_pinned_descriptor(")
+    closure_auth = provider_auth.index(
+        "authenticate_reviewed_source_file(relative, payload, source_commit, maximum_bytes)"
+    )
+    retain = provider_auth.index(
+        "retained_pins.append((path, descriptor, fingerprint, label))"
+    )
+    assert custody < descriptor_read < closure_auth < retain
+
     promotion = gate.rsplit("def promotion_errors()", 1)[1].split(
         "source_contract_errors: list[str] = []", 1
     )[0]
-    provider_auth = promotion.split(
-        'label = f"reviewed readiness source-contract provider', 1
-    )[1].split("if self_test:", 1)[0]
-    custody = provider_auth.index("require_production_root_custody(descriptor, label)")
-    descriptor_read = provider_auth.index("source_contract_bytes = read_pinned_descriptor(")
-    closure_auth = provider_auth.index(
-        "authenticate_reviewed_source_file(\n"
-        "            READINESS_SOURCE_CONTRACT,"
-    )
-    retain = provider_auth.index(
-        "authenticated_readiness_source_contract_bytes = source_contract_bytes"
-    )
-    assert custody < descriptor_read < closure_auth < retain
+    assert "for relative in READINESS_SOURCE_PROVIDERS:" in promotion
+    assert (
+        "authenticated_readiness_source_contract_bytes[relative] = (\n"
+        "                pin_authenticated_reviewed_source_file("
+    ) in promotion
 
     dispatch = gate.rsplit("source_contract_errors: list[str] = []", 1)[1].split(
         "errors = source_contract_errors", 1
@@ -993,9 +1002,9 @@ def test_source_contract_provider_executes_only_authenticated_exact_bytes() -> N
         "source_contract_bytes = authenticated_readiness_source_contract_bytes"
         in promotion_branch
     )
-    assert dispatch.count("(root / READINESS_SOURCE_CONTRACT).read_bytes()") == 1
-    assert "source_contract_bytes = (root / READINESS_SOURCE_CONTRACT).read_bytes()" in candidate_branch
-    assert "code = compile(\n            source_contract_bytes," in dispatch
+    assert dispatch.count("(root / relative).read_bytes()") == 1
+    assert "payload = (root / relative).read_bytes()" in candidate_branch
+    assert "code = compile(\n            primary_bytes," in dispatch
     assert "exec(code, source_contract_context, source_contract_context)" in dispatch
     assert READINESS_SOURCE_CONTRACT.stat().st_size <= 128 * 1024
 

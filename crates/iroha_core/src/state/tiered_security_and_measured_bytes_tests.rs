@@ -1,11 +1,15 @@
-    fn axt_security_map_fixture() -> (
+    use iroha_data_model::nexus::{AxtHandleReplayKey, AxtPolicyEntry, AxtReplayRecord};
+
+    type AxtSecurityMapFixture = (
         DataSpaceId,
         AxtHandleCounterRecord,
         AssetDefinitionId,
         AxtAssetIncarnationV1,
         AxtHandleBudgetKey,
         AxtHandleBudgetRecord,
-    ) {
+    );
+
+    fn axt_security_map_fixture_with_scope(scope: String) -> AxtSecurityMapFixture {
         let definition_id = AssetDefinitionId::from_uuid_bytes([
             0x41, 0x63, 0x85, 0xa7, 0xc9, 0xeb, 0x4d, 0xef, 0x80, 0x31, 0x42, 0x53, 0x64, 0x75,
             0x86, 0x97,
@@ -29,7 +33,7 @@
         let payload = AssetHandleIssuerPayloadV1 {
             context,
             asset_definition_id: definition_id.clone(),
-            scope: vec!["transfer".to_owned()],
+            scope: vec![scope],
             subject: HandleSubject {
                 account: "tiered-axt-security-subject".to_owned(),
                 origin_dsid: Some(context.asset_dsid),
@@ -67,6 +71,46 @@
             budget_key,
             budget_record,
         )
+    }
+    fn axt_security_map_fixture() -> AxtSecurityMapFixture {
+        axt_security_map_fixture_with_scope("transfer".to_owned())
+    }
+    fn axt_policy_replay_fixture(
+        scope: String,
+    ) -> (
+        DataSpaceId,
+        AxtPolicyEntry,
+        AxtHandleReplayKey,
+        AxtReplayRecord,
+        AxtHandleBudgetRecord,
+    ) {
+        let (dataspace, _, _, incarnation, budget_key, budget_record) =
+            axt_security_map_fixture_with_scope(scope);
+        let policy = AxtPolicyEntry {
+            manifest_root: [0xD7; 32],
+            target_lane: LaneId::SINGLE,
+            active_handle_era: 9,
+            next_handle_counter: 5,
+            current_slot: 101,
+        };
+        let replay_key = AxtHandleReplayKey::from_parts(
+            dataspace,
+            incarnation,
+            [0xC7; 32],
+            policy.active_handle_era,
+            4,
+            policy.target_lane,
+        );
+        let replay = AxtReplayRecord {
+            dataspace,
+            budget_key,
+            used_slot: 100,
+            retain_until_slot: 101,
+        };
+        replay
+            .validate_for_key(&replay_key)
+            .expect("tiered AXT replay fixture is canonical");
+        (dataspace, policy, replay_key, replay, budget_record)
     }
     #[test]
     fn streamed_hash_matches_canonical_json() {
@@ -200,6 +244,286 @@
         assert_eq!(
             MeasuredBytes::measured_bytes(&opaque),
             std::mem::size_of::<AssetDefinitionId>()
+        );
+    }
+    #[test]
+    fn axt_replay_measured_bytes_include_dynamic_family_heap() {
+        let (_, _, _, short, _) = axt_policy_replay_fixture("x".to_owned());
+        let (_, _, _, long, _) = axt_policy_replay_fixture("x".repeat(512));
+        for record in [&short, &long] {
+            assert_eq!(
+                MeasuredBytes::measured_bytes(record),
+                std::mem::size_of::<AxtReplayRecord>()
+                    .saturating_add(record.budget_key.allocated_heap_bytes())
+            );
+        }
+        assert!(
+            long.budget_key.allocated_heap_bytes() > short.budget_key.allocated_heap_bytes()
+        );
+        assert!(MeasuredBytes::measured_bytes(&long) > MeasuredBytes::measured_bytes(&short));
+    }
+    #[test]
+    fn hot_budget_arithmetic_is_saturating_and_overflow_safe() {
+        let widened_usize = u64::try_from(usize::MAX).unwrap_or(u64::MAX);
+        assert_eq!(
+            hot_budget_bytes(usize::MAX, 1),
+            widened_usize.saturating_add(1)
+        );
+        assert!(hot_budget_has_capacity(u64::MAX - 1, 1, u64::MAX));
+        assert!(!hot_budget_has_capacity(u64::MAX - 1, 2, u64::MAX));
+        assert!(hot_budget_has_capacity(u64::MAX, u64::MAX, 0));
+    }
+    #[test]
+    fn axt_budget_keys_participate_in_the_hot_byte_limit() {
+        let (_, _, _, _, short_key, short_record) =
+            axt_security_map_fixture_with_scope("x".to_owned());
+        let (_, _, _, _, long_key, long_record) =
+            axt_security_map_fixture_with_scope("x".repeat(512));
+        let entry_budget = |key: &AxtHandleBudgetKey, record: &AxtHandleBudgetRecord| {
+            hot_budget_bytes(
+                norito::codec::Encode::encode(key).len(),
+                MeasuredBytes::measured_bytes(record),
+            )
+        };
+        let short_budget = entry_budget(&short_key, &short_record);
+        let long_budget = entry_budget(&long_key, &long_record);
+        assert!(long_budget > short_budget);
+
+        let temp = tempdir().expect("temporary tiered AXT hot-budget directory");
+        for (label, key, record, expected_hot) in [
+            ("short", short_key, short_record, true),
+            ("long", long_key, long_record, false),
+        ] {
+            let key_payload = norito::codec::Encode::encode(&key);
+            let value_size = MeasuredBytes::measured_bytes(&record);
+            let expected_budget = hot_budget_bytes(key_payload.len(), value_size);
+            let mut world = World::default();
+            world.axt_handle_budget_ledger.insert(key, record);
+            let mut backend = TieredStateBackend::new(
+                true,
+                0,
+                short_budget,
+                0,
+                Some(temp.path().join(label)),
+                None,
+                0,
+                0,
+            );
+            backend
+                .record_world_snapshot(&world)
+                .expect("record tiered AXT hot-budget snapshot");
+            let manifest = backend.last_manifest().expect("tiered manifest recorded");
+            let entry = manifest
+                .hot_entries
+                .iter()
+                .chain(&manifest.cold_entries)
+                .find(|entry| entry.key_payload == key_payload)
+                .expect("AXT budget entry is present");
+            assert_eq!(entry.value_size_bytes(), value_size);
+            assert_eq!(entry.hot_budget_bytes(), expected_budget);
+            assert_eq!(manifest.hot_entries.len() == 1, expected_hot);
+            assert_eq!(manifest.cold_entries.len() == 1, !expected_hot);
+        }
+    }
+    #[test]
+    fn axt_policy_and_replay_roundtrip_through_persisted_cold_manifest() {
+        let (dataspace, policy, replay_key, replay, budget_record) =
+            axt_policy_replay_fixture("cold-manifest".to_owned());
+        assert_eq!(
+            MeasuredBytes::measured_bytes(&policy),
+            std::mem::size_of::<AxtPolicyEntry>()
+        );
+        let mut world = World::default();
+        world.axt_policies.insert(dataspace, policy);
+        world
+            .axt_replay_ledger
+            .insert(replay_key, replay.clone());
+        world
+            .axt_handle_budget_ledger
+            .insert(replay.budget_key.clone(), budget_record);
+
+        let temp = tempdir().expect("temporary tiered AXT policy/replay directory");
+        let root = temp.path().to_path_buf();
+        let mut backend =
+            TieredStateBackend::new(true, 0, 1, 0, Some(root.clone()), None, 0, 0);
+        backend
+            .record_world_snapshot(&world)
+            .expect("persist tiered AXT policy and replay ledger");
+        let snapshot_index = backend
+            .last_manifest()
+            .expect("tiered manifest recorded")
+            .snapshot_index;
+        drop(backend);
+
+        let manifest_text = fs::read_to_string(
+            root.join(format!("{snapshot_index:020}"))
+                .join("manifest.json"),
+        )
+        .expect("read persisted tiered AXT manifest");
+        assert!(manifest_text.contains(r#""axt_policies""#));
+        assert!(manifest_text.contains(r#""axt_replay_ledger""#));
+        let manifest: TieredSnapshotManifest =
+            json::from_str(&manifest_text).expect("decode persisted tiered AXT manifest");
+        let policy_entry = manifest
+            .cold_entries
+            .iter()
+            .find(|entry| entry.segment == TieredSegment::AxtPolicies)
+            .expect("AXT policy is persisted in the cold manifest");
+        let replay_entry = manifest
+            .cold_entries
+            .iter()
+            .find(|entry| entry.segment == TieredSegment::AxtReplayLedger)
+            .expect("AXT replay record is persisted in the cold manifest");
+        assert_eq!(
+            policy_entry.key_payload,
+            norito::codec::Encode::encode(&dataspace)
+        );
+        assert_eq!(
+            replay_entry.key_payload,
+            norito::codec::Encode::encode(&replay_key)
+        );
+        assert_eq!(
+            policy_entry.value_size_bytes(),
+            MeasuredBytes::measured_bytes(&policy)
+        );
+        assert_eq!(
+            replay_entry.value_size_bytes(),
+            MeasuredBytes::measured_bytes(&replay)
+        );
+
+        let reader = TieredStateBackend::new(true, 0, 1, 0, Some(root), None, 0, 0);
+        let policy_bytes = reader
+            .read_cold_payload(snapshot_index, policy_entry)
+            .expect("read AXT policy cold payload")
+            .expect("AXT policy cold payload exists");
+        let replay_bytes = reader
+            .read_cold_payload(snapshot_index, replay_entry)
+            .expect("read AXT replay cold payload")
+            .expect("AXT replay cold payload exists");
+        assert_eq!(
+            json::from_slice::<AxtPolicyEntry>(&policy_bytes).expect("decode AXT policy payload"),
+            policy
+        );
+        assert_eq!(
+            json::from_slice::<AxtReplayRecord>(&replay_bytes)
+                .expect("decode AXT replay payload"),
+            replay
+        );
+    }
+    #[test]
+    fn axt_policy_and_replay_block_payloads_update_and_remove_entries() {
+        let (dataspace, policy, replay_key, replay, budget_record) =
+            axt_policy_replay_fixture("incremental".to_owned());
+        let mut world = World::default();
+        world.axt_policies.insert(dataspace, policy);
+        world
+            .axt_replay_ledger
+            .insert(replay_key, replay.clone());
+        world
+            .axt_handle_budget_ledger
+            .insert(replay.budget_key.clone(), budget_record);
+        let temp = tempdir().expect("temporary incremental AXT policy/replay directory");
+        let mut backend = TieredStateBackend::new(
+            true,
+            0,
+            1,
+            0,
+            Some(temp.path().to_path_buf()),
+            None,
+            0,
+            0,
+        );
+        backend
+            .record_world_snapshot(&world)
+            .expect("seed tiered AXT policy and replay ledger");
+
+        let updated_policy = AxtPolicyEntry {
+            next_handle_counter: policy.next_handle_counter.saturating_add(1),
+            current_slot: 202,
+            ..policy
+        };
+        let updated_replay = AxtReplayRecord {
+            used_slot: replay.used_slot.saturating_add(1),
+            retain_until_slot: 202,
+            ..replay.clone()
+        };
+        updated_replay
+            .validate_for_key(&replay_key)
+            .expect("updated tiered replay record is canonical");
+        let mut update = world.block();
+        update.axt_policies.insert(dataspace, updated_policy);
+        update
+            .axt_replay_ledger
+            .insert(replay_key, updated_replay.clone());
+        let diff = update.tiered_snapshot_diff();
+        assert!(diff.entries().iter().any(
+            |entry| matches!(entry, TieredKeyHandle::AxtPolicy(key) if *key == dataspace)
+        ));
+        assert!(diff.entries().iter().any(
+            |entry| matches!(entry, TieredKeyHandle::AxtReplay(key) if *key == replay_key)
+        ));
+        let payload = update.tiered_snapshot_payload();
+        drop(update);
+        backend
+            .record_world_snapshot_with_payload(&payload)
+            .expect("persist incremental AXT policy and replay updates");
+
+        let manifest = backend
+            .last_manifest()
+            .expect("updated tiered manifest recorded")
+            .clone();
+        let policy_entry = manifest
+            .cold_entries
+            .iter()
+            .find(|entry| entry.segment == TieredSegment::AxtPolicies)
+            .expect("updated AXT policy remains in the cold manifest");
+        let replay_entry = manifest
+            .cold_entries
+            .iter()
+            .find(|entry| entry.segment == TieredSegment::AxtReplayLedger)
+            .expect("updated AXT replay remains in the cold manifest");
+        let policy_bytes = backend
+            .read_cold_payload(manifest.snapshot_index, policy_entry)
+            .expect("read updated AXT policy cold payload")
+            .expect("updated AXT policy cold payload exists");
+        let replay_bytes = backend
+            .read_cold_payload(manifest.snapshot_index, replay_entry)
+            .expect("read updated AXT replay cold payload")
+            .expect("updated AXT replay cold payload exists");
+        assert_eq!(
+            json::from_slice::<AxtPolicyEntry>(&policy_bytes)
+                .expect("decode updated AXT policy"),
+            updated_policy
+        );
+        assert_eq!(
+            json::from_slice::<AxtReplayRecord>(&replay_bytes)
+                .expect("decode updated AXT replay"),
+            updated_replay
+        );
+
+        let mut removal = world.block();
+        assert_eq!(removal.axt_policies.remove(dataspace), Some(policy));
+        assert_eq!(
+            removal.axt_replay_ledger.remove(replay_key),
+            Some(replay)
+        );
+        let payload = removal.tiered_snapshot_payload();
+        drop(removal);
+        backend
+            .record_world_snapshot_with_payload(&payload)
+            .expect("persist AXT policy and replay removals");
+        let manifest = backend
+            .last_manifest()
+            .expect("AXT removal manifest recorded");
+        assert!(
+            manifest
+                .hot_entries
+                .iter()
+                .chain(&manifest.cold_entries)
+                .all(|entry| !matches!(
+                    entry.segment,
+                    TieredSegment::AxtPolicies | TieredSegment::AxtReplayLedger
+                ))
         );
     }
     #[test]
@@ -399,6 +723,82 @@
         )
     }
     #[test]
+    fn hot_grace_allows_key_and_byte_budget_overflow_for_previous_entries() {
+        let temp = tempdir().expect("tmpdir");
+        let root = temp.path().to_path_buf();
+        let mut backend =
+            TieredStateBackend::new(true, 2, 0, 1, Some(root.clone()), None, 0, 0);
+        let mut world = World::default();
+        let (key1, value1) = dummy_state_entry(1);
+        let (key2, value2) = dummy_state_entry(2);
+        world.smart_contract_state.insert(key1, value1);
+        world.smart_contract_state.insert(key2, value2);
+        backend
+            .record_world_snapshot(&world)
+            .expect("first snapshot");
+        let initial_hot_bytes = backend
+            .last_manifest()
+            .expect("initial manifest recorded")
+            .hot_entries
+            .iter()
+            .fold(0_u64, |total, entry| {
+                total.saturating_add(entry.hot_budget_bytes())
+            });
+        assert!(initial_hot_bytes > 1);
+        backend.reconfigure(true, 1, initial_hot_bytes - 1, 1, Some(root), None, 0, 0);
+        backend
+            .record_world_snapshot(&world)
+            .expect("second snapshot");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+        assert_eq!(manifest.hot_entries.len(), 2);
+        assert_eq!(manifest.hot_budget_overflow_keys, 1);
+        assert_eq!(manifest.hot_budget_overflow_bytes, 1);
+    }
+    #[test]
+    fn incremental_snapshot_reports_unspillable_hot_byte_overflow() {
+        let temp = tempdir().expect("tmpdir");
+        let root = temp.path().to_path_buf();
+        let mut backend =
+            TieredStateBackend::new(true, 1, 0, 0, Some(root.clone()), None, 0, 0);
+        let mut world = World::default();
+        let (old_key, old_value) = dummy_state_entry(1);
+        let old_handle = TieredKeyHandle::SmartContractState(old_key.clone());
+        let old_budget = hot_budget_bytes(
+            old_handle.encode_key().expect("old key encodes").len(),
+            MeasuredBytes::measured_bytes(&old_value),
+        );
+        world.smart_contract_state.insert(old_key, old_value);
+        backend
+            .record_world_snapshot(&world)
+            .expect("initial snapshot");
+
+        let (new_key, new_value) = dummy_state_entry(2);
+        let new_handle = TieredKeyHandle::SmartContractState(new_key.clone());
+        let new_budget = hot_budget_bytes(
+            new_handle.encode_key().expect("new key encodes").len(),
+            MeasuredBytes::measured_bytes(&new_value),
+        );
+        backend.reconfigure(true, 1, new_budget, 0, Some(root), None, 0, 0);
+        world
+            .smart_contract_state
+            .insert(new_key, new_value.clone());
+        let mut payload = TieredSnapshotPayload::default();
+        payload.push_value(new_handle, Some(new_value));
+        backend
+            .record_world_snapshot_with_payload(&payload)
+            .expect("payload snapshot");
+
+        let manifest = backend.last_manifest().expect("manifest recorded");
+        let hot_budget = manifest.hot_entries.iter().fold(0_u64, |total, entry| {
+            total.saturating_add(entry.hot_budget_bytes())
+        });
+        assert_eq!(manifest.hot_entries.len(), 2);
+        assert!(manifest.cold_entries.is_empty());
+        assert_eq!(manifest.hot_budget_overflow_keys, 1);
+        assert_eq!(manifest.hot_budget_overflow_bytes, old_budget);
+        assert_eq!(hot_budget, old_budget.saturating_add(new_budget));
+    }
+    #[test]
     fn snapshot_failure_leaves_existing_snapshot_intact() {
         let temp = tempdir().expect("tmpdir");
         let root = temp.path().to_path_buf();
@@ -420,8 +820,8 @@
                 cold_reused_bytes: 0,
                 hot_promotions: 0,
                 hot_demotions: 0,
-                hot_grace_overflow_keys: 0,
-                hot_grace_overflow_bytes: 0,
+                hot_budget_overflow_keys: 0,
+                hot_budget_overflow_bytes: 0,
             },
             cold_entries: Vec::new(),
         };

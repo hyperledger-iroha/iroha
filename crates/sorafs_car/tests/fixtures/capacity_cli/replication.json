@@ -1,0 +1,30 @@
+
+{
+  "order_id_hex": "4444444444444444444444444444444444444444444444444444444444444444",
+  "manifest_cid_hex": "aabbccdd",
+  "manifest_digest_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "chunking_profile": "sorafs.sf1@1.0.0",
+  "target_replicas": 2,
+  "assignments": [
+    {
+      "provider_id_hex": "5555555555555555555555555555555555555555555555555555555555555555",
+      "slice_gib": 100,
+      "lane": "global"
+    },
+    {
+      "provider_id_hex": "6666666666666666666666666666666666666666666666666666666666666666",
+      "slice_gib": 100,
+      "lane": "archive"
+    }
+  ],
+  "issued_at": 1700000500,
+  "deadline_at": 1700000800,
+  "sla": {
+    "ingest_deadline_secs": 900,
+    "min_availability_percent_milli": 99000,
+    "min_por_success_percent_milli": 98000
+  },
+  "metadata": {
+    "priority": "standard"
+  }
+}

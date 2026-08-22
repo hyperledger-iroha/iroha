@@ -1,12 +1,16 @@
-//! Canonical Kagemusha offline-cash models. The module exposes one lifecycle:
-//! exact online top-up, recursive offline split/spend, and exact online redemption.
+//! Canonical Kagemusha offline cash: online top-up, recursive spend, and online redemption.
+mod kagemusha_canary_evidence;
+mod kagemusha_post_canary_validator_liveness;
 mod kagemusha_promotion_receipt;
+mod kagemusha_runtime_effective_config_projection;
 mod offline_cash_release_v1;
 mod offline_cash_v1;
 mod receiver_snapshot;
 mod status;
 pub use self::{
-    kagemusha_promotion_receipt::*, model::*, offline_cash_release_v1::*, offline_cash_v1::*,
+    kagemusha_canary_evidence::*, kagemusha_post_canary_validator_liveness::*,
+    kagemusha_promotion_receipt::*, kagemusha_runtime_effective_config_projection::*, model::*,
+    offline_cash_release_v1::*, offline_cash_v1::*,
 };
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
@@ -3085,7 +3089,10 @@ impl KagemushaReviewedSourceClosureV1 {
         }
         Ok(())
     }
-    fn canonical_descriptor_bytes(&self) -> Result<Vec<u8>, KagemushaValidationError> {
+    /// Return the exact canonical compact sorted-key ASCII JSON descriptor plus LF.
+    ///
+    /// Returns [`KagemushaValidationError`] for an invalid closure or descriptor encoding failure.
+    pub fn canonical_descriptor_bytes(&self) -> Result<Vec<u8>, KagemushaValidationError> {
         self.validate()?;
         let mut out = String::new();
         out.push_str("{\"base_commit\":");
@@ -3960,7 +3967,6 @@ mod kagemusha_v4_artifact_contract_tests {
         let mut closure = reviewed_source_closure_v2();
         closure.source_repo_dirty = true;
         assert!(closure.validate().is_err());
-
         let mut closure = reviewed_source_closure_v2();
         closure.tracked_binary_diff_sha256 = digest(b"forbidden tracked diff");
         closure.combined_source_fingerprint_sha256 = kagemusha_reviewed_source_fingerprint_v2(
@@ -3969,11 +3975,9 @@ mod kagemusha_v4_artifact_contract_tests {
             &closure.tracked_cargo_lock,
         );
         assert!(closure.validate().is_err());
-
         let mut closure = reviewed_source_closure_v2();
         closure.untracked_file_count = 1;
         assert!(closure.validate().is_err());
-
         for bad_path in [".cargo/Cargo.lock", "/Cargo.lock", "cargo.lock"] {
             let mut closure = reviewed_source_closure_v2();
             closure.tracked_cargo_lock.path = bad_path.to_owned();
@@ -3984,7 +3988,6 @@ mod kagemusha_v4_artifact_contract_tests {
             );
             assert!(closure.validate().is_err());
         }
-
         let mut closure = reviewed_source_closure_v2();
         closure.tracked_cargo_lock.git_mode = "100755".to_owned();
         closure.combined_source_fingerprint_sha256 = kagemusha_reviewed_source_fingerprint_v2(
@@ -3993,7 +3996,6 @@ mod kagemusha_v4_artifact_contract_tests {
             &closure.tracked_cargo_lock,
         );
         assert!(closure.validate().is_err());
-
         let mut closure = reviewed_source_closure_v2();
         closure.tracked_cargo_lock.size_bytes = 0;
         closure.combined_source_fingerprint_sha256 = kagemusha_reviewed_source_fingerprint_v2(
@@ -4052,16 +4054,13 @@ mod kagemusha_v4_artifact_contract_tests {
         let candidate = unsigned_candidate_v5();
         candidate.validate().expect("valid V5 candidate nucleus");
         assert_ne!(candidate.sha256().expect("V5 candidate digest"), [0; 32]);
-
         let mut wrong_schema = candidate.clone();
         wrong_schema.manifest.reviewed_source_closure.schema =
             KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1.to_owned();
         assert!(wrong_schema.validate().is_err());
-
         let mut wrong_tree = candidate.clone();
         wrong_tree.manifest.source_git_tree = "567890abcdef1234567890abcdef123456789012".to_owned();
         assert!(wrong_tree.validate().is_err());
-
         let mut missing_projection = candidate;
         missing_projection
             .manifest
@@ -4073,11 +4072,9 @@ mod kagemusha_v4_artifact_contract_tests {
         let v1_json = norito::json::to_json(&reviewed_source_closure())
             .expect("serialize historical V1 closure");
         assert!(norito::json::from_str::<KagemushaReviewedSourceClosureV2>(&v1_json).is_err());
-
         let v4_json = norito::json::to_json(&unsigned_candidate(&manifest()))
             .expect("serialize historical V4 candidate");
         assert!(norito::json::from_str::<KagemushaRecursiveSpendCandidateV5>(&v4_json).is_err());
-
         let v5_json =
             norito::json::to_json(&unsigned_candidate_v5()).expect("serialize V5 candidate");
         assert!(norito::json::from_str::<KagemushaRecursiveSpendCandidateV4>(&v5_json).is_err());
@@ -5739,47 +5736,7 @@ mod kagemusha_v4_artifact_contract_tests {
             "the legacy field layout must not decode as ABI-21"
         );
     }
-    #[test]
-    fn v4_activation_wire_binds_policy_and_rejects_legacy_one_field_layout() {
-        let policy = device_attestation_policy_wire_fixture();
-        let instruction = ActivateKagemushaRecursiveReleaseV4::new(
-            release_activation_wire_fixture(),
-            policy.clone(),
-        );
-        let boxed = InstructionBox::from(instruction.clone());
-        let bytes = norito::core::to_bytes(&boxed).expect("serialize composite activation");
-        let archived = norito::core::from_bytes::<InstructionBox>(&bytes)
-            .expect("decode composite activation archive");
-        let decoded = InstructionBox::try_deserialize(archived)
-            .expect("deserialize composite activation instruction");
-        assert_eq!(
-            decoded
-                .as_any()
-                .downcast_ref::<ActivateKagemushaRecursiveReleaseV4>(),
-            Some(&instruction),
-            "the embedded device policy must survive the actual instruction-box wire path",
-        );
-        assert_eq!(instruction.device_attestation_policy(), &policy);
-        let encoded = instruction.encode();
-        let flags = norito::core::default_encode_flags();
-        assert_eq!(
-            flags & norito::core::header_flags::PACKED_STRUCT,
-            0,
-            "legacy-layout fixture requires the canonical AoS encoding",
-        );
-        let (roundtrip, used) = ActivateKagemushaRecursiveReleaseV4::decode_from_slice(&encoded)
-            .expect("composite activation payload must roundtrip");
-        assert_eq!(used, encoded.len());
-        assert_eq!(roundtrip, instruction);
-        let mut legacy_len = 0usize;
-        crate::isi::read_aos_field(&encoded, &mut legacy_len, flags)
-            .expect("read the former activation-only field");
-        assert!(legacy_len < encoded.len());
-        assert!(
-            ActivateKagemushaRecursiveReleaseV4::decode_from_slice(&encoded[..legacy_len]).is_err(),
-            "legacy one-field activation bytes must fail closed instead of defaulting a policy",
-        );
-    }
+    include!("kagemusha_activation_instruction_inline_tests.rs");
     #[test]
     fn v4_verifier_ids_are_manifest_and_parity_qualified() {
         let manifest_sha256 = [0xab; 32];
@@ -7681,6 +7638,4 @@ impl KagemushaRecursiveSpendTopUpProvenanceV4 {
 }
 include!("kagemusha_v4_topup_provenance_inline_tests.rs");
 #[cfg(test)]
-mod kagemusha_v4_lifecycle_additional_domain_tests {
-    include!("kagemusha_v4_lifecycle_additional_domain_tests.rs");
-}
+include!("kagemusha_v4_lifecycle_additional_domain_tests.rs");

@@ -972,6 +972,181 @@ mod kagemusha_serialized_bridge_v7_tests {
     }
 
     #[test]
+    fn compact_canonical_carrier_schemas_fit_the_unchanged_release_corridor() {
+        let release_max =
+            usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4)
+                .expect("V7 release carrier cap fits usize");
+        let mut null_payload =
+            Vec::with_capacity(KAGEMUSHA_SERIALIZED_NULL_CARRIER_PAYLOAD_BYTES_V7);
+        for (sentinel, length) in [
+            (0x61, KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7),
+            (0x62, KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7),
+            (0x63, KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7),
+            (0x64, KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7),
+            (0x65, KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7),
+            (0x66, KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7),
+        ] {
+            null_payload.extend(std::iter::repeat_n(sentinel, length));
+        }
+        let null = KagemushaSerializedNullCarrierWireV7 {
+            manifest_sha256: [0x51; 32],
+            payload: null_payload,
+        };
+        let null_bytes = norito::encode_canonical(&null).expect("encode compact NullParent");
+        assert_eq!(null_bytes.len(), KAGEMUSHA_SERIALIZED_NULL_CARRIER_BYTES_V7);
+        let decoded_null: KagemushaSerializedNullCarrierWireV7 =
+            norito::decode_canonical_with_limits(
+                &null_bytes,
+                norito::canonical_decode_limits(null_bytes.len()),
+            )
+            .expect("decode compact NullParent");
+        assert_eq!(decoded_null, null);
+        let null_parts = decoded_null.parts().expect("split compact NullParent");
+        assert_eq!(
+            null_parts.step_eq_proof.len(),
+            KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7
+        );
+        assert_eq!(
+            null_parts.step_ep_branch_merge_fold.len(),
+            KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7
+        );
+        for (part, sentinel) in [
+            (null_parts.step_eq_proof, 0x61),
+            (null_parts.step_ep_proof, 0x62),
+            (null_parts.step_eq_post_proof_fold, 0x63),
+            (null_parts.step_ep_post_proof_fold, 0x64),
+            (null_parts.step_eq_branch_merge_fold, 0x65),
+            (null_parts.step_ep_branch_merge_fold, 0x66),
+        ] {
+            assert!(part.iter().all(|byte| *byte == sentinel));
+        }
+        require_distinct_kagemusha_serialized_null_fold_transcripts_v7(&null_parts)
+            .expect("separately generated NullParent folds");
+        let mut duplicate_null_fold = null.clone();
+        let eq_post_start = KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7;
+        let eq_branch_start = eq_post_start + 2 * KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7;
+        duplicate_null_fold.payload.copy_within(
+            eq_post_start..eq_post_start + KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7,
+            eq_branch_start,
+        );
+        let duplicate_parts = duplicate_null_fold
+            .parts()
+            .expect("split copied NullParent fold");
+        assert!(
+            require_distinct_kagemusha_serialized_null_fold_transcripts_v7(&duplicate_parts)
+                .is_err(),
+            "a copied NullParent fold transcript must fail closed"
+        );
+        assert!(
+            matches!(
+                norito::decode_canonical_with_limits::<KagemushaSerializedReleaseCarrierWireV7>(
+                    &null_bytes,
+                    norito::canonical_decode_limits(null_bytes.len()),
+                ),
+                Err(norito::Error::SchemaMismatch)
+            ),
+            "the NullParent schema must not decode as a live carrier"
+        );
+        assert!(null_bytes.len() > KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7);
+        assert!(
+            null_bytes.len() <= release_max,
+            "compact NullParent encoded to {} bytes under the {release_max}-byte release cap",
+            null_bytes.len()
+        );
+
+        let base = KagemushaSerializedReleaseCarrierWireV7 {
+            manifest_sha256: [0x52; 32],
+            step_eq_instances: [0; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7],
+            step_ep_instances: [0; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7],
+            payload: [
+                vec![0x71; KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7],
+                vec![0x72; KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7],
+            ]
+            .concat(),
+        };
+        let base_bytes = norito::encode_canonical(&base).expect("encode compact base carrier");
+        assert_eq!(base_bytes.len(), KAGEMUSHA_SERIALIZED_BASE_CARRIER_BYTES_V7);
+        let decoded_base: KagemushaSerializedReleaseCarrierWireV7 =
+            norito::decode_canonical_with_limits(
+                &base_bytes,
+                norito::canonical_decode_limits(base_bytes.len()),
+            )
+            .expect("decode compact base carrier");
+        assert_eq!(decoded_base, base);
+        let base_parts = decoded_base.parts().expect("split compact base carrier");
+        assert_eq!(
+            base_parts.step_eq_proof.len() + base_parts.step_ep_proof.len(),
+            KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7
+        );
+        assert!(base_parts.step_eq_proof.iter().all(|byte| *byte == 0x71));
+        assert!(base_parts.step_ep_proof.iter().all(|byte| *byte == 0x72));
+        assert!(base_parts.step_eq_post_proof_fold.is_empty());
+        assert!(base_parts.step_ep_post_proof_fold.is_empty());
+
+        let mut step_eq_instances = [0_u128; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7];
+        let mut step_ep_instances = [0_u128; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7];
+        step_eq_instances[KAGEMUSHA_COMPACT_PARENT_COUNT_OFFSET_V5] = 2;
+        step_ep_instances[KAGEMUSHA_COMPACT_PARENT_COUNT_OFFSET_V5] = 2;
+        let live = KagemushaSerializedReleaseCarrierWireV7 {
+            manifest_sha256: [0x53; 32],
+            step_eq_instances,
+            step_ep_instances,
+            payload: [
+                vec![0x81; KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7],
+                vec![0x82; KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7],
+                vec![0x83; KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7],
+                vec![0x84; KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7],
+            ]
+            .concat(),
+        };
+        let live_bytes = norito::encode_canonical(&live).expect("encode compact live carrier");
+        assert_eq!(
+            live_bytes.len(),
+            KAGEMUSHA_SERIALIZED_RECURSIVE_CARRIER_BYTES_V7
+        );
+        let decoded_live: KagemushaSerializedReleaseCarrierWireV7 =
+            norito::decode_canonical_with_limits(
+                &live_bytes,
+                norito::canonical_decode_limits(live_bytes.len()),
+            )
+            .expect("decode compact live carrier");
+        assert_eq!(decoded_live, live);
+        assert!(
+            matches!(
+                norito::decode_canonical_with_limits::<KagemushaSerializedNullCarrierWireV7>(
+                    &live_bytes,
+                    norito::canonical_decode_limits(live_bytes.len()),
+                ),
+                Err(norito::Error::SchemaMismatch)
+            ),
+            "the live schema must not decode as a NullParent carrier"
+        );
+        let live_parts = decoded_live.parts().expect("split compact live carrier");
+        assert_eq!(
+            live_parts.step_eq_proof.len() + live_parts.step_ep_proof.len(),
+            KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7
+        );
+        assert_eq!(
+            live_parts.step_eq_post_proof_fold.len() + live_parts.step_ep_post_proof_fold.len(),
+            2 * KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7
+        );
+        for (part, sentinel) in [
+            (live_parts.step_eq_proof, 0x81),
+            (live_parts.step_ep_proof, 0x82),
+            (live_parts.step_eq_post_proof_fold, 0x83),
+            (live_parts.step_ep_post_proof_fold, 0x84),
+        ] {
+            assert!(part.iter().all(|byte| *byte == sentinel));
+        }
+        assert!(live_bytes.len() > KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7);
+        assert!(
+            live_bytes.len() <= release_max,
+            "compact recursive carrier encoded to {} bytes under the {release_max}-byte release cap",
+            live_bytes.len()
+        );
+    }
+
+    #[test]
     #[ignore = "non-shipping k17 proof generation requires the guarded 56-GiB release lane"]
     fn genuine_four_node_serialized_v7_release_proof_remains_gate_blocked() {
         assert!(!KAGEMUSHA_SERIALIZED_BRIDGE_REVIEWED_V7);
@@ -1011,11 +1186,9 @@ mod kagemusha_serialized_bridge_v7_tests {
             KAGEMUSHA_SERIALIZED_REQUIRED_TERMINAL_IPA_DECISIONS_V7
         );
         assert_ne!(measurement.null_carrier_sha256, [0; 32]);
-        assert!(measurement.null_carrier_bytes > KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7);
-        assert!(
-            measurement.null_carrier_bytes
-                <= usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,)
-                    .expect("V7 absolute carrier cap fits usize")
+        assert_eq!(
+            measurement.null_carrier_bytes,
+            KAGEMUSHA_SERIALIZED_NULL_CARRIER_BYTES_V7
         );
         assert_eq!(measurement.cases.len(), 4);
         assert_eq!(measurement.cases[0].label, "initialization");
@@ -1023,6 +1196,13 @@ mod kagemusha_serialized_bridge_v7_tests {
         let mut sibling_labels = [measurement.cases[1].label, measurement.cases[2].label];
         sibling_labels.sort_unstable();
         assert_eq!(sibling_labels, ["change-child", "recipient-child"]);
+        assert_eq!(
+            measurement.cases[0].canonical_carrier_bytes,
+            KAGEMUSHA_SERIALIZED_BASE_CARRIER_BYTES_V7
+        );
+        assert!(measurement.cases[1..].iter().all(|case| {
+            case.canonical_carrier_bytes == KAGEMUSHA_SERIALIZED_RECURSIVE_CARRIER_BYTES_V7
+        }));
         assert_eq!(
             measurement
                 .cases
@@ -1037,8 +1217,8 @@ mod kagemusha_serialized_bridge_v7_tests {
                 && case.raw_proof_pair_bytes == KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7
                 && case.canonical_carrier_bytes > case.raw_proof_pair_bytes
                 && case.canonical_carrier_bytes
-                    <= usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4)
-                        .expect("V7 absolute carrier cap fits usize")
+                    <= usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4)
+                        .expect("V7 release carrier cap fits usize")
                 && case.canonical_carrier_sha256 != [0; 32]
                 && case.public_cells == KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7
                 && case.eq_coefficients == 10_111
@@ -1063,7 +1243,7 @@ mod kagemusha_serialized_bridge_v7_tests {
         ));
         assert!(
             measurement.null_carrier_bytes > measurement.cases[1].canonical_carrier_bytes,
-            "NullParent carries two additional fixed branch-fold transcripts"
+            "NullParent carries two additional independently randomized branch-fold transcripts"
         );
         assert_eq!(
             measurement.canonical_carriers_fit_current_release_max,
@@ -1071,9 +1251,10 @@ mod kagemusha_serialized_bridge_v7_tests {
                 bytes <= KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4
             })
         );
+        assert!(measurement.canonical_carriers_fit_current_release_max);
         assert!(
-            !measurement.canonical_carriers_fit_current_release_max,
-            "the complete NullParent carrier cannot be mislabeled as the 186,368-byte raw sum"
+            measurement.null_carrier_bytes > KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7,
+            "the compact NullParent carrier must still account for all four fold transcripts"
         );
         for (index, case) in measurement.cases.iter().enumerate() {
             assert_ne!(

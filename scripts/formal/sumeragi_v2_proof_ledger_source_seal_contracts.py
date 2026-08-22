@@ -569,6 +569,7 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/prune_commit_merge_support.rs",
     "kura/merge_ledger_latest_execution_index.rs",
     "kura/replica_advert_and_body_status.rs",
+    "kura/retired_pipeline_roster_rejection.rs",
     "kura/retained_finality_replica_authority.rs",
     "kura/queue_plan_admission_batch.rs",
     "kura/wsv_checkpoint_read_helpers.rs",
@@ -576,6 +577,7 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/prune_intent_publication.rs",
     "kura/prune_recovery_capacity.rs",
     "kura/block_store_definition_and_test_controls.rs",
+    "kura/startup_finality_session_reads.rs",
     "kura/pipeline_and_lane_artifacts.rs",
     "kura/autonomous_terminal_capacity.rs",
     "kura/autonomous_publication_temp_recovery.rs",
@@ -604,9 +606,11 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'block/autonomous_anchor_network_tests.rs',
         'block/sccp_soracloud_validation_tests.rs',
         'block/canonical_genesis_validation_tests.rs',
+        'block/genesis_validation_regression_tests.rs',
         'block/axt_shared_budget_across_envelopes_test.rs',
         'block/scheduler_variant_tests.rs',
         'block/validation_native_amx_test_support.rs',
+        'block/native_amx_receipt_regression_tests.rs',
         'block/native_amx_exact_quorum_cardinality_tests.rs',
         'block/native_amx_and_dag_tests.rs',
         'block/sequential_rejected_pipeline_trigger_tests.rs',
@@ -619,6 +623,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'actual/torii_tx_history.rs',
         'actual/torii_http_transport.rs',
         'actual/torii_mcp_profile.rs',
+        'actual/offline.rs',
         'actual/tests.rs',
     ),
     'crates/iroha_config/src/parameters/actual/tests.rs': (
@@ -644,6 +649,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_data_model/src/block/consensus_v2.rs': (
         'consensus_v2_tests.rs',
+    ),
+    'crates/iroha_data_model/src/block/consensus_v2_tests.rs': (
+        'consensus_v2_json_tests.rs',
     ),
     'crates/iroha_core/src/kura.rs': (
         *_KURA_PRODUCTION_COMPONENT_FILES,
@@ -686,6 +694,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'kura/tests/11_roster_and_progress_sidecars.rs',
         'kura/tests/12_sidecar_index_and_pruning.rs',
         'kura/tests/13_manifests_and_fsync.rs',
+    ),
+    'crates/iroha_core/src/kura/autonomous_application_evidence.rs': (
+        'passive_diagnostic_reads.rs',
     ),
     'crates/iroha_core/src/kura/tests/10_native_amx_and_roster.rs': (
         '10c_native_amx_latest_index_support_and_bounds.rs',
@@ -734,6 +745,18 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'queue/lane_reservation_terminal_fault_tests.rs',
         'queue/reservation_recovery_tests.rs',
     ),
+    'crates/iroha_core/src/queue/instruction_and_state_routing_tests.rs': (
+        'gossip_routing_metadata_tests.rs',
+        'gossip_route_validation_tests.rs',
+        'drain_revalidation_tests.rs',
+    ),
+    'crates/iroha_core/src/queue/lane_reservation_tests.rs': (
+        'lane_reservation_core_tests.rs',
+    ),
+    'crates/iroha_core/src/queue/reservation_recovery_tests.rs': (
+        'retired_release_snapshot_recovery_tests.rs',
+        'native_amx_reservation_tests.rs',
+    ),
     'crates/iroha_core/src/queue/journal.rs': (
         'journal_reservation_commit_preflight.rs',
         'journal_direct_file_io.rs',
@@ -741,6 +764,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'plan_journal_replay_tests.rs',
     ),
     'crates/iroha_core/src/smartcontracts/ivm/host.rs': (
+        'host/axt_persistent_budget_tests.rs',
         'host/core_codec_and_contract_tests.rs',
         'host/core_query_execution_tests.rs',
         'host/core_query_pagination_tests.rs',
@@ -754,6 +778,8 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'state/vpn_lease_validation.rs',
         'state/axt_handle_budget.rs',
         'state/zk_asset_state.rs',
+        'state/restored_staking_owner_tests.rs',
+        'state/confidential_policy_transition_index_tests.rs',
         'state/passive_lane_diagnostic_methods.rs',
         'state/lane_lifecycle_support.rs',
         'state/diagnostic_state_generation.rs',
@@ -785,6 +811,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'peer_tests.rs',
     ),
     'crates/irohad/src/main.rs': (
+        'main/kagemusha_runtime_effective_config_projection.rs',
         'main/shared_sorafs_provider_cache_tests.rs',
         'main/runtime_deps.rs',
         'sumeragi_lane_relay_item.rs',
@@ -792,6 +819,8 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'main/resolved_genesis_trust_anchor_wrong_hash_test.rs',
         'main_tests/governance_dag_publisher_binding_signer.rs',
         'main/governance_dag_launcher_tests.rs',
+        'main/kagemusha_runtime_effective_config_projection_tests.rs',
+        'main/kagemusha_startup_source_tests.rs',
         'main/runtime_budget_and_config_tests.rs',
         'main/startup_tail_tests.rs',
     ),
@@ -823,6 +852,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_adapter_main_02.rs',
         'tests/v2_adapter_main_03.rs',
         'tests/v2_adapter_main_04.rs',
+    ),
+    'crates/iroha_core/src/sumeragi/v2_recovery.rs': (
+        'v2_recovery_tests.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs': (
         'tests/v2_lifecycle_coordinator_explorer_cases.rs',
@@ -1003,6 +1035,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_lane_work_observer_role.rs',
         'tests/v2_lane_work_native_body_recovery.rs',
         'tests/v2_lane_work_lifecycle_and_recovery_cases.rs',
+        'v2_lane_work/canonical_executed_block_recovery_drift_test.rs',
         'v2_lane_work/historical_recovery_and_carrier_tests.rs',
         'v2_lane_work_autonomous_ready_durability_tests.rs',
         'v2_lane_work/autonomous_retirement_and_merge_tests.rs',
@@ -1032,6 +1065,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_adapter_04b_lifecycle_startup.rs',
         'v2_adapter_05_direct_lifecycle.rs',
     ),
+    'crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle.rs': (
+        'v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs',
+    ),
     'crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs': (
         'v2_adapter_04_wal_recovery_decision_classifier_cases.rs',
     ),
@@ -1048,6 +1084,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_worker_backpressure_cases.rs',
         'v2_worker_recovered_lifecycle_output_cases.rs',
         'v2_worker_nonzero_view_restart.rs',
+    ),
+    'crates/iroha_core/src/sumeragi/tests/v2_worker_backpressure_cases.rs': (
+        'v2_worker_backpressure_retirement_cases.rs',
     ),
     'crates/iroha_core/src/sumeragi/tests/v2_effects_main_05.rs': (
         'v2_effects_kura_tip_replay.rs',
@@ -1093,19 +1132,19 @@ def _read_reviewed_rust_source_fixture(
                 f"{unknown_components!r}"
             )
     initial_error_count = len(errors)
-    include_invocations = (
-        _RECURSIVE_REVIEWED_RUST_SOURCE._rust_include_invocations(
-            source, path, errors,
+    provider_invocations = (
+        _RECURSIVE_REVIEWED_RUST_SOURCE._rust_provider_invocations(
+            source, path, manifest, errors,
         )
     )
     if len(errors) != initial_error_count:
         return path, ""
-    observed = tuple(invocation.relative for invocation in include_invocations)
+    observed = tuple(invocation.relative for invocation in provider_invocations)
     if observed != manifest:
         errors.append(
             f"{path}: reviewed Rust include inventory must equal {manifest!r}; "
-            f"found {observed!r} across {len(include_invocations)} include "
-            "invocation(s)"
+            f"found {observed!r} across {len(provider_invocations)} code-level "
+            "binding(s)"
         )
     component_sources: dict[str, str] = {}
     for component_relative in manifest:
@@ -1136,7 +1175,7 @@ def _read_reviewed_rust_source_fixture(
         component_sources[component_relative] = component_source
     expanded: list[str] = []
     cursor = 0
-    for invocation in include_invocations:
+    for invocation in provider_invocations:
         expanded.append(source[cursor:invocation.end])
         component_relative = invocation.relative
         component_source = component_sources.get(component_relative)
@@ -2442,7 +2481,7 @@ _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
     "23325cb037bc930c7503986845dbb25891ef80af6f08092533b1e0e1d8233fad"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "545c7687a3fe7d3cb7405b1e733c61c771f8d642e216423097e6fb0aefcb476f"
+    "57df39a06020e50d4b6e78a3914a20c36d8decbddff413eda9f889b56966f896"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"

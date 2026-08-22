@@ -10,6 +10,8 @@ on:
       - "ci/check_connect_norito_bridge_header.sh"
       - "ci/check_kagemusha_*.sh"
       - "ci/check_kagemusha_production_readiness_source_contract.py"
+      - "ci/check_kagemusha_production_readiness_source_support.py"
+      - "ci/check_kagemusha_recursion_source_contract.py"
       - "ci/check_kagemusha_production_readiness_self_test.py"
       - "scripts/deploy_localnet.sh"
       - "scripts/tests/deploy_localnet_test.py"

@@ -309,6 +309,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>,
     dispatch_instruction::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>,
     dispatch_instruction::<iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4>,
+    dispatch_instruction::<iroha_data_model::isi::offline::RecordKagemushaTairaCanaryV4>,
+    dispatch_instruction::<iroha_data_model::isi::offline::AuthorizeKagemushaTairaCanaryV4>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation>,
     dispatch_instruction::<iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy>,
     dispatch_instruction::<iroha_data_model::isi::social::ClaimTwitterFollowReward>,

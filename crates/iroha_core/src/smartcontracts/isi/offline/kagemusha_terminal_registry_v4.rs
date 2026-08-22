@@ -1,9 +1,10 @@
-//! Startup catalog for authenticated Kagemusha V4 verifier material.
+//! Authenticated Kagemusha V4 verifier catalog and activation replay guards.
 //!
 //! V4 has its own state namespaces, release-record schema, KRV4 framing, and
 //! verifier identity. Nothing in this module accepts or upgrades the V3
 //! registry representation. Release policy comes from canonical configured
 //! Norito; consensus state can select material, but cannot select its signers.
+use super::{Error, StateTransaction, kagemusha_v2_marker, labeled_invariant};
 use crate::zk::{
     kagemusha_artifact_source_v4::{
         KagemushaArtifactReadSeekV4, KagemushaAuthenticatedArtifactSourceV4,
@@ -20,6 +21,7 @@ use crate::zk::{
     },
     kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4,
 };
+use iroha_crypto::Hash;
 use iroha_data_model::{
     confidential::ConfidentialStatus,
     offline::{
@@ -73,6 +75,7 @@ use std::{
     sync::Mutex,
 };
 pub(crate) const TERMINAL_RELEASE_STATE_KEY_PREFIX_V4: &str = "kagemusha_terminal_release_v4_";
+const KAGEMUSHA_V4_PROMOTION_ID_DOMAIN: &str = "kagemusha-v4-promotion-id";
 const VERIFIER_OWNER_MANIFEST_PREFIX_V4: &str = "kagemusha-v4-";
 const STEP_EQ_VERIFIER_CURVE_V4: &str = "vesta";
 const STEP_EP_VERIFIER_CURVE_V4: &str = "pallas";
@@ -88,7 +91,8 @@ const KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4: usize =
 const KAGEMUSHA_CATALOG_QUALIFICATION_SEAL_SCHEMA_V1: &str =
     "iroha.kagemusha.catalog_qualification_seal.v1";
 const KAGEMUSHA_CATALOG_QUALIFICATION_SEAL_VERSION_V1: u16 = 1;
-const KAGEMUSHA_CATALOG_QUALIFICATION_SEAL_MAX_BYTES_V1: usize = 8 * 1024 * 1024;
+/// Maximum canonical bytes accepted for one root-trusted catalog qualification seal.
+pub const KAGEMUSHA_CATALOG_QUALIFICATION_SEAL_MAX_BYTES_V1: usize = 8 * 1024 * 1024;
 const KAGEMUSHA_CATALOG_QUALIFICATION_SEAL_MAX_PATHS_V1: usize = 1024;
 const KAGEMUSHA_CATALOG_QUALIFICATION_SEAL_MAX_RELEASES_V1: usize = 16;
 const KAGEMUSHA_CATALOG_QUALIFICATION_SEAL_BUILD_DOMAIN_V1: &[u8] =
@@ -280,6 +284,28 @@ impl KagemushaCatalogQualificationSealV1 {
         }
         Ok(bytes)
     }
+
+    /// Verify exact externally retained canonical bytes for this same-load seal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `bytes` is empty, exceeds the fixed seal ceiling,
+    /// or differs byte-for-byte from this authenticated seal's canonical form.
+    pub fn verify_exact_canonical_bytes(&self, bytes: &[u8]) -> Result<(), String> {
+        if bytes.is_empty() || bytes.len() > KAGEMUSHA_CATALOG_QUALIFICATION_SEAL_MAX_BYTES_V1 {
+            return Err(
+                "Kagemusha catalog qualification seal bytes violate the fixed bound".to_owned(),
+            );
+        }
+        let canonical = self.canonical_bytes()?;
+        if canonical != bytes {
+            return Err(
+                "configured Kagemusha catalog qualification seal differs from the same-load seal"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
 }
 impl KagemushaCatalogSealedParityQualificationV1 {
     fn from_qualified(
@@ -360,13 +386,14 @@ struct KagemushaCatalogConsensusIdentityV1 {
 /// The catalog owns qualified pinned read-only artifact handles and one source-backed verifier
 /// facade per release. Consensus execution performs map lookups and reads only those already-opened
 /// inodes; it never reopens an artifact by path or caches two-parity Halo2 material.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct KagemushaReleaseCatalogV4 {
     configured_policy_sha256: Option<[u8; 32]>,
     consensus_policy_digest: Option<[u8; 32]>,
     releases: BTreeMap<[u8; 32], Arc<KagemushaCachedReleaseV4>>,
 }
 include!("kagemusha_terminal_registry_v4_release_catalog_impl.rs");
+include!("kagemusha_terminal_registry_v4_validator_qualification.rs");
 impl KagemushaCachedReleaseV4 {
     pub(crate) fn release_record(
         &self,
@@ -3029,6 +3056,45 @@ impl ResolvedKagemushaTerminalVerifierV4 {
         }
     }
 }
+/// Plan consumption of one unused promotion identity without mutating state.
+pub(super) fn plan_v4_promotion_id(
+    promotion_id: [u8; 32],
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<Hash, Error> {
+    if promotion_id == [0; 32] {
+        return Err(labeled_invariant(
+            "recursive_release_invalid",
+            "Kagemusha V4 promotion id must be nonzero",
+        )
+        .into());
+    }
+    let marker = kagemusha_v2_marker(KAGEMUSHA_V4_PROMOTION_ID_DOMAIN, &[&promotion_id]);
+    if state_transaction
+        .world
+        .kagemusha_replay_keys
+        .get(&marker)
+        .is_some()
+    {
+        return Err(labeled_invariant(
+            "promotion_replay",
+            "Kagemusha V4 promotion id was already consumed by a committed activation",
+        )
+        .into());
+    }
+    Ok(marker)
+}
+
+/// Commit one previously validated promotion identity in the activation overlay.
+pub(super) fn commit_v4_promotion_id(
+    marker: Hash,
+    state_transaction: &mut StateTransaction<'_, '_>,
+) {
+    state_transaction
+        .world
+        .kagemusha_replay_keys
+        .insert(marker, ());
+}
+
 /// Deterministic V4-only state key for an authenticated release record.
 pub(crate) fn release_state_key(
     binding: &KagemushaRecursiveSpendArtifactBindingV4,
@@ -3216,6 +3282,7 @@ mod tests {
         }
     }
     include!("kagemusha_terminal_registry_v4/core_tests.rs");
+    include!("kagemusha_terminal_registry_v4/validator_qualification_tests.rs");
     #[cfg(all(
         unix,
         not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
@@ -3288,7 +3355,7 @@ mod tests {
                 .validate_for_configured_runtime(policy, artifacts)
                 .is_err()
         );
-        let (authenticated, promotion) = authenticated_candidate_binding_release();
+        let (authenticated, promotion, _) = authenticated_candidate_binding_release();
         let candidate = authenticated
             .manifest()
             .immutable_candidate()
@@ -3588,7 +3655,7 @@ mod tests {
     }
     #[test]
     fn decoded_catalog_estimate_accounts_for_params_and_vk_expansion() {
-        let (authenticated, _) = authenticated_candidate_binding_release();
+        let (authenticated, _, _) = authenticated_candidate_binding_release();
         let estimate = estimate_catalog_release_memory_v4(authenticated.manifest())
             .expect("candidate-binding memory estimate");
         let rows = 1_u64 << KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
@@ -3635,7 +3702,7 @@ mod tests {
     }
     #[test]
     fn catalog_preflight_rejects_inexact_proving_key_before_halo_parsing() {
-        let (authenticated, _) = authenticated_candidate_binding_release();
+        let (authenticated, _, _) = authenticated_candidate_binding_release();
         let mut manifest = authenticated.manifest().clone();
         for profile in &mut manifest.profiles {
             let sizes =
@@ -3661,7 +3728,7 @@ mod tests {
     }
     #[test]
     fn decoded_catalog_estimate_rejects_shift_overflow() {
-        let (authenticated, _) = authenticated_candidate_binding_release();
+        let (authenticated, _, _) = authenticated_candidate_binding_release();
         let mut manifest = authenticated.manifest().clone();
         manifest.profiles[0].ipa_k = u64::BITS;
         assert!(estimate_catalog_release_memory_v4(&manifest).is_err());
@@ -3699,7 +3766,7 @@ mod tests {
         let root = canonical_temporary_root(&temporary);
         let policy = write_test_policy(&root);
         let artifacts = root.join("artifacts");
-        let (authenticated, _) = authenticated_candidate_binding_release();
+        let (authenticated, _, _) = authenticated_candidate_binding_release();
         let mut manifest = authenticated.manifest().clone();
         for profile in &mut manifest.profiles {
             let sizes =
@@ -3768,7 +3835,7 @@ mod tests {
         let root = canonical_temporary_root(&temporary);
         let release_directory = root.join("release");
         std::fs::create_dir(&release_directory).expect("create pinned-source release directory");
-        let (authenticated, _) = authenticated_candidate_binding_release();
+        let (authenticated, _, _) = authenticated_candidate_binding_release();
         for (index, descriptor) in authenticated
             .manifest()
             .profiles
@@ -4407,7 +4474,7 @@ mod tests {
     }
     #[test]
     fn runtime_promotion_validation_rejects_candidate_digest_substitution() {
-        let (authenticated, promotion) = authenticated_candidate_binding_release();
+        let (authenticated, promotion, _) = authenticated_candidate_binding_release();
         promotion
             .validate_against_authenticated_release(&authenticated)
             .expect("exact reconstructed candidate binding");

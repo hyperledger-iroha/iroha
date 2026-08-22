@@ -6,22 +6,16 @@
 //! capture its result-bearing finalized block. Validation binds those artifacts
 //! together; it never creates, publishes, submits, or activates them.
 
-// TODO: Wire these validators to same-read host evidence capture, validator and
-// receipt signers, governed submission, and finality collection only after
-// those typed runtime APIs exist; accepting caller-asserted substitutes here
-// would recreate the publication gap this module is meant to close.
-
 use crate::{
     NetworkId,
     account::{AccountId, MultisigPolicy},
     block::{
-        SignedBlock,
-        consensus_v2::HeightContextId,
-        decode_framed_signed_block,
+        SignedBlock, decode_framed_signed_block,
         proofs::{AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1, TrustedBlockProofAnchor},
     },
-    bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
+    bridge::{BridgeFinalityProof, BridgeFinalityVerifier, verify_bridge_finality_proof},
     isi::{Instruction as _, offline::ActivateKagemushaRecursiveReleaseV4},
+    offline::OfflineDeviceAttestationPolicy,
     peer::PeerId,
     query::CommittedTransaction,
     transaction::{Executable, SignedTransaction, TransactionEntrypoint},
@@ -30,17 +24,38 @@ use crate::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
+use norito::{
+    codec::{Decode, Encode},
+    core as ncore,
+};
 use sha2::{Digest as _, Sha256};
 use std::fmt;
 use thiserror::Error;
+
+use super::KagemushaV4RuntimeEffectiveConfigProjectionV1;
 
 /// Exact first-release validator count required by Kagemusha activation.
 pub const KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT: usize = 4;
 /// Minimum distinct governance signers required by the V4 activation corridor.
 pub const KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS: usize = 2;
+/// Maximum immediate-successor proofs retained after the trusted anchor.
+pub const KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1: usize = 4096;
 /// Maximum canonical Norito bytes accepted for one activation receipt.
 pub const KAGEMUSHA_V4_ACTIVATION_RECEIPT_MAX_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum canonical Norito bytes accepted for one signed promotion reservation.
+pub const KAGEMUSHA_V4_PROMOTION_RESERVATION_MAX_BYTES: usize = 1024 * 1024;
+/// Maximum exact JSON bytes accepted for one promotion-scoped catalog-revalidation receipt.
+pub const KAGEMUSHA_V4_CATALOG_REVALIDATION_RECEIPT_MAX_BYTES: usize = 256 * 1024;
+/// Maximum lifetime of one signed validator-qualification authorization.
+pub const KAGEMUSHA_V4_VALIDATOR_QUALIFICATION_MAX_LIFETIME_MS: u64 = 5 * 60 * 1_000;
+/// Maximum tolerated future skew for a catalog-revalidation receipt issuer.
+pub const KAGEMUSHA_V4_CATALOG_REVALIDATION_MAX_CLOCK_SKEW_MS: u64 = 30 * 1_000;
+/// Maximum canonical Norito bytes accepted for one signed activation-expectations artifact.
+pub const KAGEMUSHA_V4_ACTIVATION_EXPECTATIONS_MAX_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum UTF-8 bytes accepted for the GitHub `owner/repository` provenance field.
+pub const KAGEMUSHA_V4_GITHUB_REPOSITORY_MAX_BYTES: usize = 255;
+/// Maximum UTF-8 bytes accepted for the immutable GitHub workflow reference.
+pub const KAGEMUSHA_V4_GITHUB_WORKFLOW_REF_MAX_BYTES: usize = 1024;
 /// Maximum raw JSON request bytes accepted by the bounded receipt decoder.
 ///
 /// This is an ingress ceiling, not a peak-memory guarantee. The embedded block
@@ -59,6 +74,18 @@ pub const KAGEMUSHA_V4_ACTIVATION_FINALITY_RECEIPT_BODY_SCHEMA: &str =
 /// Schema id of a signed activation-finality receipt.
 pub const KAGEMUSHA_V4_ACTIVATION_FINALITY_RECEIPT_SCHEMA: &str =
     "iroha.kagemusha.v4.activation_finality_receipt.v1";
+/// Schema id of a root-custodied promotion reservation body.
+pub const KAGEMUSHA_V4_PROMOTION_RESERVATION_BODY_SCHEMA: &str =
+    "iroha.kagemusha.v4.promotion_reservation_body.v1";
+/// Schema id of a signed root-custodied promotion reservation.
+pub const KAGEMUSHA_V4_PROMOTION_RESERVATION_SCHEMA: &str =
+    "iroha.kagemusha.v4.promotion_reservation.v1";
+/// Schema id of a root-custodied activation-expectations body.
+pub const KAGEMUSHA_V4_ACTIVATION_EXPECTATIONS_BODY_SCHEMA: &str =
+    "iroha.kagemusha.v4.activation_receipt_expectations_body.v1";
+/// Schema id of a signed root-custodied activation-expectations artifact.
+pub const KAGEMUSHA_V4_ACTIVATION_EXPECTATIONS_SCHEMA: &str =
+    "iroha.kagemusha.v4.activation_receipt_expectations.v1";
 /// Current validator qualification and activation receipt version.
 pub const KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION: u16 = 1;
 /// Domain separator for validator qualification signatures.
@@ -67,6 +94,15 @@ pub const KAGEMUSHA_V4_VALIDATOR_QUALIFICATION_SIGNATURE_DOMAIN: &[u8] =
 /// Domain separator for durable activation-finality receipt signatures.
 pub const KAGEMUSHA_V4_ACTIVATION_FINALITY_SIGNATURE_DOMAIN: &[u8] =
     b"iroha:kagemusha:v4:activation-finality-receipt:v1\0";
+/// Domain separator for root-controller promotion-reservation signatures.
+pub const KAGEMUSHA_V4_PROMOTION_RESERVATION_SIGNATURE_DOMAIN: &[u8] =
+    b"iroha:kagemusha:v4:promotion-reservation:v1\0";
+/// Domain separator for root-controller activation-expectations signatures.
+pub const KAGEMUSHA_V4_ACTIVATION_EXPECTATIONS_SIGNATURE_DOMAIN: &[u8] =
+    b"iroha:kagemusha:v4:activation-receipt-expectations:v1\0";
+/// Domain tag used to derive a promotion id from immutable GitHub run provenance.
+pub const KAGEMUSHA_V4_GITHUB_PROMOTION_RUN_ID_DOMAIN: &[u8] =
+    b"iroha.kagemusha.github-promotion-run.v1";
 
 /// Exact byte identity used for an externally held immutable input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -129,7 +165,316 @@ impl KagemushaExactBytesDigestV1 {
     }
 }
 
-/// Shared release, policy, catalog, genesis, and consensus identity.
+/// Immutable GitHub Actions run provenance used to reserve one promotion id.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaV4GitHubPromotionRunV1 {
+    /// Exact `owner/repository` spelling reported by GitHub Actions.
+    pub repository: String,
+    /// Immutable workflow ref including the workflow path and resolved ref.
+    pub workflow_ref: String,
+    /// Exact 20-byte workflow commit SHA.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub workflow_sha: [u8; 20],
+    /// GitHub Actions run id.
+    pub run_id: u64,
+    /// Positive GitHub Actions run attempt.
+    pub run_attempt: u32,
+}
+
+impl KagemushaV4GitHubPromotionRunV1 {
+    /// Derive the deterministic promotion id from the exact provenance tuple.
+    ///
+    /// Each textual component, including lowercase hexadecimal and decimal
+    /// renderings of numeric fields, is terminated by one NUL byte. Structure
+    /// validation rejects embedded NUL bytes, making this encoding injective.
+    #[must_use]
+    pub fn promotion_id(&self) -> [u8; 32] {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut workflow_sha_hex = [0_u8; 40];
+        for (index, byte) in self.workflow_sha.iter().copied().enumerate() {
+            workflow_sha_hex[index * 2] = HEX[usize::from(byte >> 4)];
+            workflow_sha_hex[index * 2 + 1] = HEX[usize::from(byte & 0x0f)];
+        }
+        let run_id = self.run_id.to_string();
+        let run_attempt = self.run_attempt.to_string();
+        let mut hasher = Sha256::new();
+        for component in [
+            KAGEMUSHA_V4_GITHUB_PROMOTION_RUN_ID_DOMAIN,
+            self.repository.as_bytes(),
+            self.workflow_ref.as_bytes(),
+            workflow_sha_hex.as_slice(),
+            run_id.as_bytes(),
+            run_attempt.as_bytes(),
+        ] {
+            hasher.update(component);
+            hasher.update([0]);
+        }
+        hasher.finalize().into()
+    }
+
+    fn validate(&self) -> Result<(), KagemushaPromotionReceiptValidationError> {
+        if self.repository.is_empty()
+            || self.repository.len() > KAGEMUSHA_V4_GITHUB_REPOSITORY_MAX_BYTES
+            || self.repository.as_bytes().contains(&0)
+            || self.workflow_ref.is_empty()
+            || self.workflow_ref.len() > KAGEMUSHA_V4_GITHUB_WORKFLOW_REF_MAX_BYTES
+            || self.workflow_ref.as_bytes().contains(&0)
+            || self.workflow_sha == [0; 20]
+            || self.run_id == 0
+            || self.run_attempt == 0
+        {
+            return Err(KagemushaPromotionReceiptValidationError::InvalidField(
+                "promotion_reservation.github_run",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Root-controller statement reserving one promotion id and its source custody.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaV4PromotionReservationBodyV1 {
+    /// Exact reservation-body schema.
+    pub schema: String,
+    /// Reservation-body version.
+    pub version: u16,
+    /// Independently pinned root promotion-controller key.
+    pub promotion_controller: PublicKey,
+    /// Immutable GitHub Actions run provenance.
+    pub github_run: KagemushaV4GitHubPromotionRunV1,
+    /// Deterministic id derived from `github_run`.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub promotion_id: [u8; 32],
+    /// Exact genesis-derived network identity reserved for activation.
+    pub network_id: NetworkId,
+    /// Exact reviewed source-closure descriptor bytes.
+    pub reviewed_source_closure_descriptor: KagemushaExactBytesDigestV1,
+    /// SHA-256 of the canonical promoted V4 manifest.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub manifest_sha256: [u8; 32],
+    /// SHA-256 of the canonical promoted V4 release record.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub release_record_sha256: [u8; 32],
+    /// Exact canonical promotion-record Norito bytes.
+    pub promotion_record_norito: KagemushaExactBytesDigestV1,
+    /// Exact root-custodied release-policy source bytes.
+    pub release_policy_source: KagemushaExactBytesDigestV1,
+    /// Exact signed-genesis source bytes reserved for the ordinary node corridor.
+    pub signed_genesis: KagemushaExactBytesDigestV1,
+    /// Exact catalog-revalidation receipt JSON bytes.
+    pub catalog_revalidation_receipt_json: KagemushaExactBytesDigestV1,
+    /// SHA-256 of the receipt's canonical App-Attest release-binding catalog.
+    ///
+    /// This is deliberately distinct from `catalog_consensus_policy_digest`:
+    /// the former binds physical-device evidence and consumption receipts,
+    /// while the latter binds consensus release-policy inputs.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub catalog_revalidation_catalog_sha256: [u8; 32],
+    /// Deterministic logical digest of the complete ordered Kagemusha catalog.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub catalog_consensus_policy_digest: [u8; 32],
+    /// Aggregate protocol execution-policy identity reserved for finality.
+    pub execution_policy_hash: Hash,
+    /// Exact governed device-attestation policy approved at reservation time.
+    pub device_attestation_policy: OfflineDeviceAttestationPolicy,
+    /// Root policy-evaluation time in Unix milliseconds.
+    pub policy_evaluation_time_ms: u64,
+    /// Last Unix millisecond at which a validator may sign this qualification.
+    pub validator_qualification_expires_at_unix_ms: u64,
+}
+
+impl KagemushaV4PromotionReservationBodyV1 {
+    /// Return the domain-separated typed hash signed by the promotion controller.
+    #[must_use]
+    pub fn signing_hash(&self) -> HashOf<Self> {
+        HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
+            KAGEMUSHA_V4_PROMOTION_RESERVATION_SIGNATURE_DOMAIN,
+            &self.encode(),
+        ]))
+    }
+
+    fn validate_structure(&self) -> Result<(), KagemushaPromotionReceiptValidationError> {
+        if self.schema != KAGEMUSHA_V4_PROMOTION_RESERVATION_BODY_SCHEMA
+            || self.version != KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION
+            || !matches!(
+                self.promotion_controller.try_algorithm(),
+                Ok(Algorithm::Ed25519)
+            )
+            || self.policy_evaluation_time_ms == 0
+            || self.validator_qualification_expires_at_unix_ms <= self.policy_evaluation_time_ms
+            || self
+                .validator_qualification_expires_at_unix_ms
+                .saturating_sub(self.policy_evaluation_time_ms)
+                > KAGEMUSHA_V4_VALIDATOR_QUALIFICATION_MAX_LIFETIME_MS
+        {
+            return Err(KagemushaPromotionReceiptValidationError::InvalidField(
+                "promotion_reservation.body",
+            ));
+        }
+        self.github_run.validate()?;
+        if self.promotion_id != self.github_run.promotion_id()
+            || self.manifest_sha256 == [0; 32]
+            || self.release_record_sha256 == [0; 32]
+            || self.catalog_revalidation_catalog_sha256 == [0; 32]
+            || self.catalog_consensus_policy_digest == [0; 32]
+            || self.network_id.as_bytes().iter().all(|byte| *byte == 0)
+            || self.execution_policy_hash == Hash::prehashed([0; Hash::LENGTH])
+        {
+            return Err(KagemushaPromotionReceiptValidationError::PromotionProvenance);
+        }
+        for digest in [
+            self.reviewed_source_closure_descriptor,
+            self.promotion_record_norito,
+            self.release_policy_source,
+            self.signed_genesis,
+            self.catalog_revalidation_receipt_json,
+        ] {
+            digest.validate()?;
+        }
+        if self.catalog_revalidation_receipt_json.byte_len
+            > u64::try_from(KAGEMUSHA_V4_CATALOG_REVALIDATION_RECEIPT_MAX_BYTES)
+                .expect("catalog receipt bound fits u64")
+        {
+            return Err(KagemushaPromotionReceiptValidationError::InvalidField(
+                "promotion_reservation.catalog_revalidation_receipt_json",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Signed, root-custodied reservation for one promotion id.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaV4PromotionReservationV1 {
+    /// Exact reservation schema.
+    pub schema: String,
+    /// Reservation version.
+    pub version: u16,
+    /// Signed reservation statement.
+    pub body: KagemushaV4PromotionReservationBodyV1,
+    /// Root promotion-controller signature.
+    pub signature: SignatureOf<KagemushaV4PromotionReservationBodyV1>,
+}
+
+impl KagemushaV4PromotionReservationV1 {
+    /// Sign one structurally valid reservation with its declared controller.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaPromotionReceiptValidationError`] for malformed
+    /// provenance, an unsupported or different signer, or an oversized artifact.
+    pub fn try_sign(
+        body: KagemushaV4PromotionReservationBodyV1,
+        controller: &KeyPair,
+    ) -> Result<Self, KagemushaPromotionReceiptValidationError> {
+        body.validate_structure()?;
+        if controller.public_key() != &body.promotion_controller {
+            return Err(KagemushaPromotionReceiptValidationError::SignerMismatch(
+                "promotion_reservation",
+            ));
+        }
+        let signature = SignatureOf::try_from_hash(controller.private_key(), body.signing_hash())
+            .map_err(|_| {
+            KagemushaPromotionReceiptValidationError::InvalidSignature("promotion_reservation")
+        })?;
+        let reservation = Self {
+            schema: KAGEMUSHA_V4_PROMOTION_RESERVATION_SCHEMA.to_owned(),
+            version: KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
+            body,
+            signature,
+        };
+        enforce_canonical_artifact_size(
+            &reservation,
+            KAGEMUSHA_V4_PROMOTION_RESERVATION_MAX_BYTES,
+            ArtifactKind::PromotionReservation,
+        )?;
+        Ok(reservation)
+    }
+
+    /// Decode one exact canonical reservation under explicit resource limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaPromotionReceiptValidationError`] for empty,
+    /// oversized, non-canonical, or structurally invalid input.
+    pub fn decode_canonical(
+        bytes: &[u8],
+    ) -> Result<Self, KagemushaPromotionReceiptValidationError> {
+        check_artifact_input_size(
+            bytes,
+            KAGEMUSHA_V4_PROMOTION_RESERVATION_MAX_BYTES,
+            ArtifactKind::PromotionReservation,
+        )?;
+        let reservation: Self = norito::decode_canonical_with_limits(
+            bytes,
+            artifact_decode_limits(KAGEMUSHA_V4_PROMOTION_RESERVATION_MAX_BYTES, bytes.len()),
+        )
+        .map_err(|_| KagemushaPromotionReceiptValidationError::ReservationDecode)?;
+        reservation.body.validate_structure()?;
+        Ok(reservation)
+    }
+
+    /// Verify the schema, pinned controller, provenance, and signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaPromotionReceiptValidationError`] on any mismatch.
+    pub fn verify(
+        &self,
+        pinned_controller: &PublicKey,
+    ) -> Result<(), KagemushaPromotionReceiptValidationError> {
+        if self.schema != KAGEMUSHA_V4_PROMOTION_RESERVATION_SCHEMA
+            || self.version != KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION
+            || &self.body.promotion_controller != pinned_controller
+            || !matches!(pinned_controller.try_algorithm(), Ok(Algorithm::Ed25519))
+        {
+            return Err(KagemushaPromotionReceiptValidationError::PromotionController);
+        }
+        self.body.validate_structure()?;
+        verify_typed_signature_hash(
+            &self.signature,
+            pinned_controller,
+            self.body.signing_hash(),
+            "promotion_reservation",
+        )
+    }
+
+    /// Decode and verify one exact canonical reservation in one fail-closed step.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaPromotionReceiptValidationError`] on any decode,
+    /// provenance, pinned-key, or signature failure.
+    pub fn decode_and_verify_canonical(
+        bytes: &[u8],
+        pinned_controller: &PublicKey,
+    ) -> Result<Self, KagemushaPromotionReceiptValidationError> {
+        let reservation = Self::decode_canonical(bytes)?;
+        reservation.verify(pinned_controller)?;
+        Ok(reservation)
+    }
+}
+
+/// Shared controller, reservation, release, policy, catalog, genesis, and
+/// consensus identity.
 ///
 /// Every validator body must carry this value byte-for-byte. Host-local
 /// executable, configuration-source, and catalog-seal identities deliberately
@@ -142,6 +487,10 @@ impl KagemushaExactBytesDigestV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaV4PromotionBindingV1 {
+    /// Independently pinned root promotion-controller key.
+    pub promotion_controller: PublicKey,
+    /// Exact canonical bytes of the controller-signed promotion reservation.
+    pub promotion_reservation: KagemushaExactBytesDigestV1,
     /// Unique non-zero promotion-run identity.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub promotion_id: [u8; 32],
@@ -170,7 +519,13 @@ pub struct KagemushaV4PromotionBindingV1 {
 }
 
 impl KagemushaV4PromotionBindingV1 {
-    fn validate(&self) -> Result<(), KagemushaPromotionReceiptValidationError> {
+    /// Validate the complete promotion and consensus identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaPromotionReceiptValidationError`] when a controller,
+    /// digest, network, or execution-policy identity is malformed.
+    pub fn validate(&self) -> Result<(), KagemushaPromotionReceiptValidationError> {
         let required_digests = [
             self.promotion_id,
             self.reviewed_source_closure_descriptor_sha256,
@@ -178,7 +533,10 @@ impl KagemushaV4PromotionBindingV1 {
             self.release_record_sha256,
             self.catalog_consensus_policy_digest,
         ];
-        if required_digests.iter().any(|digest| *digest == [0; 32])
+        if !matches!(
+            self.promotion_controller.try_algorithm(),
+            Ok(Algorithm::Ed25519)
+        ) || required_digests.iter().any(|digest| *digest == [0; 32])
             || self.network_id.as_bytes().iter().all(|byte| *byte == 0)
             || self.execution_policy_hash == Hash::prehashed([0; Hash::LENGTH])
         {
@@ -186,6 +544,7 @@ impl KagemushaV4PromotionBindingV1 {
                 "promotion_binding",
             ));
         }
+        self.promotion_reservation.validate()?;
         self.release_policy_source.validate()?;
         self.device_attestation_policy_norito.validate()?;
         self.signed_genesis.validate()?;
@@ -212,13 +571,10 @@ pub struct KagemushaV4ValidatorQualificationSealBodyV1 {
     pub validator_id: PeerId,
     /// Exact validator-local `iroha3d` executable bytes.
     pub iroha3d_executable: KagemushaExactBytesDigestV1,
-    /// Exact flattened TOML source bytes read on this validator.
-    ///
-    /// This deliberately does not claim to cover environment, command-line,
-    /// or profile overlays. `execution_policy_hash` binds consensus-relevant
-    /// effective policy, while the protected launcher must enforce its exact
-    /// environment contract independently.
+    /// Exact flattened TOML source bytes read on this validator for source audit.
     pub flattened_toml_config_source: KagemushaExactBytesDigestV1,
+    /// Secret-free protocol-effective config derived after every startup overlay.
+    pub runtime_effective_config: KagemushaV4RuntimeEffectiveConfigProjectionV1,
     /// Exact host-local canonical catalog qualification-seal bytes.
     pub catalog_qualification_seal: KagemushaExactBytesDigestV1,
 }
@@ -254,7 +610,23 @@ impl KagemushaV4ValidatorQualificationSealBodyV1 {
         self.binding.validate()?;
         self.iroha3d_executable.validate()?;
         self.flattened_toml_config_source.validate()?;
+        self.runtime_effective_config.validate()?;
         self.catalog_qualification_seal.validate()?;
+        if Hash::prehashed(
+            self.runtime_effective_config
+                .genesis_context
+                .execution_policy_hash,
+        ) != self.binding.execution_policy_hash
+            || !self
+                .runtime_effective_config
+                .validators
+                .iter()
+                .any(|validator| validator.validator_id == self.validator_id)
+        {
+            return Err(KagemushaPromotionReceiptValidationError::InvalidField(
+                "validator_qualification.runtime_effective_config",
+            ));
+        }
         Ok(())
     }
 }
@@ -333,6 +705,375 @@ impl KagemushaV4ValidatorQualificationSealV1 {
     }
 }
 
+/// Root-controller statement fixing every input accepted before activation submission.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaV4ActivationReceiptExpectationsBodyV1 {
+    /// Exact expectations-body schema.
+    pub schema: String,
+    /// Expectations-body version.
+    pub version: u16,
+    /// Independently pinned root promotion-controller key.
+    pub promotion_controller: PublicKey,
+    /// Exact bytes of the separately signed promotion reservation.
+    pub promotion_reservation: KagemushaExactBytesDigestV1,
+    /// Exact shared promotion, release, catalog, and consensus binding.
+    pub binding: KagemushaV4PromotionBindingV1,
+    /// Independently assigned durable-receipt issuer.
+    pub receipt_issuer: PublicKey,
+    /// Exact strong multisignature governance account.
+    pub governance_authority: AccountId,
+    /// Exact canonical governance policy duplicated for explicit review.
+    pub governance_multisig_policy: MultisigPolicy,
+    /// Four exact validator seals in strict `validator_id` order.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_array"))]
+    pub validator_seals:
+        [KagemushaV4ValidatorQualificationSealV1; KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT],
+    /// Complete directly executable, authorization-bearing activation transaction.
+    pub activation_transaction: SignedTransaction,
+    /// Exact already-finalized proof captured before submission.
+    pub trusted_finality_anchor: BridgeFinalityProof,
+}
+
+impl KagemushaV4ActivationReceiptExpectationsBodyV1 {
+    /// Return the domain-separated typed hash signed by the promotion controller.
+    #[must_use]
+    pub fn signing_hash(&self) -> HashOf<Self> {
+        HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
+            KAGEMUSHA_V4_ACTIVATION_EXPECTATIONS_SIGNATURE_DOMAIN,
+            &self.encode(),
+        ]))
+    }
+
+    fn validator_bodies(
+        &self,
+    ) -> [KagemushaV4ValidatorQualificationSealBodyV1; KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT]
+    {
+        core::array::from_fn(|index| self.validator_seals[index].body.clone())
+    }
+
+    fn validate_shape(&self) -> Result<(), KagemushaPromotionReceiptValidationError> {
+        if self.schema != KAGEMUSHA_V4_ACTIVATION_EXPECTATIONS_BODY_SCHEMA
+            || self.version != KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION
+            || !matches!(
+                self.promotion_controller.try_algorithm(),
+                Ok(Algorithm::Ed25519)
+            )
+            || !supports_receipt_signature_algorithm(&self.receipt_issuer)
+        {
+            return Err(KagemushaPromotionReceiptValidationError::InvalidField(
+                "activation_expectations.body",
+            ));
+        }
+        self.promotion_reservation.validate()?;
+        self.binding.validate()?;
+        Ok(())
+    }
+
+    fn validate_trust_chain(
+        &self,
+    ) -> Result<
+        (
+            [KagemushaV4ValidatorQualificationSealBodyV1; KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT],
+            KagemushaExactBytesDigestV1,
+        ),
+        KagemushaPromotionReceiptValidationError,
+    > {
+        self.validate_shape()?;
+        let authority_policy = validate_governance_multisig_policy(&self.governance_authority)?;
+        if authority_policy != &self.governance_multisig_policy {
+            return Err(KagemushaPromotionReceiptValidationError::GovernanceAuthority);
+        }
+        let validator_bodies = self.validator_bodies();
+        verify_kagemusha_v4_validator_qualification_seals(
+            &self.validator_seals,
+            &validator_bodies,
+            &self.binding,
+        )?;
+        validate_receipt_issuer_role_separation(
+            &self.receipt_issuer,
+            &self.governance_multisig_policy,
+            validator_bodies
+                .iter()
+                .map(|body| body.validator_id.public_key().clone()),
+        )?;
+        validate_controller_role_separation(
+            &self.promotion_controller,
+            &self.receipt_issuer,
+            &self.governance_multisig_policy,
+            validator_bodies
+                .iter()
+                .map(|body| body.validator_id.public_key().clone()),
+        )?;
+
+        self.activation_transaction
+            .verify_signature()
+            .map_err(|_| KagemushaPromotionReceiptValidationError::ActivationTransaction)?;
+        let transaction_policy =
+            validate_governance_multisig_policy(self.activation_transaction.authority())?;
+        if transaction_policy != &self.governance_multisig_policy
+            || self
+                .activation_transaction
+                .multisig_signatures()
+                .is_none_or(|bundle| {
+                    bundle.signatures.len() < KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS
+                })
+        {
+            return Err(KagemushaPromotionReceiptValidationError::GovernanceAuthority);
+        }
+        if self.activation_transaction.authority() != &self.governance_authority
+            || self.activation_transaction.network_id() != Some(&self.binding.network_id)
+        {
+            return Err(KagemushaPromotionReceiptValidationError::ActivationTransaction);
+        }
+        let activation = direct_activation_instruction(&self.activation_transaction)?;
+        validate_activation_binding(activation, &self.binding)?;
+
+        verify_bridge_finality_proof(&self.trusted_finality_anchor, &self.binding.network_id)
+            .map_err(|_| KagemushaPromotionReceiptValidationError::Finality)?;
+        validate_finality_corridor_context(
+            &self.trusted_finality_anchor,
+            &self.binding,
+            &validator_bodies,
+        )?;
+        let anchor_height = self.trusted_finality_anchor.finality_artifact.height;
+        let expiry = self
+            .activation_transaction
+            .expires_at_height()
+            .map_err(|_| KagemushaPromotionReceiptValidationError::ActivationExpiry)?
+            .ok_or(KagemushaPromotionReceiptValidationError::ActivationExpiry)?;
+        let maximum_expiry = anchor_height
+            .checked_add(
+                u64::try_from(KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1)
+                    .expect("proof-count bound fits u64"),
+            )
+            .and_then(|height| height.checked_add(1))
+            .ok_or(KagemushaPromotionReceiptValidationError::ActivationExpiry)?;
+        if expiry <= anchor_height || expiry > maximum_expiry {
+            return Err(KagemushaPromotionReceiptValidationError::ActivationExpiry);
+        }
+        let transaction_wire = self
+            .activation_transaction
+            .encode_wire_v1()
+            .map_err(|_| KagemushaPromotionReceiptValidationError::ActivationTransaction)?;
+        let transaction_wire = KagemushaExactBytesDigestV1::from_bytes(&transaction_wire)?;
+        Ok((validator_bodies, transaction_wire))
+    }
+
+    fn validate_reservation_binding(
+        &self,
+        reservation: &KagemushaV4PromotionReservationV1,
+    ) -> Result<(), KagemushaPromotionReceiptValidationError> {
+        let reserved = &reservation.body;
+        let device_policy = norito::encode_canonical(&reserved.device_attestation_policy)
+            .map_err(|_| KagemushaPromotionReceiptValidationError::ExpectationsEncode)?;
+        if reserved.promotion_controller != self.promotion_controller
+            || self.binding.promotion_controller != self.promotion_controller
+            || self.binding.promotion_reservation != self.promotion_reservation
+            || reserved.promotion_id != self.binding.promotion_id
+            || reserved.network_id != self.binding.network_id
+            || reserved.reviewed_source_closure_descriptor.sha256
+                != self.binding.reviewed_source_closure_descriptor_sha256
+            || reserved.manifest_sha256 != self.binding.manifest_sha256
+            || reserved.release_record_sha256 != self.binding.release_record_sha256
+            || reserved.release_policy_source != self.binding.release_policy_source
+            || reserved.signed_genesis != self.binding.signed_genesis
+            || reserved.catalog_consensus_policy_digest
+                != self.binding.catalog_consensus_policy_digest
+            || reserved.execution_policy_hash != self.binding.execution_policy_hash
+            || !self
+                .binding
+                .device_attestation_policy_norito
+                .matches_bytes(&device_policy)
+        {
+            return Err(KagemushaPromotionReceiptValidationError::PromotionProvenance);
+        }
+        Ok(())
+    }
+}
+
+/// Signed, root-custodied artifact that mints receipt-verification capability.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaV4ActivationReceiptExpectationsArtifactV1 {
+    /// Exact expectations-artifact schema.
+    pub schema: String,
+    /// Expectations-artifact version.
+    pub version: u16,
+    /// Signed pre-submission statement.
+    pub body: KagemushaV4ActivationReceiptExpectationsBodyV1,
+    /// Root promotion-controller signature.
+    pub signature: SignatureOf<KagemushaV4ActivationReceiptExpectationsBodyV1>,
+}
+
+impl KagemushaV4ActivationReceiptExpectationsArtifactV1 {
+    /// Sign an intrinsically valid expectations body with its declared controller.
+    ///
+    /// Reservation cross-binding is intentionally checked by
+    /// [`Self::verify_exact`], which receives the exact reservation bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaPromotionReceiptValidationError`] for an invalid
+    /// trust chain, different signer, or oversized artifact.
+    pub fn try_sign(
+        body: KagemushaV4ActivationReceiptExpectationsBodyV1,
+        controller: &KeyPair,
+    ) -> Result<Self, KagemushaPromotionReceiptValidationError> {
+        body.validate_trust_chain()?;
+        if controller.public_key() != &body.promotion_controller {
+            return Err(KagemushaPromotionReceiptValidationError::SignerMismatch(
+                "activation_expectations",
+            ));
+        }
+        let signature = SignatureOf::try_from_hash(controller.private_key(), body.signing_hash())
+            .map_err(|_| {
+            KagemushaPromotionReceiptValidationError::InvalidSignature("activation_expectations")
+        })?;
+        let artifact = Self {
+            schema: KAGEMUSHA_V4_ACTIVATION_EXPECTATIONS_SCHEMA.to_owned(),
+            version: KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
+            body,
+            signature,
+        };
+        enforce_canonical_artifact_size(
+            &artifact,
+            KAGEMUSHA_V4_ACTIVATION_EXPECTATIONS_MAX_BYTES,
+            ArtifactKind::ActivationExpectations,
+        )?;
+        Ok(artifact)
+    }
+
+    /// Decode one exact canonical expectations artifact under explicit limits.
+    ///
+    /// This does not mint a receipt-verification capability. Call
+    /// [`Self::verify_exact`] or [`Self::decode_and_verify_canonical`] with the
+    /// pinned controller and exact reservation bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaPromotionReceiptValidationError`] for empty,
+    /// oversized, non-canonical, or structurally invalid input.
+    pub fn decode_canonical(
+        bytes: &[u8],
+    ) -> Result<Self, KagemushaPromotionReceiptValidationError> {
+        check_artifact_input_size(
+            bytes,
+            KAGEMUSHA_V4_ACTIVATION_EXPECTATIONS_MAX_BYTES,
+            ArtifactKind::ActivationExpectations,
+        )?;
+        let artifact: Self = norito::decode_canonical_with_limits(
+            bytes,
+            artifact_decode_limits(KAGEMUSHA_V4_ACTIVATION_EXPECTATIONS_MAX_BYTES, bytes.len()),
+        )
+        .map_err(|_| KagemushaPromotionReceiptValidationError::ExpectationsDecode)?;
+        artifact.body.validate_shape()?;
+        Ok(artifact)
+    }
+
+    /// Authenticate exact artifact and reservation bytes and mint a private capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaPromotionReceiptValidationError`] unless both inputs
+    /// are exact canonical artifacts, both root signatures authenticate the
+    /// pinned controller, and every seal, transaction, TTL, anchor, corridor,
+    /// provenance, digest, and role-separation check succeeds.
+    pub fn verify_exact(
+        &self,
+        exact_artifact_bytes: &[u8],
+        pinned_controller: &PublicKey,
+        exact_reservation_bytes: &[u8],
+    ) -> Result<KagemushaV4ActivationReceiptExpectationsV1, KagemushaPromotionReceiptValidationError>
+    {
+        check_artifact_input_size(
+            exact_artifact_bytes,
+            KAGEMUSHA_V4_ACTIVATION_EXPECTATIONS_MAX_BYTES,
+            ArtifactKind::ActivationExpectations,
+        )?;
+        let canonical = norito::encode_canonical(self)
+            .map_err(|_| KagemushaPromotionReceiptValidationError::ExpectationsEncode)?;
+        if canonical.as_slice() != exact_artifact_bytes {
+            return Err(KagemushaPromotionReceiptValidationError::ExpectationsDigest);
+        }
+        if self.schema != KAGEMUSHA_V4_ACTIVATION_EXPECTATIONS_SCHEMA
+            || self.version != KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION
+            || &self.body.promotion_controller != pinned_controller
+            || !matches!(pinned_controller.try_algorithm(), Ok(Algorithm::Ed25519))
+        {
+            return Err(KagemushaPromotionReceiptValidationError::PromotionController);
+        }
+        self.body.validate_shape()?;
+        verify_typed_signature_hash(
+            &self.signature,
+            pinned_controller,
+            self.body.signing_hash(),
+            "activation_expectations",
+        )?;
+
+        let reservation = KagemushaV4PromotionReservationV1::decode_and_verify_canonical(
+            exact_reservation_bytes,
+            pinned_controller,
+        )?;
+        if !self
+            .body
+            .promotion_reservation
+            .matches_bytes(exact_reservation_bytes)
+        {
+            return Err(KagemushaPromotionReceiptValidationError::ReservationDigest);
+        }
+        self.body.validate_reservation_binding(&reservation)?;
+        let (validator_bodies, activation_transaction_wire) = self.body.validate_trust_chain()?;
+
+        Ok(KagemushaV4ActivationReceiptExpectationsV1 {
+            promotion_controller: self.body.promotion_controller.clone(),
+            promotion_reservation: self.body.promotion_reservation,
+            activation_expectations_artifact: KagemushaExactBytesDigestV1::from_bytes(
+                exact_artifact_bytes,
+            )?,
+            binding: self.body.binding.clone(),
+            receipt_issuer: self.body.receipt_issuer.clone(),
+            governance_authority: self.body.governance_authority.clone(),
+            governance_multisig_policy: self.body.governance_multisig_policy.clone(),
+            validator_seals: self.body.validator_seals.clone(),
+            validator_bodies,
+            activation_transaction_intent: self.body.activation_transaction.hash(),
+            activation_transaction_wire,
+            trusted_finality_anchor: self.body.trusted_finality_anchor.clone(),
+        })
+    }
+
+    /// Decode, authenticate, and mint a receipt-verification capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaPromotionReceiptValidationError`] on any canonical
+    /// decode or trust-chain verification failure.
+    pub fn decode_and_verify_canonical(
+        exact_artifact_bytes: &[u8],
+        pinned_controller: &PublicKey,
+        exact_reservation_bytes: &[u8],
+    ) -> Result<KagemushaV4ActivationReceiptExpectationsV1, KagemushaPromotionReceiptValidationError>
+    {
+        let artifact = Self::decode_canonical(exact_artifact_bytes)?;
+        artifact.verify_exact(
+            exact_artifact_bytes,
+            pinned_controller,
+            exact_reservation_bytes,
+        )
+    }
+}
+
 /// Bounded exact `SignedBlockWire` bytes retained by a durable receipt.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -391,6 +1132,221 @@ impl TryFrom<Vec<u8>> for KagemushaFinalizedBlockWireV1 {
 
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
         Self::try_from_bytes(value)
+    }
+}
+
+/// Intrinsically bounded contiguous finality successors retained by one receipt.
+///
+/// The custom Norito decoder inspects the sequence header before decoding the
+/// underlying vector, so a hostile count above the first-release limit cannot
+/// trigger an oversized proof-vector allocation.
+#[derive(Debug, Clone, PartialEq, Eq, IntoSchema)]
+#[norito(reuse_archived)]
+#[repr(transparent)]
+pub struct KagemushaV4ActivationFinalityProofChainV1(Vec<BridgeFinalityProof>);
+
+impl KagemushaV4ActivationFinalityProofChainV1 {
+    fn validate_proofs(
+        proofs: &[BridgeFinalityProof],
+    ) -> Result<(), KagemushaPromotionReceiptValidationError> {
+        if proofs.is_empty()
+            || proofs.len() > KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1
+            || proofs.windows(2).any(|pair| {
+                pair[0].finality_artifact.height.checked_add(1)
+                    != Some(pair[1].finality_artifact.height)
+            })
+        {
+            return Err(KagemushaPromotionReceiptValidationError::FinalityChain);
+        }
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), KagemushaPromotionReceiptValidationError> {
+        Self::validate_proofs(&self.0)
+    }
+
+    /// Borrow the ordered immediate-successor proofs.
+    #[must_use]
+    pub fn as_slice(&self) -> &[BridgeFinalityProof] {
+        &self.0
+    }
+
+    /// Return the number of retained successor proofs.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Return whether no successor proof is retained.
+    ///
+    /// Valid constructed and decoded values always return `false`.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Return the first proof in the contiguous successor chain.
+    #[must_use]
+    pub fn first(&self) -> Option<&BridgeFinalityProof> {
+        self.0.first()
+    }
+
+    /// Return the final proof in the contiguous successor chain.
+    #[must_use]
+    pub fn last(&self) -> Option<&BridgeFinalityProof> {
+        self.0.last()
+    }
+
+    /// Consume the wrapper and return its ordered successor proofs.
+    #[must_use]
+    pub fn into_vec(self) -> Vec<BridgeFinalityProof> {
+        self.0
+    }
+
+    /// Construct an invalid shape solely for fail-closed structural regression tests.
+    #[cfg(test)]
+    pub(crate) fn from_proofs_unchecked(proofs: Vec<BridgeFinalityProof>) -> Self {
+        Self(proofs)
+    }
+}
+
+impl TryFrom<Vec<BridgeFinalityProof>> for KagemushaV4ActivationFinalityProofChainV1 {
+    type Error = KagemushaPromotionReceiptValidationError;
+
+    fn try_from(proofs: Vec<BridgeFinalityProof>) -> Result<Self, Self::Error> {
+        Self::validate_proofs(&proofs)?;
+        Ok(Self(proofs))
+    }
+}
+
+impl<'a> IntoIterator for &'a KagemushaV4ActivationFinalityProofChainV1 {
+    type Item = &'a BridgeFinalityProof;
+    type IntoIter = std::slice::Iter<'a, BridgeFinalityProof>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl norito::NoritoSerialize for KagemushaV4ActivationFinalityProofChainV1 {
+    fn serialize(&self, writer: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
+        ncore::NoritoSerialize::serialize(&self.0, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        ncore::NoritoSerialize::encoded_len_hint(&self.0)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        ncore::NoritoSerialize::encoded_len_exact(&self.0)
+    }
+}
+
+impl<'de> norito::NoritoDeserialize<'de> for KagemushaV4ActivationFinalityProofChainV1 {
+    fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
+        Self::try_deserialize(archived)
+            .expect("Kagemusha finality proof chain requires a canonical bounded archive")
+    }
+
+    fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
+        let pointer = core::ptr::from_ref(archived).cast::<u8>();
+        let bytes = ncore::payload_slice_from_ptr(pointer)?;
+        let (chain, used) = <Self as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
+        if used != bytes.len() {
+            return Err(ncore::Error::LengthMismatch);
+        }
+        Ok(chain)
+    }
+}
+
+impl<'a> ncore::DecodeFromSlice<'a> for KagemushaV4ActivationFinalityProofChainV1 {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        let (proof_count, _) = ncore::inspect_seq_len_slice(bytes)?;
+        if proof_count == 0 || proof_count > KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1 {
+            return Err(ncore::Error::Message(format!(
+                "Kagemusha finality proof count {proof_count} is outside 1..={KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1}"
+            )));
+        }
+        let (proofs, used) =
+            <Vec<BridgeFinalityProof> as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
+        let chain =
+            Self::try_from(proofs).map_err(|error| ncore::Error::Message(error.to_string()))?;
+        Ok((chain, used))
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for KagemushaV4ActivationFinalityProofChainV1 {
+    fn write_json(&self, out: &mut String) {
+        norito::json::JsonSerialize::json_serialize(&self.0, out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.0, out)
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for KagemushaV4ActivationFinalityProofChainV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let proof_count = parser.preflight_array_entries()?;
+        if proof_count == 0 || proof_count > KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1 {
+            return Err(norito::json::Error::InvalidField {
+                field: "finality_proof_chain".to_owned(),
+                message: format!(
+                    "proof count {proof_count} is outside 1..={KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1}"
+                ),
+            });
+        }
+        let mut sequence = norito::json::SeqVisitor::new(parser)?;
+        let mut proofs = Vec::new();
+        proofs.try_reserve_exact(proof_count).map_err(|_| {
+            norito::json::Error::Message("finality proof chain allocation failed".to_owned())
+        })?;
+        while let Some(proof) = sequence.next_element::<BridgeFinalityProof>()? {
+            proofs.push(proof);
+        }
+        sequence.finish()?;
+        Self::try_from(proofs).map_err(|error| norito::json::Error::InvalidField {
+            field: "finality_proof_chain".to_owned(),
+            message: error.to_string(),
+        })
+    }
+
+    fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+        let items = value
+            .as_array()
+            .ok_or_else(|| norito::json::Error::InvalidField {
+                field: "finality_proof_chain".to_owned(),
+                message: "expected an array".to_owned(),
+            })?;
+        if items.is_empty() || items.len() > KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1 {
+            return Err(norito::json::Error::InvalidField {
+                field: "finality_proof_chain".to_owned(),
+                message: format!(
+                    "proof count {} is outside 1..={KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1}",
+                    items.len()
+                ),
+            });
+        }
+        let mut proofs = Vec::new();
+        proofs.try_reserve_exact(items.len()).map_err(|_| {
+            norito::json::Error::Message("finality proof chain allocation failed".to_owned())
+        })?;
+        for item in items {
+            proofs.push(
+                <BridgeFinalityProof as norito::json::JsonDeserialize>::json_from_value(item)?,
+            );
+        }
+        Self::try_from(proofs).map_err(|error| norito::json::Error::InvalidField {
+            field: "finality_proof_chain".to_owned(),
+            message: error.to_string(),
+        })
     }
 }
 
@@ -459,6 +1415,10 @@ pub struct KagemushaV4ActivationFinalityReceiptBodyV1 {
     pub schema: String,
     /// Receipt-body version.
     pub version: u16,
+    /// Exact signed promotion-reservation bytes authenticated before submission.
+    pub promotion_reservation: KagemushaExactBytesDigestV1,
+    /// Exact signed activation-expectations bytes authenticated before submission.
+    pub activation_expectations_artifact: KagemushaExactBytesDigestV1,
     /// Shared promotion, release, catalog, and consensus binding.
     pub binding: KagemushaV4PromotionBindingV1,
     /// Public key of the independent durable-receipt issuer.
@@ -479,8 +1439,8 @@ pub struct KagemushaV4ActivationFinalityReceiptBodyV1 {
     pub finalized_block_wire: KagemushaFinalizedBlockWireV1,
     /// Separately retained exact identity of `finalized_block_wire`.
     pub finalized_block_wire_digest: KagemushaExactBytesDigestV1,
-    /// Exact durable Sumeragi-v2 finality material for the carrier block.
-    pub finality_proof: BridgeFinalityProof,
+    /// Contiguous Sumeragi-v2 successors after the pre-submission trusted anchor.
+    pub finality_proof_chain: KagemushaV4ActivationFinalityProofChainV1,
 }
 
 impl fmt::Debug for KagemushaV4ActivationFinalityReceiptBodyV1 {
@@ -489,6 +1449,11 @@ impl fmt::Debug for KagemushaV4ActivationFinalityReceiptBodyV1 {
             .debug_struct("KagemushaV4ActivationFinalityReceiptBodyV1")
             .field("schema", &self.schema)
             .field("version", &self.version)
+            .field("promotion_reservation", &self.promotion_reservation)
+            .field(
+                "activation_expectations_artifact",
+                &self.activation_expectations_artifact,
+            )
             .field("promotion_id", &self.binding.promotion_id)
             .field("issuer", &self.issuer)
             .field("governance_authority", &self.governance_authority)
@@ -503,8 +1468,12 @@ impl fmt::Debug for KagemushaV4ActivationFinalityReceiptBodyV1 {
             )
             .field(
                 "finalized_height",
-                &self.finality_proof.finality_artifact.height,
+                &self
+                    .finality_proof_chain
+                    .last()
+                    .map(|proof| proof.finality_artifact.height),
             )
+            .field("finality_proof_count", &self.finality_proof_chain.len())
             .finish_non_exhaustive()
     }
 }
@@ -534,7 +1503,17 @@ impl KagemushaV4ActivationFinalityReceiptBodyV1 {
                 "activation_receipt.issuer",
             ));
         }
-        validate_governance_multisig_policy(&self.governance_authority)?;
+        let governance_policy = validate_governance_multisig_policy(&self.governance_authority)?;
+        validate_receipt_issuer_role_separation(
+            &self.issuer,
+            governance_policy,
+            self.validator_seals
+                .iter()
+                .map(|seal| seal.body.validator_id.public_key().clone()),
+        )?;
+        self.finality_proof_chain.validate()?;
+        self.promotion_reservation.validate()?;
+        self.activation_expectations_artifact.validate()?;
         self.binding.validate()?;
         self.activation_transaction_wire.validate()?;
         self.finalized_block_wire_digest.validate()?;
@@ -577,35 +1556,142 @@ pub struct KagemushaV4ActivationFinalityReceiptV1 {
     pub signature: SignatureOf<KagemushaV4ActivationFinalityReceiptBodyV1>,
 }
 
-/// External immutable expectations required to trust an activation receipt.
+/// Private capability returned only after authenticating both root artifacts.
 ///
-/// This verifier configuration is intentionally not serialized with the
-/// receipt. Loading these values from the receipt itself would turn duplicate
-/// fields into attacker-controlled assertions rather than trust anchors.
+/// The fields are deliberately private and this type has no public constructor
+/// or Norito decoder. A receipt verifier can therefore receive it only from
+/// [`KagemushaV4ActivationReceiptExpectationsArtifactV1::verify_exact`] (or its
+/// decode-and-verify convenience wrapper), never from receipt-controlled data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KagemushaV4ActivationReceiptExpectationsV1 {
-    /// Exact shared promotion binding approved before submission.
-    pub binding: KagemushaV4PromotionBindingV1,
-    /// Independently pinned durable-receipt issuer.
-    pub receipt_issuer: PublicKey,
-    /// Exact governance account permitted to authorize activation.
-    pub governance_authority: AccountId,
-    /// Exact canonical multisignature policy independently approved for governance.
-    pub governance_multisig_policy: MultisigPolicy,
-    /// Four exact expected host bodies in strict validator order.
-    pub validator_bodies:
+    promotion_controller: PublicKey,
+    promotion_reservation: KagemushaExactBytesDigestV1,
+    activation_expectations_artifact: KagemushaExactBytesDigestV1,
+    binding: KagemushaV4PromotionBindingV1,
+    receipt_issuer: PublicKey,
+    governance_authority: AccountId,
+    governance_multisig_policy: MultisigPolicy,
+    validator_seals:
+        [KagemushaV4ValidatorQualificationSealV1; KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT],
+    validator_bodies:
         [KagemushaV4ValidatorQualificationSealBodyV1; KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT],
-    /// Exact payload-only transaction intent approved by governance.
-    pub activation_transaction_intent: HashOf<SignedTransaction>,
-    /// Exact authorization-bearing transaction wire approved by governance.
-    pub activation_transaction_wire: KagemushaExactBytesDigestV1,
-    /// Exact height context trusted for this one receipt.
-    pub activation_height_context: HeightContextId,
+    activation_transaction_intent: HashOf<SignedTransaction>,
+    activation_transaction_wire: KagemushaExactBytesDigestV1,
+    trusted_finality_anchor: BridgeFinalityProof,
 }
 
 impl KagemushaV4ActivationReceiptExpectationsV1 {
+    /// Build an intentionally unauthenticated capability only for negative tests.
+    #[cfg(test)]
+    pub(crate) fn from_unverified_artifact_for_test(
+        body: &KagemushaV4ActivationReceiptExpectationsBodyV1,
+        exact_artifact_bytes: &[u8],
+    ) -> Result<Self, KagemushaPromotionReceiptValidationError> {
+        let transaction_wire = body
+            .activation_transaction
+            .encode_wire_v1()
+            .map_err(|_| KagemushaPromotionReceiptValidationError::ActivationTransaction)?;
+        Ok(Self {
+            promotion_controller: body.promotion_controller.clone(),
+            promotion_reservation: body.promotion_reservation,
+            activation_expectations_artifact: KagemushaExactBytesDigestV1::from_bytes(
+                exact_artifact_bytes,
+            )?,
+            binding: body.binding.clone(),
+            receipt_issuer: body.receipt_issuer.clone(),
+            governance_authority: body.governance_authority.clone(),
+            governance_multisig_policy: body.governance_multisig_policy.clone(),
+            validator_seals: body.validator_seals.clone(),
+            validator_bodies: body.validator_bodies(),
+            activation_transaction_intent: body.activation_transaction.hash(),
+            activation_transaction_wire: KagemushaExactBytesDigestV1::from_bytes(
+                &transaction_wire,
+            )?,
+            trusted_finality_anchor: body.trusted_finality_anchor.clone(),
+        })
+    }
+
+    /// Return the authenticated root promotion-controller key.
+    #[must_use]
+    pub const fn promotion_controller(&self) -> &PublicKey {
+        &self.promotion_controller
+    }
+
+    /// Return the exact authenticated promotion-reservation identity.
+    #[must_use]
+    pub const fn promotion_reservation(&self) -> KagemushaExactBytesDigestV1 {
+        self.promotion_reservation
+    }
+
+    /// Return the exact authenticated expectations-artifact identity.
+    #[must_use]
+    pub const fn activation_expectations_artifact(&self) -> KagemushaExactBytesDigestV1 {
+        self.activation_expectations_artifact
+    }
+
+    /// Return the authenticated shared promotion binding.
+    #[must_use]
+    pub const fn binding(&self) -> &KagemushaV4PromotionBindingV1 {
+        &self.binding
+    }
+
+    /// Return the authenticated independent receipt issuer.
+    #[must_use]
+    pub const fn receipt_issuer(&self) -> &PublicKey {
+        &self.receipt_issuer
+    }
+
+    /// Return the authenticated governance authority.
+    #[must_use]
+    pub const fn governance_authority(&self) -> &AccountId {
+        &self.governance_authority
+    }
+
+    /// Return the authenticated exact governance policy.
+    #[must_use]
+    pub const fn governance_multisig_policy(&self) -> &MultisigPolicy {
+        &self.governance_multisig_policy
+    }
+
+    /// Return the four authenticated validator seals in strict order.
+    #[must_use]
+    pub const fn validator_seals(
+        &self,
+    ) -> &[KagemushaV4ValidatorQualificationSealV1; KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT] {
+        &self.validator_seals
+    }
+
+    /// Return the four authenticated validator bodies in strict order.
+    #[must_use]
+    pub const fn validator_bodies(
+        &self,
+    ) -> &[KagemushaV4ValidatorQualificationSealBodyV1; KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT]
+    {
+        &self.validator_bodies
+    }
+
+    /// Return the authenticated payload-only activation intent.
+    #[must_use]
+    pub const fn activation_transaction_intent(&self) -> HashOf<SignedTransaction> {
+        self.activation_transaction_intent
+    }
+
+    /// Return the authenticated authorization-bearing transaction-wire identity.
+    #[must_use]
+    pub const fn activation_transaction_wire(&self) -> KagemushaExactBytesDigestV1 {
+        self.activation_transaction_wire
+    }
+
+    /// Return the authenticated pre-submission finality anchor.
+    #[must_use]
+    pub const fn trusted_finality_anchor(&self) -> &BridgeFinalityProof {
+        &self.trusted_finality_anchor
+    }
+
     fn validate(&self) -> Result<(), KagemushaPromotionReceiptValidationError> {
         self.binding.validate()?;
+        self.promotion_reservation.validate()?;
+        self.activation_expectations_artifact.validate()?;
         self.activation_transaction_wire.validate()?;
         let authority_policy = validate_governance_multisig_policy(&self.governance_authority)?;
         if authority_policy != &self.governance_multisig_policy {
@@ -614,12 +1700,6 @@ impl KagemushaV4ActivationReceiptExpectationsV1 {
         if !supports_receipt_signature_algorithm(&self.receipt_issuer)
             || self
                 .activation_transaction_intent
-                .as_ref()
-                .iter()
-                .all(|byte| *byte == 0)
-            || self
-                .activation_height_context
-                .0
                 .as_ref()
                 .iter()
                 .all(|byte| *byte == 0)
@@ -638,7 +1718,56 @@ impl KagemushaV4ActivationReceiptExpectationsV1 {
             }
             previous = Some(&body.validator_id);
         }
+        validate_receipt_issuer_role_separation(
+            &self.receipt_issuer,
+            &self.governance_multisig_policy,
+            self.validator_bodies
+                .iter()
+                .map(|body| body.validator_id.public_key().clone()),
+        )?;
+        validate_controller_role_separation(
+            &self.promotion_controller,
+            &self.receipt_issuer,
+            &self.governance_multisig_policy,
+            self.validator_bodies
+                .iter()
+                .map(|body| body.validator_id.public_key().clone()),
+        )?;
+        verify_kagemusha_v4_validator_qualification_seals(
+            &self.validator_seals,
+            &self.validator_bodies,
+            &self.binding,
+        )?;
+        validate_finality_corridor_context(
+            &self.trusted_finality_anchor,
+            &self.binding,
+            &self.validator_bodies,
+        )?;
         Ok(())
+    }
+
+    /// Test-only mutable access for hostile-anchor regression fixtures.
+    #[cfg(test)]
+    pub(crate) fn trusted_finality_anchor_mut_for_test(&mut self) -> &mut BridgeFinalityProof {
+        &mut self.trusted_finality_anchor
+    }
+
+    /// Test-only replacement of the receipt issuer for role-splice fixtures.
+    #[cfg(test)]
+    pub(crate) fn set_receipt_issuer_for_test(&mut self, issuer: PublicKey) {
+        self.receipt_issuer = issuer;
+    }
+
+    /// Test-only replacement of governance authority for rejection fixtures.
+    #[cfg(test)]
+    pub(crate) fn set_governance_authority_for_test(&mut self, authority: AccountId) {
+        self.governance_authority = authority;
+    }
+
+    /// Test-only replacement of governance policy for rejection fixtures.
+    #[cfg(test)]
+    pub(crate) fn set_governance_multisig_policy_for_test(&mut self, policy: MultisigPolicy) {
+        self.governance_multisig_policy = policy;
     }
 }
 
@@ -646,11 +1775,31 @@ impl KagemushaV4ActivationReceiptExpectationsV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KagemushaV4VerifiedActivationReceiptV1 {
     /// Exact finalized block height.
-    pub finalized_height: u64,
+    finalized_height: u64,
     /// Hash of the exact finalized block header.
-    pub finalized_block_hash: HashOf<crate::block::BlockHeader>,
+    finalized_block_hash: HashOf<crate::block::BlockHeader>,
     /// Exact payload-only activation transaction intent.
-    pub activation_transaction_intent: HashOf<SignedTransaction>,
+    activation_transaction_intent: HashOf<SignedTransaction>,
+}
+
+impl KagemushaV4VerifiedActivationReceiptV1 {
+    /// Return the exact finalized block height authenticated by the receipt.
+    #[must_use]
+    pub const fn finalized_height(&self) -> u64 {
+        self.finalized_height
+    }
+
+    /// Return the hash of the exact finalized block header authenticated by the receipt.
+    #[must_use]
+    pub const fn finalized_block_hash(&self) -> HashOf<crate::block::BlockHeader> {
+        self.finalized_block_hash
+    }
+
+    /// Return the payload-only activation transaction intent authenticated by the receipt.
+    #[must_use]
+    pub const fn activation_transaction_intent(&self) -> HashOf<SignedTransaction> {
+        self.activation_transaction_intent
+    }
 }
 
 impl KagemushaV4ActivationFinalityReceiptV1 {
@@ -738,10 +1887,10 @@ impl KagemushaV4ActivationFinalityReceiptV1 {
 
     /// Verify every external, signature, transaction, inclusion, and finality binding.
     ///
-    /// A fresh local [`BridgeFinalityVerifier`] is created for this receipt and
-    /// pinned to `expectations.activation_height_context`; failed input can
-    /// therefore never advance shared verifier state. The method performs no
-    /// live write and does not submit or activate anything.
+    /// A fresh local [`BridgeFinalityVerifier`] first verifies the exact
+    /// pre-submission anchor and then every immediate successor retained by the
+    /// receipt. Failed input can therefore never advance shared verifier state.
+    /// The method performs no live write and does not submit or activate anything.
     ///
     /// # Errors
     ///
@@ -761,9 +1910,13 @@ impl KagemushaV4ActivationFinalityReceiptV1 {
         }
         expectations.validate()?;
         self.body.validate_structure()?;
-        if self.body.binding != expectations.binding
+        if self.body.promotion_reservation != expectations.promotion_reservation
+            || self.body.activation_expectations_artifact
+                != expectations.activation_expectations_artifact
+            || self.body.binding != expectations.binding
             || self.body.issuer != expectations.receipt_issuer
             || self.body.governance_authority != expectations.governance_authority
+            || self.body.validator_seals != expectations.validator_seals
             || self.body.activation_transaction_intent != expectations.activation_transaction_intent
             || self.body.activation_transaction_wire != expectations.activation_transaction_wire
         {
@@ -826,27 +1979,55 @@ impl KagemushaV4ActivationFinalityReceiptV1 {
         }
         let activation = direct_activation_instruction(transaction)?;
         validate_activation_binding(activation, &expectations.binding)?;
-
-        let artifact = &self.body.finality_proof.finality_artifact;
-        if artifact.height_context.execution_policy_hash
-            != expectations.binding.execution_policy_hash
-            || artifact.height_context.roster.len() != KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT
-            || artifact
-                .height_context
-                .roster
-                .iter()
-                .zip(&expectations.validator_bodies)
-                .any(|(member, body)| member.power != 1 || member.validator != body.validator_id)
-        {
-            return Err(KagemushaPromotionReceiptValidationError::FinalityRoster);
+        let finality_proof = self
+            .body
+            .finality_proof_chain
+            .last()
+            .ok_or(KagemushaPromotionReceiptValidationError::FinalityChain)?;
+        let artifact = &finality_proof.finality_artifact;
+        let anchor_height = expectations
+            .trusted_finality_anchor
+            .finality_artifact
+            .height;
+        let proof_count = u64::try_from(self.body.finality_proof_chain.len())
+            .map_err(|_| KagemushaPromotionReceiptValidationError::FinalityChain)?;
+        if anchor_height.checked_add(proof_count) != Some(artifact.height) {
+            return Err(KagemushaPromotionReceiptValidationError::FinalityChain);
+        }
+        let expiry = transaction
+            .expires_at_height()
+            .map_err(|_| KagemushaPromotionReceiptValidationError::ActivationExpiry)?
+            .ok_or(KagemushaPromotionReceiptValidationError::ActivationExpiry)?;
+        let maximum_expiry = anchor_height
+            .checked_add(
+                u64::try_from(KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1)
+                    .expect("proof-count bound fits u64"),
+            )
+            .and_then(|height| height.checked_add(1))
+            .ok_or(KagemushaPromotionReceiptValidationError::ActivationExpiry)?;
+        if artifact.height >= expiry || expiry > maximum_expiry {
+            return Err(KagemushaPromotionReceiptValidationError::ActivationExpiry);
         }
         let mut finality_verifier = BridgeFinalityVerifier::with_context(
             expectations.binding.network_id,
-            expectations.activation_height_context,
+            expectations
+                .trusted_finality_anchor
+                .finality_artifact
+                .context_id(),
         );
         finality_verifier
-            .verify(&self.body.finality_proof)
+            .verify(&expectations.trusted_finality_anchor)
             .map_err(|_| KagemushaPromotionReceiptValidationError::Finality)?;
+        for proof in &self.body.finality_proof_chain {
+            validate_finality_corridor_context(
+                proof,
+                &expectations.binding,
+                &expectations.validator_bodies,
+            )?;
+            finality_verifier
+                .verify(proof)
+                .map_err(|_| KagemushaPromotionReceiptValidationError::Finality)?;
+        }
         let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
             &block,
             artifact,
@@ -891,6 +2072,78 @@ fn validate_governance_multisig_policy(
     Ok(policy)
 }
 
+fn validate_receipt_issuer_role_separation(
+    issuer: &PublicKey,
+    governance_policy: &MultisigPolicy,
+    validator_keys: impl IntoIterator<Item = PublicKey>,
+) -> Result<(), KagemushaPromotionReceiptValidationError> {
+    if governance_policy
+        .members()
+        .iter()
+        .any(|member| member.public_key() == issuer)
+        || validator_keys
+            .into_iter()
+            .any(|validator_key| &validator_key == issuer)
+    {
+        return Err(KagemushaPromotionReceiptValidationError::IssuerRoleOverlap);
+    }
+    Ok(())
+}
+
+fn validate_controller_role_separation(
+    controller: &PublicKey,
+    receipt_issuer: &PublicKey,
+    governance_policy: &MultisigPolicy,
+    validator_keys: impl IntoIterator<Item = PublicKey>,
+) -> Result<(), KagemushaPromotionReceiptValidationError> {
+    if controller == receipt_issuer
+        || governance_policy
+            .members()
+            .iter()
+            .any(|member| member.public_key() == controller)
+        || validator_keys
+            .into_iter()
+            .any(|validator_key| &validator_key == controller)
+    {
+        return Err(KagemushaPromotionReceiptValidationError::ControllerRoleOverlap);
+    }
+    Ok(())
+}
+
+pub(super) fn validate_finality_corridor_context(
+    proof: &BridgeFinalityProof,
+    binding: &KagemushaV4PromotionBindingV1,
+    validator_bodies: &[KagemushaV4ValidatorQualificationSealBodyV1;
+         KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT],
+) -> Result<(), KagemushaPromotionReceiptValidationError> {
+    let context = &proof.finality_artifact.height_context;
+    let runtime = &validator_bodies[0].runtime_effective_config;
+    if context.network_id != binding.network_id
+        || context.mode != crate::block::consensus_v2::ConsensusMode::Permissioned
+        || context.nexus_amx_context_hash
+            != Hash::prehashed(runtime.genesis_context.nexus_amx_context_hash)
+        || context.execution_policy_hash != binding.execution_policy_hash
+        || context.da_layout != runtime.genesis_context.da_layout
+        || context.snapshot_bootstrap.is_some()
+        || context.roster.len() != KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT
+        || proof.finality_artifact.validator_set_pops.len() != runtime.validators.len()
+        || context
+            .roster
+            .iter()
+            .zip(validator_bodies)
+            .any(|(member, body)| member.power != 1 || member.validator != body.validator_id)
+        || proof
+            .finality_artifact
+            .validator_set_pops
+            .iter()
+            .zip(&runtime.validators)
+            .any(|(actual, expected)| actual != &expected.bls_pop)
+    {
+        return Err(KagemushaPromotionReceiptValidationError::FinalityRoster);
+    }
+    Ok(())
+}
+
 fn enforce_activation_receipt_frame_size<T: norito::NoritoSerialize>(
     value: &T,
 ) -> Result<usize, KagemushaPromotionReceiptValidationError> {
@@ -921,10 +2174,12 @@ pub fn verify_kagemusha_v4_validator_qualification_seals(
     binding: &KagemushaV4PromotionBindingV1,
 ) -> Result<(), KagemushaPromotionReceiptValidationError> {
     binding.validate()?;
+    let shared_effective_config = &expected_bodies[0].runtime_effective_config;
     let mut previous = None;
     for (seal, expected) in seals.iter().zip(expected_bodies) {
         expected.validate_structure()?;
         if expected.binding != *binding
+            || expected.runtime_effective_config != *shared_effective_config
             || seal.body != *expected
             || previous.is_some_and(|validator: &PeerId| validator >= &seal.body.validator_id)
         {
@@ -955,6 +2210,12 @@ fn validate_activation_binding(
     instruction: &ActivateKagemushaRecursiveReleaseV4,
     binding: &KagemushaV4PromotionBindingV1,
 ) -> Result<(), KagemushaPromotionReceiptValidationError> {
+    instruction
+        .validate_promotion_id()
+        .map_err(|_| KagemushaPromotionReceiptValidationError::ActivationPayload)?;
+    if instruction.promotion_binding() != binding {
+        return Err(KagemushaPromotionReceiptValidationError::ActivationPayload);
+    }
     let activation = instruction.activation();
     activation
         .validate_structure()
@@ -1023,6 +2284,74 @@ fn supports_receipt_signature_algorithm(signer: &PublicKey) -> bool {
     )
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ArtifactKind {
+    PromotionReservation,
+    ActivationExpectations,
+}
+
+fn check_artifact_input_size(
+    bytes: &[u8],
+    maximum: usize,
+    kind: ArtifactKind,
+) -> Result<(), KagemushaPromotionReceiptValidationError> {
+    if !bytes.is_empty() && bytes.len() <= maximum {
+        return Ok(());
+    }
+    Err(match kind {
+        ArtifactKind::PromotionReservation => {
+            KagemushaPromotionReceiptValidationError::ReservationSize {
+                actual: bytes.len(),
+                maximum,
+            }
+        }
+        ArtifactKind::ActivationExpectations => {
+            KagemushaPromotionReceiptValidationError::ExpectationsSize {
+                actual: bytes.len(),
+                maximum,
+            }
+        }
+    })
+}
+
+fn enforce_canonical_artifact_size<T: norito::NoritoSerialize>(
+    value: &T,
+    maximum: usize,
+    kind: ArtifactKind,
+) -> Result<usize, KagemushaPromotionReceiptValidationError> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let actual = norito::core::encoded_frame_len(value).map_err(|_| match kind {
+        ArtifactKind::PromotionReservation => {
+            KagemushaPromotionReceiptValidationError::ReservationEncode
+        }
+        ArtifactKind::ActivationExpectations => {
+            KagemushaPromotionReceiptValidationError::ExpectationsEncode
+        }
+    })?;
+    if actual == 0 || actual > maximum {
+        return Err(match kind {
+            ArtifactKind::PromotionReservation => {
+                KagemushaPromotionReceiptValidationError::ReservationSize { actual, maximum }
+            }
+            ArtifactKind::ActivationExpectations => {
+                KagemushaPromotionReceiptValidationError::ExpectationsSize { actual, maximum }
+            }
+        });
+    }
+    Ok(actual)
+}
+
+fn artifact_decode_limits(maximum: usize, encoded_len: usize) -> norito::DecodeLimits {
+    norito::DecodeLimits::new(
+        maximum,
+        maximum,
+        encoded_len.saturating_mul(8),
+        maximum.saturating_mul(8),
+        norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+    )
+}
+
 fn receipt_decode_limits(encoded_len: usize) -> norito::DecodeLimits {
     let maximum = KAGEMUSHA_V4_ACTIVATION_RECEIPT_MAX_BYTES;
     let allocation = maximum.saturating_mul(8);
@@ -1046,7 +2375,7 @@ fn block_decode_limits() -> norito::DecodeLimits {
     )
 }
 
-fn decode_exact_finalized_block(
+pub(super) fn decode_exact_finalized_block(
     bytes: &[u8],
 ) -> Result<SignedBlock, KagemushaPromotionReceiptValidationError> {
     if bytes.is_empty() || bytes.len() > AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 {
@@ -1191,6 +2520,51 @@ pub enum KagemushaPromotionReceiptValidationError {
     /// A signature is malformed or invalid.
     #[error("invalid Kagemusha promotion receipt signature: {0}")]
     InvalidSignature(&'static str),
+    /// The root promotion controller differs from the independently pinned key.
+    #[error("Kagemusha promotion controller is not the independently pinned Ed25519 key")]
+    PromotionController,
+    /// GitHub provenance or a reservation-to-activation binding differs.
+    #[error("Kagemusha promotion reservation provenance or release binding differs")]
+    PromotionProvenance,
+    /// The controller reuses a receipt-issuer, governance, or validator key.
+    #[error(
+        "promotion controller must be independent of receipt issuer, governance, and validators"
+    )]
+    ControllerRoleOverlap,
+    /// Canonical promotion-reservation encoding failed.
+    #[error("failed to encode the canonical Kagemusha promotion reservation")]
+    ReservationEncode,
+    /// Canonical bounded promotion-reservation decoding failed.
+    #[error("failed to decode the canonical bounded Kagemusha promotion reservation")]
+    ReservationDecode,
+    /// Canonical reservation input violates the encoded-size ceiling.
+    #[error("Kagemusha promotion reservation is {actual} bytes; maximum is {maximum}")]
+    ReservationSize {
+        /// Actual byte length.
+        actual: usize,
+        /// Maximum permitted byte length.
+        maximum: usize,
+    },
+    /// The expectations artifact does not bind the exact signed reservation bytes.
+    #[error("Kagemusha promotion reservation digest differs from its exact bytes")]
+    ReservationDigest,
+    /// Canonical activation-expectations encoding failed.
+    #[error("failed to encode the canonical Kagemusha activation expectations")]
+    ExpectationsEncode,
+    /// Canonical bounded activation-expectations decoding failed.
+    #[error("failed to decode the canonical bounded Kagemusha activation expectations")]
+    ExpectationsDecode,
+    /// Canonical expectations input violates the encoded-size ceiling.
+    #[error("Kagemusha activation expectations are {actual} bytes; maximum is {maximum}")]
+    ExpectationsSize {
+        /// Actual byte length.
+        actual: usize,
+        /// Maximum permitted byte length.
+        maximum: usize,
+    },
+    /// Supplied expectations bytes differ from the exact canonical artifact.
+    #[error("Kagemusha activation expectations digest differs from exact artifact bytes")]
+    ExpectationsDigest,
     /// Four validator identities or their order differ.
     #[error("Kagemusha validator set is not the exact ordered four-validator set")]
     ValidatorSet,
@@ -1251,12 +2625,21 @@ pub enum KagemushaPromotionReceiptValidationError {
     /// Governance is not the exact strong multisignature authority and bundle.
     #[error("activation governance is not the exact approved strong multisignature policy")]
     GovernanceAuthority,
+    /// The receipt issuer reuses a governance-member or validator key.
+    #[error("activation receipt issuer must be independent of governance and validators")]
+    IssuerRoleOverlap,
     /// The finalized block carries different authorization bytes for the same intent.
     #[error("finalized block activation authorization wire differs from the approved wire")]
     ActivationAuthorizationWire,
     /// The direct activation payload differs from the sealed release and policy.
     #[error("invalid Kagemusha V4 activation payload binding")]
     ActivationPayload,
+    /// The activation transaction omits or exceeds the anchor-bounded height expiry.
+    #[error("invalid Kagemusha V4 activation transaction height expiry")]
+    ActivationExpiry,
+    /// The retained finality material is not one bounded contiguous successor chain.
+    #[error("invalid Kagemusha V4 activation finality proof chain")]
+    FinalityChain,
     /// Finality roster and sealed validators differ.
     #[error("finality roster differs from the four sealed validators")]
     FinalityRoster,
@@ -1277,9 +2660,9 @@ mod tests {
         block::{
             BlockHeader,
             consensus_v2::{
-                BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-                ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
-                QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
+                BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment,
+                GlobalPhase, HeightContext, PROTOCOL_VERSION, QuorumCertificate, ValidatorPower,
+                finality::V2FinalityArtifact,
             },
         },
         prelude::Log,
@@ -1299,8 +2682,56 @@ mod tests {
         NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(label)))
     }
 
+    fn effective_config(
+        keys: &[KeyPair],
+        execution_policy_hash: Hash,
+    ) -> KagemushaV4RuntimeEffectiveConfigProjectionV1 {
+        let validators = keys
+            .iter()
+            .enumerate()
+            .map(
+                |(index, key)| crate::offline::KagemushaV4RuntimeValidatorProjectionV1 {
+                    validator_id: PeerId::new(key.public_key().clone()),
+                    public_address: format!("127.0.0.1:{}", 14_000 + index)
+                        .parse()
+                        .expect("fixture validator address"),
+                    bls_pop: iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("fixture validator PoP"),
+                },
+            )
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("exactly four runtime validators");
+        let projection = KagemushaV4RuntimeEffectiveConfigProjectionV1 {
+            chain: crate::ChainId::from("kagemusha-qualification-test"),
+            chain_discriminant: 42,
+            is_validator: true,
+            genesis_public_key: KeyPair::from_seed(vec![0x29; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+            genesis_expected_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"genesis header",
+            )),
+            validators,
+            sumeragi_config_fingerprint: Hash::new(b"effective Sumeragi V2 config"),
+            genesis_context: crate::block::consensus_v2::SumeragiV2GenesisContextParameters {
+                execution_policy_hash: *execution_policy_hash.as_ref(),
+                ..crate::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended()
+            },
+            kagemusha_max_decoded_bytes: 64 * 1024 * 1024,
+        };
+        projection
+            .validate()
+            .expect("valid effective runtime config");
+        projection
+    }
+
     fn binding() -> KagemushaV4PromotionBindingV1 {
         KagemushaV4PromotionBindingV1 {
+            promotion_controller: KeyPair::from_seed(vec![0x30; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+            promotion_reservation: exact(b"canonical signed promotion reservation"),
             promotion_id: Sha256::digest(b"promotion run 1").into(),
             network_id: network(b"qualification network"),
             reviewed_source_closure_descriptor_sha256: Sha256::digest(b"source closure").into(),
@@ -1326,6 +2757,7 @@ mod tests {
             .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
             .collect::<Vec<_>>();
         keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let runtime_effective_config = effective_config(&keys, binding.execution_policy_hash);
         let bodies: [KagemushaV4ValidatorQualificationSealBodyV1;
             KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT] = keys
             .iter()
@@ -1339,6 +2771,7 @@ mod tests {
                 flattened_toml_config_source: exact(
                     format!("host-{index}-flattened-config-source").as_bytes(),
                 ),
+                runtime_effective_config: runtime_effective_config.clone(),
                 catalog_qualification_seal: exact(
                     format!("host-{index}-catalog-qualification-seal").as_bytes(),
                 ),
@@ -1433,6 +2866,7 @@ mod tests {
 
     fn roundtrip_receipt() -> KagemushaV4ActivationFinalityReceiptV1 {
         let (binding, bodies, seals, _) = qualification_fixture();
+        let runtime = &bodies[0].runtime_effective_config;
         let issuer = KeyPair::from_seed(vec![0x71; 32], Algorithm::Ed25519);
         let governance_keys = [0x72_u8, 0x73, 0x74]
             .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519));
@@ -1507,16 +2941,9 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("four-validator quorum"),
             roster,
-            nexus_amx_context_hash: Hash::new(b"receipt fixture nexus context"),
+            nexus_amx_context_hash: Hash::prehashed(runtime.genesis_context.nexus_amx_context_hash),
             execution_policy_hash: binding.execution_policy_hash,
-            da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 1024,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 4096,
-                max_chunk_count: 8,
-            },
+            da_layout: runtime.genesis_context.da_layout,
             leader_seed: [0xA5; 32],
         };
         let subject = BlockSubject {
@@ -1548,16 +2975,24 @@ mod tests {
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![0xA5],
             },
-            vec![vec![0x5A]; KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT],
+            runtime
+                .validators
+                .iter()
+                .map(|validator| validator.bls_pop.clone())
+                .collect(),
         );
         let transaction_wire = transaction
             .encode_wire_v1()
             .expect("encode authorization-bearing transaction");
         let finalized_block_wire = vec![0xA5];
+        let promotion_reservation = exact(b"roundtrip signed promotion reservation");
+        let activation_expectations_artifact = exact(b"roundtrip signed activation expectations");
         KagemushaV4ActivationFinalityReceiptV1::try_sign(
             KagemushaV4ActivationFinalityReceiptBodyV1 {
                 schema: KAGEMUSHA_V4_ACTIVATION_FINALITY_RECEIPT_BODY_SCHEMA.to_owned(),
                 version: KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
+                promotion_reservation,
+                activation_expectations_artifact,
                 binding,
                 issuer: issuer.public_key().clone(),
                 governance_authority: authority,
@@ -1576,11 +3011,13 @@ mod tests {
                     &finalized_block_wire,
                 )
                 .expect("roundtrip block identity"),
-                finality_proof: BridgeFinalityProof {
+                finality_proof_chain: vec![BridgeFinalityProof {
                     version: crate::bridge::BRIDGE_FINALITY_PROOF_VERSION_V2,
                     block_header: header,
                     finality_artifact,
-                },
+                }]
+                .try_into()
+                .expect("one bounded roundtrip successor proof"),
             },
             &issuer,
         )
@@ -1596,6 +3033,11 @@ mod tests {
         assert_eq!(decoded, receipt);
         assert_eq!(
             decoded.verify(&KagemushaV4ActivationReceiptExpectationsV1 {
+                promotion_controller: KeyPair::from_seed(vec![0x70; 32], Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+                promotion_reservation: decoded.body.promotion_reservation,
+                activation_expectations_artifact: decoded.body.activation_expectations_artifact,
                 binding: decoded.body.binding.clone(),
                 receipt_issuer: decoded.body.issuer.clone(),
                 governance_authority: decoded.body.governance_authority.clone(),
@@ -1606,14 +3048,16 @@ mod tests {
                     .multisig_policy()
                     .expect("roundtrip fixture has multisig governance")
                     .clone(),
+                validator_seals: decoded.body.validator_seals.clone(),
                 validator_bodies: decoded.body.validator_seals.clone().map(|seal| seal.body),
                 activation_transaction_intent: decoded.body.activation_transaction_intent,
                 activation_transaction_wire: decoded.body.activation_transaction_wire,
-                activation_height_context: decoded
+                trusted_finality_anchor: decoded
                     .body
-                    .finality_proof
-                    .finality_artifact
-                    .context_id(),
+                    .finality_proof_chain
+                    .first()
+                    .expect("roundtrip fixture proof")
+                    .clone(),
             }),
             Err(KagemushaPromotionReceiptValidationError::BlockDecode),
             "a serializable placeholder is not evidence that activation occurred",
@@ -1636,6 +3080,43 @@ mod tests {
                 Err(KagemushaPromotionReceiptValidationError::ReceiptJsonDecode),
             );
         }
+    }
+
+    #[test]
+    fn finality_chain_rejects_oversize_declared_count_before_vector_decode() {
+        let receipt = roundtrip_receipt();
+        let mut encoded = receipt.body.finality_proof_chain.encode();
+        let declared = u64::try_from(KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1)
+            .expect("proof-count bound fits u64")
+            .saturating_add(1);
+        encoded[..core::mem::size_of::<u64>()].copy_from_slice(&declared.to_le_bytes());
+        let error = <KagemushaV4ActivationFinalityProofChainV1 as ncore::DecodeFromSlice>::decode_from_slice(
+            &encoded,
+        )
+        .expect_err("oversize declared proof count must fail before vector decoding");
+        assert!(
+            error.to_string().contains("outside 1..=4096"),
+            "expected intrinsic proof-count preflight, got {error}"
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn finality_chain_json_rejects_oversize_array_before_element_decode() {
+        let mut hostile = String::from("[");
+        for index in 0..=KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1 {
+            if index != 0 {
+                hostile.push(',');
+            }
+            hostile.push_str("null");
+        }
+        hostile.push(']');
+        let error = norito::json::from_str::<KagemushaV4ActivationFinalityProofChainV1>(&hostile)
+            .expect_err("oversize proof array must fail before decoding its null elements");
+        assert!(
+            error.to_string().contains("outside 1..=4096"),
+            "expected intrinsic JSON proof-count preflight, got {error}"
+        );
     }
 
     #[cfg(feature = "json")]

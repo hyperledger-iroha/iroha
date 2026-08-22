@@ -1,0 +1,18 @@
+
+[nexus]
+lane_count = 2
+
+[nexus.autoscale]
+enabled = true
+min_lanes = 1
+max_lanes = 2
+
+[[nexus.lane_catalog]]
+index = 0
+alias = "default"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 1
+alias = "manual-elastic-range"
+metadata = {}

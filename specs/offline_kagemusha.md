@@ -315,6 +315,26 @@ remain expected values until authentic generation confirms them. Candidate
 promotion must bind the exact generated bounds rather than the larger
 defensive wire ceilings.
 
+The newer non-shipping serialized-advice V7 lab is a separate candidate and
+does not reinterpret those V4 projections. Its source-pinned k17 graph uses a
+70-cell public column and currently expects 8,388,676-byte parameters,
+20,394-byte verifier keys, 5,356,151,726-byte proving keys, and 93,184-byte
+proofs per role (186,368 raw proof bytes per pair). Canonical carriers use a
+compact Norito schema: live carriers retain both public columns, both proofs,
+and both post-proof folds, while the authenticated reader derives and decides
+the output lineages instead of serializing them twice. The all-zero NullParent
+derives its fixed instance columns and succinct-verifier outputs but retains
+four separately generated, non-equal post-proof/branch-fold transcripts. Cheap
+layout tests pin 188,844-byte base, 191,532-byte recursive, and 191,828-byte
+NullParent carriers, each within the unchanged 191,862-byte release maximum.
+The complete four-node topology accounts for 30 terminal IPA decisions,
+including the compact NullParent carrier's four separately generated, non-equal
+post-proof and branch-merge fold transcripts. The V7 reviewed admission
+estimate is 53,126,388,928 bytes. These are still
+source-derived expectations, not production evidence: the guarded genuine
+four-node proof remains ignored and the V7 release-review gate remains false
+until the measured artifacts and independent review complete.
+
 The reciprocal scalar loader removes only the identity tail of one assigned
 product with coefficient one and constant zero: its direct `FpChip::mul`
 result has the same three-limb `ProperCrtUint` residue invariant as the former
@@ -399,6 +419,21 @@ Iroha still starts, participates in consensus, serves every offline route, and
 reports ordinary node readiness. A transaction requiring unavailable release
 material fails transaction validation with a precise error.
 
+Promotion-scoped validator sealing is a separate, explicit corridor. Its
+`kagemusha_promotion_controller_public_key`,
+`kagemusha_catalog_revalidation_authority_key_id`,
+`kagemusha_catalog_revalidation_authority_public_key`,
+`kagemusha_promotion_reservation_path`, and
+`kagemusha_validator_qualification_seal_path` settings must be configured
+together and require `kagemusha_catalog_qualification_seal_path` to be
+configured. That catalog-seal file must exist before the validator-seal command
+runs. The controller key must be Ed25519. The reservation path names the
+controller-signed canonical promotion reservation under root custody. The
+catalog-revalidation key must be a distinct Ed25519 authority, and its key id
+must match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. The validator-seal path names a
+distinct, absent root-owned output. None of these settings enables offline
+support or authorizes ordinary daemon startup to publish a seal.
+
 Qualification authenticates every candidate subdirectory, validates framed
 and payload sizes and SHA-256 values, parses the six validator-side artifacts
 (ParamsIPA, verifying key, and bootstrap witness for Eq and Ep), and builds an
@@ -413,11 +448,14 @@ the authenticated source-seal projection SHA-256 and the reviewed Cargo and
 rustc binary SHA-256 values from the manifest. Any zero or one-bit-substituted
 value invalidates the seal against the authenticated release.
 
-Create a seal only with the no-bind validation command:
+Create the catalog seal as the first no-bind validation command. In the
+production validator corridor, use the exact same integrity-bound flattened
+configuration for both stages:
 
 ```text
 sudo iroha3d --check-config \
   --config /absolute/path/config.toml \
+  --config-blake3 '<64-hex-digest-of-exact-flattened-config>' \
   --genesis-manifest-json /absolute/path/genesis.json \
   --write-kagemusha-catalog-qualification-seal /absolute/root-owned/seals/catalog.norito
 ```
@@ -435,6 +473,47 @@ a root-owned mode `0444` file by an exclusive same-directory rename, and syncs
 both the file and directory.
 Seals are never replaced: use a new release-specific filename and update the
 configuration for every qualified release.
+
+Only after that configured catalog seal exists, create one validator seal with
+a second process invocation:
+
+```text
+sudo iroha3d --check-config \
+  --config /absolute/path/config.toml \
+  --config-blake3 '<64-hex-digest-of-exact-flattened-config>' \
+  --genesis-manifest-json /absolute/path/genesis.json \
+  --write-kagemusha-validator-qualification-seal /absolute/root-owned/validator-seals/validator-1.norito
+```
+
+The second command reads the configured signed promotion reservation and
+verifies it against the pinned controller key. It also reads the already
+published catalog seal as an exact, bounded, root-owned mode-`0444` input,
+performs a fresh same-load catalog qualification, and requires the canonical
+seal produced by that load to match the existing catalog-seal bytes exactly.
+The promotion-scoped catalog-revalidation receipt must name the configured
+authority key id, bind the SHA-256 of that authority's canonical Ed25519 SPKI
+DER, and carry a valid Ed25519 signature over the Python-compatible compact,
+sorted JSON object after removing exactly `signature` and
+`signature_payload_sha256`. Root custody of the controller reservation does not
+replace this independent signature check. The same captured catalog is then
+checked against the reservation and used to build the validator seal. Signing
+binds the exact flattened TOML bytes retained by the integrity-bound config
+reader and the exact signed-genesis bytes retained by the ordinary genesis
+decoder; digests or reconstructed substitutes are not accepted. Publication
+occurs only after complete configuration, catalog, reservation,
+catalog-revalidation authority, signed-genesis, and disposable-genesis
+validation succeeds.
+
+The two write flags are mutually exclusive. A validator-seal invocation never
+creates or replaces the catalog seal, so there is no simultaneous two-file
+publication boundary. Its requested output must exactly equal
+`kagemusha_validator_qualification_seal_path`, be absent, and use a directory
+separate from the release policy, artifact tree, catalog seal, promotion
+reservation, and executable. The reader and publisher reject non-canonical or
+symlinked paths, untrusted or writable ancestry, ACLs or extended attributes,
+and changing inodes. The validator seal is published as a root-owned
+mode-`0444`, single-link file by a no-replace same-directory rename and is never
+automatically retried after a commit-uncertain result.
 
 Keep the seal directory separate from the release-policy parent, artifact tree,
 and executable path. Publishing a directory entry changes that directory's
@@ -484,11 +563,16 @@ the genesis hash that those artifacts authenticate.
 A validator that will validate a transaction against a particular locally
 cached candidate must have that candidate before the transaction is submitted.
 This is command material availability, not offline capability or node
-readiness. `ActivateKagemushaRecursiveReleaseV4` authenticates
-the release-policy digest, signed release and evidence, exact-eight inventory,
-`NetworkId`/asset/scale and future issuance window, distinct inline Eq/Ep verifier
-records, matching local cached material, and the embedded production iOS and
-Android device-attestation policy. Each verifier record must carry the exact
+readiness. `ActivateKagemushaRecursiveReleaseV4` carries the complete
+`KagemushaV4PromotionBindingV1`, not only a promotion id. Consensus therefore
+commits the independently pinned controller, exact reservation identity,
+nonzero promotion run, `NetworkId`, reviewed closure, manifest and release
+record, release policy, device-policy bytes, signed genesis, catalog policy,
+and execution-policy hash together with the activation. It also authenticates
+the signed release and evidence, exact-eight inventory, asset/scale and future
+issuance window, distinct inline Eq/Ep verifier records, matching local cached
+material, and the embedded production iOS and Android device-attestation
+policy. Each verifier record must carry the exact
 release-derived owner identifier and public-input schema hash plus the
 domain-separated commitment of its inline key; merely non-empty or non-zero
 substitutes are invalid. Release-policy role thresholds must also fit together
@@ -982,7 +1066,8 @@ promotion. Its gate authenticates a catalog that already contains
 `promotion-record-v4.norito`; it does not publish that record, write a validator
 qualification seal, prepare or submit an activation, or archive a
 workflow-identity-bound durable receipt. Verification success is not promotion,
-and the workflow does not invoke `promote-release-v4`.
+and the workflow does not invoke the authenticated controller's
+`promote-kagemusha-release-v4` subcommand.
 
 The local Kagami publication boundary is non-circular. `promote-release-v4`
 first authenticates the exact sixteen-file pre-promotion candidate, including
@@ -995,31 +1080,41 @@ that post-publication verification pass. `verify-release-v4` remains a distinct
 verification-only command and always requires the complete seventeen-file
 inventory.
 
-That local primitive does not make the protected workflow a publisher. The
-authenticated tool controller still needs a dedicated exact-argument promotion
-publisher: its generic writable-file mode pre-creates outputs and therefore
-conflicts with Kagami's create-new contract, while the readiness launcher denies
-every write. The dedicated controller path must authenticate the exact Kagami
-binary and sixteen-file candidate, allow only the fixed absent bundle leaf, and
-return the post-publication verification result without broadening its sandbox
-or filesystem authority.
+The dedicated authenticated publisher now exists as
+`iroha_authenticated_tool_controller promote-kagemusha-release-v4`.
+The generic writable-file mode pre-creates outputs, so it cannot preserve the
+required absent-leaf, no-replace publication boundary and is not admissible.
+The publisher accepts exactly five option/value pairs, in this order, with no
+additions or reordering:
 
-Only after that receipt may the workflow re-run the full readiness gate over
-the complete immutable release. Four separately protected validator jobs must
-then invoke `iroha3d --check-config` with
-`--write-kagemusha-catalog-qualification-seal` and each validator's admitted
-binary, config, genesis, and fixed new seal path; no repository variable can
-stand in for those host-local inputs. A separate live-operator workflow must use
-`prepare-activation-v4`, collect the required governance authorization, submit
-the transaction, and observe its future-height commit. Its final
-no-replace durable receipt must bind repository, workflow path/SHA, run
-id/attempt, reviewed closure, manifest, promotion publication receipt, all four
-seal digests, signed transaction hash, and committed block identity. Until
-those source contracts, four validator lanes, and runtime-only governance
-inputs exist, verification success is not promotion and no activation write is
-authorized.
+```text
+--expected-macos-build <build>
+--kagami <path>
+--kagami-sha256 <sha256>
+--bundle-dir <path>
+--release-policy <path>
+```
 
-The data-model boundary for that future live operator is now explicit.
+The controller is macOS-only and root-only. It pins the expected macOS build,
+requires canonical root-custodied controller, Kagami, bundle, and policy paths,
+authenticates the exact Kagami binary and exact sixteen-file candidate, and
+confines the authenticated Kagami snapshot to the fixed read roots and fixed
+same-directory staging names plus the single absent
+`promotion-record-v4.norito` leaf. Publication remains no-replace. Success
+requires the exact seventeen-file result and Kagami's exact canonical one-line,
+candidate-bound JSON report. Once publication may have started, any cleanup,
+observation, or reporting ambiguity exits with status 75 and requires explicit
+reconciliation rather than automatic retry.
+
+This local controller does not change the checked-in GitHub workflow's status:
+that workflow remains verification-only and does not invoke
+`promote-kagemusha-release-v4`. Protected hosts must still install the signed
+promotion reservation and independently publish the catalog and validator
+qualification seals from separate `iroha3d --check-config` invocations; a
+repository variable is not a substitute for those root-custodied host-local
+inputs.
+
+The data-model boundary used by the local rollout corridor is explicit.
 `KagemushaV4ValidatorQualificationSealV1` is signed by the validator's exact
 `PeerId` and binds a nonzero promotion id, network, reviewed closure, canonical
 manifest and release record, exact release-policy source, canonical governed
@@ -1029,14 +1124,32 @@ host's exact `iroha3d`, flattened TOML source, and canonical catalog
 qualification-seal bytes. Those three identities are intentionally per-host:
 the catalog seal includes local path/stat identity and a heterogeneous
 four-validator fleet may run separately reviewed target binaries. Only the
-release, policy, genesis, logical catalog, and execution-policy identities are
-required to agree across all four seals. "Flattened TOML source" does not mean
-runtime-effective configuration; environment, command-line, and profile
-overlays remain outside those bytes and must still be excluded by the protected
-exact-environment launcher.
+release, policy, genesis, logical catalog, execution policy, and canonical
+runtime-effective projection are required to agree across all four seals.
+
+That projection is derived only after disposable signed-genesis execution and
+height-one freezing. It retains the effective chain and I105 discriminant, a
+validator-role assertion, configured genesis key and hash, the exact ordered
+four public peer addresses, the frozen genesis PoP bytes, the complete
+post-overlay Sumeragi-config fingerprint, the signed-and-staged DA/Nexus/AMX/
+execution context, and the Kagemusha decoded-memory ceiling. The configured PoP
+map must contain exactly the frozen validators and PoPs byte-for-byte, with no
+extra entry. The local identity and signing key must agree; its sealed endpoint
+is `network.public_address`, never the internal bind address. Both signed
+context commitments must use the canonical hash marker, and an observer-role
+node cannot produce a seal. "Flattened TOML source" remains useful
+source-custody evidence,
+but it is not allowed to stand in for this projection when environment,
+command-line, or profile overlays affect the actual configuration.
+
+Validator qualification signs only when the exact signed-genesis metadata
+selects permissioned consensus with exactly four voters. Permissioned genesis
+construction fixes every voter to unit power; an NPoS-mode roster is not a
+valid qualification source even when it contains exactly four validators.
 
 `KagemushaV4ActivationFinalityReceiptV1` retains those four strictly ordered,
-distinct seals, the independently pinned issuer, and the exact canonical
+distinct seals, an independently pinned issuer whose key is disjoint from every
+validator and governance member, and the exact canonical
 governance `MultisigPolicy`. Governance must have at least two members and a
 threshold of at least two, and the admitted transaction must carry at least two
 distinct valid member signatures. The receipt also retains the payload-only
@@ -1044,16 +1157,30 @@ distinct valid member signatures. The receipt also retains the payload-only
 authorization-bearing `encode_wire_v1()` bytes, ordinary committed-transaction
 inclusion and successful result, the exact result-bearing `SignedBlockWire`, a
 separately checked exact-length/SHA-256 identity for those bytes, and its
-Sumeragi-v2 finality proof. After finality locates the authenticated block index,
+Sumeragi-v2 finality successor chain. External expectations retain the exact
+already-finalized anchor captured before transaction submission. The receipt
+chain must contain one to 4096 immediate successors after that anchor and end at
+the activation carrier. Its dedicated bounded Norito/JSON wrapper checks the
+declared proof count before reserving or decoding the underlying vector;
+snapshot-bootstrap contexts are rejected, and every
+context must retain the exact sealed four-validator unit-power roster and
+`execution_policy_hash`. After finality locates the authenticated block index,
 verification compares the actual external transaction's complete signed wire
 byte-for-byte with the approved wire; equal intent hashes cannot hide a different
 multisignature bundle. Verification accepts only one direct
 `ActivateKagemushaRecursiveReleaseV4` instruction; batch, IVM, contract,
-sealed, time-trigger, merge-sidecar, failed-result, stale-context, substituted
+sealed, time-trigger, merge-sidecar, failed-result, stale-anchor, substituted
 block, roster, catalog, policy, transaction, or authorization-wire forms fail
-closed. A fresh
-context-pinned finality verifier is used for every receipt, and the four-seal
-`execution_policy_hash` must equal the finalized height context. The canonical
+closed. The instruction's complete promotion binding must equal the shared
+sealed binding byte-for-byte. Consensus stores a canonical hash marker for that
+full binding alongside the promotion-id marker, and the id is consumed once in the persistent replay
+ledger before any later activation can reuse it. The
+signed transaction must also carry an exclusive `expires_at_height`: it must be
+above the finalized carrier height and no greater than anchor height plus 4097,
+so every accepted receipt fits the proof-chain bound. Core enforces any present
+height expiry even when configuration does not require one. A fresh
+anchor-pinned finality verifier verifies the trusted anchor and every successor
+for each receipt. The canonical
 receipt is capped at 64 MiB and its block at 32 MiB; Norito uses explicit
 cumulative decode limits and exact block re-encoding, while JSON ingress has a
 raw-body cap and rejects an oversized base64 block token before decoded
@@ -1062,18 +1189,142 @@ enforce the 64 MiB ceiling before any complete receipt re-encoding or signature
 hash allocation. The 64 MiB value is an encoded-input ceiling, not a peak-memory
 promise.
 
-These are verification and durable wire primitives, not a live publisher. The
-remaining typed integration work is to capture same-read executable/config/
-genesis/catalog evidence inside each validator, access an authorized validator
-signer, collect all four seals, distribute the exact trusted activation height
-context, submit with the governance signer, capture the committed result-bearing
-block and finality material, and publish the issuer-signed receipt through a
-fixed root-custodied no-replace destination. Snapshot-bootstrap validators are
-outside this V1 corridor unless the same trusted signed-genesis body is
-separately provisioned. A canonical effective-config projection is also still
-absent. The staged removal of the checked-in Taira capture/update/publish
-workflows leaves no repository-owned live rollout integration to wire these
-hooks into; none may be inferred from readiness verification.
+The phase-separated local operator surface is
+`iroha offline kagemusha rollout-v4`, with `create-expectations`, `submit`,
+`finalize-receipt`, `create-canary-authorization`,
+`submit-canary-authorization`, `submit-canary`, `finalize-canary-evidence`, and
+`finalize-validator-liveness` subcommands. Its promotion-keyed state root is
+canonical and root-owned at
+`/var/lib/iroha/kagemusha-rollout-v1/<promotion-id-hex>/` on Linux or
+`/private/var/db/iroha-kagemusha-rollout-v1/<promotion-id-hex>/` on macOS.
+The immediate promotion directory is mode `0700`; generated expectations,
+journals, receipts, authorizations, challenges, and evidence are root-owned,
+singly linked, xattr/extended-ACL-free mode-`0400` regular files. Publication
+uses a mode-`0600` staging inode, syncs and changes it to `0400`, runs the
+verification callback immediately before a no-replace rename, then rereads and
+reverifies the same committed inode. Public external qualification inputs use
+the separately checked mode-`0444` policy; runtime signing keys remain bounded
+mode-`0600` inputs and are never copied into rollout state.
+`create-expectations` verifies the signed reservation, the four ordered
+validator seals, the exact already-authorized transaction wire, and the trusted
+anchor before publishing canonical
+`activation-expectations-v1.norito` no-replace.
+
+`submit` requires explicit `--write-authorized` consent. Before any POST or
+retry it durably publishes and rereads
+`activation-submission-journal-v1.norito`, keyed by the promotion and containing
+the exact authenticated expectations bytes. An existing journal must
+byte-match and reverify; any pre-existing Torii status without a journal is a
+retrospective state and fails closed. POST, transport, and wait ambiguity is an
+explicit submission-uncertain result and is reconciled through status and
+evidence using the configured transaction timeout. An `Applied` status is not
+sufficient by itself: the client fetches the bounded canonical block and full
+finality successor chain, decodes canonical `SignedBlockWire`, constructs a
+`TrustedBlockProofAnchor` from the finality artifact, locates the unique actual
+entrypoint, and compares its complete authorization-bearing transaction wire
+byte-for-byte with the approved wire.
+
+`finalize-receipt` first requires the exact authenticated submission journal to
+exist and reverify, then reuses that proof-anchored evidence, signs with the independent
+receipt issuer, and publishes canonical
+`activation-finality-receipt-v1.norito` no-replace.
+The activation itself is not the promotion canary. After authenticating its
+receipt, `create-canary-authorization` first signs a narrow
+`KagemushaV4TairaCanaryPermitV1`, then builds exactly one ordinary
+`RecordKagemushaTairaCanaryV4` transaction with a nonce, fee quote, finite
+time-to-live, and exclusive height expiry. The permit binds the complete
+activation promotion binding, exact expectations and receipt identities,
+actual canary authority, canonical configured HTTPS Torii origin, wall-clock
+interval, and height corridor. The instruction embeds that permit
+byte-for-byte. The controller then signs a separate minimal reservation over
+the permit, payload intent, complete-wire digest, and external entrypoint hash,
+and finally signs the complete off-chain package containing the reservation and
+exact `SignedTransaction`. Canonical
+`canary-authorization-v1.norito` is therefore the private complete package; the
+on-chain reservation does not reveal or carry the signed transaction or its
+wire preimage.
+
+`submit-canary-authorization` requires explicit `--write-authorized` consent
+and builds one ordinary transaction carrying only
+`AuthorizeKagemushaTairaCanaryV4(reservation)`. It durably publishes and
+reverifies both `canary-authorization-submission-journal-v1.norito` and the
+root-private complete `canary-submission-journal-v1.norito` before the first
+authorization POST. Consensus verifies the reservation controller signature,
+network, actual transaction authorizer, exclusive time/height limits, and exact
+activation binding, then reserves only the external canary entrypoint hash.
+Reapplying the same exact reservation is idempotent; another reservation for an
+occupied promotion slot fails. Because the public instruction contains only
+signed hashes, a third party cannot learn and submit the exact canary early to
+poison its pipeline hash.
+
+`submit-canary` requires separate explicit `--write-authorized` consent, the
+same exact Torii origin, network, and authority, the private byte-identical
+canary journal, and a proof-finalized matching on-chain reservation. Immediately
+before each local commit or network POST, the client advances an
+activation-anchored finality verifier through every observed successor, checks
+that the next-block inclusion margin remains before the exclusive height
+expiry, reads a fresh protected-host time, and reverifies the complete
+authorization. Core accepts `RecordKagemushaTairaCanaryV4` only when the current
+external entrypoint hash equals the reserved hash and the full activation
+binding and permit still match; the exact canary is consumed once. A
+pre-existing status without the corresponding journal, a mismatching journal,
+or an ambiguous submission cannot be retrospectively converted into production
+evidence.
+
+`finalize-canary-evidence` requires that exact journal and independently proves
+the authorized canary transaction was successfully committed in a block
+strictly later than the activation receipt. It collects the byte-identical
+committed transaction and canonical `SignedBlockWire`, a nonempty contiguous
+four-validator finality extension rooted at the receipt's terminal proof, and
+a global/state `Applied` observation at the canary block height. The canary
+block creation time must fall inside the authorization interval. The
+independent receipt issuer signs the full committed transaction, block, proof
+extension, exact authorization identity, and diagnostic response identities;
+the command publishes only the absent promotion-keyed
+`canary-evidence-v1.norito` leaf. A fresh query of the activation receipt, host
+timestamps alone, or generic `iroha taira write-canary` JSON is not promotion
+evidence.
+
+A four-member roster and a valid `2f + 1` commit certificate establish finality,
+not proof that every validator was live. `finalize-validator-liveness` closes
+that separate boundary. Before any request it creates or exact-rereads the
+no-replace `post-canary-validator-liveness-challenge-v1.norito`: an
+issuer-signed, canary-bound challenge containing a fresh nonzero OS-random
+nonce, a maximum five-minute interval, and exactly four ordered qualified
+`PeerId`/distinct canonical HTTPS-origin targets. The collector then queries all
+four origins concurrently. Its attestation transport is direct, proxy-free,
+redirect-free, transport-retry-free, bounded to 8 MiB, requests identity
+encoding, rejects every `Content-Encoding`, and requires canonical Norito plus
+`Cache-Control: no-store`. Runtime-configured authentication headers are
+forwarded only to those four operator-precommitted origins; their custody is an
+operator trust input and header values are not persisted in the artifact. A
+status read is only an unsigned tip hint; a `404`
+caused by a tip race is retried at the application layer with the same signed
+challenge and a fresh hint while the interval remains open.
+
+Each accepted response is a `BridgeFinalityAttestationV1` signed by the exact
+qualified BLS node key over the common challenge, network, node identity,
+genesis proof, restart-free reducer status, configuration/build fingerprints,
+and durable-tip proof. The artifact also carries one cryptographically verified
+immediate-successor chain from the authenticated canary proof to the highest
+reported tip, and each embedded node tip must equal the corresponding proof in
+that chain byte-for-byte. The receipt issuer signs the complete four-observation
+artifact and publishes
+`post-canary-validator-liveness-evidence-v1.norito` no-replace. This proves that
+four distinct qualified signing keys answered the same fresh challenge with a
+durable tip at or after the exact canary. It does not prove continuous uptime,
+physical host independence, uncompromised validator keys, or that all four keys
+voted in one quorum certificate. HTTPS origins and request times are trusted
+collector observations; a reverse proxy can relay a request but cannot forge a
+validator signature.
+
+These commands are local primitives, not evidence of a live rollout or
+promotion. Still required are
+real physical App Attest and candidate artifacts, protected collection of all
+four host seals and their identical runtime-effective projections, runtime
+governance and signing inputs, and live four-validator and Taira
+submission/finality evidence. The checked-in verification workflow supplies
+none of those live steps, and no promotion may be inferred from its success.
 
 The signed JSON itself remains the release's
 `physical-device-benchmark.evidence`. The corridor verifies its exact external

@@ -14,7 +14,7 @@
 )]
 
 use super::{
-    rns_native_cross_field_rlwe_direct::RnsNativeCrossFieldRlweVerifiedCoreRootV1,
+    rns_native_claimed_successor::RnsNativeCrossFieldRlweVerifiedCoreRootV1,
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
         ZkAmsMkheRnsNativeFamilyV1, zk_ams_mkhe_rns_native_profile_manifest_v1,
@@ -628,8 +628,8 @@ pub(super) struct ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1 {
 }
 
 impl ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1 {
-    /// Consume the obligation against the concrete opaque root owned and
-    /// constructed only by the direct verifier.
+    /// Consume the obligation against the sealed opaque root. No production
+    /// module can construct this compatibility evidence.
     pub(super) fn discharge_v1(
         self,
         recomputed_root: RnsNativeCrossFieldRlweVerifiedCoreRootV1,

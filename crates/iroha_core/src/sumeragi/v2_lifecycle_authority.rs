@@ -250,13 +250,6 @@ impl CoordinatorLifecycleOrdinalAuthority {
             committed: AtomicBool::new(false),
         })
     }
-
-    /// Verify that launch restoration placed the shared cursor after the ledger.
-    pub(super) fn recognizes_high_water(&self, high_water: u128) -> Result<bool, String> {
-        self.shared.lock_state().map(|state| {
-            state.pending.is_none() && state.next.is_some_and(|next| next > high_water)
-        })
-    }
 }
 
 /// Affine coordinator reservation committed only after its LedgerV1 successor is durable.
