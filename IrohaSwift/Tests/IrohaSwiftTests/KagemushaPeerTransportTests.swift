@@ -150,8 +150,8 @@ final class KagemushaPeerTransportTests: XCTestCase {
         let message = try IrohaPeerKagemushaAdapterV1.wrap(.receiveRequest(offer))
 
         XCTAssertEqual(
-            projection.request.payload.networkID,
-            TestNetworkIds.canonical
+            projection.request.payload.networkID.literal,
+            "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"
         )
         XCTAssertEqual(
             projection.request.payload.assetDefinitionID,
@@ -231,14 +231,14 @@ final class KagemushaPeerTransportTests: XCTestCase {
             noritoSchemaHash(forTypeName: KagemushaRecursiveSpend.bundleWireNameV4)
         )
         XCTAssertEqual(KagemushaRecursiveSpend.wireVersionV4, 4)
-        XCTAssertEqual(payment.archive.count, 11_887)
+        XCTAssertEqual(payment.archive.count, 12_896)
         XCTAssertEqual(
             sha256Hex(payment.archive),
-            "ae20bc0718f3a3ff31e18b6452422549d017b66301cde799d43609614661d019"
+            "33eb4ea6836d628fa766bc0bbe619dc14cfefe5f47c104795315e022e42be42d"
         )
         XCTAssertEqual(
             verifiedRequest.digest.hexEncodedString(),
-            "e9aa5e352f5e14687adac62b40dbcfba2050463624ce3d21377e83fc3f34de08"
+            "cb6508a5aa6b56ada90978d4db638b2176f20f154e9de4ed8a450d95a940c71b"
         )
         XCTAssertEqual(summary.assetDefinitionID, request.payload.assetDefinitionID)
         XCTAssertEqual(summary.amount, request.payload.amount)
@@ -270,7 +270,7 @@ final class KagemushaPeerTransportTests: XCTestCase {
             XCTAssertEqual(
                 error as? KagemushaPeerTransportError,
                 .archiveTooLarge(
-                    actual: 11_887,
+                    actual: 12_896,
                     maximum: KagemushaPeerTransportContract.maximumTextArchiveBytes
                 )
             )

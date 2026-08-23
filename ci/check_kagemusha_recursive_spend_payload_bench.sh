@@ -118,8 +118,8 @@ for prefix in ("PKK2R.", "PKK2P.", "PKK2A."):
         raise SystemExit(f"missing canonical six-byte peer prefix: {prefix}")
 
 for source, transport_name, needle in (
-    (swift_qr_tests, "QR", '("payment-v4-peer-hop-1", 11_887, 60),'),
-    (swift_nfc_tests, "NFC", '("payment-v4-peer-hop-1", 11_887, 55, 57),'),
+    (swift_qr_tests, "QR", '("payment-v4-peer-hop-1", 12_896, 65),'),
+    (swift_nfc_tests, "NFC", '("payment-v4-peer-hop-1", 12_896, 59, 61),'),
 ):
     if needle not in source:
         raise SystemExit(f"Swift {transport_name} measurement drifted: {needle}")
@@ -130,7 +130,7 @@ for retired_hop in (16, 32, 64):
 
 print(
     "Kagemusha peer transport bounds are internally consistent: "
-    "the ABI-21/V4 archive permits 32 MiB, the canonical 11,887-byte ABI-21 peer-payment "
+    "the ABI-21/V4 archive permits 32 MiB, the canonical 12,896-byte ABI-21 peer-payment "
     "fixture remains pinned in the QR and NFC transport tests, and the "
     "12 KiB text envelope derives an independent 9,211-byte raw sub-cap; runtime proof use "
     "still requires the authenticated installed ABI-21/V4 artifact set and promotion evidence."

@@ -36,7 +36,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
     }
 
-    func testTopUpWitnessBindingRetriesOnlySnapshotDriftAndKeepsMatchedSnapshot() throws {
+    func testTopUpWitnessBindingUsesUniversalCapabilityAndAuthoritativeSnapshot() throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -51,15 +51,29 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         let end = try XCTUnwrap(tail.range(of: "    /// Generates a new signing key"))
         let implementation = String(tail[..<end.lowerBound])
 
-        XCTAssertTrue(implementation.contains("for attempt in 0..<3"))
-        XCTAssertTrue(implementation.contains("matching: readiness"))
-        XCTAssertTrue(implementation.contains("if attempt < 2 { continue }"))
+        XCTAssertTrue(implementation.contains("let verifier = expectedReadiness.verifier"))
         XCTAssertTrue(implementation.contains(
-            "evaluatedBlockHeight: readiness.evaluatedBlockHeight"
+            "_ = try await toriiRestClient.getOfflineCapability()"
         ))
         XCTAssertTrue(implementation.contains(
-            "evaluatedBlockHash: readiness.evaluatedBlockHashBytes"
+            "let snapshot = try await toriiRestClient.getZkAssetMerklePathSnapshot("
         ))
+        XCTAssertTrue(implementation.contains("canonicalAuth: canonicalAuth"))
+        XCTAssertTrue(implementation.contains(
+            "verifier.activationHeight <= snapshot.evaluatedBlockHeight"
+        ))
+        XCTAssertTrue(implementation.contains(
+            "verifier.withdrawalHeight.map({ snapshot.evaluatedBlockHeight < $0 }) != false"
+        ))
+        XCTAssertTrue(implementation.contains(
+            "evaluatedBlockHeight: snapshot.evaluatedBlockHeight"
+        ))
+        XCTAssertTrue(implementation.contains(
+            "evaluatedBlockHash: snapshot.evaluatedBlockHash"
+        ))
+        XCTAssertFalse(implementation.contains("getKagemushaReadiness"))
+        XCTAssertFalse(implementation.contains("matching: readiness"))
+        XCTAssertFalse(implementation.contains("for attempt in 0..<3"))
         XCTAssertFalse(implementation.contains("let currentReadiness"))
     }
 
