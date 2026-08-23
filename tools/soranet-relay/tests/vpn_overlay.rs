@@ -27,7 +27,7 @@ impl VpnOverlay {
 }
 
 fn overlay() -> RelayVpnOverlay {
-    let cfg = VpnConfig {
+    let mut cfg = VpnConfig {
         enabled: true,
         ..VpnConfig::default()
     };

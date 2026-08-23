@@ -5291,11 +5291,14 @@ mod kagemusha_v4_artifact_contract_tests {
         );
     }
     #[cfg(feature = "transparent_api")]
-    #[test]
-    fn release_lifecycle_state_enforces_exact_predecessors_and_terminal_phases() {
+    fn validated_staged_lifecycle_fixture() -> (
+        KagemushaV4ReleaseLifecycleStateV1,
+        KagemushaExactBytesDigestV1,
+    ) {
         let staged = lifecycle_staged_state_fixture();
         staged.validate().expect("valid staged lifecycle");
         assert!(!staged.issuance_enabled());
+
         let mut changed_policy = staged.clone();
         changed_policy
             .device_attestation_policy
@@ -5305,6 +5308,7 @@ mod kagemusha_v4_artifact_contract_tests {
             changed_policy.validate().is_err(),
             "the retained redemption policy must match its signed promotion identity"
         );
+
         let staged_id = staged.exact_bytes_digest().expect("staged state identity");
         let staged_bytes = norito::encode_canonical(&staged).expect("canonical staged state");
         assert_eq!(
@@ -5315,7 +5319,14 @@ mod kagemusha_v4_artifact_contract_tests {
         let mut trailing = staged_bytes;
         trailing.push(0xA5);
         assert!(KagemushaV4ReleaseLifecycleStateV1::decode_canonical(&trailing).is_err());
+        (staged, staged_id)
+    }
 
+    #[cfg(feature = "transparent_api")]
+    fn validated_enabled_lifecycle_fixture(
+        staged: &KagemushaV4ReleaseLifecycleStateV1,
+        staged_id: KagemushaExactBytesDigestV1,
+    ) -> (KagemushaV4ReleaseEnabledV1, KagemushaExactBytesDigestV1) {
         let witness = lifecycle_enable_witness_wire_fixture();
         let witness_norito = norito::encode_canonical(&witness).expect("canonical enable witness");
         assert_eq!(
@@ -5363,7 +5374,14 @@ mod kagemusha_v4_artifact_contract_tests {
         let enabled_id = enabled_state
             .exact_bytes_digest()
             .expect("enabled state identity");
+        (enabled, enabled_id)
+    }
 
+    #[cfg(feature = "transparent_api")]
+    fn assert_cancelled_lifecycle_state(
+        staged: &KagemushaV4ReleaseLifecycleStateV1,
+        staged_id: KagemushaExactBytesDigestV1,
+    ) {
         let mut cancelled_state = staged.clone();
         cancelled_state.phase = KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(Box::new(
             KagemushaV4ReleaseCancelledV1 {
@@ -5395,7 +5413,16 @@ mod kagemusha_v4_artifact_contract_tests {
                 .expect("decode boxed cancelled state"),
             cancelled_state,
         );
+    }
 
+    #[cfg(feature = "transparent_api")]
+    fn assert_deactivated_lifecycle_state(
+        staged: &KagemushaV4ReleaseLifecycleStateV1,
+        staged_id: KagemushaExactBytesDigestV1,
+        enabled: KagemushaV4ReleaseEnabledV1,
+        enabled_id: KagemushaExactBytesDigestV1,
+    ) {
+        let canary_finalized_height = enabled.canary_finalized_height;
         let mut deactivated_state = staged.clone();
         deactivated_state.phase = KagemushaV4ReleaseLifecyclePhaseV1::Deactivated(Box::new(
             KagemushaV4ReleaseDeactivatedV1 {
@@ -5413,7 +5440,7 @@ mod kagemusha_v4_artifact_contract_tests {
                 deactivation_transaction_intent: HashOf::from_untyped_unchecked(Hash::new(
                     b"lifecycle deactivation transaction",
                 )),
-                deactivated_at_height: canary.finalized_height + 2,
+                deactivated_at_height: canary_finalized_height + 2,
                 deactivated_at_unix_ms: 1_700_000_004_000,
             },
         ));
@@ -5443,6 +5470,15 @@ mod kagemusha_v4_artifact_contract_tests {
             deactivated_state.validate().is_err(),
             "deactivation cannot name the staged state instead of the exact enabled predecessor"
         );
+    }
+
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn release_lifecycle_state_enforces_exact_predecessors_and_terminal_phases() {
+        let (staged, staged_id) = validated_staged_lifecycle_fixture();
+        let (enabled, enabled_id) = validated_enabled_lifecycle_fixture(&staged, staged_id);
+        assert_cancelled_lifecycle_state(&staged, staged_id);
+        assert_deactivated_lifecycle_state(&staged, staged_id, enabled, enabled_id);
     }
     #[test]
     fn v4_artifact_contract_source_guard_is_exhaustive() {
