@@ -230,7 +230,65 @@ int32_t connect_norito_decode_ciphertext_frame(
     uint8_t* out_sid, uint8_t* out_dir, uint64_t* out_seq,
     uint8_t** out_aead_ptr, unsigned long* out_aead_len);
 
-// ---------------- Kagemusha recursive spend ABI 21/V4 ----------------
+// ---------------- Offline Cash V1 (Kagemusha kgm2) ----------------
+// Every canonicalize/decode output is Rust-owned and must be released with
+// connect_norito_free. Payment and acknowledgement entrypoints require their
+// exact preceding messages so native validation covers the complete binding.
+int32_t connect_norito_offline_cash_payment_request_canonicalize_v1(
+    const uint8_t* request_ptr, unsigned long request_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+int32_t connect_norito_offline_cash_payment_canonicalize_v1(
+    const uint8_t* request_ptr, unsigned long request_len,
+    const uint8_t* payment_ptr, unsigned long payment_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+int32_t connect_norito_offline_cash_payment_canonicalize_for_session_v1(
+    const uint8_t* request_ptr, unsigned long request_len,
+    const uint8_t* payment_ptr, unsigned long payment_len,
+    const uint8_t* expected_artifact_manifest_sha256_ptr,
+    unsigned long expected_artifact_manifest_sha256_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+int32_t connect_norito_offline_cash_acknowledgement_canonicalize_v1(
+    const uint8_t* request_ptr, unsigned long request_len,
+    const uint8_t* payment_ptr, unsigned long payment_len,
+    const uint8_t* acknowledgement_ptr, unsigned long acknowledgement_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+int32_t connect_norito_offline_cash_peer_encode_payment_request_v1(
+    const uint8_t* request_ptr, unsigned long request_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+int32_t connect_norito_offline_cash_peer_decode_payment_request_v1(
+    const uint8_t* text_ptr, unsigned long text_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+int32_t connect_norito_offline_cash_peer_encode_payment_v1(
+    const uint8_t* request_ptr, unsigned long request_len,
+    const uint8_t* payment_ptr, unsigned long payment_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+int32_t connect_norito_offline_cash_peer_decode_payment_v1(
+    const uint8_t* request_ptr, unsigned long request_len,
+    const uint8_t* text_ptr, unsigned long text_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+int32_t connect_norito_offline_cash_peer_encode_acknowledgement_v1(
+    const uint8_t* request_ptr, unsigned long request_len,
+    const uint8_t* payment_ptr, unsigned long payment_len,
+    const uint8_t* acknowledgement_ptr, unsigned long acknowledgement_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+int32_t connect_norito_offline_cash_peer_decode_acknowledgement_v1(
+    const uint8_t* request_ptr, unsigned long request_len,
+    const uint8_t* payment_ptr, unsigned long payment_len,
+    const uint8_t* text_ptr, unsigned long text_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+
+// Initializes both 32-byte identities on every successful probe. Callers must
+// require available == 1 and exact equality with both values in their signed
+// runtime manifest. ABI22 currently reports unavailable until the dedicated
+// 22-artifact Offline Cash V1 release registry is production-published; it
+// never substitutes the Kagemusha V4 artifact manifest.
+int32_t connect_norito_offline_cash_release_probe_v1(
+    uint8_t* out_available,
+    uint8_t* out_release_id, unsigned long out_release_id_len,
+    uint8_t* out_artifact_manifest_sha256,
+    unsigned long out_artifact_manifest_sha256_len);
+
+// ---------------- Kagemusha recursive spend ABI 22/V4 ----------------
 // JVM/Android projection tuples use an exact four-byte big-endian version and
 // carry canonical exact-state claim archives plus the authenticated output
 // artifact binding. Append builders accept this ABI's full one-or-two input
@@ -240,7 +298,7 @@ int32_t connect_norito_decode_ciphertext_frame(
 #define CONNECT_NORITO_KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS 2
 
 // Returns canonical Norito `KagemushaRecursiveSpendNativeCapabilitiesV4`.
-// ABI21 callers must require `proof_backend_available`; the production bridge
+// ABI22 callers must require `proof_backend_available`; the production bridge
 // reports true after an authenticated V4 artifact release is installed.
 int32_t connect_norito_kagemusha_recursive_spend_capabilities_v4(
     uint8_t** out_capabilities_ptr,
@@ -254,7 +312,7 @@ int32_t connect_norito_kagemusha_recursive_spend_capabilities_v4(
 // a parallel JSON projection or generation label. Returns 0 only after the
 // manifest and roster digests, full anchor bindings, Commit-QC aggregate, and
 // exact anchor path all verify. Recursive init performs this same verification
-// inside its native boundary. The standalone symbol is active in the ABI-21
+// inside its native boundary. The standalone symbol is active in the ABI22
 // production bridge and does not treat a content address as a trust root.
 int32_t connect_norito_kagemusha_topup_finality_verify_v4(
     const uint8_t* proof_norito_ptr,
@@ -268,7 +326,7 @@ int32_t connect_norito_kagemusha_topup_finality_verify_v4(
     const uint8_t* expected_manifest_sha256_ptr,
     unsigned long expected_manifest_sha256_len);
 
-// ABI21 uses a distinct exact eight-artifact KRV4 inventory. Canonical order is
+// ABI22 uses a distinct exact eight-artifact KRV4 inventory. Canonical order is
 // Eq then Ep and, within each parity: ParamsIPA, proving key, verifying key, and
 // BootstrapV4. Circuit configuration lives only in the signed manifest profile;
 // every framed header binds its domain-separated digest. These entrypoints
@@ -673,7 +731,7 @@ int32_t connect_norito_kagemusha_recursive_spend_bundle_summary_v4(
     uint8_t** out_summary_ptr,
     unsigned long* out_summary_len);
 
-// Canonical ABI-21 append-only frontier. Construction recomputes the supplied
+// Canonical ABI22 append-only frontier. Construction recomputes the supplied
 // empty-leaf path with the consensus Poseidon domains before returning it.
 int32_t connect_norito_kagemusha_output_membership_frontier_build_v4(
     uint32_t leaf_index,

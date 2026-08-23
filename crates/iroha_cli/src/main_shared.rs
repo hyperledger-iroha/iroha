@@ -29,15 +29,6 @@ mod sumeragi;
 mod taira;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
 use clap::{ArgAction, CommandFactory, FromArgMatches, error::ErrorKind};
-use iroha_i18n::{Bundle, Localizer, detect_language};
-use std::{
-    fmt::Display,
-    fs,
-    io::{self, Read, Write},
-    path::{Path, PathBuf},
-    sync::LazyLock,
-    time::Duration,
-};
 use error_stack::{IntoReportCompat, Report, ResultExt, fmt::ColorMode};
 use eyre::{Result, WrapErr, eyre};
 use futures::{TryStreamExt, stream::TryStream};
@@ -49,8 +40,17 @@ use iroha::{
 };
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+use iroha_i18n::{Bundle, Localizer, detect_language};
 use iroha_torii_shared::{ErrorEnvelope, FeeQuoteResponse};
 use std::num::NonZeroU64;
+use std::{
+    fmt::Display,
+    fs,
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
+    sync::LazyLock,
+    time::Duration,
+};
 use thiserror::Error;
 use tokio::runtime::Runtime;
 // For base64 Engine trait (decode)
@@ -694,8 +694,8 @@ impl Command {
         match self {
             Self::App(command) => command.allows_fallback_config(),
             Self::Tools(command) => command.allows_fallback_config(),
+            Self::Tx(command) => command.allows_fallback_config(),
             Self::Account(_)
-            | Self::Tx(_)
             | Self::Ledger(_)
             | Self::Trigger(_)
             | Self::Ops(_)
@@ -707,6 +707,7 @@ impl Command {
     }
     fn allows_fallback_config_in_machine_mode(&self) -> bool {
         match self {
+            Self::Tx(command) => command.allows_fallback_config(),
             Self::Offline(command) => command.allows_fallback_config(),
             Self::Contract(command) => command.allows_fallback_config(),
             _ => false,
@@ -1548,9 +1549,9 @@ fn account_admission_rejected_message(hint: &str, i18n: &Localizer) -> String {
     i18n.t_with("error.account_admission_rejected", &[("hint", hint)])
 }
 mod filter {
-    use iroha::data_model::query::dsl::CompoundPredicate;
     use super::*;
     use crate::list_support::{CommonArgs, FilterArgs};
+    use iroha::data_model::query::dsl::CompoundPredicate;
     #[derive(clap::Args, Debug)]
     pub struct DomainFilter {
         /// Filtering condition specified as a JSON string
@@ -1691,8 +1692,8 @@ fn listen_blocks_message(
     )
 }
 mod events {
-    use iroha::data_model::events::pipeline::{BlockEventFilter, TransactionEventFilter};
     use super::*;
+    use iroha::data_model::events::pipeline::{BlockEventFilter, TransactionEventFilter};
     #[derive(clap::Args, Debug)]
     pub struct Args {
         /// Duration to listen for events.
@@ -1792,8 +1793,8 @@ mod events {
     }
 }
 mod blocks {
-    use std::num::NonZeroU64;
     use super::*;
+    use std::num::NonZeroU64;
     #[derive(clap::Args, Debug)]
     pub struct Args {
         /// Block height from which to start streaming blocks
@@ -1980,8 +1981,8 @@ mod domain {
     }
 }
 mod account {
-    use std::fmt::Debug;
     use super::*;
+    use std::fmt::Debug;
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Read and write account roles
@@ -2478,12 +2479,12 @@ mod asset {
         ))
     }
     mod definition {
+        use super::*;
         use iroha::{
             data_model::asset::{AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
             data_model::sorafs_uri::SorafsUri,
         };
         use iroha_primitives::numeric::MAX_DECIMAL_SCALE;
-        use super::*;
         fn numeric_spec_from_scale(scale: Option<u32>) -> Result<NumericSpec> {
             scale.map_or_else(
                 || Ok(NumericSpec::unconstrained()),
@@ -3236,11 +3237,11 @@ mod nft {
     }
 }
 mod rwa {
+    use super::*;
     use iroha::data_model::isi::rwa::{
         ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
         SetRwaControls, TransferRwa, UnfreezeRwa,
     };
-    use super::*;
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Retrieve details of a specific RWA lot
@@ -3607,14 +3608,14 @@ mod peer {
     }
 }
 mod multisig {
+    use super::*;
     use core::convert::TryFrom;
+    use iroha::executor_data_model::isi::multisig::*;
     use std::{
         collections::{BTreeMap, BTreeSet},
         num::{NonZeroU16, NonZeroU64},
         time::{Duration, SystemTime},
     };
-    use iroha::executor_data_model::isi::multisig::*;
-    use super::*;
     type ProposalKey = HashOf<Vec<InstructionBox>>;
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
@@ -4521,6 +4522,7 @@ mod query {
     }
 }
 mod transaction {
+    use super::*;
     use iroha::data_model::{Level as LogLevel, isi::Log, metadata::Metadata, name::Name};
     use std::{
         sync::{
@@ -4530,7 +4532,6 @@ mod transaction {
         thread,
         time::{SystemTime, UNIX_EPOCH},
     };
-    use super::*;
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Read the typed pipeline status of a submitted transaction
@@ -4543,6 +4544,8 @@ mod transaction {
         Ivm(Ivm),
         /// Send a transaction using JSON input from stdin
         Stdin(Stdin),
+        /// Canonically inspect stdin instructions without configuration, signing, or network access
+        Inspect(Inspect),
         /// Build and sign stdin instructions locally, then print their exact framed size without submitting
         SignedSize(SignedSize),
     }
@@ -4555,8 +4558,14 @@ mod transaction {
                 Ping(cmd) => cmd.run(context),
                 Ivm(cmd) => cmd.run(context),
                 Stdin(cmd) => cmd.run(context),
+                Inspect(cmd) => cmd.run(context),
                 SignedSize(cmd) => cmd.run(context),
             }
+        }
+    }
+    impl Command {
+        pub(super) const fn allows_fallback_config(&self) -> bool {
+            matches!(self, Self::Inspect(_))
         }
     }
     #[derive(clap::Args, Debug)]
@@ -4945,6 +4954,288 @@ mod transaction {
             context
                 .finish(instructions)
                 .wrap_err("Failed to submit parsed instructions")
+        }
+    }
+    #[derive(clap::Args, Debug)]
+    pub struct Inspect;
+
+    const INSTRUCTION_ARRAY_INSPECTION_SCHEMA_V1: &str =
+        "iroha.transaction-instruction-inspection.v1";
+    const INSTRUCTION_ARRAY_DIGEST_DOMAIN_V1: &[u8] = b"iroha:instruction-array:v1\0";
+
+    fn semantic_instruction_type(instruction: &InstructionBox) -> &'static str {
+        if let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() {
+            return match register {
+                RegisterBox::Peer(_) => "Register.Peer",
+                RegisterBox::Domain(_) => "Register.Domain",
+                RegisterBox::Account(_) => "Register.Account",
+                RegisterBox::AssetDefinition(_) => "Register.AssetDefinition",
+                RegisterBox::Nft(_) => "Register.Nft",
+                RegisterBox::Role(_) => "Register.Role",
+                RegisterBox::Trigger(_) => "Register.Trigger",
+            };
+        }
+        if let Some(unregister) = instruction.as_any().downcast_ref::<UnregisterBox>() {
+            return match unregister {
+                UnregisterBox::Peer(_) => "Unregister.Peer",
+                UnregisterBox::Domain(_) => "Unregister.Domain",
+                UnregisterBox::Account(_) => "Unregister.Account",
+                UnregisterBox::AssetDefinition(_) => "Unregister.AssetDefinition",
+                UnregisterBox::Nft(_) => "Unregister.Nft",
+                UnregisterBox::Role(_) => "Unregister.Role",
+                UnregisterBox::Trigger(_) => "Unregister.Trigger",
+            };
+        }
+        if let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() {
+            return match grant {
+                GrantBox::Permission(_) => "Grant.Permission",
+                GrantBox::Role(_) => "Grant.Role",
+                GrantBox::RolePermission(_) => "Grant.RolePermission",
+            };
+        }
+        if let Some(revoke) = instruction.as_any().downcast_ref::<RevokeBox>() {
+            return match revoke {
+                RevokeBox::Permission(_) => "Revoke.Permission",
+                RevokeBox::Role(_) => "Revoke.Role",
+                RevokeBox::RolePermission(_) => "Revoke.RolePermission",
+            };
+        }
+        if let Some(mint) = instruction
+            .as_any()
+            .downcast_ref::<iroha::data_model::isi::mint_burn::MintBox>()
+        {
+            use iroha::data_model::isi::mint_burn::MintBox;
+            return match mint {
+                MintBox::Asset(_) => "Mint.Asset",
+                MintBox::TriggerRepetitions(_) => "Mint.TriggerRepetitions",
+            };
+        }
+        if let Some(burn) = instruction
+            .as_any()
+            .downcast_ref::<iroha::data_model::isi::mint_burn::BurnBox>()
+        {
+            use iroha::data_model::isi::mint_burn::BurnBox;
+            return match burn {
+                BurnBox::Asset(_) => "Burn.Asset",
+                BurnBox::TriggerRepetitions(_) => "Burn.TriggerRepetitions",
+            };
+        }
+        if let Some(transfer) = instruction
+            .as_any()
+            .downcast_ref::<iroha::data_model::isi::transfer::TransferBox>()
+        {
+            use iroha::data_model::isi::transfer::TransferBox;
+            return match transfer {
+                TransferBox::Domain(_) => "Transfer.Domain",
+                TransferBox::AssetDefinition(_) => "Transfer.AssetDefinition",
+                TransferBox::Asset(_) => "Transfer.Asset",
+                TransferBox::Nft(_) => "Transfer.Nft",
+            };
+        }
+        if let Ok(multisig) =
+            iroha_executor_data_model::isi::multisig::MultisigInstructionBox::try_from(instruction)
+        {
+            use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
+            return match multisig {
+                MultisigInstructionBox::Register(_) => "Multisig.Register",
+                MultisigInstructionBox::Propose(_) => "Multisig.Propose",
+                MultisigInstructionBox::Approve(_) => "Multisig.Approve",
+                MultisigInstructionBox::Cancel(_) => "Multisig.Cancel",
+                MultisigInstructionBox::InvalidateOutstanding(_) => {
+                    "Multisig.InvalidateOutstanding"
+                }
+            };
+        }
+        macro_rules! direct_semantic_type {
+            ($($ty:path => $label:literal),+ $(,)?) => {
+                $(
+                    if instruction.as_any().is::<$ty>() {
+                        return $label;
+                    }
+                )+
+            };
+        }
+        direct_semantic_type! {
+            iroha::data_model::isi::Log => "Log",
+            iroha::data_model::isi::alias_setup::EnsureAlias => "Alias.Ensure",
+            iroha::data_model::isi::alias_setup::RebindAccountAlias => "Alias.RebindAccount",
+            iroha::data_model::isi::domain_link::SetAccountAliasBinding => "Alias.SetAccountBinding",
+            iroha::data_model::isi::asset_alias::SetAssetDefinitionAlias => "Alias.SetAssetDefinition",
+            iroha::data_model::isi::asset_transfer_control::SetAssetTransferAvailability => "AssetTransfer.SetAvailability",
+            iroha::data_model::isi::asset_transfer_control::SetAssetHoldingLimit => "AssetTransfer.SetHoldingLimit",
+            iroha::data_model::isi::asset_transfer_control::SetAssetTransferBlacklist => "AssetTransfer.SetBlacklist",
+            iroha::data_model::isi::asset_transfer_control::SetAssetTransferControl => "AssetTransfer.SetControl",
+            iroha::data_model::isi::nexus::CreateFeeSponsorProgram => "FeeSponsor.CreateProgram",
+            iroha::data_model::isi::nexus::StageFeeSponsorProgramRevision => "FeeSponsor.StageRevision",
+            iroha::data_model::isi::nexus::ActivateFeeSponsorProgramRevision => "FeeSponsor.ActivateRevision",
+            iroha::data_model::isi::nexus::EnrollFeeSponsorBeneficiary => "FeeSponsor.EnrollBeneficiary",
+            iroha::data_model::isi::offline::RecordKagemushaTairaCanaryV4 => "Kagemusha.RecordTairaCanaryV4",
+            iroha::data_model::isi::offline::AuthorizeKagemushaTairaCanaryV4 => "Kagemusha.AuthorizeTairaCanaryV4",
+            iroha::data_model::isi::offline::RegisterOfflineDeviceAttestation => "Kagemusha.RegisterDeviceAttestation",
+            iroha::data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4 => "Kagemusha.ActivateReleaseV4",
+            iroha::data_model::isi::offline::EnableKagemushaRecursiveIssuanceV4 => "Kagemusha.EnableIssuanceV4",
+            iroha::data_model::isi::offline::CancelKagemushaRecursiveReleaseV4 => "Kagemusha.CancelReleaseV4",
+            iroha::data_model::isi::offline::DeactivateKagemushaRecursiveIssuanceV4 => "Kagemusha.DeactivateIssuanceV4",
+        }
+        Instruction::id(&**instruction)
+    }
+
+    fn inspection_instructions_from_json(input: &str) -> Result<Vec<InstructionBox>> {
+        let value: norito::json::Value = parse_json(input)?;
+        let values = value.as_array().ok_or_else(|| {
+            eyre!("transaction instruction inspection input must be a JSON array")
+        })?;
+        u32::try_from(values.len())
+            .map_err(|_| eyre!("instruction count exceeds the canonical u32 boundary"))?;
+        values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                if let norito::json::Value::String(encoded) = value {
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(encoded.as_bytes())
+                        .map_err(|error| {
+                            eyre!("instruction {index} is not canonical base64: {error}")
+                        })?;
+                    if base64::engine::general_purpose::STANDARD.encode(&bytes) != *encoded {
+                        eyre::bail!("instruction {index} uses an alternate base64 encoding");
+                    }
+                    return norito::decode_canonical::<InstructionBox>(&bytes).map_err(|error| {
+                        eyre!("instruction {index} is not canonical framed Norito: {error}")
+                    });
+                }
+                let encoded = norito::json::to_json(value)
+                    .map_err(|error| eyre!("failed to normalize instruction {index}: {error}"))?;
+                norito::json::from_json::<InstructionBox>(&encoded)
+                    .map_err(|error| eyre!("failed to decode instruction {index}: {error}"))
+            })
+            .collect()
+    }
+
+    fn inspection_instructions_from_stdin() -> Result<Vec<InstructionBox>> {
+        inspection_instructions_from_json(&string_from_stdin()?)
+    }
+
+    fn inspect_instruction_array(instructions: &[InstructionBox]) -> Result<norito::json::Value> {
+        use sha2::{Digest as _, Sha256};
+
+        let instruction_count = u32::try_from(instructions.len())
+            .map_err(|_| eyre!("instruction count exceeds the canonical u32 boundary"))?;
+        let mut array_hasher = Sha256::new();
+        array_hasher.update(INSTRUCTION_ARRAY_DIGEST_DOMAIN_V1);
+        array_hasher.update(instruction_count.to_be_bytes());
+        let mut rows = Vec::with_capacity(instructions.len());
+        for (index, instruction) in instructions.iter().enumerate() {
+            let framed = norito::encode_canonical(instruction)
+                .wrap_err_with(|| format!("failed to frame instruction {index}"))?;
+            let framed_len = u32::try_from(framed.len()).map_err(|_| {
+                eyre!("instruction {index} frame exceeds the canonical u32 boundary")
+            })?;
+            array_hasher.update(framed_len.to_be_bytes());
+            array_hasher.update(&framed);
+            let wire_id = iroha::data_model::isi::instruction_wire_id(instruction)
+                .ok_or_else(|| eyre!("instruction {index} is absent from the wire registry"))?;
+            rows.push(norito::json!({
+                "index": (u64::try_from(index).unwrap_or(u64::MAX)),
+                "type_name": (Instruction::id(&**instruction)),
+                "wire_id": (wire_id),
+                "semantic_type": (semantic_instruction_type(instruction)),
+                "norito_sha256": (hex::encode(Sha256::digest(&framed))),
+            }));
+        }
+        Ok(norito::json!({
+            "schema": INSTRUCTION_ARRAY_INSPECTION_SCHEMA_V1,
+            "canonical": true,
+            "instruction_array_sha256": (hex::encode(array_hasher.finalize())),
+            "instructions": (rows),
+        }))
+    }
+
+    impl Run for Inspect {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            if context.input_instructions() || context.output_instructions() {
+                eyre::bail!("`iroha tx inspect` does not accept `--input` or `--output`");
+            }
+            let instructions = inspection_instructions_from_stdin()?;
+            context.print_data(&inspect_instruction_array(&instructions)?)
+        }
+    }
+
+    #[cfg(test)]
+    mod inspect_tests {
+        use super::*;
+        use iroha::data_model::{
+            domain::{Domain, DomainId},
+            isi::Register,
+        };
+        use sha2::Digest as _;
+
+        #[test]
+        fn empty_array_digest_uses_the_stable_domain_and_big_endian_count() {
+            let report = inspect_instruction_array(&[]).expect("inspect empty array");
+            let json = norito::json::to_json(&report).expect("encode inspection report");
+            assert!(json.contains("iroha.transaction-instruction-inspection.v1"));
+            assert!(
+                json.contains("c1c25f275d2056f2c9fa1b2f9b01b20ff32f3eba0337b504f1e44ea85b293942")
+            );
+        }
+
+        #[test]
+        fn inspection_reports_nested_register_semantics_and_exact_frame_hash() {
+            let instruction: InstructionBox = Register::domain(Domain::new(
+                DomainId::try_new("inspection", "universal").expect("fixture domain"),
+            ))
+            .into();
+            let expected_frame = norito::encode_canonical(&instruction).expect("canonical frame");
+            let report = inspect_instruction_array(&[instruction]).expect("inspect register");
+            let json = norito::json::to_json(&report).expect("encode inspection report");
+            assert!(json.contains("Register.Domain"));
+            assert!(json.contains(&hex::encode(sha2::Sha256::digest(expected_frame))));
+        }
+
+        #[test]
+        fn base64_instruction_input_must_be_exact_standard_and_canonical_norito() {
+            let instruction: InstructionBox =
+                Log::new(LogLevel::INFO, "inspection".to_owned()).into();
+            let frame = norito::encode_canonical(&instruction).expect("canonical frame");
+            let encoded = base64::engine::general_purpose::STANDARD.encode(frame);
+            let input = norito::json::to_json(&vec![encoded.clone()]).expect("fixture JSON");
+            assert_eq!(
+                inspection_instructions_from_json(&input)
+                    .expect("canonical base64 instruction")
+                    .len(),
+                1
+            );
+
+            let unpadded = encoded.trim_end_matches('=');
+            if unpadded != encoded {
+                let input = norito::json::to_json(&vec![unpadded]).expect("fixture JSON");
+                assert!(inspection_instructions_from_json(&input).is_err());
+            }
+            let mut trailing = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .expect("decode fixture");
+            trailing.push(0);
+            let input = norito::json::to_json(&vec![
+                base64::engine::general_purpose::STANDARD.encode(trailing),
+            ])
+            .expect("fixture JSON");
+            assert!(inspection_instructions_from_json(&input).is_err());
+        }
+
+        #[test]
+        fn inspection_reports_stable_log_semantics_for_signed_canaries() {
+            let instruction: InstructionBox =
+                Log::new(LogLevel::INFO, "bpng-taira-signed-canary".to_owned()).into();
+            let report = inspect_instruction_array(&[instruction]).expect("inspect signed canary");
+            let row = report
+                .get("instructions")
+                .and_then(norito::json::Value::as_array)
+                .and_then(|rows| rows.first())
+                .and_then(norito::json::Value::as_object)
+                .expect("one inspection row");
+            assert_eq!(row.get("semantic_type").and_then(|value| value.as_str()), Some("Log"));
+            assert_eq!(row.get("wire_id").and_then(|value| value.as_str()), Some("iroha.log"));
         }
     }
     #[derive(clap::Args, Debug)]
@@ -6710,7 +7001,6 @@ mod repo {
     }
 }
 mod settlement {
-    use std::collections::BTreeSet;
     use super::*;
     use clap::ValueEnum;
     use iroha::data_model::{
@@ -6730,6 +7020,7 @@ mod settlement {
         prelude::{AssetDefinitionId, Name},
         query::settlement::prelude::{FindFxCorridorPolicyById, FindFxCorridorPolicyRegistry},
     };
+    use std::collections::BTreeSet;
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Create a delivery-versus-payment instruction
@@ -8376,49 +8667,55 @@ mod cli_integration_harness_tests {
         type Item = Domain;
 
         fn ranked_three() -> Vec<Self::Item> {
-            [("d1", Some(2), 0x10), ("d2", Some(1), 0x11), ("d3", None, 0x12)]
-                .into_iter()
-                .map(|(name, rank, seed)| {
-                    let owner = sample_account_id("land", seed);
-                    let mut domain = Domain::new(DomainId::try_new(name, "universal").unwrap())
-                        .build(owner.account());
-                    if let Some(rank) = rank {
-                        domain.metadata_mut().insert(
-                            "rank".parse().unwrap(),
-                            Json::from(norito::json!(rank)),
-                        );
-                    }
+            [
+                ("d1", Some(2), 0x10),
+                ("d2", Some(1), 0x11),
+                ("d3", None, 0x12),
+            ]
+            .into_iter()
+            .map(|(name, rank, seed)| {
+                let owner = sample_account_id("land", seed);
+                let mut domain = Domain::new(DomainId::try_new(name, "universal").unwrap())
+                    .build(owner.account());
+                if let Some(rank) = rank {
                     domain
-                })
-                .collect()
+                        .metadata_mut()
+                        .insert("rank".parse().unwrap(), Json::from(norito::json!(rank)));
+                }
+                domain
+            })
+            .collect()
         }
 
         fn ranked_five(seed: u8) -> Vec<Self::Item> {
-            [("d0", Some(2)), ("d1", Some(4)), ("d2", None), ("d3", Some(1)), ("d4", Some(3))]
-                .into_iter()
-                .map(|(name, rank)| {
-                    let owner = sample_account_id("universal", seed);
-                    let mut domain = Domain::new(DomainId::try_new(name, "universal").unwrap())
-                        .build(&owner);
-                    if let Some(rank) = rank {
-                        domain.metadata_mut().insert(
-                            "rank".parse().unwrap(),
-                            Json::from(norito::json!(rank)),
-                        );
-                    }
+            [
+                ("d0", Some(2)),
+                ("d1", Some(4)),
+                ("d2", None),
+                ("d3", Some(1)),
+                ("d4", Some(3)),
+            ]
+            .into_iter()
+            .map(|(name, rank)| {
+                let owner = sample_account_id("universal", seed);
+                let mut domain =
+                    Domain::new(DomainId::try_new(name, "universal").unwrap()).build(&owner);
+                if let Some(rank) = rank {
                     domain
-                })
-                .collect()
+                        .metadata_mut()
+                        .insert("rank".parse().unwrap(), Json::from(norito::json!(rank)));
+                }
+                domain
+            })
+            .collect()
         }
 
         fn positioned_five(seed: u8) -> Vec<Self::Item> {
             (0..5)
                 .map(|index| {
                     let owner = sample_account_id("universal", seed + index as u8);
-                    Domain::new(
-                        DomainId::try_new(&format!("d{index}"), "universal").unwrap(),
-                    )
-                    .build(&owner)
+                    Domain::new(DomainId::try_new(&format!("d{index}"), "universal").unwrap())
+                        .build(&owner)
                 })
                 .collect()
         }
@@ -8480,10 +8777,9 @@ mod cli_integration_harness_tests {
                 .map(|index| {
                     let id = sample_account_id("land", seed + index as u8);
                     let mut account = Account::new(id.clone()).build(&id);
-                    account.metadata.insert(
-                        "pos".parse().unwrap(),
-                        Json::from(norito::json!(index)),
-                    );
+                    account
+                        .metadata
+                        .insert("pos".parse().unwrap(), Json::from(norito::json!(index)));
                     account
                 })
                 .collect()
@@ -8542,10 +8838,9 @@ mod cli_integration_harness_tests {
         fn positioned_five(seed: u8) -> Vec<Self::Item> {
             let mut definitions = Self::definitions(seed);
             for (index, definition) in definitions.iter_mut().enumerate() {
-                definition.metadata_mut().insert(
-                    "pos".parse().unwrap(),
-                    Json::from(norito::json!(index)),
-                );
+                definition
+                    .metadata_mut()
+                    .insert("pos".parse().unwrap(), Json::from(norito::json!(index)));
             }
             definitions
         }
@@ -8594,9 +8889,7 @@ mod cli_integration_harness_tests {
             nfts[0]
                 .content
                 .insert(key.clone(), Json::from(norito::json!(2)));
-            nfts[1]
-                .content
-                .insert(key, Json::from(norito::json!(1)));
+            nfts[1].content.insert(key, Json::from(norito::json!(1)));
             nfts
         }
 
@@ -8614,10 +8907,8 @@ mod cli_integration_harness_tests {
         fn positioned_five(seed: u8) -> Vec<Self::Item> {
             let mut nfts = Self::nfts(seed);
             for (index, nft) in nfts.iter_mut().enumerate() {
-                nft.content.insert(
-                    "pos".parse().unwrap(),
-                    Json::from(norito::json!(index)),
-                );
+                nft.content
+                    .insert("pos".parse().unwrap(), Json::from(norito::json!(index)));
             }
             nfts
         }
@@ -8637,11 +8928,8 @@ mod cli_integration_harness_tests {
             let owner = sample_account_id("art", seed);
             (0..5)
                 .map(|index| {
-                    Nft::new(
-                        format!("n{index}$art").parse().unwrap(),
-                        Default::default(),
-                    )
-                    .build(owner.account())
+                    Nft::new(format!("n{index}$art").parse().unwrap(), Default::default())
+                        .build(owner.account())
                 })
                 .collect()
         }
@@ -9275,11 +9563,8 @@ mod cli_integration_harness_tests {
         use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
         PSN_ASC_STARTS.store(0, Ordering::SeqCst);
         PSN_ASC_CONTS.store(0, Ordering::SeqCst);
-        let exec = HarnessQueryExecutor::<NftFixture>::ranked_five(
-            0x71,
-            &PSN_ASC_STARTS,
-            &PSN_ASC_CONTS,
-        );
+        let exec =
+            HarnessQueryExecutor::<NftFixture>::ranked_five(0x71, &PSN_ASC_STARTS, &PSN_ASC_CONTS);
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(SortOrder::Asc),
@@ -9413,7 +9698,6 @@ mod cli_integration_harness_tests {
 #[cfg(all(test, feature = "cli_integration_harness"))]
 mod cli_integration_harness {
     use super::*;
-    use std::collections::BTreeMap;
     use eyre::eyre;
     use iroha::crypto::KeyPair;
     #[cfg(feature = "ids_projection")]
@@ -9435,6 +9719,7 @@ mod cli_integration_harness {
     use iroha_crypto::{Algorithm, Hash};
     #[cfg(feature = "ids_projection")]
     use norito::codec::Decode;
+    use std::collections::BTreeMap;
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")

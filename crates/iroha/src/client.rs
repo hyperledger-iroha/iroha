@@ -7449,7 +7449,7 @@ impl Client {
     /// # Errors
     /// Returns an error for transport failures, non-success responses, malformed
     /// negotiated representations, or a response that does not describe the
-    /// exact first-release `cash_handoff_v1` ABI-21 capability.
+    /// exact first-release `cash_handoff_v1` native ABI22 capability.
     pub fn get_offline_capability(&self) -> Result<OfflineStatus> {
         let url = join_torii_url(&self.torii_url, torii_uri::OFFLINE_READINESS);
         let response = self.send_builder(
@@ -17554,6 +17554,39 @@ impl Client {
         let path = format!("v1/gov/contracts/{contract_address}");
         let url = join_torii_url(&self.torii_url, &path);
         self.send_builder(self.account_signed_request(HttpMethod::GET, url, Vec::new())?)
+    }
+    /// GET one exact unscoped `/v1/contracts/state` path as JSON.
+    ///
+    /// This retains the server's ordinary public-read semantics while bounding
+    /// the response and making the exact state-path selector explicit. Callers
+    /// remain responsible for decoding and validating the stored canonical
+    /// value against its domain type.
+    ///
+    /// # Errors
+    /// Returns an error for an empty/NUL-containing path, transport failure,
+    /// non-OK response, oversized response, or malformed JSON.
+    pub fn get_contract_state_path_json(&self, path: &str) -> Result<norito::json::Value> {
+        const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+        if path.is_empty() || path.as_bytes().contains(&0) {
+            return Err(eyre!(
+                "contract state path must be non-empty and contain no NUL"
+            ));
+        }
+        let mut url = join_torii_url(&self.torii_url, "v1/contracts/state");
+        url.query_pairs_mut()
+            .append_pair("path", path)
+            .append_pair("include_value", "true");
+        let response = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(MAX_RESPONSE_BYTES),
+        )?;
+        if response.body().len() > MAX_RESPONSE_BYTES {
+            return Err(eyre!(
+                "contract state response exceeds the bounded client limit"
+            ));
+        }
+        Self::decode_json_ok(response, "Failed to get exact contract state path")
     }
     /// Account-signed GET `/v1/contracts/code-bytes/{code_hash}` and decode a bounded,
     /// canonical base64 artifact whose digest exactly matches `code_hash`.

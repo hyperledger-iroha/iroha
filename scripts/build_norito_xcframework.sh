@@ -1151,9 +1151,9 @@ if protocol_abis != header_abis:
 print(header_abis[0])
 PY
 )" || exit 1
-# The mobile registry binds the Kagemusha ABI-21/V4 artifact family carried by
+# The mobile registry binds the Kagemusha ABI-22/V4 artifact family carried by
 # the independently versioned native bridge ABI above.
-KAGEMUSHA_ARTIFACT_ABI_VERSION=21
+KAGEMUSHA_ARTIFACT_ABI_VERSION=22
 SOURCE_COMMIT="$SOURCE_COMMIT_START"
 SOURCE_TREE_DIRTY=false
 if [[ -n "$SOURCE_STATUS_START" ]]; then
@@ -1286,6 +1286,17 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_offline_cash_payment_request_canonicalize_v1",
+    "connect_norito_offline_cash_payment_canonicalize_v1",
+    "connect_norito_offline_cash_payment_canonicalize_for_session_v1",
+    "connect_norito_offline_cash_acknowledgement_canonicalize_v1",
+    "connect_norito_offline_cash_peer_encode_payment_request_v1",
+    "connect_norito_offline_cash_peer_decode_payment_request_v1",
+    "connect_norito_offline_cash_peer_encode_payment_v1",
+    "connect_norito_offline_cash_peer_decode_payment_v1",
+    "connect_norito_offline_cash_peer_encode_acknowledgement_v1",
+    "connect_norito_offline_cash_peer_decode_acknowledgement_v1",
+    "connect_norito_offline_cash_release_probe_v1",
     "iroha_privacy_compiled_profile_catalog_v1",
     "iroha_privacy_validate_compiled_profile_catalog_v1",
     "iroha_privacy_exact12_fixture_bundle_v1",

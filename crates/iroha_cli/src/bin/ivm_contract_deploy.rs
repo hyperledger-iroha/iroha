@@ -25,7 +25,10 @@ use iroha::{
         metadata::Metadata,
         name::Name,
         prelude::*,
-        smart_contract::ContractAlias,
+        smart_contract::{
+            ContractAlias,
+            manifest::{ContractManifest, ManifestProvenance},
+        },
         transaction::{FeePaymentIntent, TransactionBuilder},
     },
 };
@@ -92,6 +95,14 @@ struct Args {
     emit_only: bool,
     #[arg(long, default_value_t = false)]
     skip_register_bytes: bool,
+    /// Prepared deployment nonce to compare with the fresh authenticated deployment-state
+    /// snapshot. Must be supplied together with `--expected-contract-address`.
+    #[arg(long, requires = "expected_contract_address")]
+    expected_deploy_nonce: Option<u64>,
+    /// Prepared contract address to compare with the address freshly derived from authenticated
+    /// deployment state. Must be supplied together with `--expected-deploy-nonce`.
+    #[arg(long, requires = "expected_deploy_nonce")]
+    expected_contract_address: Option<iroha::data_model::smart_contract::ContractAddress>,
 }
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::JsonDeserialize, norito::derive::JsonSerialize,
@@ -114,6 +125,58 @@ struct ValidatedContractDeploymentState {
     deploy_nonce: u64,
     dataspace_id: DataSpaceId,
     previous_contract_address: Option<iroha::data_model::smart_contract::ContractAddress>,
+}
+
+struct PublicManifestOutputs {
+    abi_hash_hex: String,
+    signed_manifest: norito::json::Value,
+    manifest_provenance: ManifestProvenance,
+    manifest_provenance_json: norito::json::Value,
+}
+
+fn public_manifest_outputs(
+    abi_hash: Hash,
+    manifest: &ContractManifest,
+) -> Result<PublicManifestOutputs> {
+    let manifest_provenance = manifest
+        .provenance
+        .clone()
+        .ok_or_else(|| eyre!("signed contract manifest did not contain public provenance"))?;
+    Ok(PublicManifestOutputs {
+        abi_hash_hex: hex::encode(<[u8; 32]>::from(abi_hash)),
+        signed_manifest: norito::json::to_value(manifest)
+            .wrap_err("encode signed contract manifest")?,
+        manifest_provenance_json: norito::json::to_value(&manifest_provenance)
+            .wrap_err("encode public manifest provenance")?,
+        manifest_provenance,
+    })
+}
+
+fn validate_prepared_plan_expectation(
+    expected_deploy_nonce: Option<u64>,
+    expected_contract_address: Option<&iroha::data_model::smart_contract::ContractAddress>,
+    authenticated_deploy_nonce: u64,
+    derived_contract_address: &iroha::data_model::smart_contract::ContractAddress,
+) -> Result<()> {
+    match (expected_deploy_nonce, expected_contract_address) {
+        (None, None) => Ok(()),
+        (Some(expected_nonce), Some(expected_address)) => {
+            if expected_nonce != authenticated_deploy_nonce {
+                return Err(eyre!(
+                    "prepared deployment nonce {expected_nonce} no longer matches authenticated deployment state nonce {authenticated_deploy_nonce}"
+                ));
+            }
+            if expected_address != derived_contract_address {
+                return Err(eyre!(
+                    "prepared contract address {expected_address} no longer matches authenticated derived address {derived_contract_address}"
+                ));
+            }
+            Ok(())
+        }
+        _ => Err(eyre!(
+            "--expected-deploy-nonce and --expected-contract-address must be supplied together"
+        )),
+    }
 }
 #[cfg(test)]
 use iroha::data_model::transaction::Executable;
@@ -608,7 +671,7 @@ mod tests {
     use super::*;
     use std::num::NonZeroU64;
     fn test_network_id() -> NetworkId {
-        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+        "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
             .parse()
             .expect("canonical test network id")
     }
@@ -768,6 +831,147 @@ mod tests {
                 "deployment CAS state must come only from the authenticated snapshot"
             );
         }
+    }
+    #[test]
+    fn clap_surface_requires_complete_prepared_plan_cas_pair() {
+        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::of(key_pair.public_key().clone());
+        let address = iroha::data_model::smart_contract::ContractAddress::derive(
+            &test_network_id(),
+            &authority,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive prepared address")
+        .to_string();
+        let base_arguments = || {
+            vec![
+                "ivm-contract-deploy".to_owned(),
+                "--torii-url".to_owned(),
+                "http://127.0.0.1:8080".to_owned(),
+                "--chain-id".to_owned(),
+                "localnet".to_owned(),
+                "--network-id".to_owned(),
+                "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149".to_owned(),
+                "--authority".to_owned(),
+                "authority".to_owned(),
+                "--private-key-file".to_owned(),
+                "private.key".to_owned(),
+                "--code-file".to_owned(),
+                "contract.to".to_owned(),
+                "--contract-alias".to_owned(),
+                "contract::universal".to_owned(),
+                "--fee-payment-json".to_owned(),
+                "fee.json".to_owned(),
+            ]
+        };
+        let mut nonce_only = base_arguments();
+        nonce_only.extend(["--expected-deploy-nonce".to_owned(), "7".to_owned()]);
+        assert!(Args::try_parse_from(nonce_only).is_err());
+        let mut address_only = base_arguments();
+        address_only.extend(["--expected-contract-address".to_owned(), address.clone()]);
+        assert!(Args::try_parse_from(address_only).is_err());
+        let mut complete = base_arguments();
+        complete.extend([
+            "--expected-deploy-nonce".to_owned(),
+            "7".to_owned(),
+            "--expected-contract-address".to_owned(),
+            address,
+        ]);
+        let parsed = Args::try_parse_from(complete).expect("complete prepared-plan CAS pair");
+        assert_eq!(parsed.expected_deploy_nonce, Some(7));
+        assert!(parsed.expected_contract_address.is_some());
+    }
+    #[test]
+    fn prepared_plan_cas_rejects_nonce_or_address_drift() -> Result<()> {
+        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::of(key_pair.public_key().clone());
+        let expected = iroha::data_model::smart_contract::ContractAddress::derive(
+            &test_network_id(),
+            &authority,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .map_err(|error| eyre!(error.to_string()))?;
+        let changed = iroha::data_model::smart_contract::ContractAddress::derive(
+            &test_network_id(),
+            &authority,
+            8,
+            DataSpaceId::UNIVERSAL,
+        )
+        .map_err(|error| eyre!(error.to_string()))?;
+        validate_prepared_plan_expectation(Some(7), Some(&expected), 7, &expected)?;
+        assert!(
+            validate_prepared_plan_expectation(Some(7), Some(&expected), 8, &changed)
+                .expect_err("advanced nonce must fail")
+                .to_string()
+                .contains("no longer matches authenticated deployment state")
+        );
+        assert!(
+            validate_prepared_plan_expectation(Some(7), Some(&changed), 7, &expected)
+                .expect_err("changed derived address must fail")
+                .to_string()
+                .contains("no longer matches authenticated derived address")
+        );
+        Ok(())
+    }
+    #[test]
+    fn public_manifest_outputs_are_exact_and_owner_readable() -> Result<()> {
+        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
+        let abi_hash = Hash::new(b"public-manifest-output-abi");
+        let manifest = ContractManifest {
+            seiyaku_name: Some("prepared_contract".to_owned()),
+            code_hash: Some(Hash::new(b"public-manifest-output-code")),
+            abi_hash: Some(abi_hash),
+            compiler_fingerprint: None,
+            features_bitmap: Some(0),
+            access_set_hints: None,
+            entrypoints: None,
+            states: None,
+            error_codes: None,
+            kotoba: None,
+            provenance: None,
+        }
+        .try_signed(&key_pair)?;
+        let outputs = public_manifest_outputs(abi_hash, &manifest)?;
+        assert_eq!(
+            outputs.abi_hash_hex,
+            hex::encode(<[u8; 32]>::from(abi_hash))
+        );
+        assert_eq!(
+            outputs.manifest_provenance,
+            manifest
+                .provenance
+                .clone()
+                .expect("signed manifest provenance")
+        );
+        let provenance = outputs
+            .manifest_provenance_json
+            .as_object()
+            .expect("provenance is a standalone object");
+        assert_eq!(provenance.len(), 2);
+        assert!(provenance.contains_key("signer"));
+        assert!(provenance.contains_key("signature"));
+        let output = tempfile::tempdir()?;
+        let (path, size) = write_owner_readable_json(
+            output.path(),
+            "manifest-provenance.json",
+            &outputs.manifest_provenance_json,
+        )?;
+        assert_eq!(size, fs::read(&path)?.len());
+        let (same_path, same_size) = write_owner_readable_json(
+            output.path(),
+            "manifest-provenance.json",
+            &outputs.manifest_provenance_json,
+        )?;
+        assert_eq!(same_path, path);
+        assert_eq!(same_size, size);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
+        }
+        Ok(())
     }
     #[test]
     fn transaction_signing_context_checked_helper_verifies() -> Result<()> {
@@ -1317,6 +1521,102 @@ fn write_tx(out_dir: &Path, stem: &str, tx: &SignedTransaction) -> Result<(PathB
     fs::write(&path, &bytes).wrap_err_with(|| format!("write {}", path.display()))?;
     Ok((path, bytes.len()))
 }
+
+fn write_owner_readable_json(
+    out_dir: &Path,
+    file_name: &str,
+    value: &norito::json::Value,
+) -> Result<(PathBuf, usize)> {
+    fs::create_dir_all(out_dir)
+        .wrap_err_with(|| format!("create output directory {}", out_dir.display()))?;
+    let path = out_dir.join(file_name);
+    let mut bytes = norito::json::to_vec_pretty(value).wrap_err("encode public manifest JSON")?;
+    bytes.push(b'\n');
+
+    if let Ok(metadata) = fs::symlink_metadata(&path) {
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            return Err(eyre!(
+                "refusing to replace non-regular public manifest output {}",
+                path.display()
+            ));
+        }
+        let existing =
+            fs::read(&path).wrap_err_with(|| format!("read existing {}", path.display()))?;
+        if existing != bytes {
+            return Err(eyre!(
+                "public manifest output {} already exists with different contents",
+                path.display()
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                .wrap_err_with(|| format!("secure {}", path.display()))?;
+        }
+        return Ok((path, bytes.len()));
+    }
+
+    let temporary = out_dir.join(format!(".{file_name}.{}.tmp", std::process::id()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&temporary)
+        .wrap_err_with(|| format!("create {}", temporary.display()))?;
+    std::io::Write::write_all(&mut file, &bytes)
+        .wrap_err_with(|| format!("write {}", temporary.display()))?;
+    file.sync_all()
+        .wrap_err_with(|| format!("sync {}", temporary.display()))?;
+    drop(file);
+    match fs::hard_link(&temporary, &path) {
+        Ok(()) => {
+            fs::remove_file(&temporary)
+                .wrap_err_with(|| format!("remove published temporary {}", temporary.display()))?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = fs::remove_file(&temporary);
+            let metadata = fs::symlink_metadata(&path)
+                .wrap_err_with(|| format!("inspect raced output {}", path.display()))?;
+            if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                return Err(eyre!(
+                    "raced public manifest output is not a regular file: {}",
+                    path.display()
+                ));
+            }
+            let existing =
+                fs::read(&path).wrap_err_with(|| format!("read raced {}", path.display()))?;
+            if existing != bytes {
+                return Err(eyre!(
+                    "public manifest output {} raced with different contents",
+                    path.display()
+                ));
+            }
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            return Err(error).wrap_err_with(|| {
+                format!(
+                    "publish public manifest output {} from {} without replacement",
+                    path.display(),
+                    temporary.display()
+                )
+            });
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .wrap_err_with(|| format!("secure {}", path.display()))?;
+    }
+    Ok((path, bytes.len()))
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let fee_payment_bytes = fs::read(&args.fee_payment_json)
@@ -1369,14 +1669,22 @@ fn main() -> Result<()> {
     )
     .map_err(|err| eyre!(err.to_string()))
     .wrap_err("failed to derive contract address")?;
+    validate_prepared_plan_expectation(
+        args.expected_deploy_nonce,
+        args.expected_contract_address.as_ref(),
+        deploy_nonce,
+        &contract_address,
+    )?;
     let code =
         fs::read(&args.code_file).wrap_err_with(|| format!("read {}", args.code_file.display()))?;
     let verified = ivm::verify_contract_artifact(&code)
         .map_err(|err| eyre!("verify contract artifact: {err}"))?;
+    let abi_hash = verified.abi_hash;
     let manifest = verified
         .manifest
         .try_signed(&key_pair)
         .wrap_err("failed to sign contract manifest")?;
+    let public_manifest = public_manifest_outputs(abi_hash, &manifest)?;
     let code_hash = verified.code_hash;
     let transaction_ttl = args.transaction_ttl_ms.map(Duration::from_millis);
     // Registration and atomic commit are one governance operation. Bind every
@@ -1464,6 +1772,28 @@ fn main() -> Result<()> {
     } else {
         None
     };
+    let public_manifest_files = if let Some(out_dir) = args.out_dir.as_deref() {
+        Some(vec![
+            (
+                "signed_manifest",
+                write_owner_readable_json(
+                    out_dir,
+                    "signed-contract-manifest.json",
+                    &public_manifest.signed_manifest,
+                )?,
+            ),
+            (
+                "manifest_provenance",
+                write_owner_readable_json(
+                    out_dir,
+                    "manifest-provenance.json",
+                    &public_manifest.manifest_provenance_json,
+                )?,
+            ),
+        ])
+    } else {
+        None
+    };
     if !args.emit_only {
         for (name, _, tx) in &planned_txs {
             eprintln!("submitting {name} hash={}", tx.hash());
@@ -1471,6 +1801,7 @@ fn main() -> Result<()> {
         }
     }
     let code_hash_hex = hex::encode(<[u8; 32]>::from(code_hash));
+    let abi_hash_hex = public_manifest.abi_hash_hex.clone();
     let payload_digest_hex = hex::encode(blake3::hash(&code).as_bytes());
     let operation_status = if args.emit_only {
         "prepared"
@@ -1494,7 +1825,7 @@ fn main() -> Result<()> {
         "contract_address": (contract_address.to_string()),
         "contract_subject_account": (contract_subject_account.clone()),
         "code_hash_hex": (code_hash_hex.clone()),
-        "abi_hash_hex": (Option::<String>::None),
+        "abi_hash_hex": (abi_hash_hex.clone()),
         "tx_hash_hex": (commit_deployment_tx_hash.to_string()),
         "entrypoint": (Option::<String>::None),
         "entrypoint_hash_hex": (Option::<String>::None),
@@ -1519,6 +1850,9 @@ fn main() -> Result<()> {
         "deploy_nonce": (deploy_nonce),
         "next_deploy_nonce": (next_nonce),
         "code_hash_hex": (code_hash_hex.clone()),
+        "abi_hash_hex": (abi_hash_hex),
+        "signed_manifest": (public_manifest.signed_manifest),
+        "manifest_provenance": (public_manifest.manifest_provenance),
         "register_manifest_tx_hash": (register_manifest_tx_hash),
         "commit_deployment_tx_hash": (commit_deployment_tx_hash),
         "expected_previous_contract_address": (expected_previous_contract_address),
@@ -1546,17 +1880,30 @@ fn main() -> Result<()> {
         unreachable!("native upload report is always an object");
     };
     result.extend(upload_report);
+    let mut files = Vec::new();
     if let Some(written) = written {
-        let files = written
-            .into_iter()
-            .map(|(name, (path, size))| {
-                norito::json!({
-                    "name": (name),
-                    "path": (path.display().to_string()),
-                    "size": (size as u64),
-                })
+        files.extend(written.into_iter().map(|(name, (path, size))| {
+            norito::json!({
+                "name": (name),
+                "path": (path.display().to_string()),
+                "size": (size as u64),
             })
-            .collect();
+        }));
+    }
+    if let Some(public_manifest_files) = public_manifest_files {
+        files.extend(
+            public_manifest_files
+                .into_iter()
+                .map(|(name, (path, size))| {
+                    norito::json!({
+                        "name": (name),
+                        "path": (path.display().to_string()),
+                        "size": (size as u64),
+                    })
+                }),
+        );
+    }
+    if !files.is_empty() {
         result.insert("files".to_owned(), norito::json::Value::Array(files));
     }
     println!(

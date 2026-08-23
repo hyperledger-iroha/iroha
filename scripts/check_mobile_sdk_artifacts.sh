@@ -538,6 +538,20 @@ PRIVACY_COMPILED_PROFILE_C_SYMBOLS=(
   iroha_privacy_free_buffer
 )
 
+OFFLINE_CASH_V1_C_SYMBOLS=(
+  connect_norito_offline_cash_payment_request_canonicalize_v1
+  connect_norito_offline_cash_payment_canonicalize_v1
+  connect_norito_offline_cash_payment_canonicalize_for_session_v1
+  connect_norito_offline_cash_acknowledgement_canonicalize_v1
+  connect_norito_offline_cash_peer_encode_payment_request_v1
+  connect_norito_offline_cash_peer_decode_payment_request_v1
+  connect_norito_offline_cash_peer_encode_payment_v1
+  connect_norito_offline_cash_peer_decode_payment_v1
+  connect_norito_offline_cash_peer_encode_acknowledgement_v1
+  connect_norito_offline_cash_peer_decode_acknowledgement_v1
+  connect_norito_offline_cash_release_probe_v1
+)
+
 REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_bridge_abi_version
   connect_norito_free
@@ -550,6 +564,7 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_canonical_json_blake3_v1
   connect_norito_encode_account_onboarding_plan_body_v1
   connect_norito_alias_instruction_round_trip_v1
+  "${OFFLINE_CASH_V1_C_SYMBOLS[@]}"
   "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}"
   connect_norito_sorafs_reference_validate_bundle_json
   connect_norito_sorafs_reference_validate_governance_json

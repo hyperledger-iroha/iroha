@@ -816,7 +816,7 @@ fn causal_event(
         "error_message_sha256".to_owned(),
         if rejected {
             JsonValue::from(hex::encode(Sha256::digest(
-                b"duplicate input rejected by native ABI-21/V4",
+                b"duplicate input rejected by native ABI22/V4",
             )))
         } else {
             JsonValue::Null

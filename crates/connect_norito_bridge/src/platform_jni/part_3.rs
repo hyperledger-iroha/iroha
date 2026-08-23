@@ -1444,3 +1444,412 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
         JNI_FALSE
     }
 }
+
+fn java_offline_cash_v1_result(
+    env: &mut jni::JNIEnv<'_>,
+    label: &str,
+    result: Result<Vec<u8>, String>,
+) -> jni::sys::jbyteArray {
+    match result.and_then(|bytes| {
+        env.byte_array_from_slice(&bytes)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| format!("failed to copy native result: {error}"))
+    }) {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, format!("Offline Cash V1 {label}: {message}"));
+            std::ptr::null_mut()
+        }
+    }
+}
+
+fn java_offline_cash_v1_request(
+    env: &mut jni::JNIEnv<'_>,
+    request: &jni::objects::JByteArray<'_>,
+) -> Result<OfflineCashPaymentRequestV1, String> {
+    let bytes = read_java_byte_array_bounded(
+        env,
+        request,
+        "requestNorito",
+        OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1,
+    )
+    .ok_or_else(|| "requestNorito is missing or oversized".to_owned())?;
+    OfflineCashPaymentRequestV1::decode_canonical_exact(&bytes)
+        .map_err(|error| format!("requestNorito is invalid: {error}"))
+}
+
+fn java_offline_cash_v1_payment(
+    env: &mut jni::JNIEnv<'_>,
+    request: &OfflineCashPaymentRequestV1,
+    payment: &jni::objects::JByteArray<'_>,
+) -> Result<OfflineCashPaymentV1, String> {
+    let bytes = read_java_byte_array_bounded(
+        env,
+        payment,
+        "paymentNorito",
+        OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
+    )
+    .ok_or_else(|| "paymentNorito is missing or oversized".to_owned())?;
+    OfflineCashPaymentV1::decode_canonical_exact_against(&bytes, request)
+        .map_err(|error| format!("paymentNorito is invalid: {error}"))
+}
+
+pub(super) fn java_offline_cash_v1_canonicalize_request(
+    env: &mut jni::JNIEnv<'_>,
+    request: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = java_offline_cash_v1_request(env, &request)
+        .and_then(|request| norito::encode_canonical(&request).map_err(|error| error.to_string()));
+    java_offline_cash_v1_result(env, "request", result)
+}
+
+pub(super) fn java_offline_cash_v1_canonicalize_payment(
+    env: &mut jni::JNIEnv<'_>,
+    request: jni::objects::JByteArray<'_>,
+    payment: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = java_offline_cash_v1_request(env, &request)
+        .and_then(|request| java_offline_cash_v1_payment(env, &request, &payment))
+        .and_then(|payment| norito::encode_canonical(&payment).map_err(|error| error.to_string()));
+    java_offline_cash_v1_result(env, "payment", result)
+}
+
+pub(super) fn java_offline_cash_v1_canonicalize_payment_for_session(
+    env: &mut jni::JNIEnv<'_>,
+    request: jni::objects::JByteArray<'_>,
+    payment: jni::objects::JByteArray<'_>,
+    expected_artifact_manifest_sha256: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = java_offline_cash_v1_request(env, &request).and_then(|request| {
+        java_offline_cash_v1_payment(env, &request, &payment).and_then(|payment| {
+            let expected = read_java_byte_array_bounded(
+                env,
+                &expected_artifact_manifest_sha256,
+                "expectedArtifactManifestSHA256",
+                32,
+            )
+            .ok_or_else(|| "expectedArtifactManifestSHA256 is missing or oversized".to_owned())?;
+            let expected: [u8; 32] = expected.try_into().map_err(|_| {
+                "expectedArtifactManifestSHA256 must be exactly 32 bytes".to_owned()
+            })?;
+            if expected == [0; 32] || payment.artifact_manifest_digest != expected {
+                return Err(
+                    "payment artifact manifest does not match the wallet session".to_owned(),
+                );
+            }
+            norito::encode_canonical(&payment).map_err(|error| error.to_string())
+        })
+    });
+    java_offline_cash_v1_result(env, "session payment", result)
+}
+
+pub(super) fn java_offline_cash_v1_canonicalize_acknowledgement(
+    env: &mut jni::JNIEnv<'_>,
+    request: jni::objects::JByteArray<'_>,
+    payment: jni::objects::JByteArray<'_>,
+    acknowledgement: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = java_offline_cash_v1_request(env, &request).and_then(|request| {
+        java_offline_cash_v1_payment(env, &request, &payment).and_then(|payment| {
+            let bytes = read_java_byte_array_bounded(
+                env,
+                &acknowledgement,
+                "acknowledgementNorito",
+                OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1,
+            )
+            .ok_or_else(|| "acknowledgementNorito is missing or oversized".to_owned())?;
+            OfflineCashAcknowledgementV1::decode_canonical_exact_against(&bytes, &request, &payment)
+                .map_err(|error| format!("acknowledgementNorito is invalid: {error}"))
+                .and_then(|value| {
+                    norito::encode_canonical(&value).map_err(|error| error.to_string())
+                })
+        })
+    });
+    java_offline_cash_v1_result(env, "acknowledgement", result)
+}
+
+pub(super) fn java_offline_cash_v1_peer_encode_request(
+    env: &mut jni::JNIEnv<'_>,
+    request: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = java_offline_cash_v1_request(env, &request)
+        .and_then(|request| {
+            OfflineCashPeerAdapterV1
+                .encode_payment_request(&request)
+                .map_err(|error| error.to_string())
+        })
+        .map(String::into_bytes);
+    java_offline_cash_v1_result(env, "request peer encoding", result)
+}
+
+pub(super) fn java_offline_cash_v1_peer_decode_request(
+    env: &mut jni::JNIEnv<'_>,
+    text: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = read_java_byte_array_bounded(
+        env,
+        &text,
+        "peerText",
+        iroha_data_model::offline::OFFLINE_CASH_TEXT_SESSION_MAX_BYTES_V1,
+    )
+    .ok_or_else(|| "peerText is missing or oversized".to_owned())
+    .and_then(|bytes| String::from_utf8(bytes).map_err(|error| error.to_string()))
+    .and_then(|text| {
+        OfflineCashPeerAdapterV1
+            .decode_payment_request(&text)
+            .map_err(|error| error.to_string())
+    })
+    .and_then(|request| norito::encode_canonical(&request).map_err(|error| error.to_string()));
+    java_offline_cash_v1_result(env, "request peer decoding", result)
+}
+
+pub(super) fn java_offline_cash_v1_peer_encode_payment(
+    env: &mut jni::JNIEnv<'_>,
+    request: jni::objects::JByteArray<'_>,
+    payment: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = java_offline_cash_v1_request(env, &request).and_then(|request| {
+        java_offline_cash_v1_payment(env, &request, &payment).and_then(|payment| {
+            OfflineCashPeerAdapterV1
+                .encode_payment(&request, &payment)
+                .map(String::into_bytes)
+                .map_err(|error| error.to_string())
+        })
+    });
+    java_offline_cash_v1_result(env, "payment peer encoding", result)
+}
+
+pub(super) fn java_offline_cash_v1_peer_decode_payment(
+    env: &mut jni::JNIEnv<'_>,
+    request: jni::objects::JByteArray<'_>,
+    text: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = java_offline_cash_v1_request(env, &request).and_then(|request| {
+        read_java_byte_array_bounded(
+            env,
+            &text,
+            "peerText",
+            iroha_data_model::offline::OFFLINE_CASH_TEXT_SESSION_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "peerText is missing or oversized".to_owned())
+        .and_then(|bytes| String::from_utf8(bytes).map_err(|error| error.to_string()))
+        .and_then(|text| {
+            OfflineCashPeerAdapterV1
+                .decode_payment(&request, &text)
+                .map_err(|error| error.to_string())
+        })
+        .and_then(|payment| norito::encode_canonical(&payment).map_err(|error| error.to_string()))
+    });
+    java_offline_cash_v1_result(env, "payment peer decoding", result)
+}
+
+pub(super) fn java_offline_cash_v1_peer_encode_acknowledgement(
+    env: &mut jni::JNIEnv<'_>,
+    request: jni::objects::JByteArray<'_>,
+    payment: jni::objects::JByteArray<'_>,
+    acknowledgement: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = java_offline_cash_v1_request(env, &request).and_then(|request| {
+        java_offline_cash_v1_payment(env, &request, &payment).and_then(|payment| {
+            let bytes = read_java_byte_array_bounded(
+                env,
+                &acknowledgement,
+                "acknowledgementNorito",
+                OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1,
+            )
+            .ok_or_else(|| "acknowledgementNorito is missing or oversized".to_owned())?;
+            let acknowledgement = OfflineCashAcknowledgementV1::decode_canonical_exact_against(
+                &bytes, &request, &payment,
+            )
+            .map_err(|error| error.to_string())?;
+            OfflineCashPeerAdapterV1
+                .encode_acknowledgement(&request, &payment, &acknowledgement)
+                .map(String::into_bytes)
+                .map_err(|error| error.to_string())
+        })
+    });
+    java_offline_cash_v1_result(env, "acknowledgement peer encoding", result)
+}
+
+pub(super) fn java_offline_cash_v1_peer_decode_acknowledgement(
+    env: &mut jni::JNIEnv<'_>,
+    request: jni::objects::JByteArray<'_>,
+    payment: jni::objects::JByteArray<'_>,
+    text: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = java_offline_cash_v1_request(env, &request).and_then(|request| {
+        java_offline_cash_v1_payment(env, &request, &payment).and_then(|payment| {
+            read_java_byte_array_bounded(
+                env,
+                &text,
+                "peerText",
+                iroha_data_model::offline::OFFLINE_CASH_TEXT_SESSION_MAX_BYTES_V1,
+            )
+            .ok_or_else(|| "peerText is missing or oversized".to_owned())
+            .and_then(|bytes| String::from_utf8(bytes).map_err(|error| error.to_string()))
+            .and_then(|text| {
+                OfflineCashPeerAdapterV1
+                    .decode_acknowledgement(&request, &payment, &text)
+                    .map_err(|error| error.to_string())
+            })
+            .and_then(|value| norito::encode_canonical(&value).map_err(|error| error.to_string()))
+        })
+    });
+    java_offline_cash_v1_result(env, "acknowledgement peer decoding", result)
+}
+
+pub(super) fn java_offline_cash_v1_release_probe(
+    env: &mut jni::JNIEnv<'_>,
+) -> jni::sys::jobjectArray {
+    java_kagemusha_byte_arrays(
+        env,
+        &[
+            vec![0],
+            vec![0; 32],
+            vec![0; 32],
+            CONNECT_NORITO_BRIDGE_ABI_VERSION.to_be_bytes().to_vec(),
+        ],
+    )
+    .unwrap_or_else(|message| {
+        throw_java_illegal_state(env, format!("Offline Cash V1 release probe: {message}"));
+        std::ptr::null_mut()
+    })
+}
+
+jni_sdk_android_pairs! {
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeCanonicalizePaymentRequestV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeCanonicalizePaymentRequestV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_offline_cash_v1_canonicalize_request(&mut env, request)
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeCanonicalizePaymentV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeCanonicalizePaymentV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request: jni::objects::JByteArray<'_>,
+    payment: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_offline_cash_v1_canonicalize_payment(&mut env, request, payment)
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeCanonicalizePaymentForSessionV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeCanonicalizePaymentForSessionV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request: jni::objects::JByteArray<'_>,
+    payment: jni::objects::JByteArray<'_>,
+    expected_artifact_manifest_sha256: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_offline_cash_v1_canonicalize_payment_for_session(
+        &mut env,
+        request,
+        payment,
+        expected_artifact_manifest_sha256,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeCanonicalizeAcknowledgementV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeCanonicalizeAcknowledgementV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request: jni::objects::JByteArray<'_>,
+    payment: jni::objects::JByteArray<'_>,
+    acknowledgement: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_offline_cash_v1_canonicalize_acknowledgement(
+        &mut env,
+        request,
+        payment,
+        acknowledgement,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativePeerEncodePaymentRequestV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativePeerEncodePaymentRequestV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_offline_cash_v1_peer_encode_request(&mut env, request)
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativePeerDecodePaymentRequestV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativePeerDecodePaymentRequestV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    text: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_offline_cash_v1_peer_decode_request(&mut env, text)
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativePeerEncodePaymentV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativePeerEncodePaymentV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request: jni::objects::JByteArray<'_>,
+    payment: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_offline_cash_v1_peer_encode_payment(&mut env, request, payment)
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativePeerDecodePaymentV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativePeerDecodePaymentV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request: jni::objects::JByteArray<'_>,
+    text: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_offline_cash_v1_peer_decode_payment(&mut env, request, text)
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativePeerEncodeAcknowledgementV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativePeerEncodeAcknowledgementV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request: jni::objects::JByteArray<'_>,
+    payment: jni::objects::JByteArray<'_>,
+    acknowledgement: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_offline_cash_v1_peer_encode_acknowledgement(
+        &mut env,
+        request,
+        payment,
+        acknowledgement,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativePeerDecodeAcknowledgementV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativePeerDecodeAcknowledgementV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request: jni::objects::JByteArray<'_>,
+    payment: jni::objects::JByteArray<'_>,
+    text: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_offline_cash_v1_peer_decode_acknowledgement(&mut env, request, payment, text)
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeReleaseProbeV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeReleaseProbeV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jobjectArray {
+    java_offline_cash_v1_release_probe(&mut env)
+}
+}

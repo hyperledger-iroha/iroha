@@ -8,6 +8,7 @@ use super::{
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{NetworkId, account::AccountId, asset::AssetDefinitionId};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
@@ -807,6 +808,344 @@ impl OfflineCashAcknowledgementV1 {
     }
 }
 
+/// State of one receiver-bound Offline Cash V1 wallet session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OfflineCashWalletSessionStateV1 {
+    /// The signed receiver request is ready to share.
+    ReceiveRequestReady,
+    /// The sender response has been fully validated and committed to this session.
+    PaymentCommitted,
+    /// The post-persistence receiver acknowledgement has been fully validated.
+    Acknowledged,
+}
+
+/// Result of applying a peer message to an Offline Cash V1 wallet session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OfflineCashWalletSessionEventV1 {
+    /// A previously unseen payment was committed.
+    PaymentCommitted,
+    /// The exact already-committed payment was replayed idempotently.
+    PaymentReplay,
+    /// A previously unseen acknowledgement was accepted.
+    Acknowledged,
+    /// The exact already-accepted acknowledgement was replayed idempotently.
+    AcknowledgementReplay,
+}
+
+/// Opaque state-machine facade for one Offline Cash V1 handoff.
+///
+/// The facade owns typed canonical values and mutates state only after all
+/// request, payment, acknowledgement, signature, proof, and aggregate-size
+/// validation succeeds.
+#[derive(Debug, Clone)]
+pub struct OfflineCashWalletSessionV1 {
+    request: OfflineCashPaymentRequestV1,
+    expected_release_id: [u8; 32],
+    expected_artifact_manifest_sha256: [u8; 32],
+    payment: Option<OfflineCashPaymentV1>,
+    acknowledgement: Option<OfflineCashAcknowledgementV1>,
+}
+
+impl OfflineCashWalletSessionV1 {
+    /// Create a request-ready session after validating the exact receiver request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request is invalid or oversized.
+    pub fn new(
+        request: OfflineCashPaymentRequestV1,
+        expected_release_id: [u8; 32],
+        expected_artifact_manifest_sha256: [u8; 32],
+    ) -> Result<Self, KagemushaValidationError> {
+        request.validate()?;
+        if expected_release_id == [0; 32]
+            || expected_artifact_manifest_sha256 == [0; 32]
+            || request.release_id != expected_release_id
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "offline_cash.session.release_binding",
+            });
+        }
+        Ok(Self {
+            request,
+            expected_release_id,
+            expected_artifact_manifest_sha256,
+            payment: None,
+            acknowledgement: None,
+        })
+    }
+
+    /// Return the current monotonic session state.
+    #[must_use]
+    pub const fn state(&self) -> OfflineCashWalletSessionStateV1 {
+        if self.acknowledgement.is_some() {
+            OfflineCashWalletSessionStateV1::Acknowledged
+        } else if self.payment.is_some() {
+            OfflineCashWalletSessionStateV1::PaymentCommitted
+        } else {
+            OfflineCashWalletSessionStateV1::ReceiveRequestReady
+        }
+    }
+
+    /// Return the exact signed receiver request.
+    #[must_use]
+    pub const fn request(&self) -> &OfflineCashPaymentRequestV1 {
+        &self.request
+    }
+
+    /// Return the release identifier pinned by the signed runtime manifest.
+    #[must_use]
+    pub const fn expected_release_id(&self) -> [u8; 32] {
+        self.expected_release_id
+    }
+
+    /// Return the installed artifact-manifest digest pinned by the signed runtime manifest.
+    #[must_use]
+    pub const fn expected_artifact_manifest_sha256(&self) -> [u8; 32] {
+        self.expected_artifact_manifest_sha256
+    }
+
+    /// Return the committed payment, when present.
+    #[must_use]
+    pub const fn payment(&self) -> Option<&OfflineCashPaymentV1> {
+        self.payment.as_ref()
+    }
+
+    /// Return the accepted acknowledgement, when present.
+    #[must_use]
+    pub const fn acknowledgement(&self) -> Option<&OfflineCashAcknowledgementV1> {
+        self.acknowledgement.as_ref()
+    }
+
+    /// Validate and atomically commit a sender payment.
+    ///
+    /// Exact replay is idempotent. A different payment or any payment applied
+    /// after acknowledgement is rejected without changing the session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payment is invalid, mismatched, or conflicts
+    /// with already-committed session state.
+    pub fn accept_payment(
+        &mut self,
+        payment: OfflineCashPaymentV1,
+    ) -> Result<OfflineCashWalletSessionEventV1, KagemushaValidationError> {
+        if payment.artifact_manifest_digest != self.expected_artifact_manifest_sha256 {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "offline_cash.session.artifact_manifest_binding",
+            });
+        }
+        payment.validate_against(&self.request)?;
+        if self.acknowledgement.is_some() {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "offline_cash.session.payment_after_acknowledgement",
+            });
+        }
+        if let Some(existing) = self.payment.as_ref() {
+            return if existing == &payment {
+                Ok(OfflineCashWalletSessionEventV1::PaymentReplay)
+            } else {
+                Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "offline_cash.session.conflicting_payment",
+                })
+            };
+        }
+        self.payment = Some(payment);
+        Ok(OfflineCashWalletSessionEventV1::PaymentCommitted)
+    }
+
+    /// Validate and atomically accept a receiver acknowledgement.
+    ///
+    /// Exact replay is idempotent. A different acknowledgement is rejected
+    /// without changing the session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no payment is committed or when the
+    /// acknowledgement is invalid, mismatched, oversized, or conflicting.
+    pub fn accept_acknowledgement(
+        &mut self,
+        acknowledgement: OfflineCashAcknowledgementV1,
+    ) -> Result<OfflineCashWalletSessionEventV1, KagemushaValidationError> {
+        let payment =
+            self.payment
+                .as_ref()
+                .ok_or(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "offline_cash.session.acknowledgement_before_payment",
+                })?;
+        acknowledgement.validate_against(&self.request, payment)?;
+        validate_offline_cash_session_v1(&self.request, payment, &acknowledgement)?;
+        if let Some(existing) = self.acknowledgement.as_ref() {
+            return if existing == &acknowledgement {
+                Ok(OfflineCashWalletSessionEventV1::AcknowledgementReplay)
+            } else {
+                Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "offline_cash.session.conflicting_acknowledgement",
+                })
+            };
+        }
+        self.acknowledgement = Some(acknowledgement);
+        Ok(OfflineCashWalletSessionEventV1::Acknowledged)
+    }
+}
+
+fn offline_cash_text_max_for_raw(raw_max: usize) -> usize {
+    OFFLINE_CASH_TEXT_PREFIX_V1.len() + unpadded_base64url_len(raw_max)
+}
+
+fn encode_offline_cash_text_v1<T: Encode>(
+    value: &T,
+    raw_max: usize,
+) -> Result<String, KagemushaValidationError> {
+    let bytes = norito::encode_canonical(value)?;
+    if bytes.len() > raw_max {
+        return Err(KagemushaValidationError::EncodedSizeExceeded {
+            actual: bytes.len(),
+            max: raw_max,
+        });
+    }
+    Ok(format!(
+        "{OFFLINE_CASH_TEXT_PREFIX_V1}{}",
+        URL_SAFE_NO_PAD.encode(bytes)
+    ))
+}
+
+fn decode_offline_cash_text_v1(
+    text: &str,
+    raw_max: usize,
+    field: &'static str,
+) -> Result<Vec<u8>, KagemushaValidationError> {
+    let text_max = offline_cash_text_max_for_raw(raw_max);
+    if text.len() > text_max {
+        return Err(KagemushaValidationError::EncodedSizeExceeded {
+            actual: text.len(),
+            max: text_max,
+        });
+    }
+    let encoded = text
+        .strip_prefix(OFFLINE_CASH_TEXT_PREFIX_V1)
+        .ok_or(KagemushaValidationError::InvalidRecursiveSpendProof { field })?;
+    if encoded.is_empty()
+        || encoded.contains('=')
+        || !encoded.is_ascii()
+        || encoded.bytes().any(|byte| byte.is_ascii_whitespace())
+    {
+        return Err(KagemushaValidationError::InvalidRecursiveSpendProof { field });
+    }
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| KagemushaValidationError::InvalidRecursiveSpendProof { field })?;
+    if bytes.len() > raw_max || URL_SAFE_NO_PAD.encode(&bytes) != encoded {
+        return Err(KagemushaValidationError::InvalidRecursiveSpendProof { field });
+    }
+    Ok(bytes)
+}
+
+/// Canonical kgm2 text adapter for peer transports.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OfflineCashPeerAdapterV1;
+
+impl OfflineCashPeerAdapterV1 {
+    /// Encode one validated receiver request as canonical unpadded kgm2 text.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request is invalid or oversized.
+    pub fn encode_payment_request(
+        &self,
+        request: &OfflineCashPaymentRequestV1,
+    ) -> Result<String, KagemushaValidationError> {
+        request.validate()?;
+        encode_offline_cash_text_v1(request, OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1)
+    }
+
+    /// Decode and validate one canonical unpadded kgm2 receiver request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a malformed, padded, non-canonical, oversized, or invalid request.
+    pub fn decode_payment_request(
+        &self,
+        text: &str,
+    ) -> Result<OfflineCashPaymentRequestV1, KagemushaValidationError> {
+        let bytes = decode_offline_cash_text_v1(
+            text,
+            OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1,
+            "offline_cash.peer.request_text",
+        )?;
+        OfflineCashPaymentRequestV1::decode_canonical_exact(&bytes)
+    }
+
+    /// Encode one validated sender payment as canonical unpadded kgm2 text.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payment does not bind the request or is oversized.
+    pub fn encode_payment(
+        &self,
+        request: &OfflineCashPaymentRequestV1,
+        payment: &OfflineCashPaymentV1,
+    ) -> Result<String, KagemushaValidationError> {
+        payment.validate_against(request)?;
+        encode_offline_cash_text_v1(payment, OFFLINE_CASH_PAYMENT_MAX_BYTES_V1)
+    }
+
+    /// Decode and validate one canonical unpadded kgm2 sender payment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a malformed, padded, non-canonical, oversized,
+    /// invalid, or request-mismatched payment.
+    pub fn decode_payment(
+        &self,
+        request: &OfflineCashPaymentRequestV1,
+        text: &str,
+    ) -> Result<OfflineCashPaymentV1, KagemushaValidationError> {
+        let bytes = decode_offline_cash_text_v1(
+            text,
+            OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
+            "offline_cash.peer.payment_text",
+        )?;
+        OfflineCashPaymentV1::decode_canonical_exact_against(&bytes, request)
+    }
+
+    /// Encode one validated acknowledgement as canonical unpadded kgm2 text.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the acknowledgement does not bind the request and
+    /// payment or is oversized.
+    pub fn encode_acknowledgement(
+        &self,
+        request: &OfflineCashPaymentRequestV1,
+        payment: &OfflineCashPaymentV1,
+        acknowledgement: &OfflineCashAcknowledgementV1,
+    ) -> Result<String, KagemushaValidationError> {
+        acknowledgement.validate_against(request, payment)?;
+        encode_offline_cash_text_v1(acknowledgement, OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1)
+    }
+
+    /// Decode and validate one canonical unpadded kgm2 acknowledgement.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a malformed, padded, non-canonical, oversized,
+    /// invalid, or session-mismatched acknowledgement.
+    pub fn decode_acknowledgement(
+        &self,
+        request: &OfflineCashPaymentRequestV1,
+        payment: &OfflineCashPaymentV1,
+        text: &str,
+    ) -> Result<OfflineCashAcknowledgementV1, KagemushaValidationError> {
+        let bytes = decode_offline_cash_text_v1(
+            text,
+            OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1,
+            "offline_cash.peer.acknowledgement_text",
+        )?;
+        OfflineCashAcknowledgementV1::decode_canonical_exact_against(&bytes, request, payment)
+    }
+}
+
 fn unpadded_base64url_len(raw_len: usize) -> usize {
     raw_len / 3 * 4
         + match raw_len % 3 {
@@ -1144,5 +1483,126 @@ mod tests {
                 .validate_against(&request, &payment)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn peer_adapter_roundtrips_strict_kgm2_text() {
+        let adapter = OfflineCashPeerAdapterV1;
+        let request = request();
+        let payment = payment(&request);
+        let acknowledgement = acknowledgement(&request, &payment);
+
+        let request_text = adapter
+            .encode_payment_request(&request)
+            .expect("encode request text");
+        assert!(request_text.starts_with(OFFLINE_CASH_TEXT_PREFIX_V1));
+        assert!(!request_text.contains('='));
+        let decoded_request = adapter
+            .decode_payment_request(&request_text)
+            .expect("decode request text");
+        assert_eq!(decoded_request, request);
+
+        let payment_text = adapter
+            .encode_payment(&request, &payment)
+            .expect("encode payment text");
+        let decoded_payment = adapter
+            .decode_payment(&request, &payment_text)
+            .expect("decode payment text");
+        assert_eq!(decoded_payment, payment);
+
+        let acknowledgement_text = adapter
+            .encode_acknowledgement(&request, &payment, &acknowledgement)
+            .expect("encode acknowledgement text");
+        let decoded_acknowledgement = adapter
+            .decode_acknowledgement(&request, &payment, &acknowledgement_text)
+            .expect("decode acknowledgement text");
+        assert_eq!(decoded_acknowledgement, acknowledgement);
+        assert!(
+            request_text.len() + payment_text.len() + acknowledgement_text.len()
+                <= OFFLINE_CASH_TEXT_SESSION_MAX_BYTES_V1
+        );
+
+        assert!(
+            adapter
+                .decode_payment_request(&format!("{request_text}="))
+                .is_err()
+        );
+        assert!(
+            adapter
+                .decode_payment_request(&format!(" {request_text}"))
+                .is_err()
+        );
+        assert!(
+            adapter
+                .decode_payment_request(&request_text.replacen("kgm2:", "kgm1:", 1))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn wallet_session_is_release_bound_monotonic_and_replay_safe() {
+        let request = request();
+        let payment_value = payment(&request);
+        let acknowledgement = acknowledgement(&request, &payment_value);
+        assert!(
+            OfflineCashWalletSessionV1::new(
+                request.clone(),
+                [0xFF; 32],
+                payment_value.artifact_manifest_digest,
+            )
+            .is_err()
+        );
+        let mut session = OfflineCashWalletSessionV1::new(
+            request.clone(),
+            request.release_id,
+            payment_value.artifact_manifest_digest,
+        )
+        .expect("release-bound session");
+        assert_eq!(
+            session.state(),
+            OfflineCashWalletSessionStateV1::ReceiveRequestReady
+        );
+        assert_eq!(
+            session
+                .accept_payment(payment_value.clone())
+                .expect("commit payment"),
+            OfflineCashWalletSessionEventV1::PaymentCommitted
+        );
+        assert_eq!(
+            session
+                .accept_payment(payment_value.clone())
+                .expect("idempotent payment replay"),
+            OfflineCashWalletSessionEventV1::PaymentReplay
+        );
+        let mut conflicting_payment = payment_value.clone();
+        conflicting_payment.encrypted_credit.push(0x44);
+        assert!(session.accept_payment(conflicting_payment).is_err());
+        assert_eq!(
+            session
+                .accept_acknowledgement(acknowledgement)
+                .expect("accept acknowledgement"),
+            OfflineCashWalletSessionEventV1::Acknowledged
+        );
+        assert_eq!(
+            session.state(),
+            OfflineCashWalletSessionStateV1::Acknowledged
+        );
+        let acknowledgement_replay = session
+            .acknowledgement()
+            .expect("stored acknowledgement")
+            .to_owned();
+        assert_eq!(
+            session
+                .accept_acknowledgement(acknowledgement_replay)
+                .expect("idempotent acknowledgement replay"),
+            OfflineCashWalletSessionEventV1::AcknowledgementReplay
+        );
+        assert!(session.accept_payment(payment_value).is_err());
+
+        let wrong_manifest =
+            OfflineCashWalletSessionV1::new(request.clone(), request.release_id, [0xEE; 32])
+                .expect("request binding is independent of payment");
+        let mut wrong_manifest = wrong_manifest;
+        assert!(wrong_manifest.accept_payment(payment(&request)).is_err());
     }
 }

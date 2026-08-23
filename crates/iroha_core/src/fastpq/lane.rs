@@ -911,7 +911,8 @@ mod tests {
         let calls = Arc::new(std::sync::Mutex::new(0usize));
         let retry_calls = Arc::clone(&calls);
         let (retry_handle, retry_task) = start_with_builder(None, None, None, move || {
-            Some(Arc::new(MockEngine { calls: retry_calls }) as Arc<dyn FastpqProofEngine>)
+            let engine: Arc<dyn FastpqProofEngine> = Arc::new(MockEngine { calls: retry_calls });
+            Some(engine)
         })
         .expect("lane retry registers");
         let deadline = Instant::now() + Duration::from_secs(1);
@@ -936,7 +937,8 @@ mod tests {
         let calls = Arc::new(std::sync::Mutex::new(0usize));
         let (handle, task) =
             start_with_builder(None, None, Some(external_shutdown.clone()), move || {
-                Some(Arc::new(MockEngine { calls }) as Arc<dyn FastpqProofEngine>)
+                let engine: Arc<dyn FastpqProofEngine> = Arc::new(MockEngine { calls });
+                Some(engine)
             })
             .expect("lane registers");
         let deadline = Instant::now() + Duration::from_secs(1);
@@ -1382,9 +1384,9 @@ mod tests {
     fn proof_completed_during_shutdown_is_not_enqueued() {
         let lane_shutdown = ShutdownSignal::new();
         let supervisor_shutdown = ShutdownSignal::new();
-        let engine = Arc::new(ShutdownDuringProofEngine {
+        let engine: Arc<dyn FastpqProofEngine> = Arc::new(ShutdownDuringProofEngine {
             shutdown: supervisor_shutdown.clone(),
-        }) as Arc<dyn FastpqProofEngine>;
+        });
         let bundle = sample_bundle();
         let batches = sample_batches(&bundle);
         assert_eq!(

@@ -528,6 +528,7 @@ for name in (
     "REQUIRED_BRIDGE_SYMBOLS",
     "SORAFS_APPEAL_FINANCE_C_SYMBOLS",
     "PRIVACY_COMPILED_PROFILE_C_SYMBOLS",
+    "OFFLINE_CASH_V1_C_SYMBOLS",
     "KAGEMUSHA_C_SYMBOLS",
 ):
     for symbol in shell_array(name):
@@ -579,6 +580,8 @@ def emit(symbol):
         print(symbol)
 
 emit("connect_norito_bridge_abi_version")
+for symbol in shell_array("OFFLINE_CASH_V1_C_SYMBOLS"):
+    emit(symbol)
 for symbol in shell_array("KAGEMUSHA_C_SYMBOLS"):
     emit(symbol)
 for symbol in shell_array("SORAFS_APPEAL_FINANCE_C_SYMBOLS"):

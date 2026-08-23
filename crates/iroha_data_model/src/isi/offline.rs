@@ -57,7 +57,7 @@ iroha_data_model_derive::model_single! {
     #[derive(Decode, Encode)]
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
-    /// Atomically stage one governed device policy and signed ABI-21 release.
+    /// Atomically stage one governed device policy and signed native-ABI22 release.
     ///
     /// Public issuance remains disabled until the separate enable transition.
     pub struct ActivateKagemushaRecursiveReleaseV4 {
@@ -217,21 +217,21 @@ impl crate::seal::Instruction for AuthorizeKagemushaTairaCanaryV4 {}
 impl crate::seal::Instruction for RegisterOfflineDeviceAttestation {}
 impl crate::seal::Instruction for SetOfflineDeviceAttestationPolicy {}
 impl TopUpKagemushaRecursiveV4 {
-    /// Construct a scale-bound ABI-21 Kagemusha top-up instruction.
+    /// Construct a scale-bound native-ABI22, Kagemusha-data-V4 top-up instruction.
     #[must_use]
     pub fn new(request: KagemushaRecursiveSpendTopUpRequestV4) -> Self {
         Self { request }
     }
 }
 impl RedeemKagemushaRecursiveV4 {
-    /// Construct a branch-safe ABI-21 Kagemusha redemption instruction.
+    /// Construct a branch-safe native-ABI22, Kagemusha-data-V4 redemption instruction.
     #[must_use]
     pub fn new(request: KagemushaRecursiveSpendRedeemRequestV4) -> Self {
         Self { request }
     }
 }
 impl ActivateKagemushaRecursiveReleaseV4 {
-    /// Construct an atomic device-policy and ABI-21 release staging instruction.
+    /// Construct an atomic device-policy and native-ABI22 release staging instruction.
     #[must_use]
     pub fn new(
         promotion_binding: KagemushaV4PromotionBindingV1,

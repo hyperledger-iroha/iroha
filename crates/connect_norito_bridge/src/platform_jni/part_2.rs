@@ -2144,7 +2144,7 @@ pub(super) fn java_kagemusha_authenticated_artifact_set_v4_fields(
         || artifact_set.max_proof_bytes
             > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
     {
-        return Err("artifactSet.maxProofBytes exceeds the ABI-21 V4 release limit".to_owned());
+        return Err("artifactSet.maxProofBytes exceeds the ABI22 V4 release limit".to_owned());
     }
     if artifact_set.asset_scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2 {
         return Err("artifactSet.assetScale exceeds the offline payment limit".to_owned());
@@ -2192,7 +2192,7 @@ pub(super) fn java_kagemusha_project_readiness_v4_fields(
     if readiness.required_bridge_abi_version
         != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
     {
-        return Err("required bridge ABI must be 22 for the ABI-21/V4 contract".to_owned());
+        return Err("required bridge ABI must be 22 for the ABI22/V4 contract".to_owned());
     }
     if readiness.max_hops != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2 {
         return Err("maximum hop count does not match the protocol contract".to_owned());
@@ -2289,12 +2289,12 @@ pub(super) fn java_kagemusha_project_readiness_v4_fields(
     }
     let recursive_pair_present = !step_eq.is_empty() && !step_ep.is_empty();
     if step_eq.is_empty() != step_ep.is_empty() {
-        return Err("ABI-21 V4 recursive verifiers must be reported atomically".to_owned());
+        return Err("ABI22 V4 recursive verifiers must be reported atomically".to_owned());
     }
     let artifact_set = match readiness.artifact_set.as_ref() {
         None => {
             if recursive_pair_present {
-                return Err("artifactSet is required with the ABI-21 V4 verifier pair".to_owned());
+                return Err("artifactSet is required with the ABI22 V4 verifier pair".to_owned());
             }
             if readiness.proof_backend_available {
                 return Err(
@@ -2305,7 +2305,7 @@ pub(super) fn java_kagemusha_project_readiness_v4_fields(
         }
         Some(artifact_set) => {
             if !recursive_pair_present {
-                return Err("artifactSet requires the ABI-21 V4 verifier pair".to_owned());
+                return Err("artifactSet requires the ABI22 V4 verifier pair".to_owned());
             }
             java_kagemusha_authenticated_artifact_set_v4_fields(artifact_set)?;
             if artifact_set.activation_height > readiness.evaluated_block_height
@@ -2390,7 +2390,7 @@ pub(super) fn java_kagemusha_project_readiness_v4_fields(
     if (readiness.artifact_set.is_none() && registry_blocker_count != 1)
         || (readiness.artifact_set.is_some() && registry_blocker_count != 0)
     {
-        return Err("artifactSet contradicts the ABI-21 V4 registry blocker set".to_owned());
+        return Err("artifactSet contradicts the ABI22 V4 registry blocker set".to_owned());
     }
     let expected_recursive_lineage_supported = readiness.proof_backend_available
         && readiness.artifact_set.is_some()
@@ -2398,7 +2398,7 @@ pub(super) fn java_kagemusha_project_readiness_v4_fields(
         && !step_ep.is_empty();
     if readiness.recursive_lineage_supported != expected_recursive_lineage_supported {
         return Err(
-            "recursiveLineageSupported must equal the exact authenticated ABI-21 lineage conjunction"
+            "recursiveLineageSupported must equal the exact authenticated ABI22 lineage conjunction"
                 .to_owned(),
         );
     }
@@ -2420,7 +2420,7 @@ pub(super) fn java_kagemusha_project_readiness_v4_fields(
         && !step_ep.is_empty()
         && readiness.blockers.is_empty();
     if readiness.ready != expected_ready {
-        return Err("ready must equal the complete ABI-21 runtime conjunction".to_owned());
+        return Err("ready must equal the complete ABI22 runtime conjunction".to_owned());
     }
     let mut fields = vec![
         readiness.cash_handoff_capability.into_bytes(),

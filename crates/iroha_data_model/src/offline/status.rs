@@ -72,11 +72,11 @@ pub struct OfflineActiveTransferVerifier {
 pub type OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier;
 /// Active confidential-unshield verifier selected at the readiness snapshot.
 pub type OfflineActiveUnshieldVerifier = OfflineActiveTransferVerifier;
-/// Active ABI-21 V4 recursive `StepEq` verifier selected at the readiness snapshot.
+/// Active native-ABI22, data-V4 recursive `StepEq` verifier selected at the readiness snapshot.
 pub type OfflineActiveRecursiveStepEqVerifier = OfflineActiveTransferVerifier;
-/// Active ABI-21 V4 recursive `StepEp` verifier selected at the readiness snapshot.
+/// Active native-ABI22, data-V4 recursive `StepEp` verifier selected at the readiness snapshot.
 pub type OfflineActiveRecursiveStepEpVerifier = OfflineActiveTransferVerifier;
-/// Authenticated ABI-21 recursive release selected at a readiness snapshot.
+/// Authenticated native-ABI22, data-V4 recursive release selected at a readiness snapshot.
 ///
 /// Every digest is lowercase hexadecimal, non-zero, and distinct in public JSON. The identity is
 /// emitted only after Core authenticates the release policy, attestation, evidence, manifest,
@@ -227,7 +227,7 @@ pub struct OfflineReadiness {
     pub active_recursive_step_eq_verifier: Option<OfflineActiveRecursiveStepEqVerifier>,
     /// Active recursive `StepEp` verifier at the evaluated height.
     pub active_recursive_step_ep_verifier: Option<OfflineActiveRecursiveStepEpVerifier>,
-    /// Exact authenticated ABI-21 release identity.
+    /// Exact authenticated native-ABI22, data-V4 release identity.
     pub artifact_set: Option<OfflineAuthenticatedArtifactSet>,
     /// Whether the authenticated V4 material constructs the production backend.
     pub proof_backend_available: bool,
@@ -237,6 +237,75 @@ pub struct OfflineReadiness {
     pub ready: bool,
     /// Complete known blocker set.
     pub blockers: Vec<OfflineReadinessBlocker>,
+}
+
+/// Authenticated native artifact identity required before an Offline Cash V1 wallet session can
+/// exist.
+///
+/// This is intentionally distinct from [`OfflineReadiness`]: node readiness describes committed
+/// chain policy, while this value proves which ABI22 native release is actually installed in the
+/// calling SDK process.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    IntoSchema,
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct OfflineCashReleaseStatusV1 {
+    /// True only when both authenticated identities are installed and usable.
+    pub available: bool,
+    /// Native bridge ABI reported by the loaded artifact, when a bridge was found.
+    pub native_bridge_abi_version: Option<u32>,
+    /// Authenticated release identity selected by the installed bridge.
+    pub installed_release_id: Option<[u8; 32]>,
+    /// SHA-256 identity of the installed authenticated artifact manifest.
+    pub installed_artifact_manifest_sha256: Option<[u8; 32]>,
+    /// Stable fail-closed blocker code, absent only for an available status.
+    pub blocker: Option<String>,
+}
+
+impl OfflineCashReleaseStatusV1 {
+    /// Return whether the status is internally consistent and binds an exact ABI22 artifact set.
+    #[must_use]
+    pub fn is_well_formed(&self) -> bool {
+        if !self.available {
+            return self.installed_release_id.is_none()
+                && self.installed_artifact_manifest_sha256.is_none()
+                && self
+                    .blocker
+                    .as_ref()
+                    .is_some_and(|blocker| !blocker.is_empty());
+        }
+        self.native_bridge_abi_version
+            == Some(super::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4)
+            && self
+                .installed_release_id
+                .is_some_and(|digest| digest != [0; 32])
+            && self
+                .installed_artifact_manifest_sha256
+                .is_some_and(|digest| digest != [0; 32])
+            && self.blocker.is_none()
+    }
+
+    /// Require exact equality with both identities pinned by a signed runtime manifest.
+    #[must_use]
+    pub fn matches(
+        &self,
+        expected_release_id: [u8; 32],
+        expected_artifact_manifest_sha256: [u8; 32],
+    ) -> bool {
+        self.is_well_formed()
+            && expected_release_id != [0; 32]
+            && expected_artifact_manifest_sha256 != [0; 32]
+            && self.installed_release_id == Some(expected_release_id)
+            && self.installed_artifact_manifest_sha256 == Some(expected_artifact_manifest_sha256)
+    }
 }
 /// Universal offline protocol capability projection embedded in node status.
 #[derive(
@@ -500,6 +569,34 @@ mod tests {
         assert!(norito::json::from_json::<OfflineReadiness>(&unknown).is_err());
         let duplicate = json.replacen("\"max_hops\":8", "\"max_hops\":8,\"max_hops\":8", 1);
         assert!(norito::json::from_json::<OfflineReadiness>(&duplicate).is_err());
+    }
+    #[test]
+    fn offline_cash_release_status_requires_abi22_and_both_authenticated_identities() {
+        let release_id = [0x11; 32];
+        let manifest = [0x22; 32];
+        let status = OfflineCashReleaseStatusV1 {
+            available: true,
+            native_bridge_abi_version: Some(22),
+            installed_release_id: Some(release_id),
+            installed_artifact_manifest_sha256: Some(manifest),
+            blocker: None,
+        };
+        assert!(status.is_well_formed());
+        assert!(status.matches(release_id, manifest));
+
+        let unavailable = OfflineCashReleaseStatusV1 {
+            available: false,
+            native_bridge_abi_version: Some(22),
+            installed_release_id: None,
+            installed_artifact_manifest_sha256: None,
+            blocker: Some("offline-cash-v1-authenticated-release-unavailable".to_owned()),
+        };
+        assert!(unavailable.is_well_formed());
+        assert!(!unavailable.matches(release_id, manifest));
+
+        let mut mismatched = status;
+        mismatched.native_bridge_abi_version = Some(21);
+        assert!(!mismatched.is_well_formed());
     }
     #[test]
     fn universal_status_norito_roundtrip_preserves_exact_projection() {

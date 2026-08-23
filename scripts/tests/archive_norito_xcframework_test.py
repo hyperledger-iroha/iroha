@@ -25,7 +25,7 @@ VALIDATOR = ROOT / "scripts/validate_norito_bridge_xcframework.py"
 SOURCE_DATE_EPOCH = "1700000001"
 NORMALIZED_ZIP_TIME = (2023, 11, 14, 22, 13, 20)
 KNOWN_FIXTURE_ARCHIVE_SHA256 = (
-    "0f7dbc53223d921bd5180c73a88aa1d76ee33a517f4502917394b6a22ff33ba5"
+    "21802302734a4a873e18593da08c7cbb6ba9ff4c49ffa7fb8288a92e5832412a"
 )
 SLICE_METADATA = {
     "ios-arm64": ("ios", ["arm64"], None),
@@ -726,7 +726,7 @@ print(f"{digest} {size}")
             builder,
         )
         self.assertIn("protocol_abis != header_abis", builder)
-        self.assertIn("KAGEMUSHA_ARTIFACT_ABI_VERSION=21", builder)
+        self.assertIn("KAGEMUSHA_ARTIFACT_ABI_VERSION=22", builder)
         self.assertIn(
             '"native_bridge_abi_version": $BRIDGE_ABI_VERSION,',
             builder,

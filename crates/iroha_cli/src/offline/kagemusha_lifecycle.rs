@@ -1,6 +1,7 @@
 //! Exact-payload, detached-multisignature Kagemusha V4 lifecycle corridor.
 
 use crate::{Run, RunContext};
+use base64::Engine as _;
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr as _, bail, eyre};
 use iroha::{
@@ -13,6 +14,10 @@ use iroha::{
                 ActivateKagemushaRecursiveReleaseV4, CancelKagemushaRecursiveReleaseV4,
                 DeactivateKagemushaRecursiveIssuanceV4, EnableKagemushaRecursiveIssuanceV4,
             },
+        },
+        offline::{
+            KagemushaV4ReleaseLifecyclePhaseV1, KagemushaV4ReleaseLifecycleStateV1,
+            kagemusha_v4_release_lifecycle_state_key,
         },
         soracloud::{
             CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestSignatureWitnessV1,
@@ -68,6 +73,8 @@ impl Args {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Read and authenticate one manifest-scoped committed lifecycle record.
+    Status(Status),
     /// Prepare the exact ordinary transaction and authenticated fee-quote draft.
     Prepare(Prepare),
     /// Produce one detached member signature for the exact fee-quote request.
@@ -86,6 +93,7 @@ impl Run for Args {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         reject_legacy_instruction_io(context)?;
         match self.command {
+            Command::Status(args) => args.run(context),
             Command::Prepare(args) => args.run(context),
             Command::SignFeeQuote(args) => args.run(context),
             Command::FinalizeFeeQuote(args) => args.run(context),
@@ -107,6 +115,194 @@ enum LifecycleKind {
     Cancel,
     /// Deactivate issuance for an enabled release.
     Deactivate,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum LifecyclePhase {
+    Staged,
+    Enabled,
+    Cancelled,
+    Deactivated,
+}
+
+impl LifecyclePhase {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Staged => "staged",
+            Self::Enabled => "enabled",
+            Self::Cancelled => "cancelled",
+            Self::Deactivated => "deactivated",
+        }
+    }
+}
+
+#[derive(ClapArgs, Debug)]
+struct Status {
+    /// Exact canonical lowercase manifest SHA-256 selecting the lifecycle key.
+    #[arg(long, value_name = "64_LOWER_HEX")]
+    manifest_sha256: String,
+    /// Exact canonical lowercase promotion identity expected in committed state.
+    #[arg(long, value_name = "64_LOWER_HEX")]
+    promotion_id: String,
+    /// Required committed phase; mismatch exits non-zero.
+    #[arg(long, value_enum)]
+    expected_phase: LifecyclePhase,
+}
+
+impl Run for Status {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let manifest_sha256 = parse_nonzero_lower_hex32(
+            &self.manifest_sha256,
+            "Kagemusha lifecycle manifest SHA-256",
+        )?;
+        let promotion_id = parse_nonzero_lower_hex32(&self.promotion_id, "Kagemusha promotion id")?;
+        let state_path = kagemusha_v4_release_lifecycle_state_key(&manifest_sha256)
+            .map_err(|error| eyre!("invalid lifecycle state selector: {error}"))?;
+        let response = context
+            .client_from_config()
+            .get_contract_state_path_json(&state_path)
+            .wrap_err("failed to read committed Kagemusha lifecycle state")?;
+        let state_bytes = exact_contract_state_value(&response, &state_path)?;
+        let state = KagemushaV4ReleaseLifecycleStateV1::decode_canonical(&state_bytes)
+            .map_err(|error| eyre!("invalid committed Kagemusha lifecycle state: {error}"))?;
+        if state.artifact_binding.manifest_sha256 != manifest_sha256 {
+            bail!("committed lifecycle manifest differs from the requested manifest");
+        }
+        if state.promotion_binding.promotion_id != promotion_id {
+            bail!("committed lifecycle promotion differs from the requested promotion");
+        }
+        let actual_phase = lifecycle_phase(&state);
+        if actual_phase != self.expected_phase {
+            bail!(
+                "committed lifecycle phase is {}, expected {}",
+                actual_phase.as_str(),
+                self.expected_phase.as_str()
+            );
+        }
+        context.print_data(&lifecycle_status_report(&state_path, &state_bytes, &state)?)
+    }
+}
+
+fn parse_nonzero_lower_hex32(value: &str, label: &str) -> Result<[u8; 32]> {
+    if value.len() != 64
+        || !value
+            .as_bytes()
+            .iter()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        bail!("{label} must be exactly 64 lowercase hexadecimal characters");
+    }
+    let mut decoded = [0_u8; 32];
+    hex::decode_to_slice(value, &mut decoded).wrap_err_with(|| format!("invalid {label}"))?;
+    if decoded == [0; 32] {
+        bail!("{label} must be non-zero");
+    }
+    Ok(decoded)
+}
+
+fn exact_contract_state_value(response: &norito::json::Value, state_path: &str) -> Result<Vec<u8>> {
+    let root = response
+        .as_object()
+        .ok_or_else(|| eyre!("contract state response is not an object"))?;
+    if root.get("path").and_then(norito::json::Value::as_str) != Some(state_path) {
+        bail!("contract state response does not bind the requested path");
+    }
+    let entries = root
+        .get("entries")
+        .and_then(norito::json::Value::as_array)
+        .ok_or_else(|| eyre!("contract state response has no entries array"))?;
+    let [entry] = entries.as_slice() else {
+        bail!("contract state response must contain exactly one entry");
+    };
+    let entry = entry
+        .as_object()
+        .ok_or_else(|| eyre!("contract state entry is not an object"))?;
+    if entry.get("path").and_then(norito::json::Value::as_str) != Some(state_path)
+        || entry.get("found").and_then(norito::json::Value::as_bool) != Some(true)
+    {
+        bail!("contract state entry does not prove the requested path exists");
+    }
+    let encoded = entry
+        .get("value_b64")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("contract state entry omits its exact value"))?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .wrap_err("contract state value is not standard base64")?;
+    if base64::engine::general_purpose::STANDARD.encode(&decoded) != encoded {
+        bail!("contract state value uses an alternate base64 encoding");
+    }
+    if entry.get("value_len").and_then(norito::json::Value::as_u64)
+        != Some(u64::try_from(decoded.len()).wrap_err("contract state value length overflow")?)
+    {
+        bail!("contract state value length does not match its decoded bytes");
+    }
+    Ok(decoded)
+}
+
+const fn lifecycle_phase(state: &KagemushaV4ReleaseLifecycleStateV1) -> LifecyclePhase {
+    match &state.phase {
+        KagemushaV4ReleaseLifecyclePhaseV1::Staged => LifecyclePhase::Staged,
+        KagemushaV4ReleaseLifecyclePhaseV1::Enabled(_) => LifecyclePhase::Enabled,
+        KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(_) => LifecyclePhase::Cancelled,
+        KagemushaV4ReleaseLifecyclePhaseV1::Deactivated(_) => LifecyclePhase::Deactivated,
+    }
+}
+
+fn lifecycle_status_report(
+    state_path: &str,
+    state_bytes: &[u8],
+    state: &KagemushaV4ReleaseLifecycleStateV1,
+) -> Result<norito::json::Value> {
+    use sha2::{Digest as _, Sha256};
+
+    let transition = match &state.phase {
+        KagemushaV4ReleaseLifecyclePhaseV1::Staged => norito::json::Value::Null,
+        KagemushaV4ReleaseLifecyclePhaseV1::Enabled(enabled) => norito::json!({
+            "kind": "enable",
+            "transition_id": (hex::encode(enabled.transition_id)),
+            "transaction_hash": (enabled.enable_transaction_intent.to_string()),
+            "height": (enabled.enabled_at_height),
+            "unix_ms": (enabled.enabled_at_unix_ms),
+            "canary_transaction_hash": (enabled.canary_transaction_intent.to_string()),
+            "canary_finalized_height": (enabled.canary_finalized_height),
+            "canary_finalized_block_hash": (enabled.canary_finalized_block_hash.to_string()),
+            "highest_observed_tip_height": (enabled.highest_observed_tip_height),
+        }),
+        KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(cancelled) => norito::json!({
+            "kind": "cancel",
+            "transition_id": (hex::encode(cancelled.cancellation.transition_id)),
+            "transaction_hash": (cancelled.cancellation_transaction_intent.to_string()),
+            "height": (cancelled.cancelled_at_height),
+            "unix_ms": (cancelled.cancelled_at_unix_ms),
+        }),
+        KagemushaV4ReleaseLifecyclePhaseV1::Deactivated(deactivated) => norito::json!({
+            "kind": "deactivate",
+            "transition_id": (hex::encode(deactivated.deactivation.transition_id)),
+            "transaction_hash": (deactivated.deactivation_transaction_intent.to_string()),
+            "height": (deactivated.deactivated_at_height),
+            "unix_ms": (deactivated.deactivated_at_unix_ms),
+            "enable_transaction_hash": (deactivated.enabled.enable_transaction_intent.to_string()),
+        }),
+    };
+    Ok(norito::json!({
+        "schema": "iroha.offline.kagemusha.lifecycle-status.v1",
+        "canonical": true,
+        "state_path": state_path,
+        "state_norito_byte_len": (u64::try_from(state_bytes.len()).wrap_err("lifecycle state length overflow")?),
+        "state_norito_sha256": (hex::encode(Sha256::digest(state_bytes))),
+        "manifest_sha256": (hex::encode(state.artifact_binding.manifest_sha256)),
+        "artifact_generation": (state.artifact_binding.generation.clone()),
+        "promotion_id": (hex::encode(state.promotion_binding.promotion_id)),
+        "network_id": (state.promotion_binding.network_id.to_string()),
+        "governance_authority": (state.governance_authority.to_string()),
+        "phase": (lifecycle_phase(state).as_str()),
+        "issuance_enabled": (state.issuance_enabled()),
+        "stage_transaction_hash": (state.stage_transaction_intent.to_string()),
+        "staged_at_height": (state.staged_at_height),
+        "staged_at_unix_ms": (state.staged_at_unix_ms),
+        "transition": (transition),
+    }))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -199,11 +395,13 @@ impl Prepare {
         };
         validate_fee_quote_draft(&draft, self.kind)?;
         write_canonical_no_replace(&self.output, &draft, "lifecycle fee-quote draft")?;
-        context.println(format_args!(
-            "prepared exact {:?} fee-quote draft at {}",
+        print_lifecycle_artifact_report(
+            context,
+            "prepared",
             self.kind,
-            self.output.display()
-        ))
+            &self.output,
+            "fee_quote_draft",
+        )
     }
 }
 
@@ -241,10 +439,13 @@ impl SignFeeQuote {
             &artifact,
             "lifecycle fee-quote detached signature",
         )?;
-        context.println(format_args!(
-            "wrote detached fee-quote signature at {}",
-            self.output.display()
-        ))
+        print_lifecycle_artifact_report(
+            context,
+            "signed",
+            self.kind,
+            &self.output,
+            "fee_quote_signature",
+        )
     }
 }
 
@@ -304,11 +505,13 @@ impl FinalizeFeeQuote {
             .wrap_err("failed to freeze exact quoted lifecycle payload")?;
         let bytes = builder.encode_payload();
         publish_no_replace(&self.output, &bytes, "quoted lifecycle transaction payload")?;
-        context.println(format_args!(
-            "froze exact quoted {:?} payload at {}",
+        print_lifecycle_artifact_report(
+            context,
+            "finalized",
             self.kind,
-            self.output.display()
-        ))
+            &self.output,
+            "quoted_transaction_payload",
+        )
     }
 }
 
@@ -343,10 +546,13 @@ impl SignTransaction {
             &signature,
             "lifecycle transaction detached signature",
         )?;
-        context.println(format_args!(
-            "wrote detached transaction signature at {}",
-            self.output.display()
-        ))
+        print_lifecycle_artifact_report(
+            context,
+            "signed",
+            self.kind,
+            &self.output,
+            "transaction_signature",
+        )
     }
 }
 
@@ -376,11 +582,13 @@ impl AssembleTransaction {
             .encode_wire_v1()
             .map_err(|error| eyre!("failed to encode exact lifecycle transaction: {error}"))?;
         publish_no_replace(&self.output, &bytes, "assembled lifecycle transaction")?;
-        context.println(format_args!(
-            "assembled exact {:?} transaction at {}",
+        print_lifecycle_artifact_report(
+            context,
+            "assembled",
             self.kind,
-            self.output.display()
-        ))
+            &self.output,
+            "signed_transaction",
+        )
     }
 }
 
@@ -427,8 +635,46 @@ impl SubmitTransaction {
         let hash = client
             .submit_prepared_transaction_payload(&prepared)
             .wrap_err("failed to submit exact lifecycle transaction")?;
-        context.println_data(hash)
+        use sha2::{Digest as _, Sha256};
+        context.print_data(&norito::json!({
+            "schema": "iroha.offline.kagemusha.lifecycle-submission.v1",
+            "status": "submitted",
+            "kind": (lifecycle_kind_name(self.kind)),
+            "transaction_hash": (hash.to_string()),
+            "transaction_norito_byte_len": (u64::try_from(bytes.len()).wrap_err("lifecycle transaction length overflow")?),
+            "transaction_norito_sha256": (hex::encode(Sha256::digest(&bytes))),
+        }))
     }
+}
+
+const fn lifecycle_kind_name(kind: LifecycleKind) -> &'static str {
+    match kind {
+        LifecycleKind::Stage => "stage",
+        LifecycleKind::Enable => "enable",
+        LifecycleKind::Cancel => "cancel",
+        LifecycleKind::Deactivate => "deactivate",
+    }
+}
+
+fn print_lifecycle_artifact_report<C: RunContext>(
+    context: &mut C,
+    status: &'static str,
+    kind: LifecycleKind,
+    output: &Path,
+    artifact: &'static str,
+) -> Result<()> {
+    use sha2::{Digest as _, Sha256};
+
+    let bytes = read_bounded_stable(output, LIFECYCLE_ARTIFACT_MAX_BYTES, artifact)?;
+    context.print_data(&norito::json!({
+        "schema": "iroha.offline.kagemusha.lifecycle-artifact.v1",
+        "status": status,
+        "kind": (lifecycle_kind_name(kind)),
+        "artifact": artifact,
+        "output": (output.display().to_string()),
+        "byte_len": (u64::try_from(bytes.len()).wrap_err("lifecycle artifact length overflow")?),
+        "sha256": (hex::encode(Sha256::digest(&bytes))),
+    }))
 }
 
 fn reject_legacy_instruction_io(context: &impl RunContext) -> Result<()> {
@@ -920,7 +1166,7 @@ mod tests {
 
     fn cancel_payload_with_policy(policy: MultisigPolicy) -> TransactionPayload {
         TransactionBuilder::new(
-            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+            "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
                 .parse()
                 .expect("fixture network id"),
             AccountId::new_multisig(policy),
@@ -1073,7 +1319,9 @@ mod tests {
         payload.instructions =
             Executable::Instructions(vec![cancel_instruction(), cancel_instruction()].into());
         assert!(require_lifecycle_payload(&payload, LifecycleKind::Cancel).is_err());
-        assert!(require_lifecycle_payload(&cancel_payload(&signers), LifecycleKind::Enable).is_err());
+        assert!(
+            require_lifecycle_payload(&cancel_payload(&signers), LifecycleKind::Enable).is_err()
+        );
     }
 
     #[test]
@@ -1086,6 +1334,52 @@ mod tests {
         assert!(
             require_fresh_timestamp(now + LIFECYCLE_FEE_QUOTE_MAX_CLOCK_SKEW_MS + 1, now).is_err()
         );
+    }
+
+    #[test]
+    fn lifecycle_status_selector_requires_nonzero_canonical_lower_hex() {
+        assert_eq!(
+            parse_nonzero_lower_hex32(&"42".repeat(32), "fixture").expect("valid digest"),
+            [0x42; 32]
+        );
+        assert!(parse_nonzero_lower_hex32(&"00".repeat(32), "fixture").is_err());
+        assert!(parse_nonzero_lower_hex32(&"AB".repeat(32), "fixture").is_err());
+        assert!(parse_nonzero_lower_hex32("42", "fixture").is_err());
+    }
+
+    #[test]
+    fn lifecycle_status_contract_state_value_is_path_and_length_bound() {
+        let state_path = "kagemusha_release_lifecycle_v4_fixture";
+        let value = b"canonical-state";
+        let response = norito::json!({
+            "path": state_path,
+            "entries": [{
+                "path": state_path,
+                "found": true,
+                "value_b64": (base64::engine::general_purpose::STANDARD.encode(value)),
+                "value_len": (u64::try_from(value.len()).expect("fixture length")),
+            }],
+            "offset": 0,
+            "limit": 1,
+        });
+        assert_eq!(
+            exact_contract_state_value(&response, state_path).expect("exact state value"),
+            value
+        );
+        assert!(exact_contract_state_value(&response, "other").is_err());
+
+        let wrong_length = norito::json!({
+            "path": state_path,
+            "entries": [{
+                "path": state_path,
+                "found": true,
+                "value_b64": (base64::engine::general_purpose::STANDARD.encode(value)),
+                "value_len": 1,
+            }],
+            "offset": 0,
+            "limit": 1,
+        });
+        assert!(exact_contract_state_value(&wrong_length, state_path).is_err());
     }
 
     #[cfg(unix)]
@@ -1109,9 +1403,6 @@ mod tests {
             publish_no_replace(&path, b"replacement", "test lifecycle payload").is_err(),
             "an existing archive must never be replaced"
         );
-        assert_eq!(
-            fs::read(path).expect("published bytes"),
-            b"exact-payload"
-        );
+        assert_eq!(fs::read(path).expect("published bytes"), b"exact-payload");
     }
 }

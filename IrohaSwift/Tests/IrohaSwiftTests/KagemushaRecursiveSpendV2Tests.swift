@@ -26,7 +26,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         )
         let tail = source[start.lowerBound...]
         let end = try XCTUnwrap(
-            tail.range(of: "/// Canonical unsigned ABI-21 online-to-offline request fields.")
+            tail.range(of: "/// Canonical unsigned ABI22 online-to-offline request fields.")
         )
         let implementation = String(tail[..<end.lowerBound])
 

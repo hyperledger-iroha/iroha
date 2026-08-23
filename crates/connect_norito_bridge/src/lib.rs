@@ -41,7 +41,12 @@ use iroha_data_model::{
     metadata::Metadata,
     name::Name,
     nexus::DataSpaceId,
-    offline::{KagemushaConfidentialMerklePathV2, KagemushaNoteMembershipWitnessV2},
+    offline::{
+        KagemushaConfidentialMerklePathV2, KagemushaNoteMembershipWitnessV2,
+        OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1, OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
+        OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1, OfflineCashAcknowledgementV1,
+        OfflineCashPaymentRequestV1, OfflineCashPaymentV1, OfflineCashPeerAdapterV1,
+    },
     privacy::{
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
         PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
@@ -380,7 +385,7 @@ impl BridgeError {
     }
 }
 type BridgeResult<T> = Result<T, BridgeError>;
-/// Rust-owned stack for ABI-21 artifact parsing and Halo2 execution, insulating offline cash from
+/// Rust-owned stack for ABI22 artifact parsing and Halo2 execution, insulating offline cash from
 /// Swift/ART caller stacks whose size Rust cannot control.
 const KAGEMUSHA_RECURSIVE_SPEND_WORKER_STACK_BYTES_V4: usize = 64 * 1024 * 1024;
 /// Process-wide permit preventing concurrent callers from multiplying the authenticated prover's
@@ -1565,6 +1570,435 @@ fn bridge_result_to_code(result: BridgeResult<()>) -> c_int {
         Ok(()) => 0,
         Err(err) => err.code(),
     }
+}
+
+fn offline_cash_bridge_error<T>(result: Result<T, impl core::fmt::Display>) -> BridgeResult<T> {
+    result.map_err(|_| BridgeError::KagemushaProve)
+}
+
+unsafe fn read_offline_cash_archive_v1(
+    archive_ptr: *const c_uchar,
+    archive_len: c_ulong,
+    maximum: usize,
+) -> BridgeResult<Vec<u8>> {
+    unsafe { read_kagemusha_archive_bytes_bounded(archive_ptr, archive_len, maximum) }
+}
+
+unsafe fn publish_offline_cash_output_v1(
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+    bytes: &[u8],
+    maximum: usize,
+) -> BridgeResult<()> {
+    clear_bridge_output_or_null(out_ptr, out_len)?;
+    if bytes.is_empty() || bytes.len() > maximum {
+        return Err(BridgeError::KagemushaProve);
+    }
+    unsafe { write_bytes_bridge(out_ptr, out_len, bytes) }
+}
+
+unsafe fn offline_cash_request_from_bridge_v1(
+    request_ptr: *const c_uchar,
+    request_len: c_ulong,
+) -> BridgeResult<OfflineCashPaymentRequestV1> {
+    let request = unsafe {
+        read_offline_cash_archive_v1(
+            request_ptr,
+            request_len,
+            OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1,
+        )
+    }?;
+    offline_cash_bridge_error(OfflineCashPaymentRequestV1::decode_canonical_exact(
+        &request,
+    ))
+}
+
+unsafe fn offline_cash_payment_from_bridge_v1(
+    request: &OfflineCashPaymentRequestV1,
+    payment_ptr: *const c_uchar,
+    payment_len: c_ulong,
+) -> BridgeResult<OfflineCashPaymentV1> {
+    let payment = unsafe {
+        read_offline_cash_archive_v1(payment_ptr, payment_len, OFFLINE_CASH_PAYMENT_MAX_BYTES_V1)
+    }?;
+    offline_cash_bridge_error(OfflineCashPaymentV1::decode_canonical_exact_against(
+        &payment, request,
+    ))
+}
+
+/// Decode, validate, and reproduce one exact canonical Offline Cash V1 receiver request.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_payment_request_canonicalize_v1(
+    request_ptr: *const c_uchar,
+    request_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_ptr, out_len);
+    let result = (|| {
+        let request = unsafe { offline_cash_request_from_bridge_v1(request_ptr, request_len) }?;
+        let canonical = offline_cash_bridge_error(norito::encode_canonical(&request))?;
+        unsafe {
+            publish_offline_cash_output_v1(
+                out_ptr,
+                out_len,
+                &canonical,
+                OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Decode, validate, and reproduce one exact request-bound Offline Cash V1 payment.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_payment_canonicalize_v1(
+    request_ptr: *const c_uchar,
+    request_len: c_ulong,
+    payment_ptr: *const c_uchar,
+    payment_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_ptr, out_len);
+    let result = (|| {
+        let request = unsafe { offline_cash_request_from_bridge_v1(request_ptr, request_len) }?;
+        let payment =
+            unsafe { offline_cash_payment_from_bridge_v1(&request, payment_ptr, payment_len) }?;
+        let canonical = offline_cash_bridge_error(norito::encode_canonical(&payment))?;
+        unsafe {
+            publish_offline_cash_output_v1(
+                out_ptr,
+                out_len,
+                &canonical,
+                OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Decode, validate, and reproduce one request-bound Offline Cash V1 payment only when its
+/// authenticated artifact manifest matches the exact digest pinned by the wallet session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_payment_canonicalize_for_session_v1(
+    request_ptr: *const c_uchar,
+    request_len: c_ulong,
+    payment_ptr: *const c_uchar,
+    payment_len: c_ulong,
+    expected_artifact_manifest_sha256_ptr: *const c_uchar,
+    expected_artifact_manifest_sha256_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_ptr, out_len);
+    let result = (|| {
+        let request = unsafe { offline_cash_request_from_bridge_v1(request_ptr, request_len) }?;
+        let payment =
+            unsafe { offline_cash_payment_from_bridge_v1(&request, payment_ptr, payment_len) }?;
+        let expected = unsafe {
+            read_offline_cash_archive_v1(
+                expected_artifact_manifest_sha256_ptr,
+                expected_artifact_manifest_sha256_len,
+                32,
+            )
+        }?;
+        let expected: [u8; 32] = expected
+            .try_into()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        if expected == [0; 32] || payment.artifact_manifest_digest != expected {
+            return Err(BridgeError::KagemushaProve);
+        }
+        let canonical = offline_cash_bridge_error(norito::encode_canonical(&payment))?;
+        unsafe {
+            publish_offline_cash_output_v1(
+                out_ptr,
+                out_len,
+                &canonical,
+                OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Decode, validate, and reproduce one exact request/payment-bound acknowledgement.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_acknowledgement_canonicalize_v1(
+    request_ptr: *const c_uchar,
+    request_len: c_ulong,
+    payment_ptr: *const c_uchar,
+    payment_len: c_ulong,
+    acknowledgement_ptr: *const c_uchar,
+    acknowledgement_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_ptr, out_len);
+    let result = (|| {
+        let request = unsafe { offline_cash_request_from_bridge_v1(request_ptr, request_len) }?;
+        let payment =
+            unsafe { offline_cash_payment_from_bridge_v1(&request, payment_ptr, payment_len) }?;
+        let acknowledgement_bytes = unsafe {
+            read_offline_cash_archive_v1(
+                acknowledgement_ptr,
+                acknowledgement_len,
+                OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1,
+            )
+        }?;
+        let acknowledgement = offline_cash_bridge_error(
+            OfflineCashAcknowledgementV1::decode_canonical_exact_against(
+                &acknowledgement_bytes,
+                &request,
+                &payment,
+            ),
+        )?;
+        let canonical = offline_cash_bridge_error(norito::encode_canonical(&acknowledgement))?;
+        unsafe {
+            publish_offline_cash_output_v1(
+                out_ptr,
+                out_len,
+                &canonical,
+                OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+unsafe fn offline_cash_text_from_bridge_v1(
+    text_ptr: *const c_uchar,
+    text_len: c_ulong,
+) -> BridgeResult<String> {
+    let text = unsafe {
+        read_offline_cash_archive_v1(
+            text_ptr,
+            text_len,
+            iroha_data_model::offline::OFFLINE_CASH_TEXT_SESSION_MAX_BYTES_V1,
+        )
+    }?;
+    String::from_utf8(text).map_err(|_| BridgeError::Utf8)
+}
+
+/// Encode one canonical Offline Cash V1 request as strict unpadded `kgm2:` text.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_peer_encode_payment_request_v1(
+    request_ptr: *const c_uchar,
+    request_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_ptr, out_len);
+    let result = (|| {
+        let request = unsafe { offline_cash_request_from_bridge_v1(request_ptr, request_len) }?;
+        let text =
+            offline_cash_bridge_error(OfflineCashPeerAdapterV1.encode_payment_request(&request))?;
+        unsafe {
+            publish_offline_cash_output_v1(
+                out_ptr,
+                out_len,
+                text.as_bytes(),
+                iroha_data_model::offline::OFFLINE_CASH_TEXT_SESSION_MAX_BYTES_V1,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Decode strict canonical `kgm2:` request text to exact canonical Norito.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_peer_decode_payment_request_v1(
+    text_ptr: *const c_uchar,
+    text_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_ptr, out_len);
+    let result = (|| {
+        let text = unsafe { offline_cash_text_from_bridge_v1(text_ptr, text_len) }?;
+        let request =
+            offline_cash_bridge_error(OfflineCashPeerAdapterV1.decode_payment_request(&text))?;
+        let canonical = offline_cash_bridge_error(norito::encode_canonical(&request))?;
+        unsafe {
+            publish_offline_cash_output_v1(
+                out_ptr,
+                out_len,
+                &canonical,
+                OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Encode one request-bound Offline Cash V1 payment as strict `kgm2:` text.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_peer_encode_payment_v1(
+    request_ptr: *const c_uchar,
+    request_len: c_ulong,
+    payment_ptr: *const c_uchar,
+    payment_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_ptr, out_len);
+    let result = (|| {
+        let request = unsafe { offline_cash_request_from_bridge_v1(request_ptr, request_len) }?;
+        let payment =
+            unsafe { offline_cash_payment_from_bridge_v1(&request, payment_ptr, payment_len) }?;
+        let text =
+            offline_cash_bridge_error(OfflineCashPeerAdapterV1.encode_payment(&request, &payment))?;
+        unsafe {
+            publish_offline_cash_output_v1(
+                out_ptr,
+                out_len,
+                text.as_bytes(),
+                iroha_data_model::offline::OFFLINE_CASH_TEXT_SESSION_MAX_BYTES_V1,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Decode strict `kgm2:` payment text against an exact receiver request.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_peer_decode_payment_v1(
+    request_ptr: *const c_uchar,
+    request_len: c_ulong,
+    text_ptr: *const c_uchar,
+    text_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_ptr, out_len);
+    let result = (|| {
+        let request = unsafe { offline_cash_request_from_bridge_v1(request_ptr, request_len) }?;
+        let text = unsafe { offline_cash_text_from_bridge_v1(text_ptr, text_len) }?;
+        let payment =
+            offline_cash_bridge_error(OfflineCashPeerAdapterV1.decode_payment(&request, &text))?;
+        let canonical = offline_cash_bridge_error(norito::encode_canonical(&payment))?;
+        unsafe {
+            publish_offline_cash_output_v1(
+                out_ptr,
+                out_len,
+                &canonical,
+                OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Encode one request/payment-bound acknowledgement as strict `kgm2:` text.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_peer_encode_acknowledgement_v1(
+    request_ptr: *const c_uchar,
+    request_len: c_ulong,
+    payment_ptr: *const c_uchar,
+    payment_len: c_ulong,
+    acknowledgement_ptr: *const c_uchar,
+    acknowledgement_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_ptr, out_len);
+    let result = (|| {
+        let request = unsafe { offline_cash_request_from_bridge_v1(request_ptr, request_len) }?;
+        let payment =
+            unsafe { offline_cash_payment_from_bridge_v1(&request, payment_ptr, payment_len) }?;
+        let acknowledgement_bytes = unsafe {
+            read_offline_cash_archive_v1(
+                acknowledgement_ptr,
+                acknowledgement_len,
+                OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1,
+            )
+        }?;
+        let acknowledgement = offline_cash_bridge_error(
+            OfflineCashAcknowledgementV1::decode_canonical_exact_against(
+                &acknowledgement_bytes,
+                &request,
+                &payment,
+            ),
+        )?;
+        let text = offline_cash_bridge_error(OfflineCashPeerAdapterV1.encode_acknowledgement(
+            &request,
+            &payment,
+            &acknowledgement,
+        ))?;
+        unsafe {
+            publish_offline_cash_output_v1(
+                out_ptr,
+                out_len,
+                text.as_bytes(),
+                iroha_data_model::offline::OFFLINE_CASH_TEXT_SESSION_MAX_BYTES_V1,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Decode strict `kgm2:` acknowledgement text against one exact handoff.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_peer_decode_acknowledgement_v1(
+    request_ptr: *const c_uchar,
+    request_len: c_ulong,
+    payment_ptr: *const c_uchar,
+    payment_len: c_ulong,
+    text_ptr: *const c_uchar,
+    text_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_ptr, out_len);
+    let result = (|| {
+        let request = unsafe { offline_cash_request_from_bridge_v1(request_ptr, request_len) }?;
+        let payment =
+            unsafe { offline_cash_payment_from_bridge_v1(&request, payment_ptr, payment_len) }?;
+        let text = unsafe { offline_cash_text_from_bridge_v1(text_ptr, text_len) }?;
+        let acknowledgement = offline_cash_bridge_error(
+            OfflineCashPeerAdapterV1.decode_acknowledgement(&request, &payment, &text),
+        )?;
+        let canonical = offline_cash_bridge_error(norito::encode_canonical(&acknowledgement))?;
+        unsafe {
+            publish_offline_cash_output_v1(
+                out_ptr,
+                out_len,
+                &canonical,
+                OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Probe the installed authenticated Offline Cash V1 release and artifact set.
+///
+/// The dedicated 22-artifact Offline Cash V1 registry is not production-published yet, so this
+/// ABI22 bridge must report unavailable instead of substituting the older Kagemusha V4 registry.
+/// Successful probing always initializes every output; callers must require `available == 1` and
+/// exact equality with both signed runtime-manifest digests before creating a wallet session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_release_probe_v1(
+    out_available: *mut u8,
+    out_release_id: *mut c_uchar,
+    out_release_id_len: c_ulong,
+    out_artifact_manifest_sha256: *mut c_uchar,
+    out_artifact_manifest_sha256_len: c_ulong,
+) -> c_int {
+    if out_available.is_null()
+        || out_release_id.is_null()
+        || out_artifact_manifest_sha256.is_null()
+        || out_release_id_len != 32
+        || out_artifact_manifest_sha256_len != 32
+    {
+        return BridgeError::NullPtr.code();
+    }
+    unsafe {
+        *out_available = 0;
+        ptr::write_bytes(out_release_id, 0, 32);
+        ptr::write_bytes(out_artifact_manifest_sha256, 0, 32);
+    }
+    0
 }
 const PRIVACY_BUFFER_HEADER_MAGIC: u64 = 0x4952_5041_484f_5249;
 const PRIVACY_BUFFER_HEADER_BYTES: usize = std::mem::size_of::<PrivacyBufferHeader>();
@@ -4989,7 +5423,7 @@ impl iroha_core::zk::kagemusha_artifact_source_v4::KagemushaAuthenticatedArtifac
         self.with_selected_file(parity, kind, |file| consume(file))
     }
 }
-/// One separately authenticated ABI-21 release retained in canonical
+/// One separately authenticated ABI22 release retained in canonical
 /// Eq/role then Ep/role manifest order.
 struct KagemushaRecursiveSpendInstalledArtifactSetV4 {
     promotion_record: iroha_data_model::offline::KagemushaRecursiveSpendPromotedReleaseV4,
@@ -5034,7 +5468,7 @@ impl KagemushaRecursiveSpendInstalledArtifactSetV4 {
         self.source.validate_snapshot()
     }
 }
-/// Mode-safe view consumed by the one real ABI-21 prover/verifier lifecycle.
+/// Mode-safe view consumed by the one real ABI22 prover/verifier lifecycle.
 /// Production and the explicitly feature-gated candidate lab provide separate
 /// registries and authentication rules, but converge only after their artifact
 /// payloads have been semantically validated by the core KRV4 parser.
@@ -5499,7 +5933,7 @@ impl KagemushaRecursiveSpendArtifactSetViewV4
             .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
     }
 }
-// Keep ABI-21 handles in a positive JNI-safe namespace and resolve them only
+// Keep ABI22 handles in a positive JNI-safe namespace and resolve them only
 // through the V4 registry.
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HANDLE_NAMESPACE_V4: u64 = 0x4b34_0000_0000_0000;
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HANDLE_COUNTER_MASK_V4: u64 = 0x0000_ffff_ffff_ffff;
@@ -5632,7 +6066,7 @@ fn try_preacquire_kagemusha_heavy_proof_permit_v4()
 -> BridgeResult<KagemushaHeavyProofPreacquiredScopeV4<'static>> {
     try_preacquire_kagemusha_heavy_proof_permit_from_v4(&KAGEMUSHA_HEAVY_PROOF_PERMIT_V4)
 }
-// ABI-21 has exactly four authenticated files per parity: Params, PK, VK,
+// ABI22 has exactly four authenticated files per parity: Params, PK, VK,
 // and Bootstrap. Circuit parameters are carried inside the manifest profile.
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4: usize = 8;
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_SESSIONS_V4: usize =
@@ -6136,7 +6570,7 @@ struct KagemushaOutputMembershipLeafPathsV4 {
 const KAGEMUSHA_OUTPUT_MEMBERSHIP_FRONTIER_VERSION_V4: u16 = 4;
 const KAGEMUSHA_OUTPUT_MEMBERSHIP_FRONTIER_MAX_BYTES_V4: usize = 4 * 1024;
 const KAGEMUSHA_OUTPUT_MEMBERSHIP_PATHS_MAX_BYTES_V4: usize = 16 * 1024;
-/// Canonical next-zero cursor retained atomically with every ABI-21 branch.
+/// Canonical next-zero cursor retained atomically with every ABI22 branch.
 #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
 struct KagemushaOutputMembershipFrontierV4 {
     version: u16,
@@ -6294,7 +6728,7 @@ enum KagemushaOutputMembershipOperationV4 {
 }
 /// Exact V4 local output-update witness.
 ///
-/// This intentionally duplicates the stable path-shape checks at the ABI-21
+/// This intentionally duplicates the stable path-shape checks at the ABI22
 /// boundary. V4 never projects into a V3 carrier, so future V4 fields cannot
 /// be smuggled through a V3 decoder or silently ignored.
 #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
@@ -10321,7 +10755,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_peer_payment_v
     })();
     bridge_result_to_code(result)
 }
-/// Decode and validate an opaque ABI-21 bundle, returning its wallet-safe typed summary.
+/// Decode and validate an opaque ABI22 bundle, returning its wallet-safe typed summary.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_bundle_summary_v4(
     bundle_norito_ptr: *const c_uchar,
@@ -10352,7 +10786,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_bundle_summary
     })();
     bridge_result_to_code(result)
 }
-/// Build one canonical, cryptographically validated ABI-21 next-zero frontier.
+/// Build one canonical, cryptographically validated ABI22 next-zero frontier.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_output_membership_frontier_build_v4(
     leaf_index: u32,
@@ -10570,7 +11004,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_branch_validat
     })();
     bridge_result_to_code(result)
 }
-/// Build and fully verify the canonical provenance for a first-origin ABI-21 bundle.
+/// Build and fully verify the canonical provenance for a first-origin ABI22 bundle.
 ///
 /// This boundary intentionally accepts one anchor/proof pair: a freshly initialized
 /// branch has exactly one top-up origin. Merged provenance is produced only by the
@@ -10643,7 +11077,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_provenan
     })();
     bridge_result_to_code(result)
 }
-/// Canonically decode and fully verify provenance for one ABI-21 bundle.
+/// Canonically decode and fully verify provenance for one ABI22 bundle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_provenance_validate_v4(
     bundle_norito_ptr: *const c_uchar,
@@ -10682,7 +11116,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_provenan
     })();
     bridge_result_to_code(result)
 }
-/// Return the exact ABI-21/V4 recursive-spend capability contract.
+/// Return the exact ABI22/V4 recursive-spend capability contract.
 ///
 /// Symbol presence is not a readiness signal. Availability requires one live
 /// eight-role source whose authenticated release was fully qualified at install.
@@ -10744,7 +11178,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_capabilities_v
     })();
     bridge_result_to_code(result)
 }
-/// Bind stable roster bytes to the separate ABI-21 roster reference without
+/// Bind stable roster bytes to the separate ABI22 roster reference without
 /// reinterpreting the V4 manifest as an ABI-19 release.
 fn verify_kagemusha_topup_roster_binding_v4(
     roster: &iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2,
@@ -10820,7 +11254,7 @@ fn verify_kagemusha_topup_provenance_against_installed_v4(
 }
 /// Validate one branch provenance inventory against an already selected,
 /// mode-safe artifact set. Candidate-lab callers must not re-enter the
-/// production registry while executing the shared ABI-21 lifecycle.
+/// production registry while executing the shared ABI22 lifecycle.
 fn validate_kagemusha_topup_provenance_for_bundle_against_installed_v4(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
     provenance: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpProvenanceV4,
@@ -11017,7 +11451,7 @@ fn decode_kagemusha_recursive_spend_manifest_v4(
         .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
     Ok((manifest, expected_manifest_sha256))
 }
-/// Begin bounded streaming of one complete, manifest-bound ABI-21 package.
+/// Begin bounded streaming of one complete, manifest-bound ABI22 package.
 ///
 /// The caller supplies an opaque `KRV4KEY` file. The canonical manifest and
 /// one unique framed-file digest are pinned before allocating an anonymous
@@ -11444,7 +11878,7 @@ fn install_authenticated_kagemusha_recursive_spend_artifact_set_v4(
     *active = Some(installed);
     Ok(())
 }
-/// Authenticate a promoted release and atomically install its exact eight ABI-21
+/// Authenticate a promoted release and atomically install its exact eight ABI22
 /// Params/PK/VK/Bootstrap artifacts. No V3 handle, manifest, or unsigned
 /// candidate participates.
 #[allow(clippy::too_many_arguments)]
@@ -11634,7 +12068,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_set_i
     })();
     bridge_result_to_code(result)
 }
-/// Copy the SHA-256 identity of the currently installed authenticated ABI-21 release.
+/// Copy the SHA-256 identity of the currently installed authenticated ABI22 release.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_installed_manifest_sha256_v4(
     out_manifest_sha256: *mut c_uchar,
@@ -12415,7 +12849,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_topup_shield_build_unsigned_v4
     })();
     bridge_result_to_code(result)
 }
-/// Compute the authorization digest for a canonical unsigned ABI-21 top-up.
+/// Compute the authorization digest for a canonical unsigned ABI22 top-up.
 ///
 /// Recursive init happens locally only after Torii returns the finalized
 /// top-up anchor and consensus proof, so no lineage proving artifact is
@@ -12615,7 +13049,7 @@ macro_rules! finish_kagemusha_lifecycle {
     }};
 }
 
-/// Generates one complete ABI-21 lifecycle surface over a selected artifact registry.
+/// Generates one complete ABI22 lifecycle surface over a selected artifact registry.
 macro_rules! kagemusha_recursive_spend_lifecycle_exports {
     (
         resolver = $resolver:path;
@@ -12907,16 +13341,16 @@ kagemusha_recursive_spend_lifecycle_exports! {
     resolver = require_kagemusha_recursive_spend_artifact_binding_v4;
     verify_precheck = true;
     init
-        /// ABI-21 initialization boundary using only the authenticated V4 release.
+        /// ABI22 initialization boundary using only the authenticated V4 release.
         => connect_norito_kagemusha_recursive_spend_init_v4, "krv4-init";
     append
-        /// ABI-21 append boundary. It never falls back to the V2/V3 lifecycle.
+        /// ABI22 append boundary. It never falls back to the V2/V3 lifecycle.
         => connect_norito_kagemusha_recursive_spend_append_v4, "krv4-append";
     verify
-        /// ABI-21 terminal-verification boundary over the installed V4 verifier set.
+        /// ABI22 terminal-verification boundary over the installed V4 verifier set.
         => connect_norito_kagemusha_recursive_spend_verify_v4, "krv4-verify";
     redeem
-        /// ABI-21 full-terminal or partial-with-change redemption boundary.
+        /// ABI22 full-terminal or partial-with-change redemption boundary.
         => connect_norito_kagemusha_recursive_spend_redeem_v4, "krv4-redeem";
 }
 
@@ -12927,7 +13361,7 @@ kagemusha_recursive_spend_lifecycle_exports! {
     init
         /// Candidate-lab initialization boundary. It differs only in the separately
         /// validated candidate registry; proof generation and verification call the
-        /// same ABI-21 implementation as production.
+        /// same ABI22 implementation as production.
         => connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4, "krv4-lab-init";
     append => connect_norito_kagemusha_recursive_spend_candidate_lab_append_v4, "krv4-lab-app";
     verify => connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4, "krv4-lab-ver";
@@ -15867,7 +16301,7 @@ mod kagemusha_bridge_tests {
         ));
     }
     #[test]
-    fn recursive_spend_v4_inventory_uses_the_dedicated_abi21_handle_namespace() {
+    fn recursive_spend_v4_inventory_uses_the_dedicated_abi22_handle_namespace() {
         assert_eq!(
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4,
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len()
@@ -16417,7 +16851,7 @@ mod kagemusha_bridge_tests {
             .split_once("    public func buildUnsigned() throws")
             .expect("Swift top-up proof builder")
             .1
-            .split_once("/// Canonical unsigned ABI-21 online-to-offline request fields.")
+            .split_once("/// Canonical unsigned ABI22 online-to-offline request fields.")
             .expect("end of Swift top-up proof builder")
             .0;
         assert!(top_up.contains("catch NativeBridgeError.kagemushaBusy"));
@@ -21316,7 +21750,7 @@ mod kagemusha_bridge_tests {
     #[test]
     fn kagemusha_topup_shield_v4_rejects_noncanonical_local_archive() {
         let error = kagemusha_topup_shield_build_unsigned_from_archive_v4(b"not-an-archive")
-            .expect_err("ABI-21 must reject a non-canonical local top-up archive");
+            .expect_err("ABI22 must reject a non-canonical local top-up archive");
         assert_eq!(error.code(), ERR_KAGEMUSHA_PROVE);
     }
     #[test]
@@ -22334,7 +22768,7 @@ mod kagemusha_bridge_tests {
         assert!(java_kagemusha_count_v1(3, "branchClaims").is_err());
         assert_eq!(
             KAGEMUSHA_JVM_EXACT_STATE_PROJECTION_VERSION_V1, 1,
-            "the stable V2 projection tuple remains version 1 under ABI 21"
+            "the stable V2 projection tuple remains version 1 under ABI22"
         );
         let source = bridge_source();
         let start = "fn java_native_kagemusha_project_init_result_v4(";
@@ -28238,6 +28672,81 @@ mod tests {
     #[test]
     fn native_signer_jni_contract_revision_is_the_v5_network_id_hard_cut() {
         assert_eq!(native_signer_jni_contract_revision(), 5);
+    }
+    #[test]
+    fn offline_cash_v1_release_probe_is_initialized_and_fail_closed() {
+        let mut available = 0xff;
+        let mut release_id = [0xff; 32];
+        let mut artifact_manifest_sha256 = [0xff; 32];
+        let status = unsafe {
+            connect_norito_offline_cash_release_probe_v1(
+                &mut available,
+                release_id.as_mut_ptr(),
+                release_id.len() as c_ulong,
+                artifact_manifest_sha256.as_mut_ptr(),
+                artifact_manifest_sha256.len() as c_ulong,
+            )
+        };
+        assert_eq!(status, 0);
+        assert_eq!(available, 0);
+        assert_eq!(release_id, [0; 32]);
+        assert_eq!(artifact_manifest_sha256, [0; 32]);
+
+        assert_eq!(
+            unsafe {
+                connect_norito_offline_cash_release_probe_v1(
+                    &mut available,
+                    release_id.as_mut_ptr(),
+                    31,
+                    artifact_manifest_sha256.as_mut_ptr(),
+                    32,
+                )
+            },
+            ERR_NULL_PTR
+        );
+    }
+    #[test]
+    fn offline_cash_v1_canonicalizers_reject_malformed_archives_and_clear_outputs() {
+        let malformed = b"not-canonical-norito";
+        let mut out_ptr = ptr::dangling_mut::<c_uchar>();
+        let mut out_len = 99;
+        let status = unsafe {
+            connect_norito_offline_cash_payment_request_canonicalize_v1(
+                malformed.as_ptr(),
+                malformed.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+    #[test]
+    fn offline_cash_v1_c_jni_and_swift_symbol_contract_is_present() {
+        let source = bridge_source();
+        for symbol in [
+            "connect_norito_offline_cash_payment_request_canonicalize_v1",
+            "connect_norito_offline_cash_payment_canonicalize_v1",
+            "connect_norito_offline_cash_payment_canonicalize_for_session_v1",
+            "connect_norito_offline_cash_acknowledgement_canonicalize_v1",
+            "connect_norito_offline_cash_peer_encode_payment_request_v1",
+            "connect_norito_offline_cash_peer_decode_payment_request_v1",
+            "connect_norito_offline_cash_peer_encode_payment_v1",
+            "connect_norito_offline_cash_peer_decode_payment_v1",
+            "connect_norito_offline_cash_peer_encode_acknowledgement_v1",
+            "connect_norito_offline_cash_peer_decode_acknowledgement_v1",
+            "connect_norito_offline_cash_release_probe_v1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeReleaseProbeV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeReleaseProbeV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeCanonicalizePaymentForSessionV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeCanonicalizePaymentForSessionV1",
+        ] {
+            assert!(
+                source.contains(symbol),
+                "missing Offline Cash V1 symbol {symbol}"
+            );
+        }
     }
     #[test]
     fn c_and_jni_transaction_network_ids_require_exact_canonical_encodings() {
