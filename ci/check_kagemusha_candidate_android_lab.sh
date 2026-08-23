@@ -32,6 +32,7 @@ paths = {
     "core_cargo": root / "crates/iroha_core/Cargo.toml",
     "header": root / "crates/connect_norito_bridge/include/connect_norito_bridge.h",
     "release_workflow": root / ".github/workflows/mobile_sdk_artifacts.yml",
+    "pr_workflow": root / ".github/workflows/pr_kagemusha_payload_bench.yml",
 }
 
 errors = []
@@ -171,15 +172,48 @@ for needle in (f"package {package}", 'LIBRARY_NAME: String = "connect_norito_bri
 
 jni_prefix = "Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_"
 rust = text["rust"]
-for method in sorted(kotlin_methods):
-    symbol = jni_prefix + method
-    match = re.search(rf'pub\s+unsafe\s+extern\s+"system"\s+fn\s+{re.escape(symbol)}\s*\(', rust)
-    if match is None:
-        errors.append(f"Rust bridge is missing candidate-lab JNI export {method}")
-        continue
-    guard = rust[max(0, match.start() - 500):match.start()]
-    if f'feature = "{feature}"' not in guard:
-        errors.append(f"candidate-lab JNI export {method} is not feature-gated")
+jni_module_marker = "\nmod kagemusha_candidate_lab_jni {"
+jni_reexport_marker = f'''\n}}
+#[cfg(all(
+    feature = "{feature}",'''
+jni_module_start = rust.rfind(jni_module_marker)
+jni_module_end = (
+    rust.find(jni_reexport_marker, jni_module_start + len(jni_module_marker))
+    if jni_module_start >= 0
+    else -1
+)
+jni_module = ""
+if jni_module_start < 0 or jni_module_end < 0:
+    errors.append("Rust bridge is missing the bounded candidate-lab JNI module")
+else:
+    jni_module = rust[jni_module_start:jni_module_end]
+    module_guard = rust[max(0, jni_module_start - 600):jni_module_start]
+    if f'feature = "{feature}"' not in module_guard:
+        errors.append("candidate-lab JNI module is not feature-gated")
+    reexport = rust[jni_module_end:jni_module_end + 600]
+    if (
+        f'feature = "{feature}"' not in reexport
+        or "pub use kagemusha_candidate_lab_jni::*;" not in reexport
+    ):
+        errors.append("candidate-lab JNI re-export is not feature-gated")
+    if (
+        jni_module.count("#[unsafe(no_mangle)]") != 2
+        or jni_module.count('pub unsafe extern "system" fn $name(') != 2
+    ):
+        errors.append("candidate-lab JNI export macros must retain no-mangle system exports")
+    actual_rust_jni_methods = set(
+        re.findall(
+            rf'^\s*{re.escape(jni_prefix)}(native[A-Za-z0-9]+)\s*\(',
+            jni_module,
+            re.MULTILINE,
+        )
+    )
+    if actual_rust_jni_methods != kotlin_methods:
+        errors.append(
+            "candidate-lab Rust JNI surface drifted: "
+            f"missing={sorted(kotlin_methods - actual_rust_jni_methods)} "
+            f"extra={sorted(actual_rust_jni_methods - kotlin_methods)}"
+        )
 
 continuity_signatures = {
     "nativeValidateBranchV4": (
@@ -238,11 +272,12 @@ for method, (expected_params, expected_return) in continuity_signatures.items():
 
     symbol = jni_prefix + method
     export = re.search(
-        rf'fn\s+{re.escape(symbol)}\s*\((?P<params>.*?)\)\s*->\s*(?P<return>[^\s{{]+)',
-        rust,
-        re.DOTALL,
+        rf'^\s*{re.escape(symbol)}\s*\((?P<params>.*?)^\s*\)\s*->\s*(?P<return>[^\s{{=]+)',
+        jni_module,
+        re.DOTALL | re.MULTILINE,
     )
     if export is None:
+        errors.append(f"Rust continuity JNI declaration is missing for {method}")
         continue
     rust_types = re.findall(
         r'^\s*(?:mut\s+)?[A-Za-z_][A-Za-z0-9_]*\s*:\s*([^,\n]+),',
@@ -250,7 +285,7 @@ for method, (expected_params, expected_return) in continuity_signatures.items():
         re.MULTILINE,
     )
     rust_types = [value.rsplit("::", 1)[-1].replace("<'_>", "") for value in rust_types]
-    expected_rust = ["JNIEnv", "JClass"] + [kotlin_to_jni[value] for value in expected_params]
+    expected_rust = [kotlin_to_jni[value] for value in expected_params]
     rust_return = export.group("return").rsplit("::", 1)[-1]
     if rust_types != expected_rust or rust_return != "jbyteArray":
         errors.append(
@@ -273,10 +308,35 @@ c_suffixes = (
     "redeem_v4",
 )
 c_prefix = "connect_norito_kagemusha_recursive_spend_candidate_lab_"
+lifecycle_suffixes = {"init_v4", "append_v4", "verify_v4", "redeem_v4"}
+lifecycle_match = re.search(
+    rf'#\[cfg\(feature = "{re.escape(feature)}"\)\]\s*'
+    r'kagemusha_recursive_spend_lifecycle_exports!\s*\{(?P<body>.*?)\n\}',
+    rust,
+    re.DOTALL,
+)
+actual_lifecycle_suffixes = set()
+if lifecycle_match is None:
+    errors.append("Rust bridge is missing the feature-gated candidate-lab lifecycle export macro")
+else:
+    actual_lifecycle_suffixes = set(
+        re.findall(
+            rf'=>\s*{re.escape(c_prefix)}([a-z0-9_]+)\s*,',
+            lifecycle_match.group("body"),
+        )
+    )
+    if actual_lifecycle_suffixes != lifecycle_suffixes:
+        errors.append(
+            "candidate-lab Rust C lifecycle surface drifted: "
+            f"missing={sorted(lifecycle_suffixes - actual_lifecycle_suffixes)} "
+            f"extra={sorted(actual_lifecycle_suffixes - lifecycle_suffixes)}"
+        )
 for suffix in c_suffixes:
     symbol = c_prefix + suffix
     match = re.search(rf'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+{re.escape(symbol)}\s*\(', rust)
     if match is None:
+        if suffix in actual_lifecycle_suffixes:
+            continue
         errors.append(f"Rust bridge is missing candidate-lab C export {symbol}")
         continue
     guard = rust[max(0, match.start() - 350):match.start()]
@@ -505,17 +565,29 @@ for needle in (
 
 compile_check = text["compile_check"]
 for needle in (
+    "KAGEMUSHA_CANDIDATE_COMPILE_WARM_GRADLE_CACHE",
+    "warm-gradle-artifacts",
+    "final-gradle-artifacts",
+    "MOBILE_SDK_ANDROID_ARTIFACT_DIR",
+    "-Pkotlin.compiler.execution.strategy=in-process",
+    'rm -rf -- "$EVIDENCE_ROOT/gradle" "$EVIDENCE_ROOT/warm-gradle-project-cache"',
     "-PkagemushaCandidateCompileOnly=true",
     ":kagemusha-candidate-evidence-lab:compileDebugKotlin",
     ":kagemusha-candidate-evidence-lab:compileDebugAndroidTestKotlin",
     "--offline",
     "--max-workers=2",
+    "--project-cache-dir",
     "GRADLE_RO_DEP_CACHE",
     "compile-gradle-read-only-cache",
     "chmod -R u+w",
 ):
     if needle not in compile_check:
         errors.append(f"actual AGP/Kotlin compile-only check is missing {needle}")
+for workflow in ("pr_workflow", "release_workflow"):
+    if 'KAGEMUSHA_CANDIDATE_COMPILE_WARM_GRADLE_CACHE: "1"' not in text[workflow]:
+        errors.append(
+            f"{workflow} must explicitly warm the disposable Gradle dependency cache"
+        )
 
 source_seal = text["source_seal"]
 for needle in (
