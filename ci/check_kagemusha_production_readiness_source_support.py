@@ -57,6 +57,14 @@ CORE_KAGEMUSHA_CANARY_COMPONENT = (
     "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_taira_canary.rs"
 )
 CORE_KAGEMUSHA_CANARY_INCLUDE = 'include!("offline/kagemusha_taira_canary.rs");'
+CORE_ISI_TESTS = "crates/iroha_core/src/smartcontracts/isi/offline/isi_tests.rs"
+CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS = (
+    "crates/iroha_core/src/smartcontracts/isi/offline/"
+    "isi_kagemusha_taira_canary_context_tests.rs"
+)
+CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS_INCLUDE = (
+    'include!("isi_kagemusha_taira_canary_context_tests.rs");'
+)
 CORE_ISI_MOD = "crates/iroha_core/src/smartcontracts/isi/mod.rs"
 CORE_STATE = "crates/iroha_core/src/state.rs"
 CORE_COMMITTED_TX_CONTEXT = (
@@ -499,11 +507,13 @@ def canary_source_errors(
          r"use committed_transaction_context::seed_committed_transaction_context;.*?"
          r"pub\(crate\) kagemusha_taira_canary_wire_identity:\s*"
          r"Option<KagemushaExactBytesDigestV1>.*?"
+         r"pub\(crate\) kagemusha_taira_canary_external_entrypoint: bool.*?"
          r"kagemusha_taira_canary_wire_identity: None.*?"
+         r"kagemusha_taira_canary_external_entrypoint: false.*?"
          r"if block\.error\(entrypoint_index\)\.is_none\(\).*?"
          r"let mut transaction = self\.transaction\(\);.*?"
          r"crate::state::seed_committed_transaction_context\(\s*"
-         r"&mut transaction,\s*&tx,\s*entrypoint_index,\s*\)"),
+         r"&mut transaction,\s*&entrypoint,\s*entrypoint_index,\s*\)"),
         wire_boundary,
     )
     require_pattern(
@@ -512,14 +522,19 @@ def canary_source_errors(
         errors,
         (r"pub\(crate\) fn seed_committed_transaction_context\(\s*"
          r"state_transaction: &mut StateTransaction.*?"
-         r"transaction: &SignedTransaction,.*?entrypoint_index: usize,.*?"
+         r"entrypoint: &TransactionEntrypoint,.*?entrypoint_index: usize,.*?"
+         r"kagemusha_taira_canary_external_entrypoint = false;.*?"
+         r"TransactionEntrypoint::External\(transaction\).*?"
+         r"kagemusha_taira_canary_external_entrypoint = true;.*?"
+         r"TransactionEntrypoint::SealedReveal\(reveal\).*?reveal\.signed_transaction\(\).*?"
          r"state_transaction\.tx_call_hash\s*=\s*Some\(Hash::from\("
-         r"transaction\.hash_as_entrypoint\(\)\)\);.*?"
+         r"entrypoint\.execution_call_hash\(\)\)\);.*?"
          r"state_transaction\.current_tx_hash\s*=.*?"
          r"AcceptedTransaction::prepare_signed_metadata\(transaction\)\.signed_hash.*?"
+         r"if state_transaction\.kagemusha_taira_canary_external_entrypoint.*?"
          r"state_transaction\.kagemusha_taira_canary_wire_identity\s*=\s*"
          r"signed_kagemusha_taira_canary_wire_identity_v1\(transaction\).*?"
-         r"\.expect\(\"committed canary wire must encode\"\).*?"
+         r"\.expect\(\"committed external canary wire must encode\"\).*?"
          r"state_transaction\.current_entrypoint_index\s*=\s*"
          r"Some\(u64::try_from\(entrypoint_index\)\.unwrap_or\(u64::MAX\)\)"),
         wire_boundary,
@@ -530,6 +545,7 @@ def canary_source_errors(
          r"canary_wire_identity\s*=\s*crate::smartcontracts::isi::offline::"
          r"signed_kagemusha_taira_canary_wire_identity_v1\(tx\).*?"
          r"map_err\(TransactionRejectionReason::Validation\).*?"
+         r"state_tx\.kagemusha_taira_canary_external_entrypoint\s*=\s*true;.*?"
          r"state_tx\.kagemusha_taira_canary_wire_identity\s*=\s*canary_wire_identity;.*?"
          r"StateBlock::validate_stateful_admission\(tx, state_tx, Some\(routing\)\)"),
         wire_boundary,
@@ -539,6 +555,7 @@ def canary_source_errors(
         (r"pub fn execute_transaction\(.*?"
          r"state_transaction\.kagemusha_taira_canary_wire_identity\s*=\s*None;.*?"
          r"transaction\.authority\(\) != authority.*?"
+         r"if state_transaction\.kagemusha_taira_canary_external_entrypoint.*?"
          r"state_transaction\.kagemusha_taira_canary_wire_identity\s*=\s*"
          r"signed_kagemusha_taira_canary_wire_identity_v1\(&transaction\)\?;.*?"
          r"state_transaction\.tx_call_hash = Some"),
@@ -575,9 +592,11 @@ def canary_source_errors(
         (r"impl Execute for RecordKagemushaTairaCanaryV4.*?"
          r"verify_for_execution\(\s*state_transaction\.network_id\(\),\s*authority,.*?"
          r"require_v4_promotion_binding\(binding, state_transaction\).*?"
+         r"if !state_transaction\.kagemusha_taira_canary_external_entrypoint.*?"
+         r"canary_external_entrypoint_required.*?"
          r"state_transaction\.tx_call_hash.*?"
          r"state_transaction\s*\.kagemusha_taira_canary_wire_identity\s*"
-         r"\.ok_or_else\(.*?"
+         r"\.take\(\)\s*\.ok_or_else\(.*?"
          r"require_v4_taira_canary_authorization\(.*?wire_identity.*?"
          r"plan_v4_taira_canary\(binding\.promotion_id, state_transaction\).*?"
          r"commit_v4_taira_canary\(marker, state_transaction\).*?"
@@ -1058,14 +1077,93 @@ def canary_source_errors(
     return errors
 
 
-def release_closure_source_errors(core: str, schema: str, workflow: str) -> list[str]:
+def release_closure_source_errors(
+    core: str, schema: str, workflow: str, overrides: dict[str, str]
+) -> list[str]:
     """Reject release-source gaps that focused filters or compilation would expose."""
     errors: list[str] = []
+    isi_tests = (
+        overrides[CORE_ISI_TESTS]
+        if CORE_ISI_TESTS in overrides
+        else read(CORE_ISI_TESTS, errors)
+    )
+    context_tests = (
+        overrides[CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS]
+        if CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS in overrides
+        else read(CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS, errors)
+    )
+    forbid_merge_conflict_markers(isi_tests, CORE_ISI_TESTS, errors)
+    forbid_merge_conflict_markers(
+        context_tests, CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS, errors
+    )
     require(
         core,
         CORE,
         errors,
         "pub(crate) use isi::signed_kagemusha_taira_canary_wire_identity_v1;",
+    )
+    require(
+        isi_tests,
+        CORE_ISI_TESTS,
+        errors,
+        CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS_INCLUDE,
+    )
+    require_pattern(
+        context_tests,
+        CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS,
+        errors,
+        (r"fn taira_canary_committed_replay_seeds_only_one_direct_wire\(\).*?"
+         r"TransactionEntrypoint::External\(first\.canary_transaction\.clone\(\)\).*?"
+         r"Some\(first_wire\).*?"
+         r"TransactionEntrypoint::External\(second\.canary_transaction\.clone\(\)\).*?"
+         r"Some\(second_wire\).*?"
+         r"TransactionEntrypoint::External\(multi\).*?"
+         r"kagemusha_taira_canary_wire_identity, None.*?"
+         r"TransactionEntrypoint::External\(batch\).*?"
+         r"kagemusha_taira_canary_wire_identity, None.*?"
+         r"TransactionEntrypoint::SealedReveal\(.*?"
+         r"kagemusha_taira_canary_external_entrypoint\).*?"
+         r"kagemusha_taira_canary_wire_identity, None"),
+        "External-only committed-replay exact-wire seeding boundaries",
+    )
+    require_pattern(
+        context_tests,
+        CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS,
+        errors,
+        (r"fn taira_canary_sealed_reveal_validation_cannot_gain_external_provenance\(\).*?"
+         r"TransactionEntrypoint::SealedCommitment\(.*?"
+         r"TransactionEntrypoint::SealedReveal\(.*?"
+         r"validate_transaction\(.*?expect_err\(.*?"
+         r"canary_external_entrypoint_required.*?"
+         r"replay_keys_before"),
+        "sealed-reveal validation rejects External canary provenance",
+    )
+    require_pattern(
+        context_tests,
+        CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS,
+        errors,
+        (r"fn taira_canary_executor_enforces_exact_wire_shape_and_proof\(\).*?"
+         r"signed canary without External entrypoint provenance must fail.*?"
+         r"canary_external_entrypoint_required.*?"
+         r"kagemusha_taira_canary_external_entrypoint = true.*?"
+         r"execute_transaction\(.*?second\.canary_transaction.*?expect_err\(.*?"
+         r"execute_transaction\(&mut transaction, &authority, multi.*?expect_err\(.*?"
+         r"execute_transaction\(&mut transaction, &authority, batch.*?expect_err\(.*?"
+         r"execute_transaction\(.*?first\.canary_transaction.*?expect\(.*?"
+         r"kagemusha_taira_canary_wire_identity, None"),
+        "automatic executor exact-wire proof and shape boundaries",
+    )
+    require_pattern(
+        context_tests,
+        CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS,
+        errors,
+        (r"fn taira_canary_nested_trigger_cannot_inherit_outer_wire\(\).*?"
+         r"ExecuteTriggerEventFilter::new\(\)\.for_trigger\(trigger_id\.clone\(\)\).*?"
+         r"RecordKagemushaTairaCanaryV4::new\(outer\.permit\).*?"
+         r"kagemusha_taira_canary_wire_identity, None.*?"
+         r"ExecuteTrigger::new\(trigger_id\).*?expect_err\(.*?"
+         r"canary_authorization_missing"),
+        "nested-trigger affine signed-wire rejection",
     )
     if '"pending-' in schema:
         errors.append(f"{SCHEMA_GOLDEN}: public schema golden contains pending placeholder")

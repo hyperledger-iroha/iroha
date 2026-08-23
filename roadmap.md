@@ -66,6 +66,11 @@ to:
   the required authorized signatures, including clean OpenAPI provenance.
 - Recompute and verify the source, formal, and release seals from one immutable
   tree; mutable-tree checks are not release evidence.
+- After that candidate is frozen, obtain the four owner-held protected approval
+  files for the exact `23/38/7/8` operation plans. The validator and receipt
+  writer now derive those counts from the candidate-bound contract and reject
+  an unplanned eighth `network-scale-soak` operation; this source repair is not
+  a substitute for operator approval.
 
 ## Kagemusha production evidence closeout
 

@@ -1265,13 +1265,18 @@ before each local commit or network POST, the client advances an
 activation-anchored finality verifier through every observed successor, checks
 that the next-block inclusion margin remains before the exclusive height
 expiry, reads a fresh protected-host time, and reverifies the complete
-authorization. At each signed-transaction boundary Core clears prior context
-and derives a complete-wire identity only for exactly one direct
-`RecordKagemushaTairaCanaryV4`; top-level Batch, contract, IVM, and dynamically emitted
-forms remain unbound. Core accepts the record only when both the current
-external entrypoint hash and this authorization-proof-bearing signed-wire
-identity equal their reserved markers and the full activation binding and permit
-still match; the exact canary is consumed once. A
+authorization. At each canonical transaction boundary Core clears prior context
+and derives a complete-wire identity only when the enclosing entrypoint is
+itself `External` and contains exactly one direct
+`RecordKagemushaTairaCanaryV4`; top-level Batch, contract, IVM, dynamically
+emitted, and `SealedReveal`-wrapped forms remain unbound. In particular, opening
+a sealed commitment does not reinterpret its inner signed transaction as the
+external evidence carrier reserved by the controller. Core accepts the record
+only when both the current external entrypoint hash and this
+authorization-proof-bearing signed-wire identity equal their reserved markers
+and the full activation binding and permit still match. The direct record
+affinely takes and clears that wire capability before any child data-trigger
+execution, and the exact canary is consumed once. A
 pre-existing status without the corresponding journal, a mismatching journal,
 or an ambiguous submission cannot be retrospectively converted into production
 evidence.

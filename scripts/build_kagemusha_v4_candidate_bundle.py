@@ -1228,7 +1228,7 @@ def _strict_unit_graph_json(payload: bytes, label: str) -> dict[str, Any]:
     except (json.JSONDecodeError, UnicodeError, ValueError) as error:
         raise CandidateBuildError(f"{label} is not strict JSON") from error
     graph = _exact_object(value, _UNIT_GRAPH_KEYS, label)
-    if graph["version"] != 1:
+    if type(graph["version"]) is not int or graph["version"] != 1:
         raise CandidateBuildError(f"{label} version is not exact V1")
     if not isinstance(graph["roots"], list) or not isinstance(graph["units"], list):
         raise CandidateBuildError(f"{label} roots or units are not arrays")
@@ -3247,6 +3247,7 @@ def _preflight_unit_graph_launch(
     if (
         not isinstance(graph, dict)
         or set(graph) != {"roots", "units", "version"}
+        or type(graph.get("version")) is not int
         or graph.get("version") != 1
         or not isinstance(graph.get("roots"), list)
         or not isinstance(graph.get("units"), list)

@@ -281,6 +281,15 @@ def _case_release_approval_four_class_binding_and_path_free_archives() -> None:
             )
         all_operation_ids.extend(operation_ids)
     assert len(all_operation_ids) == len(set(all_operation_ids))
+    assert {
+        approval_class.value: len(expectations[approval_class].operations)
+        for approval_class in module.APPROVAL_CLASS_ORDER
+    } == {
+        "offline-toolchain-sdk": 23,
+        "formal-proof-tools": 38,
+        "network-scale-soak": 7,
+        "final-bootstrap-publication": 8,
+    }
     final_arguments = tuple(
         argument
         for operation in expectations[
@@ -429,6 +438,25 @@ def _case_release_approval_four_class_binding_and_path_free_archives() -> None:
             value["class_id"] for value in set_archive.value["approvals"]
         ] == list(module.APPROVAL_CLASS_IDS)
         assert str(root) not in set_archive.canonical_bytes.decode("ascii")
+
+        network_class = module.ReleaseApprovalClass.NETWORK_SCALE_SOAK
+        extra_network_operation = copy.deepcopy(documents[network_class])
+        eighth_operation = copy.deepcopy(extra_network_operation["operations"][-1])
+        eighth_operation["ordinal"] = 7
+        eighth_operation["operation_id"] = "network-unapproved-eighth-operation"
+        extra_network_operation["operations"].append(eighth_operation)
+        extra_network_path = _approval_write(
+            root / "network-eighth-operation.json",
+            _approval_canonical(extra_network_operation),
+        )
+        with pytest.raises(
+            module.ReleaseApprovalError, match="exact planned invocation"
+        ):
+            module.load_protected_release_approval(
+                extra_network_path,
+                expected_class=network_class,
+                expectation=expectations[network_class],
+            )
 
         first_class = module.APPROVAL_CLASS_ORDER[0]
         mismatched = copy.deepcopy(expectations[first_class])

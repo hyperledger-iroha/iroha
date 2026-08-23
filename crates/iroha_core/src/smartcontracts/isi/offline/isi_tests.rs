@@ -923,7 +923,6 @@ mod tests {
             transaction.world.kagemusha_replay_keys.iter().count(),
             replay_keys_after_authorization,
         );
-
         bind_canary_consensus_wire(&fixture, &mut transaction);
         transaction.tx_call_hash = Some(Hash::new(b"altered same-permit transaction"));
         let altered = RecordKagemushaTairaCanaryV4::new(fixture.permit.clone())
@@ -934,7 +933,6 @@ mod tests {
             transaction.world.kagemusha_replay_keys.iter().count(),
             replay_keys_after_authorization,
         );
-
         transaction.tx_call_hash = Some(fixture.exact_call_hash);
         bind_canary_consensus_wire(&fixture, &mut transaction);
         let mismatched_authority = RecordKagemushaTairaCanaryV4::new(fixture.permit.clone())
@@ -954,6 +952,7 @@ mod tests {
             .execute(&ALICE_ID, &mut transaction)
             .expect("the exactly authorized ordinary canary consumes its one-shot marker");
         let replay_keys_after_canary = transaction.world.kagemusha_replay_keys.iter().count();
+        bind_canary_consensus_wire(&fixture, &mut transaction);
         let duplicate = RecordKagemushaTairaCanaryV4::new(fixture.permit.clone())
             .execute(&ALICE_ID, &mut transaction)
             .expect_err("the exact canary cannot execute twice");
@@ -2995,5 +2994,6 @@ mod tests {
             "the exact manager permission inherited through a role must authorize policy changes"
         );
     }
+    include!("isi_kagemusha_taira_canary_context_tests.rs");
     include!("isi_platform_policy_tests.rs");
 }

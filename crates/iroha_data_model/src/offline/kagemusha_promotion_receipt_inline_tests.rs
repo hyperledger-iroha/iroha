@@ -17,6 +17,7 @@ use crate::{
     transaction::{
         DataTriggerSequence, FeePaymentIntent, SignedTransaction, TransactionBuilder,
         TransactionEntrypoint, TransactionResult, TransactionResultInner,
+        signed::SealedTransactionReveal,
     },
 };
 #[cfg(feature = "transparent_api")]
@@ -1839,6 +1840,33 @@ fn production_canary_authorization_and_finality_evidence_verify_exactly() {
             .reservation
             .body
             .canary_transaction_wire,
+    );
+}
+
+#[cfg(feature = "transparent_api")]
+#[test]
+fn production_canary_evidence_rejects_a_sealed_reveal_entrypoint() {
+    let fixture = complete_canary_fixture();
+    let receipt_bytes =
+        norito::encode_canonical(&fixture.receipt.receipt).expect("canonical receipt");
+    let mut body = fixture.evidence.body.clone();
+    body.committed_transaction.entrypoint =
+        TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            Hash::new(b"sealed Kagemusha canary evidence boundary"),
+            fixture.canary_transaction,
+            [0xA7; 32],
+        ));
+    assert_eq!(
+        KagemushaV4TairaCanaryEvidenceV1::try_sign(
+            body,
+            &fixture.receipt.issuer,
+            &fixture.authorization,
+            &fixture.authorization_bytes,
+            &fixture.receipt.expectations,
+            &fixture.receipt.receipt,
+            &receipt_bytes,
+        ),
+        Err(KagemushaV4TairaCanaryEvidenceValidationError::CommittedTransaction),
     );
 }
 

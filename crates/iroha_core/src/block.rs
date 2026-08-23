@@ -257,8 +257,7 @@ fn map_overlay_error(
         ),
     }
 }
-/// Return whether an executable is built through the VM overlay scheduler and
-/// therefore needs access capture, state-dependent retry, and live rebuild.
+/// Return whether an executable needs the VM overlay scheduler and live rebuild.
 #[must_use]
 const fn uses_live_vm_overlay_scheduler(executable: &Executable) -> bool {
     matches!(
@@ -294,6 +293,7 @@ fn validate_block_transaction_admission(
         crate::smartcontracts::isi::offline::signed_kagemusha_taira_canary_wire_identity_v1(tx)
             .map_err(TransactionRejectionReason::Validation)?;
     state_tx.bind_privacy_transaction_intent_v1(privacy_intent_binding);
+    state_tx.kagemusha_taira_canary_external_entrypoint = true;
     state_tx.kagemusha_taira_canary_wire_identity = canary_wire_identity;
     StateBlock::validate_stateful_admission(tx, state_tx, Some(routing))
 }

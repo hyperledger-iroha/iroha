@@ -573,6 +573,9 @@ fn queue_plan_entrypoint_for_state_test(state: &State, tag: u8) -> TransactionEn
     TransactionEntrypoint::External(
         transaction
             .with_instructions([Log::new(Level::INFO, format!("queue-plan-admission-{tag}"))])
+            .with_admission_intent(
+                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+            )
             .sign(transaction_keypair.private_key()),
     )
 }

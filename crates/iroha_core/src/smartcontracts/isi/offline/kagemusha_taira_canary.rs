@@ -394,6 +394,13 @@ impl Execute for RecordKagemushaTairaCanaryV4 {
             })?;
         let binding = &self.permit.body.binding;
         require_v4_promotion_binding(binding, state_transaction)?;
+        if !state_transaction.kagemusha_taira_canary_external_entrypoint {
+            return Err(labeled_invariant(
+                "canary_external_entrypoint_required",
+                "Kagemusha V4 Taira canary requires an evidentiary External entrypoint",
+            )
+            .into());
+        }
         let exact_call_hash = state_transaction.tx_call_hash.ok_or_else(|| {
             labeled_invariant(
                 "canary_authorization_missing",
@@ -402,6 +409,7 @@ impl Execute for RecordKagemushaTairaCanaryV4 {
         })?;
         let wire_identity = state_transaction
             .kagemusha_taira_canary_wire_identity
+            .take()
             .ok_or_else(|| {
                 labeled_invariant(
                     "canary_authorization_missing",

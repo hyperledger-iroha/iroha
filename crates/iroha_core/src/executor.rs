@@ -5966,9 +5966,7 @@ impl Executor {
         Ok(())
     }
     /// Execute [`SignedTransaction`].
-    ///
     /// # Errors
-    ///
     /// Returns an error when IVM preparation or execution fails, or the executor denies the operation.
     #[allow(clippy::too_many_lines)]
     pub fn execute_transaction(
@@ -5989,8 +5987,10 @@ impl Executor {
         let privacy_intent_binding =
             crate::privacy::signed_privacy_transaction_intent_binding_v1(&transaction)?;
         state_transaction.bind_privacy_transaction_intent_v1(privacy_intent_binding);
-        state_transaction.kagemusha_taira_canary_wire_identity =
-            signed_kagemusha_taira_canary_wire_identity_v1(&transaction)?;
+        if state_transaction.kagemusha_taira_canary_external_entrypoint {
+            state_transaction.kagemusha_taira_canary_wire_identity =
+                signed_kagemusha_taira_canary_wire_identity_v1(&transaction)?;
+        }
         let call_hash = transaction.hash_as_entrypoint();
         state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
         let tx_hash = transaction.hash();

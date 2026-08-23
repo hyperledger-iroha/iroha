@@ -708,7 +708,9 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         texts[CORE_STATE], texts[CORE_COMMITTED_TX_CONTEXT],
         texts[CORE_BLOCK], texts[CORE_EXECUTOR],
     )
-    errors += release_closure_source_errors(texts[CORE], texts[SCHEMA_GOLDEN], texts[WORKFLOW])
+    errors += release_closure_source_errors(
+        texts[CORE], texts[SCHEMA_GOLDEN], texts[WORKFLOW], overrides
+    )
     require_pattern(
         qualification_command,
         qccomp,

@@ -2510,6 +2510,8 @@ class KagemushaRecursiveSpendProver private constructor() {
         maximumBytes: Int,
     ) {
         private val bytes = requireCanonicalArchive(archive, schema, field, maximumBytes)
+        // Retain only the 32-bit collection bucket after zeroization, never a secret digest.
+        private val equalityHashCode = bytes.contentHashCode()
         private var destroyed = false
 
         @Synchronized
@@ -2543,11 +2545,35 @@ class KagemushaRecursiveSpendProver private constructor() {
         @Synchronized
         fun isDestroyed(): Boolean = destroyed
 
-        final override fun equals(other: Any?): Boolean =
-            other != null && this::class == other::class &&
-                bytes.contentEquals((other as CanonicalArchive).bytes)
+        final override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other == null || this::class != other::class) return false
+            other as CanonicalArchive
+            val identity = System.identityHashCode(this)
+            val otherIdentity = System.identityHashCode(other)
+            return when {
+                identity < otherIdentity -> synchronized(this) {
+                    synchronized(other) { liveContentEquals(other) }
+                }
+                identity > otherIdentity -> synchronized(other) {
+                    synchronized(this) { liveContentEquals(other) }
+                }
+                else -> synchronized(EQUALITY_TIE_LOCK) {
+                    synchronized(this) {
+                        synchronized(other) { liveContentEquals(other) }
+                    }
+                }
+            }
+        }
 
-        final override fun hashCode(): Int = bytes.contentHashCode()
+        final override fun hashCode(): Int = equalityHashCode
+
+        private fun liveContentEquals(other: CanonicalArchive): Boolean =
+            !destroyed && !other.destroyed && bytes.contentEquals(other.bytes)
+
+        private companion object {
+            val EQUALITY_TIE_LOCK = Any()
+        }
     }
 
     class RecipientPaymentRequest internal constructor(archive: ByteArray) : CanonicalArchive(
@@ -4127,6 +4153,8 @@ class KagemushaRecursiveSpendProver private constructor() {
         init {
             require(
                 baseUri.isAbsolute &&
+                    !baseUri.isOpaque &&
+                    !baseUri.host.isNullOrEmpty() &&
                     baseUri.rawQuery == null &&
                     baseUri.rawFragment == null &&
                     baseUri.rawUserInfo == null,
