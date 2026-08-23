@@ -1322,6 +1322,7 @@ fn vpn_backend_bootstrap_mac(
 fn bootstrap_mac_matches(expected: &[u8; 32], candidate: &[u8; 32]) -> bool {
     blake3::Hash::from_bytes(*expected) == blake3::Hash::from_bytes(*candidate)
 }
+#[cfg(test)]
 fn admit_bootstrap_nonce(
     seen: &mut SeenBootstrapNonces,
     nonce: [u8; 16],
@@ -2439,6 +2440,7 @@ struct BoundedCommandOutput {
     bytes: Vec<u8>,
     exceeded_limit: bool,
 }
+#[cfg(test)]
 fn read_bounded_command_output<R: io::Read>(reader: R) -> io::Result<BoundedCommandOutput> {
     read_bounded_command_output_until(reader, &AtomicBool::new(false))
 }

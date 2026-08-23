@@ -29,9 +29,10 @@ execution model).
 
 2. **GPU-enabled build (optional)**
    ```bash
-   cargo build --release -p irohad --bin iroha3d --features fastpq_prover/fastpq-gpu
+   cargo build --release -p irohad --bin iroha3d --features fastpq-gpu
    ```
-   GPU support requires an SM80+ CUDA toolkit with `nvcc` available during the build.【crates/fastpq_prover/Cargo.toml:11】
+   Linux/NVIDIA builds require an SM80+ CUDA toolkit with `nvcc` available during the build.
+   macOS builds use Metal and prepare Xcode's optional MetalToolchain as described below.【crates/fastpq_prover/Cargo.toml:11】【crates/fastpq_prover/build.rs:100】
 
 3. **Self-tests**
    ```bash
@@ -51,18 +52,18 @@ execution model).
    opening.
 
 ### Metal toolchain preparation (macOS)
-1. Install the Metal command-line tools before building: `xcode-select --install` (if the CLI tools are missing) and `xcodebuild -downloadComponent MetalToolchain` to fetch the GPU toolchain. The build script invokes `xcrun metal`/`xcrun metallib` directly and will fail fast if the binaries are absent.【crates/fastpq_prover/build.rs:98】【crates/fastpq_prover/build.rs:121】
+1. Install the Xcode command-line tools first (`xcode-select --install` when they are missing). When Xcode's optional Metal compiler is absent, the macOS build automatically runs `xcodebuild -downloadComponent MetalToolchain` before invoking `xcrun metal`/`xcrun metallib`. A failed download or offline compilation is reported clearly and uses runtime source compilation instead of misclassifying the Metal device as unavailable.【crates/fastpq_prover/build.rs:100】【crates/fastpq_prover/src/backend.rs:716】【crates/fastpq_prover/src/metal.rs:2331】
 2. To validate the pipeline ahead of CI, you can mirror the build script locally:
    ```bash
    export OUT_DIR=$PWD/target/metal && mkdir -p "$OUT_DIR"
-   xcrun metal -std=metal3.0 -O3 -c metal/kernels/ntt_stage.metal -o "$OUT_DIR/ntt_stage.air"
-   xcrun metal -std=metal3.0 -O3 -c metal/kernels/poseidon2.metal -o "$OUT_DIR/poseidon2.air"
-   xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" -o "$OUT_DIR/fastpq.metallib"
-   export FASTPQ_METAL_LIB="$OUT_DIR/fastpq.metallib"
+   xcrun metal -std=metal3.0 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/ntt_stage.metal -o "$OUT_DIR/ntt_stage.air"
+   xcrun metal -std=metal3.0 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/poseidon2.metal -o "$OUT_DIR/poseidon2.air"
+   xcrun metal -std=metal3.0 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/bn254.metal -o "$OUT_DIR/bn254.air"
+   xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" "$OUT_DIR/bn254.air" -o "$OUT_DIR/fastpq.metallib"
    ```
-   When this succeeds the build emits `FASTPQ_METAL_LIB=<path>`; the runtime reads that value to load the metallib deterministically.【crates/fastpq_prover/build.rs:188】【crates/fastpq_prover/src/metal.rs:43】
-3. Set `FASTPQ_SKIP_GPU_BUILD=1` when cross-compiling without the Metal toolchain; the build prints a warning and the planner remains on the CPU path.【crates/fastpq_prover/build.rs:45】【crates/fastpq_prover/src/backend.rs:195】
-4. Nodes configured with `zk.fastpq.execution_mode = "gpu"` fail closed if Metal is unavailable (missing framework, unsupported GPU, empty `FASTPQ_METAL_LIB`, or failed preflight). Nodes configured with `cpu` stay on the deterministic scalar path.【crates/fastpq_prover/build.rs:29】【crates/iroha_core/src/fastpq/lane.rs:228】【crates/fastpq_prover/src/metal.rs:43】
+   Release builds should let `build.rs` generate the library and embed its Cargo `OUT_DIR` path at compile time. `FASTPQ_METAL_LIB` is only a debug/dev override, not production configuration; a relocated release whose embedded path is stale compiles the embedded source instead.【crates/fastpq_prover/build.rs:210】【crates/fastpq_prover/src/metal.rs:2475】
+3. Set `FASTPQ_SKIP_GPU_BUILD=1` to opt out of the toolchain download and offline shader build. On macOS this does not disable visible Metal hardware: the runtime compiles the embedded, self-contained source through `MTLDevice`.【crates/fastpq_prover/build.rs:28】【crates/fastpq_prover/src/metal.rs:2348】
+4. Nodes configured with `zk.fastpq.execution_mode = "gpu"` fail closed if no usable `MTLDevice` exists, the preferred build-time library cannot load, embedded source/pipeline compilation fails, or parity preflight fails. Nodes configured with `cpu` stay on the deterministic scalar path.【crates/iroha_core/src/fastpq/lane.rs:283】【crates/fastpq_prover/src/metal.rs:2334】
 
 ### Release checklist (Stage 6)
 Keep the FASTPQ release ticket blocked until every item below is complete and attached.
@@ -84,12 +85,10 @@ Keep the FASTPQ release ticket blocked until every item below is complete and at
    can replay the verification step.【artifacts/fastpq_benchmarks/README.md:65】
 
 ### Metal validation workflow
-1. After a GPU-enabled build, confirm `FASTPQ_METAL_LIB` points at a `.metallib` (`echo $FASTPQ_METAL_LIB`) so the runtime can load it deterministically.【crates/fastpq_prover/build.rs:188】
+1. After a GPU-enabled build, optionally confirm that Cargo produced `fastpq.metallib`; this is the preferred release path and its Cargo `OUT_DIR` location is embedded into the binary. A missing or stale embedded path selects runtime source compilation and is not, by itself, evidence that Metal is disabled.【crates/fastpq_prover/build.rs:210】【crates/fastpq_prover/src/metal.rs:2475】
 2. Run the parity suite with GPU lanes forced on:\
-   `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq_prover/fastpq-gpu --release`. The backend will exercise the Metal kernels; investigate any unavailable-backend warning before enabling production `gpu` mode.【crates/fastpq_prover/src/backend.rs:114】【crates/fastpq_prover/src/metal.rs:418】
-3. Capture a benchmark sample for dashboards:\
-   locate the compiled Metal library (`fd -g 'fastpq.metallib' target/release/build | head -n1`),
-   export it via `FASTPQ_METAL_LIB`, and run\
+   `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu --release`. The backend will exercise the Metal kernels; investigate any unavailable-backend warning before enabling production `gpu` mode.【crates/fastpq_prover/src/backend.rs:114】【crates/fastpq_prover/src/metal.rs:418】
+3. Capture a benchmark sample for dashboards using the release binary's build-time library (or its embedded-source fallback):\
   `cargo run -p fastpq_prover --features fastpq-gpu,dev-tools --bin fastpq_metal_bench --release -- --rows 20000 --iterations 5 --output fastpq_metal_bench.json --trace-dir traces`.
   The canonical `fastpq-lane-balanced` profile now pads every capture to 32,768 rows (2¹⁵), so the JSON carries both `rows` and `padded_rows` along with the Metal LDE latency; rerun the capture if `zero_fill` or queue settings push the GPU LDE beyond the 950 ms (<1 s) target on Apple M-series hosts. Archive the resulting JSON/log alongside other release evidence; the nightly macOS workflow performs the same run and uploads its artefacts for comparison.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:697】【.github/workflows/fastpq-metal-nightly.yml:1】
   When you need Poseidon-only telemetry (e.g., to record an Instruments trace), add `--operation poseidon_hash_columns` to the command above; the bench will still respect `FASTPQ_GPU=gpu`, emit `metal_dispatch_queue.poseidon`, and include the new `poseidon_profiles` block so the release bundle documents the Poseidon bottleneck explicitly.
@@ -113,10 +112,10 @@ Keep the FASTPQ release ticket blocked until every item below is complete and at
 ### Evidence to archive
 | Artefact | Capture | Notes |
 |----------|---------|-------|
-| `.metallib` bundle | `xcrun metal -std=metal3.0 -O3 -c metal/kernels/ntt_stage.metal -o "$OUT_DIR/ntt_stage.air"` and `xcrun metal -std=metal3.0 -O3 -c metal/kernels/poseidon2.metal -o "$OUT_DIR/poseidon2.air"` followed by `xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" -o "$OUT_DIR/fastpq.metallib"` and `export FASTPQ_METAL_LIB=$OUT_DIR/fastpq.metallib`. | Proves the Metal CLI/toolchain was installed and produced a deterministic library for this commit.【crates/fastpq_prover/build.rs:98】【crates/fastpq_prover/build.rs:188】 |
-| Environment snapshot | `echo $FASTPQ_METAL_LIB` after the build; keep the absolute path with your release ticket. | Empty output means Metal was disabled; recording the value documents that GPU lanes remain available on the shipping artefact.【crates/fastpq_prover/build.rs:188】【crates/fastpq_prover/src/metal.rs:43】 |
+| `.metallib` bundle | Compile `metal/kernels/ntt_stage.metal`, `metal/kernels/poseidon2.metal`, and `metal/kernels/bn254.metal` into the corresponding `.air` files, then run `xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" "$OUT_DIR/bn254.air" -o "$OUT_DIR/fastpq.metallib"`. | Proves the Metal CLI/toolchain was installed and produced a deterministic library containing every runtime-required pipeline for this commit. Release builds generate and embed their own Cargo `OUT_DIR` path.【crates/fastpq_prover/build.rs:144】【crates/fastpq_prover/build.rs:210】 |
+| Library-path evidence | Archive the relevant `build.rs` warning/output and record whether the packaged binary retained its embedded Cargo `OUT_DIR` library or exercised embedded runtime source. | A stale or absent build-time path means embedded source compilation is in use, not that Metal was disabled. `FASTPQ_METAL_LIB` remains a debug/dev-only override.【crates/fastpq_prover/build.rs:29】【crates/fastpq_prover/src/metal.rs:2475】 |
 | GPU parity log | `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu --release` and archive the snippet that contains `backend="metal"` or the unavailable-backend warning. | Demonstrates that kernels run before you promote a production `gpu` build.【crates/fastpq_prover/src/backend.rs:114】【crates/fastpq_prover/src/backend.rs:195】 |
-| Benchmark output | `FASTPQ_METAL_LIB=$(fd -g 'fastpq.metallib' target/release/build | head -n1) cargo run -p fastpq_prover --features fastpq-gpu,dev-tools --bin fastpq_metal_bench --release -- --rows 20000 --iterations 5 --output fastpq_metal_bench.json --trace-dir traces`; wrap and sign via `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 fastpq_metal_bench.json artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --sign-output [--gpg-key <fingerprint>]`. | The wrapped JSON records `speedup.ratio`, `speedup.delta_ms`, FFT tuning, padded rows (32,768), enriched `zero_fill`/`kernel_profiles`, the flattened `kernel_summary`, the verified `metal_dispatch_queue.poseidon`/`poseidon_profiles` blocks (when `--operation poseidon_hash_columns` is used), and the trace metadata so the GPU LDE mean stays ≤950 ms and Poseidon stays <1 s; keep both the bundle and the generated `.json.asc` signature with the release ticket so dashboards and auditors can verify the artefact without rerunning workloads.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:697】【scripts/fastpq/wrap_benchmark.py:714】【scripts/fastpq/wrap_benchmark.py:732】 |
+| Benchmark output | `cargo run -p fastpq_prover --features fastpq-gpu,dev-tools --bin fastpq_metal_bench --release -- --rows 20000 --iterations 5 --output fastpq_metal_bench.json --trace-dir traces`; wrap and sign via `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 fastpq_metal_bench.json artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --sign-output [--gpg-key <fingerprint>]`. | The wrapped JSON records `speedup.ratio`, `speedup.delta_ms`, FFT tuning, padded rows (32,768), enriched `zero_fill`/`kernel_profiles`, the flattened `kernel_summary`, the verified `metal_dispatch_queue.poseidon`/`poseidon_profiles` blocks (when `--operation poseidon_hash_columns` is used), and the trace metadata so the GPU LDE mean stays ≤950 ms and Poseidon stays <1 s; keep both the bundle and the generated `.json.asc` signature with the release ticket so dashboards and auditors can verify the artefact without rerunning workloads.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:697】【scripts/fastpq/wrap_benchmark.py:714】【scripts/fastpq/wrap_benchmark.py:732】 |
 | Bench manifest | `cargo xtask fastpq-bench-manifest --bench metal=artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --bench cuda=artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json --signing-key secrets/fastpq_bench.ed25519 --out artifacts/fastpq_bench_manifest.json`. | Validates both GPU artefacts, fails if the LDE mean breaks the `<1 s` ceiling, records BLAKE3/SHA-256 digests, and emits a signed manifest so the release checklist cannot advance without verifiable metrics.【xtask/src/fastpq.rs:1】【artifacts/fastpq_benchmarks/README.md:65】 |
 | CUDA bundle | Run `FASTPQ_GPU=gpu cargo run -p fastpq_prover --features dev-tools --bin fastpq_cuda_bench --release -- --rows 20000 --iterations 5 --column-count 16 --device 0 --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_2025-05-12.json` on the SM80 lab host, wrap/sign the JSON into `artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json` (use `--label device_class=xeon-rtx-sm80` so dashboards pick up the correct class), add the path to `artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt`, and keep the `.json`/`.asc` pair with the Metal artefact before regenerating the manifest. The raw CUDA bundle includes FFT/IFFT/LDE, Poseidon columns, Poseidon Merkle parent pairs, and BN254 Poseidon word batches unless `--operation` narrows the capture. The checked-in `fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json` illustrates the exact bundle format auditors expect.【scripts/fastpq/wrap_benchmark.py:714】【artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt:1】 |
 | Telemetry proof | `curl -s http://<host>:8180/metrics | rg 'fastpq_execution_mode_total{device_class'` plus the `telemetry::fastpq.execution_mode` log emitted at startup. | Confirms Prometheus/OTEL expose `device_class="<matrix>", backend="metal"` (or a downgrade log) before enabling traffic.【crates/iroha_telemetry/src/metrics.rs:8887】【crates/fastpq_prover/src/backend.rs:174】 |
@@ -168,7 +167,7 @@ Environment overrides:
 1. **Startup logs**
    - Expect `FASTPQ execution mode resolved` from target `telemetry::fastpq.execution_mode` with
      `requested`, `resolved`, and `backend` labels.【crates/fastpq_prover/src/backend.rs:208】
-   - GPU-configured nodes surface `backend="metal"` when the metallib loads successfully and the preflight passes.
+   - GPU-configured nodes surface `backend="metal"` when `MTLDevice` discovery succeeds and either the offline library or embedded source pipelines pass preflight.
    - If compilation, loading, or preflight fails for explicit `gpu`, the FASTPQ lane is disabled instead of silently using CPU.【crates/fastpq_prover/build.rs:29】【crates/iroha_core/src/fastpq/lane.rs:228】【crates/fastpq_prover/src/metal.rs:43】
 
 2. **Prometheus metrics**
@@ -196,10 +195,10 @@ Environment overrides:
      peer compiled with the same parameters.
 
 ## Troubleshooting
-- **Resolved mode stays CPU on GPU hosts** — check that the binary was built with
-  `fastpq_prover/fastpq-gpu`, CUDA libraries are on the loader path, and `FASTPQ_GPU` is not forcing
+- **Resolved mode stays CPU on GPU hosts** — check that the daemon was built with
+  `irohad/fastpq-gpu`, CUDA libraries are on the loader path, and `FASTPQ_GPU` is not forcing
   `cpu`.
-- **Metal unavailable on Apple Silicon** — verify the CLI tools are installed (`xcode-select --install`), rerun `xcodebuild -downloadComponent MetalToolchain`, and ensure the build produced a non-empty `FASTPQ_METAL_LIB` path; an empty or missing value disables the backend by design.【crates/fastpq_prover/build.rs:166】【crates/fastpq_prover/src/metal.rs:43】
+- **Metal unavailable on Apple Silicon** — in a debug/dev diagnostic build, set `FASTPQ_DEBUG_METAL_ENUM=1` and verify `MTLCreateSystemDefaultDevice` or `MTLCopyAllDevices` sees the GPU. The build automatically downloads a missing Metal compiler unless `FASTPQ_SKIP_GPU_BUILD` is set, while a missing offline library uses embedded source compilation. Treat a runtime compiler or parity-preflight error as a library/pipeline failure rather than a hardware-discovery failure; `FASTPQ_METAL_LIB` is only a debug/dev override.【crates/fastpq_prover/build.rs:103】【crates/fastpq_prover/src/backend.rs:745】【crates/fastpq_prover/src/metal.rs:2334】
 - **`Unknown parameter` errors** — ensure both prover and verifier use the same canonical catalogue
   emitted by `fastpq_isi`; mismatches surface as `Error::UnknownParameter`.【crates/fastpq_prover/src/proof.rs:133】
 - **GPU mode disabled at startup** — inspect `cargo tree -p fastpq_prover --features` and
@@ -224,7 +223,7 @@ regression is understood.
 
 ## Regression Tests
 - `cargo test -p fastpq_prover --release`
-- `cargo test -p fastpq_prover --release --features fastpq_prover/fastpq-gpu` (on GPU hosts)
+- `cargo test -p fastpq_prover --release --features fastpq-gpu` (on GPU hosts)
 - Optional golden fixture check:
   ```bash
   cargo test -p fastpq_prover --test backend_regression --release -- --ignored

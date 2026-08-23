@@ -710,9 +710,10 @@ class KagemushaRecursiveSpendProverTest {
             ByteArray::class.java,
             ByteArray::class.java,
             ByteArray::class.java,
+            ByteArray::class.java,
             LongArray::class.java,
         )
-        assertEquals(8, nativeInstall.parameterCount)
+        assertEquals(9, nativeInstall.parameterCount)
         val nativeAuthorizationPrepare = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
             "nativePrepareAuthorizationV2",
             ByteArray::class.java,
@@ -989,13 +990,13 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun releaseAuthenticationIsMandatoryAndBounded() {
         val one = byteArrayOf(1)
-        KagemushaRecursiveSpendProver.ReleaseAuthentication(one, one, one, one, one)
-        repeat(5) { emptyIndex ->
-            val values = Array(5) { one }
+        KagemushaRecursiveSpendProver.ReleaseAuthentication(one, one, one, one, one, one)
+        repeat(6) { emptyIndex ->
+            val values = Array(6) { one }
             values[emptyIndex] = byteArrayOf()
             assertFailsWith<IllegalArgumentException> {
                 KagemushaRecursiveSpendProver.ReleaseAuthentication(
-                    values[0], values[1], values[2], values[3], values[4],
+                    values[0], values[1], values[2], values[3], values[4], values[5],
                 )
             }
         }
@@ -1006,10 +1007,34 @@ class KagemushaRecursiveSpendProverTest {
                 one,
                 one,
                 one,
+                one,
             )
         }
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.ReleaseAuthentication(
+                one,
+                one,
+                ByteArray(
+                    KagemushaRecursiveSpendProver.MAX_INTERNAL_VALIDATION_RECEIPT_BYTES + 1,
+                ),
+                one,
+                one,
+                one,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.ReleaseAuthentication(
+                one,
+                one,
+                one,
+                one,
+                ByteArray(KagemushaRecursiveSpendProver.MAX_CRYPTOGRAPHIC_REVIEW_BYTES + 1),
+                one,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.ReleaseAuthentication(
+                one,
                 one,
                 one,
                 one,

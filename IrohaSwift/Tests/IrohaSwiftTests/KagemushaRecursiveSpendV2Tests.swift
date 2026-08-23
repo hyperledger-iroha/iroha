@@ -903,9 +903,10 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             authentication: try KagemushaRecursiveSpendReleaseAuthenticationV4(
                 trustedPolicyNorito: Data([0x01]),
                 releaseAttestationNorito: Data([0x02]),
-                benchmarkEvidence: Data([0x03]),
-                cryptographicReview: Data([0x04]),
-                promotionRecordNorito: Data([0x05])
+                internalValidationReceiptNorito: Data([0x03]),
+                benchmarkEvidence: Data([0x04]),
+                cryptographicReview: Data([0x05]),
+                promotionRecordNorito: Data([0x06])
             )
         )
         XCTAssertEqual(session.manifest, manifest)
@@ -937,37 +938,64 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertNoThrow(try KagemushaRecursiveSpendReleaseAuthenticationV4(
             trustedPolicyNorito: Data([0x01]),
             releaseAttestationNorito: Data([0x02]),
-            benchmarkEvidence: Data([0x03]),
-            cryptographicReview: Data([0x04]),
-            promotionRecordNorito: Data([0x05])
+            internalValidationReceiptNorito: Data([0x03]),
+            benchmarkEvidence: Data([0x04]),
+            cryptographicReview: Data([0x05]),
+            promotionRecordNorito: Data([0x06])
         ))
-        for field in 0..<5 {
+        for field in 0..<6 {
             var values = [
-                Data([0x01]), Data([0x02]), Data([0x03]), Data([0x04]), Data([0x05])
+                Data([0x01]), Data([0x02]), Data([0x03]), Data([0x04]), Data([0x05]),
+                Data([0x06]),
             ]
             values[field] = Data()
             XCTAssertThrowsError(try KagemushaRecursiveSpendReleaseAuthenticationV4(
                 trustedPolicyNorito: values[0],
                 releaseAttestationNorito: values[1],
-                benchmarkEvidence: values[2],
-                cryptographicReview: values[3],
-                promotionRecordNorito: values[4]
+                internalValidationReceiptNorito: values[2],
+                benchmarkEvidence: values[3],
+                cryptographicReview: values[4],
+                promotionRecordNorito: values[5]
             ))
         }
         XCTAssertThrowsError(try KagemushaRecursiveSpendReleaseAuthenticationV4(
             trustedPolicyNorito: Data(repeating: 0x01, count: 64 * 1_024 + 1),
             releaseAttestationNorito: Data([0x02]),
-            benchmarkEvidence: Data([0x03]),
-            cryptographicReview: Data([0x04]),
-            promotionRecordNorito: Data([0x05])
+            internalValidationReceiptNorito: Data([0x03]),
+            benchmarkEvidence: Data([0x04]),
+            cryptographicReview: Data([0x05]),
+            promotionRecordNorito: Data([0x06])
         ))
         XCTAssertThrowsError(try KagemushaRecursiveSpendReleaseAuthenticationV4(
             trustedPolicyNorito: Data([0x01]),
             releaseAttestationNorito: Data([0x02]),
-            benchmarkEvidence: Data([0x03]),
-            cryptographicReview: Data([0x04]),
-            promotionRecordNorito: Data(
+            internalValidationReceiptNorito: Data(
+                repeating: 0x03,
+                count: KagemushaRecursiveSpend.maximumInternalValidationReceiptBytesV4 + 1
+            ),
+            benchmarkEvidence: Data([0x04]),
+            cryptographicReview: Data([0x05]),
+            promotionRecordNorito: Data([0x06])
+        ))
+        XCTAssertThrowsError(try KagemushaRecursiveSpendReleaseAuthenticationV4(
+            trustedPolicyNorito: Data([0x01]),
+            releaseAttestationNorito: Data([0x02]),
+            internalValidationReceiptNorito: Data([0x03]),
+            benchmarkEvidence: Data([0x04]),
+            cryptographicReview: Data(
                 repeating: 0x05,
+                count: KagemushaRecursiveSpend.maximumCryptographicReviewBytesV4 + 1
+            ),
+            promotionRecordNorito: Data([0x06])
+        ))
+        XCTAssertThrowsError(try KagemushaRecursiveSpendReleaseAuthenticationV4(
+            trustedPolicyNorito: Data([0x01]),
+            releaseAttestationNorito: Data([0x02]),
+            internalValidationReceiptNorito: Data([0x03]),
+            benchmarkEvidence: Data([0x04]),
+            cryptographicReview: Data([0x05]),
+            promotionRecordNorito: Data(
+                repeating: 0x06,
                 count: KagemushaRecursiveSpend.maximumPromotionRecordBytesV4 + 1
             )
         ))

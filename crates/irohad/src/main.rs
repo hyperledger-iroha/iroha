@@ -9874,10 +9874,11 @@ impl Iroha {
         if let Some((_h, child)) = iroha_core::pipeline::zk_lane::start(&zk_cfg.halo2) {
             supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
         }
-        if let Some((_h, child)) = iroha_core::fastpq::lane::start_with_backpressure(
+        if let Some((_h, child)) = iroha_core::fastpq::lane::start_with_backpressure_and_shutdown(
             &zk_cfg.fastpq,
             Some(queue_backpressure),
             Some(kura.clone()),
+            supervisor.shutdown_signal(),
         ) {
             supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
         }

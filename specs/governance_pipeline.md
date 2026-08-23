@@ -15,13 +15,16 @@ constitution are not active until implemented and separately enacted.
   floor and does not increase draw odds above the minimum. Each proposal body
   uses `min(configured target, eligible citizens)` members, rejects only the
   zero-candidate case, and computes quorum from the actual immutable roster.
-  The same citizen may serve in all seven bodies.
+  The same citizen may serve in all seven bodies. The proposal-local roster and
+  quorum basis points are pinned when the proposal enters the pipeline; later
+  module-catalog or governance-configuration changes cannot replace its voters
+  or lower its threshold.
 - The first validation-fee release supports PLAIN finalization only. `h_end` is
-  inclusive; close/tally executes at `h_end + 1`, evidence is anchored to
-  `h_end`, and ballot locks must remain active through that height. Other
-  governance paths may retain ZK behavior where explicitly configured. The
-  Taira validation-fee profile retains an exact 3,600-block window, so
-  `h_end = h_start + 3,599`.
+  inclusive; finalization is first permitted at `h_end + 1`, evidence is
+  anchored to `h_end`, and retained ballot locks keep the same tally available
+  if finalization lands in a later block. Other governance paths may retain ZK
+  behavior where explicitly configured. The Taira validation-fee profile
+  retains an exact 3,600-block window, so `h_end = h_start + 3,599`.
 - At the `h_start` boundary, after all seven proposal-local Parliament bodies
   have reached quorum, consensus freezes the complete PLAIN electorate. The
   snapshot binds the proposal id and operator, Parliament approval-gate height,
@@ -34,6 +37,9 @@ constitution are not active until implemented and separately enacted.
   `plain_electorate_rules`. Ballots use the retained asset, bond escrow, slash
   receiver, amount, duration, conviction, turnout, approval threshold, member
   cap, and citizen gate even if live governance configuration later changes.
+  A transaction containing only a PLAIN ballot remains a control-plane
+  transaction after a validation-fee policy activates; mixing that ballot with
+  ordinary instructions does not inherit the exemption.
   Lock, expiry-release, slash, and restitution transfers are atomic and retain
   the lock on any custody mismatch or transfer failure. Unregistering retained
   custody accounts, asset definitions, or their domains is rejected even
@@ -41,6 +47,11 @@ constitution are not active until implemented and separately enacted.
   `/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft` route derives
   these immutable fields and rejects duplicate effective ballots; clients
   supply only the owner and closed AYE/NAY/ABSTAIN direction.
+- An epoch council roster is immutable after its first successful persistence.
+  Replaying the exact same roster is idempotent and cannot consume another
+  service slot or extend a cooldown. A citizen cannot release the citizenship
+  bond while seated in a current or scheduled council/body roster, retained by
+  an active proposal electorate, or holding an active referendum ballot.
 - An enacted validation-fee policy is valid only when
   `effective_from_height = enacted_at_height + 120,960`; an earlier or later
   activation, or height overflow, is rejected. The proof-bearing current-policy

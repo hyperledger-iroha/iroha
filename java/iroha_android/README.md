@@ -437,8 +437,9 @@ See [`specs/offline_cash_device_bridge_v1.md`](../../specs/offline_cash_device_b
 for exact frame offsets, feature bits, and optional native entry points.
 
 Artifact installation requires the canonical candidate-bound promotion record through
-`ReleaseAuthentication`, in addition to the trusted policy, attestation, benchmark evidence, and
-cryptographic review. An authenticated-but-unpromoted release cannot become active.
+`ReleaseAuthentication`, in addition to the trusted policy, attestation, runner-signed
+internal-validation receipt, benchmark evidence, and cryptographic review. The receipt and review
+are each limited to 1 MiB. An authenticated-but-unpromoted release cannot become active.
 
 `newToriiClient(...)` requires an exact genesis-derived `LocalSigningContext` and exposes the
 query-free, asset-neutral `getOfflineCapability`, `getRecipientRegistrationLineage`, `submitTopUp`,

@@ -564,6 +564,9 @@ pub async fn handle_gov_ballot_zk_v1(
         if let Err(reason) = ensure_owner_canonical(owner) {
             return Ok(ballot_rejection(&reason));
         }
+        if owner != &authority_id.to_string() {
+            return Ok(ballot_rejection("owner must equal authority"));
+        }
     }
     if let Err(reason) = validate_optional_ballot_direction(body.direction.as_deref()) {
         return Ok(ballot_rejection(&reason));
@@ -664,6 +667,14 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
         return Ok(ballot_rejection(
             "lock hints must include owner, amount, duration_blocks",
         ));
+    }
+    if body
+        .ballot
+        .owner
+        .as_ref()
+        .is_some_and(|owner| owner != &authority_id)
+    {
+        return Ok(ballot_rejection("owner must equal authority"));
     }
     if let Err(reason) = validate_optional_ballot_direction(body.ballot.direction.as_deref()) {
         return Ok(ballot_rejection(&reason));
@@ -1423,21 +1434,25 @@ pub async fn handle_gov_get_tally(
     let rid = id.0;
     require_exact_governance_path_token("referendum id", &rid)?;
     let world = state.world_view();
-    let mut proposal_id = [0_u8; 32];
-    let is_validation_fee_referendum = rid.len() == 64
-        && hex::decode_to_slice(&rid, &mut proposal_id).is_ok()
-        && world
-            .governance_proposals()
-            .get(&proposal_id)
-            .is_some_and(|proposal| {
-                matches!(
-                    &proposal.kind,
-                    iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
-                        | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
-                )
-            });
-    if is_validation_fee_referendum {
-        let typed_proposal_id = hex::encode(proposal_id);
+    let proposal_id = if rid.len() == 64 {
+        let mut decoded = [0_u8; 32];
+        hex::decode_to_slice(&rid, &mut decoded)
+            .is_ok()
+            .then_some(decoded)
+    } else {
+        None
+    };
+    let proposal = proposal_id.and_then(|id| world.governance_proposals().get(&id));
+    let is_validation_fee_referendum =
+        proposal.is_some_and(|proposal| {
+            matches!(
+            &proposal.kind,
+            iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
+                | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
+        )
+        });
+    if let Some(validation_fee_proposal_id) = proposal_id.filter(|_| is_validation_fee_referendum) {
+        let typed_proposal_id = hex::encode(validation_fee_proposal_id);
         return Err(crate::routing::conversion_error(format!(
             "validation-fee referendum tally requires the typed \
              /v1/validation-fee/proposals/{typed_proposal_id} endpoint"
@@ -1470,51 +1485,76 @@ pub async fn handle_gov_get_tally(
     let mut approve: u128 = 0;
     let mut reject: u128 = 0;
     let mut abstain: u128 = 0;
-    match referendum.mode {
-        iroha_core::state::GovernanceReferendumMode::Plain => {
-            if let Some(locks) = world.governance_locks().get(&rid) {
-                let step = gov_cfg.conviction_step_blocks.max(1);
-                let max_c = gov_cfg.max_conviction;
-                for (_owner, rec) in locks.locks.iter() {
-                    if rec.expiry_height < now_h {
-                        continue;
-                    }
-                    if rec.amount.scale() != 0 {
-                        return Err(crate::routing::conversion_error(
-                            "plain ballot lock amount must have scale zero".into(),
-                        ));
-                    }
-                    let units = rec.amount.as_numeric().try_mantissa_u128().ok_or_else(|| {
-                        crate::routing::conversion_error(
-                            "plain ballot lock amount exceeds u128 voting range".into(),
-                        )
-                    })?;
-                    let w = checked_plain_tally_weight(units, rec.duration_blocks, step, max_c)?;
-                    match rec.direction {
-                        0 => {
-                            approve = approve.checked_add(w).ok_or_else(tally_overflow_error)?;
+    let finalization_evidence = proposal_id.and_then(|id| {
+        proposal
+            .and_then(|record| record.finalization_evidence.as_ref())
+            .copied()
+            .filter(|evidence| evidence.proposal_id == id && evidence.referendum_id == id)
+    });
+    if let Some(evidence) = finalization_evidence {
+        approve = evidence.approve;
+        reject = evidence.reject;
+        abstain = evidence.abstain;
+    } else {
+        match referendum.mode {
+            iroha_core::state::GovernanceReferendumMode::Plain => {
+                let tally_height = if referendum.status
+                    == iroha_core::state::GovernanceReferendumStatus::Closed
+                    || now_h > referendum.h_end
+                {
+                    referendum.h_end
+                } else {
+                    now_h
+                };
+                if let Some(locks) = world.governance_locks().get(&rid) {
+                    let step = gov_cfg.conviction_step_blocks.max(1);
+                    let max_c = gov_cfg.max_conviction;
+                    for (_owner, rec) in locks.locks.iter() {
+                        if rec.expiry_height < tally_height {
+                            continue;
                         }
-                        1 => {
-                            reject = reject.checked_add(w).ok_or_else(tally_overflow_error)?;
+                        if rec.amount.scale() != 0 {
+                            return Err(crate::routing::conversion_error(
+                                "plain ballot lock amount must have scale zero".into(),
+                            ));
                         }
-                        2 => {
-                            abstain = abstain.checked_add(w).ok_or_else(tally_overflow_error)?;
-                        }
-                        direction => {
-                            return Err(crate::routing::conversion_error(format!(
-                                "plain ballot lock has invalid direction {direction}; \
+                        let units =
+                            rec.amount.as_numeric().try_mantissa_u128().ok_or_else(|| {
+                                crate::routing::conversion_error(
+                                    "plain ballot lock amount exceeds u128 voting range".into(),
+                                )
+                            })?;
+                        let w =
+                            checked_plain_tally_weight(units, rec.duration_blocks, step, max_c)?;
+                        match rec.direction {
+                            0 => {
+                                approve =
+                                    approve.checked_add(w).ok_or_else(tally_overflow_error)?;
+                            }
+                            1 => {
+                                reject = reject.checked_add(w).ok_or_else(tally_overflow_error)?;
+                            }
+                            2 => {
+                                abstain =
+                                    abstain.checked_add(w).ok_or_else(tally_overflow_error)?;
+                            }
+                            direction => {
+                                return Err(crate::routing::conversion_error(format!(
+                                    "plain ballot lock has invalid direction {direction}; \
                                  expected 0, 1, or 2"
-                            )));
+                                )));
+                            }
                         }
                     }
                 }
             }
-        }
-        iroha_core::state::GovernanceReferendumMode::Zk => {
-            if let Some(e) = world.elections().get(&rid) {
-                if e.finalized && e.tally.len() >= 2 {
-                    approve = e.tally[0] as u128;
-                    reject = e.tally[1] as u128;
+            iroha_core::state::GovernanceReferendumMode::Zk => {
+                if let Some(e) = world.elections().get(&rid) {
+                    if e.finalized && e.tally.len() >= 2 {
+                        approve = e.tally[0] as u128;
+                        reject = e.tally[1] as u128;
+                        abstain = e.tally.get(2).copied().map_or(0, u128::from);
+                    }
                 }
             }
         }
@@ -2409,10 +2449,10 @@ mod tests {
         queue::{Queue, TransactionGuard},
         smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
         state::{
-            CouncilState, GovernanceLockRecord, GovernanceLocksForReferendum, GovernancePipeline,
-            GovernanceProposalRecord, GovernanceProposalStatus, GovernanceReferendumMode,
-            GovernanceReferendumRecord, GovernanceReferendumStatus, GovernanceStageApprovals,
-            State, World,
+            CouncilState, ElectionState, GovernanceLockRecord, GovernanceLocksForReferendum,
+            GovernancePipeline, GovernanceProposalRecord, GovernanceProposalStatus,
+            GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
+            GovernanceStageApprovals, State, World,
         },
     };
     use iroha_crypto::{Algorithm, KeyPair};
@@ -4018,6 +4058,164 @@ seiyaku GovernedReadFixture {
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit())
         );
+    }
+    #[tokio::test]
+    async fn gov_get_tally_uses_referendum_end_for_closed_plain_view() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query);
+        let mut cfg = state.gov.clone();
+        cfg.conviction_step_blocks = 1;
+        cfg.max_conviction = 1;
+        state.set_gov(cfg);
+        let rid = "rid-tally-closed-lock".to_string();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let block_hash = iroha_crypto::HashOf::new(&header);
+        {
+            let mut block = state.block(header);
+            let mut tx = block.transaction();
+            tx.world.governance_referenda_mut().insert(
+                rid.clone(),
+                GovernanceReferendumRecord {
+                    h_start: 0,
+                    h_end: 0,
+                    status: GovernanceReferendumStatus::Closed,
+                    mode: GovernanceReferendumMode::Plain,
+                },
+            );
+            let mut locks = GovernanceLocksForReferendum::default();
+            locks.locks.insert(
+                ALICE_ID.clone(),
+                GovernanceLockRecord {
+                    owner: ALICE_ID.clone(),
+                    amount: 9_u64.into(),
+                    slashed: Quantity::zero(),
+                    expiry_height: 0,
+                    direction: 0,
+                    duration_blocks: 0,
+                    custody: None,
+                },
+            );
+            tx.world.governance_locks_mut().insert(rid.clone(), locks);
+            tx.apply();
+            let iroha_core::state::StateBlock { world, .. } = block;
+            world.commit();
+        }
+        state.push_block_hash_for_testing(block_hash);
+
+        let response = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
+            .await
+            .expect("closed PLAIN tally");
+        assert_eq!(response.0.evaluated_block_height, 1);
+        assert_eq!(response.0.approve, 3);
+        assert_eq!(response.0.reject, 0);
+        assert_eq!(response.0.abstain, 0);
+    }
+    #[tokio::test]
+    async fn gov_get_tally_projects_zk_abstentions() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let rid = "rid-tally-zk-abstain".to_string();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        {
+            let mut block = state.block(header);
+            let mut tx = block.transaction();
+            tx.world.governance_referenda_mut().insert(
+                rid.clone(),
+                GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: 10,
+                    status: GovernanceReferendumStatus::Closed,
+                    mode: GovernanceReferendumMode::Zk,
+                },
+            );
+            tx.world.elections_mut().insert(
+                rid.clone(),
+                ElectionState {
+                    finalized: true,
+                    tally: vec![7, 3, 5],
+                    ..ElectionState::default()
+                },
+            );
+            tx.apply();
+            let iroha_core::state::StateBlock { world, .. } = block;
+            world.commit();
+        }
+
+        let response = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
+            .await
+            .expect("finalized ZK tally");
+        assert_eq!(response.0.approve, 7);
+        assert_eq!(response.0.reject, 3);
+        assert_eq!(response.0.abstain, 5);
+    }
+    #[tokio::test]
+    async fn gov_get_tally_prefers_retained_finalization_evidence() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let anchor = iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
+            network_id: *state.network_id_ref(),
+            action: sample_sccp_route_governance_action(),
+        };
+        let kind = iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(
+            iroha_data_model::governance::types::SccpRouteGovernanceProposal {
+                anchor: Box::new(anchor),
+            },
+        );
+        let proposal_id = kind.fingerprint();
+        let rid = hex::encode(proposal_id);
+        let evidence = iroha_data_model::governance::types::GovernanceFinalizationEvidence {
+            proposal_id,
+            referendum_id: proposal_id,
+            finalized_at_height: 11,
+            mode: iroha_data_model::isi::governance::VotingMode::Plain,
+            approve: 101,
+            reject: 23,
+            abstain: 7,
+            min_turnout: 1,
+            approval_threshold_numerator: 1,
+            approval_threshold_denominator: 2,
+            approved: true,
+        };
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        {
+            let mut block = state.block(header);
+            let mut tx = block.transaction();
+            tx.world.governance_proposals_mut().insert(
+                proposal_id,
+                GovernanceProposalRecord {
+                    proposer: ALICE_ID.clone(),
+                    kind,
+                    created_height: 1,
+                    status: GovernanceProposalStatus::Approved,
+                    pipeline: GovernancePipeline::default(),
+                    parliament_snapshot: None,
+                    finalization_evidence: Some(evidence),
+                    enacted_at_height: None,
+                },
+            );
+            tx.world.governance_referenda_mut().insert(
+                rid.clone(),
+                GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: 10,
+                    status: GovernanceReferendumStatus::Closed,
+                    mode: GovernanceReferendumMode::Plain,
+                },
+            );
+            tx.apply();
+            let iroha_core::state::StateBlock { world, .. } = block;
+            world.commit();
+        }
+
+        let response = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
+            .await
+            .expect("retained finalized tally");
+        assert_eq!(response.0.approve, 101);
+        assert_eq!(response.0.reject, 23);
+        assert_eq!(response.0.abstain, 7);
     }
     #[tokio::test]
     async fn gov_get_tally_rejects_missing_referendum() {

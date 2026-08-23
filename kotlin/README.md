@@ -455,8 +455,9 @@ key, and final-key selector-zero bootstrap witness for each Eq/Ep parity. Each p
 circuit parameters are authenticated inline in the V4 manifest, not streamed as a ninth or tenth
 artifact. The top-up-finality roster is authenticated release metadata outside the exact eight-role
 cryptographic inventory. `ReleaseAuthentication` also requires the canonical candidate-bound
-promotion record alongside the trusted policy, attestation, benchmark evidence, and cryptographic
-review; an authenticated-but-unpromoted release cannot be installed.
+promotion record and runner-signed internal-validation receipt alongside the trusted policy,
+attestation, benchmark evidence, and cryptographic review. The receipt and review are each limited
+to 1 MiB; an authenticated-but-unpromoted release cannot be installed.
 
 `KagemushaRecursiveSpendProver.newToriiClient` requires a genesis-derived
 `LocalSigningContext`. Its receiver-lineage method additionally requires a per-call

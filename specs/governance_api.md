@@ -267,8 +267,11 @@ Code Size Cap
     - For ZK elections, contract paths must call `ZK_VOTE_VERIFY_TALLY` prior to executing `FinalizeElection`; hosts enforce a one-shot latch. `FinalizeReferendum` rejects ZK referenda until the election tally is finalized.
     - `h_end` is inclusive. PLAIN referenda close and tally at the start of
       `h_end + 1`, while finalization evidence remains anchored to `h_end`.
-      Manual PLAIN finalization at or before `h_end` is rejected. ZK referenda
-      still require a finalized election tally.
+      Validation-fee referenda require explicit finalization no earlier than
+      that boundary; if it is missed, their exact locks remain escrowed and the
+      same end-height tally can be finalized in a later block. Manual PLAIN
+      finalization at or before `h_end` is rejected. ZK referenda still require
+      a finalized election tally.
     - Turnout is `approve + reject + abstain`; abstentions count toward turnout
       and the configured approval denominator.
 
@@ -296,6 +299,10 @@ Code Size Cap
 - GET `/v1/gov/referenda/{id}` and GET `/v1/gov/tally/{id}`
   - Path `{id}` follows the same exact non-empty referendum-token grammar as
     the locks endpoint. Noncanonical variants fail before state lookup.
+  - A finalized proposal tally is projected from its retained finalization
+    evidence, so later lock expiry cannot change the result. Live/post-window
+    PLAIN tallies use the same inclusive `h_end` eligibility boundary as
+    consensus, and finalized ZK projections include the optional abstain slot.
 
 - GET `/v1/gov/council/current`
   - Response: { "epoch": N, "members": [{ "account_id": "…" }, …] }
@@ -483,7 +490,8 @@ Unlock Sweep (Operator/Audit)
       are rejected. `duration_blocks` spans the complete `u64` domain.
     - When any lock hint is provided, the ballot must supply `owner`,
       `amount`, and `duration_blocks`; partial hints are rejected. Unknown
-      fields and private-key aliases fail before a draft is constructed.
+      fields and private-key aliases fail before a draft is constructed. A
+      supplied owner must be the same canonical account as `authority`.
     - ZK re-votes are monotonic: attempts to shrink amount or expiry are
       rejected with `BallotRejected` diagnostics.
     - Contract execution must call `ZK_VOTE_VERIFY_BALLOT` before enqueuing
@@ -519,6 +527,8 @@ Unlock Sweep (Operator/Audit)
   - Notes:
     - The strict request has no private-key field; Torii returns only an
       unsigned instruction skeleton for local signing.
+    - A supplied ballot owner must equal the authenticated request authority;
+      Torii rejects mismatches before returning a skeleton.
     - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
     - The envelope bytes are re-encoded as base64 for the instruction payload.
     - This endpoint is part of every V1 app API build.

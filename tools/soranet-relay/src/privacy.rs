@@ -5,9 +5,9 @@
 //! they satisfy the configured contribution thresholds; otherwise they surface as
 //! `soranet_privacy_bucket_suppressed` markers.
 use crate::config::{
-    GAR_CATEGORY_MAX_BYTES_V1, PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1,
-    PRIVACY_MAX_COMPLETED_BUCKETS_V1, PRIVACY_MAX_EXPECTED_SHARES_V1, PRIVACY_MAX_OPEN_BUCKETS_V1,
-    PrivacyTelemetryConfig, RelayMode, is_canonical_gar_category_v1,
+    PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1, PRIVACY_MAX_COMPLETED_BUCKETS_V1,
+    PRIVACY_MAX_EXPECTED_SHARES_V1, PRIVACY_MAX_OPEN_BUCKETS_V1, PrivacyTelemetryConfig, RelayMode,
+    is_canonical_gar_category_v1,
 };
 use blake3::Hasher as Blake3Hasher;
 use iroha_data_model::soranet::privacy_metrics::{
@@ -1079,6 +1079,8 @@ impl From<PrivacyTelemetryConfig> for PrivacyConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::GAR_CATEGORY_MAX_BYTES_V1;
+
     fn base_time() -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(1_000)
     }
@@ -1444,7 +1446,11 @@ mod tests {
     fn privacy_category_retention_is_bounded() {
         let mut bucket = BucketStats::default();
         for index in 0..=PRIVACY_GAR_CATEGORIES_PER_BUCKET_MAX_V1 {
-            bucket.record_gar_category(format!("{index:016x}"));
+            bucket.record_gar_category(
+                u64::try_from(index)
+                    .expect("bounded category index fits in u64")
+                    .to_be_bytes(),
+            );
         }
         assert_eq!(
             bucket.gar_counts.len(),

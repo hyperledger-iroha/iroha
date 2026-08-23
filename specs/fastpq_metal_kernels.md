@@ -4,10 +4,13 @@ title: FASTPQ Metal Kernel Suite
 
 # FASTPQ Metal Kernel Suite
 
-The Apple Silicon backend ships a single `fastpq.metallib` that contains every
-Metal Shading Language (MSL) kernel exercised by the prover. This note explains
-the available entry points, their threadgroup limits, and the determinism
-guarantees that make the GPU path interchangeable with the scalar fallback.
+The Apple Silicon backend prefers a single build-generated `fastpq.metallib`
+that contains every Metal Shading Language (MSL) kernel exercised by the
+prover. The same sources are embedded as a runtime-compilation fallback, so a
+missing build artifact does not make visible Metal hardware unavailable. This
+note explains the available entry points, their threadgroup limits, and the
+determinism guarantees that make the GPU path interchangeable with the scalar
+fallback.
 
 The canonical implementation lives under
 `crates/fastpq_prover/metal/kernels/` and is compiled by
@@ -46,20 +49,26 @@ the same metadata.
 
 ## Metallib generation
 
-`build.rs` compiles the individual `.metal` sources into `.air` objects and then
-links them into `fastpq.metallib`, exporting every entry point listed above.
-Setting `FASTPQ_METAL_LIB` to that path (the build script does this
-automatically) allows the runtime to load the library deterministically regardless
-of where `cargo` placed the build artifacts.【crates/fastpq_prover/build.rs:45】
+`build.rs` ensures Xcode's optional MetalToolchain is installed (unless
+`FASTPQ_SKIP_GPU_BUILD` opts out), compiles the individual `.metal` sources into
+`.air` objects, and links them into `fastpq.metallib`, exporting every entry
+point listed above. If toolchain download or offline compilation fails, the
+runtime concatenates the prelude, parameters, field helpers, and all kernel
+translation units into self-contained Metal 3.0 source and creates the same
+pipelines through `MTLDevice::new_library_with_source`.
+The build script passes the generated Cargo `OUT_DIR` path to the crate at compile
+time, so a release loads that library while it remains present. A packaged or
+relocated release with a stale path selects the embedded fallback instead;
+`FASTPQ_METAL_LIB` is only a debug/dev override, not production configuration.【crates/fastpq_prover/build.rs:210】【crates/fastpq_prover/src/metal.rs:2475】
 
 For parity with CI runs you can regenerate the library manually:
 
 ```bash
 export OUT_DIR=$PWD/target/metal && mkdir -p "$OUT_DIR"
-xcrun metal -std=metal3.0 -O3 -c crates/fastpq_prover/metal/kernels/ntt_stage.metal -o "$OUT_DIR/ntt_stage.air"
-xcrun metal -std=metal3.0 -O3 -c crates/fastpq_prover/metal/kernels/poseidon2.metal -o "$OUT_DIR/poseidon2.air"
-xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" -o "$OUT_DIR/fastpq.metallib"
-export FASTPQ_METAL_LIB="$OUT_DIR/fastpq.metallib"
+xcrun metal -std=metal3.0 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/ntt_stage.metal -o "$OUT_DIR/ntt_stage.air"
+xcrun metal -std=metal3.0 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/poseidon2.metal -o "$OUT_DIR/poseidon2.air"
+xcrun metal -std=metal3.0 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/bn254.metal -o "$OUT_DIR/bn254.air"
+xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" "$OUT_DIR/bn254.air" -o "$OUT_DIR/fastpq.metallib"
 ```
 
 ## Threadgroup sizing heuristics
