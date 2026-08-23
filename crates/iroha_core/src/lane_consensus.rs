@@ -1554,6 +1554,7 @@ fn validate_lane_executable_payload_body(
             entrypoint.clone(),
         ));
         if key.validate().is_err()
+            || key.signed_transaction_hash != accepted.hash()
             || key.entrypoint_hash != accepted.hash_as_entrypoint()
             || Hash::from(key.entrypoint_hash) != *entrypoint_hash
             || key.lane_id != descriptor.lane_id
@@ -6059,6 +6060,8 @@ mod tests {
         ));
         let reservation = LaneQueueReservationKeyV2 {
             version: LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash:
+                LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(entrypoint.hash()),
             entrypoint_hash: entrypoint.hash(),
             queue_plan_admission_binding_hash: Hash::new(
                 b"lane-consensus-queue-plan-admission-binding",

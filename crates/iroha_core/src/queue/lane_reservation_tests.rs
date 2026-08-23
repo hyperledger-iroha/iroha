@@ -1791,6 +1791,10 @@ fn restart_reconciliation_snapshot_is_fifo_group_complete_and_read_only() {
             .expect("rebuild reservation fixture routing plan");
         LaneQueueReservationKeyV2 {
             version: LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash:
+                LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
+                    binding.entrypoint_hash,
+                ),
             entrypoint_hash: binding.entrypoint_hash,
             queue_plan_admission_binding_hash: binding.canonical_hash(),
             routing_plan_digest: routing_plan.digest(),

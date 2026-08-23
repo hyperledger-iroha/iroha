@@ -120,6 +120,16 @@ macro_rules! kura_autonomous_reservation_inventory_methods {
                 inventory.route_latest_bytes = Some(metadata.len());
                 continue;
             }
+            // Lifecycle cursors, bootstrap records, and terminal outcomes
+            // legitimately share this directory with reservation artifacts.
+            // Their dedicated readers validate their contents; this bounded
+            // inventory must accept only their exact canonical filenames.
+            if Self::autonomous_lifecycle_cursor_coordinates(&name).is_some()
+                || Self::autonomous_lifecycle_bootstrap_coordinates(&name).is_some()
+                || Self::autonomous_lifecycle_terminal_outcome_coordinates(&name).is_some()
+            {
+                continue;
+            }
             return Err(Self::invalid_lane_artifact_error(
                 path,
                 "unexpected or obsolete autonomous reservation persistence artifact",

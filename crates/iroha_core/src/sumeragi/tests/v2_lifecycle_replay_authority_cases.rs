@@ -52,6 +52,63 @@ fn every_stage_has_one_canonical_round_trip_and_exact_record_mapping() {
     }
 }
 #[test]
+fn timeout_certificate_retransmit_replay_accepts_only_the_exact_legacy_key() {
+    let fixture = Fixture::new();
+    let case = fixture
+        .cases()
+        .into_iter()
+        .find(|case| case.stage.kind() == LifecycleStageKind::BroadcastTc)
+        .expect("fixture retains one timeout-certificate Broadcast");
+    let LifecycleReplaySourceV1::ConsensusBroadcast(message) = &case.authority.source else {
+        panic!("timeout-certificate row retains a direct Broadcast authority")
+    };
+    let wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) = &message.payload else {
+        panic!("BroadcastTc authority retains a timeout certificate")
+    };
+    let highest = certificate.highest_prepare_qc();
+    let legacy_key = lifecycle_key(
+        fixture.context,
+        certificate.round,
+        highest.map(|qc| qc.proposal_round),
+        highest.map(|qc| block_subject(qc.subject)),
+        LifecyclePhase::BroadcastTc,
+        highest.map(|qc| execution_commitment(qc.execution_commitment)),
+    );
+    let foreign_legacy_key = lifecycle_key(
+        fixture.context,
+        certificate.round,
+        highest.map(|qc| qc.proposal_round),
+        Some(LifecycleDigest::new([0xA5; 32])),
+        LifecyclePhase::BroadcastTc,
+        highest.map(|qc| execution_commitment(qc.execution_commitment)),
+    );
+
+    assert_ne!(case.key, legacy_key);
+    assert_eq!(
+        case.key.subject(),
+        Some(timeout_certificate_envelope_subject(certificate))
+    );
+    case.authority
+        .validate_record(
+            fixture.context,
+            legacy_key,
+            case.work_class,
+            case.stage,
+            case.payload,
+        )
+        .expect("pre-envelope BroadcastTc key remains a valid decoded LedgerV1 row");
+    assert_eq!(
+        case.authority.validate_record(
+            fixture.context,
+            foreign_legacy_key,
+            case.work_class,
+            case.stage,
+            case.payload,
+        ),
+        Err(ReplayAuthorityValidationError::RecordMismatch)
+    );
+}
+#[test]
 fn canonical_decoder_enforces_version_size_and_complete_input() {
     let fixture = Fixture::new();
     let mut authority = fixture

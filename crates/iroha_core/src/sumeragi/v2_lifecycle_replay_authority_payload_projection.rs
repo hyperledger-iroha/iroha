@@ -33,6 +33,7 @@ impl BodyFrameBindingV1 {
 #[derive(Clone, Copy)]
 struct ReplayShape {
     key: LifecycleKey,
+    legacy_key: Option<LifecycleKey>,
     work_class: LifecycleWorkClass,
     stage_kind: LifecycleStageKind,
 }
@@ -44,9 +45,14 @@ impl ReplayShape {
     ) -> Self {
         Self {
             key,
+            legacy_key: None,
             work_class,
             stage_kind,
         }
+    }
+    const fn with_legacy_key(mut self, legacy_key: LifecycleKey) -> Self {
+        self.legacy_key = Some(legacy_key);
+        self
     }
 }
 fn project_broadcast(
@@ -153,18 +159,27 @@ fn project_broadcast(
                 return Err(ReplayAuthorityValidationError::InvalidSource);
             }
             let highest = certificate.highest_prepare_qc();
+            let legacy_key = lifecycle_key(
+                context,
+                certificate.round,
+                highest.map(|qc| qc.proposal_round),
+                highest.map(|qc| block_subject(qc.subject)),
+                LifecyclePhase::BroadcastTc,
+                highest.map(|qc| execution_commitment(qc.execution_commitment)),
+            );
             ReplayShape::new(
                 lifecycle_key(
                     context,
                     certificate.round,
                     highest.map(|qc| qc.proposal_round),
-                    highest.map(|qc| block_subject(qc.subject)),
+                    Some(timeout_certificate_envelope_subject(certificate)),
                     LifecyclePhase::BroadcastTc,
                     highest.map(|qc| execution_commitment(qc.execution_commitment)),
                 ),
                 LifecycleWorkClass::Broadcast,
                 LifecycleStageKind::BroadcastTc,
             )
+            .with_legacy_key(legacy_key)
         }
         wire::ConsensusMessageV2Payload::PayloadManifest(_)
         | wire::ConsensusMessageV2Payload::PayloadChunk(_)

@@ -2,6 +2,7 @@
 
 use std::{collections::BTreeSet, num::NonZeroUsize};
 
+use iroha_crypto::Hash;
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
@@ -23,6 +24,11 @@ use super::{
     public_lane_validator_record_matches_key,
 };
 use crate::governance::manifest::{GovernanceRules, LaneManifestRegistry};
+
+const TAIRA_RESET11_H4_LANE0_DESCRIPTOR_HASH: [u8; Hash::LENGTH] = [
+    0xd4, 0xdf, 0xdd, 0x60, 0x08, 0x4f, 0xa1, 0x90, 0xe7, 0x86, 0xc9, 0x71, 0x73, 0xf8, 0x5d, 0x63,
+    0xec, 0xe9, 0xd0, 0xb3, 0x96, 0x7b, 0x36, 0xba, 0x4f, 0x92, 0x69, 0xcf, 0x36, 0x21, 0xc2, 0x3b,
+];
 
 /// Exact lane/dataspace route whose consensus authority is being resolved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -665,9 +671,49 @@ pub(super) fn authenticated_committee_for_descriptor(
                 && ownership.validate_replay_material().is_ok()
         });
     let mut ownerships = ownerships.take(2);
-    let ownership = ownerships
-        .next()
-        .ok_or("finalized proposal-height block does not bind this lane descriptor")?;
+    let Some(ownership) = ownerships.next() else {
+        // Reset-11 was produced before global blocks persisted the complete
+        // lane-payload ownership projection.  Its one certified lane-zero
+        // block was nevertheless authorized with the producer's canonical
+        // proposal-height committee.  Retain that exact, narrow recovery
+        // corridor only for the exact authenticated descriptor emitted by the
+        // reset producer.  The live State height may already expose a staged
+        // successor while this source is selected, so height is not a stable
+        // discriminator here; the immutable descriptor and H4 finality are.
+        if crate::sumeragi::v2_context::uses_pre_release_taira_nexus_projection(&state.network_id)
+            && descriptor.descriptor_hash == Hash::prehashed(TAIRA_RESET11_H4_LANE0_DESCRIPTOR_HASH)
+            && descriptor.proposal_height == 4
+            && descriptor.lane_id == LaneId::SINGLE
+            && descriptor.dataspace_id == DataSpaceId::UNIVERSAL
+            && descriptor.previous_lane_block_height == 0
+            && descriptor.previous_lane_block_descriptor_hash.is_none()
+            && descriptor.lane_block_height == 1
+        {
+            let committee = finality
+                .height_context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<Vec<_>>();
+            if !committee.is_empty()
+                && finality
+                    .height_context
+                    .roster
+                    .iter()
+                    .all(|entry| entry.power == 1)
+                && descriptor.validator_set == committee
+                && descriptor.validator_set_hash == descriptor.computed_validator_set_hash()
+                && usize::try_from(descriptor.validator_count).ok() == Some(committee.len())
+                && finality.height_context.quorum.min_signers == descriptor.min_quorum
+                && finality.height_context.quorum.total_power
+                    == u64::from(descriptor.validator_count)
+            {
+                return Ok(committee);
+            }
+            return Err("reset-11 lane descriptor differs from its canonical committee");
+        }
+        return Err("finalized proposal-height block does not bind this lane descriptor");
+    };
     if ownerships.next().is_some() {
         return Err("finalized proposal-height block ambiguously binds this lane descriptor");
     }

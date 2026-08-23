@@ -24415,6 +24415,8 @@ pub(super) mod tests {
         ));
         let mut reservation = LaneQueueReservationKeyV2 {
             version: LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash:
+                LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(entrypoint.hash()),
             entrypoint_hash: entrypoint.hash(),
             queue_plan_admission_binding_hash: Hash::new(admission_binding),
             routing_plan_digest: routing_plan.digest(),
@@ -26959,6 +26961,10 @@ pub(super) mod tests {
         ));
         let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
             version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash:
+                crate::queue::LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
+                    entrypoint.hash(),
+                ),
             entrypoint_hash: entrypoint.hash(),
             queue_plan_admission_binding_hash: Hash::new(
                 b"pending-autonomous-queue-plan-admission-binding",

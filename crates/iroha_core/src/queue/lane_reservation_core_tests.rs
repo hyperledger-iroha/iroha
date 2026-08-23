@@ -56,6 +56,9 @@ fn reservation_key_fixture() -> LaneQueueReservationKeyV2 {
     let entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new(b"reservation-key-entrypoint"));
     LaneQueueReservationKeyV2 {
         version: LaneQueueReservationKeyV2::VERSION,
+        signed_transaction_hash: LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
+            entrypoint_hash.clone(),
+        ),
         entrypoint_hash,
         queue_plan_admission_binding_hash: Hash::new(
             b"reservation-key-queue-plan-admission-binding",
@@ -105,48 +108,18 @@ fn lane_reservation_key_current_layout_roundtrips() {
 }
 
 #[test]
-fn lane_reservation_key_rejects_pre_release_duplicate_identity_layout() {
-    #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-    #[norito(deny_unknown_fields)]
-    struct PreReleaseLaneQueueReservationKeyV2 {
-        version: u16,
-        signed_transaction_hash: HashOf<iroha_data_model::transaction::SignedTransaction>,
-        entrypoint_hash: HashOf<TransactionEntrypoint>,
-        queue_plan_admission_binding_hash: Hash,
-        routing_plan_digest: Hash,
-        coordinator_leg: RouteLeg,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        lane_incarnation: Hash,
-        proposal_height: u64,
-        lane_block_height: u64,
-        lane_block_view: u64,
-        reservation_owner_hash: Hash,
-        proposal_identity_hash: Hash,
-    }
-
+fn lane_reservation_key_accepts_reset11_duplicate_identity_layout() {
     let key = reservation_key_fixture();
-    let pre_release = PreReleaseLaneQueueReservationKeyV2 {
-        version: key.version,
-        signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::from(key.entrypoint_hash)),
-        entrypoint_hash: key.entrypoint_hash,
-        queue_plan_admission_binding_hash: key.queue_plan_admission_binding_hash,
-        routing_plan_digest: key.routing_plan_digest,
-        coordinator_leg: key.coordinator_leg,
-        lane_id: key.lane_id,
-        dataspace_id: key.dataspace_id,
-        lane_incarnation: key.lane_incarnation,
-        proposal_height: key.proposal_height,
-        lane_block_height: key.lane_block_height,
-        lane_block_view: key.lane_block_view,
-        reservation_owner_hash: key.reservation_owner_hash,
-        proposal_identity_hash: key.proposal_identity_hash,
-    };
-    let pre_release_framed =
-        norito::encode_canonical(&pre_release).expect("encode pre-release reservation key");
-    assert!(
-        norito::decode_canonical::<LaneQueueReservationKeyV2>(&pre_release_framed).is_err(),
-        "the duplicate-identity pre-release layout must fail closed"
+    assert_eq!(
+        key.signed_transaction_hash,
+        LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(key.entrypoint_hash)
+    );
+    let pre_release_framed = norito::encode_canonical(&key)
+        .expect("encode canonical reset-11 duplicate-identity reservation key");
+    assert_eq!(
+        norito::decode_canonical::<LaneQueueReservationKeyV2>(&pre_release_framed)
+            .expect("reset-11 duplicate-identity layout must remain canonical"),
+        key
     );
 }
 fn install_test_reservation_journal(queue: &Queue, dir: &tempfile::TempDir) -> PathBuf {
@@ -192,6 +165,10 @@ fn payload_free_diagnostic_reservation_record(
         version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
         key: LaneQueueReservationKeyV2 {
             version: LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash:
+                LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
+                    entrypoint_hash.clone(),
+                ),
             entrypoint_hash,
             queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
                 b"payload-free-diagnostic-admission",

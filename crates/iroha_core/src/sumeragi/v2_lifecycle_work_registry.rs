@@ -4,14 +4,12 @@
 //! module keeps the corresponding process-local effect values in a separate,
 //! deterministic map so planning never makes the coordinator own physical
 //! bytes or service handles.
-#[cfg(test)]
-use super::{AdmissionRequest, LeaseId};
 use super::{
-    AuthenticatedLifecycleRecoveryCut, CandidateAdmission, CapacityClass, InitialLifecycleState,
-    LifecycleContext, LifecycleCoordinator, LifecycleDigest, LifecycleKey, LifecyclePhase,
-    LifecycleRecord, LifecycleStage, LifecycleStageKind, LifecycleWorkClass, OwnerId,
-    PhysicalReplacement, PhysicalSlot, PhysicalSlotId, PredecessorScope, ReadyEvent, TurnLease,
-    WaitSource, WaitToken, authority,
+    AdmissionRejection, AuthenticatedLifecycleRecoveryCut, CandidateAdmission, CapacityClass,
+    CoordinatorFault, InitialLifecycleState, LifecycleContext, LifecycleCoordinator,
+    LifecycleDigest, LifecycleKey, LifecyclePhase, LifecycleRecord, LifecycleStage,
+    LifecycleStageKind, LifecycleWorkClass, OwnerId, PhysicalReplacement, PhysicalSlot,
+    PhysicalSlotId, PredecessorScope, ReadyEvent, TurnLease, WaitSource, WaitToken, authority,
     body_pipeline_transition::{
         SealedInvalidBodyReportProjection, SealedInvalidBodyReportProjectionPermit,
         SealedValidateApplyProjection, SealedValidateApplyProjectionPermit,
@@ -48,6 +46,8 @@ use super::{
         authenticate_recovered_wal_vote_lifecycle_from_ledger_parent,
     },
 };
+#[cfg(test)]
+use super::{AdmissionRequest, LeaseId};
 use iroha_config::parameters::actual::SumeragiV2Config;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{

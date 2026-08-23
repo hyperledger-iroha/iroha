@@ -6452,7 +6452,7 @@ state_test! { sync merge_reservation_key_boundary_requires_current_version
     let route = crate::queue::RoutingDecision::new(LaneId::new(7), DataSpaceId::new(9));
     let plan = crate::queue::RoutingPlan::single(route);
     let_row! { entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new(b"merge-reservation-entrypoint")) };
-    let_row! { key = crate::queue::LaneQueueReservationKeyV2 { version: crate::queue::LaneQueueReservationKeyV2::VERSION, entrypoint_hash, queue_plan_admission_binding_hash: Hash::new( b"merge-reservation-queue-plan-admission-binding", ), routing_plan_digest: plan.digest(), coordinator_leg: plan.coordinator_leg(), lane_id: route.lane_id, dataspace_id: route.dataspace_id, lane_incarnation: Hash::new(b"merge-reservation-incarnation"), proposal_height: 13, lane_block_height: 5, lane_block_view: 2, reservation_owner_hash: Hash::new(b"merge-reservation-owner"), proposal_identity_hash: Hash::new(b"merge-reservation-proposal"), } };
+    let_row! { key = crate::queue::LaneQueueReservationKeyV2 { version: crate::queue::LaneQueueReservationKeyV2::VERSION, signed_transaction_hash: crate::queue::LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(entrypoint_hash.clone()), entrypoint_hash, queue_plan_admission_binding_hash: Hash::new( b"merge-reservation-queue-plan-admission-binding", ), routing_plan_digest: plan.digest(), coordinator_leg: plan.coordinator_leg(), lane_id: route.lane_id, dataspace_id: route.dataspace_id, lane_incarnation: Hash::new(b"merge-reservation-incarnation"), proposal_height: 13, lane_block_height: 5, lane_block_view: 2, reservation_owner_hash: Hash::new(b"merge-reservation-owner"), proposal_identity_hash: Hash::new(b"merge-reservation-proposal"), } };
     let framed = norito::encode_canonical(&key).expect("encode current merge reservation key");
     assert_eq!(
         decode_canonical_merge_reservation_key(&framed)
@@ -20467,6 +20467,10 @@ fn autonomous_diagnostic_reservations(
             let entrypoint_hash = HashOf::from_untyped_unchecked(*accepted_hash);
             crate::queue::LaneQueueReservationKeyV2 {
                 version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+                signed_transaction_hash:
+                    crate::queue::LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
+                        entrypoint_hash.clone(),
+                    ),
                 entrypoint_hash,
                 queue_plan_admission_binding_hash: Hash::new(
                     format!("autonomous-diagnostic-admission-{index}").as_bytes(),

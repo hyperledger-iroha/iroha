@@ -148,9 +148,16 @@ impl LifecycleProducerClaimDispositionV1 {
             (Self::AwaitingCompletion, Completion::RecoveredDecisionApplyDeferred)
             | (Self::AwaitingCompletion, Completion::RecoveredDecisionApplyRequeued)
             | (Self::AwaitingCompletion, Completion::RecoveredDecisionApplyCompletionDeferred)
-            | (Self::AwaitingCompletion, Completion::LifecycleValidatePublicationRetry)
-            | (Self::Eligible | Self::AwaitingCompletion, Completion::LifecycleValidateDeferred) => {
+            | (Self::AwaitingCompletion, Completion::LifecycleValidatePublicationRetry) => {
                 Ok(Self::AwaitingCompletion)
+            }
+            (Self::Eligible | Self::AwaitingCompletion, Completion::LifecycleValidateDeferred) => {
+                // The Validate row is atomically settled on an external
+                // merge-sidecar wait before its registration is retained. No
+                // active lifecycle lease crosses that wait, and its response
+                // must be allowed through Ingress before the exact
+                // registration can wake.
+                Ok(Self::Eligible)
             }
             (
                 Self::AwaitingCompletion,
@@ -607,6 +614,36 @@ mod tests {
             ))
             .expect("matching Sign completion clears the target");
         assert!(!claim.requires_yield());
+    }
+
+    #[test]
+    fn deferred_validate_sidecar_wait_releases_ingress_for_its_response() {
+        use super::super::super::v2_lifecycle_coordinator::{
+            ProductionCompletionDispatchV1 as Dispatch,
+            ProductionLifecycleCompletionSelectionV1 as Completion,
+        };
+
+        let claim = LifecycleProducerClaimDispositionV1::initial()
+            .observe_completion(&Completion::CompletionIoDispatch(Ok(
+                Dispatch::ValidateQueued { ordinal: 1 },
+            )))
+            .expect("eligible Validate dispatch mints the Completion target");
+        assert_eq!(
+            claim,
+            LifecycleProducerClaimDispositionV1::AwaitingCompletion
+        );
+
+        let claim = claim
+            .observe_completion(&Completion::LifecycleValidateDeferred)
+            .expect("external sidecar wait releases the Completion target");
+        assert_eq!(claim, LifecycleProducerClaimDispositionV1::Eligible);
+        assert!(!claim.requires_yield());
+        assert!(!claim.blocks_ingress());
+
+        assert_eq!(
+            claim.observe_completion(&Completion::LifecycleValidateSidecarWoken),
+            Ok(LifecycleProducerClaimDispositionV1::Eligible)
+        );
     }
 
     #[test]

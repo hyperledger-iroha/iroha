@@ -4571,6 +4571,9 @@ pub(crate) mod valid {
         pipeline_cfg: iroha_config::parameters::actual::Pipeline,
         pipeline_parallelism: crate::state::PipelineParallelism,
         aggregate_lane: LaneId,
+        /// Canonical admission instants for signed external entrypoints whose exact pending
+        /// QueuePlan ownership already existed in the parent WSV.
+        queue_plan_stateless_validation_times: Vec<Option<Duration>>,
     }
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub(crate) struct SumeragiV2ValidationContext {
@@ -7506,10 +7509,16 @@ pub(crate) mod valid {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(context);
-                for (tx, prepared) in Self::collect_external_signed_transactions(&block)
+                for (idx, (tx, prepared)) in Self::collect_external_signed_transactions(&block)
                     .into_iter()
                     .zip(prepared_txs.iter())
+                    .enumerate()
                 {
+                    if static_data.queue_plan_stateless_validation_times[idx].is_some() {
+                        // QueuePlan admission time is state-bound authority, while this cache is
+                        // generic and hash-only. Never erase that distinction with a cache hit.
+                        continue;
+                    }
                     let expires_at_ms = tx
                         .time_to_live()
                         .and_then(|ttl| tx.creation_time().checked_add(ttl))
@@ -7810,6 +7819,8 @@ pub(crate) mod valid {
                 state,
                 validation_profile.clone(),
             )?;
+            let queue_plan_stateless_validation_times =
+                Self::queue_plan_stateless_validation_times(block, state)?;
             let block_height = block.header().height().get();
             let nexus = state.nexus();
             let expected_policy_bundle =
@@ -7930,6 +7941,7 @@ pub(crate) mod valid {
                 pipeline_cfg,
                 pipeline_parallelism,
                 aggregate_lane,
+                queue_plan_stateless_validation_times,
             })
         }
         fn npos_effects_error(message: impl Into<String>) -> BlockValidationError {
@@ -10121,6 +10133,97 @@ pub(crate) mod valid {
                 .filter_map(Self::signed_transaction_from_entrypoint)
                 .collect()
         }
+        /// Resolve the stateless-validation instant for each signed external entrypoint.
+        ///
+        /// Only an exact QueuePlan binding that was already pending in canonical parent state can
+        /// replace the block timestamp. The lookup authenticates the complete transaction wire,
+        /// committed routing plan, immutable registry owner, pending obligation, route markers,
+        /// lane incarnations, and minimum execution height before its enqueue timestamp is used.
+        fn queue_plan_stateless_validation_times_with_lookup(
+            block: &SignedBlock,
+            mut lookup: impl FnMut(
+                &TransactionEntrypoint,
+                &crate::queue::RoutingPlan,
+                u64,
+            ) -> Result<
+                Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>,
+                String,
+            >,
+        ) -> Result<Vec<Option<Duration>>, BlockValidationError> {
+            let execution_height = block.header().height().get();
+            let execution_context = block.execution_context();
+            let mut validation_times =
+                Vec::with_capacity(Self::collect_external_signed_transactions(block).len());
+            for (index, entrypoint) in block.external_entrypoints_slice().iter().enumerate() {
+                if Self::signed_transaction_from_entrypoint(entrypoint).is_none() {
+                    continue;
+                }
+                if entrypoint.admission_intent()
+                    != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+                {
+                    validation_times.push(None);
+                    continue;
+                }
+                let Some(context) = execution_context.and_then(|bundle| bundle.external.get(index))
+                else {
+                    // Contextless or same-block QueuePlan admission receives no historical time
+                    // authority. It remains subject to ordinary block-time TTL validation.
+                    validation_times.push(None);
+                    continue;
+                };
+                let routing_plan = routing_plan_from_execution_context(context).map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "QueuePlan execution context at index {index} has no canonical routing plan: {error}"
+                    ))
+                })?;
+                let binding =
+                    lookup(entrypoint, &routing_plan, execution_height).map_err(|error| {
+                        Self::execution_context_error(format!(
+                            "QueuePlan parent binding lookup failed at index {index}: {error}"
+                        ))
+                    })?;
+                validation_times.push(
+                    binding.map(|binding| Duration::from_millis(binding.enqueue_timestamp_ms)),
+                );
+            }
+            debug_assert_eq!(
+                validation_times.len(),
+                Self::collect_external_signed_transactions(block).len(),
+                "QueuePlan validation times must align with signed external transactions",
+            );
+            Ok(validation_times)
+        }
+        fn queue_plan_stateless_validation_times(
+            block: &SignedBlock,
+            state: &impl StateReadOnly,
+        ) -> Result<Vec<Option<Duration>>, BlockValidationError> {
+            Self::queue_plan_stateless_validation_times_with_lookup(
+                block,
+                |entrypoint, routing_plan, execution_height| {
+                    State::pending_queue_plan_binding_for_execution(
+                        state,
+                        entrypoint,
+                        routing_plan,
+                        execution_height,
+                    )
+                },
+            )
+        }
+        fn queue_plan_stateless_validation_times_at_block_start(
+            block: &SignedBlock,
+            state_block: &StateBlock<'_>,
+        ) -> Result<Vec<Option<Duration>>, BlockValidationError> {
+            Self::queue_plan_stateless_validation_times_with_lookup(
+                block,
+                |entrypoint, routing_plan, execution_height| {
+                    state_block.pending_queue_plan_binding_for_execution_at_block_start(
+                        entrypoint,
+                        routing_plan,
+                        execution_height,
+                    )
+                },
+            )
+        }
         pub(crate) fn sequential_entrypoints_for_live_execution(
             block: &SignedBlock,
         ) -> Option<Vec<TransactionEntrypoint>> {
@@ -10406,6 +10509,14 @@ pub(crate) mod valid {
             if signed_txs.len() != prepared_txs.len() {
                 return Err(BlockValidationError::MerkleRootMismatch);
             }
+            debug_assert_eq!(
+                static_data.queue_plan_stateless_validation_times.len(),
+                signed_txs.len(),
+                "QueuePlan validation times must align with signed block transactions",
+            );
+            if static_data.queue_plan_stateless_validation_times.len() != signed_txs.len() {
+                return Err(BlockValidationError::MerkleRootMismatch);
+            }
             let is_genesis_block = block.header().is_genesis();
             let mut prechecked_signature_results: Vec<
                 Option<Result<(), SignatureVerificationFail>>,
@@ -10601,6 +10712,8 @@ pub(crate) mod valid {
                 let prechecked_signature_result = prechecked_signature_results
                     .get(idx)
                     .and_then(|result| result.as_ref().cloned());
+                let validation_time = static_data.queue_plan_stateless_validation_times[idx]
+                    .unwrap_or(block_creation_time);
                 if is_genesis_block {
                     if let Some(Err(fail)) = prechecked_signature_result {
                         return Some(BlockValidationError::TransactionAccept(
@@ -10626,7 +10739,7 @@ pub(crate) mod valid {
                             max_clock_drift,
                             tx_params,
                             crypto_cfg.as_ref(),
-                            block_creation_time,
+                            validation_time,
                             Some(prechecked_signature_result),
                             &prepared.metadata,
                         )
@@ -10637,7 +10750,7 @@ pub(crate) mod valid {
                             max_clock_drift,
                             tx_params,
                             crypto_cfg.as_ref(),
-                            block_creation_time,
+                            validation_time,
                             &prepared.metadata,
                         )
                 } else {
@@ -10647,7 +10760,7 @@ pub(crate) mod valid {
                         max_clock_drift,
                         tx_params,
                         crypto_cfg.as_ref(),
-                        block_creation_time,
+                        validation_time,
                         &prepared.metadata,
                     )
                 };
@@ -10760,10 +10873,14 @@ pub(crate) mod valid {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(context);
-                for (tx, prepared) in Self::collect_external_signed_transactions(block)
+                for (idx, (tx, prepared)) in Self::collect_external_signed_transactions(block)
                     .into_iter()
                     .zip(prepared_txs.iter())
+                    .enumerate()
                 {
+                    if static_data.queue_plan_stateless_validation_times[idx].is_some() {
+                        continue;
+                    }
                     let expires_at_ms = tx
                         .time_to_live()
                         .and_then(|ttl| tx.creation_time().checked_add(ttl))
@@ -11586,6 +11703,14 @@ pub(crate) mod valid {
                 txs.len(),
                 "prepared metadata must align with external transactions"
             );
+            // Preserve typed QueuePlan authority even when follower static validation already
+            // ran. The execution path does not repeat stateless checks in that case, but it must
+            // still prevent a state-authorized result from entering the generic hash-only cache.
+            let queue_plan_stateless_validation_times =
+                Self::queue_plan_stateless_validation_times_at_block_start(block, state_block)?;
+            if queue_plan_stateless_validation_times.len() != txs.len() {
+                return Err(BlockValidationError::MerkleRootMismatch);
+            }
             let tx_hashes: std::collections::HashSet<_> = prepared_txs
                 .iter()
                 .map(|prepared| prepared.metadata.entrypoint_hash)
@@ -12279,13 +12404,15 @@ pub(crate) mod valid {
                     let prechecked_signature_result = prechecked_signature_results
                         .get(idx)
                         .and_then(|result| result.as_ref().cloned());
+                    let validation_time =
+                        queue_plan_stateless_validation_times[idx].unwrap_or(block_creation_time);
                     let stateless = AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
                             tx,
                             &network_id,
                             max_clock_drift,
                             tx_params,
                             crypto_cfg.as_ref(),
-                            block_creation_time,
+                            validation_time,
                             prechecked_signature_result,
                             &prepared_txs[idx].metadata,
                         );
@@ -12318,7 +12445,9 @@ pub(crate) mod valid {
                 cache.set_cap(cache_cap);
                 cache.ensure_context(cache_context);
                 for (idx, tx) in txs.iter().enumerate() {
-                    if stateless_rejections[idx].is_some() {
+                    if stateless_rejections[idx].is_some()
+                        || queue_plan_stateless_validation_times[idx].is_some()
+                    {
                         continue;
                     }
                     let expires_at_ms = tx
@@ -16487,6 +16616,10 @@ pub(crate) mod valid {
                 .expect("derive canonical autonomous reservation identity");
             let reservation = crate::queue::LaneQueueReservationKeyV2 {
                 version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+                signed_transaction_hash:
+                    crate::queue::LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
+                        entrypoint.hash(),
+                    ),
                 entrypoint_hash: entrypoint.hash(),
                 queue_plan_admission_binding_hash: Hash::new(
                     b"block-native-amx-queue-plan-admission-binding",
@@ -22904,6 +23037,415 @@ pub(crate) mod valid {
                 }
             ));
         }
+        #[derive(Clone, Copy)]
+        enum QueuePlanTtlBindingFixture {
+            Missing,
+            Exact,
+            Conflict,
+            Stale,
+        }
+        struct QueuePlanTtlFixture {
+            state: State,
+            topology: Topology,
+            block_time_source: TimeSource,
+            block: SignedBlock,
+            signed_hash: HashOf<SignedTransaction>,
+        }
+        #[allow(clippy::too_many_arguments)]
+        fn queue_plan_ttl_fixture(
+            label: &str,
+            intent: iroha_data_model::transaction::TransactionAdmissionIntent,
+            binding_fixture: QueuePlanTtlBindingFixture,
+            creation_time_ms: u64,
+            ttl_ms: u64,
+            enqueue_timestamp_ms: u64,
+            block_time_ms: u64,
+            invalidate_signature: bool,
+        ) -> QueuePlanTtlFixture {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let validator_keys = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(4)
+            .collect::<Vec<_>>();
+            let leader = &validator_keys[0];
+            let topology = test_topology_with_keys(&validator_keys);
+            let (authority, signer) = gen_account_in(label);
+            let domain_id = DomainId::try_new(label, "universal").expect("fixture domain id");
+            let account = Account::new(authority.clone()).build(&authority);
+            let domain = Domain::new(domain_id).build(&authority);
+            let mut world = World::with([domain], [account], []);
+            let mut parameters = Parameters::default();
+            parameters.set_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            ));
+            world.parameters = Cell::new(parameters);
+            insert_active_consensus_keys(&mut world, &validator_keys);
+            let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.stateless_cache_cap = 64;
+            state.set_pipeline(pipeline);
+            let parent = ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                header.set_height(nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+                header.creation_time_ms = 1;
+            })
+            .commit_unchecked()
+            .unpack(|_| {});
+            let predecessor_hash = parent.as_ref().hash();
+            {
+                let mut state_block = state.block(parent.as_ref().header());
+                state_block.block_hashes.push(predecessor_hash);
+                state_block.transactions.insert_block(
+                    std::collections::HashSet::new(),
+                    NonZeroUsize::new(1).expect("parent height is non-zero"),
+                );
+                state_block
+                    .commit()
+                    .expect("commit QueuePlan TTL parent metadata");
+            }
+            kura.store_block(parent)
+                .expect("store QueuePlan TTL parent");
+            let mut tx_builder = TransactionBuilder::new(
+                state.network_id,
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, label.to_owned())])
+            .with_admission_intent(intent);
+            tx_builder.set_creation_time(Duration::from_millis(creation_time_ms));
+            tx_builder.set_ttl(Duration::from_millis(ttl_ms));
+            let mut signed = tx_builder.sign(signer.private_key());
+            if invalidate_signature {
+                let (forged_authority, _) = gen_account_in(&format!("{label}-forged"));
+                signed = signed.with_authority(forged_authority);
+            }
+            let signed_hash = signed.hash();
+            let entrypoint = TransactionEntrypoint::External(signed.clone());
+            let routing_plan = crate::queue::RoutingPlan::single(
+                crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            );
+            if !matches!(binding_fixture, QueuePlanTtlBindingFixture::Missing) {
+                let validator_set = state
+                    .resolve_lane_committee_at_height(
+                        crate::state::LaneAuthorityRoute::new(
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                        ),
+                        2,
+                    )
+                    .expect("resolve exact QueuePlan TTL lane authority")
+                    .into_validators();
+                let lane_incarnation =
+                    if matches!(binding_fixture, QueuePlanTtlBindingFixture::Stale) {
+                        Hash::new(b"retired-queue-plan-ttl-lane-incarnation")
+                    } else {
+                        state
+                            .lane_incarnation_at_height(LaneId::SINGLE, 2)
+                            .expect("default lane is active at candidate height")
+                    };
+                let admission_context = crate::queue::QueuePlanAdmissionContextV2 {
+                    version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+                    authority_height: 1,
+                    proposal_height: 2,
+                    predecessor_block_hash: Some(predecessor_hash),
+                    routing_plan_digest: routing_plan.digest(),
+                    route_incarnations: vec![crate::queue::QueuePlanRouteIncarnationV2 {
+                        leg: routing_plan.coordinator_leg(),
+                        lane_incarnation,
+                        validator_set_hash_version:
+                            iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                        validator_set_hash: HashOf::new(&validator_set),
+                        validator_count: u16::try_from(validator_set.len())
+                            .expect("fixture validator count fits u16"),
+                        durability_threshold: u16::try_from(validator_set.len().div_ceil(3))
+                            .expect("fixture threshold fits u16"),
+                        validator_set,
+                    }],
+                };
+                let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+                    state.network_id_ref(),
+                    &entrypoint,
+                    &routing_plan,
+                    admission_context,
+                    enqueue_timestamp_ms,
+                )
+                .expect("canonical QueuePlan TTL binding");
+                state
+                    .install_queue_plan_pending_binding_for_test(&binding)
+                    .expect("install pending QueuePlan TTL binding");
+                if matches!(binding_fixture, QueuePlanTtlBindingFixture::Conflict) {
+                    state
+                        .replace_queue_plan_registry_owner_for_test(
+                            &binding,
+                            Hash::new(b"conflicting-queue-plan-ttl-owner"),
+                        )
+                        .expect("replace exact registry owner for conflict fixture");
+                }
+            }
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
+            let (_block_handle, block_time_source) =
+                TimeSource::new_mock(Duration::from_millis(block_time_ms));
+            let builder =
+                BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone())
+                    .chain(0, state.view().latest_block().as_deref());
+            let execution_validator_set = state
+                .resolve_lane_committee_at_height(
+                    crate::state::LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                    2,
+                )
+                .expect("resolve exact execution-context lane authority")
+                .into_validators();
+            let ownership = sample_lane_payload_ownership_for_context_at_slot(
+                2,
+                0,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                state
+                    .lane_incarnation_at_height(LaneId::SINGLE, 2)
+                    .expect("default lane is active at candidate height"),
+                1,
+                0,
+                vec![0],
+                vec![Hash::from(entrypoint.hash())],
+                &execution_validator_set,
+            );
+            let execution_context =
+                BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                    entrypoint.hash(),
+                    LaneId::SINGLE,
+                    DataSpaceId::UNIVERSAL,
+                )])
+                .with_lane_payload_ownerships(vec![ownership]);
+            let block = with_current_state_da_sidecars(
+                builder.with_execution_context(Some(execution_context)),
+                &state,
+            )
+            .sign(leader.private_key())
+            .unpack(|_| {})
+            .into();
+            QueuePlanTtlFixture {
+                state,
+                topology,
+                block_time_source,
+                block,
+                signed_hash,
+            }
+        }
+        fn validate_queue_plan_ttl_fixture(
+            fixture: &QueuePlanTtlFixture,
+        ) -> Result<(ValidBlock, StateBlock<'_>), Error> {
+            let mut voting_block = None;
+            validate_voting_test_block!(
+                fixture.block.clone(),
+                &fixture.topology,
+                &fixture.block_time_source,
+                &fixture.state,
+                &mut voting_block
+            )
+            .unpack(|_| {})
+        }
+        #[test]
+        fn exact_parent_queue_plan_admission_uses_enqueue_time_for_follower_and_proposer() {
+            use iroha_data_model::transaction::TransactionAdmissionIntent;
+            let fixture = queue_plan_ttl_fixture(
+                "queue-plan-expired-exact-follower",
+                TransactionAdmissionIntent::QueuePlanSynced,
+                QueuePlanTtlBindingFixture::Exact,
+                10,
+                10,
+                10,
+                100,
+                false,
+            );
+            let (valid, state_block) = validate_queue_plan_ttl_fixture(&fixture)
+                .expect("exact parent QueuePlan admission must survive follower block-time expiry");
+            assert!(
+                valid.as_ref().results().next().expect("one result").is_ok(),
+                "follower execution must apply the exact admitted transaction"
+            );
+            drop(state_block);
+            assert!(
+                !fixture
+                    .state
+                    .stateless_validation_cache()
+                    .lock()
+                    .contains_key(&fixture.signed_hash),
+                "state-authorized QueuePlan validation must not become a generic cache entry"
+            );
+
+            let proposer = queue_plan_ttl_fixture(
+                "queue-plan-expired-exact-proposer",
+                TransactionAdmissionIntent::QueuePlanSynced,
+                QueuePlanTtlBindingFixture::Exact,
+                10,
+                10,
+                10,
+                100,
+                false,
+            );
+            let mut state_block = proposer.state.block(proposer.block.header());
+            let valid =
+                ValidBlock::validate_unchecked(proposer.block, &mut state_block).unpack(|_| {});
+            assert!(
+                valid.as_ref().results().next().expect("one result").is_ok(),
+                "local proposer execution must use the same exact admission time"
+            );
+            assert!(
+                !proposer
+                    .state
+                    .stateless_validation_cache()
+                    .lock()
+                    .contains_key(&proposer.signed_hash),
+                "local execution must not publish QueuePlan authority into the generic cache"
+            );
+        }
+        #[test]
+        fn block_time_expiry_still_rejects_ordinary_and_unbound_queue_plan_transactions() {
+            use iroha_data_model::transaction::TransactionAdmissionIntent;
+            for (label, intent) in [
+                (
+                    "ordinary-expired-at-block",
+                    TransactionAdmissionIntent::Ordinary,
+                ),
+                (
+                    "queue-plan-expired-without-binding",
+                    TransactionAdmissionIntent::QueuePlanSynced,
+                ),
+            ] {
+                let fixture = queue_plan_ttl_fixture(
+                    label,
+                    intent,
+                    QueuePlanTtlBindingFixture::Missing,
+                    10,
+                    10,
+                    10,
+                    100,
+                    false,
+                );
+                let Err((_, error)) = validate_queue_plan_ttl_fixture(&fixture) else {
+                    panic!("block-time-expired transaction must be rejected");
+                };
+                assert!(matches!(
+                    error.as_ref(),
+                    BlockValidationError::TransactionAccept(
+                        AcceptTransactionFail::TransactionExpired { .. }
+                    )
+                ));
+            }
+        }
+        #[test]
+        fn queue_plan_enqueue_time_must_itself_be_within_signed_ttl() {
+            use iroha_data_model::transaction::TransactionAdmissionIntent;
+            let fixture = queue_plan_ttl_fixture(
+                "queue-plan-expired-before-enqueue",
+                TransactionAdmissionIntent::QueuePlanSynced,
+                QueuePlanTtlBindingFixture::Exact,
+                10,
+                10,
+                21,
+                100,
+                false,
+            );
+            let Err((_, error)) = validate_queue_plan_ttl_fixture(&fixture) else {
+                panic!("exact ownership cannot waive expiry at the certified enqueue time");
+            };
+            assert!(matches!(
+                error.as_ref(),
+                BlockValidationError::TransactionAccept(
+                    AcceptTransactionFail::TransactionExpired {
+                        expires_at_ms: 20,
+                        now_ms: 21,
+                    }
+                )
+            ));
+        }
+        #[test]
+        fn conflicting_or_stale_queue_plan_parent_binding_fails_closed() {
+            use iroha_data_model::transaction::TransactionAdmissionIntent;
+            for (label, binding_fixture, expected) in [
+                (
+                    "queue-plan-conflicting-parent-owner",
+                    QueuePlanTtlBindingFixture::Conflict,
+                    "conflicts with its immutable registry owner",
+                ),
+                (
+                    "queue-plan-stale-parent-owner",
+                    QueuePlanTtlBindingFixture::Stale,
+                    "does not retain its admitted incarnation",
+                ),
+            ] {
+                let fixture = queue_plan_ttl_fixture(
+                    label,
+                    TransactionAdmissionIntent::QueuePlanSynced,
+                    binding_fixture,
+                    10,
+                    10,
+                    10,
+                    100,
+                    false,
+                );
+                let Err((_, error)) = validate_queue_plan_ttl_fixture(&fixture) else {
+                    panic!("non-exact QueuePlan parent authority must fail closed");
+                };
+                assert!(matches!(
+                    error.as_ref(),
+                    BlockValidationError::ExecutionContextInvalid(message)
+                        if message.contains(expected)
+                ));
+            }
+        }
+        #[test]
+        fn queue_plan_enqueue_time_still_runs_signature_and_governed_limit_checks() {
+            use iroha_data_model::transaction::TransactionAdmissionIntent;
+            let invalid_signature = queue_plan_ttl_fixture(
+                "queue-plan-invalid-signature",
+                TransactionAdmissionIntent::QueuePlanSynced,
+                QueuePlanTtlBindingFixture::Exact,
+                10,
+                10,
+                10,
+                100,
+                true,
+            );
+            let Err((_, error)) = validate_queue_plan_ttl_fixture(&invalid_signature) else {
+                panic!("QueuePlan time authority must not bypass signature validation");
+            };
+            assert!(matches!(
+                error.as_ref(),
+                BlockValidationError::TransactionAccept(
+                    AcceptTransactionFail::SignatureVerification(_)
+                )
+            ));
+
+            let max_ttl_ms = invalid_signature
+                .state
+                .view()
+                .world()
+                .parameters()
+                .transaction()
+                .max_time_to_live_ms()
+                .get();
+            let invalid_limit = queue_plan_ttl_fixture(
+                "queue-plan-invalid-governed-ttl",
+                TransactionAdmissionIntent::QueuePlanSynced,
+                QueuePlanTtlBindingFixture::Exact,
+                10,
+                max_ttl_ms.saturating_add(1),
+                10,
+                100,
+                false,
+            );
+            let Err((_, error)) = validate_queue_plan_ttl_fixture(&invalid_limit) else {
+                panic!("QueuePlan time authority must not bypass governed limits");
+            };
+            assert!(matches!(
+                error.as_ref(),
+                BlockValidationError::TransactionAccept(AcceptTransactionFail::TransactionLimit(_))
+            ));
+        }
         #[test]
         fn validate_keep_voting_block_uses_block_time_for_ttl_checks() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
@@ -27710,6 +28252,10 @@ mod tests {
         let descriptor = &coordinator_proposal.descriptor;
         let reservation = crate::queue::LaneQueueReservationKeyV2 {
             version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash:
+                crate::queue::LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
+                    entrypoint_hash.clone(),
+                ),
             entrypoint_hash,
             queue_plan_admission_binding_hash: Hash::new(
                 b"historical-native-amx-queue-plan-admission",

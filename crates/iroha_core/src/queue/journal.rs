@@ -4111,6 +4111,10 @@ mod tests {
             .expect("global journal fixture has a coordinator");
         LaneQueueReservationKeyV2 {
             version: LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash:
+                LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
+                    record.entrypoint_hash.clone(),
+                ),
             entrypoint_hash: record.entrypoint_hash.clone(),
             queue_plan_admission_binding_hash: binding_hash,
             routing_plan_digest: record.plan_digest(),

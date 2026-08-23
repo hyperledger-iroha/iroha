@@ -4875,6 +4875,10 @@ mod tests {
             version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
             key: LaneQueueReservationKeyV2 {
                 version: LaneQueueReservationKeyV2::VERSION,
+                signed_transaction_hash:
+                    LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
+                        entrypoint_hash.clone(),
+                    ),
                 entrypoint_hash,
                 queue_plan_admission_binding_hash: Hash::new([seed, 9]),
                 routing_plan_digest: Hash::new([seed, 3]),
