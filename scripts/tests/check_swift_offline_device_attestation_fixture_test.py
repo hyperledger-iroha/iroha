@@ -218,3 +218,40 @@ def test_workflow_watches_and_executes_the_fixture_contract() -> None:
     ) in workflow
     assert "OfflineDeviceAttestationABI21ParityTests.swift" in swift_gate
     assert "--filter OfflineDeviceAttestationABI21ParityTests" in swift_gate
+
+
+def test_swift_workflow_binds_one_canonical_regular_rustup() -> None:
+    workflow = (
+        REPO_ROOT / ".github/workflows/pr_kagemusha_payload_bench.yml"
+    ).read_text(encoding="utf-8")
+    swift_job = workflow.split("\n  swift:\n", maxsplit=1)[1].split(
+        "\n  kotlin-java:\n", maxsplit=1
+    )[0]
+    builder = (REPO_ROOT / "scripts/build_norito_xcframework.sh").read_text(
+        encoding="utf-8"
+    )
+    checker = (REPO_ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'rustup_dir="$RUNNER_TEMP/iroha-kagemusha-apple-tools"' in swift_job
+    assert '/bin/cp "$rustup_source" "$rustup_binary"' in swift_job
+    assert '/usr/bin/cmp -s "$rustup_source" "$rustup_binary"' in swift_job
+    assert (
+        'echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_binary" >> "$GITHUB_ENV"'
+        in swift_job
+    )
+    for tool in ("cargo", "rustc", "rustdoc"):
+        assert (
+            f'"$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 {tool}'
+            in swift_job
+        )
+    assert (
+        '"$MOBILE_SDK_RUSTUP_BINARY" target add --toolchain 1.93.1'
+        in swift_job
+    )
+    assert "rustup target add" not in swift_job
+    assert "$(rustup which" not in swift_job
+    for owner in (builder, checker):
+        assert "MOBILE_SDK_RUSTUP_BINARY" in owner
+        assert "absolute canonical regular executable" in owner

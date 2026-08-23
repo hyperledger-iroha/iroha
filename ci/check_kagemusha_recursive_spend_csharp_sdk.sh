@@ -17,9 +17,12 @@ fi
   "${DOTNET_BIN}" test \
     "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj" \
     --artifacts-path "${ARTIFACTS}" \
-    --filter "FullyQualifiedName~KagemushaToriiTests|FullyQualifiedName~VerifyingKeyBackendTagTests|FullyQualifiedName~ToriiClientTests|FullyQualifiedName~TransactionBuilderTests" \
     -p:ProduceReferenceAssembly=false \
-    --logger "console;verbosity=minimal"
+    -- \
+    --filter-class Hyperledger.Iroha.Sdk.Tests.KagemushaToriiTests \
+    --filter-class Hyperledger.Iroha.Sdk.Tests.VerifyingKeyBackendTagTests \
+    --filter-class Hyperledger.Iroha.Sdk.Tests.ToriiClientTests \
+    --filter-class Hyperledger.Iroha.Sdk.Tests.TransactionBuilderTests
 )
 
 client="${ROOT_DIR}/csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiKagemushaClient.cs"

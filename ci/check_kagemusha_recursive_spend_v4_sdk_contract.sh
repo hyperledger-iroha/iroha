@@ -278,13 +278,13 @@ require_regex(
 
 recipient_request_vector = canonical_hex_vector("recipient_request_vector")
 peer_payment_vector = canonical_hex_vector("peer_payment_vector")
-if len(recipient_request_vector) != 765:
+if len(recipient_request_vector) != 753:
     errors.append(
-        f"{paths['recipient_request_vector']}: expected 765 bytes, "
+        f"{paths['recipient_request_vector']}: expected 753 bytes, "
         f"found {len(recipient_request_vector)}"
     )
 if hashlib.sha256(recipient_request_vector).hexdigest() != (
-    "899c9b4d44630e6c0c010d04ab4b0c570c2062fba5a54e678d6a0baf0e8b02b0"
+    "d325566b1117fa368703a971367056173f2d8349d2e86101dc06187aaf8fd2b4"
 ):
     errors.append(f"{paths['recipient_request_vector']}: canonical SHA-256 mismatch")
 if len(peer_payment_vector) != 11_887:
