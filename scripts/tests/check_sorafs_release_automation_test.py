@@ -563,6 +563,20 @@ def test_pop_broker_hard_cut_contract_accepts_repository() -> None:
     assert automation._validate_pop_broker_hard_cut_contract(REPO_ROOT) == []
 
 
+def test_pop_broker_hard_cut_scans_split_server_dispatch(tmp_path: Path) -> None:
+    _copy_workflows(tmp_path)
+    dispatch = (
+        tmp_path
+        / "crates/irohad/src/runtime_provider_broker/platform_operation_dispatch.rs"
+    )
+    with dispatch.open("a", encoding="utf-8") as destination:
+        destination.write("\ntype LeakedRecipientSecret = HybridSecretKey;\n")
+
+    assert "PoP broker IPC must never serialize HybridSecretKey" in (
+        automation._validate_pop_broker_hard_cut_contract(tmp_path)
+    )
+
+
 def test_pop_broker_operation_60_cannot_be_reassigned(tmp_path: Path) -> None:
     _copy_workflows(tmp_path)
     protocol = (
