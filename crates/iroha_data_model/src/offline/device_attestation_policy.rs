@@ -513,8 +513,8 @@ impl OfflineDeviceAttestationPolicy {
             }
             previous_rule_id = Some(&rule.rule_id);
             if !canonical_lowercase_selector(&rule.manufacturer)
-                || !canonical_lowercase_selector(&rule.model)
                 || [
+                    rule.model.as_deref(),
                     rule.brand.as_deref(),
                     rule.device.as_deref(),
                     rule.product.as_deref(),
@@ -669,7 +669,7 @@ impl OfflineDeviceAttestationPolicy {
 }
 
 /// Finalized block identity bound to one policy view and eligibility credential.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OfflineDevicePolicyFinalityBindingV1 {
     /// Binding layout marker.
@@ -1055,7 +1055,7 @@ mod device_attestation_policy_tests {
         OfflineAndroidDeviceVulnerabilityRuleV2 {
             rule_id: "samsung-test-floor".to_owned(),
             manufacturer: "samsung".to_owned(),
-            model: "sm-test".to_owned(),
+            model: Some("sm-test".to_owned()),
             brand: Some("samsung".to_owned()),
             device: None,
             product: None,
@@ -1066,6 +1066,8 @@ mod device_attestation_policy_tests {
             minimum_safe_os_patch_level: None,
             minimum_safe_vendor_patch_level: Some(202607),
             minimum_safe_boot_patch_level: None,
+            affected_os_version_min: None,
+            affected_os_version_max: None,
             permanently_blocked: false,
             source_ids: vec!["https://security.example.test/advisory".to_owned()],
             cve_ids: vec!["CVE-2026-21046".to_owned()],
@@ -1155,6 +1157,17 @@ mod device_attestation_policy_tests {
             .android_vulnerability_rules
             .push(vulnerability_rule());
         assert!(duplicate.validate_v2_rule_shape().is_err());
+
+        let mut manufacturer_wide = expected.clone();
+        manufacturer_wide.android_vulnerability_rules[0].model = None;
+        manufacturer_wide
+            .validate_v2_rule_shape()
+            .expect("an absent optional model selector is canonical");
+
+        let mut noncanonical_model = expected.clone();
+        noncanonical_model.android_vulnerability_rules[0].model = Some("SM-TEST".to_owned());
+        assert!(noncanonical_model.validate_v2_rule_shape().is_err());
+
         let mut noncanonical_cve = expected;
         noncanonical_cve.android_vulnerability_rules[0].cve_ids = vec!["cve-2026-21046".to_owned()];
         assert!(noncanonical_cve.validate_v2_rule_shape().is_err());

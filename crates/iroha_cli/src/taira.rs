@@ -3428,7 +3428,7 @@ mod tests {
 
         let wrong_discriminant = norito::json!({
             "network_id": (network_id.to_string()),
-            "chain_discriminant": DEFAULT_CHAIN_DISCRIMINANT + 1,
+            "chain_discriminant": (DEFAULT_CHAIN_DISCRIMINANT + 1),
         });
         let discriminant_error = validate_taira_puzzle_identity(&wrong_discriminant, &network_id)
             .expect_err("a foreign chain discriminant must fail before publication");
