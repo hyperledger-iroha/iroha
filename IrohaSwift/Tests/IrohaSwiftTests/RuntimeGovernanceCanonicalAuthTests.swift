@@ -95,7 +95,7 @@ final class RuntimeGovernanceCanonicalAuthTests: XCTestCase {
             await XCTAssertThrowsErrorAsync(
                 try await client(networkId: TestNetworkIds.canonical)
                     .getRuntimeMetrics(canonicalAuth: auth)
-            )
+            ) { _ in }
             XCTAssertEqual(dispatchCount, 1, "status \(status) was replayed")
         }
     }
