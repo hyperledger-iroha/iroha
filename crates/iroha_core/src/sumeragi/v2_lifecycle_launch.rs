@@ -2587,7 +2587,7 @@ impl ProductionLifecycleOwnerV1 {
             .take()
             .ok_or(ProductionLifecycleLaunchErrorV1::InvalidOwner)?;
         let body_store_identity = body_store.instance_identity();
-        let (runtime, pending_kura_apply_replay, recovered_local_proposal_attempt) =
+        let (runtime, mut pending_kura_apply_replay, recovered_local_proposal_attempt) =
             adapter_startup
                 .into_serialized_runtime(
                     inputs.runtime_started_at,
@@ -2613,6 +2613,7 @@ impl ProductionLifecycleOwnerV1 {
             runtime,
             body_store,
             recovered_validate_retry_census,
+            pending_kura_apply_replay.as_mut(),
             context.clone(),
             inputs.local_peer.clone(),
             inputs.local_validator,

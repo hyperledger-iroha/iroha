@@ -320,9 +320,7 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
     ];
     let mut staged = evidence.clone();
     for effect in &recovery_sequence {
-        staged.stage = staged
-            .transition_for_effect(effect)
-            .expect("exact recovery stage transition");
+        staged.advance_stage_for_test(effect);
     }
     assert_eq!(
         staged.stage(),
@@ -352,7 +350,7 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
             if reason.contains("does not match its exact authenticated stage")
     ));
     let mut apply_stage = evidence.clone();
-    apply_stage.stage = PendingKuraApplyRecoveryStage::Apply;
+    apply_stage.enter_apply_stage_for_test();
     assert_eq!(
         apply_stage
             .transition_for_effect(&apply_effect)

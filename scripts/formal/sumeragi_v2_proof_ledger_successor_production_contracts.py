@@ -74,6 +74,9 @@ def _lifecycle_decision_apply_lineage_source_fidelity_errors(
     adapter_path, adapter_source = load(
         "crates/iroha_core/src/sumeragi/v2.rs"
     )
+    effects_path, effects_source = load(
+        "crates/iroha_core/src/sumeragi/v2_effects.rs"
+    )
     worker_path, worker_source = load(
         "crates/iroha_core/src/sumeragi/v2_worker.rs"
     )
@@ -97,6 +100,34 @@ pub(in crate::sumeragi) enum LifecycleDecisionApplyLineageV1 {
 }
 """,
         "lifecycle Decision Apply must retain a closed live/recovered lineage",
+        errors,
+    )
+    key_matchers = tuple(
+        item
+        for item in rust_items(registry_source, "matches")
+        if item.brace_context
+        == (("impl", "LifecycleDecisionApplyDispatchKeyV1"),)
+    )
+    if len(key_matchers) != 1:
+        errors.append(
+            f"{registry_path}: require exactly one full-coordinate "
+            "LifecycleDecisionApplyDispatchKeyV1::matches item; found "
+            f"{len(key_matchers)}"
+        )
+    key_matches = key_matchers[0] if len(key_matchers) == 1 else None
+    _require_rust_token_sequence(
+        registry_path,
+        key_matches,
+        """
+self.context == context.id()
+    && self.height == context.height()
+    && self.owner == address.owner
+    && self.ordinal == address.ordinal
+    && self.slot == address.slot
+    && self.digest == digest
+    && self.lineage == lineage
+""",
+        "lifecycle Decision Apply key must reject every isolated carrier-coordinate substitution",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -413,6 +444,45 @@ if !key.matches_carrier(context, address, installed_digest, lineage)
     || completion.validated_receipt() != validated_receipt
 """,
         "shared Apply completion projection must rejoin the exact lineage-tagged carrier",
+        errors,
+    )
+
+    executor_prepare = _require_rust_item(
+        effects_path,
+        effects_source,
+        "prepare_lifecycle_decision_apply_completion",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        executor_prepare,
+        """
+let lineage_owner_is_exact = match authority.lineage() {
+    LifecycleDecisionApplyLineageV1::Live => self
+        .live_lifecycle_decision_apply
+        .as_ref()
+        .is_some_and(|owner| {
+            owner.exactly_matches_completion(
+                authority.dispatch_key(),
+                authority.tag(),
+                authority.subject(),
+                authority.receipt(),
+                authority.artifact(),
+            )
+        }),
+    LifecycleDecisionApplyLineageV1::Recovered => {
+        self.live_lifecycle_decision_apply.is_none()
+    }
+};
+""",
+        "executor preparation must distinguish exact live ownership from recovered non-substitution",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        executor_prepare,
+        "|| !lineage_owner_is_exact",
+        "executor preparation must reject an authority-only lineage substitution",
         errors,
     )
 
@@ -2225,6 +2295,15 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
     lifecycle_selector_path, lifecycle_selector_source = load(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs"
     )
+    lifecycle_turn_driver_path, lifecycle_turn_driver_source = load(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs"
+    )
+    ingress_position_path, ingress_position_source = load(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs"
+    )
+    fair_ingress_path, fair_ingress_source = load(
+        "crates/iroha_core/src/sumeragi/mod.rs"
+    )
     if effects_source:
         require_tokens(
             effects_path,
@@ -2277,7 +2356,233 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 "AdapterEffect::Apply",
             ),
         )
+        preledger_restart_regression = _require_rust_item(
+            effects_path,
+            effects_source,
+            "ungated_certified_fetch_phase_b_restarts_before_ledger_without_mutation",
+            errors,
+        )
+        if preledger_restart_regression is not None:
+            require_order(
+                effects_path,
+                "ungated certified Fetch Phase-B pre-Ledger fail-stop regression",
+                preledger_restart_regression.source,
+                (
+                    "certified_fetch_preledger_productive_ingress_token_for_test()",
+                    "CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken",
+                    "let work_id = completion.work_id()",
+                    "let wait_before = owner.fetch_wait_projection_for_test(",
+                    "let registry_before = owner.fetch_registry_snapshot_for_test()",
+                    "let pending_before = fixture.executor.pending_fetches.clone()",
+                    "let certified_before = fixture.executor.certified_work.clone()",
+                    "let outstanding_before = fixture.executor.outstanding_requests.hashes()",
+                    "let claims_before = fixture.executor.outstanding_requests.response_claim_count()",
+                    "let next_work_id_before = fixture.executor.next_work_id",
+                    "let ingress_depth_before = ingress.len()",
+                    "let ingress_cut_before = ingress.next_physical_admission_ordinal()",
+                    "let files_before = regular_file_bytes_below_for_test(owner_directory.path())",
+                    "complete_certified_fetch_for_test(",
+                    "RestartRequiredBeforeLedger(",
+                    "assert_eq!(failure.work_id(), work_id)",
+                    "assert_eq!( failure.failure(), CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken, )",
+                    "fixture.executor.output_guard.restart_required()",
+                    "owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source)",
+                    "owner.fetch_registry_snapshot_for_test()",
+                    "fixture.executor.pending_fetches, pending_before",
+                    "fixture.executor.certified_work, certified_before",
+                    "fixture.executor.outstanding_requests.hashes()",
+                    "fixture.executor.next_work_id, next_work_id_before",
+                    "ingress.len(), ingress_depth_before",
+                    "regular_file_bytes_below_for_test(owner_directory.path())",
+                    "ingress.exact_queued_ungated_occurrence_for_test(response_ordinal)",
+                    "certified_fetch_completion_is_pending(work_id)",
+                    "!production_services.has_reparked_certified_fetch_completion_for_test()",
+                ),
+            )
     if lifecycle_selector_source:
+        recovered_fetch_next_selector = _require_rust_item(
+            lifecycle_selector_path,
+            lifecycle_selector_source,
+            "prepare_next_recovered_decision_fetch_ingress_selector",
+            errors,
+        )
+        if recovered_fetch_next_selector is not None:
+            require_order(
+                lifecycle_selector_path,
+                "queue-owned recovered Decision Fetch selector",
+                recovered_fetch_next_selector.source,
+                (
+                    "self.lifecycle_terminal_subject()",
+                    "capture_next_lifecycle_queue_cut(",
+                    "v2_ingress_head_can_drain(occurrence.inbound(), self, terminal_subject)",
+                    "self.capture_lifecycle_ingress_selector(cut)",
+                    "prepared.queue_witness.selected_disposition()",
+                    "PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence",
+                    ".selected_claimed_response_family()",
+                ),
+            )
+        ownership_exact = _require_rust_item(
+            lifecycle_selector_path,
+            lifecycle_selector_source,
+            "certified_fetch_ingress_ownership_is_exact",
+            errors,
+        )
+        if ownership_exact is not None:
+            require_order(
+                lifecycle_selector_path,
+                "certified Fetch exact ingress ownership predicate",
+                ownership_exact.source,
+                (
+                    "ownership.validate_exact()",
+                    "ownership.matches_message(inbound.message())",
+                    "ownership.matches_semantic_origin(inbound.sender())",
+                    "ownership.matches_reply_routes(inbound.reply_routes())",
+                ),
+            )
+        preledger_restart = region(
+            lifecycle_selector_path,
+            lifecycle_selector_source,
+            "certified Fetch pre-Ledger restart owner",
+            "pub(crate) struct CertifiedFetchBodyPersistencePreLedgerRestartError {",
+            "\n/// Closed structural rejection for a selected productive carrier before LedgerV1.",
+        )
+        require_order(
+            lifecycle_selector_path,
+            "certified Fetch pre-Ledger restart owner",
+            preledger_restart,
+            (
+                "failure: CertifiedFetchPreLedgerProductiveIngressErrorV1",
+                "completion: PreparedCertifiedFetchBodyPersistenceCompletion",
+                "pub(crate) const fn failure(&self)",
+                "self.failure",
+                "match self.failure",
+                "CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingOwnership",
+                "CertifiedFetchPreLedgerProductiveIngressErrorV1::InvalidOwnership",
+                "CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken",
+                "CertifiedFetchPreLedgerProductiveIngressErrorV1::RuntimeAlreadyBound",
+                "pub(crate) const fn work_id(&self)",
+                "self.completion.work_id()",
+            ),
+        )
+        preledger_error = region(
+            lifecycle_selector_path,
+            lifecycle_selector_source,
+            "certified Fetch pre-Ledger productive-ingress error partition",
+            "pub(crate) enum CertifiedFetchPreLedgerProductiveIngressErrorV1 {",
+            "\n/// Closed structural rejection for the sole post-dequeue Runtime handoff.",
+        )
+        require_tokens(
+            lifecycle_selector_path,
+            "certified Fetch pre-Ledger productive-ingress error partition",
+            preledger_error,
+            (
+                "MissingOwnership",
+                "InvalidOwnership",
+                "MissingLeaderWireToken",
+                "RuntimeAlreadyBound",
+            ),
+        )
+        postdequeue_error = region(
+            lifecycle_selector_path,
+            lifecycle_selector_source,
+            "certified Fetch post-dequeue Runtime-handoff error partition",
+            "pub(crate) enum CertifiedFetchPostDequeueRuntimeHandoffErrorV1 {",
+            "\nimpl CertifiedFetchPostDequeueRuntimeHandoffErrorV1 {",
+        )
+        require_tokens(
+            lifecycle_selector_path,
+            "certified Fetch post-dequeue Runtime-handoff error partition",
+            postdequeue_error,
+            (
+                "MissingOwnership",
+                "InvalidOwnership",
+                "MissingRuntimeReceipt",
+                "MismatchedRuntimeReceipt",
+            ),
+        )
+        preledger_validator = _require_rust_item(
+            lifecycle_selector_path,
+            lifecycle_selector_source,
+            "certified_fetch_preledger_productive_ingress_token",
+            errors,
+        )
+        if preledger_validator is not None:
+            require_order(
+                lifecycle_selector_path,
+                "certified Fetch pre-Ledger productive-ingress validation",
+                preledger_validator.source,
+                (
+                    "inbound.ingress_ownership()",
+                    "CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingOwnership",
+                    "certified_fetch_ingress_ownership_is_exact(inbound, ownership)",
+                    "CertifiedFetchPreLedgerProductiveIngressErrorV1::InvalidOwnership",
+                    "ownership.leader_wire_token()",
+                    "CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken",
+                    "ownership.leader_wire_runtime_receipt().is_some()",
+                    "CertifiedFetchPreLedgerProductiveIngressErrorV1::RuntimeAlreadyBound",
+                    "Ok(token)",
+                ),
+            )
+        postdequeue_validator = _require_rust_item(
+            lifecycle_selector_path,
+            lifecycle_selector_source,
+            "certified_fetch_postdequeue_runtime_receipt",
+            errors,
+        )
+        if postdequeue_validator is not None:
+            require_order(
+                lifecycle_selector_path,
+                "certified Fetch post-dequeue Runtime-receipt validation",
+                postdequeue_validator.source,
+                (
+                    "inbound.ingress_ownership()",
+                    "CertifiedFetchPostDequeueRuntimeHandoffErrorV1::MissingOwnership",
+                    "certified_fetch_ingress_ownership_is_exact(inbound, ownership)",
+                    "CertifiedFetchPostDequeueRuntimeHandoffErrorV1::InvalidOwnership",
+                    "ownership.leader_wire_runtime_receipt()",
+                    "CertifiedFetchPostDequeueRuntimeHandoffErrorV1::MissingRuntimeReceipt",
+                    "receipt.token() != expected_token",
+                    "receipt.owner().causal_lifecycle_key() != expected_token.identity_hash()",
+                    "receipt.owner().admission_ordinal() != expected_token.scheduler_ordinal()",
+                    "CertifiedFetchPostDequeueRuntimeHandoffErrorV1::MismatchedRuntimeReceipt",
+                    "Ok(receipt.clone())",
+                ),
+            )
+        preledger_test_wrapper = _require_qualified_rust_item(
+            lifecycle_selector_path,
+            lifecycle_selector_source,
+            "PreparedLifecycleIngressSelector",
+            "certified_fetch_preledger_productive_ingress_token_for_test",
+            errors,
+            "certified Fetch production pre-Ledger test wrapper",
+            expected_attributes=("#[cfg(test)]",),
+        )
+        _require_rust_token_sequence(
+            lifecycle_selector_path,
+            preledger_test_wrapper,
+            "certified_fetch_preledger_productive_ingress_token(family.inbound.as_ref())",
+            "certified Fetch production pre-Ledger test wrapper must delegate exactly",
+            errors,
+        )
+        completion_error = region(
+            lifecycle_selector_path,
+            lifecycle_selector_source,
+            "certified Fetch Phase-B result split",
+            "pub(crate) enum CertifiedFetchBodyPersistenceCompletionError {",
+            "\n/// Typed reason an authenticated selected response could not wake its exact",
+        )
+        require_tokens(
+            lifecycle_selector_path,
+            "certified Fetch Phase-B result split",
+            completion_error,
+            (
+                "Retry(CertifiedFetchBodyPersistenceRetryError)",
+                "RestartRequiredBeforeLedger(CertifiedFetchBodyPersistencePreLedgerRestartError)",
+                "RestartRequired(CertifiedFetchBodyPersistenceRestartError)",
+                "RestartRequiredAfterDequeue(String)",
+                "RestartRequiredAfterCommit(String)",
+            ),
+        )
         certified_fetch_persistence = region(
             lifecycle_selector_path,
             lifecycle_selector_source,
@@ -2293,14 +2598,277 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 ".prepare_selected_certified_fetch_completion(",
                 ".bind_durable_body_receipt(receipt)",
                 ".prepare_lifecycle_certified_fetch_completion(candidate, &authenticated)",
+                "let output_guard = services.lifecycle_output_guard()",
+                "output_guard.close_admission_for_restart()",
+                "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(",
+                "failure: $failure",
+                "certified_fetch_preledger_productive_ingress_token(family.inbound.as_ref())",
+                "Err(error)",
+                "durable_registry.abort_before_dequeue()",
+                "restart_invalid_leader_wire!(error, receipt)",
                 ".into_exact_certified_fetch_dequeue(executor, id, &authenticated)",
+                "let Some(operation) = output_guard.begin_fail_stop_operation()",
+                "persist_exact_staged_successor()",
                 "exact_dequeue.commit(ingress)",
+                "let runtime_receipt = certified_fetch_postdequeue_runtime_receipt(",
+                "dequeued.inbound()",
+                "&selected_leader_wire_token",
+                "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(",
                 "durable_registry.commit_after_exact_dequeue(dequeued)",
                 "PreparedCertifiedFetchReadyTransition::Mutation(ready) => ready.commit()",
                 "executor.commit_lifecycle_certified_fetch_completion(executor_prepared, &authenticated)",
                 "service_prepared.commit(operation.permit())",
+                "work_ack.commit()",
+                "mark_leader_wire_durable_body_terminal(&runtime_receipt, &durable_body)",
+                "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(error)",
+                "operation.complete()",
             ),
         )
+        dequeue_marker = "let dequeued = match exact_dequeue.commit(ingress)"
+        dequeue_offset = certified_fetch_persistence.find(dequeue_marker)
+        if dequeue_offset < 0:
+            errors.append(
+                f"{lifecycle_selector_path}: complete_certified_fetch_body_persistence "
+                "lost its exact post-Ledger dequeue boundary"
+            )
+        else:
+            pre_dequeue = certified_fetch_persistence[:dequeue_offset]
+            post_dequeue = certified_fetch_persistence[dequeue_offset:]
+            require_token_count(
+                lifecycle_selector_path,
+                "certified Fetch pre-dequeue productive-owner validation",
+                pre_dequeue,
+                "certified_fetch_preledger_productive_ingress_token(family.inbound.as_ref())",
+                1,
+            )
+            require_token_count(
+                lifecycle_selector_path,
+                "certified Fetch pre-dequeue invalid-owner fail-stop",
+                pre_dequeue,
+                "restart_invalid_leader_wire!(error, receipt)",
+                1,
+            )
+            reject_tokens(
+                lifecycle_selector_path,
+                "certified Fetch pre-dequeue queued-owner validation",
+                pre_dequeue,
+                (
+                    "install_leader_wire_runtime_receipt",
+                    "bind_leader_wire_runtime_ownership_locked",
+                    "mark_leader_wire_runtime_locked",
+                    "RestartRequiredAfterDequeue",
+                    "RestartRequiredAfterCommit",
+                ),
+            )
+            require_token_count(
+                lifecycle_selector_path,
+                "certified Fetch post-dequeue Runtime receipt extraction",
+                post_dequeue,
+                "certified_fetch_postdequeue_runtime_receipt",
+                1,
+            )
+            require_token_count(
+                lifecycle_selector_path,
+                "certified Fetch post-dequeue restart boundary",
+                post_dequeue,
+                "RestartRequiredAfterDequeue",
+                1,
+            )
+            require_token_count(
+                lifecycle_selector_path,
+                "certified Fetch durable-terminal restart boundary",
+                post_dequeue,
+                "RestartRequiredAfterCommit",
+                1,
+            )
+        exact_dequeue_bridge = region(
+            lifecycle_selector_path,
+            lifecycle_selector_source,
+            "certified Fetch exact-dequeue bridge",
+            "impl PreparedCertifiedFetchExactDequeue {",
+            "\n/// Restart-only failure after LedgerV1 publication was invoked.",
+        )
+        require_order(
+            lifecycle_selector_path,
+            "certified Fetch exact-dequeue bridge",
+            exact_dequeue_bridge,
+            (
+                "queue_witness.commit_exact_dequeue_retaining(",
+                "ingress_identity.physical_admission_ordinal()",
+                "Ok((inbound, disposition))",
+                "CertifiedFetchDequeuedResponse",
+            ),
+        )
+    if ingress_position_source:
+        exact_dequeue_commit = region(
+            ingress_position_path,
+            ingress_position_source,
+            "queue witness exact-dequeue commit",
+            "pub(super) fn commit_exact_dequeue_retaining(",
+            "\n    /// Atomically remove the exact selected occurrence after revalidating this",
+        )
+        require_order(
+            ingress_position_path,
+            "queue witness exact-dequeue commit",
+            exact_dequeue_commit,
+            (
+                "self.revalidate_for_commit(queue)",
+                "self.metadata_matches_locked(&state)",
+                "queue.dequeue_selected_locked(",
+                "Ok(dequeued)",
+            ),
+        )
+    if fair_ingress_source:
+        dequeue_selected = _require_rust_item(
+            fair_ingress_path,
+            fair_ingress_source,
+            "dequeue_selected_locked",
+            errors,
+        )
+        if dequeue_selected is not None:
+            require_order(
+                fair_ingress_path,
+                "sole exact-dequeue leader-wire Runtime receipt mint",
+                dequeue_selected.source,
+                (
+                    "let mut staged_ownership",
+                    "staged_ownership.runtime_physical_cut.is_some()",
+                    "staged_ownership.freeze_runtime_physical_cut(runtime_physical_cut)",
+                    "let has_leader_wire_ownership",
+                    "staged_ownership.leader_wire_runtime_receipt().is_some()",
+                    "Self::bind_leader_wire_runtime_ownership_locked(state, &mut staged_ownership)",
+                    "ingress_ownership = Some(staged_ownership)",
+                    ".entries.remove(admitted_index)",
+                    "Arc::try_unwrap(entry.inbound)",
+                ),
+            )
+            require_token_count(
+                fair_ingress_path,
+                "sole exact-dequeue leader-wire Runtime receipt mint",
+                dequeue_selected.source,
+                "Self::bind_leader_wire_runtime_ownership_locked(state, &mut staged_ownership)",
+                1,
+            )
+        bind_runtime = _require_rust_item(
+            fair_ingress_path,
+            fair_ingress_source,
+            "bind_leader_wire_runtime_ownership_locked",
+            errors,
+        )
+        if bind_runtime is not None:
+            require_order(
+                fair_ingress_path,
+                "leader-wire Runtime receipt mint",
+                bind_runtime.source,
+                (
+                    "ownership.validate_exact()",
+                    "ownership.leader_wire_token().cloned()",
+                    "ownership.leader_wire_runtime_receipt()",
+                    "record.token != token",
+                    "owner.causal_lifecycle_key() != token.identity_hash()",
+                    "owner.admission_ordinal() != token.scheduler_ordinal()",
+                    "Self::mark_leader_wire_runtime_locked(state, &token, owner)",
+                    "ownership.install_leader_wire_runtime_receipt(receipt)",
+                ),
+            )
+    if lifecycle_turn_driver_source:
+        settle_certified_fetch = _require_rust_item(
+            lifecycle_turn_driver_path,
+            lifecycle_turn_driver_source,
+            "settle_parked_certified_fetch_body_persistence",
+            errors,
+        )
+        if settle_certified_fetch is not None:
+            require_order(
+                lifecycle_turn_driver_path,
+                "certified Fetch Phase-B turn result split",
+                settle_certified_fetch.source,
+                (
+                    "CertifiedFetchBodyPersistenceCompletionError::Retry(error)",
+                    "error.into_completion()",
+                    "ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRetry",
+                    "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(",
+                    "ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRestartRequired",
+                    "CertifiedFetchBodyPersistenceCompletionError::RestartRequired(error)",
+                    "ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRestartRequired",
+                    "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(",
+                    "ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRestartRequired",
+                    "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(",
+                    "ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRestartRequired",
+                ),
+            )
+            require_token_count(
+                lifecycle_turn_driver_path,
+                "certified Fetch Phase-B retry ownership",
+                settle_certified_fetch.source,
+                "error.into_completion()",
+                1,
+            )
+            branch_markers = (
+                (
+                    "Retry",
+                    "Err(CertifiedFetchBodyPersistenceCompletionError::Retry(error))",
+                    "Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(",
+                    ("error.into_completion()",),
+                    ("close_admission_for_restart",),
+                ),
+                (
+                    "RestartRequiredBeforeLedger",
+                    "Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(",
+                    "Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequired(error))",
+                    (
+                        "error.work_id().get()",
+                        "close_admission_for_restart()",
+                        "drop(error)",
+                    ),
+                    ("error.into_completion()",),
+                ),
+                (
+                    "RestartRequired",
+                    "Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequired(error))",
+                    "Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(",
+                    ("close_admission_for_restart()", "drop(error)"),
+                    ("error.into_completion()",),
+                ),
+                (
+                    "RestartRequiredAfterDequeue",
+                    "Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(",
+                    "Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(",
+                    ("close_admission_for_restart()",),
+                    ("error.into_completion()",),
+                ),
+                (
+                    "RestartRequiredAfterCommit",
+                    "Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(",
+                    "\n        }\n    }",
+                    ("close_admission_for_restart()",),
+                    ("error.into_completion()",),
+                ),
+            )
+            for branch_name, start_marker, end_marker, required, forbidden in branch_markers:
+                start = settle_certified_fetch.source.find(start_marker)
+                end = settle_certified_fetch.source.find(
+                    end_marker, start + len(start_marker)
+                )
+                if start < 0 or end < 0:
+                    errors.append(
+                        f"{lifecycle_turn_driver_path}:{settle_certified_fetch.line}: "
+                        f"missing certified Fetch Phase-B {branch_name} branch"
+                    )
+                    continue
+                branch = settle_certified_fetch.source[start:end]
+                require_tokens(
+                    lifecycle_turn_driver_path,
+                    f"certified Fetch Phase-B {branch_name} branch",
+                    branch,
+                    required,
+                )
+                reject_tokens(
+                    lifecycle_turn_driver_path,
+                    f"certified Fetch Phase-B {branch_name} branch",
+                    branch,
+                    forbidden,
+                )
     release_path = repo_root / "scripts" / "run_sumeragi_v2_release_gates.sh"
     if not release_path.is_file() or release_path.is_symlink():
         errors.append(

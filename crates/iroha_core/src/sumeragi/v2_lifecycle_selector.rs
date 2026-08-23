@@ -27,9 +27,10 @@ use super::{
 use crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding;
 use crate::sumeragi::{
     FairV2Ingress, FairV2IngressClass, FairV2IngressDequeueDisposition,
-    FairV2IngressOwnershipEvidence, FairV2IngressQueueGateVerdict, FairV2IngressSourceClass,
-    InboundBlockMessage,
+    FairV2IngressLeaderWireToken, FairV2IngressOwnershipEvidence, FairV2IngressQueueGateVerdict,
+    FairV2IngressSourceClass, InboundBlockMessage,
     message::BlockMessage,
+    serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt,
     v2_body_store::{
         DurableCertifiedFetchBodyReceipt, RecoveredDecisionFetchStoreBodyAuthorityV1, V2BodyStore,
         V2BodyStoreError,
@@ -122,6 +123,21 @@ pub(crate) enum LifecycleIngressSelectorError {
     ExecutorState(Box<EffectExecutorError>),
     /// The complete occurrence key set or cardinality was not representable.
     InvalidCensus,
+}
+
+/// Read-only priority of the exact selected certified-response occurrence.
+///
+/// `DefinitelyNonPriority` deliberately retains the caller's queue cut so the
+/// ordinary ingress consumer can dequeue the same physical winner. The two
+/// claimed variants may alone enter lifecycle selector preparation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SelectedCertifiedResponsePriorityV1 {
+    /// The selected occurrence is not an authenticated physical family winner.
+    DefinitelyNonPriority,
+    /// The ordinary executor Fetch owns the selected response family.
+    OrdinaryClaimed,
+    /// A recovered Decision Fetch owns the selected response family.
+    RecoveredClaimed,
 }
 impl LifecycleIngressSelectorError {
     /// Render the exact fail-closed selector reason without discarding its payload.
@@ -498,6 +514,135 @@ impl CertifiedFetchBodyPersistenceRetryError {
         }
     }
 }
+/// Structurally invalid productive ingress discovered before LedgerV1.
+///
+/// No durable completion publication was attempted, but the unchanged
+/// physical carrier cannot become valid through an in-process retry. The
+/// complete worker outcome remains owned only for restart diagnostics.
+#[must_use = "invalid productive ingress requires process restart"]
+pub(crate) struct CertifiedFetchBodyPersistencePreLedgerRestartError {
+    failure: CertifiedFetchPreLedgerProductiveIngressErrorV1,
+    completion: PreparedCertifiedFetchBodyPersistenceCompletion,
+}
+impl CertifiedFetchBodyPersistencePreLedgerRestartError {
+    /// Exact structural invariant which forced the pre-ledger restart.
+    pub(crate) const fn failure(&self) -> CertifiedFetchPreLedgerProductiveIngressErrorV1 {
+        self.failure
+    }
+    /// Stable diagnostic category for the non-retryable pre-ledger boundary.
+    pub(crate) const fn reason(&self) -> &'static str {
+        "queued leader-wire ownership"
+    }
+    /// Explain why the same physical completion cannot become retryable.
+    pub(crate) const fn detail(&self) -> &'static str {
+        match self.failure {
+            CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingOwnership => {
+                "selected certified-Fetch response lost its fair-ingress ownership"
+            }
+            CertifiedFetchPreLedgerProductiveIngressErrorV1::InvalidOwnership => {
+                "selected certified-Fetch response changed its fair-ingress ownership"
+            }
+            CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken => {
+                "selected certified-Fetch response lacks its durable Ingress token"
+            }
+            CertifiedFetchPreLedgerProductiveIngressErrorV1::RuntimeAlreadyBound => {
+                "selected certified-Fetch response was already transferred to Runtime"
+            }
+        }
+    }
+    /// Return the still-indexed existing executor work identity.
+    pub(crate) const fn work_id(&self) -> EffectWorkId {
+        self.completion.work_id()
+    }
+}
+/// Closed structural rejection for a selected productive carrier before LedgerV1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CertifiedFetchPreLedgerProductiveIngressErrorV1 {
+    /// The selected queue occurrence lost its immutable ownership evidence.
+    MissingOwnership,
+    /// Ownership bytes no longer bind the selected message, source, or routes.
+    InvalidOwnership,
+    /// Test-only or corrupt ingress omitted the required durable gate token.
+    MissingLeaderWireToken,
+    /// A still-queued carrier already claims to have crossed into Runtime.
+    RuntimeAlreadyBound,
+}
+/// Closed structural rejection for the sole post-dequeue Runtime handoff.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CertifiedFetchPostDequeueRuntimeHandoffErrorV1 {
+    /// The dequeued carrier lost its immutable ownership evidence.
+    MissingOwnership,
+    /// Ownership bytes no longer bind the dequeued message, source, or routes.
+    InvalidOwnership,
+    /// The exact dequeue failed to install the required Runtime receipt.
+    MissingRuntimeReceipt,
+    /// The installed receipt names another token or Runtime owner.
+    MismatchedRuntimeReceipt,
+}
+impl CertifiedFetchPostDequeueRuntimeHandoffErrorV1 {
+    const fn detail(self) -> &'static str {
+        match self {
+            Self::MissingOwnership => "exact dequeue lost its fair-ingress ownership",
+            Self::InvalidOwnership => "exact dequeue changed its fair-ingress ownership",
+            Self::MissingRuntimeReceipt => {
+                "exact dequeue omitted its durable leader-wire Runtime receipt"
+            }
+            Self::MismatchedRuntimeReceipt => {
+                "exact dequeue installed a foreign leader-wire Runtime receipt"
+            }
+        }
+    }
+}
+fn certified_fetch_ingress_ownership_is_exact(
+    inbound: &InboundBlockMessage,
+    ownership: &FairV2IngressOwnershipEvidence,
+) -> bool {
+    ownership.validate_exact()
+        && ownership.matches_message(inbound.message())
+        && ownership.matches_semantic_origin(inbound.sender())
+        && ownership.matches_reply_routes(inbound.reply_routes())
+}
+/// Validate the exact queued productive stage without mutating ingress or its gate.
+pub(crate) fn certified_fetch_preledger_productive_ingress_token(
+    inbound: &InboundBlockMessage,
+) -> Result<FairV2IngressLeaderWireToken, CertifiedFetchPreLedgerProductiveIngressErrorV1> {
+    let ownership = inbound
+        .ingress_ownership()
+        .ok_or(CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingOwnership)?;
+    if !certified_fetch_ingress_ownership_is_exact(inbound, ownership) {
+        return Err(CertifiedFetchPreLedgerProductiveIngressErrorV1::InvalidOwnership);
+    }
+    let token = ownership
+        .leader_wire_token()
+        .cloned()
+        .ok_or(CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken)?;
+    if ownership.leader_wire_runtime_receipt().is_some() {
+        return Err(CertifiedFetchPreLedgerProductiveIngressErrorV1::RuntimeAlreadyBound);
+    }
+    Ok(token)
+}
+/// Validate and clone the sole Runtime receipt installed by exact dequeue.
+pub(crate) fn certified_fetch_postdequeue_runtime_receipt(
+    inbound: &InboundBlockMessage,
+    expected_token: &FairV2IngressLeaderWireToken,
+) -> Result<LeaderWireLifecycleRuntimeReceipt, CertifiedFetchPostDequeueRuntimeHandoffErrorV1> {
+    let ownership = inbound
+        .ingress_ownership()
+        .ok_or(CertifiedFetchPostDequeueRuntimeHandoffErrorV1::MissingOwnership)?;
+    if !certified_fetch_ingress_ownership_is_exact(inbound, ownership) {
+        return Err(CertifiedFetchPostDequeueRuntimeHandoffErrorV1::InvalidOwnership);
+    }
+    let receipt = ownership
+        .leader_wire_runtime_receipt()
+        .ok_or(CertifiedFetchPostDequeueRuntimeHandoffErrorV1::MissingRuntimeReceipt)?;
+    if receipt.token() != expected_token
+        || receipt.owner().causal_lifecycle_key() != expected_token.identity_hash()
+        || receipt.owner().admission_ordinal() != expected_token.scheduler_ordinal()
+    {
+        return Err(CertifiedFetchPostDequeueRuntimeHandoffErrorV1::MismatchedRuntimeReceipt);
+    }
+    Ok(receipt.clone())
+}
 /// Exact fresh queue witness retained after LedgerV1 may have advanced.
 struct PreparedCertifiedFetchExactDequeue {
     context: LifecycleContext,
@@ -660,8 +805,14 @@ impl CertifiedFetchBodyPersistenceRestartError {
 pub(crate) enum CertifiedFetchBodyPersistenceCompletionError {
     /// No ledger publication was invoked; the whole completion may be retried.
     Retry(CertifiedFetchBodyPersistenceRetryError),
+    /// The queued productive owner is structurally invalid; no publication was
+    /// invoked, but retrying the same bytes cannot repair it.
+    RestartRequiredBeforeLedger(CertifiedFetchBodyPersistencePreLedgerRestartError),
     /// Ledger publication was invoked; output is closed and retry is forbidden.
     RestartRequired(CertifiedFetchBodyPersistenceRestartError),
+    /// Ledger and exact queue handoff committed, but the volatile registry,
+    /// coordinator, executor, service, and work-ack tail did not run.
+    RestartRequiredAfterDequeue(String),
     /// Every volatile owner committed, but the exact durable ingress terminal failed.
     RestartRequiredAfterCommit(String),
 }
@@ -1772,6 +1923,28 @@ impl PreparedLifecycleIngressSelector {
             authority.wait_source(),
         ))
     }
+    /// Classify the selected queued productive ownership through the production pre-ledger gate.
+    #[cfg(test)]
+    pub(crate) fn certified_fetch_preledger_productive_ingress_token_for_test(
+        &self,
+    ) -> Result<FairV2IngressLeaderWireToken, CertifiedFetchPreLedgerProductiveIngressErrorV1> {
+        let family = self
+            .selected_claimed_response_family()
+            .map_err(|_| CertifiedFetchPreLedgerProductiveIngressErrorV1::InvalidOwnership)?;
+        certified_fetch_preledger_productive_ingress_token(family.inbound.as_ref())
+    }
+    /// Whether the selected exact response is still queued without any durable gate handoff.
+    #[cfg(test)]
+    pub(crate) fn selected_certified_fetch_is_ungated_for_test(&self) -> bool {
+        self.selected_claimed_response_family()
+            .ok()
+            .and_then(|family| family.inbound.ingress_ownership())
+            .is_some_and(|ownership| {
+                ownership.validate_exact()
+                    && ownership.leader_wire_token().is_none()
+                    && ownership.leader_wire_runtime_receipt().is_none()
+            })
+    }
     /// Prove that this real prepared selector crosses the sealed
     /// selector-to-registry preflight against an exact installed Fetch and that
     /// dropping the borrow-bound token leaves that incumbent byte-for-byte
@@ -1999,6 +2172,26 @@ impl LifecycleCoordinator {
             }
         };
         let output_guard = services.lifecycle_output_guard();
+        macro_rules! restart_invalid_leader_wire {
+            ($failure:expr, $receipt:expr) => {{
+                output_guard.close_admission_for_restart();
+                return Err(
+                    CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(
+                        CertifiedFetchBodyPersistencePreLedgerRestartError {
+                            failure: $failure,
+                            completion: PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(
+                                CertifiedFetchBodyPersistenceCompletion {
+                                    id,
+                                    authenticated,
+                                    receipt: $receipt,
+                                },
+                                work_ack,
+                            ),
+                        },
+                    ),
+                );
+            }};
+        }
         let service_prepared =
             match services.prepare_certified_body_fetch_owner_removal(executor_prepared.task()) {
                 Ok(prepared) => prepared,
@@ -2010,7 +2203,7 @@ impl LifecycleCoordinator {
                     );
                 }
             };
-        let (selected_response_matches, runtime_receipt) = {
+        let (selected_response_matches, selected_leader_wire_token) = {
             let family = match selector.persisted_family(id, &authenticated) {
                 Ok(family) => family,
                 Err(error) => {
@@ -2018,25 +2211,21 @@ impl LifecycleCoordinator {
                     retry!(error, receipt);
                 }
             };
-            let Some(runtime_receipt) = family
-                .inbound
-                .ingress_ownership()
-                .and_then(FairV2IngressOwnershipEvidence::leader_wire_runtime_receipt)
-                .cloned()
-            else {
-                let receipt = durable_registry.abort_before_dequeue();
-                retry!(
-                    CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity,
-                    receipt
-                );
-            };
+            let leader_wire_token =
+                match certified_fetch_preledger_productive_ingress_token(family.inbound.as_ref()) {
+                    Ok(token) => token,
+                    Err(error) => {
+                        let receipt = durable_registry.abort_before_dequeue();
+                        restart_invalid_leader_wire!(error, receipt);
+                    }
+                };
             (
                 durable_registry.matches_selected_response(
                     family.ingress_identity,
                     family.inbound.as_ref(),
                     selector.queue_witness.selected_disposition(),
                 ),
-                runtime_receipt,
+                leader_wire_token,
             )
         };
         if !selected_response_matches {
@@ -2228,13 +2417,15 @@ impl LifecycleCoordinator {
                 );
             }
         };
-        assert!(
-            dequeued
-                .inbound()
-                .ingress_ownership()
-                .and_then(FairV2IngressOwnershipEvidence::leader_wire_runtime_receipt)
-                .is_some_and(|receipt| receipt == &runtime_receipt)
-        );
+        let runtime_receipt = certified_fetch_postdequeue_runtime_receipt(
+            dequeued.inbound(),
+            &selected_leader_wire_token,
+        )
+        .map_err(|error| {
+            CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(
+                error.detail().to_owned(),
+            )
+        })?;
         let durable_body = durable_registry.durable_body_receipt().clone();
         durable_registry.commit_after_exact_dequeue(dequeued);
         match ready {
@@ -2783,6 +2974,18 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             .map_err(|_| LifecycleIngressSelectorError::QueueCutCapture)?;
         self.capture_lifecycle_ingress_selector(cut)
     }
+    /// Classify one exact response occurrence without consuming its queue cut.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn classify_selected_certified_response_priority_for_test(
+        &self,
+        ingress: &FairV2Ingress,
+        target_physical_ordinal: u64,
+    ) -> Result<SelectedCertifiedResponsePriorityV1, LifecycleIngressSelectorError> {
+        let cut = ingress
+            .capture_lifecycle_queue_cut(target_physical_ordinal)
+            .map_err(|_| LifecycleIngressSelectorError::QueueCutCapture)?;
+        self.classify_selected_certified_response_priority(&cut)
+    }
     /// Select the next fair authenticated recovered Decision-Fetch response.
     ///
     /// The queue runs the same strict-then-dependency source/lane selection as
@@ -2831,7 +3034,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
         }
         Ok(Some(prepared))
     }
-    /// Decide whether an already selected exact cut is the recovered Fetch owner.
+    /// Classify the exact selected certified-response occurrence without mutation.
     ///
     /// Only the selected response's exact signed-request family is
     /// authenticated. In particular, the lowest physical occurrence of that
@@ -2839,10 +3042,10 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
     /// byte-identical duplicate; an unrelated later malformed family cannot
     /// poison an ordinary selected head. This method is read-only and leaves
     /// the cut's queue service guard with the caller.
-    pub(super) fn selected_cut_is_recovered_decision_fetch(
+    pub(super) fn classify_selected_certified_response_priority(
         &self,
         cut: &FairIngressQueueCut<'_>,
-    ) -> Result<bool, LifecycleIngressSelectorError> {
+    ) -> Result<SelectedCertifiedResponsePriorityV1, LifecycleIngressSelectorError> {
         self.validate_lifecycle_ingress_selector_authority()
             .map_err(|error| LifecycleIngressSelectorError::ExecutorAuthority {
                 ordinal: None,
@@ -2864,7 +3067,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
                 _ => None,
             });
         let Some(selected_request_hash) = selected_request_hash else {
-            return Ok(false);
+            return Ok(SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority);
         };
         let mut response_candidates = BTreeMap::new();
         for occurrence in cut.selector_occurrences() {
@@ -2922,10 +3125,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
                 .iter()
                 .map(|(ordinal, candidate)| (candidate.request_hash(), *ordinal)),
         )?;
-        let selected_family = family_winners
-            .values()
-            .any(|ordinal| *ordinal == selected_ordinal);
-        let mut selected_recovered = false;
+        let mut selected_priority = SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority;
         for ordinal in family_winners.into_values() {
             let candidate = response_candidates
                 .remove(&ordinal)
@@ -2961,8 +3161,14 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
                 return Err(LifecycleIngressSelectorError::CandidateRevalidationDrift { ordinal });
             }
             if ordinal == selected_ordinal {
-                selected_recovered =
-                    matches!(candidate, PreparedCertifiedResponseCandidate::Recovered(_));
+                selected_priority = match candidate {
+                    PreparedCertifiedResponseCandidate::Ordinary(_) => {
+                        SelectedCertifiedResponsePriorityV1::OrdinaryClaimed
+                    }
+                    PreparedCertifiedResponseCandidate::Recovered(_) => {
+                        SelectedCertifiedResponsePriorityV1::RecoveredClaimed
+                    }
+                };
             }
         }
         self.validate_lifecycle_ingress_selector_authority()
@@ -2973,7 +3179,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
         if !cut.pre_cut_is_intact() {
             return Err(LifecycleIngressSelectorError::QueueCutChanged);
         }
-        Ok(selected_family && selected_recovered)
+        Ok(selected_priority)
     }
 
     /// Convert the selected response family's cut into Phase-A authority.

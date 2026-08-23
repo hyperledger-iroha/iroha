@@ -259,14 +259,13 @@ use schema::{
 use schema::{DurableContinuation, MAX_LIFECYCLE_RECORDS_PER_HEIGHT};
 #[cfg(test)]
 pub(crate) use schema::{NonCandidateEffect, RetryAction};
-#[cfg(test)]
-pub(crate) use selector::CertifiedFetchReadyPublicationError;
 #[allow(unused_imports, reason = "reviewed persistence selector namespace")]
 pub(crate) use selector::{
     CertifiedFetchBodyPersistenceCompletion, CertifiedFetchBodyPersistenceCompletionError,
     CertifiedFetchBodyPersistencePreparationError, CertifiedFetchBodyPersistenceRestartError,
     CertifiedFetchBodyPersistenceRetryError, LifecycleIngressIoTargetKind,
     LifecycleIngressIoTargetSeal, LifecycleIngressSelectorError, PreparedLifecycleIngressSelector,
+    SelectedCertifiedResponsePriorityV1,
 };
 #[allow(unused_imports, reason = "reviewed recovered-fetch selector namespace")]
 pub(in crate::sumeragi) use selector::{
@@ -274,6 +273,13 @@ pub(in crate::sumeragi) use selector::{
     RecoveredDecisionFetchBodyPersistenceCompletionV1, RecoveredDecisionFetchBodyPersistenceIdV1,
     RecoveredDecisionFetchBodyPersistencePreparationErrorV1,
     RecoveredDecisionFetchBodyPersistenceTaskV1, RecoveredDecisionFetchExactDequeueErrorV1,
+};
+#[cfg(test)]
+pub(crate) use selector::{
+    CertifiedFetchPostDequeueRuntimeHandoffErrorV1,
+    CertifiedFetchPreLedgerProductiveIngressErrorV1, CertifiedFetchReadyPublicationError,
+    certified_fetch_postdequeue_runtime_receipt,
+    certified_fetch_preledger_productive_ingress_token,
 };
 pub(in crate::sumeragi) use validate_sidecar::{
     LifecycleValidateSidecarDriveV1, LifecycleValidateSidecarRegistrationIdentityV1,

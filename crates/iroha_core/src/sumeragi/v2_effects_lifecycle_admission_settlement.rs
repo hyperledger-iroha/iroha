@@ -1222,7 +1222,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         subject: wire::BlockSubject,
         ownership: RuntimeEffectOwnership,
         _services: &mut S,
-    ) -> Result<(), EffectExecutorError> {
+    ) -> Result<Option<super::v2::PendingKuraValidatedApplySuccessorV1>, EffectExecutorError> {
         let key = (round, subject);
         let effect = AdapterEffect::ValidateBody {
             tag,
@@ -1235,14 +1235,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "ValidateBody retry changed its exact pending lifecycle owner".to_owned(),
                 ));
             }
-            return Ok(());
+            return Ok(None);
         }
         if let Some(seal) = self.durable_validate_retry_seals.get_mut(&key) {
             let projected = seal
                 .project_retry(&effect, &ownership)
                 .map_err(EffectExecutorError::Contract)?;
             *seal = projected.seal;
-            return Ok(());
+            return Ok(None);
         }
         let receipt = self.durable_bodies.get(&key).cloned().ok_or_else(|| {
             EffectExecutorError::Contract(
@@ -1262,11 +1262,31 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         .to_owned(),
                 ));
             }
-            // The independently fsynced marker is the terminal authority for
-            // this closed-ingress recovery stage. The enclosing recovery
-            // transition advances to Apply after this exact catalog stutter;
-            // it must not mint ordinary Proposal/local-body admission work.
-            return Ok(());
+            self.ensure_pending_slot()?;
+            let _next_apply_work = self.plan_work_id()?;
+            let marker = self
+                .pending_tip_recovery
+                .as_mut()
+                .expect("pending-Kura validation was checked above")
+                .take_deferred_validated_marker()?;
+            let successor = match self
+                .runtime
+                .commit_pending_kura_validated_apply(marker, &effect, &ownership)
+            {
+                Ok(successor) => successor,
+                Err((marker, error)) => {
+                    self.pending_tip_recovery
+                        .as_mut()
+                        .expect("pending-Kura validation still owns its recovery evidence")
+                        .restore_deferred_validated_marker(marker);
+                    return Err(EffectExecutorError::PendingApplyRecoveryMismatch(error));
+                }
+            };
+            // The independently fsynced marker now enters the reducer through
+            // its real direct successful-validation transition. The returned
+            // Apply is the sole predecessor-projected child and is consumed by
+            // the outer recovery step only after it records the Apply stage.
+            return Ok(Some(successor));
         }
         if self.authenticated_genesis_replay.contains_key(&key)
             && self.remote_proposal_replay.contains_key(&key)
@@ -1340,12 +1360,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     ));
                 }
             };
-            return self.install_pending_durable_validate_admission(
+            self.install_pending_durable_validate_admission(
                 key,
                 &effect,
                 &validate_ownership,
                 validate.into_pending_durable_validate_admission(),
-            );
+            )?;
+            return Ok(None);
         }
         match self.remote_proposal_replay.get(&key) {
             Some(RemoteProposalReplayStageV1::Fetch { .. })
@@ -1419,6 +1440,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             &effect,
             &validate_ownership,
             validate.into_pending_durable_validate_admission(),
-        )
+        )?;
+        Ok(None)
     }
 }

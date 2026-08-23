@@ -2441,7 +2441,7 @@ _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
         "7501414a5b20cfeacf429a9d2b43cf5dd2a797e2a579559c05d987437352ed8d"
     ),
     "production_capacity_saturation_admits_response_and_reconstructible_fetch": (
-        "c222912bd0fbfbb589269108834fa62252c4b61bed3ef4231b293b0b8b787719"
+        "934cac43859cca5ef5975f978a32934d88fd586b3b50fb97df1d62038e36e2c8"
     ),
     "unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner": (
         "920f70f6d4ebf90ce3f9a4365e99bc88da19671d80e4f716aa57bc08caece7fd"

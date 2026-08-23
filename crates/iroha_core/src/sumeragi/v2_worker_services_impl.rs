@@ -1,4 +1,26 @@
+/// Read-only worker/corridor snapshot for pending-Kura Apply diagnostics.
+#[cfg(test)]
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(in crate::sumeragi) struct PendingKuraApplyIoSnapshotV1 {
+    queued_commands: usize,
+    tracked_queued: usize,
+    tracked_active: usize,
+    tracked_completion_pending: usize,
+    completion_owners: usize,
+    local_completions: usize,
+    held_completion: bool,
+}
+
 impl ProductionV2Services {
+    /// Whether Phase B reparked a certified-Fetch result behind the service boundary.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn has_reparked_certified_fetch_completion_for_test(&self) -> bool {
+        matches!(
+            self.held_io_completion.as_ref(),
+            Some(V2IoCompletion::CertifiedFetchBodyPersisted(_))
+        )
+    }
     /// Reserve output after a recovered Broadcast rejoins its LedgerV1 row,
     /// retaining that durable row as crash-recovery debt.
     pub(in crate::sumeragi) fn capture_recovered_lifecycle_signed_broadcast_refanout(
@@ -3385,6 +3407,40 @@ impl ProductionV2Services {
     /// Return whether fail-stop output handling requires a process restart.
     pub(in crate::sumeragi) fn exact_output_restart_required_for_test(&self) -> bool {
         self.output_guard.restart_required()
+    }
+    /// Snapshot ordinary Apply worker ownership without taking any queue item.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn pending_kura_apply_io_snapshot_for_test(
+        &self,
+    ) -> Option<PendingKuraApplyIoSnapshotV1> {
+        let io = self.io.as_ref()?;
+        let state = io.command_tx.queue.lock();
+        let queued_commands = state
+            .commands
+            .iter()
+            .filter(|command| matches!(command, V2IoCommand::Apply(_)))
+            .count();
+        let tracked = |expected| {
+            state
+                .work
+                .values()
+                .filter(|tracked| {
+                    matches!(tracked.descriptor, V2IoWorkDescriptor::Apply { .. })
+                        && tracked.state == expected
+                })
+                .count()
+        };
+        let snapshot = PendingKuraApplyIoSnapshotV1 {
+            queued_commands,
+            tracked_queued: tracked(V2IoWorkState::Queued),
+            tracked_active: tracked(V2IoWorkState::Active),
+            tracked_completion_pending: tracked(V2IoWorkState::CompletionPending),
+            completion_owners: io.admission.completion_snapshot(Instant::now()).depth,
+            local_completions: self.local_completions.len(),
+            held_completion: self.held_io_completion.is_some(),
+        };
+        drop(state);
+        Some(snapshot)
     }
     /// Count accepted service calls carrying this exact canonical consensus envelope.
     #[cfg(test)]

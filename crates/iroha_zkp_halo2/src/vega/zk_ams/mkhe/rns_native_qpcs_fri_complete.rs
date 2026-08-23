@@ -9,11 +9,25 @@
 //! the composite verifier continues to fail closed.
 
 use super::{
+    manifest::ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
+    rns_native_cross_field_inventory::{
+        RnsNativePreQpcsQMaskInventoryPreflightV1,
+        authenticate_rns_native_cross_field_inventory_from_sealed_pre_qpcs_preflight_v1,
+    },
+    rns_native_cross_field_rlwe_direct::{
+        RnsNativeCrossFieldRlweBoundPreDirectInventoryV1,
+        RnsNativeCrossFieldRlweClaimedInventoryNumericV2,
+        RnsNativeCrossFieldRlweClaimedQpcsInputV2, RnsNativeCrossFieldRlweDirectErrorV1,
+        bind_authenticated_claimed_qpcs_inventory_direct_v2,
+        bind_rns_native_cross_field_rlwe_pre_direct_inventory_v1,
+    },
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_CORRELATED_FRI_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1,
         ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1, ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1,
+        ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1,
+        ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1,
     },
+    rns_native_public_polynomial_reader::RnsNativePublicPolynomialEvaluationV1,
     rns_native_qpcs_prefix::{
         DIGEST_BYTES_V1, DOMAIN_SIZE_V1, Fq2ParametersV1, Fq2V1, IndexSetV1, LEAF_BYTES_V1,
         MAX_OPENED_LEAVES_V1, QUERY_COUNT_V1, ROWS_PER_LIMB_V1, RnsNativeQpcsFoldZeroStageV1,
@@ -23,12 +37,24 @@ use super::{
         derive_fields_v1, descriptor_for_indices_v1, fold_value_with_inverse_x_v1,
         query_pair_indices_v1, read_value_v1, validate_leaf_values_v1,
     },
+    rns_native_rlwe_source_statement::{
+        RnsNativePublicArtifactViewV1, RnsNativeRlweSourceStatementErrorV1,
+        RnsNativeRlweSourceStatementStageV1, preflight_rns_native_rlwe_source_statement_v1,
+    },
+    rns_native_section_codec::RnsNativePendingCrossFieldGlobalLookupContextV1,
+    rns_native_source::{
+        ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceReceiptV1,
+        ZkAmsMkheRnsNativeSourceSnapshotV1,
+    },
+    rns_native_terminal_cross_basis::RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
     rns_native_transcript::{
         ZkAmsMkheRnsNativeChallengeSeedsV1, ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1,
         ZkAmsMkheRnsNativeCrossFieldRootClaimV1,
         ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1,
-        ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,
+        ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1, ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,
+        ZkAmsMkheRnsNativeTerminalRootsV1,
     },
+    rns_native_zero_padding_commitment::RnsNativeZeroPaddingCommitmentPrerequisiteV1,
 };
 use crate::vega::sponge::Keccak256;
 
@@ -58,6 +84,18 @@ const FOLD_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.f
 const RESIDUAL_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.fri-complete.rlwe-source-residual";
 
+/// Tranche-A source typestates and their private direct chronology are implemented,
+/// but no live verification entry reaches them.
+pub(super) const PRE_AUTH_CLAIMED_QPCS_TYPESTATE_SOURCE_IMPLEMENTED_V1: bool = true;
+/// No live production verifier entry consumes the tranche-A owner yet.
+pub(super) const PRE_AUTH_CLAIMED_QPCS_INTEGRATED_V1: bool = false;
+/// The tranche-A owners grant no proof-verification authority.
+pub(super) const PRE_AUTH_CLAIMED_QPCS_VERIFICATION_AUTHORITY_V1: bool = false;
+/// The tranche-A owners grant no readiness authority.
+pub(super) const PRE_AUTH_CLAIMED_QPCS_READINESS_V1: bool = false;
+/// The tranche-A owners grant no release authority.
+pub(super) const PRE_AUTH_CLAIMED_QPCS_RELEASE_READY_V1: bool = false;
+
 const _: () = {
     assert!(ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 == 18);
     assert!(FIRST_ENCODED_LAYER_V1 == 2);
@@ -70,6 +108,11 @@ const _: () = {
     assert!(MAX_FRI_OPENED_LEAVES_V1 == 4_028);
     assert!(MAX_FRI_AUTHENTICATION_HASHES_V1 == 20_030);
     assert!(ZK_AMS_MKHE_RNS_NATIVE_CORRELATED_FRI_MAX_BYTES_V1 == 26_409_984);
+    assert!(PRE_AUTH_CLAIMED_QPCS_TYPESTATE_SOURCE_IMPLEMENTED_V1);
+    assert!(!PRE_AUTH_CLAIMED_QPCS_INTEGRATED_V1);
+    assert!(!PRE_AUTH_CLAIMED_QPCS_VERIFICATION_AUTHORITY_V1);
+    assert!(!PRE_AUTH_CLAIMED_QPCS_READINESS_V1);
+    assert!(!PRE_AUTH_CLAIMED_QPCS_RELEASE_READY_V1);
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -247,6 +290,41 @@ pub(super) struct RnsNativeQpcsFriCompleteStageV1<'a> {
     rlwe_source_residual: &'a [u8],
 }
 
+/// Move-only owner created before qPCS authentication from the sole lineaged
+/// relation schedule, the exact qPCS-bound transcript, and all claimed
+/// terminal roots.
+///
+/// Its provisional terminal chronology is non-authorizing and retains three
+/// undisclosed root-equality obligations.  The schedule cannot be borrowed or
+/// extracted; it can only move into the authentication transition below.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "the sole schedule and provisional chronology must move together exactly once"
+)]
+#[must_use = "the pre-auth claimed-qPCS owner must be consumed by qPCS authentication"]
+pub(super) struct RnsNativeQpcsPreAuthClaimedV1 {
+    relation_schedule: RnsNativeQpcsRelationScheduleV1,
+    expected_qpcs_bound_transcript_state: [u8; DIGEST_BYTES_V1],
+    terminal_chronology: ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
+}
+
+/// Move-only non-authorizing owner after qPCS authenticates under the final
+/// seeds produced by the same claimed terminal chronology.
+///
+/// The authenticated qPCS stage still owns the sole relation schedule and the
+/// terminal chronology still owns every undisclosed equality obligation.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "authenticated qPCS and its claimed terminal chronology must remain one-shot"
+)]
+#[must_use = "authenticated claimed qPCS is incomplete until successor obligations are discharged"]
+pub(super) struct RnsNativeQpcsAuthenticatedClaimedV1<'a> {
+    qpcs: RnsNativeQpcsFriCompleteStageV1<'a>,
+    terminal_chronology: ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
+}
+
 /// Move-only joint owner proving that a completed qPCS relation schedule and
 /// a qPCS-bound transcript descend from the same one-shot relation lineage and
 /// have the exact post-FRI, pre-cross-field transcript state retained by this
@@ -266,11 +344,315 @@ pub(super) struct RnsNativeQpcsCompletedLineageV1 {
     qpcs_transcript: Option<ZkAmsMkheRnsNativeQpcsBoundTranscriptV1>,
 }
 
+/// Leaf-private one-shot proof that the claimed qPCS schedule, provisional
+/// terminal chronology, authenticated numeric tails, and source binding were
+/// destructured from one authenticated claimed owner in this module.
+///
+/// The type name is visible to the direct module, but its tuple field and sole
+/// construction site remain private here. It has no constructor, clone, copy,
+/// getter, or raw-parts surface.
+#[allow(
+    missing_copy_implementations,
+    dead_code,
+    reason = "the direct claimed-qPCS input must consume this leaf-private origin once"
+)]
+pub(super) struct RnsNativeAuthenticatedClaimedQpcsOriginV2(());
+
+const CLAIMED_SOURCE_REPETITIONS_V1: usize = 5;
+const CLAIMED_SOURCE_RELATIONS_V1: usize =
+    ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * CLAIMED_SOURCE_REPETITIONS_V1;
+const CLAIMED_SOURCE_QPCS_PAIR_BYTES_V1: usize = 2 * core::mem::size_of::<u64>();
+const CLAIMED_SOURCE_QPCS_EVALUATION_BYTES_V1: usize =
+    CLAIMED_SOURCE_RELATIONS_V1 * CLAIMED_SOURCE_QPCS_PAIR_BYTES_V1;
+const CLAIMED_SOURCE_RING_POWER_SQUARINGS_V1: usize = 17;
+const CLAIMED_SOURCE_BINDING_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.claimed-source-numeric-binding";
+pub(super) const RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_BYTES_V1: usize =
+    CLAIMED_SOURCE_BINDING_DOMAIN_V1.len()
+        + 1
+        + 13 * DIGEST_BYTES_V1
+        + RNS_NATIVE_QPCS_CLAIMED_NUMERIC_TAIL_BYTES_V1;
+
+pub(super) const RNS_NATIVE_QPCS_CLAIMED_NUMERIC_TAIL_BYTES_V1: usize =
+    CLAIMED_SOURCE_RELATIONS_V1 * core::mem::size_of::<RnsNativeQpcsAuthenticatedNumericTailV1>();
+pub(super) const RNS_NATIVE_QPCS_CLAIMED_TERMINAL_CHRONOLOGY_BYTES_V1: usize =
+    core::mem::size_of::<ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1>();
+
+const _: () = {
+    assert!(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 == 1 << 17);
+    assert!(CLAIMED_SOURCE_RELATIONS_V1 == 200);
+    assert!(CLAIMED_SOURCE_QPCS_EVALUATION_BYTES_V1 == 3_200);
+    assert!(core::mem::size_of::<RnsNativeQpcsAuthenticatedNumericTailV1>() == 24);
+    assert!(RNS_NATIVE_QPCS_CLAIMED_NUMERIC_TAIL_BYTES_V1 == 4_800);
+    assert!(RNS_NATIVE_QPCS_CLAIMED_TERMINAL_CHRONOLOGY_BYTES_V1 == 5_384);
+    assert!(RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_BYTES_V1 == 5_284);
+};
+
+/// The only retained qPCS values needed by a schedule-free direct numeric
+/// cursor. Row identity is implicit in the fixed limb-major/repetition-major
+/// array position, so no caller-controlled ordinal is retained.
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub(super) struct RnsNativeQpcsAuthenticatedNumericTailV1 {
+    a: u64,
+    product: u64,
+    opening_quotient: u64,
+}
+
+impl RnsNativeQpcsAuthenticatedNumericTailV1 {
+    const UNFILLED: Self = Self {
+        a: u64::MAX,
+        product: u64::MAX,
+        opening_quotient: u64::MAX,
+    };
+
+    pub(super) const fn values_v1(self) -> (u64, u64, u64) {
+        (self.a, self.product, self.opening_quotient)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RnsNativeQpcsClaimedSourceErrorV1 {
+    SourcePreflight,
+    Inventory,
+    InvalidCount,
+    InvalidOrder,
+    InvalidPoint,
+    NonCanonicalResidue,
+    ZeroFactor,
+    InvalidRelation,
+    InvalidBinding,
+}
+
+impl core::fmt::Display for RnsNativeQpcsClaimedSourceErrorV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+impl std::error::Error for RnsNativeQpcsClaimedSourceErrorV1 {}
+
+/// Opaque owner after the exact authenticated-claimed qPCS has passed source
+/// preflight. The sole schedule is still present inside `source.qpcs()` and
+/// the complete three-obligation terminal chronology remains paired with it.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "numeric materialization consumes this source-only intermediate exactly once"
+)]
+#[must_use = "source-preflighted claimed qPCS must be consumed by numeric materialization"]
+pub(super) struct RnsNativeQpcsPreflightedClaimedSourceV1<
+    'proof,
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+> {
+    source: RnsNativeRlweSourceStatementStageV1<'proof, S>,
+    terminal_chronology: ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
+}
+
+/// Opaque schedule-free source owner after all 200 authenticated numeric tails
+/// have been materialized. It retains, but does not expose, the one extracted
+/// relation schedule and the whole provisional chronology. In particular it
+/// cannot be converted to the legacy completed-lineage or claimed-relation
+/// owners, either of which would lose this chronology.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "the private source-chain/inventory carrier consumes this exact owner once"
+)]
+#[must_use = "schedule-free claimed source remains non-authorizing until every successor verifies"]
+pub(super) struct RnsNativeQpcsSchedulelessClaimedSourceV1<
+    'proof,
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+> {
+    source: RnsNativeRlweSourceStatementStageV1<'proof, S>,
+    relation_schedule: RnsNativeQpcsRelationScheduleV1,
+    terminal_chronology: ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
+    numeric_tails: [RnsNativeQpcsAuthenticatedNumericTailV1; CLAIMED_SOURCE_RELATIONS_V1],
+    source_binding_digest: [u8; DIGEST_BYTES_V1],
+}
+
+/// One move-only owner joining the authenticated claimed qPCS chronology to
+/// the exact sealed cross-section allocation and its authenticated inventory.
+///
+/// The sole relation schedule and all three terminal-root obligations remain
+/// recursively owned. No schedule, chronology, inventory bytes, or raw parts
+/// can be projected from this type.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "the direct claimed-relation transition must consume this exact joined owner"
+)]
+#[must_use = "claimed qPCS inventory chronology remains non-authorizing until direct and terminal-root equality discharge"]
+pub(super) struct RnsNativeQpcsClaimedInventoryChronologyV2<
+    'qpcs,
+    'cross,
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+> {
+    bound_pre_direct_inventory: RnsNativeCrossFieldRlweBoundPreDirectInventoryV1<'qpcs, 'cross, S>,
+    relation_schedule: RnsNativeQpcsRelationScheduleV1,
+    terminal_chronology: ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
+    numeric_tails: [RnsNativeQpcsAuthenticatedNumericTailV1; CLAIMED_SOURCE_RELATIONS_V1],
+    source_binding_digest: [u8; DIGEST_BYTES_V1],
+}
+
+impl<S: ZkAmsMkheRnsNativeSourceSnapshotV1> RnsNativeQpcsSchedulelessClaimedSourceV1<'_, S> {
+    pub(super) fn authoritative_source_binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.terminal_chronology
+            .final_challenge_seeds_v1()
+            .source_binding_digest()
+    }
+
+    pub(super) fn numeric_tail_v1(
+        &self,
+        limb: usize,
+        repetition: usize,
+    ) -> Option<RnsNativeQpcsAuthenticatedNumericTailV1> {
+        if limb >= ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 || repetition >= CLAIMED_SOURCE_REPETITIONS_V1 {
+            return None;
+        }
+        self.numeric_tails
+            .get(limb * CLAIMED_SOURCE_REPETITIONS_V1 + repetition)
+            .copied()
+    }
+
+    pub(super) const fn claimed_source_binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.source_binding_digest
+    }
+}
+
+impl<'qpcs, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
+    RnsNativeQpcsSchedulelessClaimedSourceV1<'qpcs, S>
+{
+    /// Consume this owner and the exact sealed cross-section children into one
+    /// authenticated inventory chronology. Final context is borrowed only
+    /// from this owner's own provisional chronology; any failure drops the
+    /// source, sole schedule, chronology, and both section children together.
+    pub(super) fn authenticate_claimed_inventory_v2<'cross>(
+        self,
+        terminal: RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
+        zero_padding: RnsNativeZeroPaddingCommitmentPrerequisiteV1,
+        pending_cross: RnsNativePendingCrossFieldGlobalLookupContextV1<'cross>,
+        preflight: RnsNativePreQpcsQMaskInventoryPreflightV1<'cross>,
+    ) -> Result<
+        RnsNativeQpcsClaimedInventoryChronologyV2<'qpcs, 'cross, S>,
+        RnsNativeQpcsClaimedSourceErrorV1,
+    > {
+        let Self {
+            source,
+            relation_schedule,
+            terminal_chronology,
+            numeric_tails,
+            source_binding_digest,
+        } = self;
+        let bound = pending_cross
+            .bind_final_context_v1(terminal_chronology.final_challenge_seeds_v1())
+            .map_err(|_| RnsNativeQpcsClaimedSourceErrorV1::Inventory)?;
+        let inventory =
+            authenticate_rns_native_cross_field_inventory_from_sealed_pre_qpcs_preflight_v1(
+                terminal_chronology.final_challenge_seeds_v1(),
+                source,
+                terminal,
+                zero_padding,
+                bound,
+                preflight,
+            )
+            .map_err(|_| RnsNativeQpcsClaimedSourceErrorV1::Inventory)?;
+        let bound_pre_direct_inventory =
+            bind_rns_native_cross_field_rlwe_pre_direct_inventory_v1(inventory)
+                .map_err(|_| RnsNativeQpcsClaimedSourceErrorV1::Inventory)?;
+        Ok(RnsNativeQpcsClaimedInventoryChronologyV2 {
+            bound_pre_direct_inventory,
+            relation_schedule,
+            terminal_chronology,
+            numeric_tails,
+            source_binding_digest,
+        })
+    }
+}
+
+impl<S: ZkAmsMkheRnsNativeSourceSnapshotV1> RnsNativeQpcsClaimedInventoryChronologyV2<'_, '_, S> {
+    pub(super) fn authoritative_source_binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.terminal_chronology
+            .final_challenge_seeds_v1()
+            .source_binding_digest()
+    }
+
+    pub(super) fn numeric_tail_v1(
+        &self,
+        limb: usize,
+        repetition: usize,
+    ) -> Option<RnsNativeQpcsAuthenticatedNumericTailV1> {
+        if limb >= ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 || repetition >= CLAIMED_SOURCE_REPETITIONS_V1 {
+            return None;
+        }
+        self.numeric_tails
+            .get(limb * CLAIMED_SOURCE_REPETITIONS_V1 + repetition)
+            .copied()
+    }
+
+    pub(super) const fn claimed_source_binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.source_binding_digest
+    }
+}
+
+impl<'qpcs, 'cross, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
+    RnsNativeQpcsClaimedInventoryChronologyV2<'qpcs, 'cross, S>
+{
+    /// Consume the authenticated claimed owner directly into the direct
+    /// relation. This is the sole place that may create the transcript-empty
+    /// completed lineage, and it immediately moves that lineage, the whole
+    /// terminal chronology, inventory, and numeric tails into one direct
+    /// owner.
+    pub(super) fn bind_direct_claimed_relation_v2(
+        self,
+    ) -> Result<
+        RnsNativeCrossFieldRlweClaimedInventoryNumericV2<'qpcs, 'cross, S>,
+        RnsNativeCrossFieldRlweDirectErrorV1,
+    > {
+        let Self {
+            bound_pre_direct_inventory,
+            relation_schedule,
+            terminal_chronology,
+            numeric_tails,
+            source_binding_digest,
+        } = self;
+        let completed_qpcs =
+            RnsNativeQpcsCompletedLineageV1::from_authenticated_claimed_schedule_v2(
+                relation_schedule,
+            );
+        let claimed_qpcs_origin = RnsNativeAuthenticatedClaimedQpcsOriginV2(());
+        let claimed_qpcs_input =
+            RnsNativeCrossFieldRlweClaimedQpcsInputV2::from_authenticated_claimed_qpcs_v2(
+                claimed_qpcs_origin,
+                completed_qpcs,
+                terminal_chronology,
+                numeric_tails,
+                source_binding_digest,
+            )?;
+        bind_authenticated_claimed_qpcs_inventory_direct_v2(
+            bound_pre_direct_inventory,
+            claimed_qpcs_input,
+        )
+    }
+}
+
 #[allow(
     dead_code,
     reason = "the undeclared direct adapter consumes this completed qPCS owner"
 )]
 impl RnsNativeQpcsCompletedLineageV1 {
+    /// Purpose-private constructor for the already-authenticated claimed-qPCS
+    /// path. The schedule was lineaged and authenticated before terminal roots
+    /// were provisionally bound; no raw schedule caller can reach this helper.
+    fn from_authenticated_claimed_schedule_v2(
+        relation_schedule: RnsNativeQpcsRelationScheduleV1,
+    ) -> Self {
+        Self {
+            relation_schedule,
+            qpcs_transcript: None,
+        }
+    }
+
     fn from_completed_fri_v1(
         relation_schedule: RnsNativeQpcsRelationScheduleV1,
         expected_qpcs_bound_transcript_state: [u8; DIGEST_BYTES_V1],
@@ -316,6 +698,19 @@ impl RnsNativeQpcsCompletedLineageV1 {
             .ok_or(RnsNativeQpcsFriCompleteErrorV1::InvalidOrder)
     }
 
+    /// Consume the sole retained qPCS transcript into the complete provisional
+    /// three-root chronology. The schedule stays owned by this lineage and is
+    /// left transcript-empty for the direct cross-root obligation.
+    pub(super) fn bind_provisional_terminal_chronology_v1(
+        &mut self,
+        roots: ZkAmsMkheRnsNativeTerminalRootsV1,
+    ) -> Result<ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1, RnsNativeQpcsFriCompleteErrorV1>
+    {
+        self.take_qpcs_transcript_v1()?
+            .bind_provisional_terminal_chronology_v1(roots)
+            .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidContext)
+    }
+
     /// Consume the sole qPCS transcript against an authenticated claimed
     /// cross-field root.  The returned transcript is provisional until the
     /// opaque equality obligation is discharged by the direct verifier.
@@ -355,6 +750,16 @@ impl RnsNativeQpcsCompletedLineageV1 {
 impl<'a> RnsNativeQpcsFriCompleteStageV1<'a> {
     pub(super) const fn has_relation_schedule_v1(&self) -> bool {
         self.relation_schedule.is_some()
+    }
+
+    /// Borrow the sole authenticated relation schedule without transferring
+    /// or duplicating its one-shot lineage.
+    pub(super) fn relation_schedule_v1(
+        &self,
+    ) -> Result<&RnsNativeQpcsRelationScheduleV1, RnsNativeQpcsFriCompleteErrorV1> {
+        self.relation_schedule
+            .as_ref()
+            .ok_or(RnsNativeQpcsFriCompleteErrorV1::InvalidOrder)
     }
 
     pub(super) fn take_relation_schedule_v1(
@@ -416,6 +821,349 @@ impl<'a> RnsNativeQpcsFriCompleteStageV1<'a> {
     pub(super) const fn rlwe_source_residual(&self) -> &'a [u8] {
         self.rlwe_source_residual
     }
+}
+
+/// Consume the sole lineaged schedule and exact qPCS transcript before any
+/// terminal root is provisionally bound.
+///
+/// # Errors
+///
+/// Rejects a schedule from another relation lineage, a legacy unlineaged
+/// schedule, roots tagged for another qPCS state, or invalid terminal binding.
+#[allow(
+    dead_code,
+    reason = "tranche A defines the source typestate before production orchestration is integrated"
+)]
+pub(super) fn prepare_rns_native_qpcs_pre_auth_claimed_v1(
+    relation_schedule: RnsNativeQpcsRelationScheduleV1,
+    qpcs_transcript: ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,
+    terminal_roots: ZkAmsMkheRnsNativeTerminalRootsV1,
+) -> Result<RnsNativeQpcsPreAuthClaimedV1, RnsNativeQpcsFriCompleteErrorV1> {
+    let expected_qpcs_bound_transcript_state = qpcs_transcript.binding_digest();
+    if expected_qpcs_bound_transcript_state == [0; DIGEST_BYTES_V1] {
+        return Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext);
+    }
+    relation_schedule
+        .validate_qpcs_bound_lineage_v1(&qpcs_transcript)
+        .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidContext)?;
+    let terminal_chronology = qpcs_transcript
+        .bind_provisional_terminal_chronology_v1(terminal_roots)
+        .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidContext)?;
+    if !terminal_chronology
+        .matches_qpcs_bound_transcript_state_v1(expected_qpcs_bound_transcript_state)
+    {
+        return Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext);
+    }
+    Ok(RnsNativeQpcsPreAuthClaimedV1 {
+        relation_schedule,
+        expected_qpcs_bound_transcript_state,
+        terminal_chronology,
+    })
+}
+
+/// Authenticate qPCS using the final seeds and the exact schedule already
+/// owned by the pre-auth claimed typestate.
+#[allow(
+    dead_code,
+    reason = "tranche A defines the source transition before production orchestration is integrated"
+)]
+pub(super) fn authenticate_rns_native_qpcs_pre_auth_claimed_v1<'a>(
+    claimed: RnsNativeQpcsPreAuthClaimedV1,
+    equation_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
+    limb_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
+    query_opening_digests: &[[u8; DIGEST_BYTES_V1]],
+    proof: &'a [u8],
+) -> Result<RnsNativeQpcsAuthenticatedClaimedV1<'a>, RnsNativeQpcsFriCompleteErrorV1> {
+    let RnsNativeQpcsPreAuthClaimedV1 {
+        relation_schedule,
+        expected_qpcs_bound_transcript_state,
+        terminal_chronology,
+    } = claimed;
+    let qpcs = authenticate_rns_native_qpcs_fri_complete_with_schedule_v1(
+        terminal_chronology.final_challenge_seeds_v1(),
+        relation_schedule,
+        equation_commitment_digests,
+        limb_commitment_digests,
+        query_opening_digests,
+        proof,
+    )?;
+    finish_rns_native_qpcs_pre_auth_claimed_v1(
+        qpcs,
+        expected_qpcs_bound_transcript_state,
+        terminal_chronology,
+    )
+}
+
+fn finish_rns_native_qpcs_pre_auth_claimed_v1<'a>(
+    qpcs: RnsNativeQpcsFriCompleteStageV1<'a>,
+    expected_qpcs_bound_transcript_state: [u8; DIGEST_BYTES_V1],
+    terminal_chronology: ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
+) -> Result<RnsNativeQpcsAuthenticatedClaimedV1<'a>, RnsNativeQpcsFriCompleteErrorV1> {
+    if qpcs.relation_schedule.is_none()
+        || qpcs.qpcs_bound_transcript_state != expected_qpcs_bound_transcript_state
+        || !terminal_chronology
+            .matches_qpcs_bound_transcript_state_v1(qpcs.qpcs_bound_transcript_state)
+    {
+        return Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext);
+    }
+    Ok(RnsNativeQpcsAuthenticatedClaimedV1 {
+        qpcs,
+        terminal_chronology,
+    })
+}
+
+/// Consume the authenticated-claimed qPCS directly into source preflight.
+/// The final seeds are borrowed only from its own provisional chronology and
+/// the qPCS stage still owns the sole schedule throughout the preflight call.
+/// No transcript, schedule, root, or chronology parts are returned.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn preflight_rns_native_qpcs_authenticated_claimed_source_v1<'proof, S>(
+    authenticated: RnsNativeQpcsAuthenticatedClaimedV1<'proof>,
+    layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+    receipt: ZkAmsMkheRnsNativeSourceReceiptV1,
+    public: RnsNativePublicArtifactViewV1<'_>,
+    equation_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
+    limb_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
+    snapshot: S,
+) -> Result<RnsNativeQpcsPreflightedClaimedSourceV1<'proof, S>, RnsNativeQpcsClaimedSourceErrorV1>
+where
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+{
+    let RnsNativeQpcsAuthenticatedClaimedV1 {
+        qpcs,
+        terminal_chronology,
+    } = authenticated;
+    if !qpcs.has_relation_schedule_v1() {
+        return Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidOrder);
+    }
+    let source = preflight_rns_native_rlwe_source_statement_v1(
+        terminal_chronology.final_challenge_seeds_v1(),
+        layout,
+        receipt,
+        public,
+        equation_commitment_digests,
+        limb_commitment_digests,
+        snapshot,
+        qpcs,
+    )
+    .map_err(map_claimed_source_preflight_error_v1)?;
+    if !source.qpcs().has_relation_schedule_v1()
+        || source.snapshot().layout().source_binding_digest()
+            != terminal_chronology
+                .final_challenge_seeds_v1()
+                .source_binding_digest()
+    {
+        return Err(RnsNativeQpcsClaimedSourceErrorV1::SourcePreflight);
+    }
+    Ok(RnsNativeQpcsPreflightedClaimedSourceV1 {
+        source,
+        terminal_chronology,
+    })
+}
+
+fn map_claimed_source_preflight_error_v1(
+    _: RnsNativeRlweSourceStatementErrorV1,
+) -> RnsNativeQpcsClaimedSourceErrorV1 {
+    RnsNativeQpcsClaimedSourceErrorV1::SourcePreflight
+}
+
+impl<'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
+    RnsNativeQpcsPreflightedClaimedSourceV1<'proof, S>
+{
+    /// Materialize all 200 authenticated numeric tails, then and only then
+    /// extract the sole schedule. Any error consumes this entire owner and
+    /// returns no schedule, chronology, source stage, or partial tail array.
+    pub(super) fn materialize_numeric_and_take_schedule_v1(
+        mut self,
+        public_evaluations: &[RnsNativePublicPolynomialEvaluationV1],
+    ) -> Result<
+        RnsNativeQpcsSchedulelessClaimedSourceV1<'proof, S>,
+        RnsNativeQpcsClaimedSourceErrorV1,
+    > {
+        if public_evaluations.len() != CLAIMED_SOURCE_RELATIONS_V1
+            || self.source.qpcs().evaluations().len() != CLAIMED_SOURCE_QPCS_EVALUATION_BYTES_V1
+            || !self.source.qpcs().has_relation_schedule_v1()
+        {
+            return Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidCount);
+        }
+        let mut numeric_tails =
+            [RnsNativeQpcsAuthenticatedNumericTailV1::UNFILLED; CLAIMED_SOURCE_RELATIONS_V1];
+        {
+            let schedule = self
+                .source
+                .qpcs()
+                .relation_schedule_v1()
+                .map_err(|_| RnsNativeQpcsClaimedSourceErrorV1::InvalidOrder)?;
+            for limb in 0..ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 {
+                for repetition in 0..CLAIMED_SOURCE_REPETITIONS_V1 {
+                    let relation = limb * CLAIMED_SOURCE_REPETITIONS_V1 + repetition;
+                    let point = schedule
+                        .point(limb, repetition)
+                        .ok_or(RnsNativeQpcsClaimedSourceErrorV1::InvalidPoint)?;
+                    let (product, opening_quotient) =
+                        claimed_source_qpcs_pair_v1(self.source.qpcs().evaluations(), relation)?;
+                    numeric_tails[relation] = validate_claimed_source_numeric_tail_v1(
+                        limb,
+                        repetition,
+                        point,
+                        public_evaluations[relation],
+                        product,
+                        opening_quotient,
+                    )?;
+                }
+            }
+        }
+        if numeric_tails.iter().any(|tail| {
+            tail.a == u64::MAX || tail.product == u64::MAX || tail.opening_quotient == u64::MAX
+        }) {
+            return Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidCount);
+        }
+        let relation_schedule = self
+            .source
+            .take_qpcs_relation_schedule_v1()
+            .map_err(|_| RnsNativeQpcsClaimedSourceErrorV1::InvalidOrder)?;
+        if self.source.qpcs().has_relation_schedule_v1() {
+            return Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidOrder);
+        }
+        let source_binding_digest = claimed_source_numeric_binding_digest_v1(
+            &self.source,
+            &relation_schedule,
+            &self.terminal_chronology,
+            &numeric_tails,
+        )?;
+        Ok(RnsNativeQpcsSchedulelessClaimedSourceV1 {
+            source: self.source,
+            relation_schedule,
+            terminal_chronology: self.terminal_chronology,
+            numeric_tails,
+            source_binding_digest,
+        })
+    }
+}
+
+fn claimed_source_numeric_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
+    source: &RnsNativeRlweSourceStatementStageV1<'_, S>,
+    schedule: &RnsNativeQpcsRelationScheduleV1,
+    terminal_chronology: &ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
+    numeric_tails: &[RnsNativeQpcsAuthenticatedNumericTailV1; CLAIMED_SOURCE_RELATIONS_V1],
+) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsClaimedSourceErrorV1> {
+    let mut hash = Keccak256::new();
+    hash.update(CLAIMED_SOURCE_BINDING_DOMAIN_V1);
+    hash.update(&[CLOSURE_VERSION_V1]);
+    for digest in [
+        source.statement_anchor_digest(),
+        source.preflight_statement_digest(),
+        source.public_bundle_digest(),
+        source.qpcs().parameter_digest(),
+        source.qpcs().transcript_digest(),
+        source.qpcs().schedule_digest(),
+        source.qpcs().evaluation_binding_digest(),
+        source.qpcs().residual_digest(),
+        schedule.parameter_digest(),
+        schedule.q_mask_s_root(),
+        schedule.qpcs_pre_relation_transcript_digest(),
+        schedule.relation_seed(),
+        terminal_chronology
+            .final_challenge_seeds_v1()
+            .transcript_digest(),
+    ] {
+        hash.update(&digest);
+    }
+    for tail in numeric_tails {
+        hash.update(&tail.a.to_be_bytes());
+        hash.update(&tail.product.to_be_bytes());
+        hash.update(&tail.opening_quotient.to_be_bytes());
+    }
+    let digest = hash.finalize();
+    if digest == [0; DIGEST_BYTES_V1] {
+        return Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidBinding);
+    }
+    Ok(digest)
+}
+
+fn claimed_source_qpcs_pair_v1(
+    bytes: &[u8],
+    relation: usize,
+) -> Result<(u64, u64), RnsNativeQpcsClaimedSourceErrorV1> {
+    if bytes.len() != CLAIMED_SOURCE_QPCS_EVALUATION_BYTES_V1
+        || relation >= CLAIMED_SOURCE_RELATIONS_V1
+    {
+        return Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidCount);
+    }
+    let offset = relation
+        .checked_mul(CLAIMED_SOURCE_QPCS_PAIR_BYTES_V1)
+        .ok_or(RnsNativeQpcsClaimedSourceErrorV1::InvalidCount)?;
+    let product = u64::from_be_bytes(
+        bytes
+            .get(offset..offset + 8)
+            .and_then(|value| value.try_into().ok())
+            .ok_or(RnsNativeQpcsClaimedSourceErrorV1::InvalidCount)?,
+    );
+    let opening_quotient = u64::from_be_bytes(
+        bytes
+            .get(offset + 8..offset + 16)
+            .and_then(|value| value.try_into().ok())
+            .ok_or(RnsNativeQpcsClaimedSourceErrorV1::InvalidCount)?,
+    );
+    Ok((product, opening_quotient))
+}
+
+fn validate_claimed_source_numeric_tail_v1(
+    limb: usize,
+    repetition: usize,
+    point: u64,
+    public: RnsNativePublicPolynomialEvaluationV1,
+    product: u64,
+    opening_quotient: u64,
+) -> Result<RnsNativeQpcsAuthenticatedNumericTailV1, RnsNativeQpcsClaimedSourceErrorV1> {
+    let modulus = *ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1
+        .get(limb)
+        .ok_or(RnsNativeQpcsClaimedSourceErrorV1::InvalidOrder)?;
+    if repetition >= CLAIMED_SOURCE_REPETITIONS_V1 || point == 0 || point >= modulus {
+        return Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidPoint);
+    }
+    if [
+        point,
+        public.public_a,
+        public.public_b,
+        product,
+        opening_quotient,
+    ]
+    .iter()
+    .chain(public.ciphertext_c0.iter())
+    .chain(public.ciphertext_c1.iter())
+    .any(|value| *value >= modulus)
+    {
+        return Err(RnsNativeQpcsClaimedSourceErrorV1::NonCanonicalResidue);
+    }
+    let point_to_n = claimed_source_ring_power_v1(point, modulus);
+    let factor = claimed_source_mod_add_v1(point_to_n, 1, modulus);
+    if factor == 0 {
+        return Err(RnsNativeQpcsClaimedSourceErrorV1::ZeroFactor);
+    }
+    if product != claimed_source_mod_mul_v1(factor, opening_quotient, modulus) {
+        return Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidRelation);
+    }
+    Ok(RnsNativeQpcsAuthenticatedNumericTailV1 {
+        a: point,
+        product,
+        opening_quotient,
+    })
+}
+
+fn claimed_source_mod_add_v1(left: u64, right: u64, modulus: u64) -> u64 {
+    ((u128::from(left) + u128::from(right)) % u128::from(modulus)) as u64
+}
+
+fn claimed_source_mod_mul_v1(left: u64, right: u64, modulus: u64) -> u64 {
+    ((u128::from(left) * u128::from(right)) % u128::from(modulus)) as u64
+}
+
+fn claimed_source_ring_power_v1(mut value: u64, modulus: u64) -> u64 {
+    for _ in 0..CLAIMED_SOURCE_RING_POWER_SQUARINGS_V1 {
+        value = claimed_source_mod_mul_v1(value, value, modulus);
+    }
+    value
 }
 
 /// Consume the authenticated fold-zero stage and complete correlated FRI.

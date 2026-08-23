@@ -2961,7 +2961,7 @@ self.io.is_some()
                 registry_source,
                 "opaque recovered Broadcast-and-next-Sign registry preparation",
                 "pub(super) fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor<",
-                "impl<'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter>",
+                "impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter>",
             )
             require_order(
                 registry_path,
@@ -3147,7 +3147,7 @@ self.io.is_some()
                 adapter_source,
                 "durable recovered Proposal adapter two-child commit",
                 "pub(in crate::sumeragi) fn commit_after_durable_broadcast_and_sign(self)",
-                "/// Borrow-bound adapter successor for one registry-owned recovered Apply",
+                "/// Borrow-bound adapter successor for one registry-owned lifecycle Apply",
             )
             require_order(
                 adapter_path,
@@ -3171,7 +3171,7 @@ self.io.is_some()
                 adapter_source,
                 "durable recovered Vote adapter two-child commit",
                 "pub(in crate::sumeragi) fn commit_after_durable_vote_broadcast_and_sign(self)",
-                "/// Borrow-bound adapter successor for one registry-owned recovered Apply",
+                "/// Borrow-bound adapter successor for one registry-owned lifecycle Apply",
             )
             require_order(
                 adapter_path,
@@ -3696,7 +3696,7 @@ self.io.is_some()
                 worker_source,
                 "recovered Sign capacity capture release",
                 "fn capture_recovered_lifecycle_sign_capacity<'a>(",
-                "fn recovered_completion_worker_capacity(",
+                "fn lifecycle_completion_worker_capacity(",
             )
             require_token_count(
                 worker_path,

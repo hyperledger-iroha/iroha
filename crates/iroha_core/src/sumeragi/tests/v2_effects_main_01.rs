@@ -736,19 +736,7 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
     )
     .payload()
     .to_vec();
-    let ingress =
-        crate::sumeragi::FairV2Ingress::new(32, 5 * 512 * 1024, 512 * 1024, 0, 512 * 1024);
-    ingress
-        .configure_roster(
-            fixture
-                .context
-                .roster
-                .iter()
-                .map(|power| power.validator.clone()),
-        )
-        .expect("fixture roster fits the response ingress");
-    ingress.state.lock().leader_wire_context = Some((fixture.context.id(), fixture.context.height));
-    ingress.open().expect("open response ingress");
+    let (_ingress_directory, ingress, ingress_gate) = fixture.bound_certified_response_ingress();
     let response_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response_a),
     ));
@@ -760,6 +748,8 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
         Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
     ));
     let response_ordinal = ingress.state.lock().last_admission_ordinal;
+    let response_leader_wire_token =
+        queued_leader_wire_ingress_token(&ingress, &ingress_gate, response_ordinal);
     let prepared = fixture
         .executor
         .prepare_lifecycle_ingress_selector(&ingress, response_ordinal)
@@ -789,6 +779,7 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
             &fixture.validator_keys[0],
             owner_directory.path(),
         );
+    assert!(response_leader_wire_token.scheduler_ordinal() > lifecycle_ordinal);
     let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
     production_services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
     let mut planner_io = owner.bind_body_store_to_planner_io_for_test(
@@ -842,6 +833,13 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
                 error.reason(),
                 error.detail(),
             ),
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(
+                error,
+            ) => panic!(
+                "A lost its productive ingress before persistence: {}: {}",
+                error.reason(),
+                error.detail(),
+            ),
             crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequired(
                 error,
             ) => panic!(
@@ -849,23 +847,48 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
                 error.reason(),
                 error.detail(),
             ),
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(
+                error,
+            ) => panic!("A lost its exact Runtime handoff after dequeue: {error}"),
             crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(
                 error,
             ) => panic!("A failed after the persistence commit: {error}"),
         });
     assert!(matches!(
         owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
-        (Some(LifecycleState::Ready), Some(1), None, false)
+        (Some(LifecycleState::Ready), Some(2), None, false)
     ));
     assert!(fixture.executor.pending_fetches.is_empty());
     assert!(fixture.executor.certified_work.is_empty());
     assert!(fixture.executor.outstanding_requests.is_empty());
     assert_eq!(ingress.len(), 0);
+    assert_leader_wire_body_terminal(&ingress_gate, &response_leader_wire_token);
     let post_completion_status = fixture.executor.status();
-    assert_eq!(
-        post_completion_status.runtime_queues,
-        saturated_runtime_queues
-    );
+    for (before, after) in [
+        (
+            saturated_runtime_queues.normal,
+            post_completion_status.runtime_queues.normal,
+        ),
+        (
+            saturated_runtime_queues.progress,
+            post_completion_status.runtime_queues.progress,
+        ),
+        (
+            saturated_runtime_queues.completion,
+            post_completion_status.runtime_queues.completion,
+        ),
+    ] {
+        assert_eq!(
+            (after.depth, after.capacity, after.max_service_debt),
+            (before.depth, before.capacity, before.max_service_debt),
+            "lifecycle persistence cannot change runtime queue ownership or service debt",
+        );
+        assert_eq!(after.oldest_age.is_some(), before.oldest_age.is_some());
+        assert!(
+            after.oldest_age >= before.oldest_age,
+            "the same queued owners can only age while Phase B runs",
+        );
+    }
     assert_eq!(
         post_completion_status.queued_runtime_completions,
         saturated_queued_commands,
@@ -901,6 +924,261 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
     assert!(fixture.executor.retained_effect_batch.is_none());
     assert!(!fixture.executor.output_guard.restart_required());
     assert!(!fixture.executor.status().fail_closed);
+    planner_io.detach(&mut production_services);
+}
+#[test]
+#[allow(clippy::too_many_lines)]
+fn ungated_certified_fetch_phase_b_restarts_before_ledger_without_mutation() {
+    let mut fixture = ProductionTransportFixture::new();
+    fixture.executor.recovered_bodies.clear();
+    let mut services = FakeServices {
+        requester_key: Some(fixture.requester_key.clone()),
+        ..FakeServices::default()
+    };
+    let prepare =
+        fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment);
+    let effects = vec![AdapterEffect::FetchBody {
+        tag: fixture.executor.current_tag(),
+        round: fixture.round,
+        subject: fixture.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: fixture.certified_sources(&prepare),
+        certificate: Some(prepare),
+    }];
+    fixture
+        .executor
+        .runtime
+        .retain_retransmit_effect_ownership_for_test(&effects)
+        .expect("bind one production certified-Fetch owner");
+    assert_eq!(
+        fixture
+            .executor
+            .consume_effects(effects, &mut services)
+            .expect("admit one production certified-Fetch owner"),
+        1,
+    );
+    let task = services.fetch_tasks[0].clone();
+    let mut response = wire::CertifiedBodyResponse {
+        request_hash: HashOf::new(
+            task.certified_request()
+                .expect("the Fetch owns its exact signed request"),
+        ),
+        manifest: fixture.manifest.clone(),
+        body: fixture.body.clone(),
+        responder: 0,
+        signature: Vec::new(),
+    };
+    response.signature = Signature::new(
+        fixture.validator_keys[0].private_key(),
+        &response.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let ingress =
+        crate::sumeragi::FairV2Ingress::new(32, 5 * 512 * 1024, 512 * 1024, 0, 512 * 1024);
+    ingress
+        .configure_roster(
+            fixture
+                .context
+                .roster
+                .iter()
+                .map(|power| power.validator.clone()),
+        )
+        .expect("fixture roster fits the deliberately ungated ingress");
+    ingress.state.lock().leader_wire_context = Some((fixture.context.id(), fixture.context.height));
+    ingress.open().expect("open deliberately ungated ingress");
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
+            )),
+            fixture.context.roster[0].validator.clone(),
+        )),
+        Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let response_ordinal = ingress.state.lock().last_admission_ordinal;
+    let prepared = fixture
+        .executor
+        .prepare_lifecycle_ingress_selector(&ingress, response_ordinal)
+        .expect("authenticate the exact ungated response family");
+    assert_eq!(
+        prepared.certified_fetch_preledger_productive_ingress_token_for_test(),
+        Err(CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken),
+        "Phase A may observe a test-only ungated owner but Phase B must reject it",
+    );
+    assert!(prepared.selected_certified_fetch_is_ungated_for_test());
+    assert!(ingress.exact_queued_ungated_occurrence_for_test(response_ordinal));
+    let effect = task.adapter_effect();
+    let pending = task
+        .ownership()
+        .exact_pending_adapter_effect_binding(&effect)
+        .expect("retain the exact Fetch registry carrier");
+    let proofs = fixture
+        .validator_keys
+        .iter()
+        .map(|key| {
+            iroha_crypto::bls_normal_pop_prove(key.private_key())
+                .expect("validator proof of possession")
+        })
+        .collect::<Vec<_>>();
+    let verified = VerifiedHeightContext::genesis(fixture.context.clone(), proofs)
+        .expect("verified lifecycle owner context");
+    let owner_directory = TempDir::new().expect("temporary ungated lifecycle owner storage");
+    let (mut owner, lifecycle_ordinal, lifecycle_source) =
+        crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::waiting_fetch_for_ingress_test(
+            verified,
+            &prepared,
+            effect,
+            pending,
+            &fixture.validator_keys[0],
+            owner_directory.path(),
+        );
+    let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
+    production_services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+    let mut planner_io = owner.bind_body_store_to_planner_io_for_test(
+        &mut production_services,
+        Arc::clone(&fixture.executor.output_guard),
+        1,
+    );
+    planner_io.install_output_guard_for_test(
+        &mut production_services,
+        Arc::clone(&fixture.executor.output_guard),
+    );
+    V2EffectServices::enqueue_body_fetch(&mut production_services, task.clone())
+        .expect("install the exact certified-Fetch service owner");
+    let planned = owner.plan_ingress_turn_for_test(
+        &production_services,
+        &fixture.executor,
+        fixture.executor.lifecycle_mode_rank_snapshot(),
+        prepared,
+        crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context),
+    );
+    let queued = match planned {
+        Ok(ProductionIngressTurnPreparation::Queued(queued)) => queued,
+        Ok(ProductionIngressTurnPreparation::CapacityWait(_)) => {
+            panic!("available exact capacity cannot delay the ungated Phase-A fixture")
+        }
+        Err(_) => panic!("real Phase A must persist the selected ungated response"),
+    };
+    assert_eq!(queued.ordinal(), lifecycle_ordinal);
+    planner_io.execute_one_certified_fetch(Arc::clone(&fixture.executor.output_guard));
+    let completion = match production_services
+        .take_next_lifecycle_completion()
+        .expect("take the real persisted Fetch completion before fail-stop")
+    {
+        crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::CertifiedFetch(completion) => {
+            completion
+        }
+        _ => panic!("the persisted response must classify as certified Fetch"),
+    };
+    let work_id = completion.work_id();
+    assert!(planner_io.certified_fetch_completion_is_pending(work_id));
+    assert!(matches!(
+        production_services
+            .take_next_lifecycle_completion()
+            .expect("the completion FIFO remains open before the fail-stop boundary"),
+        crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::None
+    ));
+    let wait_before = owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
+    let registry_before = owner.fetch_registry_snapshot_for_test();
+    let pending_before = fixture.executor.pending_fetches.clone();
+    let certified_before = fixture.executor.certified_work.clone();
+    let outstanding_before = fixture.executor.outstanding_requests.hashes();
+    let claims_before = fixture.executor.outstanding_requests.response_claim_count();
+    let next_work_id_before = fixture.executor.next_work_id;
+    let ingress_depth_before = ingress.len();
+    let ingress_cut_before = ingress.next_physical_admission_ordinal();
+    let files_before = regular_file_bytes_below_for_test(owner_directory.path());
+    drop(
+        production_services
+            .prepare_certified_body_fetch_owner_removal(&task)
+            .expect("snapshot the exact retained service owner"),
+    );
+    assert!(!fixture.executor.output_guard.restart_required());
+    let failure = match owner.complete_certified_fetch_for_test(
+        &mut fixture.executor,
+        &mut production_services,
+        &ingress,
+        completion,
+    ) {
+        Err(
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(
+                error,
+            ),
+        ) => error,
+        Ok(()) => panic!("ungated productive ingress cannot cross Phase B"),
+        Err(
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::Retry(
+                error,
+            ),
+        ) => panic!(
+            "structurally invalid productive ingress cannot spin: {}: {}",
+            error.reason(),
+            error.detail(),
+        ),
+        Err(
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequired(
+                error,
+            ),
+        ) => panic!("ungated rejection must precede Ledger: {}", error.detail()),
+        Err(
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(
+                error,
+            ),
+        ) => panic!("ungated rejection must precede dequeue: {error}"),
+        Err(
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(
+                error,
+            ),
+        ) => panic!("ungated rejection must precede the volatile commit tail: {error}"),
+    };
+    assert_eq!(failure.work_id(), work_id);
+    assert_eq!(
+        failure.failure(),
+        CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken,
+    );
+    assert!(fixture.executor.output_guard.restart_required());
+    assert_eq!(
+        owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
+        wait_before,
+    );
+    assert_eq!(owner.fetch_registry_snapshot_for_test(), registry_before);
+    assert_eq!(fixture.executor.pending_fetches, pending_before);
+    assert_eq!(fixture.executor.certified_work, certified_before);
+    assert_eq!(
+        fixture.executor.outstanding_requests.hashes(),
+        outstanding_before,
+    );
+    assert_eq!(
+        fixture.executor.outstanding_requests.response_claim_count(),
+        claims_before,
+    );
+    assert_eq!(fixture.executor.next_work_id, next_work_id_before);
+    assert_eq!(ingress.len(), ingress_depth_before);
+    assert_eq!(
+        ingress.next_physical_admission_ordinal(),
+        ingress_cut_before
+    );
+    assert_eq!(
+        regular_file_bytes_below_for_test(owner_directory.path()),
+        files_before,
+        "pre-ledger fail-stop cannot publish lifecycle or body-store bytes",
+    );
+    assert!(
+        ingress.exact_queued_ungated_occurrence_for_test(response_ordinal),
+        "the exact response remains queue-owned without a fabricated Runtime receipt",
+    );
+    drop(
+        production_services
+            .prepare_certified_body_fetch_owner_removal(&task)
+            .expect("pre-ledger fail-stop retains the exact service owner"),
+    );
+    assert!(planner_io.certified_fetch_completion_is_pending(work_id));
+    assert!(
+        !production_services.has_reparked_certified_fetch_completion_for_test(),
+        "the move-only restart error, not a second FIFO, retains the completion",
+    );
+    drop(failure);
     planner_io.detach(&mut production_services);
 }
 #[test]

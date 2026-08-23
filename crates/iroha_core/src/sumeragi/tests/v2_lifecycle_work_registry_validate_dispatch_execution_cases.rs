@@ -2017,6 +2017,7 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
             replay_runtime,
             body_store,
             terminal_census,
+            None,
             fixture.verified.context().clone(),
             fixture.verified.context().roster[0].validator.clone(),
             Some(0),
@@ -2281,6 +2282,7 @@ fn recovered_ready_validate_plural_open_fixture() {
             runtime,
             body_store,
             census,
+            None,
             fixtures[0].verified.context().clone(),
             fixtures[0].verified.context().roster[0].validator.clone(),
             Some(0),
@@ -2433,6 +2435,7 @@ fn recovered_ready_validate_plural_late_corruption_fixture() {
             direct_runtime,
             body_store,
             RecoveredDurableValidateRetryCensusV1::empty_for_test(),
+            None,
             fixtures[0].verified.context().clone(),
             fixtures[0].verified.context().roster[0].validator.clone(),
             Some(0),
@@ -2488,6 +2491,7 @@ fn recovered_ready_validate_plural_late_corruption_fixture() {
         open_runtime,
         body_store,
         open_census,
+        None,
         fixtures[0].verified.context().clone(),
         fixtures[0].verified.context().roster[0].validator.clone(),
         Some(0),
@@ -3876,6 +3880,9 @@ fn ready_validate_apply_actor_global_child_fixture(
             decision.execution_commitment,
         )
     );
+    executor
+        .reconcile_live_lifecycle_decision_apply(cleanup, &mut services)
+        .expect("install exact live Apply owner before the normal Ready scheduler gate");
 
     planner_io.saturate_consensus_prefix(&services);
     assert_eq!(
@@ -4320,6 +4327,7 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
             live_runtime,
             live_body_store,
             recovered_validate_retry_census,
+            None,
             verified.context().clone(),
             verified.context().roster[0].validator.clone(),
             Some(0),

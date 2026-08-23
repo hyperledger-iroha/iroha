@@ -6,9 +6,12 @@
 use super::v2_core as reducer;
 #[path = "v2_pending_kura_recovery.rs"]
 mod pending_kura_recovery;
+pub(crate) use pending_kura_recovery::{
+    DeferredPendingKuraValidatedMarkerV1, PendingKuraValidatedApplySuccessorV1,
+};
 pub(in crate::sumeragi) use pending_kura_recovery::{
-    InstalledPendingKuraApplyV1, PreparedRecoveredPendingKuraApplyReplayV1,
-    RecoveredPendingKuraApplyReplayV1,
+    InstalledPendingKuraApplyV1, PreparedPendingKuraValidatedApplyV1,
+    PreparedRecoveredPendingKuraApplyReplayV1, RecoveredPendingKuraApplyReplayV1,
 };
 
 #[cfg(test)]

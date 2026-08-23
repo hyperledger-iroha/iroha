@@ -1060,6 +1060,20 @@ fn exercise_pending_kura_production_lifecycle(
     let mut pending = launched
         .install_pending_kura_apply(&mut setup_runner)
         .unwrap_or_else(|error| panic!("install exact pending Kura replay: {error}"));
+    pending
+        .with_runner_setup(&mut setup_runner, |executor, services| {
+            super::super::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
+                executor, services,
+            )
+            .unwrap_or_else(|error| {
+                panic!("reconcile pending Kura locked body before Apply recovery: {error}")
+            });
+            Ok::<
+                _,
+                super::super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1,
+            >(())
+        })
+        .expect("mirror production pending Kura pre-activation reconciliation");
     assert!(!ingress_ready.load(Ordering::Acquire));
     assert!(!leader_wire_ingress.state.lock().open);
     assert!(crate::sumeragi::status::v2_status().is_none());
@@ -1092,7 +1106,22 @@ fn exercise_pending_kura_production_lifecycle(
             break;
         }
         if Instant::now() >= completion_deadline {
-            panic!("timed out waiting for pending Kura Apply completion");
+            let (status, owner_flags, recovered_retry_keys, io) = pending
+                .with_runner_setup(&mut setup_runner, |executor, services| {
+                    Ok::<
+                        _,
+                        super::super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1,
+                    >((
+                        executor.status(),
+                        executor.pending_kura_apply_owner_flags_for_test(),
+                        executor.recovered_durable_validate_retry_keys_for_test(),
+                        services.pending_kura_apply_io_snapshot_for_test(),
+                    ))
+                })
+                .expect("inspect stalled pending Kura Apply ownership");
+            panic!(
+                "timed out waiting for pending Kura Apply completion: progress={progress:?}, status={status:?}, owner_flags={owner_flags:?}, recovered_retry_keys={recovered_retry_keys:?}, io={io:?}"
+            );
         }
         std::thread::yield_now();
     }
@@ -2112,8 +2141,17 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                         drop(turn);
                         panic!("released certified Serve must enter lifecycle dispatch directly")
                     }
-                    ProductionLifecycleIngressTurnV1::Selected(_) => {
-                        panic!("released certified Serve selected the wrong outcome")
+                    ProductionLifecycleIngressTurnV1::Selected(selected) => {
+                        let selected = match selected {
+                            super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending => "CertifiedServeCapacityPending",
+                            super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeCompetingReady => "CertifiedServeCompetingReady",
+                            super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeRetry => "CertifiedServeRetry",
+                            super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeTerminal => "CertifiedServeTerminal",
+                            super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeReplayQueued => "CertifiedServeReplayQueued",
+                            super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::RestartRequired => "RestartRequired",
+                            _ => "non-Serve selection",
+                        };
+                        panic!("released certified Serve selected the wrong outcome: {selected}")
                     }
                 }
                 },

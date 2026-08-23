@@ -374,17 +374,20 @@ fn lifecycle_decision_apply_source_keeps_explicit_lineage_outside_generic_effect
             }),
         "lifecycle Apply must authenticate its exact context before storage execution"
     );
-    let carrier_source =
-        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
+    let live_carrier_source =
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_lifecycle_work_registry_source_for_test(
+        );
     assert_eq!(
-        carrier_source
+        live_carrier_source
             .matches("LifecycleDecisionApplyTaskV1::from_live_registry_projection")
             .count(),
         1,
         "only the fixed live carrier projection may mint a live worker task"
     );
+    let recovered_carrier_source =
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     assert_eq!(
-        carrier_source
+        recovered_carrier_source
             .matches("LifecycleDecisionApplyTaskV1::from_recovered_registry_projection")
             .count(),
         1,
@@ -734,6 +737,24 @@ impl LifecyclePlannerIoFixture {
             .filter(|command| matches!(command, V2IoCommand::PersistCertifiedFetchBody(_)))
             .count()
     }
+    /// Whether one persisted certified-Fetch command retains its exact Phase-B ack owner.
+    pub(in crate::sumeragi) fn certified_fetch_completion_is_pending(
+        &self,
+        work_id: EffectWorkId,
+    ) -> bool {
+        self.command_rx
+            .queue
+            .lock()
+            .work
+            .get(&work_id)
+            .is_some_and(|tracked| {
+                tracked.state == V2IoWorkState::CompletionPending
+                    && matches!(
+                        &tracked.descriptor,
+                        V2IoWorkDescriptor::PersistCertifiedFetchBody { .. }
+                    )
+            })
+    }
     /// Fill the exact Consensus threshold with control predecessors.
     pub(in crate::sumeragi) fn saturate_consensus_prefix(&self, services: &ProductionV2Services) {
         let io = services
@@ -822,12 +843,13 @@ impl LifecyclePlannerIoFixture {
         self.command_rx
             .complete_lifecycle_decision_apply(key, &result)
             .expect("move exact lifecycle Apply tracker to CompletionPending");
-        try_send_tracked_completion(
+        try_send_tracked_completion_with_lifecycle_ordinal(
             &self.completion_tx,
             &self.admission,
             V2IoCompletion::LifecycleDecisionApply(Box::new(
                 GuardedLifecycleDecisionApplyWorkerResultV1::new(result, output_guard),
             )),
+            Some(key.lifecycle_ordinal()),
         )
         .expect("publish one guarded lifecycle Decision Apply completion");
     }

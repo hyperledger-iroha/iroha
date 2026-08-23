@@ -4351,7 +4351,6 @@ impl PreparedCertifiedServeRegistryBatchV1 {
             && self.preflights_registry(registry)
             && registry.exactly_covers_all_live_work(verified, current)
             && current.active_context == staged.active_context
-            && current.high_water.checked_add(2) == Some(staged.high_water)
             && self.exactly_matches_fresh_staged_append(current, staged)
             && registry
                 .serve_and_producer_carrier_count()
@@ -4402,7 +4401,8 @@ impl PreparedCertifiedServeRegistryBatchV1 {
         let (Some(serve), Some(producer)) = (serve, producer) else {
             return false;
         };
-        if serve.checked_add(1) != Some(producer)
+        if serve <= current.high_water
+            || serve.checked_add(1) != Some(producer)
             || producer != staged.high_water
             || current.records.len().checked_add(2) != Some(staged.records.len())
             || current.durable_records.len().checked_add(2) != Some(staged.durable_records.len())

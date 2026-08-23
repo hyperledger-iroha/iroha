@@ -25,6 +25,7 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
     "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
     "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_open_output_recovery.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs",
@@ -78,7 +79,7 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
 )
 assert len(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES)
-) == 74
+) == 75
 
 
 LIFECYCLE_DECISION_APPLY_LINEAGE_SOURCE_FILES = (
@@ -87,6 +88,7 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_SOURCE_FILES = (
     "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs",
     "crates/iroha_core/src/sumeragi/v2.rs",
+    "crates/iroha_core/src/sumeragi/v2_effects.rs",
     "crates/iroha_core/src/sumeragi/v2_worker.rs",
     "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
@@ -94,7 +96,7 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_SOURCE_FILES = (
 )
 assert len(LIFECYCLE_DECISION_APPLY_LINEAGE_SOURCE_FILES) == len(
     set(LIFECYCLE_DECISION_APPLY_LINEAGE_SOURCE_FILES)
-) == 9
+) == 10
 
 
 LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
@@ -134,6 +136,20 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
         "exact live carrier and lineage",
     ),
     (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        "impl LifecycleDecisionApplyDispatchKeyV1 {",
+        "self.context == context.id()",
+        "true",
+        "every isolated carrier-coordinate substitution",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        "impl LifecycleDecisionApplyDispatchKeyV1 {",
+        "&& self.height == context.height()",
+        "&& true",
+        "every isolated carrier-coordinate substitution",
+    ),
+    (
         "crates/iroha_core/src/sumeragi/v2.rs",
         "pub(in crate::sumeragi) fn project_live_decision_apply_completion(",
         "LifecycleDecisionApplyLineageV1::Live,",
@@ -146,6 +162,27 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
         "key.matches_carrier(context, address, installed_digest, lineage)",
         "key.matches_height_context(&artifact.height_context)",
         "exact lineage-tagged carrier",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "let lineage_owner_is_exact = match authority.lineage() {",
+        "LifecycleDecisionApplyLineageV1::Live => self",
+        "LifecycleDecisionApplyLineageV1::Recovered => self",
+        "distinguish exact live ownership from recovered non-substitution",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "let lineage_owner_is_exact = match authority.lineage() {",
+        "LifecycleDecisionApplyLineageV1::Recovered => {",
+        "LifecycleDecisionApplyLineageV1::Live => {",
+        "distinguish exact live ownership from recovered non-substitution",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(",
+        "|| !lineage_owner_is_exact",
+        "|| false",
+        "reject an authority-only lineage substitution",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
@@ -166,7 +203,7 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
         "pub(super) fn from_authenticated(",
         "lifecycle_decision_apply_attestation",
         "recovered_apply_attestation",
-        "scheduler schema must bind Apply through the lifecycle-neutral attestation local",
+        "scheduler schema Apply corridor",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -213,7 +250,7 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
 )
 assert len(LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS) == len(
     set(LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS)
-) == 16
+) == 21
 
 
 @pytest.mark.parametrize(
@@ -1186,10 +1223,52 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
-        "pub(super) fn selected_cut_is_recovered_decision_fetch(",
+        "pub(super) fn classify_selected_certified_response_priority(",
         "if response.request_hash != selected_request_hash {\n                continue;\n            }",
         "if false {\n                continue;\n            }",
-        "selected response-family-only recovery census",
+        "closed selected certified-response priority census",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(super) fn classify_selected_certified_response_priority(",
+        "SelectedCertifiedResponsePriorityV1::OrdinaryClaimed",
+        "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
+        "closed selected certified-response priority census",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(super) fn classify_selected_certified_response_priority(",
+        "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
+        "SelectedCertifiedResponsePriorityV1::OrdinaryClaimed",
+        "closed selected certified-response priority census",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(super) fn classify_selected_certified_response_priority(",
+        "if !cut.pre_cut_is_intact() {",
+        "if false {",
+        "closed selected certified-response priority census",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+        "pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(",
+        "cut.into_ordinary_turn_cut()",
+        "cut",
+        "ordinary/recovered ingress owner order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+        "pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(",
+        "capture_lifecycle_ingress_selector(cut)",
+        "prepare_recovered_decision_fetch_from_selected_cut(cut)",
+        "ordinary/recovered ingress owner order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+        "pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(",
+        "prepare_recovered_decision_fetch_from_selected_cut(cut)",
+        "capture_lifecycle_ingress_selector(cut)",
+        "ordinary/recovered ingress owner order",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
@@ -1528,6 +1607,83 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "opaque pending-Kura replay types expose forbidden surface",
     ),
     (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        "fn exactly_matches_fresh_staged_append(",
+        "serve <= current.high_water",
+        "serve > current.high_water",
+        "gap-aware fresh Serve staged append",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        "fn exactly_matches_fresh_staged_append(",
+        "serve.checked_add(1) != Some(producer)",
+        "serve.checked_add(1) == Some(producer)",
+        "gap-aware fresh Serve staged append",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        "fn exactly_matches_fresh_staged_append(",
+        "current.records.len().checked_add(2) != Some(staged.records.len())",
+        "current.records.len().checked_add(1) != Some(staged.records.len())",
+        "gap-aware fresh Serve staged append",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "fn classify_and_defer_validated_marker(",
+        "self.deferred_validated_marker = Some(DeferredPendingKuraValidatedMarkerV1 {",
+        "let _deferred_validated_marker = DeferredPendingKuraValidatedMarkerV1 {",
+        "move-only pending-Kura marker deferral",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "fn exactly_matches_recovery(",
+        "self.certificate == *certificate",
+        "true",
+        "exact pending-Kura marker authority",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "fn prepare_apply<'a>(",
+        "DirectValidationSucceededPreparation::Apply(prepared)",
+        "DirectValidationSucceededPreparation::Sign(prepared)",
+        "sealed pending-Kura ValidationCompleted Apply preview",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "fn prepare_apply<'a>(",
+        "project_validate_apply_successor(predecessor, &apply_effect)",
+        "project_store_validate_successor(predecessor, &apply_effect)",
+        "sealed pending-Kura ValidationCompleted Apply preview",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+        "pub(in crate::sumeragi) fn prepare_pending_kura_validated_apply(",
+        "|| self.clocks_armed",
+        "|| false",
+        "no-clock pending-Kura validation runtime seam",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+        "fn validate_body<S: V2EffectServices>(",
+        "take_deferred_validated_marker()?",
+        "clone_deferred_validated_marker()?",
+        "direct pending-Kura Validate-to-Apply child",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "fn consume_one<S: V2EffectServices>(",
+        "if let Some(stage) = recovery_transition {",
+        "if false {",
+        "pending-Kura outer-stage-before-direct-child dispatch",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "fn consume_for_executor(",
+        "_permit: crate::sumeragi::v2_effects::PendingKuraApplySuccessorExecutorPermitV1",
+        "_permit: ()",
+        "executor-permit pending-Kura Apply child release",
+    ),
+    (
         "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
         "fn bind_pending_kura_apply(",
         "expected.height() != self.adapter.wire_context.height",
@@ -1575,6 +1731,174 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "super::preactivation::missing_pending_kura_replay(",
         "ProductionPendingKuraApplyInstallErrorV1::MissingReplay",
         "fail-stop pending-Kura preactivation install",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) enum CertifiedFetchBodyPersistenceCompletionError {",
+        "RestartRequiredBeforeLedger(CertifiedFetchBodyPersistencePreLedgerRestartError)",
+        "RetryBeforeLedger(CertifiedFetchBodyPersistencePreLedgerRestartError)",
+        "certified Fetch Phase-B result split",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) enum CertifiedFetchBodyPersistenceCompletionError {",
+        "RestartRequiredAfterDequeue(String)",
+        "RestartRequiredAfterCommit(String)",
+        "certified Fetch Phase-B result split",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn complete_certified_fetch_body_persistence(",
+        "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(",
+        "CertifiedFetchBodyPersistenceCompletionError::Retry(",
+        "complete_certified_fetch_body_persistence must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn certified_fetch_preledger_productive_ingress_token(",
+        "inbound\n        .ingress_ownership()",
+        "None",
+        "certified Fetch pre-Ledger productive-ingress validation",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "fn certified_fetch_ingress_ownership_is_exact(",
+        "ownership.validate_exact()",
+        "true",
+        "certified Fetch exact ingress ownership predicate",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn complete_certified_fetch_body_persistence(",
+        "exact_dequeue.commit(ingress)",
+        "exact_dequeue.commit_without_runtime_receipt(ingress)",
+        "complete_certified_fetch_body_persistence must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn certified_fetch_preledger_productive_ingress_token(",
+        "if !certified_fetch_ingress_ownership_is_exact(inbound, ownership) {",
+        "if false {",
+        "certified Fetch pre-Ledger productive-ingress validation",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn certified_fetch_preledger_productive_ingress_token(",
+        ".leader_wire_token()",
+        ".leader_wire_runtime_receipt()",
+        "certified Fetch pre-Ledger productive-ingress validation",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn certified_fetch_preledger_productive_ingress_token(",
+        "ownership.leader_wire_runtime_receipt().is_some()",
+        "ownership.leader_wire_runtime_receipt().is_none()",
+        "certified Fetch pre-Ledger productive-ingress validation",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn certified_fetch_postdequeue_runtime_receipt(",
+        "inbound\n        .ingress_ownership()",
+        "None",
+        "certified Fetch post-dequeue Runtime-receipt validation",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn certified_fetch_postdequeue_runtime_receipt(",
+        "if !certified_fetch_ingress_ownership_is_exact(inbound, ownership) {",
+        "if false {",
+        "certified Fetch post-dequeue Runtime-receipt validation",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn certified_fetch_postdequeue_runtime_receipt(",
+        ".leader_wire_runtime_receipt()",
+        ".leader_wire_token()",
+        "certified Fetch post-dequeue Runtime-receipt validation",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn certified_fetch_postdequeue_runtime_receipt(",
+        "receipt.token() != expected_token",
+        "receipt.token() == expected_token",
+        "certified Fetch post-dequeue Runtime-receipt validation",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn certified_fetch_postdequeue_runtime_receipt(",
+        "receipt.owner().causal_lifecycle_key() != expected_token.identity_hash()",
+        "receipt.owner().causal_lifecycle_key() == expected_token.identity_hash()",
+        "certified Fetch post-dequeue Runtime-receipt validation",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn certified_fetch_postdequeue_runtime_receipt(",
+        "receipt.owner().admission_ordinal() != expected_token.scheduler_ordinal()",
+        "receipt.owner().admission_ordinal() == expected_token.scheduler_ordinal()",
+        "certified Fetch post-dequeue Runtime-receipt validation",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) struct CertifiedFetchBodyPersistencePreLedgerRestartError {",
+        "failure: CertifiedFetchPreLedgerProductiveIngressErrorV1,",
+        "failure: (),",
+        "certified Fetch pre-Ledger restart owner",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn complete_certified_fetch_body_persistence(",
+        "output_guard.close_admission_for_restart();",
+        "let _ = &output_guard;",
+        "complete_certified_fetch_body_persistence must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn complete_certified_fetch_body_persistence(",
+        "restart_invalid_leader_wire!(error, receipt);",
+        "retry!(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity, receipt);",
+        "certified Fetch pre-dequeue invalid-owner fail-stop",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn complete_certified_fetch_body_persistence(",
+        "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(",
+        "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(",
+        "certified Fetch post-dequeue restart boundary",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn complete_certified_fetch_body_persistence(",
+        "durable_registry.commit_after_exact_dequeue(dequeued);",
+        "drop(dequeued);",
+        "complete_certified_fetch_body_persistence must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/mod.rs",
+        "fn dequeue_selected_locked(",
+        "Self::bind_leader_wire_runtime_ownership_locked(state, &mut staged_ownership)?;",
+        "let _ = (&state, &mut staged_ownership);",
+        "sole exact-dequeue leader-wire Runtime receipt mint",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/mod.rs",
+        "fn bind_leader_wire_runtime_ownership_locked(",
+        "ownership.install_leader_wire_runtime_receipt(receipt)",
+        "ownership.leader_wire_runtime_receipt().is_some()",
+        "leader-wire Runtime receipt mint",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+        "fn settle_parked_certified_fetch_body_persistence(",
+        "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(",
+        "CertifiedFetchBodyPersistenceCompletionError::Retry(",
+        "certified Fetch Phase-B turn result split",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+        "fn settle_parked_certified_fetch_body_persistence(",
+        "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(",
+        "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(",
+        "certified Fetch Phase-B turn result split",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
@@ -2913,6 +3237,139 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "lifecycle Decision Apply settlement must preserve its intentional unguarded final publication",
     ),
     (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(super) fn classify_selected_certified_response_priority(",
+        "occurrence.queue_gate() == FairV2IngressQueueGateVerdict::Blocked",
+        "occurrence.queue_gate() != FairV2IngressQueueGateVerdict::Blocked",
+        "closed selected certified-response priority census",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(super) fn classify_selected_certified_response_priority(",
+        "let mut selected_priority = SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority;",
+        "let mut selected_priority = SelectedCertifiedResponsePriorityV1::OrdinaryClaimed;",
+        "closed selected certified-response priority census",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(super) fn classify_selected_certified_response_priority(",
+        "Err(error) if response_error_is_remote_nonpriority(&error) => continue,",
+        "Err(_) => continue,",
+        "closed selected certified-response priority census",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(super) fn classify_selected_certified_response_priority(",
+        ".insert(occurrence.physical_admission_ordinal(), candidate)\n                .is_some()",
+        ".insert(occurrence.physical_admission_ordinal(), candidate)\n                .is_none()",
+        "closed selected certified-response priority census",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(super) fn classify_selected_certified_response_priority(",
+        "if !exact {",
+        "if false {",
+        "closed selected certified-response priority census",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs",
+        "pub(super) fn into_ordinary_turn_cut(",
+        "bound_context: Some(bound_context),",
+        "bound_context: None,",
+        "exact current-context cut widening",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs",
+        "pub(super) fn into_ordinary_turn_cut(",
+        ".position(|source| source == selected_source)",
+        ".rposition(|source| source == selected_source)",
+        "exact current-context cut widening",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        "fn exactly_matches_fresh_staged_append(",
+        "producer != staged.high_water",
+        "producer == staged.high_water",
+        "gap-aware fresh Serve staged append",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        "fn exactly_matches_fresh_staged_append(",
+        "current.admission_waits != staged.admission_waits",
+        "current.admission_waits == staged.admission_waits",
+        "gap-aware fresh Serve staged append",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        "fn exactly_matches_fresh_staged_append(",
+        "carrier.matches_record(record, metadata, work.digest)",
+        "true",
+        "gap-aware fresh Serve staged append",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        "fn exactly_matches_fresh_staged_append(",
+        "serve_used.checked_add(1)",
+        "serve_used.checked_add(2)",
+        "gap-aware fresh Serve staged append",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "fn classify_and_defer_validated_marker(",
+        "self.expected.height() != context.height",
+        "self.expected.height() == context.height",
+        "move-only pending-Kura marker deferral",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "fn classify_and_defer_validated_marker(",
+        "certificate.proposal_round != *round",
+        "certificate.proposal_round == *round",
+        "move-only pending-Kura marker deferral",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+        "fn validate_body<S: V2EffectServices>(",
+        "self.ensure_pending_slot()?;",
+        "let _ = self.remaining_capacity();",
+        "direct pending-Kura Validate-to-Apply child",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+        "fn validate_body<S: V2EffectServices>(",
+        ".restore_deferred_validated_marker(marker);",
+        ".discard_deferred_validated_marker(marker);",
+        "direct pending-Kura Validate-to-Apply child",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "pub(crate) trait EffectRuntime {",
+        "runtime cannot commit a deferred pending-Kura validation marker",
+        "runtime accepted a deferred pending-Kura validation marker",
+        "fail-closed generic pending-Kura validation hook",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "fn consume_one<S: V2EffectServices>(",
+        "result?;",
+        "let _ = result;",
+        "pending-Kura outer-stage-before-direct-child dispatch",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) struct CertifiedFetchBodyPersistencePreLedgerRestartError {",
+        "self.completion.work_id()",
+        "EffectWorkId::new(0)",
+        "certified Fetch pre-Ledger restart owner",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+        "fn settle_parked_certified_fetch_body_persistence(",
+        "work_id = error.work_id().get(),",
+        "work_id = 0,",
+        "certified Fetch Phase-B RestartRequiredBeforeLedger branch",
+    ),
+    (
         "scripts/run_sumeragi_v2_release_gates.sh",
         "required_production_liveness_tests=(",
         "sumeragi::v2_block_sync::tests::catch_up_is_strictly_sequential_across_contexts",
@@ -2924,7 +3381,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 339
+) == 399
 
 
 @pytest.mark.parametrize(

@@ -3139,6 +3139,22 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "FairIngressTurnContextCut::Lifecycle(cut)",
         ),
     )
+    widen = item("ingress", "into_ordinary_turn_cut")
+    require_order(
+        "ingress",
+        widen,
+        "exact current-context cut widening",
+        (
+            "let Self { queue, _service_guard, physical_cut, bound_context, geometry, selector_occurrences, pending_identities: _, leader_wire_projection, selected_identity, selected_positions, selected_disposition, } = self",
+            "let selected_physical_ordinal = selected_identity.physical_admission_ordinal",
+            "source_for_frozen_ordinal(&geometry, selected_physical_ordinal)",
+            ".position(|source| source == selected_source)",
+            "FairIngressTurnCut {",
+            "queue, _service_guard, physical_cut, geometry, selector_occurrences, leader_wire_projection",
+            "bound_context: Some(bound_context)",
+            "selected_source_index, selected_physical_ordinal, selected_positions, selected_disposition",
+        ),
+    )
     exact_dequeue = item("ingress", "dequeue_exact_retaining")
     require_order(
         "ingress",
@@ -3181,7 +3197,15 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "selected_ingress_is_current_certified_serve(",
             "selected_ingress_is_certified_body_response(",
             "cut.narrow_to_lifecycle(expected_context)",
-            "selected_cut_is_recovered_decision_fetch(&cut)",
+            "FairIngressTurnContextCut::Ordinary(cut)",
+            "FairIngressTurnContextCut::Lifecycle(cut)",
+            "classify_selected_certified_response_priority(&cut)",
+            "SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority",
+            "cut.into_ordinary_turn_cut()",
+            "SelectedCertifiedResponsePriorityV1::OrdinaryClaimed",
+            "capture_lifecycle_ingress_selector(cut)",
+            "self.drive_certified_fetch_ingress_selector(selector, runner)",
+            "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
             "prepare_recovered_decision_fetch_from_selected_cut(cut)",
             "self.drive_recovered_ingress_selector(selector, runner)",
         ),
@@ -3191,7 +3215,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         for token, count in (
             (
                 "dequeue_prepared_ordinary_ingress(",
-                3,
+                4,
             ),
             ("ProductionLifecycleIngressTurnV1::PassThrough(runner)", 2),
         ):
@@ -3336,16 +3360,75 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
                 f"surface {forbidden!r}"
             )
 
-    selected_family = item("selector", "selected_cut_is_recovered_decision_fetch")
-    require_tokens(
+    selected_priority_start = sources["selector"].find(
+        "pub(crate) enum SelectedCertifiedResponsePriorityV1 {"
+    )
+    selected_priority_end = sources["selector"].find(
+        "impl LifecycleIngressSelectorError", selected_priority_start
+    )
+    selected_priority_region = (
+        sources["selector"][selected_priority_start:selected_priority_end]
+        if selected_priority_start >= 0 and selected_priority_end > selected_priority_start
+        else ""
+    )
+    for token in (
+        "SelectedCertifiedResponsePriorityV1",
+        "DefinitelyNonPriority",
+        "OrdinaryClaimed",
+        "RecoveredClaimed",
+    ):
+        if token not in selected_priority_region:
+            errors.append(
+                f"{paths['selector']}: closed selected certified-response priority "
+                f"enum omits {token!r}"
+            )
+    for source_name in ("selector", "driver"):
+        if "selected_cut_is_recovered_decision_fetch" in sources[source_name]:
+            errors.append(
+                f"{paths[source_name]}: retired boolean certified-response selector remains"
+            )
+
+    selected_family = item(
+        "selector", "classify_selected_certified_response_priority"
+    )
+    require_order(
         "selector",
         selected_family,
-        "selected response-family-only recovery census",
+        "closed selected certified-response priority census",
         (
-            "let Some(selected_request_hash) = selected_request_hash else { return Ok(false); }",
-            "if response.request_hash != selected_request_hash { continue; }",
+            "self.validate_lifecycle_ingress_selector_authority()",
+            "cut.selected_identity().context() != context",
+            "let selected_ordinal = cut.selected_identity().physical_admission_ordinal()",
+            "let selected_request_hash = cut.selector_occurrences()",
+            "return Ok(SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority)",
+            "for occurrence in cut.selector_occurrences()",
+            "occurrence.queue_gate() == FairV2IngressQueueGateVerdict::Blocked",
+            "let drainable = occurrence.is_obsolete()",
+            "message.validate_version().is_err()",
+            "if !drainable || message.validate_version().is_err()",
+            "response.request_hash != selected_request_hash",
+            "probe_certified_response_priority(response, responder)",
+            "Ok(CertifiedResponsePriorityProbe::DefinitelyNonPriority(_)) => continue",
+            "PreparedCertifiedResponseCandidate::Ordinary(candidate)",
+            "PreparedCertifiedResponseCandidate::Recovered(candidate)",
+            "response_error_is_remote_nonpriority(&error) => continue",
+            "Err(error) =>",
+            "LifecycleIngressSelectorError::ExecutorAuthority",
+            "response_candidates.insert(occurrence.physical_admission_ordinal(), candidate)",
+            ".is_some()",
+            "LifecycleIngressSelectorError::InvalidOccurrenceIdentity",
             "lowest_physical_ordinal_per_family(",
-            "cut.pre_cut_is_intact()",
+            "let mut selected_priority = SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority",
+            "revalidate_certified_response_priority_candidate(",
+            "revalidate_recovered_decision_fetch_response_candidate(",
+            "if !exact",
+            "LifecycleIngressSelectorError::CandidateRevalidationDrift",
+            "if ordinal == selected_ordinal",
+            "SelectedCertifiedResponsePriorityV1::OrdinaryClaimed",
+            "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
+            "self.validate_lifecycle_ingress_selector_authority()",
+            "if !cut.pre_cut_is_intact()",
+            "Ok(selected_priority)",
         ),
     )
     family_prepare = item(
@@ -3388,16 +3471,16 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         (
             "add_recovered_next_vote_completion_for_test(0xCD)",
             "mixed_sign_ordinal > first_summary.0",
-            "bind_body_store_to_recovered_completion_io_for_test(",
+            "bind_body_store_to_lifecycle_completion_io_for_test(",
             "install_local_signer_for_test(",
             "dispatch_completion_for_test(",
             "ProductionCompletionDispatchV1::SignQueued",
-            "recovered_completion_selection_is_exact_for_test(",
+            "lifecycle_completion_selection_is_exact_for_test(",
             "output_guard.close_admission_for_restart()",
             "output_guard.restart_required()",
             "drop(first)",
             "let mut reopened = reopened",
-            "bind_body_store_to_recovered_completion_io_for_test(",
+            "bind_body_store_to_lifecycle_completion_io_for_test(",
             "dispatch_completion_for_test(",
             "ProductionCompletionDispatchV1::FetchDispatched",
             "services.has_pending_exact_output()",
@@ -3567,7 +3650,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ],
         "composite recovered Completion Sign selection behavior",
         (
-            "dispatch_completion_with_runner_debt(&services, &mut executor, 0,)",
+            "dispatch_completion_with_runner_debt(&mut services, &mut executor, 0,)",
             "ProductionCompletionDispatchV1::SignQueued { ordinal: paired }",
             "state.records[&paired].state",
             "LifecycleState::Claimed(_)",
@@ -3587,7 +3670,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "park_direct_broadcast_before_fence_for_test(direct, fence)",
             "owner.classify_completion_ready_work(fence)",
             "ProductionCompletionReadyWorkV1::CompletionIo",
-            "dispatch_completion_with_runner_debt(&services, &mut executor, 0)",
+            "dispatch_completion_with_runner_debt(&mut services, &mut executor, 0)",
             "ProductionCompletionDispatchV1::SignQueued { ordinal: paired }",
             "state.records[&direct].state",
             "LifecycleState::Ready",
@@ -3945,9 +4028,10 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "PreGate::Ordinary(ordinary_turn)",
             "drain_one_ordinary_completion_after_lifecycle_pass_through",
             "PreGate::Selected(selected)",
-            "PreGate::Ready(ready)",
-            "producer_claim == LifecycleProducerClaimDispositionV1::Eligible",
-            "activated.drive_ready_completion_turn(ready)",
+            "PreGate::Ready(ready) if producer_claim.permits_ready_completion()",
+            "producer_claim.required_ready_ordinal()",
+            "drive_ready_completion_turn_requiring_ordinal(ready, ordinal)",
+            "None => activated.drive_ready_completion_turn(ready)",
             "completion_selection_stops_batch(&selected)",
             "LifecycleV2IngressDrainDispositionV1::ready(producer_claim)",
             "LifecycleRunnerRankTarget::Runtime",
@@ -4719,6 +4803,14 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "wal_identity: RecoveredWalFrameIdentity",
         "replay_evidence: RecoveredWalDecisionFetchReplayEvidenceV1",
         "effect: AdapterEffect",
+        "deferred_validated_marker: Option<DeferredPendingKuraValidatedMarkerV1>",
+        "pub(crate) struct DeferredPendingKuraValidatedMarkerV1",
+        "pub(in crate::sumeragi) struct PreparedPendingKuraValidatedApplyV1",
+        "prepared: super::PreparedDirectValidationSucceededApply",
+        "child_ownership: crate::sumeragi::v2_runtime::RuntimeEffectOwnership",
+        "_marker: DeferredPendingKuraValidatedMarkerV1",
+        "pub(crate) struct PendingKuraValidatedApplySuccessorV1",
+        "ownership: crate::sumeragi::v2_runtime::RuntimeEffectOwnership",
         "pub(in crate::sumeragi) struct InstalledPendingKuraApplyV1",
         "genesis: Option<crate::sumeragi::v2_effects::VerifiedPendingGenesisNexusAmxContext>",
     ):
@@ -4728,7 +4820,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
                 f"omit {required!r}"
             )
     for forbidden in (
-        "derive(Clone)",
+        "#[derive(Clone)]",
         "derive(Copy)",
         "pub startup:",
         "pub expected:",
@@ -4738,6 +4830,14 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "pub wal_identity:",
         "pub replay_evidence:",
         "pub effect:",
+        "pub(crate) effect:",
+        "pub(in crate::sumeragi) effect:",
+        "pub(crate) child_ownership:",
+        "pub(in crate::sumeragi) child_ownership:",
+        "pub(crate) _marker:",
+        "pub(in crate::sumeragi) _marker:",
+        "pub(crate) ownership:",
+        "pub(in crate::sumeragi) ownership:",
         "pub genesis:",
         "fn into_parts(",
         "fn effect(",
@@ -4789,7 +4889,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "SerializedV2Runtime::new_with_lifecycle_ordinals(",
             "returned_effects.len() == 1",
             "replay_evidence.exactly_matches_recovered_decision_fetch",
-            "PreparedRecoveredPendingKuraApplyReplayV1 { expected, verified, wal_identity, replay_evidence, effect, }",
+            "PreparedRecoveredPendingKuraApplyReplayV1 { expected, verified, wal_identity, replay_evidence, effect, deferred_validated_marker: None, }",
         ),
     )
     pending_attach = item("pending_kura", "with_pending_kura_apply_replay")
@@ -4812,11 +4912,256 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         pending_install,
         "pending-Kura verification-before-dispatch install",
         (
+            "let Some(deferred_validated_marker) = deferred_validated_marker",
             "executor.context() != verified.context()",
             "replay_evidence.exactly_matches_recovered_decision_fetch",
             "let effects = vec![effect]",
-            "executor.verify_pending_kura_apply_replay(expected, &effects)?",
+            "executor.verify_pending_kura_apply_replay( expected, &effects, deferred_validated_marker, )?",
             "executor.consume_pending_tip_recovery_effects(effects, services)?",
+        ),
+    )
+    pending_marker_defer = item(
+        "pending_kura", "classify_and_defer_validated_marker"
+    )
+    require_order(
+        "pending_kura",
+        pending_marker_defer,
+        "move-only pending-Kura marker deferral",
+        (
+            "replay_evidence.exactly_matches_recovered_decision_fetch(",
+            "let AdapterEffect::FetchBody { round, subject, manifest: advertised_manifest, certificate: Some(certificate), .. } = &self.effect",
+            "if key != expected_key",
+            "if self.deferred_validated_marker.is_some()",
+            "self.expected.context_id() != context.id()",
+            "self.expected.height() != context.height",
+            "self.expected.block_hash() != subject.block_hash",
+            "certificate.phase != crate::sumeragi::v2::wire::GlobalPhase::Commit",
+            "certificate.proposal_round != *round",
+            "certificate.subject != *subject",
+            "certificate.validate(context).is_err()",
+            "manifest.validate(context).is_err()",
+            "manifest.round != *round",
+            "manifest.subject != *subject",
+            "advertised_manifest.as_ref().is_some_and(|advertised| advertised != manifest)",
+            "durable.context_id() != context.id()",
+            "durable.round() != *round",
+            "durable.subject() != *subject",
+            "durable.manifest_hash() != iroha_crypto::HashOf::new(manifest)",
+            "validated.durable() != durable",
+            "validated.execution_commitment() != certificate.execution_commitment",
+            "self.deferred_validated_marker = Some(DeferredPendingKuraValidatedMarkerV1 {",
+            "manifest_hash: iroha_crypto::HashOf::new(manifest)",
+            "validated: validated.clone()",
+            "certificate: certificate.clone()",
+            "Ok(true)",
+        ),
+    )
+    pending_marker_exact = item("pending_kura", "exactly_matches_recovery")
+    require_order(
+        "pending_kura",
+        pending_marker_exact,
+        "exact pending-Kura marker authority",
+        (
+            "self.tag == replay_tag",
+            "self.round == manifest.round",
+            "self.subject == manifest.subject",
+            "self.subject.block_hash == expected.block_hash()",
+            "expected.context_id() == context.id()",
+            "expected.height() == context.height",
+            "self.manifest_hash == iroha_crypto::HashOf::new(manifest)",
+            "self.durable == *durable",
+            "self.validated == *validated",
+            "self.validated.durable() == &self.durable",
+            "self.certificate == *certificate",
+            "self.certificate.phase == crate::sumeragi::v2::wire::GlobalPhase::Commit",
+            "self.certificate.proposal_round == self.round",
+            "self.certificate.subject == self.subject",
+            "self.certificate.execution_commitment == self.validated.execution_commitment()",
+            "self.certificate.validate(context).is_ok()",
+        ),
+    )
+    pending_marker_apply = item("pending_kura", "prepare_apply")
+    require_order(
+        "pending_kura",
+        pending_marker_apply,
+        "sealed pending-Kura ValidationCompleted Apply preview",
+        (
+            "let AdapterEffect::ValidateBody { tag, round, subject, } = predecessor",
+            "*tag != self.tag || *round != self.round || *subject != self.subject",
+            "ownership.binds_durable_decision_authority(",
+            "self.certificate.round",
+            "self.certificate.proposal_round",
+            "self.subject",
+            "self.certificate.execution_commitment",
+            "ownership.exact_pending_adapter_effect_binding(predecessor)",
+            "adapter.prepare_direct_validation_succeeded(",
+            "DirectValidationSucceededPreparation::Apply(prepared)",
+            "let apply_effect = prepared.apply_effect().clone()",
+            "AdapterEffect::Apply { tag, subject, certificate, }",
+            "certificate == &self.certificate",
+            "validate_pending.project_validate_apply_successor(predecessor, &apply_effect)",
+            "ownership.rebind_as_inherited_adapter_effect(&apply_effect)",
+            "child_ownership.exact_pending_adapter_effect_binding(&apply_effect)",
+            "Some(&child_pending)",
+            "PreparedPendingKuraValidatedApplyV1 { prepared, child_ownership, _marker: self, }",
+        ),
+    )
+    if pending_marker_apply is not None:
+        for forbidden in (
+            "reducer::Event::ValidationCompleted",
+            "AdapterEffect::Apply { tag: self.tag",
+            "RuntimeEffectOwnership::new",
+            "periodic_timer",
+        ):
+            if forbidden in pending_marker_apply.source:
+                errors.append(
+                    f"{paths['pending_kura']}:{pending_marker_apply.line}: sealed "
+                    f"pending-Kura validation preview contains forbidden raw mint {forbidden!r}"
+                )
+    pending_marker_commit = item("pending_kura", "commit")
+    require_order(
+        "pending_kura",
+        pending_marker_commit,
+        "infallible pending-Kura validation commit",
+        (
+            "let super::PreparedDirectValidationSucceededApply { _adapter: adapter, next_reducer, next_registry, event, core_effect, apply_effect, next_fence_generation, } = prepared",
+            "child_ownership.exactly_binds_adapter_effect(&apply_effect)",
+            "adapter.reducer = next_reducer",
+            "adapter.registry = next_registry",
+            "adapter.reducer_fence_generation = next_fence_generation",
+            "adapter.record_reducer_outcome(",
+            "adapter.log_body_progress(",
+            "PendingKuraValidatedApplySuccessorV1 { effect: apply_effect, ownership: child_ownership, }",
+        ),
+    )
+    pending_child_release = item("pending_kura", "consume_for_executor")
+    require_order(
+        "pending_kura",
+        pending_child_release,
+        "executor-permit pending-Kura Apply child release",
+        (
+            "_permit: crate::sumeragi::v2_effects::PendingKuraApplySuccessorExecutorPermitV1",
+            "(self.effect, self.ownership)",
+        ),
+    )
+    pending_runtime_prepare = item(
+        "runtime", "prepare_pending_kura_validated_apply"
+    )
+    require_order(
+        "runtime",
+        pending_runtime_prepare,
+        "no-clock pending-Kura validation runtime seam",
+        (
+            "self.fail_closed",
+            "self.clocks_armed",
+            "self.ingress.len() != 0",
+            "self.pending_effect_ownership.is_some()",
+            "self.last_scheduler_ownership.is_some()",
+            "!self.pending_leader_wire_terminals.is_empty()",
+            "marker.prepare_apply(&mut self.driver, predecessor, ownership)",
+        ),
+    )
+    pending_runtime_hooks = rust_items(
+        sources["effects"], "commit_pending_kura_validated_apply"
+    )
+    pending_runtime_default = next(
+        (
+            rust_item
+            for rust_item in pending_runtime_hooks
+            if rust_item.brace_context
+            == (("pub", "(", "crate", ")", "trait", "EffectRuntime"),)
+        ),
+        None,
+    )
+    pending_runtime_serialized = next(
+        (
+            rust_item
+            for rust_item in pending_runtime_hooks
+            if rust_item.brace_context
+            == (("impl", "EffectRuntime", "for", "SerializedV2Runtime"),)
+        ),
+        None,
+    )
+    if pending_runtime_default is None or pending_runtime_serialized is None or len(
+        pending_runtime_hooks
+    ) != 2:
+        errors.append(
+            f"{paths['effects']}: require exactly the fail-closed EffectRuntime "
+            "default and SerializedV2Runtime pending-Kura commit override"
+        )
+    require_order(
+        "effects",
+        pending_runtime_default,
+        "fail-closed generic pending-Kura validation hook",
+        (
+            "marker: super::v2::DeferredPendingKuraValidatedMarkerV1",
+            "Err(( marker",
+            '"runtime cannot commit a deferred pending-Kura validation marker"',
+        ),
+    )
+    require_order(
+        "effects",
+        pending_runtime_serialized,
+        "serialized pending-Kura validation prepare/commit override",
+        (
+            "self.prepare_pending_kura_validated_apply(marker, predecessor, ownership)",
+            "Ok(prepared) => Ok(prepared.commit())",
+            "Err((marker, error)) => Err((marker, error.to_string()))",
+        ),
+    )
+    pending_replay_verify = item("effects", "verify_pending_kura_apply_replay")
+    require_order(
+        "effects",
+        pending_replay_verify,
+        "pending-Kura deferred marker replay installation",
+        (
+            "deferred_validated_marker: super::v2::DeferredPendingKuraValidatedMarkerV1",
+            "self.pending_tip_recovery.is_some()",
+            "let decision = self.runtime.replayed_decision_key()",
+            "let [ AdapterEffect::FetchBody",
+            "self.runtime.verify_certificate(&self.context, certificate)",
+            "verify_pending_kura_apply_parts_with_marker(",
+            "deferred_validated_marker",
+            "self.pending_tip_recovery = Some(evidence)",
+        ),
+    )
+    pending_validate = item("effects", "validate_body")
+    require_order(
+        "effects",
+        pending_validate,
+        "direct pending-Kura Validate-to-Apply child",
+        (
+            "recovery.stage() != PendingKuraApplyRecoveryStage::DeterministicValidation",
+            "recovery.replay_tag() != tag",
+            "recovery.durable_round() != round",
+            "recovery.durable_subject() != subject",
+            "recovery.durable_receipt() != &receipt",
+            "self.validated_bodies.get(&key) != Some(recovery.validated_receipt())",
+            "self.ensure_pending_slot()?",
+            "let _next_apply_work = self.plan_work_id()?",
+            "take_deferred_validated_marker()?",
+            "self.runtime.commit_pending_kura_validated_apply(marker, &effect, &ownership)",
+            "restore_deferred_validated_marker(marker)",
+            "EffectExecutorError::PendingApplyRecoveryMismatch(error)",
+            "return Ok(Some(successor))",
+        ),
+    )
+    pending_consume = item("effects", "consume_one")
+    require_order(
+        "effects",
+        pending_consume,
+        "pending-Kura outer-stage-before-direct-child dispatch",
+        (
+            "let recovery_transition = self.pending_tip_recovery.as_ref()",
+            "pending_kura_successor = self.validate_body(tag, round, subject, ownership, services)?",
+            "result?",
+            "if let Some(stage) = recovery_transition",
+            ".stage = stage",
+            "if let Some(successor) = pending_kura_successor",
+            "successor.consume_for_executor(PendingKuraApplySuccessorExecutorPermitV1::new())",
+            "self.ensure_pending_tip_recovery_effect_is_local(&effect)?",
+            "self.consume_one(effect, ownership, services)",
+            "EffectExecutorError::Contract(format!(",
         ),
     )
     pending_owner = item("coordinator_support", "with_pending_kura_apply_replay")

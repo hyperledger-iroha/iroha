@@ -3,8 +3,8 @@
 use super::*;
 use crate::sumeragi::v2_lifecycle_coordinator::{
     AdmissionDecision, CertifiedServeSchedulerObservationV1, LifecycleLedgerV1,
-    LifecycleValidateSidecarDriveV1, ReadyValidateSuccessorDispatchV1, WaitToken,
-    claim_certified_serve_turn_v1,
+    LifecycleValidateSidecarDriveV1, ReadyValidateSuccessorDispatchV1,
+    SelectedCertifiedResponsePriorityV1, WaitToken, claim_certified_serve_turn_v1,
 };
 #[cfg(test)]
 pub(in crate::sumeragi) use crate::sumeragi::v2_runner::ordinary_ingress_consumer::ProductionPreparedCertifiedServeTestSettlementV1;
@@ -1062,6 +1062,21 @@ impl LaunchedProductionLifecycleV1 {
                 ));
                 ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRetry
             }
+            Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(
+                error,
+            )) => {
+                iroha_logger::error!(
+                    reason = error.reason(),
+                    detail = error.detail(),
+                    work_id = error.work_id().get(),
+                    "ordinary certified-Fetch Phase B found invalid productive ingress"
+                );
+                services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
+                drop(error);
+                ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRestartRequired
+            }
             Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequired(error)) => {
                 iroha_logger::error!(
                     reason = error.reason(),
@@ -1074,6 +1089,18 @@ impl LaunchedProductionLifecycleV1 {
                     .lifecycle_output_guard()
                     .close_admission_for_restart();
                 drop(error);
+                ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRestartRequired
+            }
+            Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(
+                error,
+            )) => {
+                iroha_logger::error!(
+                    %error,
+                    "ordinary certified-Fetch queue handoff requires cold restart"
+                );
+                services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
                 ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRestartRequired
             }
             Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(
@@ -1589,13 +1616,16 @@ impl LaunchedProductionLifecycleV1 {
                 &self.services,
             ),
             FairIngressTurnContextCut::Lifecycle(cut) => {
-                let recovered = match self.executor.selected_cut_is_recovered_decision_fetch(&cut) {
-                    Ok(recovered) => recovered,
+                let selected_priority = match self
+                    .executor
+                    .classify_selected_certified_response_priority(&cut)
+                {
+                    Ok(selected_priority) => selected_priority,
                     Err(error) => {
                         let reason = error.detail();
                         iroha_logger::error!(
                             %reason,
-                            "Sumeragi v2 recovered Fetch selection failed closed"
+                            "Sumeragi v2 certified-response priority classification failed closed"
                         );
                         self.close_output_for_restart();
                         drop(cut);
@@ -1605,43 +1635,57 @@ impl LaunchedProductionLifecycleV1 {
                         );
                     }
                 };
-                if !recovered {
-                    let selector = match self.executor.capture_lifecycle_ingress_selector(cut) {
-                        Ok(selector) => selector,
-                        Err(error) => {
-                            let reason = error.detail();
-                            iroha_logger::error!(
-                                %reason,
-                                "ordinary certified-Fetch selector capture failed closed"
-                            );
-                            self.close_output_for_restart();
-                            drop(runner);
-                            return ProductionLifecycleIngressTurnV1::Selected(
-                                ProductionLifecycleIngressSelectionV1::RestartRequired,
-                            );
-                        }
-                    };
-                    return self.drive_certified_fetch_ingress_selector(selector, runner);
-                }
-                let selector = match self
-                    .executor
-                    .prepare_recovered_decision_fetch_from_selected_cut(cut)
-                {
-                    Ok(selector) => selector,
-                    Err(error) => {
-                        let reason = error.detail();
-                        iroha_logger::error!(
-                            %reason,
-                            "Sumeragi v2 recovered Fetch preparation failed closed"
-                        );
-                        self.close_output_for_restart();
-                        drop(runner);
-                        return ProductionLifecycleIngressTurnV1::Selected(
-                            ProductionLifecycleIngressSelectionV1::RestartRequired,
-                        );
+                match selected_priority {
+                    SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority => {
+                        dequeue_prepared_ordinary_ingress(
+                            &ingress,
+                            cut.into_ordinary_turn_cut(),
+                            runner,
+                            None,
+                            terminal_subject,
+                            &self.services,
+                        )
                     }
-                };
-                self.drive_recovered_ingress_selector(selector, runner)
+                    SelectedCertifiedResponsePriorityV1::OrdinaryClaimed => {
+                        let selector = match self.executor.capture_lifecycle_ingress_selector(cut) {
+                            Ok(selector) => selector,
+                            Err(error) => {
+                                let reason = error.detail();
+                                iroha_logger::error!(
+                                    %reason,
+                                    "ordinary certified-Fetch selector capture failed closed"
+                                );
+                                self.close_output_for_restart();
+                                drop(runner);
+                                return ProductionLifecycleIngressTurnV1::Selected(
+                                    ProductionLifecycleIngressSelectionV1::RestartRequired,
+                                );
+                            }
+                        };
+                        self.drive_certified_fetch_ingress_selector(selector, runner)
+                    }
+                    SelectedCertifiedResponsePriorityV1::RecoveredClaimed => {
+                        let selector = match self
+                            .executor
+                            .prepare_recovered_decision_fetch_from_selected_cut(cut)
+                        {
+                            Ok(selector) => selector,
+                            Err(error) => {
+                                let reason = error.detail();
+                                iroha_logger::error!(
+                                    %reason,
+                                    "Sumeragi v2 recovered Fetch preparation failed closed"
+                                );
+                                self.close_output_for_restart();
+                                drop(runner);
+                                return ProductionLifecycleIngressTurnV1::Selected(
+                                    ProductionLifecycleIngressSelectionV1::RestartRequired,
+                                );
+                            }
+                        };
+                        self.drive_recovered_ingress_selector(selector, runner)
+                    }
+                }
             }
         }
     }

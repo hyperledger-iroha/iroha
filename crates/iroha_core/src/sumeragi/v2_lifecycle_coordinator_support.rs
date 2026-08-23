@@ -288,12 +288,15 @@ enum SourceId {
     ConcreteAdmission,
     Coordinator,
     Effects,
+    FairIngress,
+    IngressPosition,
     KuraTerminalOutcomes,
     LaneWork,
     Launch,
     Ledger,
     LifecycleOpen,
     LifecycleRecovery,
+    PendingKura,
     Projection,
     Registry,
     RegistryRecovery,
@@ -328,12 +331,15 @@ impl SourceId {
             "concrete_admission" => Self::ConcreteAdmission,
             "coordinator" => Self::Coordinator,
             "effects" => Self::Effects,
+            "fair_ingress" => Self::FairIngress,
+            "ingress_position" => Self::IngressPosition,
             "kura_terminal_outcomes" => Self::KuraTerminalOutcomes,
             "lane_work" => Self::LaneWork,
             "launch" => Self::Launch,
             "ledger" => Self::Ledger,
             "lifecycle_open" => Self::LifecycleOpen,
             "lifecycle_recovery" => Self::LifecycleRecovery,
+            "pending_kura" => Self::PendingKura,
             "projection" => Self::Projection,
             "registry" => Self::Registry,
             "registry_recovery" => Self::RegistryRecovery,
@@ -380,6 +386,8 @@ fn source(id: SourceId) -> String {
         }
         SourceId::Coordinator => include_str!("v2_lifecycle_coordinator.rs").to_owned(),
         SourceId::Effects => reviewed_v2_effects_source_for_test().to_owned(),
+        SourceId::FairIngress => include_str!("mod.rs").to_owned(),
+        SourceId::IngressPosition => include_str!("v2_lifecycle_ingress_position.rs").to_owned(),
         SourceId::KuraTerminalOutcomes => {
             include_str!("../kura/autonomous_lifecycle_terminal_outcomes.rs").to_owned()
         }
@@ -392,6 +400,7 @@ fn source(id: SourceId) -> String {
             1,
         ),
         SourceId::LifecycleRecovery => include_str!("v2_lifecycle_recovery.rs").to_owned(),
+        SourceId::PendingKura => include_str!("v2_pending_kura_recovery.rs").to_owned(),
         SourceId::Projection => include_str!("v2_lifecycle_projection.rs").to_owned(),
         SourceId::Registry => reviewed_lifecycle_work_registry_source_for_test().to_owned(),
         SourceId::RegistryRecovery => {
@@ -683,7 +692,7 @@ fn parse_contracts() -> Result<Vec<Case>, String> {
             _ => return Err(format!("invalid source contract asset line {line_number}")),
         }
     }
-    if current.is_some() || cases.len() != 50 {
+    if current.is_some() || cases.len() != 52 {
         return Err(format!(
             "source contract asset must contain exactly 50 closed cases"
         ));
@@ -816,7 +825,7 @@ fn source_contract_case_ids_are_unique() {
         cases.iter().all(|case| ids.insert(case.id.as_str())),
         "source contract case IDs must be unique"
     );
-    assert_eq!(ids.len(), 50, "source contract inventory drifted");
+    assert_eq!(ids.len(), 52, "source contract inventory drifted");
     for id in ids {
         run_source_contract(id);
     }

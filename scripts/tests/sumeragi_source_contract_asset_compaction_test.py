@@ -12,13 +12,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 ASSET_PATH = ROOT / "crates/iroha_core/src/sumeragi/source_contracts_v1.txt"
 SUPPORT_PATH = ROOT / "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs"
-EXPECTED_CASE_COUNT = 50
+EXPECTED_CASE_COUNT = 52
 BASELINE_RUST_LINES = 5_195
-MAX_POSTIMAGE_RUST_LINES = 3_116
-MINIMUM_NET_REDUCTION = 2_079
-EXPECTED_ASSET_LENGTH = 399_750
-EXPECTED_ASSET_SHA256 = "948c178b786181001da9a012609e994d755740a567dcf6685183fcf02c811804"
-EXPECTED_CASE_IDS_SHA256 = "553b82a2f629076e5f47e5259475a78e1ebb5de017ae6a895dfdff53a33e8f69"
+MAX_POSTIMAGE_RUST_LINES = 3_125
+MINIMUM_NET_REDUCTION = 2_070
+EXPECTED_ASSET_LENGTH = 465_885
+EXPECTED_ASSET_SHA256 = "eb4e7208a2eed03decc328c9978f703cd216b17af7137ff0d4c604cc13f41e61"
+EXPECTED_CASE_IDS_SHA256 = "c00f7bf8c8c4a38b7cfa0a456ee10ec2bb8573ce6aac5330f5d377025ab298b6"
 
 HOST_PREIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "fe0afaffcbabfeb1d2fdae88d871e380ca1484c80cc2cd0d3a8ce492c6949446",
@@ -32,7 +32,7 @@ HOST_POSTIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "23609776f8c036c9b31996796f4a2573d5b89d0abd8e2d38160cd33698ba359a",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "b736a07a6e53fcfcb5a74cb55a1a13f6822d0763fe978c3563190c3f38505cae",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "c6427c6b098be208556e08222f31507d024f5c63524fb43a5e5c7822b65711e7",
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "c6e0ae11de80ed757c696143b2ffc7c5efa15d535f4ec5aa8f8f88e815b37274",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "12750f0640b1d4cc0361b4567b7aef31fe94d8824bfbd151f6afe62f12ecdbb1",
 }
 
 MIGRATED_TESTS = {

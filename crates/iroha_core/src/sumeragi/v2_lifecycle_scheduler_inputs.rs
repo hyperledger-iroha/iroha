@@ -5005,6 +5005,7 @@ impl ProductionLifecycleOwnerV1 {
                 runtime,
                 body_store,
                 recovered_validate_retry_census,
+                None,
                 context.clone(),
                 requester,
                 Some(0),
@@ -5145,6 +5146,9 @@ impl ProductionLifecycleOwnerV1 {
         assert!(coordinator.ready_index.remove(&ordinal));
         record.state = LifecycleState::Waiting(WaitToken::new(source, 0));
         assert!(coordinator.observed_generation.insert(source, 0).is_none());
+        coordinator
+            .attach_empty_test_ledger(&root.join("ledger"))
+            .expect("attach the exact waiting-Fetch lifecycle ledger");
         let body_store = crate::sumeragi::v2_body_store::V2BodyStore::open(
             root.join("body"),
             verified.context().clone(),
@@ -5241,6 +5245,10 @@ impl ProductionLifecycleOwnerV1 {
             self.coordinator.fault,
             self.coordinator.active_lease.is_some(),
         )
+    }
+    /// Opaque byte-stable view of the exact concrete registry for mutation checks.
+    pub(in crate::sumeragi) fn fetch_registry_snapshot_for_test(&self) -> String {
+        format!("{:?}", self.registry.registry_for_test())
     }
     /// Rejoin the sole executor owner, exact external wait, and recovered WAL
     /// registry carrier after the production request publication cut.

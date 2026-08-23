@@ -460,7 +460,8 @@ fn recovery_body_projection(
 /// links retain the repository's native 256-bit values unchanged and rely on
 /// the reviewed collision-resistance contract rather than truncation or a
 /// synthetic numeric projection.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(Clone))]
 #[must_use]
 pub(crate) struct PendingKuraApplyRecoveryEvidence {
     expected: PendingKuraApply,
@@ -475,7 +476,18 @@ pub(crate) struct PendingKuraApplyRecoveryEvidence {
     durable_receipt: DurableBodyReceipt,
     durable_frame_hash: Hash,
     validated_receipt: ValidatedBodyReceipt,
+    deferred_validated_marker: Option<super::v2::DeferredPendingKuraValidatedMarkerV1>,
     stage: PendingKuraApplyRecoveryStage,
+}
+
+/// Executor-private permit for consuming one committed pending-Kura Apply child.
+pub(in crate::sumeragi) struct PendingKuraApplySuccessorExecutorPermitV1 {
+    _private: (),
+}
+impl PendingKuraApplySuccessorExecutorPermitV1 {
+    fn new() -> Self {
+        Self { _private: () }
+    }
 }
 impl PendingKuraApplyRecoveryEvidence {
     /// Canonical Kura tip selected by startup recovery.
@@ -649,6 +661,27 @@ impl PendingKuraApplyRecoveryEvidence {
     }
     /// Check every redundant native identity link against the frozen context.
     pub(crate) fn is_exact(&self, context: &wire::HeightContext) -> bool {
+        let deferred_marker_is_exact = match self.stage() {
+            PendingKuraApplyRecoveryStage::CertifiedFetch
+            | PendingKuraApplyRecoveryStage::DurableStore
+            | PendingKuraApplyRecoveryStage::DeterministicValidation => self
+                .deferred_validated_marker
+                .as_ref()
+                .is_some_and(|marker| {
+                    marker.exactly_matches_recovery(
+                        context,
+                        self.expected(),
+                        self.replay_tag(),
+                        self.manifest(),
+                        self.durable_receipt(),
+                        self.validated_receipt(),
+                        self.commit_qc(),
+                    )
+                }),
+            PendingKuraApplyRecoveryStage::Apply
+            | PendingKuraApplyRecoveryStage::ApplicationDispatched
+            | PendingKuraApplyRecoveryStage::Completed => self.deferred_validated_marker.is_none(),
+        };
         context.id() == self.frozen_context_id()
             && context.height == self.frozen_height()
             && self.expected().context_id() == self.frozen_context_id()
@@ -681,6 +714,55 @@ impl PendingKuraApplyRecoveryEvidence {
             && self.durable_subject() == self.commit_subject()
             && self.durable_receipt().frame_hash() == self.durable_frame_hash()
             && self.validated_receipt().durable() == self.durable_receipt()
+            && deferred_marker_is_exact
+    }
+
+    fn take_deferred_validated_marker(
+        &mut self,
+    ) -> Result<super::v2::DeferredPendingKuraValidatedMarkerV1, EffectExecutorError> {
+        self.deferred_validated_marker.take().ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "pending Kura validation lost its move-only deferred marker".to_owned(),
+            )
+        })
+    }
+
+    fn restore_deferred_validated_marker(
+        &mut self,
+        marker: super::v2::DeferredPendingKuraValidatedMarkerV1,
+    ) {
+        debug_assert!(self.deferred_validated_marker.is_none());
+        self.deferred_validated_marker = Some(marker);
+    }
+
+    #[cfg(test)]
+    fn enter_apply_stage_for_test(&mut self) {
+        assert_eq!(
+            self.stage,
+            PendingKuraApplyRecoveryStage::CertifiedFetch,
+            "test-only Apply projection starts from sealed startup evidence",
+        );
+        let _marker = self
+            .deferred_validated_marker
+            .take()
+            .expect("test-only Apply projection consumes its deferred marker");
+        self.stage = PendingKuraApplyRecoveryStage::Apply;
+    }
+
+    #[cfg(test)]
+    fn advance_stage_for_test(&mut self, effect: &AdapterEffect) {
+        let next = self
+            .transition_for_effect(effect)
+            .expect("test-only recovery effect advances its exact stage");
+        if self.stage == PendingKuraApplyRecoveryStage::DeterministicValidation
+            && next == PendingKuraApplyRecoveryStage::Apply
+        {
+            let _marker = self
+                .deferred_validated_marker
+                .take()
+                .expect("test-only Validate transition consumes its deferred marker");
+        }
+        self.stage = next;
     }
     fn transition_for_effect(
         &self,
@@ -2805,6 +2887,26 @@ enum RestartEffectSource {
     DiagnosticOnly,
 }
 pub(crate) trait EffectRuntime {
+    /// Commit one exact deferred pending-Kura marker through the serialized adapter.
+    ///
+    /// Synthetic runtimes cannot mint this authority and retain the default
+    /// fail-closed result. Production returns one opaque predecessor-derived
+    /// Apply child only after the real direct validation transition commits.
+    fn commit_pending_kura_validated_apply(
+        &mut self,
+        marker: super::v2::DeferredPendingKuraValidatedMarkerV1,
+        _predecessor: &AdapterEffect,
+        _ownership: &RuntimeEffectOwnership,
+    ) -> Result<
+        super::v2::PendingKuraValidatedApplySuccessorV1,
+        (super::v2::DeferredPendingKuraValidatedMarkerV1, String),
+    > {
+        Err((
+            marker,
+            "runtime cannot commit a deferred pending-Kura validation marker".to_owned(),
+        ))
+    }
+
     /// Decide whether the runtime accepts one exact fair-ingress ownership carrier.
     fn can_admit_network_message_with_ingress_ownership(
         &self,
@@ -3098,6 +3200,21 @@ pub(crate) trait EffectRuntime {
     fn watchdog_threshold(&self) -> Duration;
 }
 impl EffectRuntime for SerializedV2Runtime {
+    fn commit_pending_kura_validated_apply(
+        &mut self,
+        marker: super::v2::DeferredPendingKuraValidatedMarkerV1,
+        predecessor: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<
+        super::v2::PendingKuraValidatedApplySuccessorV1,
+        (super::v2::DeferredPendingKuraValidatedMarkerV1, String),
+    > {
+        match self.prepare_pending_kura_validated_apply(marker, predecessor, ownership) {
+            Ok(prepared) => Ok(prepared.commit()),
+            Err((marker, error)) => Err((marker, error.to_string())),
+        }
+    }
+
     fn can_admit_network_message_with_ingress_ownership(
         &self,
         message: &wire::ConsensusMessageV2,
@@ -3735,6 +3852,9 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         mut runtime: SerializedV2Runtime,
         body_store: V2BodyStore,
         mut recovered_validate_retry_census: RecoveredDurableValidateRetryCensusV1,
+        mut pending_kura_apply_replay: Option<
+            &mut super::v2::PreparedRecoveredPendingKuraApplyReplayV1,
+        >,
         context: wire::HeightContext,
         requester: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
@@ -3773,17 +3893,41 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                     "validated recovery marker differs from its durable body".to_owned(),
                 ));
             }
-            match recovered_validate_retry_census
+            let ready_validate_deferred = recovered_validate_retry_census
                 .classify_and_bind_validated_marker(*key, validated_receipt)
-            {
-                Ok(false) => runtime
+                .map_err(|error| EffectExecutorError::BodyStore(error.to_owned()))?;
+            let pending_kura_deferred = pending_kura_apply_replay
+                .as_deref_mut()
+                .map(|replay| {
+                    replay.classify_and_defer_validated_marker(
+                        *key,
+                        manifest,
+                        durable_receipt,
+                        validated_receipt,
+                    )
+                })
+                .transpose()
+                .map_err(|error| EffectExecutorError::BodyStore(error.to_owned()))?
+                .unwrap_or(false);
+            match (ready_validate_deferred, pending_kura_deferred) {
+                (false, false) => runtime
                     .recover_validated_body(manifest, validated_receipt)
                     .map_err(|error| EffectExecutorError::Runtime(error.to_string()))?,
-                Ok(true) => {}
-                Err(error) => {
-                    return Err(EffectExecutorError::BodyStore(error.to_owned()));
+                (true, true) => {
+                    return Err(EffectExecutorError::BodyStore(
+                        "validated marker retained two cold recovery owners".to_owned(),
+                    ));
                 }
+                (true, false) | (false, true) => {}
             }
+        }
+        if pending_kura_apply_replay
+            .as_deref()
+            .is_some_and(|replay| !replay.validated_marker_was_deferred())
+        {
+            return Err(EffectExecutorError::BodyStore(
+                "pending Kura replay has no exact validated marker to defer".to_owned(),
+            ));
         }
         let mut executor = Self::with_runtime_and_guard(
             runtime,
@@ -4550,6 +4694,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         &mut self,
         expected: PendingKuraApply,
         startup_effects: &[AdapterEffect],
+        deferred_validated_marker: super::v2::DeferredPendingKuraValidatedMarkerV1,
     ) -> Result<Option<VerifiedPendingGenesisNexusAmxContext>, EffectExecutorError> {
         self.ensure_open()?;
         if self.pending_tip_recovery.is_some() {
@@ -4596,7 +4741,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         self.runtime
             .verify_certificate(&self.context, certificate)
             .map_err(EffectExecutorError::PendingApplyRecoveryMismatch)?;
-        let (genesis_context, evidence) = verify_pending_kura_apply_parts(
+        let (genesis_context, evidence) = verify_pending_kura_apply_parts_with_marker(
             &self.context,
             decision,
             &self.recovered_bodies,
@@ -4606,6 +4751,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             owner_tag,
             certificate.clone(),
             manifest.as_ref(),
+            deferred_validated_marker,
         )?;
         if evidence.durable_round() != *round {
             return Err(EffectExecutorError::PendingApplyRecoveryMismatch(
@@ -9795,6 +9941,19 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .as_ref()
             .map(|owner| owner.dispatch_key)
     }
+    /// Inspect only whether pending-Kura Apply collided with lifecycle/batch owners.
+    #[cfg(test)]
+    pub(in crate::sumeragi) const fn pending_kura_apply_owner_flags_for_test(
+        &self,
+    ) -> (bool, bool, bool, bool, bool) {
+        (
+            self.live_lifecycle_decision_apply.is_some(),
+            self.live_lifecycle_validate_successor.is_some(),
+            self.retained_effect_batch.is_some(),
+            self.parked_effect_batch.is_some(),
+            self.finality_completion.is_some(),
+        )
+    }
     /// Route one exact reducer Apply rediscovery through the same private
     /// admission function used by a live Runtime turn.
     #[cfg(test)]
@@ -9842,6 +10001,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         ownership: RuntimeEffectOwnership,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
+        let mut pending_kura_successor = None;
         let recovery_transition = self
             .pending_tip_recovery
             .as_ref()
@@ -10000,7 +10160,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 tag,
                 round,
                 subject,
-            } => self.validate_body(tag, round, subject, ownership, services),
+            } => {
+                pending_kura_successor =
+                    self.validate_body(tag, round, subject, ownership, services)?;
+                Ok(())
+            }
             AdapterEffect::Apply {
                 tag,
                 subject,
@@ -10022,6 +10186,21 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .as_mut()
                 .expect("recovery transition was derived from this evidence")
                 .stage = stage;
+        }
+        if let Some(successor) = pending_kura_successor {
+            // The direct validation commit above emitted this exact child while
+            // the outer stage still owned DeterministicValidation. Record the
+            // Apply stage first, then consume only the predecessor-projected
+            // child so its own transition advances to ApplicationDispatched.
+            let (effect, ownership) =
+                successor.consume_for_executor(PendingKuraApplySuccessorExecutorPermitV1::new());
+            self.ensure_pending_tip_recovery_effect_is_local(&effect)?;
+            self.consume_one(effect, ownership, services)
+                .map_err(|error| {
+                    EffectExecutorError::Contract(format!(
+                        "committed pending-Kura validation could not dispatch its exact Apply child: {error}"
+                    ))
+                })?;
         }
         Ok(())
     }
@@ -13595,7 +13774,7 @@ fn select_recovered_decision_body(
         validated.clone(),
     ))
 }
-fn verify_pending_kura_apply_parts(
+fn verify_pending_kura_apply_parts_inner(
     context: &wire::HeightContext,
     decision: Option<DurableDecision>,
     recovered_bodies: &BTreeMap<
@@ -13608,6 +13787,7 @@ fn verify_pending_kura_apply_parts(
     owner_tag: EventTag,
     certificate: wire::QuorumCertificate,
     advertised_manifest: Option<&wire::PayloadManifest>,
+    deferred_validated_marker: Option<super::v2::DeferredPendingKuraValidatedMarkerV1>,
 ) -> Result<
     (
         Option<VerifiedPendingGenesisNexusAmxContext>,
@@ -13660,6 +13840,40 @@ fn verify_pending_kura_apply_parts(
         advertised_manifest,
     )
     .map_err(mismatch)?;
+    let deferred_validated_marker = match deferred_validated_marker {
+        Some(marker) => marker,
+        None => {
+            #[cfg(test)]
+            {
+                super::v2::DeferredPendingKuraValidatedMarkerV1::for_test(
+                    replay_tag,
+                    &manifest,
+                    &durable,
+                    &validated,
+                    &certificate,
+                )
+            }
+            #[cfg(not(test))]
+            {
+                return Err(mismatch(
+                    "pending Kura replay omitted its exact deferred validation marker",
+                ));
+            }
+        }
+    };
+    if !deferred_validated_marker.exactly_matches_recovery(
+        context,
+        expected,
+        replay_tag,
+        &manifest,
+        &durable,
+        &validated,
+        &certificate,
+    ) {
+        return Err(mismatch(
+            "pending Kura deferred marker differs from its exact recovered Decision body",
+        ));
+    }
     let genesis_context = (context.height == 1).then_some(VerifiedPendingGenesisNexusAmxContext {
         hash: context.nexus_amx_context_hash,
     });
@@ -13676,6 +13890,7 @@ fn verify_pending_kura_apply_parts(
         durable_frame_hash: durable.frame_hash(),
         durable_receipt: durable,
         validated_receipt: validated,
+        deferred_validated_marker: Some(deferred_validated_marker),
         stage: PendingKuraApplyRecoveryStage::CertifiedFetch,
     };
     if !evidence.is_exact(context) {
@@ -13694,6 +13909,76 @@ fn verify_pending_kura_apply_parts(
     };
     let _authorized_recovery = checked_recovery.into_projection();
     Ok((genesis_context, evidence))
+}
+
+fn verify_pending_kura_apply_parts_with_marker(
+    context: &wire::HeightContext,
+    decision: Option<DurableDecision>,
+    recovered_bodies: &BTreeMap<
+        (wire::ConsensusRound, wire::BlockSubject),
+        (wire::PayloadManifest, DurableBodyReceipt),
+    >,
+    validated_bodies: &BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
+    expected: PendingKuraApply,
+    replay_tag: EventTag,
+    owner_tag: EventTag,
+    certificate: wire::QuorumCertificate,
+    advertised_manifest: Option<&wire::PayloadManifest>,
+    deferred_validated_marker: super::v2::DeferredPendingKuraValidatedMarkerV1,
+) -> Result<
+    (
+        Option<VerifiedPendingGenesisNexusAmxContext>,
+        PendingKuraApplyRecoveryEvidence,
+    ),
+    EffectExecutorError,
+> {
+    verify_pending_kura_apply_parts_inner(
+        context,
+        decision,
+        recovered_bodies,
+        validated_bodies,
+        expected,
+        replay_tag,
+        owner_tag,
+        certificate,
+        advertised_manifest,
+        Some(deferred_validated_marker),
+    )
+}
+
+#[cfg(test)]
+fn verify_pending_kura_apply_parts(
+    context: &wire::HeightContext,
+    decision: Option<DurableDecision>,
+    recovered_bodies: &BTreeMap<
+        (wire::ConsensusRound, wire::BlockSubject),
+        (wire::PayloadManifest, DurableBodyReceipt),
+    >,
+    validated_bodies: &BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
+    expected: PendingKuraApply,
+    replay_tag: EventTag,
+    owner_tag: EventTag,
+    certificate: wire::QuorumCertificate,
+    advertised_manifest: Option<&wire::PayloadManifest>,
+) -> Result<
+    (
+        Option<VerifiedPendingGenesisNexusAmxContext>,
+        PendingKuraApplyRecoveryEvidence,
+    ),
+    EffectExecutorError,
+> {
+    verify_pending_kura_apply_parts_inner(
+        context,
+        decision,
+        recovered_bodies,
+        validated_bodies,
+        expected,
+        replay_tag,
+        owner_tag,
+        certificate,
+        advertised_manifest,
+        None,
+    )
 }
 #[cfg(test)]
 mod tests {

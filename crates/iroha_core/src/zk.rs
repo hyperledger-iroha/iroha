@@ -85,6 +85,13 @@ pub mod kagemusha_v2;
     reason = "staged offline-cash boundary remains disconnected until exact STATE circuits and activation wiring land"
 )]
 pub mod offline_cash_v1;
+/// Private non-authorizing Offline Cash V2 source contracts.
+#[cfg(feature = "zk-halo2-ipa")]
+#[allow(
+    dead_code,
+    reason = "staged V2 contracts remain disconnected from wire, artifact, verifier, backend, readiness, and release authority"
+)]
+mod offline_cash_v2;
 /// Shared fixed-profile accounting for Pasta IPA recursive proofs.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod pasta_ipa_recursion;

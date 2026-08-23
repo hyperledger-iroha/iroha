@@ -1854,6 +1854,14 @@ fn reconcile_executor_locked_body(
     }
     Ok(directive)
 }
+/// Mirror the production pending-Kura pre-activation reconciliation in focused tests.
+#[cfg(test)]
+pub(in crate::sumeragi) fn reconcile_executor_locked_body_for_pending_kura_test(
+    executor: &mut V2EffectExecutor,
+    services: &mut ProductionV2Services,
+) -> Result<(), V2RunnerError> {
+    reconcile_executor_locked_body(executor, services).map(drop)
+}
 /// Keep lane-work construction behind the completed interrupted-tip
 /// application boundary.
 ///
