@@ -386,7 +386,25 @@ owner
         &ingress,
         completion,
     )
-    .unwrap_or_else(|_| panic!("A must publish Ready and retire its physical response"));
+    .unwrap_or_else(|error| match error {
+        crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::Retry(
+            error,
+        ) => panic!(
+            "A must publish Ready and retire its physical response: {}: {}",
+            error.reason(),
+            error.detail(),
+        ),
+        crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequired(
+            error,
+        ) => panic!(
+            "A reached a restart-only persistence failure: {}: {}",
+            error.reason(),
+            error.detail(),
+        ),
+        crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(
+            error,
+        ) => panic!("A failed after the persistence commit: {error}"),
+    });
 """,
         "the saturated response must complete through the current lifecycle Phase-B persistence adapter",
         errors,

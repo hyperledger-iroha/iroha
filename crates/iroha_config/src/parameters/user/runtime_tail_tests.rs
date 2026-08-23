@@ -524,6 +524,54 @@ fn telemetry_clamps_zero_telegram_metrics_period() {
         Some(StdDuration::from_millis(100))
     );
 }
+
+#[test]
+fn network_parse_clamps_zero_periods() {
+    let mut table = base_table();
+    let network = table
+        .get_mut("network")
+        .and_then(Value::as_table_mut)
+        .expect("network table");
+    network.insert("block_gossip_period_ms".into(), Value::Integer(0));
+    network.insert("block_gossip_max_period_ms".into(), Value::Integer(0));
+    network.insert("peer_gossip_period_ms".into(), Value::Integer(0));
+    network.insert("peer_gossip_max_period_ms".into(), Value::Integer(0));
+    network.insert("transaction_gossip_period_ms".into(), Value::Integer(0));
+    network.insert(
+        "transaction_gossip_public_target_reshuffle_ms".into(),
+        Value::Integer(0),
+    );
+    network.insert(
+        "transaction_gossip_restricted_target_reshuffle_ms".into(),
+        Value::Integer(0),
+    );
+    network.insert("idle_timeout_ms".into(), Value::Integer(0));
+    network.insert("reply_writer_flush_timeout_ms".into(), Value::Integer(0));
+    let actual = load_root(table);
+    let min = StdDuration::from_millis(100);
+    assert_eq!(actual.block_sync.gossip_period, min);
+    assert_eq!(actual.block_sync.gossip_max_period, min);
+    assert_eq!(actual.transaction_gossiper.gossip_period, min);
+    assert_eq!(
+        actual
+            .transaction_gossiper
+            .dataspace
+            .public_target_reshuffle,
+        min
+    );
+    assert_eq!(
+        actual
+            .transaction_gossiper
+            .dataspace
+            .restricted_target_reshuffle,
+        min
+    );
+    assert_eq!(actual.network.peer_gossip_period, min);
+    assert_eq!(actual.network.peer_gossip_max_period, min);
+    assert_eq!(actual.network.idle_timeout, min);
+    assert_eq!(actual.network.reply_writer_flush_timeout, min);
+}
+
 #[test]
 fn sumeragi_v2_exact_output_geometry_accepts_network_source_boundary() {
     let mut table = base_table();

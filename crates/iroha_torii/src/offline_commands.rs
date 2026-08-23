@@ -2401,6 +2401,7 @@ mod tests {
             results: vec![result],
             settlement_commitment: settlement_commitment.clone(),
             settlement_hash,
+            fastpq_transcripts: Vec::new().into(),
         };
         let lanes = vec![execution];
         let entrypoint_merkle_root =

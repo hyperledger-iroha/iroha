@@ -41,8 +41,8 @@ pub struct Args {
     /// Optional explicit chain id (overrides profile default).
     #[clap(long, value_name = "CHAIN_ID")]
     chain_id: Option<ChainId>,
-    /// Optional VRF seed (hex, 32 bytes). Required for `iroha3-taira`/`iroha3-nexus`
-    /// when NPoS is selected; ignored for permissioned manifests.
+    /// Optional VRF seed (hex, 32 bytes). Required for the public
+    /// `iroha3-taira`/`iroha3-nexus` profiles.
     #[clap(long, value_name = "HEX")]
     vrf_seed_hex: Option<String>,
     /// Canonical public XOR asset definition id (Base58). Required for `iroha3-nexus`
@@ -861,7 +861,6 @@ mod consensus_manifest_tests {
             "defaults/genesis.json",
             "defaults/kagami/iroha3-dev/genesis.json",
             "defaults/kagami/iroha3-nexus/genesis.json",
-            "defaults/kagami/iroha3-taira/genesis.json",
             "defaults/nexus/genesis.json",
             "configs/soranexus/nexus/genesis.json",
             "configs/soranexus/taira/genesis.json",

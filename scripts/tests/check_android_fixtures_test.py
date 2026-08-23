@@ -174,6 +174,113 @@ def test_fee_payment_requires_exact_authority_shape() -> None:
         )
 
 
+def _charge_limit(
+    kind: object = "nexus",
+    max_amount: object = "1",
+    *,
+    asset_definition_id: object = "asset",
+    value: object = None,
+) -> dict:
+    return {
+        "asset_definition_id": asset_definition_id,
+        "kind": {"kind": kind, "value": value},
+        "max_amount": max_amount,
+    }
+
+
+def _validate_charge_limits(limits: object) -> None:
+    MODULE.validate_fee_payment(
+        {
+            "payer": "authority",
+            "value": {"charge_limits": limits, "gas_limit": None},
+        },
+        "fee payment",
+    )
+
+
+def test_fee_payment_accepts_positive_canonical_quantity_limits_in_kind_order() -> None:
+    _validate_charge_limits(
+        [
+            _charge_limit("nexus", "0." + "0" * 27 + "1"),
+            _charge_limit(
+                "pipeline_gas", MODULE.MAX_QUANTITY_MANTISSA_TEXT
+            ),
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "max_amount",
+    [
+        None,
+        1,
+        "",
+        "0",
+        "-1",
+        "+1",
+        "01",
+        ".1",
+        "1.",
+        "1.0",
+        "0.10",
+        "1e1",
+        "0." + "0" * 28 + "1",
+        str(1 << 511),
+    ],
+)
+def test_fee_payment_rejects_noncanonical_or_nonpositive_quantity_limits(
+    max_amount: object,
+) -> None:
+    with pytest.raises(ValueError, match="max_amount"):
+        _validate_charge_limits([_charge_limit(max_amount=max_amount)])
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        {},
+        {"kind": "nexus"},
+        {"kind": "nexus", "value": None, "legacy": True},
+        {"kind": "Nexus", "value": None},
+        {"kind": "unknown", "value": None},
+        {"kind": {}, "value": None},
+        {"kind": "nexus", "value": {}},
+    ],
+)
+def test_fee_payment_rejects_noncanonical_charge_kind(kind: object) -> None:
+    limit = _charge_limit()
+    limit["kind"] = kind
+    with pytest.raises(ValueError, match="kind"):
+        _validate_charge_limits([limit])
+
+
+def test_fee_payment_requires_distinct_canonically_ordered_charge_kinds() -> None:
+    with pytest.raises(ValueError, match="duplicate kind"):
+        _validate_charge_limits([_charge_limit("nexus"), _charge_limit("nexus")])
+    with pytest.raises(ValueError, match="canonical fee-component order"):
+        _validate_charge_limits(
+            [_charge_limit("pipeline_gas"), _charge_limit("nexus")]
+        )
+
+
+def test_fee_payment_requires_exact_charge_limit_fields_and_nonempty_asset() -> None:
+    limit = _charge_limit()
+    limit["legacy"] = True
+    with pytest.raises(ValueError, match="unexpected=.*legacy"):
+        _validate_charge_limits([limit])
+
+    limit = _charge_limit()
+    limit.pop("max_amount")
+    with pytest.raises(ValueError, match="missing=.*max_amount"):
+        _validate_charge_limits([limit])
+
+    for asset_definition_id in (None, "", "   "):
+        with pytest.raises(ValueError, match="asset_definition_id"):
+            _validate_charge_limits(
+                [_charge_limit(asset_definition_id=asset_definition_id)]
+            )
+
+
 def test_admission_intent_requires_exact_ordinary_shape() -> None:
     MODULE.validate_admission_intent(
         {"intent": "ordinary", "value": None}, "admission intent"

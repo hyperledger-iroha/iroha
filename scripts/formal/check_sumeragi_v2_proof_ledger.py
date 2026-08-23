@@ -106,7 +106,6 @@ _CHECKER_COMPONENT_FILES = (
 
 def _execute_checker_component(filename: str) -> None:
     """Execute one reviewed contract component in the checker namespace."""
-
     path = Path(__file__).with_name(filename)
     if path.is_symlink() or not path.is_file():
         raise RuntimeError(f"proof-ledger checker component is unavailable: {path}")
@@ -206,7 +205,6 @@ def _total_gate(
     production_success_value: str | None = None,
 ) -> CrossToolTotalGateContract:
     """Build one immutable checked-gate signature contract."""
-
     parameters = parameters or f"projection: {projection_type},"
     return CrossToolTotalGateContract(
         name=name,
@@ -865,7 +863,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     # Refresh after atomic-reservation work stops touching v2_runner.rs.
     "successor_retry": "a99d3aec22c01501fabb4e6b90526ae066b6728ab78043301476653432fac5fd",
     "historical_certificate": "9028b1db75d71c3ab5e72573e5c3e7b46d92c0ffe4a1cd1805ebfde379fbdbfa",
-    "historical_body": "0a7c5d29372bc8970f88d82f74f36e1e7a06635f51a12ff7475e63b221577851",
+    "historical_body": "97681979dd7f57bd52e8666099f26014c37d6ccd07c6ce2fa4b9b30359354361",
     "terminal_application": "18c9adfc440c9e4302dd5e1b78c71beec18927bc30170ad1db8b4953d40df2b2",
 }
 
@@ -877,7 +875,6 @@ def _total_gate_call_sites(
     tuple[CrossToolLinkedConsumerContract, ...],
 ]:
     """Return the exact checked-gate production seams for one claim."""
-
     hashes = _TOTAL_GATE_CALL_ITEM_SHA256
     calls: dict[str, tuple[CrossToolProductionCallContract, ...]] = {
         "ProductionDurableIntentTraceRefinesProgressWitness": (
@@ -1355,7 +1352,6 @@ def _reliable_flush_supplemental_total_contracts(
     supplemental: tuple[CrossToolSupplementalKernelContract, ...],
 ) -> tuple[CrossToolSupplementalKernelContract, ...]:
     """Attach the application/link gates and authoritative call seams."""
-
     if len(supplemental) != 2:
         raise RuntimeError("reliable-flush claim must retain exactly two kernels")
     hashes = _TOTAL_GATE_CALL_ITEM_SHA256
@@ -1444,7 +1440,6 @@ def _reliable_flush_supplemental_total_contracts(
 def _ingress_reservation_materialization_supplemental_total_contract(
 ) -> CrossToolSupplementalKernelContract:
     """Bind exact reserved-slot materialization as auxiliary ingress evidence."""
-
     call_site = CrossToolProductionCallContract(
         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
         item="commit_canonical_body_available",
@@ -1507,7 +1502,6 @@ def _ingress_reservation_materialization_supplemental_total_contract(
 def _effect_to_candidate_supplemental_total_contract(
 ) -> CrossToolSupplementalKernelContract:
     """Bind concrete adapter effects to unique bounded TLA candidates."""
-
     call_site = CrossToolProductionCallContract(
         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
         item="retain_effect_batch_at_frontier",
@@ -1595,7 +1589,6 @@ def _effect_to_candidate_supplemental_total_contract(
 def _leader_wire_admission_supplemental_total_contract(
 ) -> CrossToolSupplementalKernelContract:
     """Bind durable leader-wire admission as auxiliary ingress evidence."""
-
     call_site = CrossToolProductionCallContract(
         source="crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
         item="admit_ingress",
@@ -1684,7 +1677,6 @@ def _install_total_checked_gate_contracts(
     contracts: tuple[CrossToolObligationContract, ...],
 ) -> tuple[CrossToolObligationContract, ...]:
     """Replace the 7 + 6 legacy-shaped placeholders with total gates."""
-
     upgraded: list[CrossToolObligationContract] = []
     for obligation in contracts:
         claims: list[CrossToolClaimContract] = []
@@ -1945,7 +1937,6 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def load_ledger(path: Path = LEDGER_PATH) -> Any:
     """Load a ledger while rejecting duplicate JSON keys."""
-
     return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
 
 
@@ -1958,7 +1949,6 @@ def strip_tla_comments(
     source: str, *, preserve_string_contents: bool = False
 ) -> str:
     """Remove TLA+ comments while preserving lines and, optionally, strings."""
-
     output: list[str] = []
     index = 0
     depth = 0
@@ -2031,7 +2021,6 @@ def strip_tla_comments(
 
 def _rust_literal_end(source: str, start: int) -> int | None:
     """Return the exclusive end of a Rust string/character literal."""
-
     length = len(source)
     raw_marker: int | None = None
     if source.startswith(("br", "rb", "cr", "rc"), start):
@@ -2049,7 +2038,6 @@ def _rust_literal_end(source: str, start: int) -> int | None:
         terminator = '"' + ("#" * hashes)
         closing = source.find(terminator, opening_quote + 1)
         return None if closing < 0 else closing + len(terminator)
-
     quote = start + 1 if start < length and source[start] in "bc" else start
     if quote >= length or source[quote] != '"':
         return None
@@ -2067,7 +2055,6 @@ def _rust_literal_end(source: str, start: int) -> int | None:
 
 def _rust_char_literal_end(source: str, start: int) -> int | None:
     """Return a Rust char/byte-char end without mistaking lifetimes for chars."""
-
     length = len(source)
     quote = start + 1 if source.startswith("b'", start) else start
     if quote >= length or source[quote] != "'" or quote + 2 >= length:
@@ -2101,14 +2088,11 @@ def mask_rust_comments_and_literals(source: str) -> str:
     delimiters. Character handling intentionally recognizes only complete
     one-scalar/escaped literals, so lifetimes such as ``'a`` remain code.
     """
-
     output = list(source)
-
     def mask(start: int, end: int) -> None:
         for offset in range(start, end):
             if output[offset] != "\n":
                 output[offset] = " "
-
     index = 0
     length = len(source)
     while index < length:
@@ -2133,7 +2117,6 @@ def mask_rust_comments_and_literals(source: str) -> str:
             mask(index, end)
             index = end
             continue
-
         literal_end = _rust_literal_end(source, index)
         if literal_end is None and (source[index] == "'" or source.startswith("b'", index)):
             literal_end = _rust_char_literal_end(source, index)
@@ -2148,14 +2131,11 @@ def mask_rust_comments_and_literals(source: str) -> str:
 @lru_cache(maxsize=32)
 def mask_rust_comments(source: str) -> str:
     """Mask Rust comments while preserving real literals and byte offsets."""
-
     output = list(source)
-
     def mask(start: int, end: int) -> None:
         for offset in range(start, end):
             if output[offset] != "\n":
                 output[offset] = " "
-
     index = 0
     length = len(source)
     while index < length:
@@ -2209,27 +2189,23 @@ _execute_checker_component("sumeragi_v2_proof_ledger_ingress_source_seal_contrac
 @lru_cache(maxsize=512)
 def rust_code_tokens(source: str) -> tuple[str, ...]:
     """Tokenize Rust/Verus structure after removing comments and literals."""
-
     return tuple(_RUST_TOKEN_RE.findall(mask_rust_comments_and_literals(source)))
 
 
 @lru_cache(maxsize=1024)
 def tla_code_tokens(source: str) -> tuple[str, ...]:
     """Tokenize executable TLA+ while excluding comments and string contents."""
-
     return tuple(_TLA_TOKEN_RE.findall(strip_tla_comments(source)))
 
 
 def _rust_item_token_sha256(item: RustItem) -> str:
     """Hash one comment/literal-free item token stream unambiguously."""
-
     encoded = "\0".join(rust_code_tokens(item.source)).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
 def _rust_sealed_item_token_sha256(item: RustItem) -> str:
     """Hash one item's declaration together with every leading attribute."""
-
     source = "\n".join((*item.attributes, item.source))
     encoded = "\0".join(rust_code_tokens(source)).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -2237,7 +2213,6 @@ def _rust_sealed_item_token_sha256(item: RustItem) -> str:
 
 def _rust_statement_token_sha256(statement: RustStatement) -> str:
     """Hash one exact top-level statement token stream unambiguously."""
-
     encoded = "\0".join(statement.tokens).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -2253,7 +2228,6 @@ def _rust_delimiter_context(
     mutation-matrix validation does not rescan a large production file for
     each view of the same item.
     """
-
     stack: list[tuple[str, int, tuple[str, ...]]] = []
     matching = {')': '(', ']': '[', '}': '{'}
     last_boundary = 0
@@ -2284,7 +2258,6 @@ def _rust_brace_context(
     structural_source: str, end: int
 ) -> tuple[tuple[str, ...], ...]:
     """Return tokenized headers for curly-brace ancestors enclosing ``end``."""
-
     return tuple(
         header
         for opener, _position, header in _rust_delimiter_context(
@@ -2296,7 +2269,6 @@ def _rust_brace_context(
 
 def _rust_attribute_end(structural_source: str, start: int) -> int:
     """Return the exclusive end of one bracketed Rust attribute."""
-
     opening = structural_source.find("[", start)
     if opening < 0:
         return start
@@ -2318,7 +2290,6 @@ def _rust_ancestor_inner_cfg_attributes(
     item_context: tuple[tuple[str, int, tuple[str, ...]], ...],
 ) -> tuple[str, ...]:
     """Collect file/ancestor inner attributes that can suppress an item."""
-
     item_positions = tuple(position for _opener, position, _header in item_context)
     attributes: list[str] = []
     pattern = re.compile(r"#\s*!\s*\[\s*cfg(?:_attr)?\b")
@@ -2343,7 +2314,6 @@ def _leading_rust_attributes(
     source: str, structural_source: str, start: int
 ) -> tuple[str, ...]:
     """Collect contiguous attributes immediately preceding an item."""
-
     attributes: list[str] = []
     cursor = start
     while True:
@@ -2377,7 +2347,6 @@ def _token_sequence_count(
     haystack: Sequence[str], needle: Sequence[str]
 ) -> int:
     """Count contiguous token sequences without accepting comment stuffing."""
-
     width = len(needle)
     if width == 0:
         return 0
@@ -2391,7 +2360,6 @@ def _token_sequence_positions(
     haystack: Sequence[str], needle: Sequence[str]
 ) -> tuple[int, ...]:
     """Return exact contiguous-token offsets without accepting identifier joins."""
-
     width = len(needle)
     if width == 0:
         return ()
@@ -2404,7 +2372,6 @@ def _token_sequence_positions(
 
 def _adapter_step_has_synchronous_reducer_effect_dataflow(source: str) -> bool:
     """Bind one reducer result directly to one later synchronous effect drive."""
-
     tokens = rust_code_tokens(source)
     outcome = _token_sequence_positions(tokens, ("let", "outcome", "="))
     reducer = _token_sequence_positions(tokens, rust_code_tokens("self.step_reducer(event)"))
@@ -2421,7 +2388,6 @@ def _tla_dependency_positions(
     proof: str, dependency: str
 ) -> tuple[int, ...]:
     """Locate a reviewed TLA+ dependency as an exact code-token sequence."""
-
     return _token_sequence_positions(
         tla_code_tokens(proof),
         tla_code_tokens(dependency),
@@ -2430,13 +2396,11 @@ def _tla_dependency_positions(
 
 def _tla_dependency_present(proof: str, dependency: str) -> bool:
     """Reject dependency names hidden in comments, strings, or larger identifiers."""
-
     return bool(_tla_dependency_positions(proof, dependency))
 
 
 def rust_items(source: str, name: str) -> tuple[RustItem, ...]:
     """Extract all real Rust/Verus function items named ``name``."""
-
     structural = mask_rust_comments_and_literals(source)
     declaration = re.compile(
         rf"(?m)^[ \t]*(?:pub(?:\s*\([^\n)]*\))?[ \t]+)?"
@@ -2511,7 +2475,6 @@ def rust_function_items_from_structural(
     It is used when several unique functions must be inspected in a multi-megabyte source: the
     caller masks comments/literals once, and only the small selected item bodies are tokenized.
     """
-
     if len(source) != len(structural):
         raise ValueError("Rust structural source must preserve byte positions")
     declaration = re.compile(
@@ -2583,7 +2546,6 @@ def _rust_all_function_items(
     helper.  Avoiding context reconstruction for every unrelated function keeps
     large production modules linear enough for the aggregate release checker.
     """
-
     structural = mask_rust_comments_and_literals(source)
     reference_pattern = (
         re.compile(
@@ -2675,7 +2637,6 @@ def _rust_all_function_items(
 
 def _rust_item_is_test_only(item: RustItem) -> bool:
     """Return whether an extracted function is enclosed by a test/bench gate."""
-
     context_tokens = tuple(
         token for header in item.brace_context for token in header
     )
@@ -2691,7 +2652,6 @@ def _rust_item_is_test_only(item: RustItem) -> bool:
 
 def rust_struct_items(source: str, name: str) -> tuple[RustItem, ...]:
     """Extract all real brace-delimited Rust/Verus structs named ``name``."""
-
     structural = mask_rust_comments_and_literals(source)
     declaration = re.compile(
         rf"(?m)^[ \t]*(?:pub(?:\s*\([^\n)]*\))?[ \t]+)?"
@@ -2742,7 +2702,6 @@ def rust_struct_items(source: str, name: str) -> tuple[RustItem, ...]:
 
 def rust_enum_items(source: str, name: str) -> tuple[RustItem, ...]:
     """Extract all real brace-delimited Rust enums named ``name``."""
-
     structural = mask_rust_comments_and_literals(source)
     declaration = re.compile(
         rf"(?m)^[ \t]*(?:pub(?:\s*\([^\n)]*\))?[ \t]+)?"
@@ -2793,7 +2752,6 @@ def rust_enum_items(source: str, name: str) -> tuple[RustItem, ...]:
 
 def rust_macro_items(source: str, name: str) -> tuple[RustItem, ...]:
     """Extract all real brace-delimited ``macro_rules!`` items named ``name``."""
-
     structural = mask_rust_comments_and_literals(source)
     declaration = re.compile(
         rf"(?m)^[ \t]*macro_rules\s*!\s*{re.escape(name)}\b"
@@ -2845,7 +2803,6 @@ def rust_macro_items(source: str, name: str) -> tuple[RustItem, ...]:
 
 def rust_top_level_statements(source: str) -> tuple[RustStatement, ...]:
     """Extract real semicolon-terminated statements at file brace depth zero."""
-
     structural = mask_rust_comments_and_literals(source)
     statements: list[RustStatement] = []
     stack: list[str] = []
@@ -2895,7 +2852,6 @@ def _require_rust_item(
     errors: list[str],
 ) -> RustItem | None:
     """Return one named item, recording a fail-closed cardinality error."""
-
     items = rust_items(source, name)
     if len(items) != 1:
         errors.append(
@@ -2917,7 +2873,6 @@ def _require_qualified_rust_item(
     expected_attributes: tuple[str, ...] = (),
 ) -> RustItem | None:
     """Return one method from the exact reviewed impl, rejecting lookalikes."""
-
     expected_context = (("impl", impl_name),)
     matching = [
         item
@@ -2952,7 +2907,6 @@ def _require_rust_item_context(
     expected_attributes: tuple[str, ...] = (),
 ) -> None:
     """Reject macro nesting and disabled replacements for a reviewed item."""
-
     if item is None:
         return
     if item.brace_context != expected_context:
@@ -3004,7 +2958,6 @@ def _require_exact_rust_tokens(
     errors: list[str],
 ) -> None:
     """Require one extracted item to equal an exact code-token contract."""
-
     if item is not None and rust_code_tokens(item.source) != rust_code_tokens(
         expected_source
     ):
@@ -3024,7 +2977,6 @@ def _require_rust_token_sequence(
     count: int = 1,
 ) -> None:
     """Require an exact token subsequence in one extracted real item."""
-
     if item is None:
         return
     observed = _token_sequence_count(
@@ -3045,7 +2997,6 @@ def _require_rust_item_token_sha256(
     errors: list[str],
 ) -> None:
     """Require the complete extracted item to retain its reviewed token seal."""
-
     if item is None:
         return
     observed_sha256 = _rust_item_token_sha256(item)
@@ -3067,7 +3018,6 @@ def _require_rust_source_token_sequence(
     count: int = 1,
 ) -> None:
     """Require one exact token sequence in a regular Rust source file."""
-
     observed = _token_sequence_count(
         rust_code_tokens(source), rust_code_tokens(expected_source)
     )
@@ -3080,7 +3030,6 @@ def _require_rust_source_token_sequence(
 
 def tla_shortcut_errors(path: Path, source: str) -> list[str]:
     """Find unchecked trust constructs and obsolete unsound proof rules."""
-
     stripped = strip_tla_comments(source)
     structured_assumptions: set[int] = set()
     for declaration in ANY_THEOREM_DECLARATION_RE.finditer(stripped):
@@ -3109,7 +3058,6 @@ def tla_shortcut_errors(path: Path, source: str) -> list[str]:
         if STRUCTURED_PROVE_RE.search(statement, assumption.end()) is None:
             continue
         structured_assumptions.add(body_start + assumption.start("token"))
-
     errors: list[str] = []
     for match in TOP_LEVEL_TRUST_RE.finditer(stripped):
         if match.start("token") in structured_assumptions:
@@ -3131,7 +3079,6 @@ def tla_shortcut_errors(path: Path, source: str) -> list[str]:
 
 def verus_shortcut_errors(path: Path, source: str) -> list[str]:
     """Find Verus assumption/admission and unreviewed trusted-body escapes."""
-
     structural = mask_rust_comments_and_literals(source)
     errors: list[str] = []
     for match in VERUS_ESCAPE_RE.finditer(structural):
@@ -3158,7 +3105,6 @@ def _symbol_names(symbol_field: str) -> tuple[str, ...]:
 
 def _symbol_exists(module_source: str, symbol: str, *, theorem_only: bool = False) -> bool:
     """Return whether ``symbol`` has the required top-level declaration shape."""
-
     stripped = strip_tla_comments(module_source)
     theorem_pattern = re.compile(
         THEOREM_DECLARATION_TEMPLATE.format(symbol=re.escape(symbol))
@@ -3184,7 +3130,6 @@ def _formal_source_manifest(
     formal_dir: Path = FORMAL_DIR, root_dir: Path = ROOT_DIR
 ) -> dict[str, Any]:
     """Hash every TLA+ model/proof source in one deterministic manifest."""
-
     files: list[dict[str, str]] = []
     aggregate = hashlib.sha256()
     for path in sorted(formal_dir.glob("*.tla")):
@@ -3200,7 +3145,6 @@ def _formal_source_manifest(
 
 def _proof_ledger_sha256(formal_dir: Path = FORMAL_DIR) -> str:
     """Return the byte-exact digest of the source-owned proof ledger."""
-
     path = formal_dir / "proof_coverage.json"
     if not path.is_file() or path.is_symlink():
         raise ValueError(f"proof ledger is not a regular file: {path}")
@@ -3211,7 +3155,6 @@ def _tlapm_runner_marker(
     module: str, source_manifest_sha256: str, ledger_sha256: str
 ) -> str:
     """Return the exact marker appended only after a strict TLAPM run succeeds."""
-
     return (
         f"{TLAPM_RUNNER_MARKER_PREFIX} module={module} commit={TLAPM_COMMIT} "
         f"source_manifest_sha256={source_manifest_sha256} "
@@ -3223,7 +3166,6 @@ def _tlapm_preflight_marker(
     module: str, source_manifest_sha256: str, ledger_sha256: str
 ) -> str:
     """Return the source-bound marker for a successful strict frontend pass."""
-
     return (
         f"{TLAPM_PREFLIGHT_MARKER_PREFIX} module={module} commit={TLAPM_COMMIT} "
         f"source_manifest_sha256={source_manifest_sha256} "
@@ -3239,7 +3181,6 @@ def _valid_tlapm_preflight_log(
     ledger_sha256: str,
 ) -> bool:
     """Require one nonempty frontend transcript and its exact final marker."""
-
     if not log_source.endswith("\n"):
         return False
     lines = log_source.splitlines()
@@ -3268,7 +3209,6 @@ def _tlapm_obligation_count(
     after that line.  Requiring this exact two-line suffix prevents a stale,
     partial, or marker-stuffed log from becoming release evidence.
     """
-
     if not log_source.endswith("\n"):
         return None
     lines = log_source.splitlines()
@@ -3299,7 +3239,6 @@ def _resolve_promotion_target(
     root_dir: Path,
 ) -> dict[str, Any]:
     """Resolve one contract to its unique physical theorem and exact span."""
-
     matches: list[tuple[Path, str, tuple[int, int]]] = []
     for path in sorted(formal_dir.glob("*.tla")):
         if not path.is_file() or path.is_symlink():
@@ -3375,7 +3314,6 @@ def _promotion_target_contract_errors(
     formal_dir: Path = FORMAL_DIR, root_dir: Path = ROOT_DIR
 ) -> list[str]:
     """Reject drift in the ordered 9 + 3 exact theorem target contract."""
-
     errors: list[str] = []
     expected_ids = (*PROMOTION_TLAPS_TARGET_IDS, *PROMOTION_CROSS_TOOL_TARGET_IDS)
     observed_ids = tuple(
@@ -3459,7 +3397,6 @@ def _promotion_target_entries(
     formal_dir: Path = FORMAL_DIR, root_dir: Path = ROOT_DIR
 ) -> list[dict[str, Any]]:
     """Return canonical resolved target metadata in reviewed execution order."""
-
     errors = _promotion_target_contract_errors(formal_dir, root_dir)
     if errors:
         raise ValueError("; ".join(errors))
@@ -3479,7 +3416,6 @@ def _tlapm_target_marker(
     ledger_sha256: str,
 ) -> str:
     """Return the exact suffix marker for one strict theorem-range run."""
-
     return (
         f"{TLAPM_TARGET_MARKER_PREFIX} "
         f"obligation_id={target['obligation_id']} "
@@ -3502,7 +3438,6 @@ def _tlapm_target_obligation_count(
     ledger_sha256: str,
 ) -> int | None:
     """Validate one strict range transcript and return its nonzero count."""
-
     if not log_source.endswith("\n"):
         return None
     lines = log_source.splitlines()
@@ -3532,7 +3467,6 @@ def _tlapm_target_obligation_count(
 
 def _canonical_json_sha256(value: Any) -> str:
     """Hash a JSON value using the evidence contract's canonical encoding."""
-
     encoded = json.dumps(
         value,
         ensure_ascii=False,
@@ -3554,9 +3488,7 @@ def _rust_precondition_is_obviously_contradictory(
     containing implication are kept opaque so a contradictory antecedent is
     not mistaken for a contradictory precondition.
     """
-
     matching = {")": "(", "]": "[", "}": "{"}
-
     def strip_outer(value: tuple[str, ...]) -> tuple[str, ...]:
         while len(value) >= 2 and value[0] == "(" and value[-1] == ")":
             depth = 0
@@ -3573,7 +3505,6 @@ def _rust_precondition_is_obviously_contradictory(
                 break
             value = value[1:-1]
         return value
-
     def split_top_level(
         value: tuple[str, ...], separator: str
     ) -> list[tuple[str, ...]]:
@@ -3591,20 +3522,17 @@ def _rust_precondition_is_obviously_contradictory(
                 start = index + 1
         parts.append(strip_outer(value[start:]))
         return [part for part in parts if part]
-
     def contains_implication(value: tuple[str, ...]) -> bool:
         return any(
             value[index : index + 2] == ("==", ">")
             for index in range(len(value) - 1)
         )
-
     def is_atom(value: tuple[str, ...]) -> bool:
         return bool(value) and all(
             re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token)
             or token in (".", "::")
             for token in value
         )
-
     clauses = split_top_level(tuple(tokens), ",")
     atoms: list[tuple[str, ...]] = []
     for clause in clauses:
@@ -3613,7 +3541,6 @@ def _rust_precondition_is_obviously_contradictory(
         if contains_implication(clause):
             continue
         atoms.extend(split_top_level(clause, "&&"))
-
     positive: set[tuple[str, ...]] = set()
     negative: set[tuple[str, ...]] = set()
     equal_literals: dict[tuple[str, ...], str] = {}
@@ -19884,7 +19811,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         if not active_root.is_dir():
             continue
         for active_path in sorted(active_root.rglob("*")):
-            if (
+            if ".tlacache" in active_path.parts or (
                 active_path.suffix not in active_suffixes
                 or not active_path.is_file()
                 or active_path.is_symlink()
@@ -28244,22 +28171,11 @@ def _transport_geometry_production_source_fidelity_errors(
         "kagami_localnet": (
             repo_root / "crates" / "iroha_kagami" / "src" / "localnet.rs"
         ),
-        "kagami_profiles": repo_root / "xtask" / "src" / "kagami_profiles.rs",
-        "taira_default": (
-            repo_root / "defaults" / "kagami" / "iroha3-taira" / "config.toml"
-        ),
         "taira_config": (
             repo_root / "configs" / "soranexus" / "taira" / "config.toml"
         ),
         "taira_genesis": (
             repo_root / "configs" / "soranexus" / "taira" / "genesis.json"
-        ),
-        "taira_default_genesis": (
-            repo_root
-            / "defaults"
-            / "kagami"
-            / "iroha3-taira"
-            / "genesis.json"
         ),
     }
     sources: dict[str, str] = {}
@@ -30647,27 +30563,6 @@ queues.insert(
 
     deployment_fragments = (
         (
-            "taira_default",
-            "max_transactions = 96\n"
-            "max_payload_bytes = 16777216\n"
-            "proposal_queue_scan_multiplier = 4",
-            "default Taira profile pins the revision-4 payload ceiling with privacy framing headroom",
-        ),
-        (
-            "taira_default",
-            "authenticated_non_validator_sources = 2\n"
-            "body_bytes = 311427072\n"
-            "body_source_bytes = 34603008",
-            "default seven-validator Taira profile pins H=2 and nine source partitions",
-        ),
-        (
-            "taira_default",
-            "max_frame_bytes = 23068700\n"
-            "max_frame_bytes_block_sync = 23068672\n"
-            "max_frame_bytes_tx_gossip = 13631488",
-            "default Taira profile carries maximum privacy transaction and block-sync frames",
-        ),
-        (
             "taira_config",
             "max_frame_bytes = 23068700\n"
             "max_frame_bytes_block_sync = 23068672\n"
@@ -30693,11 +30588,6 @@ queues.insert(
             '"max_tx_bytes": 10485760',
             "production Taira genesis admits one maximum privacy transaction",
         ),
-        (
-            "taira_default_genesis",
-            '"max_tx_bytes": 10485760',
-            "default Taira genesis admits one maximum privacy transaction",
-        ),
     )
     for role, fragment, description in deployment_fragments:
         observed = sources[role].count(fragment)
@@ -30706,7 +30596,7 @@ queues.insert(
                 f"{paths[role]}: {description} must occur exactly 1 time(s); "
                 f"found {observed}"
             )
-    for role, label in (("taira_genesis", "production"), ("taira_default_genesis", "default")):
+    for role, label in (("taira_genesis", "production"),):
         try:
             genesis = json.loads(sources[role], object_pairs_hook=_unique_object)
             max_payload = genesis["sumeragi_v2"]["da_layout"]["max_payload_size_bytes"]
@@ -57504,9 +57394,9 @@ self.finality_completion = Some(FinalityCompletion {
         effects_path,
         effects_source,
         "finality_completion",
-        "the durable Apply completion tombstone field must have exactly its thirteen reviewed runtime/recovery uses and no additional mutation surface",
+        "the durable Apply completion tombstone field must have exactly its fourteen reviewed runtime/recovery/readiness uses and no additional mutation surface",
         errors,
-        count=13,
+        count=14,
     )
     for expected, description in (
         (
@@ -57557,19 +57447,44 @@ self.finality_completion
         _require_rust_item_context(effects_path, item, (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),), f"recovered Decision Apply finality {description}", errors)
     _require_rust_token_sequence(
         effects_path, prepare_recovered_finality,
-        """self.pending_work() != 0 || !self.recovered_decision_fetch_request_index_is_exact_and_empty() || self.retained_effect_batch.is_some()
-|| self.parked_effect_batch.is_some() || self.pending_tip_recovery.is_some()
-|| self.finality_completion.is_some()
-|| self.runtime.queued_commands() != 0""",
+        """let pending_recovery_is_exact = self.pending_tip_recovery.as_ref().is_none_or(|evidence| {
+    authority.exactly_matches_pending_kura_recovery(&self.context, evidence)
+});
+if self.pending_work() != 0
+    || !self.recovered_decision_fetch_request_index_is_exact_and_empty()
+    || self.retained_effect_batch.is_some()
+    || self.parked_effect_batch.is_some()
+    || !pending_recovery_is_exact
+    || self.finality_completion.is_some()""",
         "recovered Decision Apply completion must not overtake retained executor work",
         errors)
     _require_rust_token_sequence(
         effects_path, commit_recovered_finality,
-        """self.finality_completion.is_none() && self.pending_work() == 0 && self.recovered_decision_fetch_request_index_is_exact_and_empty()
-&& dispatch_key.matches_height_context(&self.context) && artifact.height_context == self.context
-&& artifact.subject == receipt.subject() && receipt.context_id() == self.context.id()
-&& receipt.height() == self.context.height && receipt.artifact_hash() == HashOf::new(&artifact)
-&& self.runtime.driver().ready_to_finish()""",
+        """let pending_recovery_is_exact = self.pending_tip_recovery.as_ref().is_none_or(|evidence| {
+    evidence.stage() == PendingKuraApplyRecoveryStage::ApplicationDispatched
+        && evidence.is_exact(&self.context)
+        && tag == evidence.replay_tag()
+        && artifact.subject == evidence.commit_subject()
+        && &artifact.commit_qc == evidence.commit_qc()
+        && receipt.height() == evidence.frozen_height()
+        && receipt.context_id() == evidence.frozen_context_id()
+        && receipt.block_hash() == evidence.commit_subject().block_hash
+        && receipt.subject() == evidence.commit_subject()
+        && receipt.certificate() == evidence.commit_qc().as_ref()
+        && receipt.artifact_hash() == HashOf::new(&artifact)
+});
+assert!(
+    self.finality_completion.is_none()
+        && self.pending_work() == 0
+        && self.recovered_decision_fetch_request_index_is_exact_and_empty()
+        && pending_recovery_is_exact
+        && dispatch_key.matches_height_context(&self.context)
+        && artifact.height_context == self.context
+        && artifact.subject == receipt.subject()
+        && receipt.context_id() == self.context.id()
+        && receipt.height() == self.context.height
+        && receipt.artifact_hash() == HashOf::new(&artifact)
+        && self.runtime.driver().ready_to_finish()""",
         "recovered Decision Apply finality must authenticate its height, artifact, receipt, and drained runtime",
         errors)
     _require_rust_token_sequence(

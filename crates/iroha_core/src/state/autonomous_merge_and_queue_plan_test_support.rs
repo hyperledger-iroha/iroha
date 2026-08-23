@@ -15,12 +15,22 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
         .first()
         .expect("fixture binding has a coordinator");
     let proposal_height = binding.admission_context.proposal_height;
-    // This fixture has one active execution lane, so production merge
-    // validation binds autonomous certification to the global commit
-    // topology rather than the QueuePlan admission committee.
-    let mut validator_set = state.commit_topology_snapshot();
-    validator_set.sort();
-    validator_set.dedup();
+    // Bind the autonomous certificate to the exact lane authority that
+    // production validation resolves at this activation height.  The
+    // optimizations branch keeps this authority independent from the global
+    // commit topology, so deriving it from commit peers would make the
+    // fixture certify a committee that production correctly rejects.
+    let validator_set = state
+        .resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(
+                coordinator.leg.route.lane_id,
+                coordinator.leg.route.dataspace_id,
+            ),
+            proposal_height,
+        )
+        .expect("fixture lane authority resolves at the admission height")
+        .validators()
+        .to_vec();
     assert!(
         !validator_set.is_empty(),
         "fixture activation committee must not be empty"
@@ -391,7 +401,9 @@ fn persist_merge_carrier_finality_chain_for_state_test(
             height,
             view: block.header().view_change_index(),
         };
-        let signers = (0..keypairs.len())
+        let signer_count =
+            crate::sumeragi::network_topology::commit_quorum_from_len(keypairs.len());
+        let signers = (0..signer_count)
             .map(|index| u32::try_from(index).expect("fixture signer index fits u32"))
             .collect::<Vec<_>>();
         let mut commit_qc = QuorumCertificate {
@@ -408,6 +420,7 @@ fn persist_merge_carrier_finality_chain_for_state_test(
             .expect("valid finality signer preimage");
         let signatures = keypairs
             .iter()
+            .take(signer_count)
             .map(|keypair| {
                 Signature::try_new(keypair.private_key(), &preimage)
                     .expect("sign finality fixture vote")
@@ -448,6 +461,178 @@ fn persist_merge_carrier_finality_chain_for_state_test(
 fn autonomous_merge_commit_authorization_fixture(
     seed_expired_axt_replay: bool,
     seed_due_start_effect: bool,
+) -> (
+    State,
+    MergeLedgerEntry,
+    SignedBlock,
+    Option<AxtHandleReplayKey>,
+) {
+    autonomous_merge_commit_authorization_fixture_inner(
+        seed_expired_axt_replay,
+        seed_due_start_effect,
+        None,
+    )
+}
+fn autonomous_merge_transfer_commit_authorization_fixture() -> (State, MergeLedgerEntry, SignedBlock)
+{
+    let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture_inner(
+        false,
+        false,
+        Some(QueuePlanTransferFixture::Single),
+    );
+    (state, entry, carrier)
+}
+fn autonomous_merge_batch_transfer_commit_authorization_fixture(
+    mode: QueuePlanTransferFixture,
+) -> (State, MergeLedgerEntry, SignedBlock) {
+    assert!(
+        matches!(
+            mode,
+            QueuePlanTransferFixture::AtomicBatch | QueuePlanTransferFixture::IndependentBatch
+        ),
+        "batch fixture requires batch settlement semantics"
+    );
+    let (state, entry, carrier, _) =
+        autonomous_merge_commit_authorization_fixture_inner(false, false, Some(mode));
+    (state, entry, carrier)
+}
+#[derive(Clone, Copy)]
+enum QueuePlanTransferFixture {
+    Single,
+    AtomicBatch,
+    IndependentBatch,
+}
+fn queue_plan_transfer_entrypoint_for_state_test(
+    state: &State,
+    tag: u8,
+    fixture: QueuePlanTransferFixture,
+) -> TransactionEntrypoint {
+    let transaction_keypair =
+        KeyPair::try_from_seed(vec![tag.wrapping_add(0x31); 32], Algorithm::Ed25519)
+            .expect("deterministic QueuePlan transfer key");
+    let recipient_keypair =
+        KeyPair::try_from_seed(vec![tag.wrapping_add(0x71); 32], Algorithm::Ed25519)
+            .expect("deterministic QueuePlan recipient key");
+    let second_recipient_keypair =
+        KeyPair::try_from_seed(vec![tag.wrapping_add(0x91); 32], Algorithm::Ed25519)
+            .expect("deterministic QueuePlan second recipient key");
+    let authority = AccountId::new(transaction_keypair.public_key().clone());
+    let recipient = AccountId::new(recipient_keypair.public_key().clone());
+    let second_recipient = AccountId::new(second_recipient_keypair.public_key().clone());
+    let domain_id = DomainId::try_new("universal", "universal").expect("fixture domain");
+    let definition_id = AssetDefinitionId::derive_from_components(
+        domain_id.clone(),
+        "xor".parse().expect("fixture asset name"),
+    );
+    assert_eq!(
+        definition_id.canonical_address(),
+        iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+        "fixture transfer asset must be the registered Nexus fee asset"
+    );
+    let source_asset_id = AssetId::new(definition_id.clone(), authority.clone());
+    let registration_header_hash = state
+        .latest_block_header_fast()
+        .expect("fixture has an authenticated parent header")
+        .hash();
+    let asset_incarnation = AxtAssetIncarnationV1::derive(
+        state.network_id_ref(),
+        &definition_id,
+        &registration_header_hash,
+        &Hash::new(b"queue-plan-transfer-fixture-registration"),
+        0,
+    );
+    {
+        let mut world = state.world.block();
+        world.domains.insert(
+            domain_id.clone(),
+            Domain::new(domain_id.clone()).build(&authority),
+        );
+        world.accounts.insert(
+            authority.clone(),
+            AccountValue::new(AccountDetails::default()),
+        );
+        world.accounts.insert(
+            recipient.clone(),
+            AccountValue::new(AccountDetails::default()),
+        );
+        world.accounts.insert(
+            second_recipient.clone(),
+            AccountValue::new(AccountDetails::default()),
+        );
+        world.asset_definitions.insert(
+            definition_id.clone(),
+            AssetDefinition::numeric(
+                definition_id.clone(),
+                "XOR",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            )
+            .build(&authority),
+        );
+        world
+            .asset_definition_domains
+            .insert(definition_id.clone(), domain_id);
+        world
+            .axt_asset_incarnations
+            .insert(definition_id.clone(), asset_incarnation);
+        let initial_balance = match fixture {
+            QueuePlanTransferFixture::Single => 10_u32,
+            QueuePlanTransferFixture::AtomicBatch | QueuePlanTransferFixture::IndependentBatch => {
+                20_u32
+            }
+        };
+        let (asset_id, asset_value) =
+            Asset::new(source_asset_id.clone(), Quantity::from(initial_balance)).into_key_value();
+        world.assets.insert(asset_id, asset_value);
+        world.commit();
+    }
+    let instruction: iroha_data_model::isi::InstructionBox = match fixture {
+        QueuePlanTransferFixture::Single => {
+            Transfer::asset_quantity(source_asset_id, 3_u32, recipient).into()
+        }
+        QueuePlanTransferFixture::AtomicBatch | QueuePlanTransferFixture::IndependentBatch => {
+            let entries = vec![
+                TransferAssetBatchEntry::with_leg_id(
+                    "autonomous-batch-leg-a",
+                    authority.clone(),
+                    recipient,
+                    definition_id.clone(),
+                    3_u32,
+                ),
+                TransferAssetBatchEntry::with_leg_id(
+                    "autonomous-batch-leg-b",
+                    authority.clone(),
+                    second_recipient,
+                    definition_id,
+                    4_u32,
+                ),
+            ];
+            match fixture {
+                QueuePlanTransferFixture::AtomicBatch => TransferAssetBatch::new(entries).into(),
+                QueuePlanTransferFixture::IndependentBatch => {
+                    TransferAssetBatch::independent(entries).into()
+                }
+                QueuePlanTransferFixture::Single => unreachable!("matched batch fixture"),
+            }
+        }
+    };
+    let mut transaction = TransactionBuilder::new(
+        *state.network_id_ref(),
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([instruction])
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    );
+    transaction.set_creation_time(Duration::from_millis(1));
+    transaction.set_ttl(Duration::from_millis(1));
+    TransactionEntrypoint::External(transaction.sign(transaction_keypair.private_key()))
+}
+fn autonomous_merge_commit_authorization_fixture_inner(
+    seed_expired_axt_replay: bool,
+    seed_due_start_effect: bool,
+    transfer_fixture: Option<QueuePlanTransferFixture>,
 ) -> (
     State,
     MergeLedgerEntry,
@@ -495,17 +680,21 @@ fn autonomous_merge_commit_authorization_fixture(
         key
     });
     let tag = 0x6A;
-    let entrypoint = queue_plan_entrypoint_for_state_test(&state, tag);
+    let entrypoint = match transfer_fixture {
+        Some(fixture) => queue_plan_transfer_entrypoint_for_state_test(&state, tag, fixture),
+        None => queue_plan_entrypoint_for_state_test(&state, tag),
+    };
     let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
         LaneId::SINGLE,
         DataSpaceId::UNIVERSAL,
     ));
-    let (binding, certificate) = queue_plan_admission_certificate_for_state_test(
+    let (binding, certificate) = queue_plan_admission_certificate_for_entrypoint_state_test(
         &state,
         routing_plan.clone(),
         &validator_keypairs,
         1,
         tag,
+        &entrypoint,
     );
     {
         let mut world = state.world.block();
@@ -521,7 +710,7 @@ fn autonomous_merge_commit_authorization_fixture(
         &binding,
         entrypoint,
         routing_plan,
-        &commit_keypairs,
+        &validator_keypairs,
     );
     let application_header = BlockHeader::new(
         nonzero!(2_u64),
@@ -579,7 +768,14 @@ fn autonomous_merge_commit_authorization_fixture(
         .expect("fixture autonomous execution candidate is valid");
     let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
     let entry = merge_entry_from_candidate(candidate, qc);
-    let carrier = certified_merge_carrier_after(&parent, &entry);
+    let mut carrier = certified_merge_carrier_after(&parent, &entry);
+    if let Some(fixture) = transfer_fixture {
+        let committed_fragments = match fixture {
+            QueuePlanTransferFixture::Single => 1,
+            QueuePlanTransferFixture::AtomicBatch | QueuePlanTransferFixture::IndependentBatch => 3,
+        };
+        carrier.set_committed_fragment_count(committed_fragments);
+    }
     state
         .kura
         .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
@@ -626,6 +822,44 @@ fn staged_autonomous_merge_commit_block<'state>(
             .is_some(),
         "exact finalized carrier application must mint metadata authorization"
     );
+    state_block
+}
+fn production_validated_autonomous_merge_commit_block<'state>(
+    state: &'state State,
+    entry: &MergeLedgerEntry,
+    carrier: &SignedBlock,
+) -> StateBlock<'state> {
+    let mut state_block = state
+        .block_with_certified_merge_entry(carrier.header().clone(), entry)
+        .expect("certified autonomous execution must stage on its exact carrier");
+    let valid = ValidBlock::validate_unchecked(carrier.clone(), &mut state_block).unpack(|_| {});
+    let _witness = state_block
+        .take_exec_witness()
+        .expect("production validation must hand its execution witness to consensus");
+    assert!(
+        state_block.batch_transfer_outcomes.is_empty(),
+        "production carrier finalization must not inherit autonomous receipt rows"
+    );
+    let committed = valid.commit_unchecked().unpack(|_| {});
+    assert_eq!(
+        committed.as_ref().hash(),
+        carrier.hash(),
+        "production validation must retain the certified carrier identity"
+    );
+    let topology = state.commit_topology_snapshot();
+    let _events = state_block.apply_without_execution(&committed, topology);
+    assert!(
+        state_block
+            .canonical_carrier_commit_metadata_authorization
+            .is_some(),
+        "production carrier application must mint metadata authorization"
+    );
+    state_block
+        .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::FinalizedCarrier {
+            carrier_height: carrier.header().height().get(),
+            carrier_hash: &carrier.hash(),
+        })
+        .expect("production consumer handoff must leave the exact finalized carrier surface");
     state_block
 }
 fn stage_exact_empty_autonomous_carrier_membership_for_pre_vote(state_block: &mut StateBlock<'_>) {

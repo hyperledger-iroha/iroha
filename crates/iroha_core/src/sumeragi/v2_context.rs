@@ -101,6 +101,11 @@ impl GenesisV2Bootstrap {
     pub fn context(&self) -> &wire::HeightContext {
         self.verified_context.context()
     }
+    /// Borrow the exact PoPs authenticated with the staged height-one roster.
+    #[must_use]
+    pub fn proofs_of_possession(&self) -> &[Vec<u8>] {
+        self.verified_context.proofs_of_possession()
+    }
     pub(in crate::sumeragi) fn into_parts(
         self,
     ) -> (
@@ -306,7 +311,8 @@ pub fn freeze_staged_genesis_v2(
         authenticated_genesis,
     })
 }
-fn signed_genesis_validator_pops(
+/// Extract the canonical voting identities and exact PoPs signed into genesis.
+pub fn signed_genesis_validator_pops(
     genesis: &GenesisBlock,
 ) -> Result<BTreeMap<PeerId, Vec<u8>>, V2GenesisBootstrapError> {
     let mut validators = BTreeMap::new();

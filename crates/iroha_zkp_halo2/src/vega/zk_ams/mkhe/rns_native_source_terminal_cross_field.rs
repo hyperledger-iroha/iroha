@@ -1,11 +1,16 @@
 //! Private authenticated-source to terminal/cross-field linkage prerequisite.
 //!
-//! This stage replays the canonical packed `E16/rE/W8/rW` source records,
-//! maps their 1,536 rows and blindings to the retained Hyrax terminal
-//! commitments, and checks one transcript-derived random linear combination
-//! under the exact 1,025-point commitment basis.  It also exact-decodes the
-//! post-RLWE residual anchor that freezes all five point, forty limb, and
-//! twenty-nine lookup-round identities of the cross-field section.
+//! This stage first replays the canonical packed `X` source record under its
+//! exact 89-used-slot layout, so the authenticated live snapshot itself must
+//! have zeroes in every governed `X` padding slot. It then replays the packed
+//! `E16/rE/W8/rW` source records, maps their 1,536 rows and blindings to the
+//! retained Hyrax terminal commitments, and checks one transcript-derived
+//! random linear combination under the exact 1,025-point commitment basis.
+//! The detached 7,640-point zero-padding token remains only a redundant,
+//! non-authoritative compatibility input pending schema retirement. This stage
+//! also exact-decodes the post-RLWE residual anchor that freezes all five point,
+//! forty limb, and twenty-nine lookup-round identities of the cross-field
+//! section.
 //!
 //! The cross-field proof body remains opaque here.  Consequently the output
 //! is only a move-only construction prerequisite: it is not proof-validity,
@@ -64,6 +69,8 @@ const CANONICAL_BLOCKS_PER_RECORD_V1: usize = 512;
 const CANONICAL_COEFFICIENT_BYTES_V1: usize = 32;
 const CANONICAL_COEFFICIENTS_PER_BLOCK_V1: usize =
     ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_PLAINTEXT_BYTES_V1 as usize / CANONICAL_COEFFICIENT_BYTES_V1;
+const X_RECORD_V1: usize = 0;
+const X_USED_SLOTS_V1: u32 = 89;
 const E_FIRST_RECORD_V1: usize = 17;
 const E_RECORDS_V1: usize = 16;
 const RE_RECORD_V1: usize = 33;
@@ -125,6 +132,8 @@ const AGGREGATE_POINT_DOMAIN_V1: &[u8] =
 
 const SOURCE_MAPPING_FORMULA_V1: &[u8] = b"E[i][s]->row=i*64+s/1024,col=s%1024;rE[s]->blind[row=s];W[i][s]->row=1024+i*64+s/1024,col=s%1024;rW[s]->blind[row=1024+s]";
 const SOURCE_PACKING_FORMULA_V1: &[u8] = b"canonical-131072-coefficient-T256-packed-polynomial;inverse-quadratic-factor-NTT;used-slots-only";
+const SOURCE_PADDING_FORMULA_V1: &[u8] =
+    b"X:used-slots=89;all-slots-from-89-through-65535-must-be-zero-on-live-source-snapshot";
 const BATCH_FORMULA_V1: &[u8] =
     b"sum_row eta^row*(sum_col value[row,col]*G[col]+blind[row]*H);eta!=0,1";
 const OPENING_SLICE_FORMULA_V1: &[u8] =
@@ -133,6 +142,8 @@ const OPENING_SLICE_FORMULA_V1: &[u8] =
 const _: () = {
     assert!(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 == 131_072);
     assert!(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1 == 65_536);
+    assert!(X_RECORD_V1 == 0);
+    assert!(X_USED_SLOTS_V1 == 89);
     assert!(CANONICAL_COEFFICIENTS_PER_BLOCK_V1 == 256);
     assert!(CANONICAL_BLOCKS_PER_RECORD_V1 == 512);
     assert!(TERMINAL_ROWS_V1 == ERROR_ROWS_V1 + WITNESS_ROWS_V1);
@@ -615,6 +626,8 @@ fn validate_context_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
 
 fn mapping_formula_digest_v1()
 -> Result<[u8; DIGEST_BYTES_V1], RnsNativeSourceTerminalCrossFieldErrorV1> {
+    let x = zk_ams_t256_packing_layout_v1(X_USED_SLOTS_V1)
+        .map_err(|_| RnsNativeSourceTerminalCrossFieldErrorV1::InvalidPacking)?;
     let full = zk_ams_t256_packing_layout_v1(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1 as u32)
         .map_err(|_| RnsNativeSourceTerminalCrossFieldErrorV1::InvalidPacking)?;
     let re = zk_ams_t256_packing_layout_v1(RE_USED_SLOTS_V1)
@@ -627,18 +640,21 @@ fn mapping_formula_digest_v1()
     hash.update(&(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 as u32).to_be_bytes());
     hash.update(&(TERMINAL_ROWS_V1 as u16).to_be_bytes());
     hash.update(&(TERMINAL_COLUMNS_V1 as u16).to_be_bytes());
+    hash.update(&(X_RECORD_V1 as u8).to_be_bytes());
     hash.update(&(E_FIRST_RECORD_V1 as u8).to_be_bytes());
     hash.update(&(E_RECORDS_V1 as u8).to_be_bytes());
     hash.update(&(RE_RECORD_V1 as u8).to_be_bytes());
     hash.update(&(W_FIRST_RECORD_V1 as u8).to_be_bytes());
     hash.update(&(W_RECORDS_V1 as u8).to_be_bytes());
     hash.update(&(RW_RECORD_V1 as u8).to_be_bytes());
+    hash.update(&x.digest);
     hash.update(&full.digest);
     hash.update(&re.digest);
     hash.update(&rw.digest);
     for formula in [
         SOURCE_MAPPING_FORMULA_V1,
         SOURCE_PACKING_FORMULA_V1,
+        SOURCE_PADDING_FORMULA_V1,
         BATCH_FORMULA_V1,
         OPENING_SLICE_FORMULA_V1,
         super::super::COMMITMENT_KEY_LABEL_V1,
@@ -861,6 +877,15 @@ fn replay_source_terminal_aggregate_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     }
     let mut workspace = T256PackedPlaintextDecodeWorkspaceV1::try_new_v1()
         .map_err(|_| RnsNativeSourceTerminalCrossFieldErrorV1::Allocation)?;
+    let x_layout = zk_ams_t256_packing_layout_v1(X_USED_SLOTS_V1)
+        .map_err(|_| RnsNativeSourceTerminalCrossFieldErrorV1::InvalidPacking)?;
+    replay_record_v1(
+        snapshot,
+        X_RECORD_V1,
+        x_layout,
+        &mut workspace,
+        |_slot, _value| Ok(()),
+    )?;
     let full_layout = zk_ams_t256_packing_layout_v1(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1 as u32)
         .map_err(|_| RnsNativeSourceTerminalCrossFieldErrorV1::InvalidPacking)?;
     for family_index in 0..E_RECORDS_V1 {

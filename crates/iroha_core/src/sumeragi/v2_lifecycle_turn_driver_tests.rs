@@ -43,6 +43,16 @@ fn recovered_sign_completion_classifies_only_lost_or_post_publication_owners_for
         ),
     );
     assert!(!vote_applied.restart_required());
+
+    let superseded = ProductionLifecycleCompletionSelectionV1::RecoveredLifecycleSignCompletion(
+        ProductionRecoveredLifecycleSignCompletionSelectionV1::Superseded,
+    );
+    assert!(!superseded.restart_required());
+
+    let runtime_debt = ProductionLifecycleCompletionSelectionV1::RecoveredLifecycleSignCompletion(
+        ProductionRecoveredLifecycleSignCompletionSelectionV1::Retry,
+    );
+    assert!(!runtime_debt.restart_required());
 }
 
 #[test]

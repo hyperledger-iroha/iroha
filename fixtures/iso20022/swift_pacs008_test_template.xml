@@ -1,0 +1,22 @@
+<DataPDU>
+  <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+    <BizMsgIdr>{business_message_id}</BizMsgIdr>
+    <MsgDefIdr>pacs.008.001.08</MsgDefIdr>
+    <BizSvc>swift.cbprplus.02</BizSvc>
+    <CreDt>2025-01-01T12:00:00Z</CreDt>
+  </AppHdr>
+  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
+    <FIToFICstmrCdtTrf>
+      <GrpHdr><MsgId>{business_message_id}-grp</MsgId></GrpHdr>
+      <CdtTrfTxInf>
+        <PmtId><UETR>{uetr}</UETR></PmtId>
+        <IntrBkSttlmAmt Ccy="USD">10.00</IntrBkSttlmAmt>
+        <IntrBkSttlmDt>2024-01-01</IntrBkSttlmDt>
+        <DbtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></DbtrAcct>
+        <CdtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></CdtrAcct>
+        <DbtrAgt><FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId></DbtrAgt>
+        <CdtrAgt><FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId></CdtrAgt>
+      </CdtTrfTxInf>
+    </FIToFICstmrCdtTrf>
+  </Document>
+</DataPDU>

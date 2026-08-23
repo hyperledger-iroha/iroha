@@ -1,0 +1,15 @@
+
+                bundle_name = "demo"
+                default_dataspace = "universal"
+
+                [[contracts]]
+                name = "demo.greeter"
+                alias = "greeter"
+                source = "contracts/greeter.ko"
+                artifact = "artifacts/greeter.to"
+
+                [[smoke]]
+                id = "unknown_contract"
+                contract = "demo.missing"
+                entrypoint = "status"
+                payload = {}

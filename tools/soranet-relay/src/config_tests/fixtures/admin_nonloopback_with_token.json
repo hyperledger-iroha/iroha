@@ -1,0 +1,7 @@
+
+            {
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "admin_listen": "0.0.0.0:9090",
+                "admin_auth_token_path": "/run/secrets/soranet-admin-token"
+            }

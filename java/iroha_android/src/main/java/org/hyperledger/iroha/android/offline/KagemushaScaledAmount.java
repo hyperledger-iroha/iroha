@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.offline;
 
 import java.math.BigInteger;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
@@ -130,7 +131,7 @@ public final class KagemushaScaledAmount {
   }
 
   public KagemushaScaledAmount adding(final KagemushaScaledAmount other) {
-    return sum(List.of(this, other));
+    return sum(Arrays.asList(this, other));
   }
 
   @Override

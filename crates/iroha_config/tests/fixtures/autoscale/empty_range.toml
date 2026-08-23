@@ -1,0 +1,5 @@
+
+[nexus.autoscale]
+enabled = true
+min_lanes = 4
+max_lanes = 4

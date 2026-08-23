@@ -2169,7 +2169,6 @@ impl Kura {
         }
         Ok(file)
     }
-
     fn reject_retired_commit_roster_artifacts(store_root: &Path) -> Result<()> {
         let entries = std::fs::read_dir(store_root)
             .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
@@ -2183,27 +2182,9 @@ impl Kura {
         }
         Ok(())
     }
-
-    fn reject_retired_pipeline_roster_sidecars(blocks_root: &Path) -> Result<()> {
-        let pipeline_dir = blocks_root.join(PIPELINE_DIR_NAME);
-        let entries = match std::fs::read_dir(&pipeline_dir) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(Error::IO(error, pipeline_dir)),
-        };
-        for entry in entries {
-            let entry = entry.map_err(|error| Error::IO(error, pipeline_dir.clone()))?;
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("roster_sidecars")
-            {
-                return Err(Error::RetiredKuraArtifact { path: entry.path() });
-            }
-        }
-        Ok(())
-    }
-
+}
+include!("kura/retired_pipeline_roster_rejection.rs");
+impl Kura {
     fn new_inner(
         config: &Config,
         lane_config: &LaneConfig,
@@ -14311,6 +14292,7 @@ impl Kura {
             return Ok(None);
         }
         Ok(Some(V2StartupFinalityVerificationSession {
+            kura: self,
             _prune_guard: prune_guard,
             _canonical_chain_guard: canonical_chain_guard,
             inventory,
@@ -21698,6 +21680,7 @@ pub(crate) struct ExactReplayBoundary {
     pub(crate) count: u64,
     pub(crate) hashes: Vec<HashOf<BlockHeader>>,
 }
+include!("kura/startup_finality_session_reads.rs");
 impl V2StartupFinalityVerificationSession<'_> {
     pub(crate) fn replay_boundary(&self) -> &ExactReplayBoundary {
         &self.inventory.boundary
@@ -24719,6 +24702,23 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.read_certified_lane_block_artifact_read_only_under_prune_and_canonical_guards(
+            lane_id,
+            lane_block_height,
+        )
+    }
+
+    /// Read one exact active certified lane slot while the caller holds
+    /// `prune_lock` and `canonical_chain_lock`, in that order.
+    ///
+    /// This path never repairs a progress sidecar. A genuinely absent slot is
+    /// `Ok(None)`; a populated but malformed slot or unresolved writer state is
+    /// an error so startup cannot mistake corruption for pending work.
+    fn read_certified_lane_block_artifact_read_only_under_prune_and_canonical_guards(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+    ) -> Result<Option<CertifiedLaneBlockArtifact>> {
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
         let (data_path, index_path) =

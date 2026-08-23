@@ -570,10 +570,21 @@ def _drain_stage_pipe(fd: int, pending: bytearray) -> list[str]:
 def atomic_write_report(path: Path, document: dict[str, object]) -> None:
     """Write a private JSON receipt without exposing a partial document."""
 
-    path = path.resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    requested = path.absolute()
+    requested.parent.mkdir(parents=True, exist_ok=True)
+    parent = requested.parent.resolve(strict=True)
+    path = parent / requested.name
+    try:
+        existing = path.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        if stat.S_ISLNK(existing.st_mode):
+            raise RuntimeError(
+                f"Kagemusha resource report must not be a symlink: {path}"
+            )
     descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        prefix=f".{path.name}.", suffix=".tmp", dir=parent
     )
     temporary = Path(temporary_name)
     try:
@@ -584,7 +595,6 @@ def atomic_write_report(path: Path, document: dict[str, object]) -> None:
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, path)
-        os.chmod(path, 0o600)
     finally:
         try:
             temporary.unlink()

@@ -228,9 +228,12 @@ let mut next_block_sync_attempt =
             lifecycle_runner_path,
             active_height,
             """
-let discovery_was_outstanding = activated.with_runner_runtime(
+let discovery_was_outstanding = if apply_completion_barrier {
+    block_sync_request.is_some()
+} else {
+    activated.with_runner_runtime(
 """,
-            "serialized lifecycle ownership must sample the outstanding discovery request",
+            "serialized lifecycle ownership must preserve the Apply barrier while sampling the outstanding discovery request",
             errors,
         )
         if active_height is not None:
@@ -1516,9 +1519,62 @@ let status = launched
             errors,
             "recovered Decision Apply settlement publication",
         )
+        live_applied_settlement = _require_rust_item(
+            lifecycle_launch_path,
+            lifecycle_launch_source,
+            "settle_applied_decision_apply_completion",
+            errors,
+        )
+        pending_applied_settlement = _require_rust_item(
+            lifecycle_launch_path,
+            lifecycle_launch_source,
+            "settle_pending_kura_applied_decision_apply_completion",
+            errors,
+        )
+        shared_applied_settlement = _require_rust_item(
+            lifecycle_launch_path,
+            lifecycle_launch_source,
+            "settle_applied_decision_apply_completion_with_status",
+            errors,
+        )
         _require_rust_token_sequence(
             lifecycle_launch_path,
             recovered_apply_settlement,
+            "settle_applied_decision_apply_completion(owner, executor, completion)",
+            "recovered Decision Apply settlement must delegate its Applied owner to the shared durable cut",
+            errors,
+        )
+        _require_rust_token_sequence(
+            lifecycle_launch_path,
+            live_applied_settlement,
+            """
+settle_applied_decision_apply_completion_with_status(
+    owner,
+    executor,
+    completion,
+    RecoveredDecisionApplyStatusPublicationV1::PublishActiveHeight,
+)
+""",
+            "live recovered Decision Apply settlement must select active-height status publication",
+            errors,
+        )
+        _require_rust_token_sequence(
+            lifecycle_launch_path,
+            pending_applied_settlement,
+            """
+settle_applied_decision_apply_completion_with_status(
+    owner,
+    executor,
+    completion,
+    RecoveredDecisionApplyStatusPublicationV1::DeferUntilPendingKuraActivation,
+)
+""",
+            "pending-Kura recovered Decision Apply settlement must defer status publication until activation",
+            errors,
+        )
+        _require_rust_token_sequence(
+            lifecycle_launch_path,
+            shared_applied_settlement,
             """
 let status = executor.commit_recovered_decision_apply_finality(finality);
 let settled = completion.acknowledge_after_owner_settlement();
@@ -1526,24 +1582,29 @@ assert!(
     matches!(settled, RecoveredDecisionApplyWorkerResultV1::Applied(_)),
     "borrowed recovered Apply result cannot change before acknowledgement"
 );
-super::super::status::set_v2_status(status);
+if matches!(
+    status_publication,
+    RecoveredDecisionApplyStatusPublicationV1::PublishActiveHeight
+) {
+    super::super::status::set_v2_status(status);
+}
 Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied)
 """,
-            "recovered Decision Apply settlement must preserve its intentional unguarded final publication",
+            "shared recovered Decision Apply settlement must preserve its mode-gated final publication",
             errors,
         )
-        if recovered_apply_settlement is not None:
+        if shared_applied_settlement is not None:
             require_token_count(
                 lifecycle_launch_path,
-                "recovered Decision Apply settlement publication",
-                recovered_apply_settlement.source,
+                "shared recovered Decision Apply settlement publication",
+                shared_applied_settlement.source,
                 "super::super::status::set_v2_status(status)",
                 1,
             )
             require_token_count(
                 lifecycle_launch_path,
-                "recovered Decision Apply settlement publication",
-                recovered_apply_settlement.source,
+                "shared recovered Decision Apply settlement publication",
+                shared_applied_settlement.source,
                 "status_publication_enabled",
                 0,
             )
@@ -1673,12 +1734,17 @@ Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied)
                 ".prepare_selected_certified_fetch_completion(",
                 ".bind_durable_body_receipt(receipt)",
                 ".prepare_lifecycle_certified_fetch_completion(candidate, &authenticated)",
+                "queued_ownership.leader_wire_token().is_none()",
+                "queued_ownership.leader_wire_runtime_receipt().is_some()",
+                "durable_registry.matches_selected_response(",
                 ".into_exact_certified_fetch_dequeue(executor, id, &authenticated)",
                 "exact_dequeue.commit(ingress)",
+                "FairV2IngressOwnershipEvidence::leader_wire_runtime_receipt",
                 "durable_registry.commit_after_exact_dequeue(dequeued)",
                 "PreparedCertifiedFetchReadyTransition::Mutation(ready) => ready.commit()",
                 "executor.commit_lifecycle_certified_fetch_completion(executor_prepared, &authenticated)",
                 "service_prepared.commit(operation.permit())",
+                "ingress.mark_leader_wire_durable_body_terminal(&runtime_receipt, &durable_body)",
             ),
         )
     release_path = repo_root / "scripts" / "run_sumeragi_v2_release_gates.sh"

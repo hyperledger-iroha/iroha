@@ -2018,11 +2018,12 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
         "launch",
         (
             "prepare_leader_wire_launch(launch_storage.wal_path())",
-            "RuntimeLifecycleOrdinalSource::after_high_watermark(0)",
+            "lifecycle_ordinal_authorities_after_high_watermark(self.coordinator.high_water)",
             "leader_wire_launch.restored_producer_ordinal_high_watermark()",
             ".advance_past(high_watermark)",
             "leader_wire_launch.open_gate",
             "lifecycle_ordinals.advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())",
+            "self.coordinator.bind_live_lifecycle_ordinal_authority(coordinator_ordinal_authority)",
             "ProductionLeaderWireIngressBindingV1::bind",
             "adapter_startup.into_serialized_runtime",
         ),

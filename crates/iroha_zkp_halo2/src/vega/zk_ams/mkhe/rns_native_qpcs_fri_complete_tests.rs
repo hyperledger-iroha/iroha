@@ -1,4 +1,21 @@
-use super::super::rns_native_qpcs_prefix::{FQ2_BYTES_V1, tree_leaf_hash_v1, tree_node_hash_v1};
+use super::super::{
+    rns_native_profile::{
+        ZkAmsMkheRnsNativeFamilyV1, zk_ams_mkhe_rns_native_profile_v1,
+        zk_ams_mkhe_rns_native_release_candidate_digest_v1, zk_ams_mkhe_rns_native_topology_v1,
+    },
+    rns_native_qpcs_prefix::{FQ2_BYTES_V1, tree_leaf_hash_v1, tree_node_hash_v1},
+    rns_native_source::{
+        ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
+        ZkAmsMkheRnsNativeSourceErrorV1, ZkAmsMkheRnsNativeSourceLayoutV1,
+        ZkAmsMkheRnsNativeSourceSnapshotV1,
+    },
+    rns_native_transcript::{
+        ZkAmsMkheRnsNativeOpeningCommitmentV1, ZkAmsMkheRnsNativeOpeningCommitmentsV1,
+        ZkAmsMkheRnsNativePublicContextV1, ZkAmsMkheRnsNativeQpcsFriRootV1,
+        ZkAmsMkheRnsNativeTerminalBoundTranscriptV1, ZkAmsMkheRnsNativeTerminalBridgeV1,
+        ZkAmsMkheRnsNativeTerminalRootsV1, ZkAmsMkheRnsNativeTranscriptV1,
+    },
+};
 use super::*;
 use std::sync::OnceLock;
 
@@ -42,6 +59,208 @@ fn fixture_digest_v1(label: &[u8], ordinal: usize) -> [u8; DIGEST_BYTES_V1] {
             .to_be_bytes(),
     );
     hash.finalize()
+}
+
+struct JoinTestChunkV1 {
+    arena: ZkAmsMkheRnsNativeSourceArenaV1,
+    bytes: [u8; 1],
+}
+
+impl ZkAmsMkheRnsNativeSecretChunkV1 for JoinTestChunkV1 {
+    fn arena(&self) -> ZkAmsMkheRnsNativeSourceArenaV1 {
+        self.arena
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        &mut self.bytes
+    }
+}
+
+struct JoinTestSnapshotV1 {
+    layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+    context: u16,
+}
+
+impl ZkAmsMkheRnsNativeSourceSnapshotV1 for JoinTestSnapshotV1 {
+    type Chunk = JoinTestChunkV1;
+
+    fn layout(&self) -> ZkAmsMkheRnsNativeSourceLayoutV1 {
+        self.layout
+    }
+
+    fn snapshot_digest(&self, arena: ZkAmsMkheRnsNativeSourceArenaV1) -> [u8; DIGEST_BYTES_V1] {
+        let ordinal = match arena {
+            ZkAmsMkheRnsNativeSourceArenaV1::Main => 5,
+            ZkAmsMkheRnsNativeSourceArenaV1::Nonce => 6,
+        };
+        join_digest_v1(self.context, ordinal)
+    }
+
+    fn read_slot(
+        &mut self,
+        _arena: ZkAmsMkheRnsNativeSourceArenaV1,
+        _slot: u64,
+    ) -> Result<Self::Chunk, ZkAmsMkheRnsNativeSourceErrorV1> {
+        Err(ZkAmsMkheRnsNativeSourceErrorV1::Storage)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum JoinQpcsVariantV1 {
+    Matching,
+    Quotient,
+    Fri(usize),
+}
+
+fn join_digest_v1(context: u16, ordinal: u16) -> [u8; DIGEST_BYTES_V1] {
+    let mut hash = Keccak256::new();
+    hash.update(b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.exact-state-join.test");
+    hash.update(&context.to_be_bytes());
+    hash.update(&ordinal.to_be_bytes());
+    hash.finalize()
+}
+
+fn join_opening_role_v1(ordinal: usize) -> (ZkAmsMkheRnsNativeFamilyV1, u8) {
+    match ordinal {
+        0 => (ZkAmsMkheRnsNativeFamilyV1::X, 0),
+        1..=16 => (ZkAmsMkheRnsNativeFamilyV1::U, (ordinal - 1) as u8),
+        17..=32 => (ZkAmsMkheRnsNativeFamilyV1::E, (ordinal - 17) as u8),
+        33 => (ZkAmsMkheRnsNativeFamilyV1::RE, 0),
+        34..=41 => (ZkAmsMkheRnsNativeFamilyV1::W, (ordinal - 34) as u8),
+        42 => (ZkAmsMkheRnsNativeFamilyV1::RW, 0),
+        _ => panic!("opening ordinal outside the canonical 43-record schedule"),
+    }
+}
+
+fn join_terminal_stage_v1(context: u16) -> ZkAmsMkheRnsNativeTerminalBoundTranscriptV1 {
+    let profile = zk_ams_mkhe_rns_native_profile_v1().expect("profile");
+    let topology = zk_ams_mkhe_rns_native_topology_v1().expect("topology");
+    let release = zk_ams_mkhe_rns_native_release_candidate_digest_v1().expect("release");
+    let layout = ZkAmsMkheRnsNativeSourceLayoutV1::new(
+        profile.profile_digest,
+        topology.topology_digest,
+        release,
+        join_digest_v1(context, 1),
+        join_digest_v1(context, 2),
+    )
+    .expect("layout");
+    let receipt = JoinTestSnapshotV1 { layout, context }
+        .structural_receipt()
+        .expect("source receipt");
+    let public = ZkAmsMkheRnsNativePublicContextV1::new(
+        join_digest_v1(context, 3),
+        join_digest_v1(context, 4),
+    )
+    .expect("public context");
+    let transcript =
+        ZkAmsMkheRnsNativeTranscriptV1::new(layout, receipt, public).expect("context transcript");
+    let openings = core::array::from_fn(|ordinal| {
+        let (family, family_index) = join_opening_role_v1(ordinal);
+        ZkAmsMkheRnsNativeOpeningCommitmentV1::new(
+            family,
+            family_index,
+            join_digest_v1(context, 100 + 2 * ordinal as u16),
+            join_digest_v1(context, 101 + 2 * ordinal as u16),
+        )
+        .expect("opening")
+    });
+    let openings =
+        ZkAmsMkheRnsNativeOpeningCommitmentsV1::new(transcript.binding_digest(), openings)
+            .expect("opening bundle");
+    let transcript = transcript
+        .bind_opening_commitments(openings)
+        .expect("opening transcript");
+    let bridge = ZkAmsMkheRnsNativeTerminalBridgeV1::new(
+        transcript.binding_digest(),
+        join_digest_v1(context, 300),
+        join_digest_v1(context, 301),
+        join_digest_v1(context, 302),
+    )
+    .expect("terminal bridge");
+    transcript
+        .bind_terminal_bridge(bridge)
+        .expect("terminal transcript")
+}
+
+fn join_schedule_and_qpcs_v1(
+    context: u16,
+    variant: JoinQpcsVariantV1,
+) -> (
+    RnsNativeQpcsRelationScheduleV1,
+    ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,
+) {
+    let terminal = join_terminal_stage_v1(context);
+    let mut relation = terminal
+        .bind_qpcs_initial_root(join_digest_v1(context, 400))
+        .expect("initial qPCS root")
+        .bind_q_mask_s_root(join_digest_v1(context, 401))
+        .expect("q-mask root");
+    let binding = relation
+        .take_qpcs_relation_binding()
+        .expect("one-shot relation lineage");
+    let schedule = RnsNativeQpcsRelationScheduleV1::from_relation_binding_v1(
+        join_digest_v1(context, 402),
+        binding,
+    )
+    .expect("lineage-bearing relation schedule");
+    let quotient_ordinal = match variant {
+        JoinQpcsVariantV1::Quotient => 404,
+        JoinQpcsVariantV1::Matching | JoinQpcsVariantV1::Fri(_) => 403,
+    };
+    let mut fri = relation
+        .bind_qpcs_quotient_root(join_digest_v1(context, quotient_ordinal))
+        .expect("quotient root");
+    for layer in 0..ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 as usize {
+        let ordinal = if matches!(variant, JoinQpcsVariantV1::Fri(changed) if changed == layer) {
+            600 + u16::try_from(layer).expect("layer fits u16")
+        } else {
+            500 + u16::try_from(layer).expect("layer fits u16")
+        };
+        let root = ZkAmsMkheRnsNativeQpcsFriRootV1::new(
+            u8::try_from(layer).expect("layer fits u8"),
+            join_digest_v1(context, ordinal),
+        )
+        .expect("typed FRI root");
+        fri = fri.bind_qpcs_fri_root(root).expect("ordered FRI root");
+    }
+    let qpcs = fri.finish_qpcs_fri_roots().expect("qPCS-bound transcript");
+    (schedule, qpcs)
+}
+
+fn join_challenge_seeds_v1(context: u16) -> ZkAmsMkheRnsNativeChallengeSeedsV1 {
+    let (_, qpcs) = join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
+    let roots = ZkAmsMkheRnsNativeTerminalRootsV1::new(
+        qpcs.binding_digest(),
+        join_digest_v1(context, 700),
+        join_digest_v1(context, 701),
+        join_digest_v1(context, 702),
+    )
+    .expect("terminal roots");
+    qpcs.bind_terminal_roots(roots).expect("challenge seeds")
+}
+
+fn join_stage_v1(
+    relation_schedule: RnsNativeQpcsRelationScheduleV1,
+    transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+) -> RnsNativeQpcsFriCompleteStageV1<'static> {
+    let parameter_digest = relation_schedule.parameter_digest();
+    RnsNativeQpcsFriCompleteStageV1 {
+        relation_schedule: Some(relation_schedule),
+        qpcs_bound_transcript_state: transcript.qpcs_bound_transcript_state_v1(),
+        parameter_digest,
+        transcript_digest: transcript.transcript_digest(),
+        query_seed: transcript.qpcs_query_challenge_seed(),
+        section_binding_digest: join_digest_v1(990, 2),
+        schedule_digest: join_digest_v1(990, 3),
+        evaluations: &[],
+        evaluation_binding_digest: join_digest_v1(990, 4),
+        residual_digest: join_digest_v1(990, 5),
+        rlwe_source_residual: &[],
+    }
 }
 
 fn zero_tree_digests_v1(
@@ -259,6 +478,7 @@ fn build_fixture_v1() -> ClosureFixtureV1 {
     let mut context = FriClosureContextV1 {
         parameter_digest,
         transcript_digest: fixture_digest_v1(b"transcript", 0),
+        qpcs_bound_transcript_state: fixture_digest_v1(b"qpcs-bound-state", 0),
         query_seed: fixture_digest_v1(b"query-seed", 0),
         section_binding_digest: fixture_digest_v1(b"section-binding", 0),
         roots,
@@ -324,7 +544,7 @@ fn write_value_v1(
 #[test]
 fn complete_fri_closure_authenticates_every_layer_and_remains_non_authorizing() {
     let fixture = fixture_v1();
-    let stage = verify_closure_parts_v1(
+    let mut stage = verify_closure_parts_v1(
         fixture.context,
         &fixture.queries,
         fixture.fri_one_indices,
@@ -341,10 +561,23 @@ fn complete_fri_closure_authenticates_every_layer_and_remains_non_authorizing() 
     );
     assert_eq!(stage.schedule_digest(), fixture.context.schedule_digest);
     assert_eq!(
+        stage.qpcs_bound_transcript_state,
+        fixture.context.qpcs_bound_transcript_state
+    );
+    assert_eq!(
         stage.residual_digest(),
         residual_digest_v1(fixture.context, &fixture.residual).expect("residual digest")
     );
     assert_eq!(stage.rlwe_source_residual(), fixture.residual.as_slice());
+    let relation_schedule = stage
+        .take_relation_schedule_v1()
+        .expect("retained relation schedule");
+    assert_eq!(relation_schedule.points().len(), 200);
+    assert!(!relation_schedule.has_qpcs_relation_lineage_v1());
+    assert!(matches!(
+        stage.take_relation_schedule_v1(),
+        Err(RnsNativeQpcsFriCompleteErrorV1::InvalidOrder)
+    ));
     assert!(fixture.shape.aggregate_opened <= MAX_FRI_OPENED_LEAVES_V1);
     assert!(fixture.shape.aggregate_authentication <= MAX_FRI_AUTHENTICATION_HASHES_V1);
     assert!(
@@ -353,6 +586,24 @@ fn complete_fri_closure_authenticates_every_layer_and_remains_non_authorizing() 
     );
 
     let source = include_str!("rns_native_qpcs_fri_complete.rs");
+    assert!(source.contains("pub(super) struct RnsNativeQpcsCompletedLineageV1"));
+    assert!(source.contains("fn from_completed_fri_v1("));
+    assert!(!source.contains("pub(super) fn from_completed_fri_v1("));
+    assert!(source.contains("fn take_completed_qpcs_lineage_v1("));
+    assert!(source.contains("validate_qpcs_bound_lineage_v1(&qpcs_transcript)"));
+    assert!(source.contains(
+        "let qpcs_bound_transcript_state = transcript.qpcs_bound_transcript_state_v1();"
+    ));
+    assert!(source.contains("qpcs_bound_transcript_state: context.qpcs_bound_transcript_state"));
+    assert!(
+        source.contains("qpcs_transcript.binding_digest() != expected_qpcs_bound_transcript_state")
+    );
+    let joint = source
+        .find("pub(super) struct RnsNativeQpcsCompletedLineageV1")
+        .expect("joint completed-qPCS lineage");
+    let joint_prefix = &source[joint.saturating_sub(240)..joint];
+    assert!(!joint_prefix.contains("derive(Clone"));
+    assert!(!joint_prefix.contains("derive(Copy"));
     assert!(!source.contains("CandidateReceipt"));
     assert!(!source.contains("release_ready = true"));
     assert!(!source.contains("readiness = true"));
@@ -362,6 +613,70 @@ fn complete_fri_closure_authenticates_every_layer_and_remains_non_authorizing() 
     assert!(composite.contains("retained RLWE/source residual"));
     assert!(composite.contains(
         "StageUnavailable(\n            ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs"
+    ));
+}
+
+#[test]
+fn completed_qpcs_join_requires_the_exact_post_fri_state_and_is_one_shot() {
+    let context = 810;
+    let transcript = join_challenge_seeds_v1(context);
+    let expected_qpcs_bound_state = transcript.qpcs_bound_transcript_state_v1();
+
+    let (matching_schedule, matching_qpcs) =
+        join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
+    assert_eq!(matching_qpcs.binding_digest(), expected_qpcs_bound_state);
+    let mut matching_stage = join_stage_v1(matching_schedule, &transcript);
+    let mut completed = matching_stage
+        .take_completed_qpcs_lineage_v1(matching_qpcs)
+        .expect("exact completed-qPCS join");
+    assert!(!matching_stage.has_relation_schedule_v1());
+    completed
+        .take_qpcs_transcript_v1()
+        .expect("matching joined qPCS transcript");
+
+    for variant in [
+        JoinQpcsVariantV1::Quotient,
+        JoinQpcsVariantV1::Fri(9),
+        JoinQpcsVariantV1::Fri(17),
+    ] {
+        let (schedule, changed_qpcs) = join_schedule_and_qpcs_v1(context, variant);
+        schedule
+            .validate_qpcs_bound_lineage_v1(&changed_qpcs)
+            .expect("same pre-quotient relation lineage");
+        assert_ne!(changed_qpcs.binding_digest(), expected_qpcs_bound_state);
+        let mut stage = join_stage_v1(schedule, &transcript);
+        assert!(matches!(
+            stage.take_completed_qpcs_lineage_v1(changed_qpcs),
+            Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext)
+        ));
+        assert!(!stage.has_relation_schedule_v1());
+        let (_, replayed_matching_qpcs) =
+            join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
+        assert!(matches!(
+            stage.take_completed_qpcs_lineage_v1(replayed_matching_qpcs),
+            Err(RnsNativeQpcsFriCompleteErrorV1::InvalidOrder)
+        ));
+    }
+
+    let legacy_schedule = RnsNativeQpcsRelationScheduleV1::test_fixture_with_binding_v1(
+        join_digest_v1(context, 402),
+        join_digest_v1(context, 401),
+        join_digest_v1(context, 800),
+        join_digest_v1(context, 801),
+        [1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * 5],
+    );
+    let (_, matching_qpcs) = join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
+    let mut legacy_stage = join_stage_v1(legacy_schedule, &transcript);
+    assert!(matches!(
+        legacy_stage.take_completed_qpcs_lineage_v1(matching_qpcs),
+        Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext)
+    ));
+    assert!(!legacy_stage.has_relation_schedule_v1());
+    let (_, replayed_matching_qpcs) =
+        join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
+    assert!(matches!(
+        legacy_stage.take_completed_qpcs_lineage_v1(replayed_matching_qpcs),
+        Err(RnsNativeQpcsFriCompleteErrorV1::InvalidOrder)
     ));
 }
 

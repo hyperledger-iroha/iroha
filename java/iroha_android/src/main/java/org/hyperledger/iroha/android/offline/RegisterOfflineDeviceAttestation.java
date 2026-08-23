@@ -24,6 +24,8 @@ import org.hyperledger.iroha.android.tx.TransactionBuilder;
 /** Canonical one-instruction transaction for the ABI-21 device-attestation path. */
 public final class RegisterOfflineDeviceAttestation {
 
+  private static final long DEFAULT_TRANSACTION_TTL_MS = 100_000L;
+
   private final NetworkId networkId;
   private final String authority;
   private final DeviceAttestationRegistration registration;
@@ -48,23 +50,23 @@ public final class RegisterOfflineDeviceAttestation {
     if (creationTimeMs < 0) {
       throw new IllegalArgumentException("creationTimeMs must be non-negative");
     }
-    if (timeToLiveMs != null && timeToLiveMs <= 0) {
+    final long effectiveTimeToLiveMs =
+        timeToLiveMs == null ? DEFAULT_TRANSACTION_TTL_MS : timeToLiveMs;
+    if (effectiveTimeToLiveMs <= 0) {
       throw new IllegalArgumentException("timeToLiveMs must be positive when present");
     }
-    if (timeToLiveMs != null) {
-      final long validUntil;
-      try {
-        validUntil = Math.addExact(creationTimeMs, timeToLiveMs);
-      } catch (final ArithmeticException ex) {
-        throw new IllegalArgumentException("transaction lifetime overflows milliseconds", ex);
-      }
-      if (validUntil > registration.expiresAtMs()) {
-        throw new IllegalArgumentException(
-            "transaction lifetime must not outlive the device attestation");
-      }
+    final long validUntil;
+    try {
+      validUntil = Math.addExact(creationTimeMs, effectiveTimeToLiveMs);
+    } catch (final ArithmeticException ex) {
+      throw new IllegalArgumentException("transaction lifetime overflows milliseconds", ex);
+    }
+    if (validUntil > registration.expiresAtMs()) {
+      throw new IllegalArgumentException(
+          "transaction lifetime must not outlive the device attestation");
     }
     this.creationTimeMs = creationTimeMs;
-    this.timeToLiveMs = timeToLiveMs;
+    this.timeToLiveMs = effectiveTimeToLiveMs;
     this.nonce = nonce;
     this.feePayment = Objects.requireNonNull(feePayment, "feePayment");
     this.metadata =
@@ -92,7 +94,7 @@ public final class RegisterOfflineDeviceAttestation {
         .setNetworkId(networkId)
         .setAuthority(authority)
         .setCreationTimeMs(creationTimeMs)
-        .setExecutable(Executable.instructions(List.of(instruction())))
+        .setExecutable(Executable.instructions(Collections.singletonList(instruction())))
         .setTimeToLiveMs(timeToLiveMs)
         .setNonce(nonce)
         .setFeePayment(feePayment)

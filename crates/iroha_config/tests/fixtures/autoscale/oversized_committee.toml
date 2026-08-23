@@ -1,0 +1,7 @@
+
+[nexus]
+
+[[nexus.dataspace_catalog]]
+alias = "universal"
+id = 0
+fault_tolerance = 43

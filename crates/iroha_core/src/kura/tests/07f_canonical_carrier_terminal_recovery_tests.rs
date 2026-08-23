@@ -330,6 +330,7 @@ fn canonical_terminal_merge_execution_from_durable_source_for_test(
         results,
         settlement_hash,
         settlement_commitment,
+        fastpq_transcripts: Vec::new().into(),
     }
 }
 fn canonical_terminal_merge_carrier_for_test(

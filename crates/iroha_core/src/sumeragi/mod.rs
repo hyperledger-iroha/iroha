@@ -661,8 +661,7 @@ pub(crate) mod v2_apply;
 pub(crate) mod v2_block_sync;
 pub(crate) mod v2_body_store;
 pub(crate) mod v2_candidate;
-// Certified-Serve payload durability is owned by the production lifecycle
-// coordinator and its co-located ledger/recovery authority.
+// Certified-Serve durability belongs to the production lifecycle coordinator and ledger.
 pub(crate) mod v2_certified_serve_payload_store;
 pub(crate) mod v2_chunks;
 pub(crate) mod v2_context;
@@ -670,8 +669,9 @@ pub(crate) mod v2_context_store;
 pub(crate) mod v2_core;
 pub use v2_context::{
     GenesisV2Bootstrap, V2GenesisBootstrapError, freeze_staged_genesis_v2,
-    signed_genesis_voting_peers, staged_genesis_execution_policy_hash,
-    staged_genesis_nexus_amx_context_hash, validate_signed_genesis_v2_authority,
+    signed_genesis_validator_pops, signed_genesis_voting_peers,
+    staged_genesis_execution_policy_hash, staged_genesis_nexus_amx_context_hash,
+    validate_signed_genesis_v2_authority,
 };
 pub use v2_core::{
     CheckedProductionTransition, ProductionTwoStageRelayRetryTraceProjection,

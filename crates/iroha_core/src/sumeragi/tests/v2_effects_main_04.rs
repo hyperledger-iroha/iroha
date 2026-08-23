@@ -112,6 +112,7 @@ fn live_local_proposal_sign_enters_lifecycle_before_generic_sign_or_broadcast() 
             &fixture.manifest,
             validated,
             command_identity,
+            validate_ownership.owner().lifecycle_ordinal(),
         )
         .unwrap_or_else(|_| panic!("complete exact LocalProposalReady replay"));
     let sign_ownership = validate_ownership
@@ -903,6 +904,68 @@ fn proposal_reconstruction_rejection_retries_and_preserves_hybrid_owner() {
     assert_eq!(executor.outstanding_requests.len(), 1);
     assert!(!executor.status().fail_closed);
 }
+
+#[test]
+fn certificate_only_fetch_rejects_chunks_and_retains_typed_response_path() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    executor
+        .consume_effects(
+            vec![AdapterEffect::FetchBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+                manifest: Some(fixture.manifest.clone()),
+                certified_sources: certified_sources(&fixture, &prepare),
+                certificate: Some(prepare),
+            }],
+            &mut services,
+        )
+        .expect("start certificate-only fetch with manifest authority");
+    let task = services.fetch_tasks[0].clone();
+    let work_id = task.id();
+    let request_hash = HashOf::new(
+        task.certified_request()
+            .expect("certificate-only fetch owns one response request"),
+    );
+    let ownership_before = executor.body_ownership_projection();
+
+    assert_eq!(
+        executor.accept_payload_chunk(
+            work_id,
+            signed_payload_chunk(&fixture),
+            &fixture.context.roster[0].validator,
+            &mut services,
+        ),
+        Err(EffectTransportError::WrongFetchKind),
+        "chunks without Proposal replay cannot manufacture certified lifecycle authority",
+    );
+    assert!(services.chunks.is_empty());
+    assert_eq!(executor.body_ownership_projection(), ownership_before);
+    assert_eq!(executor.certified_work.get(&request_hash), Some(&work_id));
+    assert!(executor.outstanding_requests.contains(request_hash));
+
+    let response = signed_certified_response(
+        &fixture,
+        &task,
+        fixture.manifest.clone(),
+        fixture.body.clone(),
+        0,
+    );
+    let responder = fixture.context.roster[0].validator.clone();
+    assert!(matches!(
+        executor
+            .probe_certified_response_priority(&response, &responder)
+            .expect("the untouched request still accepts its typed response"),
+        CertifiedResponsePriorityProbe::PreflightRequired(candidate)
+            if candidate.work_id() == work_id
+                && candidate.request_hash() == request_hash
+    ));
+    assert!(!executor.status().fail_closed);
+}
+
 #[test]
 fn certified_body_response_carrier_swap_is_rejected_before_fetch_mutation() {
     let fixture = Fixture::new();
@@ -1427,19 +1490,8 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     let second_response = response(1);
     assert_eq!(first_response.request_hash, second_response.request_hash);
     assert_ne!(HashOf::new(&first_response), HashOf::new(&second_response));
-    let ingress =
-        crate::sumeragi::FairV2Ingress::new(32, 5 * 512 * 1024, 512 * 1024, 0, 512 * 1024);
-    ingress
-        .configure_roster(
-            fixture
-                .context
-                .roster
-                .iter()
-                .map(|power| power.validator.clone()),
-        )
-        .expect("fixture roster fits the selector ingress");
-    ingress.state.lock().leader_wire_context = Some((fixture.context.id(), fixture.context.height));
-    ingress.open().expect("open selector ingress");
+    let (ingress, _leader_wire_directory) =
+        fixture.productive_response_ingress("selector-response-lifecycle.wal");
     let first_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::CertifiedBodyResponse(first_response.clone()),
     ));
@@ -1463,6 +1515,21 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     ));
     let second_ordinal = ingress.state.lock().last_admission_ordinal;
     assert!(first_ordinal < second_ordinal);
+    assert!(matches!(
+        fixture
+            .executor
+            .classify_selected_certified_body_response_owner_for_test(
+                &ingress,
+                second_ordinal,
+            ),
+        Ok(crate::sumeragi::v2_lifecycle_coordinator::SelectedCertifiedBodyResponseOwnerV1::NonPriority)
+    ));
+    assert!(matches!(
+        fixture
+            .executor
+            .classify_selected_certified_body_response_owner_for_test(&ingress, first_ordinal),
+        Ok(crate::sumeragi::v2_lifecycle_coordinator::SelectedCertifiedBodyResponseOwnerV1::OrdinaryWinner)
+    ));
     let prepared = fixture
         .executor
         .prepare_lifecycle_ingress_selector(&ingress, second_ordinal)
@@ -1484,13 +1551,13 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     assert_eq!(prepared.verdict_count_for_test(), 2);
     assert_eq!(
         prepared.priority_owners_for_test(),
-        &BTreeSet::from([first_ordinal, second_ordinal]),
-        "both untrusted physical completions own the request fence",
+        &BTreeSet::from([first_ordinal]),
+        "only the drainable response-family winner owns the request fence",
     );
     assert_eq!(
         prepared.selector_debt_for_test(),
-        2,
-        "the claimed-family winner must not double-count its fence owner",
+        1,
+        "the claimed-family winner must census its two authorities as one physical owner",
     );
     assert_eq!(
         prepared.claimed_family_winners_for_test(),
@@ -1499,9 +1566,10 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     );
     assert_eq!(
         prepared.certified_fetch_ready_authority_for_test(),
-        Err(CertifiedFetchReadyPublicationError::SelectedOccurrenceNotClaimedResponse),
-        "a selected request-fenced retransmission cannot borrow the other occurrence's family authority",
+        Err(CertifiedFetchReadyPublicationError::InvalidSelectedOccurrence),
+        "a selected non-drainable retransmission cannot borrow the family winner's authority",
     );
+    drop(prepared);
     let winning_prepared = fixture
         .executor
         .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
@@ -1567,16 +1635,12 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         winning_prepared.selected_cut_for_test(),
         "registry preflight leaves the complete queue-minted cut unchanged",
     );
+    drop(reprobed_winner);
     assert_eq!(
         winning_prepared.selected_cut_for_test().2,
         first_ordinal,
         "deriving readiness borrows and preserves the complete prepared token",
     );
-    let owner_effect = task.adapter_effect();
-    let owner_pending = task
-        .ownership()
-        .exact_pending_adapter_effect_binding(&owner_effect)
-        .expect("mint the exact Fetch registry carrier for owner admission");
     let proofs = fixture
         .validator_keys
         .iter()
@@ -1588,16 +1652,21 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     let verified = VerifiedHeightContext::genesis(fixture.context.clone(), proofs)
         .expect("verified owner context");
     let owner_directory = TempDir::new().expect("temporary lifecycle owner storage");
-    let (mut owner, lifecycle_ordinal, lifecycle_source) =
-        crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::waiting_fetch_for_ingress_test(
+    let mut owner =
+        crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::empty_ingress_owner_for_test(
             verified,
-            &winning_prepared,
-            owner_effect,
-            owner_pending,
             &fixture.validator_keys[0],
             owner_directory.path(),
         );
+    let lifecycle_ordinal = 1;
+    let lifecycle_source = wake_source;
+    assert_eq!(
+        owner.ingress_admission_census_for_test(),
+        (0, 0, 0, 0),
+        "a fresh height has no manually seeded Fetch row or registry incumbent",
+    );
     let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
+    production_services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
     let before_foreign_sign_cursor =
         owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
     assert!(matches!(
@@ -1679,6 +1748,7 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         .expect("the exact winner remains selectable for a capacity wait");
     let before_capacity_wait =
         owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
+    assert_eq!(before_capacity_wait, (None, None, None, false));
     let capacity_result = owner.plan_ingress_turn_for_test(
         &production_services,
         &fixture.executor,
@@ -1691,8 +1761,27 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         Ok(ProductionIngressTurnPreparation::Queued(_)) => {
             panic!("a saturated Consensus prefix cannot admit Fetch persistence")
         }
-        Err(_) => panic!("saturation must return the opaque capacity wait"),
+        Err(error) => panic!(
+            "saturation must return the opaque capacity wait: {}",
+            error.reason(),
+        ),
     };
+    assert_eq!(
+        owner.ingress_admission_census_for_test(),
+        (1, 1, 1, 1),
+        "the first valid response atomically installs logical, durable, and concrete Fetch ownership",
+    );
+    let admitted_capacity_wait =
+        owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
+    assert!(matches!(
+        admitted_capacity_wait,
+        (
+            Some(LifecycleState::Waiting(wait)),
+            Some(0),
+            None,
+            false,
+        ) if wait.source() == lifecycle_source && wait.observed_generation() == 0
+    ));
     assert_eq!(
         capacity_wait.capacity_status(&production_services),
         ProductionIngressCapacityStatus::Pending
@@ -1724,7 +1813,7 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     planner_io.release_one_predecessor();
     assert_eq!(
         owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
-        before_capacity_wait,
+        admitted_capacity_wait,
         "capacity waiting cannot advance the Fetch generation or claim a lease",
     );
     let winning_prepared = fixture
@@ -1775,6 +1864,7 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         repeated_result,
         Err(ProductionIngressSchedulerInputsError::InFlightSelectedWork { .. })
     ));
+    drop(repeated_result);
     assert_eq!(
         owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
         before_repeat,
@@ -1783,6 +1873,19 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     assert_eq!(planner_io.queued_certified_fetch_count(), 1);
     assert!(!fixture.executor.output_guard.restart_required());
     let queue_depth_before_completion = ingress.len();
+    let selected_strong_count_before_worker = ingress
+        .state
+        .lock()
+        .lanes
+        .values()
+        .flat_map(|lane| lane.entries.iter())
+        .find(|entry| entry.admission_ordinal == first_ordinal)
+        .map(|entry| Arc::strong_count(&entry.inbound))
+        .expect("the selected response remains queued before worker execution");
+    assert_eq!(
+        selected_strong_count_before_worker, 1,
+        "all selector probes must release the selected response before worker execution",
+    );
     planner_io.execute_one_certified_fetch(Arc::clone(&fixture.executor.output_guard));
     let completion = match production_services
         .take_next_lifecycle_completion()
@@ -1793,31 +1896,78 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         }
         _ => panic!("the persisted ordinary Fetch must classify as CertifiedFetch"),
     };
-    if owner
+    let selected_strong_count_before_phase_b = ingress
+        .state
+        .lock()
+        .lanes
+        .values()
+        .flat_map(|lane| lane.entries.iter())
+        .find(|entry| entry.admission_ordinal == first_ordinal)
+        .map(|entry| Arc::strong_count(&entry.inbound))
+        .expect("the selected response remains queued before Phase B");
+    assert_eq!(
+        selected_strong_count_before_phase_b, 1,
+        "the persisted completion must not retain a queue carrier clone",
+    );
+    owner
         .complete_certified_fetch_for_test(
             &mut fixture.executor,
             &mut production_services,
             &ingress,
             completion,
         )
-        .is_err()
-    {
-        panic!("Phase B must publish Ready and retire the exact physical response");
-    }
+        .unwrap_or_else(|error| match error {
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::Retry(
+                error,
+            ) => panic!(
+                "Phase B must publish Ready and retire the exact physical response: {}: {}",
+                error.reason(),
+                error.detail(),
+            ),
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequired(
+                error,
+            ) => panic!(
+                "Phase B reached a restart-only persistence failure: {}: {}",
+                error.reason(),
+                error.detail(),
+            ),
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(
+                error,
+            ) => panic!("Phase B failed after the persistence commit: {error}"),
+        });
     assert_eq!(
         ingress.len(),
         queue_depth_before_completion - 1,
         "Phase B dequeues only the selected response occurrence",
     );
     assert!(matches!(
+        fixture
+            .executor
+            .classify_selected_certified_body_response_owner_for_test(
+                &ingress,
+                second_ordinal,
+            ),
+        Ok(crate::sumeragi::v2_lifecycle_coordinator::SelectedCertifiedBodyResponseOwnerV1::NonPriority)
+    ), "the leftover fanout response is ordinary retirement work after request completion");
+    assert!(matches!(
         owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
-        (Some(LifecycleState::Ready), Some(1), None, false)
+        (Some(LifecycleState::Ready), Some(2), None, false)
     ));
     assert!(matches!(
         production_services
             .take_next_lifecycle_completion()
             .expect("the completion FIFO remains valid after exact acknowledgement"),
         crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::None
+    ));
+    let body_key = (fixture.manifest.round, fixture.manifest.subject);
+    let durable = fixture
+        .executor
+        .durable_bodies
+        .get(&body_key)
+        .expect("Phase B joins the durable receipt into the executor catalog");
+    assert_eq!(durable.manifest_hash(), HashOf::new(&fixture.manifest));
+    assert!(fixture.executor.recovered_bodies.get(&body_key).is_some_and(
+        |(manifest, recovered)| manifest == &fixture.manifest && recovered == durable
     ));
     assert!(!fixture.executor.output_guard.restart_required());
     planner_io.detach(&mut production_services);

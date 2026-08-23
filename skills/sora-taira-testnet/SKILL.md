@@ -38,8 +38,8 @@ python3 scripts/taira_devnet.py down
 owner-only directory under `dist/`. It generates exactly four fresh-key NPoS
 validators on the canonical Taira chain, binds them to loopback, validates all
 four configs with the current daemon, starts them, requires health/readiness,
-submits a blocking signed ping, requires four-peer height convergence, and
-performs a semantic MCP initialize/tools-list smoke.
+submits a signed ping, waits for its typed `Applied` status, requires four-peer
+height convergence, and performs a semantic MCP initialize/tools-list smoke.
 
 Use `--full-doctor` only when the broad public product-route surface is part of
 the test. A minimal throwaway chain must not be rejected merely because an
@@ -170,11 +170,9 @@ For SoraFS/app-api diagnosis, sample both:
 - `GET /v1/sorafs/capacity/state`
 - repeated `GET /v1/app-api/cid/<cid>`
 
-The retained `configs/soranexus/taira/check_sorafs_rollout.sh` is an
-application-specific read check, not a deployment gate. A stable app-api `404`
-with zero capacity declarations suggests missing provider publication. Mixed
-`200`/`404` responses suggest inconsistent upstream manifest visibility, not a
-bad CID.
+A stable app-api `404` with zero capacity declarations suggests missing provider
+publication. Mixed `200`/`404` responses suggest inconsistent upstream manifest
+visibility, not a bad CID.
 
 ## Response handling and safety
 

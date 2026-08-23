@@ -3,16 +3,20 @@
 // This source deliberately remains behind `kagemusha-generation-memory-lab`
 // and behind the hard-false V7 release gate.  It creates no artifact files.
 
-const KAGEMUSHA_SERIALIZED_RELEASE_CARRIER_VERSION_V7: u16 = 7;
-const KAGEMUSHA_SERIALIZED_NULL_CARRIER_ROLE_V7: u8 = 0;
 const KAGEMUSHA_SERIALIZED_PARAMS_BYTES_V7: usize = 8_388_676;
 const KAGEMUSHA_SERIALIZED_VERIFYING_KEY_BYTES_V7: usize = 20_394;
 const KAGEMUSHA_SERIALIZED_PROVING_KEY_BYTES_V7: u64 = 5_356_151_726;
 const KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7: usize = 93_184;
 const KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7: usize = 186_368;
 const KAGEMUSHA_SERIALIZED_STEP_PROOF_MAX_BYTES_V7: usize = 192 * 1024;
+const KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7: usize = 1_344;
+const KAGEMUSHA_SERIALIZED_NULL_CARRIER_PAYLOAD_BYTES_V7: usize =
+    KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7 + 4 * KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7;
+const KAGEMUSHA_SERIALIZED_BASE_CARRIER_BYTES_V7: usize = 188_844;
+const KAGEMUSHA_SERIALIZED_RECURSIVE_CARRIER_BYTES_V7: usize = 191_532;
+const KAGEMUSHA_SERIALIZED_NULL_CARRIER_BYTES_V7: usize = 191_828;
 const KAGEMUSHA_SERIALIZED_REVIEWED_PEAK_BYTES_V7: u64 = 53_126_388_928;
-const KAGEMUSHA_SERIALIZED_REQUIRED_TERMINAL_IPA_DECISIONS_V7: usize = 26;
+const KAGEMUSHA_SERIALIZED_REQUIRED_TERMINAL_IPA_DECISIONS_V7: usize = 30;
 
 fn kagemusha_serialized_release_manifest_template_v7()
 -> super::kagemusha_serialized_audit_v7::KagemushaSerializedAuditManifestV7 {
@@ -186,58 +190,97 @@ where
     }
 }
 
-/// Complete canonical fixed-slot carrier for the final all-zero NullParent.
-/// The extra branch folds are required by the fixed two-parent graph even
-/// though the two public instance columns are exactly zero.
+/// Complete compact fixed-slot carrier for the final all-zero NullParent.
+///
+/// The canonical Norito schema hash is the carrier version/role discriminator.
+/// The two all-zero instance columns and both succinct-verifier outputs are
+/// deliberately derived while authenticating the carrier.  The payload keeps
+/// both proofs and all four independently randomized fold transcripts; none of
+/// the cryptographic evidence is omitted merely to meet the release corridor.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct KagemushaSerializedNullCarrierWireV7 {
-    version: u16,
-    role: u8,
     manifest_sha256: [u8; 32],
-    step_eq_instances: Vec<u128>,
-    step_ep_instances: Vec<u128>,
-    step_eq_proof_bytes: Vec<u8>,
-    step_ep_proof_bytes: Vec<u8>,
-    step_eq_current: KagemushaIpaAccumulatorWireV4,
-    step_ep_current: KagemushaIpaAccumulatorWireV4,
-    step_eq_post_proof_fold: KagemushaIpaAccumulationProofV4,
-    step_ep_post_proof_fold: KagemushaIpaAccumulationProofV4,
-    step_eq_branch_merge_fold: KagemushaIpaAccumulationProofV4,
-    step_ep_branch_merge_fold: KagemushaIpaAccumulationProofV4,
+    /// Eq proof, Ep proof, then Eq/Ep post-proof and Eq/Ep branch folds.
+    payload: Vec<u8>,
+}
+
+struct KagemushaSerializedNullCarrierPartsV7<'a> {
+    step_eq_proof: &'a [u8],
+    step_ep_proof: &'a [u8],
+    step_eq_post_proof_fold: &'a [u8],
+    step_ep_post_proof_fold: &'a [u8],
+    step_eq_branch_merge_fold: &'a [u8],
+    step_ep_branch_merge_fold: &'a [u8],
+}
+
+fn require_distinct_kagemusha_serialized_null_fold_transcripts_v7(
+    parts: &KagemushaSerializedNullCarrierPartsV7<'_>,
+) -> Result<(), String> {
+    let folds = [
+        parts.step_eq_post_proof_fold,
+        parts.step_ep_post_proof_fold,
+        parts.step_eq_branch_merge_fold,
+        parts.step_ep_branch_merge_fold,
+    ];
+    for (index, fold) in folds.iter().enumerate() {
+        if folds[..index].contains(fold) {
+            return Err(
+                "Kagemusha V7 compact NullParent fold transcripts must be separately generated"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
 }
 
 impl KagemushaSerializedNullCarrierWireV7 {
+    fn parts(&self) -> Result<KagemushaSerializedNullCarrierPartsV7<'_>, String> {
+        if self.payload.len() != KAGEMUSHA_SERIALIZED_NULL_CARRIER_PAYLOAD_BYTES_V7 {
+            return Err("Kagemusha V7 compact NullParent payload length drifted".to_owned());
+        }
+        let (step_eq_proof, tail) = self
+            .payload
+            .split_at(KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7);
+        let (step_ep_proof, tail) = tail.split_at(KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7);
+        let (step_eq_post_proof_fold, tail) =
+            tail.split_at(KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7);
+        let (step_ep_post_proof_fold, tail) =
+            tail.split_at(KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7);
+        let (step_eq_branch_merge_fold, step_ep_branch_merge_fold) =
+            tail.split_at(KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7);
+        Ok(KagemushaSerializedNullCarrierPartsV7 {
+            step_eq_proof,
+            step_ep_proof,
+            step_eq_post_proof_fold,
+            step_ep_post_proof_fold,
+            step_eq_branch_merge_fold,
+            step_ep_branch_merge_fold,
+        })
+    }
+
     fn validate(
         &self,
         manifest: &super::kagemusha_serialized_audit_v7::KagemushaSerializedAuditManifestV7,
     ) -> Result<(), String> {
         manifest.validate()?;
-        let zero_instances = vec![0; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7];
-        if self.version != KAGEMUSHA_SERIALIZED_RELEASE_CARRIER_VERSION_V7
-            || self.role != KAGEMUSHA_SERIALIZED_NULL_CARRIER_ROLE_V7
-            || self.manifest_sha256 != manifest.sha256()?
-            || self.step_eq_instances != zero_instances
-            || self.step_ep_instances != zero_instances
-            || self.step_eq_proof_bytes.len() != KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7
-            || self.step_ep_proof_bytes.len() != KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7
-            || self.step_eq_proof_bytes.len() > KAGEMUSHA_SERIALIZED_STEP_PROOF_MAX_BYTES_V7
-            || self.step_ep_proof_bytes.len() > KAGEMUSHA_SERIALIZED_STEP_PROOF_MAX_BYTES_V7
-            || self.step_eq_proof_bytes == self.step_ep_proof_bytes
-            || self.step_eq_proof_bytes.len() + self.step_ep_proof_bytes.len()
-                != KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7
+        let fold_bytes =
+            super::kagemusha_accumulation::kagemusha_ipa_accumulation_proof_bytes_v4(manifest.k)?;
+        let parts = self.parts()?;
+        require_distinct_kagemusha_serialized_null_fold_transcripts_v7(&parts)?;
+        if self.manifest_sha256 != manifest.sha256()?
+            || fold_bytes != KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7
+            || parts.step_eq_proof == parts.step_ep_proof
         {
             return Err("Kagemusha V7 canonical NullParent carrier shape drifted".to_owned());
         }
-        self.step_eq_current.to_eq(manifest.k)?;
-        self.step_ep_current.to_ep(manifest.k)?;
-        self.step_eq_post_proof_fold
-            .validate_fixed_transcript(manifest.k)?;
-        self.step_ep_post_proof_fold
-            .validate_fixed_transcript(manifest.k)?;
-        self.step_eq_branch_merge_fold
-            .validate_fixed_transcript(manifest.k)?;
-        self.step_ep_branch_merge_fold
-            .validate_fixed_transcript(manifest.k)?;
+        for bytes in [
+            parts.step_eq_post_proof_fold,
+            parts.step_ep_post_proof_fold,
+            parts.step_eq_branch_merge_fold,
+            parts.step_ep_branch_merge_fold,
+        ] {
+            KagemushaIpaAccumulationProofV4::from_fold_bytes(manifest.k, bytes.to_vec())?;
+        }
         Ok(())
     }
 }
@@ -248,37 +291,146 @@ struct KagemushaSerializedSealedNullCarrierV7 {
     canonical_sha256: [u8; 32],
 }
 
+#[allow(clippy::too_many_arguments)]
+fn authenticate_kagemusha_serialized_null_carrier_v7(
+    manifest: &super::kagemusha_serialized_audit_v7::KagemushaSerializedAuditManifestV7,
+    step_eq_params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
+        halo2_proofs::halo2curves::pasta::EqAffine,
+    >,
+    step_eq_verifying_key: &halo2_proofs::plonk::VerifyingKey<
+        halo2_proofs::halo2curves::pasta::EqAffine,
+    >,
+    step_ep_params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
+        halo2_proofs::halo2curves::pasta::EpAffine,
+    >,
+    step_ep_verifying_key: &halo2_proofs::plonk::VerifyingKey<
+        halo2_proofs::halo2curves::pasta::EpAffine,
+    >,
+    wire: &KagemushaSerializedNullCarrierWireV7,
+) -> Result<(KagemushaIpaAccumulatorWireV4, KagemushaIpaAccumulatorWireV4), String> {
+    use halo2_proofs::halo2curves::pasta::{Fp, Fq};
+
+    wire.validate(manifest)?;
+    let parts = wire.parts()?;
+    let proof_bound = usize::try_from(manifest.step_eq_proof_bytes)
+        .map_err(|_| "Kagemusha V7 NullParent proof bound does not fit usize".to_owned())?;
+    let step_eq_instances = vec![vec![
+        Fp::ZERO;
+        KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7
+    ]];
+    let step_ep_instances = vec![vec![
+        Fq::ZERO;
+        KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7
+    ]];
+    let (step_eq_current, _) = succinct_verify_kagemusha_serialized_eq_v7(
+        step_eq_params,
+        step_eq_verifying_key,
+        parts.step_eq_proof,
+        &step_eq_instances,
+        manifest,
+        proof_bound,
+    )?;
+    let (step_ep_current, _) = succinct_verify_kagemusha_serialized_ep_v7(
+        step_ep_params,
+        step_ep_verifying_key,
+        parts.step_ep_proof,
+        &step_ep_instances,
+        manifest,
+        proof_bound,
+    )?;
+    let step_eq_post = KagemushaIpaAccumulationProofV4::from_fold_bytes(
+        manifest.k,
+        parts.step_eq_post_proof_fold.to_vec(),
+    )?;
+    let step_ep_post = KagemushaIpaAccumulationProofV4::from_fold_bytes(
+        manifest.k,
+        parts.step_ep_post_proof_fold.to_vec(),
+    )?;
+    let step_eq_branch = KagemushaIpaAccumulationProofV4::from_fold_bytes(
+        manifest.k,
+        parts.step_eq_branch_merge_fold.to_vec(),
+    )?;
+    let step_ep_branch = KagemushaIpaAccumulationProofV4::from_fold_bytes(
+        manifest.k,
+        parts.step_ep_branch_merge_fold.to_vec(),
+    )?;
+    for proof in [&step_eq_post, &step_eq_branch] {
+        super::kagemusha_accumulation::verify_and_decide_eq_accumulation_v4(
+            step_eq_params,
+            manifest.k,
+            step_eq_current.clone(),
+            Some(step_eq_current.clone()),
+            proof,
+        )?;
+    }
+    for proof in [&step_ep_post, &step_ep_branch] {
+        super::kagemusha_accumulation::verify_and_decide_ep_accumulation_v4(
+            step_ep_params,
+            manifest.k,
+            step_ep_current.clone(),
+            Some(step_ep_current.clone()),
+            proof,
+        )?;
+    }
+    Ok((
+        KagemushaIpaAccumulatorWireV4::from_eq(&step_eq_current, manifest.k)?,
+        KagemushaIpaAccumulatorWireV4::from_ep(&step_ep_current, manifest.k)?,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn seal_kagemusha_serialized_null_carrier_v7(
     manifest: &super::kagemusha_serialized_audit_v7::KagemushaSerializedAuditManifestV7,
+    step_eq_params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
+        halo2_proofs::halo2curves::pasta::EqAffine,
+    >,
+    step_eq_verifying_key: &halo2_proofs::plonk::VerifyingKey<
+        halo2_proofs::halo2curves::pasta::EqAffine,
+    >,
+    step_ep_params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
+        halo2_proofs::halo2curves::pasta::EpAffine,
+    >,
+    step_ep_verifying_key: &halo2_proofs::plonk::VerifyingKey<
+        halo2_proofs::halo2curves::pasta::EpAffine,
+    >,
     step_eq: &KagemushaSerializedNullParentV7<halo2_proofs::halo2curves::pasta::EqAffine>,
     step_ep: &KagemushaSerializedNullParentV7<halo2_proofs::halo2curves::pasta::EpAffine>,
 ) -> Result<KagemushaSerializedSealedNullCarrierV7, String> {
+    let mut payload = Vec::with_capacity(KAGEMUSHA_SERIALIZED_NULL_CARRIER_PAYLOAD_BYTES_V7);
+    payload.extend_from_slice(&step_eq.proof);
+    payload.extend_from_slice(&step_ep.proof);
+    payload.extend_from_slice(&step_eq.post_proof_fold.bytes);
+    payload.extend_from_slice(&step_ep.post_proof_fold.bytes);
+    payload.extend_from_slice(&step_eq.branch_merge_fold.bytes);
+    payload.extend_from_slice(&step_ep.branch_merge_fold.bytes);
     let wire = KagemushaSerializedNullCarrierWireV7 {
-        version: KAGEMUSHA_SERIALIZED_RELEASE_CARRIER_VERSION_V7,
-        role: KAGEMUSHA_SERIALIZED_NULL_CARRIER_ROLE_V7,
         manifest_sha256: manifest.sha256()?,
-        step_eq_instances: vec![0; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7],
-        step_ep_instances: vec![0; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7],
-        step_eq_proof_bytes: step_eq.proof.clone(),
-        step_ep_proof_bytes: step_ep.proof.clone(),
-        step_eq_current: KagemushaIpaAccumulatorWireV4::from_eq(&step_eq.current, manifest.k)?,
-        step_ep_current: KagemushaIpaAccumulatorWireV4::from_ep(&step_ep.current, manifest.k)?,
-        step_eq_post_proof_fold: step_eq.post_proof_fold.clone(),
-        step_ep_post_proof_fold: step_ep.post_proof_fold.clone(),
-        step_eq_branch_merge_fold: step_eq.branch_merge_fold.clone(),
-        step_ep_branch_merge_fold: step_ep.branch_merge_fold.clone(),
+        payload,
     };
     wire.validate(manifest)?;
+    let authenticated = authenticate_kagemusha_serialized_null_carrier_v7(
+        manifest,
+        step_eq_params,
+        step_eq_verifying_key,
+        step_ep_params,
+        step_ep_verifying_key,
+        &wire,
+    )?;
+    if authenticated.0 != KagemushaIpaAccumulatorWireV4::from_eq(&step_eq.current, manifest.k)?
+        || authenticated.1 != KagemushaIpaAccumulatorWireV4::from_ep(&step_ep.current, manifest.k)?
+    {
+        return Err("Kagemusha V7 compact NullParent derived lineage drifted".to_owned());
+    }
     let canonical_bytes = norito::encode_canonical(&wire).map_err(|error| {
         format!("failed to encode Kagemusha V7 canonical NullParent carrier: {error}")
     })?;
-    let absolute_max = usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4)
-        .map_err(|_| "Kagemusha V7 absolute carrier bound does not fit usize".to_owned())?;
+    let release_max = usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4)
+        .map_err(|_| "Kagemusha V7 release carrier bound does not fit usize".to_owned())?;
     if canonical_bytes.len() <= KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7
-        || canonical_bytes.len() > absolute_max
+        || canonical_bytes.len() > release_max
     {
         return Err(format!(
-            "Kagemusha V7 canonical NullParent carrier is {} bytes and violates the existing {absolute_max}-byte absolute payload corridor; release is a hard NO",
+            "Kagemusha V7 compact NullParent carrier is {} bytes and violates the existing {release_max}-byte release payload corridor; release is a hard NO",
             canonical_bytes.len()
         ));
     }
@@ -296,7 +448,17 @@ fn seal_kagemusha_serialized_null_carrier_v7(
     if decoded != wire {
         return Err("Kagemusha V7 canonical NullParent carrier roundtrip drifted".to_owned());
     }
-    decoded.validate(manifest)?;
+    let decoded_authenticated = authenticate_kagemusha_serialized_null_carrier_v7(
+        manifest,
+        step_eq_params,
+        step_eq_verifying_key,
+        step_ep_params,
+        step_ep_verifying_key,
+        &decoded,
+    )?;
+    if decoded_authenticated != authenticated {
+        return Err("Kagemusha V7 decoded NullParent authentication drifted".to_owned());
+    }
     let canonical_sha256: [u8; 32] = Sha256::digest(&canonical_bytes).into();
     if canonical_sha256 == [0; 32] {
         return Err("Kagemusha V7 canonical NullParent carrier SHA-256 is zero".to_owned());
@@ -309,21 +471,39 @@ fn seal_kagemusha_serialized_null_carrier_v7(
 }
 
 fn validate_kagemusha_serialized_null_carrier_seal_v7(
-    manifest: &super::kagemusha_serialized_audit_v7::KagemushaSerializedAuditManifestV7,
+    material: &KagemushaSerializedReleaseMaterialV7,
     carrier: &KagemushaSerializedSealedNullCarrierV7,
 ) -> Result<(), String> {
-    carrier.wire.validate(manifest)?;
+    carrier.wire.validate(&material.manifest)?;
     let canonical_bytes = norito::encode_canonical(&carrier.wire).map_err(|error| {
         format!("failed to re-encode Kagemusha V7 canonical NullParent carrier: {error}")
     })?;
     let canonical_sha256: [u8; 32] = Sha256::digest(&canonical_bytes).into();
-    let absolute_max = usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4)
-        .map_err(|_| "Kagemusha V7 absolute carrier bound does not fit usize".to_owned())?;
+    let release_max = usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4)
+        .map_err(|_| "Kagemusha V7 release carrier bound does not fit usize".to_owned())?;
+    let authenticated = authenticate_kagemusha_serialized_null_carrier_v7(
+        &material.manifest,
+        &material.step_eq_params,
+        &material.step_eq_verifying_key,
+        &material.step_ep_params,
+        &material.step_ep_verifying_key,
+        &carrier.wire,
+    )?;
     if canonical_bytes != carrier.canonical_bytes
         || canonical_bytes.len() <= KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7
-        || canonical_bytes.len() > absolute_max
+        || canonical_bytes.len() > release_max
         || canonical_sha256 != carrier.canonical_sha256
         || canonical_sha256 == [0; 32]
+        || authenticated.0
+            != KagemushaIpaAccumulatorWireV4::from_eq(
+                &material.step_eq_null.current,
+                material.manifest.k,
+            )?
+        || authenticated.1
+            != KagemushaIpaAccumulatorWireV4::from_ep(
+                &material.step_ep_null.current,
+                material.manifest.k,
+            )?
     {
         return Err("Kagemusha V7 canonical NullParent seal/size identity drifted".to_owned());
     }
@@ -2190,8 +2370,15 @@ fn prepare_kagemusha_serialized_release_material_v7(
     {
         return Err("Kagemusha V7 NullParent-to-live substitution was accepted".to_owned());
     }
-    let null_carrier =
-        seal_kagemusha_serialized_null_carrier_v7(&manifest, &step_eq_null, &step_ep_null)?;
+    let null_carrier = seal_kagemusha_serialized_null_carrier_v7(
+        &manifest,
+        &step_eq_params,
+        &step_eq_converged_vk,
+        &step_ep_params,
+        &step_ep_converged_vk,
+        &step_eq_null,
+        &step_ep_null,
+    )?;
 
     Ok(KagemushaSerializedReleaseMaterialV7 {
         manifest,
@@ -2218,37 +2405,123 @@ fn prepare_kagemusha_serialized_release_material_v7(
     })
 }
 
-/// Canonical content-addressed V7 carrier.  Unlike the raw 186,368-byte proof
-/// sum, this is the complete payload needed to authenticate and recurse from a
-/// live node: both 70-cell columns, both proofs, both output lineages, and both
-/// post-proof fold transcripts.
+/// Canonical content-addressed V7 carrier.
+///
+/// Both 70-cell columns, both proofs, and both post-proof fold transcripts are
+/// carried.  Output lineages are not duplicated: the authenticated reader
+/// succinctly verifies each proof, reconstructs the parent lineage from its
+/// public cells, verifies the fold, and derives the exact lineages needed by a
+/// child.  The Norito schema hash is the carrier version discriminator.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct KagemushaSerializedReleaseCarrierWireV7 {
-    version: u16,
     manifest_sha256: [u8; 32],
-    step_eq_instances: Vec<u128>,
-    step_ep_instances: Vec<u128>,
-    step_eq_proof_bytes: Vec<u8>,
-    step_ep_proof_bytes: Vec<u8>,
-    step_eq_lineage: KagemushaIpaAccumulatorWireV4,
-    step_ep_lineage: KagemushaIpaAccumulatorWireV4,
-    step_eq_post_proof_fold: KagemushaIpaAccumulationProofV4,
-    step_ep_post_proof_fold: KagemushaIpaAccumulationProofV4,
+    step_eq_instances: [u128; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7],
+    step_ep_instances: [u128; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7],
+    /// Eq proof, Ep proof, then the Eq/Ep post-proof folds when a parent exists.
+    payload: Vec<u8>,
+}
+
+struct KagemushaSerializedReleaseCarrierPartsV7<'a> {
+    step_eq_proof: &'a [u8],
+    step_ep_proof: &'a [u8],
+    step_eq_post_proof_fold: &'a [u8],
+    step_ep_post_proof_fold: &'a [u8],
+}
+
+fn kagemusha_accumulator_wire_from_instance_limbs_v7(
+    limbs: &[u128],
+    authenticated_round_count: u32,
+) -> Result<KagemushaIpaAccumulatorWireV4, String> {
+    let expected = super::kagemusha_accumulation::kagemusha_ipa_accumulator_instance_limbs_v4(
+        authenticated_round_count,
+    )?;
+    if limbs.len() != expected {
+        return Err("Kagemusha V7 carrier parent-lineage cell count drifted".to_owned());
+    }
+    let version = u16::try_from(limbs[0])
+        .map_err(|_| "Kagemusha V7 carrier parent-lineage version is invalid".to_owned())?;
+    let round_count = u32::try_from(limbs[1])
+        .map_err(|_| "Kagemusha V7 carrier parent-lineage degree is invalid".to_owned())?;
+    let mut encoded = Vec::with_capacity(limbs.len().saturating_sub(2) / 2);
+    for chunks in limbs[2..].chunks_exact(2) {
+        let mut bytes = [0_u8; 32];
+        bytes[..16].copy_from_slice(&chunks[0].to_le_bytes());
+        bytes[16..].copy_from_slice(&chunks[1].to_le_bytes());
+        encoded.push(bytes);
+    }
+    let folded_generator = encoded
+        .pop()
+        .ok_or_else(|| "Kagemusha V7 carrier parent lineage omitted its generator".to_owned())?;
+    let wire = KagemushaIpaAccumulatorWireV4 {
+        version,
+        round_count,
+        round_challenges: encoded,
+        folded_generator,
+    };
+    wire.validate_shape(authenticated_round_count)?;
+    Ok(wire)
+}
+
+fn kagemusha_carrier_fold_from_bytes_v7(
+    authenticated_round_count: u32,
+    has_parent: bool,
+    bytes: &[u8],
+) -> Result<KagemushaIpaAccumulationProofV4, String> {
+    if has_parent {
+        KagemushaIpaAccumulationProofV4::from_fold_bytes(authenticated_round_count, bytes.to_vec())
+    } else {
+        if !bytes.is_empty() {
+            return Err(
+                "Kagemusha V7 initialization carrier contains a fold transcript".to_owned(),
+            );
+        }
+        KagemushaIpaAccumulationProofV4::initialization(authenticated_round_count)
+    }
 }
 
 impl KagemushaSerializedReleaseCarrierWireV7 {
+    fn parts(&self) -> Result<KagemushaSerializedReleaseCarrierPartsV7<'_>, String> {
+        let parent_count = self.step_eq_instances[KAGEMUSHA_COMPACT_PARENT_COUNT_OFFSET_V5];
+        let maximum_parent_count = u128::try_from(KAGEMUSHA_PASTA_PARENT_SLOTS_V1)
+            .map_err(|_| "Kagemusha V7 parent-slot count does not fit u128".to_owned())?;
+        if parent_count > maximum_parent_count
+            || self.step_ep_instances[KAGEMUSHA_COMPACT_PARENT_COUNT_OFFSET_V5] != parent_count
+        {
+            return Err("Kagemusha V7 canonical carrier parent count drifted".to_owned());
+        }
+        let fold_payload_bytes = if parent_count == 0 {
+            0
+        } else {
+            2 * KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7
+        };
+        if self.payload.len() != KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7 + fold_payload_bytes {
+            return Err("Kagemusha V7 compact live-carrier payload length drifted".to_owned());
+        }
+        let (step_eq_proof, tail) = self
+            .payload
+            .split_at(KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7);
+        let (step_ep_proof, tail) = tail.split_at(KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7);
+        let (step_eq_post_proof_fold, step_ep_post_proof_fold) = if parent_count == 0 {
+            (&tail[..0], &tail[..0])
+        } else {
+            tail.split_at(KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7)
+        };
+        Ok(KagemushaSerializedReleaseCarrierPartsV7 {
+            step_eq_proof,
+            step_ep_proof,
+            step_eq_post_proof_fold,
+            step_ep_post_proof_fold,
+        })
+    }
+
     fn validate(&self, material: &KagemushaSerializedReleaseMaterialV7) -> Result<(), String> {
-        if self.version != KAGEMUSHA_SERIALIZED_RELEASE_CARRIER_VERSION_V7
-            || self.manifest_sha256 != material.manifest.sha256()?
-            || self.step_eq_instances.len() != KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7
-            || self.step_ep_instances.len() != KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7
-            || self.step_eq_proof_bytes.len() != KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7
-            || self.step_ep_proof_bytes.len() != KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7
-            || self.step_eq_proof_bytes.len() > KAGEMUSHA_SERIALIZED_STEP_PROOF_MAX_BYTES_V7
-            || self.step_ep_proof_bytes.len() > KAGEMUSHA_SERIALIZED_STEP_PROOF_MAX_BYTES_V7
-            || self.step_eq_proof_bytes == self.step_ep_proof_bytes
-            || self.step_eq_proof_bytes.len() + self.step_ep_proof_bytes.len()
-                != KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7
+        let fold_bytes = super::kagemusha_accumulation::kagemusha_ipa_accumulation_proof_bytes_v4(
+            material.manifest.k,
+        )?;
+        let parts = self.parts()?;
+        if self.manifest_sha256 != material.manifest.sha256()?
+            || fold_bytes != KAGEMUSHA_SERIALIZED_FOLD_PROOF_BYTES_V7
+            || parts.step_eq_proof == parts.step_ep_proof
         {
             return Err("Kagemusha V7 canonical carrier shape/identity drifted".to_owned());
         }
@@ -2273,29 +2546,120 @@ impl KagemushaSerializedReleaseCarrierWireV7 {
                 .map_err(|_| "Kagemusha V7 raw proof-pair bound does not fit usize".to_owned())?;
         validate_kagemusha_serialized_atomic_envelope_v7(
             &material.manifest,
-            &self.step_eq_proof_bytes,
-            &self.step_ep_proof_bytes,
+            parts.step_eq_proof,
+            parts.step_ep_proof,
             &step_eq_instances,
             &step_ep_instances,
             proof_bound,
             raw_proof_pair_bound,
         )?;
-        self.step_eq_lineage.to_eq(material.manifest.k)?;
-        self.step_ep_lineage.to_ep(material.manifest.k)?;
         let parent_count = self.step_eq_instances[KAGEMUSHA_COMPACT_PARENT_COUNT_OFFSET_V5];
-        let maximum_parent_count = u128::try_from(KAGEMUSHA_PASTA_PARENT_SLOTS_V1)
-            .map_err(|_| "Kagemusha V7 parent-slot count does not fit u128".to_owned())?;
-        if parent_count > maximum_parent_count
-            || self.step_ep_instances[KAGEMUSHA_COMPACT_PARENT_COUNT_OFFSET_V5] != parent_count
-        {
-            return Err("Kagemusha V7 canonical carrier parent count drifted".to_owned());
-        }
         let has_parent = parent_count != 0;
-        self.step_eq_post_proof_fold
-            .validate(material.manifest.k, has_parent)?;
-        self.step_ep_post_proof_fold
-            .validate(material.manifest.k, has_parent)?;
+        kagemusha_carrier_fold_from_bytes_v7(
+            material.manifest.k,
+            has_parent,
+            parts.step_eq_post_proof_fold,
+        )?;
+        kagemusha_carrier_fold_from_bytes_v7(
+            material.manifest.k,
+            has_parent,
+            parts.step_ep_post_proof_fold,
+        )?;
         Ok(())
+    }
+
+    fn authenticate(
+        &self,
+        material: &KagemushaSerializedReleaseMaterialV7,
+    ) -> Result<(KagemushaIpaAccumulatorWireV4, KagemushaIpaAccumulatorWireV4), String> {
+        use halo2_proofs::halo2curves::pasta::{Fp, Fq};
+
+        self.validate(material)?;
+        let parts = self.parts()?;
+        let step_eq_instances = vec![
+            self.step_eq_instances
+                .iter()
+                .copied()
+                .map(Fp::from_u128)
+                .collect::<Vec<_>>(),
+        ];
+        let step_ep_instances = vec![
+            self.step_ep_instances
+                .iter()
+                .copied()
+                .map(Fq::from_u128)
+                .collect::<Vec<_>>(),
+        ];
+        let proof_bound = usize::try_from(material.manifest.step_eq_proof_bytes)
+            .map_err(|_| "Kagemusha V7 carrier proof bound does not fit usize".to_owned())?;
+        let raw_proof_pair_bound =
+            usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4)
+                .map_err(|_| "Kagemusha V7 raw proof-pair bound does not fit usize".to_owned())?;
+        let verified = verify_kagemusha_serialized_atomic_pair_v7(
+            &material.step_eq_params,
+            &material.step_eq_verifying_key,
+            &material.step_ep_params,
+            &material.step_ep_verifying_key,
+            &material.manifest,
+            parts.step_eq_proof,
+            parts.step_ep_proof,
+            &step_eq_instances,
+            &step_ep_instances,
+            proof_bound,
+            raw_proof_pair_bound,
+        )?;
+        let parent_count = self.step_eq_instances[KAGEMUSHA_COMPACT_PARENT_COUNT_OFFSET_V5];
+        let has_parent = parent_count != 0;
+        let eq_parent = has_parent
+            .then(|| {
+                kagemusha_accumulator_wire_from_instance_limbs_v7(
+                    &self.step_eq_instances[KAGEMUSHA_SERIALIZED_COMMON_HEADER_CELLS_V7
+                        ..KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7],
+                    material.manifest.k,
+                )
+            })
+            .transpose()?
+            .map(|wire| wire.to_eq(material.manifest.k))
+            .transpose()?;
+        let ep_parent = has_parent
+            .then(|| {
+                kagemusha_accumulator_wire_from_instance_limbs_v7(
+                    &self.step_ep_instances[KAGEMUSHA_SERIALIZED_COMMON_HEADER_CELLS_V7
+                        ..KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7],
+                    material.manifest.k,
+                )
+            })
+            .transpose()?
+            .map(|wire| wire.to_ep(material.manifest.k))
+            .transpose()?;
+        let step_eq_fold = kagemusha_carrier_fold_from_bytes_v7(
+            material.manifest.k,
+            has_parent,
+            parts.step_eq_post_proof_fold,
+        )?;
+        let step_ep_fold = kagemusha_carrier_fold_from_bytes_v7(
+            material.manifest.k,
+            has_parent,
+            parts.step_ep_post_proof_fold,
+        )?;
+        let step_eq_lineage = super::kagemusha_accumulation::verify_and_decide_eq_accumulation_v4(
+            &material.step_eq_params,
+            material.manifest.k,
+            verified.step_eq,
+            eq_parent,
+            &step_eq_fold,
+        )?;
+        let step_ep_lineage = super::kagemusha_accumulation::verify_and_decide_ep_accumulation_v4(
+            &material.step_ep_params,
+            material.manifest.k,
+            verified.step_ep,
+            ep_parent,
+            &step_ep_fold,
+        )?;
+        Ok((
+            KagemushaIpaAccumulatorWireV4::from_eq(&step_eq_lineage, material.manifest.k)?,
+            KagemushaIpaAccumulatorWireV4::from_ep(&step_ep_lineage, material.manifest.k)?,
+        ))
     }
 }
 
@@ -2315,8 +2679,14 @@ fn kagemusha_serialized_release_carrier_wire_v7(
     material: &KagemushaSerializedReleaseMaterialV7,
     carrier: &KagemushaSerializedReleaseCarrierV7,
 ) -> Result<KagemushaSerializedReleaseCarrierWireV7, String> {
-    let step_eq_instances = kagemusha_serialized_instance_u128_v7(&carrier.pair.step_eq_instances)?;
-    let step_ep_instances = kagemusha_serialized_instance_u128_v7(&carrier.pair.step_ep_instances)?;
+    let step_eq_instances: [u128; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7] =
+        kagemusha_serialized_instance_u128_v7(&carrier.pair.step_eq_instances)?
+            .try_into()
+            .map_err(|_| "Kagemusha V7 Eq carrier instance count drifted".to_owned())?;
+    let step_ep_instances: [u128; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7] =
+        kagemusha_serialized_instance_u128_v7(&carrier.pair.step_ep_instances)?
+            .try_into()
+            .map_err(|_| "Kagemusha V7 Ep carrier instance count drifted".to_owned())?;
     let join_cells: [u128; KAGEMUSHA_SERIALIZED_CURRENT_JOIN_CELLS_V7] = step_eq_instances
         [KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7
             ..KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7
@@ -2402,18 +2772,27 @@ fn kagemusha_serialized_release_carrier_wire_v7(
         return Err("Kagemusha V7 carrier host/public lineage splice detected".to_owned());
     }
     let wire = KagemushaSerializedReleaseCarrierWireV7 {
-        version: KAGEMUSHA_SERIALIZED_RELEASE_CARRIER_VERSION_V7,
         manifest_sha256: material.manifest.sha256()?,
-        step_eq_instances: step_eq_instances.to_vec(),
-        step_ep_instances: step_ep_instances.to_vec(),
-        step_eq_proof_bytes: carrier.pair.step_eq_proof.clone(),
-        step_ep_proof_bytes: carrier.pair.step_ep_proof.clone(),
-        step_eq_lineage: carrier.step_eq_lineage.clone(),
-        step_ep_lineage: carrier.step_ep_lineage.clone(),
-        step_eq_post_proof_fold: carrier.step_eq_post_proof_fold.clone(),
-        step_ep_post_proof_fold: carrier.step_ep_post_proof_fold.clone(),
+        step_eq_instances,
+        step_ep_instances,
+        payload: {
+            let mut payload = Vec::with_capacity(
+                KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7
+                    + carrier.step_eq_post_proof_fold.bytes.len()
+                    + carrier.step_ep_post_proof_fold.bytes.len(),
+            );
+            payload.extend_from_slice(&carrier.pair.step_eq_proof);
+            payload.extend_from_slice(&carrier.pair.step_ep_proof);
+            payload.extend_from_slice(&carrier.step_eq_post_proof_fold.bytes);
+            payload.extend_from_slice(&carrier.step_ep_post_proof_fold.bytes);
+            payload
+        },
     };
     wire.validate(material)?;
+    let authenticated = wire.authenticate(material)?;
+    if authenticated.0 != carrier.step_eq_lineage || authenticated.1 != carrier.step_ep_lineage {
+        return Err("Kagemusha V7 compact carrier derived lineage drifted".to_owned());
+    }
     Ok(wire)
 }
 
@@ -2424,11 +2803,11 @@ fn seal_kagemusha_serialized_release_carrier_v7(
     let wire = kagemusha_serialized_release_carrier_wire_v7(material, carrier)?;
     let bytes = norito::encode_canonical(&wire)
         .map_err(|error| format!("failed to encode Kagemusha V7 canonical carrier: {error}"))?;
-    let absolute_max = usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4)
-        .map_err(|_| "Kagemusha V7 absolute carrier bound does not fit usize".to_owned())?;
-    if bytes.len() <= KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7 || bytes.len() > absolute_max {
+    let release_max = usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4)
+        .map_err(|_| "Kagemusha V7 release carrier bound does not fit usize".to_owned())?;
+    if bytes.len() <= KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7 || bytes.len() > release_max {
         return Err(format!(
-            "Kagemusha V7 canonical carrier is {} bytes and violates the existing {absolute_max}-byte absolute payload corridor; release is a hard NO",
+            "Kagemusha V7 compact canonical carrier is {} bytes and violates the existing {release_max}-byte release payload corridor; release is a hard NO",
             bytes.len()
         ));
     }
@@ -2446,7 +2825,12 @@ fn seal_kagemusha_serialized_release_carrier_v7(
     if decoded != wire {
         return Err("Kagemusha V7 canonical carrier roundtrip drifted".to_owned());
     }
-    decoded.validate(material)?;
+    let decoded_lineages = decoded.authenticate(material)?;
+    if decoded_lineages.0 != carrier.step_eq_lineage
+        || decoded_lineages.1 != carrier.step_ep_lineage
+    {
+        return Err("Kagemusha V7 decoded compact carrier lineage drifted".to_owned());
+    }
     carrier.canonical_sha256 = Sha256::digest(&bytes).into();
     carrier.canonical_bytes = bytes;
     if carrier.canonical_sha256 == [0; 32] {
@@ -2463,13 +2847,16 @@ fn validate_kagemusha_serialized_release_carrier_seal_v7(
     let bytes = norito::encode_canonical(&wire)
         .map_err(|error| format!("failed to re-encode Kagemusha V7 carrier: {error}"))?;
     let sha256: [u8; 32] = Sha256::digest(&bytes).into();
-    let absolute_max = usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4)
-        .map_err(|_| "Kagemusha V7 absolute carrier bound does not fit usize".to_owned())?;
+    let release_max = usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4)
+        .map_err(|_| "Kagemusha V7 release carrier bound does not fit usize".to_owned())?;
+    let authenticated = wire.authenticate(material)?;
     if bytes != carrier.canonical_bytes
         || bytes.len() <= KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7
-        || bytes.len() > absolute_max
+        || bytes.len() > release_max
         || carrier.canonical_sha256 != sha256
         || carrier.canonical_sha256 == [0; 32]
+        || authenticated.0 != carrier.step_eq_lineage
+        || authenticated.1 != carrier.step_ep_lineage
     {
         return Err("Kagemusha V7 canonical carrier seal/size identity drifted".to_owned());
     }
@@ -3261,8 +3648,9 @@ fn run_kagemusha_serialized_release_proof_driver_v7(
     let mut measurements = Vec::with_capacity(4);
     let mut mutation_rejections = 0_usize;
     // The final all-zero null pair was already terminally decided once per
-    // parity while preparing this material.
-    let mut terminal_ipa_decisions = 2_usize;
+    // parity while preparing this material.  Its canonical compact carrier
+    // also requires four distinct post-proof/branch-merge fold decisions.
+    let mut terminal_ipa_decisions = 6_usize;
 
     let mut init = kagemusha_serialized_init_material_v7(material)?;
     let mut base_case = KagemushaSerializedReleaseProofCaseV7 {
@@ -3381,16 +3769,16 @@ fn run_kagemusha_serialized_release_proof_driver_v7(
     {
         return Err("Kagemusha V7 genuine four-node topology drifted".to_owned());
     }
-    let absolute_carrier_max =
-        usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4)
-            .map_err(|_| "Kagemusha V7 absolute carrier bound does not fit usize".to_owned())?;
+    let release_carrier_max =
+        usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4)
+            .map_err(|_| "Kagemusha V7 release carrier bound does not fit usize".to_owned())?;
     for (index, (carrier, measurement)) in carriers.iter().zip(&measurements).enumerate() {
         validate_kagemusha_serialized_release_carrier_seal_v7(material, carrier)?;
         if carrier.canonical_bytes.len() != measurement.canonical_carrier_bytes
             || carrier.canonical_sha256 != measurement.canonical_carrier_sha256
             || measurement.canonical_carrier_sha256 == [0; 32]
             || measurement.canonical_carrier_bytes <= measurement.raw_proof_pair_bytes
-            || measurement.canonical_carrier_bytes > absolute_carrier_max
+            || measurement.canonical_carrier_bytes > release_carrier_max
         {
             return Err(format!(
                 "Kagemusha V7 case {index} canonical carrier measurement/seal drifted"
@@ -3403,7 +3791,7 @@ fn run_kagemusha_serialized_release_proof_driver_v7(
             return Err("Kagemusha V7 canonical carrier SHA-256 identities collide".to_owned());
         }
     }
-    validate_kagemusha_serialized_null_carrier_seal_v7(&material.manifest, &material.null_carrier)?;
+    validate_kagemusha_serialized_null_carrier_seal_v7(material, &material.null_carrier)?;
     if carriers
         .iter()
         .any(|carrier| carrier.canonical_sha256 == material.null_carrier.canonical_sha256)
@@ -3420,6 +3808,10 @@ fn run_kagemusha_serialized_release_proof_driver_v7(
             measurement.canonical_carrier_bytes != measurements[1].canonical_carrier_bytes
         })
         || material.null_carrier.canonical_bytes.len() <= maximum_live_carrier_bytes
+        || measurements[0].canonical_carrier_bytes != KAGEMUSHA_SERIALIZED_BASE_CARRIER_BYTES_V7
+        || measurements[1].canonical_carrier_bytes
+            != KAGEMUSHA_SERIALIZED_RECURSIVE_CARRIER_BYTES_V7
+        || material.null_carrier.canonical_bytes.len() != KAGEMUSHA_SERIALIZED_NULL_CARRIER_BYTES_V7
     {
         return Err(
             "Kagemusha V7 base/recursive/null canonical carrier byte shapes drifted".to_owned(),
@@ -3497,6 +3889,7 @@ fn run_kagemusha_serialized_release_proof_driver_v7(
         || conservative_peak_bytes != material.reviewed_peak_bytes
         || conservative_peak_bytes > material.active_memory_limit_bytes
         || material.active_memory_limit_bytes > KAGEMUSHA_GENERATION_REVIEWED_MAX_ESTIMATED_BYTES_V5
+        || !canonical_carriers_fit_current_release_max
         || measurements.iter().any(|measurement| {
             measurement.step_eq_proof_bytes != KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7
                 || measurement.step_ep_proof_bytes != KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7

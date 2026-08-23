@@ -592,7 +592,7 @@ fn statement8_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
     assert_eq!(MIN_WIRE_BYTES_V1, 527_945);
     assert_eq!(
         RNS_NATIVE_SMALL_SIGN_DISJOINTNESS_RESIDUAL_MAX_BYTES_V1,
-        2_619_526
+        2_587_255
     );
 
     let source = include_str!("rns_native_small_sign_disjointness_product.rs");

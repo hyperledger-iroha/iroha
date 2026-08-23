@@ -92,9 +92,11 @@ use credit::{
     DecryptedCreditOpeningOwnerV1, bind_verified_credit_v1, credit_commitment,
     terminal_credit_matches,
 };
+#[cfg(test)]
+pub(crate) use guard::HardwareReceiveTerminalQueryV1;
 pub(crate) use guard::{
-    ExactNextHardwareGuardBackendV1, HardwareGuardSessionV1, HardwareReceiveTerminalQueryV1,
-    HardwareTerminalOperationV1, HardwareTerminalOutcomeV1,
+    ExactNextHardwareGuardBackendV1, HardwareGuardSessionV1, HardwareTerminalOperationV1,
+    HardwareTerminalOutcomeV1,
 };
 pub(crate) use guard::{
     GuardChallengeV1, GuardOperationV1, HardwareGuardErrorV1, HardwareIntentAuthorizationOwnerV1,
@@ -108,10 +110,12 @@ pub(crate) use guard::{
 use guard::{
     cancellation_authorization_matches, guard_authorization_matches, intent_authorization_matches,
 };
+#[cfg(test)]
+pub(crate) use outbox::PaymentOutboxPublicationV1;
 use outbox::authorize_publication;
 pub(crate) use outbox::{
     AuthenticatedPaymentOutboxBackendV1, AuthenticatedPaymentOutboxErrorV1,
-    AuthenticatedPaymentOutboxRecordV1, PaymentOutboxKeyV1, PaymentOutboxPublicationV1,
+    AuthenticatedPaymentOutboxRecordV1, PaymentOutboxKeyV1,
 };
 pub(crate) use pending::PendingOwnerV1;
 #[cfg(test)]

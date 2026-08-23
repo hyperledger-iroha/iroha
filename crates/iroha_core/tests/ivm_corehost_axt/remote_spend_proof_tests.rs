@@ -937,3 +937,82 @@ fn core_host_rejects_fastpq_binding_source_dsid_mismatch() {
     assert_eq!(reject.reason, AxtRejectReason::Proof);
     assert!(reject.detail.contains("source_dsid mismatch"));
 }
+
+#[cfg(feature = "app_api")]
+#[test]
+fn core_host_binds_proof_to_manifest_root() {
+    let authority = fixture_authority();
+    let dsid = DataSpaceId::new(77);
+    let manifest_root = [0xAB; 32];
+    let entries = vec![AxtPolicyBinding {
+        dsid,
+        policy: AxtPolicyEntry {
+            manifest_root,
+            target_lane: LaneId::new(0),
+            active_handle_era: 1,
+            next_handle_counter: 1,
+            current_slot: 5,
+        },
+    }];
+    let snapshot = AxtPolicySnapshot {
+        version: AxtPolicySnapshot::compute_version(&entries),
+        entries,
+    };
+    let mut vm = IVM::new(1_000_000);
+    let mut host = CoreHost::new(authority.clone())
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("fixture AXT policy snapshot should be canonical");
+    let descriptor = axt::AxtDescriptor {
+        dsids: vec![dsid],
+        touches: vec![axt::AxtTouchSpec {
+            dsid,
+            read: vec!["orders".into()],
+            write: vec!["ledger".into()],
+        }],
+    };
+    let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
+    vm.set_register(10, desc_ptr);
+    host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
+        .expect("begin");
+    let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
+    let manifest = TouchManifest {
+        read: vec!["orders/proof".into()],
+        write: vec!["ledger/proof".into()],
+    };
+    let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, manifest_ptr);
+    host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
+        .expect("touch");
+    let bad_proof = axt::ProofBlob {
+        payload: vec![0x01, 0x02],
+        expiry_slot: Some(10),
+    };
+    let bad_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &bad_proof);
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, bad_ptr);
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Err(VMError::NoritoInvalid)
+    );
+    let raw_root_proof = axt::ProofBlob {
+        payload: manifest_root.to_vec(),
+        expiry_slot: Some(10),
+    };
+    let raw_root_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &raw_root_proof);
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, raw_root_ptr);
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Err(VMError::NoritoInvalid)
+    );
+    let ok_proof = proof_blob_for(dsid, manifest_root, vec![0x03, 0x04], 10);
+    let ok_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &ok_proof);
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, ok_ptr);
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
+    // Cache hit in the same slot should also succeed.
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, ok_ptr);
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
+}

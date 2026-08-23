@@ -53,6 +53,7 @@ const REPETITIONS_V1: usize = 5;
 const RECORDS_V1: usize = ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1 as usize;
 const BLOCKS_PER_RECORD_V1: usize = 8;
 const RADIX_DIGITS_V1: usize = 18;
+const COMPARATOR_SUBTRACTION_DIGITS_V1: usize = RADIX_DIGITS_V1 - 1;
 const Q_MASK_DIGITS_V1: usize = 4;
 const COMPARATOR_GROUPS_V1: usize = RECORDS_V1 * BLOCKS_PER_RECORD_V1;
 const COMPARATOR_TOP_POINTS_V1: usize = 2 * COMPARATOR_GROUPS_V1;
@@ -188,6 +189,17 @@ pub(super) struct ComparatorRangeCarryCommitmentsV1 {
     pub(super) borrows: [Point; RADIX_DIGITS_V1],
 }
 
+/// Exact low-digit tuple consumed by centering-subtraction statement 4.
+///
+/// `difference_digits[h]` aliases the inventory `Delta_h` commitment and
+/// `borrows[h]` aliases `beta_h`, both for `h = 0..16`.  The mixed-top,
+/// final-borrow, and inverse points remain under their original owners.
+#[derive(Clone, Copy)]
+pub(super) struct ComparatorSubtractionCommitmentsV1 {
+    pub(super) difference_digits: [Point; COMPARATOR_SUBTRACTION_DIGITS_V1],
+    pub(super) borrows: [Point; COMPARATOR_SUBTRACTION_DIGITS_V1],
+}
+
 /// Exact commitment tuple consumed by small-sign product statement 8.
 ///
 /// `positive` is derived from the two authenticated inventory points and is
@@ -198,6 +210,54 @@ pub(super) struct SmallSourceProductCommitmentsV1 {
     pub(super) signed: Point,
     pub(super) negative_magnitude: Point,
     pub(super) positive: Point,
+}
+
+/// Exact q-mask digit tuple consumed by linear statements 10 and 11.
+///
+/// Lookup inverses deliberately remain owned by the inventory for the later
+/// committed-global-lookup verifier.
+#[derive(Clone, Copy)]
+pub(super) struct QMaskLinearCommitmentsV1 {
+    pub(super) digits: [Point; Q_MASK_DIGITS_V1],
+    pub(super) complement_digits: [Point; Q_MASK_DIGITS_V1],
+}
+
+/// Exact post-`z` q-mask inverse tuple aliased by the sole global lookup.
+///
+/// The raw digit commitments remain under `QMaskLinearCommitmentsV1`; this
+/// tuple exposes only their already-authenticated inverse owners and never
+/// duplicates point bytes.
+#[derive(Clone, Copy)]
+pub(super) struct QMaskLookupInverseCommitmentsV1 {
+    pub(super) digit_inverses: [Point; Q_MASK_DIGITS_V1],
+    pub(super) complement_inverses: [Point; Q_MASK_DIGITS_V1],
+}
+
+fn comparator_subtraction_commitments_v1(
+    inventory: &[u8],
+    group: usize,
+) -> Option<ComparatorSubtractionCommitmentsV1> {
+    if inventory.len() != INVENTORY_BYTES_V1 || group >= COMPARATOR_GROUPS_V1 {
+        return None;
+    }
+    let point_at = |ordinal: usize| {
+        let offset = ordinal.checked_mul(POINT_BYTES_V1)?;
+        let end = offset.checked_add(POINT_BYTES_V1)?;
+        Point::from_non_identity_wire_bytes_exact(inventory.get(offset..end)?).ok()
+    };
+    let auxiliary =
+        COMPARATOR_TOP_POINTS_V1.checked_add(group.checked_mul(COMPARATOR_POINTS_PER_GROUP_V1)?)?;
+    let first_borrow = auxiliary.checked_add(18)?;
+    let mut difference_digits = [point_at(auxiliary)?; COMPARATOR_SUBTRACTION_DIGITS_V1];
+    let mut borrows = [point_at(first_borrow)?; COMPARATOR_SUBTRACTION_DIGITS_V1];
+    for column in 1..COMPARATOR_SUBTRACTION_DIGITS_V1 {
+        difference_digits[column] = point_at(auxiliary.checked_add(column)?)?;
+        borrows[column] = point_at(first_borrow.checked_add(column)?)?;
+    }
+    Some(ComparatorSubtractionCommitmentsV1 {
+        difference_digits,
+        borrows,
+    })
 }
 
 fn small_source_product_commitments_v1(
@@ -224,6 +284,97 @@ fn small_source_product_commitments_v1(
         signed,
         negative_magnitude,
         positive,
+    })
+}
+
+fn q_mask_linear_commitments_v1(
+    inventory: &[u8],
+    owner: usize,
+) -> Option<QMaskLinearCommitmentsV1> {
+    if inventory.len() != INVENTORY_BYTES_V1 || owner >= Q_MASK_BLOCKS_V1 {
+        return None;
+    }
+    let point_at = |ordinal: usize| {
+        let offset = ordinal.checked_mul(POINT_BYTES_V1)?;
+        let end = offset.checked_add(POINT_BYTES_V1)?;
+        Point::from_non_identity_wire_bytes_exact(inventory.get(offset..end)?).ok()
+    };
+    let first = COMPARATOR_POINTS_V1
+        .checked_add(SMALL_SOURCE_POINTS_V1)?
+        .checked_add(owner.checked_mul(Q_MASK_POINTS_PER_BLOCK_V1)?)?;
+    let mut digits = [point_at(first)?; Q_MASK_DIGITS_V1];
+    let complement_first = first.checked_add(2 * Q_MASK_DIGITS_V1)?;
+    let mut complement_digits = [point_at(complement_first)?; Q_MASK_DIGITS_V1];
+    for digit in 1..Q_MASK_DIGITS_V1 {
+        digits[digit] = point_at(first.checked_add(digit)?)?;
+        complement_digits[digit] = point_at(complement_first.checked_add(digit)?)?;
+    }
+    Some(QMaskLinearCommitmentsV1 {
+        digits,
+        complement_digits,
+    })
+}
+
+fn comparator_difference_inverse_v1(
+    inventory: &[u8],
+    group: usize,
+    column: usize,
+) -> Option<Point> {
+    if inventory.len() != INVENTORY_BYTES_V1
+        || group >= COMPARATOR_GROUPS_V1
+        || column >= COMPARATOR_SUBTRACTION_DIGITS_V1
+    {
+        return None;
+    }
+    let ordinal = COMPARATOR_TOP_POINTS_V1
+        .checked_add(group.checked_mul(COMPARATOR_POINTS_PER_GROUP_V1)?)?
+        .checked_add(36)?
+        .checked_add(column)?;
+    let offset = ordinal.checked_mul(POINT_BYTES_V1)?;
+    Point::from_non_identity_wire_bytes_exact(inventory.get(offset..offset + POINT_BYTES_V1)?).ok()
+}
+
+fn small_source_lookup_inverses_v1(inventory: &[u8], block: usize) -> Option<(Point, Point)> {
+    if inventory.len() != INVENTORY_BYTES_V1 || block >= SMALL_SOURCE_BLOCKS_V1 {
+        return None;
+    }
+    let first = COMPARATOR_POINTS_V1
+        .checked_add(block.checked_mul(SMALL_SOURCE_POINTS_PER_BLOCK_V1)?)?
+        .checked_add(2)?;
+    let point_at = |ordinal: usize| {
+        let offset = ordinal.checked_mul(POINT_BYTES_V1)?;
+        Point::from_non_identity_wire_bytes_exact(inventory.get(offset..offset + POINT_BYTES_V1)?)
+            .ok()
+    };
+    Some((point_at(first)?, point_at(first.checked_add(1)?)?))
+}
+
+fn q_mask_lookup_inverses_v1(
+    inventory: &[u8],
+    owner: usize,
+) -> Option<QMaskLookupInverseCommitmentsV1> {
+    if inventory.len() != INVENTORY_BYTES_V1 || owner >= Q_MASK_BLOCKS_V1 {
+        return None;
+    }
+    let first = COMPARATOR_POINTS_V1
+        .checked_add(SMALL_SOURCE_POINTS_V1)?
+        .checked_add(owner.checked_mul(Q_MASK_POINTS_PER_BLOCK_V1)?)?;
+    let point_at = |local: usize| {
+        let ordinal = first.checked_add(local)?;
+        let offset = ordinal.checked_mul(POINT_BYTES_V1)?;
+        Point::from_non_identity_wire_bytes_exact(inventory.get(offset..offset + POINT_BYTES_V1)?)
+            .ok()
+    };
+    let mut digit_inverses = [point_at(Q_MASK_DIGITS_V1)?; Q_MASK_DIGITS_V1];
+    let complement_first = 3 * Q_MASK_DIGITS_V1;
+    let mut complement_inverses = [point_at(complement_first)?; Q_MASK_DIGITS_V1];
+    for column in 1..Q_MASK_DIGITS_V1 {
+        digit_inverses[column] = point_at(Q_MASK_DIGITS_V1.checked_add(column)?)?;
+        complement_inverses[column] = point_at(complement_first.checked_add(column)?)?;
+    }
+    Some(QMaskLookupInverseCommitmentsV1 {
+        digit_inverses,
+        complement_inverses,
     })
 }
 
@@ -742,6 +893,7 @@ pub(super) struct RnsNativeCrossFieldInventoryPrerequisiteV1<
     qpcs_evaluations: CanonicalQpcsEvaluationGridV1<'source>,
     inventory: &'proof [u8],
     continuation: &'proof [u8],
+    terminal_transcript_digest: [u8; DIGEST_BYTES_V1],
     prior_context_digest: [u8; DIGEST_BYTES_V1],
     inventory_root: [u8; DIGEST_BYTES_V1],
     continuation_digest: [u8; DIGEST_BYTES_V1],
@@ -759,6 +911,13 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 
     pub(super) const fn continuation(&self) -> &'proof [u8] {
         self.continuation
+    }
+
+    /// Exact final terminal transcript that authenticated this inventory.
+    /// The direct claimed-frame adapter uses this private identity to reject
+    /// cross-session inventory/claim pairing before exposing any successor.
+    pub(super) const fn terminal_transcript_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.terminal_transcript_digest
     }
 
     pub(super) const fn prior_context_digest(&self) -> [u8; DIGEST_BYTES_V1] {
@@ -815,11 +974,44 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
         })
     }
 
+    pub(super) fn comparator_subtraction_commitments(
+        &self,
+        group: usize,
+    ) -> Option<ComparatorSubtractionCommitmentsV1> {
+        comparator_subtraction_commitments_v1(self.inventory, group)
+    }
+
     pub(super) fn small_source_product_commitments(
         &self,
         block: usize,
     ) -> Option<SmallSourceProductCommitmentsV1> {
         small_source_product_commitments_v1(self.inventory, block)
+    }
+
+    pub(super) fn q_mask_linear_commitments(
+        &self,
+        owner: usize,
+    ) -> Option<QMaskLinearCommitmentsV1> {
+        q_mask_linear_commitments_v1(self.inventory, owner)
+    }
+
+    pub(super) fn comparator_difference_inverse(
+        &self,
+        group: usize,
+        column: usize,
+    ) -> Option<Point> {
+        comparator_difference_inverse_v1(self.inventory, group, column)
+    }
+
+    pub(super) fn small_source_lookup_inverses(&self, block: usize) -> Option<(Point, Point)> {
+        small_source_lookup_inverses_v1(self.inventory, block)
+    }
+
+    pub(super) fn q_mask_lookup_inverses(
+        &self,
+        owner: usize,
+    ) -> Option<QMaskLookupInverseCommitmentsV1> {
+        q_mask_lookup_inverses_v1(self.inventory, owner)
     }
 
     pub(super) fn qpcs_evaluation(&self, limb: usize, repetition: usize) -> Option<(u64, u64)> {
@@ -862,6 +1054,7 @@ where
         qpcs_evaluations,
         inventory: view.inventory,
         continuation: view.continuation,
+        terminal_transcript_digest: transcript.transcript_digest(),
         prior_context_digest: view.prior_context_digest,
         inventory_root: view.inventory_root,
         continuation_digest: view.continuation_digest,

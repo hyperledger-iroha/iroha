@@ -1671,6 +1671,7 @@ fn install_merge_applied_retirement_work(
         results: vec![result],
         settlement_commitment: settlement,
         settlement_hash,
+        fastpq_transcripts: Vec::new().into(),
     };
     let lanes = vec![execution];
     let base_state_hash =

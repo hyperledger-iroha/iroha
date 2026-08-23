@@ -1,0 +1,23 @@
+
+[nexus]
+lane_count = 8
+
+[nexus.autoscale]
+enabled = true
+min_lanes = 3
+max_lanes = 6
+
+[[nexus.lane_catalog]]
+index = 0
+alias = "default"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 2
+alias = "manual-below-range"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 6
+alias = "manual-at-exclusive-upper-bound"
+metadata = {}

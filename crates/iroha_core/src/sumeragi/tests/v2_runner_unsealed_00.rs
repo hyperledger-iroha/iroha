@@ -395,6 +395,25 @@ fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traf
         DecidedLaneRecoveryIngressPreparation::LeaderWireRetire
     ));
 }
+#[test]
+fn drain_decided_lane_recovery_ingress_authorizes_lane_local_qc() {
+    let (context, _) = context();
+    let sender = context.roster[0].validator.clone();
+    let inbound = InboundBlockMessage::from_authenticated_peer(valid_ingress_probe(), sender);
+    assert!(matches!(
+        prepare_decided_lane_recovery_ingress(&inbound, context.height),
+        DecidedLaneRecoveryIngressPreparation::LaneLocal
+    ));
+    assert!(matches!(
+        authorize_decided_lane_recovery_drain(prepare_decided_lane_recovery_ingress(
+            &inbound,
+            context.height,
+        )),
+        DecidedLaneRecoveryDrainDecision::Authorized(
+            DecidedLaneRecoveryDrainAuthorization::LaneLocal
+        )
+    ));
+}
 fn leader_wire_runtime_ingress_fixture() -> (
     TempDir,
     FairV2Ingress,

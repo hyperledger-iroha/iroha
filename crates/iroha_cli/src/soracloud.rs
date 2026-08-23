@@ -15223,35 +15223,8 @@ mod tests {
             hayahi_app_readme("travel_ops"),
         ];
         const OUTPUT_NAMES: &str = "site_package_json webapp_root_package_json webapp_frontend_package_json pii_app_root_package_json pii_app_frontend_package_json hayahi_app_root_package_json site_app_vue single_api_api_dev_server_mjs http_service_build_sh http_service_build_and_sync_sh http_service_server_mjs split_app_live_server_mjs http_service_readme split_app_frontend_package_json split_app_frontend_app_vue split_app_vault_dev_server_mjs split_app_vault_contract_ko split_app_live_readme split_app_vault_readme split_app_readme split_app_existing_repo_readme site_readme single_api_api_readme single_api_app_readme webapp_readme pii_app_readme hayahi_app_readme";
-        const EXPECTED: &str = r#"
-site_package_json 347 c46f64656bfdf12515337349ccacd586e8767193d552ca42310c26c9b246d1ed
-webapp_root_package_json 269 a8b3b7e882c3319559256b3e96cf48c5395639d82eaed28b860966c19ffb15ce
-webapp_frontend_package_json 351 72de68ed13eaa4819ab8d762fdb9528aa636ca58856029071c21bb30c94cd608
-pii_app_root_package_json 270 bc1976cd61a41cdcf4115b9e69c222020a8f2876a16d8e623eba34393f3ebbc3
-pii_app_frontend_package_json 355 7e8f88aa184ca0e1a31f29e102bc24e1c5cec19a8db37fba105b7e685e25922f
-hayahi_app_root_package_json 156 dfd557709bb1c7d444978b1d64fb3bc49ec3a325715982c803704403d33d759f
-site_app_vue 385 4c14de601de70079a6578e4d8b1b1139acfc25917ef452492890f18a7c8f5249
-single_api_api_dev_server_mjs 982 43e0c43a5b8f0d07c3da290e550f5e24ede338755d104571174c4ab071606605
-http_service_build_sh 1681 c64b42511d790a6ff665b7764bdd0b1441a6b871f76fc162b209679f46c78d91
-http_service_build_and_sync_sh 1662 a6d7f11aa57165049284567e5fee03261e26ef718a7f87564153ee88cb38a6ac
-http_service_server_mjs 2569 7665ddc2702a94e2b4d28b886b8514cb483b7b8f70c1bb30623283871bcd99a6
-split_app_live_server_mjs 8278 fdfc00db55f79f6770aa5c36be14c06b0072babe2a3afd633ac1d736229c8127
-http_service_readme 6759 9ed4b8e60a24595ff286d502ca3b0206ab0b0e277bff74d88fa3e9818afb9702
-split_app_frontend_package_json 398 9a530d4f077383675477ff9a00bbc2c9a0ae904dab69e92df89cc149145f4259
-split_app_frontend_app_vue 5716 b58585b2c5943e4ff5a2c4a550584cd206cca69e50566a33bbad8ddcf5e5526f
-split_app_vault_dev_server_mjs 5465 c75d651df13ded58a7797581620fa3f0b3cd7db6bac2b3495e07e9c73d6d08d0
-split_app_vault_contract_ko 1954 4659628ad41641fff5f994e398317b609a218363b10873b6a382db438dd68d01
-split_app_live_readme 1840 2b23bdc35c8df6ad63c9cfc7658d26d8be99c2f7f2831f4829a290112beeb8a5
-split_app_vault_readme 849 6fe7462b8041da7d25d39075b8bc340981913631cc4abdebf7df7ef765382538
-split_app_readme 6841 2944d7104ebfdfb277b668df64cae1048317b0c9bcc48edceeb8ae5e2c5dd620
-split_app_existing_repo_readme 1379 3862080d77bf4612d86d4a8dfc7546c7b35421a3d35558a60806440642ebc7b3
-site_readme 900 444f057eedd22cd002eb6d1ff01699a9b49fb2eec74655604929ecdef595f46b
-single_api_api_readme 1025 27df8e2b157c73d02cb9388820b1cb5ec14c56ec119e662d6113ed8bda0265f5
-single_api_app_readme 4428 916245d9adfa1e4906aeeabea3001c67cd14faf2382b914e91f00dd0f11c50ee
-webapp_readme 1873 f297bcb316ac4a5163a273a8984758b85b98f228762362805b04937a94cbc8ab
-pii_app_readme 2276 179b73cd33fa35ef0534d4db04c0bda0b4d226ad3381055402da604929c60800
-hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f45323ab823e
-"#;
+        const EXPECTED: &str =
+            include_str!("soracloud/assets/v1/tests/canonical_template_outputs.manifest");
         let expected: Vec<_> = EXPECTED.lines().filter(|line| !line.is_empty()).collect();
         let names: Vec<_> = OUTPUT_NAMES.split_ascii_whitespace().collect();
         assert_eq!([outputs.len(), expected.len(), names.len()], [27; 3]);
@@ -15653,6 +15626,58 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .and_then(norito::json::Value::as_str)
                 .is_some_and(|path| path.ends_with("dev.sh"))
         );
+    }
+    fn assert_manifest_pair_output(
+        output: &norito::json::Value,
+        workspace_script: &str,
+        script_suffix: &str,
+    ) {
+        assert_eq!(
+            output
+                .get("service_name")
+                .and_then(norito::json::Value::as_str),
+            Some("echo_console")
+        );
+        let service_plan = output
+            .get("service_plan")
+            .and_then(norito::json::Value::as_object)
+            .expect("manifest-backed service plan");
+        assert_eq!(
+            service_plan
+                .get("route_path_prefix")
+                .and_then(norito::json::Value::as_str),
+            Some("/api/v1")
+        );
+        assert!(
+            service_plan
+                .get("workspace_scripts")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|scripts| scripts.get(workspace_script))
+                .and_then(norito::json::Value::as_str)
+                .is_some_and(|path| path.ends_with(script_suffix))
+        );
+    }
+    fn assert_captured_payload_service_name(
+        server: &MockHttpServer,
+        path: &str,
+        request_expectation: &str,
+        decode_expectation: &str,
+    ) -> norito::json::Value {
+        let request = server
+            .requests()
+            .into_iter()
+            .find(|request| request.method == "POST" && request.path == path)
+            .unwrap_or_else(|| panic!("{request_expectation}"));
+        let body: norito::json::Value = json::from_slice(&request.body)
+            .unwrap_or_else(|error| panic!("{decode_expectation}: {error}"));
+        assert_eq!(
+            body.get("payload")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|payload| payload.get("service_name"))
+                .and_then(norito::json::Value::as_str),
+            Some("echo_console")
+        );
+        body
     }
     fn fixture_container() -> SoraContainerManifestV1 {
         load_json(&workspace_fixture(DEFAULT_CONTAINER_MANIFEST)).expect("container fixture")
@@ -16489,6 +16514,71 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    const SCAFFOLD_FILE_CONTRACTS: &str =
+        include_str!("soracloud/assets/v1/tests/scaffold_file_contracts.tsv");
+    fn assert_scaffold_file_contract(root: &Path, case: &str) {
+        let mut contents = BTreeMap::<&str, String>::new();
+        let bash_available = bash_available();
+        let mut matched = 0;
+        for row in SCAFFOLD_FILE_CONTRACTS.lines() {
+            let mut fields = row.splitn(4, '\t');
+            if fields.next() != Some(case) {
+                continue;
+            }
+            matched += 1;
+            let operation = fields.next().expect("scaffold contract operation");
+            let path = fields.next().expect("scaffold contract path");
+            let marker = fields.next().unwrap_or_default();
+            let full_path = root.join(path);
+            match operation {
+                "exists" => assert!(full_path.exists(), "missing scaffold path `{path}`"),
+                "missing" => assert!(!full_path.exists(), "unexpected scaffold path `{path}`"),
+                "executable" => {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt as _;
+                        assert_eq!(
+                            fs::metadata(&full_path)
+                                .unwrap_or_else(|error| panic!("metadata for `{path}`: {error}"))
+                                .permissions()
+                                .mode()
+                                & 0o111,
+                            0o111,
+                            "scaffold path `{path}` must be executable"
+                        );
+                    }
+                }
+                "contains" | "excludes" => {
+                    let file = contents.entry(path).or_insert_with(|| {
+                        fs::read_to_string(&full_path)
+                            .unwrap_or_else(|error| panic!("read scaffold path `{path}`: {error}"))
+                    });
+                    let contains = file.contains(marker);
+                    assert_eq!(
+                        contains,
+                        operation == "contains",
+                        "scaffold path `{path}` marker `{marker}`"
+                    );
+                }
+                "bash" if bash_available => run_bash_syntax_check(&full_path),
+                "bash" => {}
+                value => panic!("unsupported scaffold contract operation `{value}`"),
+            }
+        }
+        assert!(matched > 0, "missing scaffold file contract `{case}`");
+    }
+    fn assert_optional_path_ends_with(path: Option<&str>, suffix: &str) {
+        assert!(
+            path.is_some_and(|path| path.ends_with(suffix)),
+            "expected optional path ending in `{suffix}`, got {path:?}"
+        );
+    }
+    fn assert_notes_contain(notes: &[String], marker: &str) {
+        assert!(
+            notes.iter().any(|note| note.contains(marker)),
+            "notes do not contain `{marker}`: {notes:?}"
+        );
+    }
     static NODE_HARNESS_LOCK: Mutex<()> = Mutex::new(());
     fn run_node_harness(script_path: &Path) {
         let _guard = NODE_HARNESS_LOCK
@@ -16544,31 +16634,61 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
+    const GENERATED_AUTH_HARNESS_CASES: &str =
+        include_str!("soracloud/assets/v1/tests/generated_auth_harness_cases.tsv");
+    const PII_STARTUP_FAILURE_CASES: &str =
+        include_str!("soracloud/assets/v1/tests/pii_startup_failure_cases.tsv");
+    fn fixture_case_fields<'a>(table: &'a str, key: &str, field_count: usize) -> Vec<&'a str> {
+        let row = table
+            .lines()
+            .find(|row| {
+                row.split_once('\t')
+                    .is_some_and(|(candidate, _)| candidate == key)
+            })
+            .unwrap_or_else(|| panic!("missing fixture case `{key}`"));
+        let fields = row.split('\t').collect::<Vec<_>>();
+        assert_eq!(fields.len(), field_count, "fixture field count for `{key}`");
+        fields
+    }
+    fn run_generated_auth_harness_case(index: usize) {
+        let key = index.to_string();
+        let fields = fixture_case_fields(GENERATED_AUTH_HARNESS_CASES, &key, 6);
+        let template = match fields[2] {
+            "webapp" => InitTemplate::Webapp,
+            "pii-app" => InitTemplate::PiiApp,
+            value => panic!("unsupported generated auth fixture template `{value}`"),
+        };
+        let markers = fields[5].split("~|~").collect::<Vec<_>>();
+        let with_state_file = fields[4].parse().expect("generated auth fixture boolean");
+        run_generated_auth_harness(
+            fields[1],
+            template,
+            &markers,
+            fields[3],
+            index,
+            with_state_file,
+        );
+    }
     macro_rules! generated_auth_harness_test {
-        ($name:ident, $dir:literal, $template:expr, $markers:expr, $harness:literal, $index:literal, $with_state:literal) => {
+        ($name:ident, $index:literal) => {
             #[test]
             fn $name() {
-                run_generated_auth_harness(
-                    $dir,
-                    $template,
-                    $markers,
-                    $harness,
-                    $index,
-                    $with_state,
-                );
+                run_generated_auth_harness_case($index);
             }
         };
     }
     macro_rules! pii_startup_failure_test {
-        ($name:ident, $case:literal, $env:expr, $expected:literal, $markers:expr) => {
+        ($name:ident, $case:literal) => {
             #[test]
             fn $name() {
+                let fields = fixture_case_fields(PII_STARTUP_FAILURE_CASES, $case, 5);
+                let markers = fields[4].split("~|~").collect::<Vec<_>>();
                 assert_generated_pii_app_startup_import_fails(
                     concat!("pii_auth_", $case),
                     concat!("pii_auth_", $case, "_fail.mjs"),
-                    $env,
-                    $expected,
-                    $markers,
+                    &[(fields[1], fields[2])],
+                    fields[3],
+                    &markers,
                 );
             }
         };
@@ -17139,12 +17259,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(service_plan.execution_plane, "HttpService");
         assert_eq!(service_plan.runtime, "Inrou");
         assert_eq!(service_plan.route_path_prefix.as_deref(), Some("/api/v1"));
-        assert!(
-            service_plan
-                .workspace_scripts
-                .local_dev
-                .as_deref()
-                .is_some_and(|path| path.ends_with("dev.sh"))
+        assert_optional_path_ends_with(
+            service_plan.workspace_scripts.local_dev.as_deref(),
+            "dev.sh",
         );
     }
     #[test]
@@ -17216,30 +17333,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("config-status should succeed");
-        assert_eq!(
-            output
-                .get("service_name")
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-        assert_eq!(
-            output
-                .get("service_plan")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|plan| plan.get("route_path_prefix"))
-                .and_then(norito::json::Value::as_str),
-            Some("/api/v1")
-        );
-        assert!(
-            output
-                .get("service_plan")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|plan| plan.get("workspace_scripts"))
-                .and_then(norito::json::Value::as_object)
-                .and_then(|scripts| scripts.get("build_and_sync"))
-                .and_then(norito::json::Value::as_str)
-                .is_some_and(|path| path.ends_with("build-and-sync.sh"))
-        );
+        assert_manifest_pair_output(&output, "build_and_sync", "build-and-sync.sh");
         let request = server
             .requests()
             .into_iter()
@@ -17281,30 +17375,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("secret-status should succeed");
-        assert_eq!(
-            output
-                .get("service_name")
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-        assert_eq!(
-            output
-                .get("service_plan")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|plan| plan.get("route_path_prefix"))
-                .and_then(norito::json::Value::as_str),
-            Some("/api/v1")
-        );
-        assert!(
-            output
-                .get("service_plan")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|plan| plan.get("workspace_scripts"))
-                .and_then(norito::json::Value::as_object)
-                .and_then(|scripts| scripts.get("upgrade"))
-                .and_then(norito::json::Value::as_str)
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
+        assert_manifest_pair_output(&output, "upgrade", "upgrade.sh");
         let request = server
             .requests()
             .into_iter()
@@ -17351,44 +17422,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(&authority, &key_pair)
         .expect("rollback should succeed");
-        assert_eq!(
-            output
-                .get("service_name")
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-        assert_eq!(
-            output
-                .get("service_plan")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|plan| plan.get("route_path_prefix"))
-                .and_then(norito::json::Value::as_str),
-            Some("/api/v1")
-        );
-        assert!(
-            output
-                .get("service_plan")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|plan| plan.get("workspace_scripts"))
-                .and_then(norito::json::Value::as_object)
-                .and_then(|scripts| scripts.get("local_dev"))
-                .and_then(norito::json::Value::as_str)
-                .is_some_and(|path| path.ends_with("dev.sh"))
-        );
-        let rollback_request = server
-            .requests()
-            .into_iter()
-            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/rollback")
-            .expect("rollback request");
-        let rollback_body: norito::json::Value =
-            json::from_slice(&rollback_request.body).expect("decode rollback request");
-        assert_eq!(
-            rollback_body
-                .get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
+        assert_manifest_pair_output(&output, "local_dev", "dev.sh");
+        assert_captured_payload_service_name(
+            &server,
+            "/v1/soracloud/rollback",
+            "rollback request",
+            "decode rollback request",
         );
     }
     #[test]
@@ -17455,44 +17494,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(&authority, &key_pair)
         .expect("rollout should succeed");
-        assert_eq!(
-            output
-                .get("service_name")
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-        assert_eq!(
-            output
-                .get("service_plan")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|plan| plan.get("route_path_prefix"))
-                .and_then(norito::json::Value::as_str),
-            Some("/api/v1")
-        );
-        assert!(
-            output
-                .get("service_plan")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|plan| plan.get("workspace_scripts"))
-                .and_then(norito::json::Value::as_object)
-                .and_then(|scripts| scripts.get("upgrade"))
-                .and_then(norito::json::Value::as_str)
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
-        let rollout_request = server
-            .requests()
-            .into_iter()
-            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/rollout")
-            .expect("rollout request");
-        let rollout_body: norito::json::Value =
-            json::from_slice(&rollout_request.body).expect("decode rollout request");
-        assert_eq!(
-            rollout_body
-                .get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
+        assert_manifest_pair_output(&output, "upgrade", "upgrade.sh");
+        assert_captured_payload_service_name(
+            &server,
+            "/v1/soracloud/rollout",
+            "rollout request",
+            "decode rollout request",
         );
     }
     #[test]
@@ -17554,20 +17561,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .run(&authority, &key_pair)
         .expect("hf deploy should succeed");
         assert_manifest_pair_service_plan(&output);
-        let deploy_request = server
-            .requests()
-            .into_iter()
-            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/hf/deploy")
-            .expect("hf deploy request");
-        let deploy_body: norito::json::Value =
-            json::from_slice(&deploy_request.body).expect("decode hf deploy request");
-        assert_eq!(
-            deploy_body
-                .get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
+        let deploy_body = assert_captured_payload_service_name(
+            &server,
+            "/v1/soracloud/hf/deploy",
+            "hf deploy request",
+            "decode hf deploy request",
         );
         let deploy_payload = deploy_body
             .get("payload")
@@ -17700,22 +17698,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .run(&authority, &key_pair)
         .expect("hf lease leave should succeed");
         assert_manifest_pair_service_plan(&output);
-        let leave_request = server
-            .requests()
-            .into_iter()
-            .find(|request| {
-                request.method == "POST" && request.path == "/v1/soracloud/hf/lease/leave"
-            })
-            .expect("hf lease leave request");
-        let leave_body: norito::json::Value =
-            json::from_slice(&leave_request.body).expect("decode hf leave request");
-        assert_eq!(
-            leave_body
-                .get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
+        assert_captured_payload_service_name(
+            &server,
+            "/v1/soracloud/hf/lease/leave",
+            "hf lease leave request",
+            "decode hf leave request",
         );
     }
     #[test]
@@ -17777,22 +17764,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .run(&authority, &key_pair)
         .expect("hf lease renew should succeed");
         assert_manifest_pair_service_plan(&output);
-        let renew_request = server
-            .requests()
-            .into_iter()
-            .find(|request| {
-                request.method == "POST" && request.path == "/v1/soracloud/hf/lease/renew"
-            })
-            .expect("hf lease renew request");
-        let renew_body: norito::json::Value =
-            json::from_slice(&renew_request.body).expect("decode hf renew request");
-        assert_eq!(
-            renew_body
-                .get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
+        let renew_body = assert_captured_payload_service_name(
+            &server,
+            "/v1/soracloud/hf/lease/renew",
+            "hf lease renew request",
+            "decode hf renew request",
         );
         let renew_payload = renew_body
             .get("payload")
@@ -17853,19 +17829,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .run(&authority, &key_pair)
                 .expect($success);
                 assert_manifest_pair_service_plan(&output);
-                let request = server
-                    .requests()
-                    .into_iter()
-                    .find(|request| request.method == "POST" && request.path == $endpoint)
-                    .expect($request_label);
-                let body: norito::json::Value =
-                    json::from_slice(&request.body).expect($decode_label);
-                assert_eq!(
-                    body.get("payload")
-                        .and_then(norito::json::Value::as_object)
-                        .and_then(|payload| payload.get("service_name"))
-                        .and_then(norito::json::Value::as_str),
-                    Some("echo_console")
+                assert_captured_payload_service_name(
+                    &server,
+                    $endpoint,
+                    $request_label,
+                    $decode_label,
                 );
             }
         };
@@ -18432,53 +18400,70 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let base_url = normalize_public_service_base_url(&bundle).expect("public base url");
         assert_eq!(base_url.as_str(), "https://solswap-indexer.taira.sora.org/");
     }
-    #[test]
-    fn signed_rollback_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x24);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_rollback_request("web_portal", None, Some(&authority), &key_pair)
-            .expect("signed rollback request");
-        let payload = encode_rollback_signature_payload(&request.payload).expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
+    macro_rules! signed_request_signature_case {
+        ($name:ident, $seed:expr, $builder:expr, $encoder:ident, $expectation:literal) => {
+            #[test]
+            fn $name() {
+                let key_pair = soracloud_fixture_key_pair($seed);
+                let authority = AccountId::new(key_pair.public_key().clone());
+                let request = ($builder)(&authority, &key_pair).expect($expectation);
+                let payload = $encoder(&request.payload).expect("encode payload");
+                assert_signed_request_signature(&request, &request.provenance, &payload);
+            }
+        };
     }
-    #[test]
-    fn signed_rollout_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x25);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_rollout_request(
+    signed_request_signature_case!(
+        signed_rollback_request_uses_verifiable_signature,
+        0x24,
+        |authority, key_pair| signed_rollback_request(
+            "web_portal",
+            None,
+            Some(authority),
+            key_pair
+        ),
+        encode_rollback_signature_payload,
+        "signed rollback request"
+    );
+    signed_request_signature_case!(
+        signed_rollout_request_uses_verifiable_signature,
+        0x25,
+        |authority, key_pair| signed_rollout_request(
             "web_portal",
             "web_portal:rollout:2",
             true,
             Some(100),
             Hash::new(b"governance"),
-            Some(&authority),
-            &key_pair,
-        )
-        .expect("signed rollout request");
-        let payload = encode_rollout_signature_payload(&request.payload).expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
-    #[test]
-    fn signed_agent_deploy_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x26);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request =
-            signed_agent_deploy_request(fixture_agent_apartment(), 120, 500, &authority, &key_pair)
-                .expect("signed agent deploy request");
-        let payload =
-            encode_agent_deploy_signature_payload(&request.payload).expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
-    #[test]
-    fn signed_agent_lease_renew_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x27);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_agent_lease_renew_request("ops_agent", 120, &authority, &key_pair)
-            .expect("signed agent lease renew request");
-        let payload =
-            encode_agent_lease_renew_signature_payload(&request.payload).expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
+            Some(authority),
+            key_pair,
+        ),
+        encode_rollout_signature_payload,
+        "signed rollout request"
+    );
+    signed_request_signature_case!(
+        signed_agent_deploy_request_uses_verifiable_signature,
+        0x26,
+        |authority, key_pair| signed_agent_deploy_request(
+            fixture_agent_apartment(),
+            120,
+            500,
+            authority,
+            key_pair,
+        ),
+        encode_agent_deploy_signature_payload,
+        "signed agent deploy request"
+    );
+    signed_request_signature_case!(
+        signed_agent_lease_renew_request_uses_verifiable_signature,
+        0x27,
+        |authority, key_pair| signed_agent_lease_renew_request(
+            "ops_agent",
+            120,
+            authority,
+            key_pair,
+        ),
+        encode_agent_lease_renew_signature_payload,
+        "signed agent lease renew request"
+    );
     #[test]
     fn signed_hf_deploy_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x28);
@@ -18530,25 +18515,22 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("generated service provenance should verify");
         assert!(request.generated_apartment_provenance.is_some());
     }
-    #[test]
-    fn signed_hf_lease_leave_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x29);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_hf_lease_leave_request(
+    signed_request_signature_case!(
+        signed_hf_lease_leave_request_uses_verifiable_signature,
+        0x29,
+        |authority, key_pair| signed_hf_lease_leave_request(
             "openai/gpt-oss",
             Some("rev-1"),
             StorageClass::Warm,
             604_800_000,
             Some("hf_lease_a"),
             Some("ops_agent"),
-            &authority,
-            &key_pair,
-        )
-        .expect("signed hf leave request");
-        let payload =
-            encode_hf_lease_leave_signature_payload(&request.payload).expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
+            authority,
+            key_pair,
+        ),
+        encode_hf_lease_leave_signature_payload,
+        "signed hf leave request"
+    );
     #[test]
     fn signed_hf_lease_renew_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x2A);
@@ -18618,113 +18600,98 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 > request.payload.capability.advertised_at_ms
         );
     }
-    #[test]
-    fn signed_agent_restart_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x2C);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request =
-            signed_agent_restart_request("ops_agent", "manual-restart", &authority, &key_pair)
-                .expect("signed agent restart request");
-        let payload =
-            encode_agent_restart_signature_payload(&request.payload).expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
-    #[test]
-    fn signed_agent_policy_revoke_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x2D);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_agent_policy_revoke_request(
+    signed_request_signature_case!(
+        signed_agent_restart_request_uses_verifiable_signature,
+        0x2C,
+        |authority, key_pair| signed_agent_restart_request(
+            "ops_agent",
+            "manual-restart",
+            authority,
+            key_pair,
+        ),
+        encode_agent_restart_signature_payload,
+        "signed agent restart request"
+    );
+    signed_request_signature_case!(
+        signed_agent_policy_revoke_request_uses_verifiable_signature,
+        0x2D,
+        |authority, key_pair| signed_agent_policy_revoke_request(
             "ops_agent",
             "agent.autonomy.run",
             Some("manual-review"),
-            &authority,
-            &key_pair,
-        )
-        .expect("signed agent policy revoke request");
-        let payload =
-            encode_agent_policy_revoke_signature_payload(&request.payload).expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
-    #[test]
-    fn signed_agent_wallet_spend_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x2E);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let amount = "0.001".parse().expect("canonical exact amount");
-        let request = signed_agent_wallet_spend_request(
-            "ops_agent",
-            "61CtjvNd9T3THAR65GsMVHr82Bjc",
-            &amount,
-            &authority,
-            &key_pair,
-        )
-        .expect("signed agent wallet spend request");
-        let payload =
-            encode_agent_wallet_spend_signature_payload(&request.payload).expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
-    #[test]
-    fn signed_agent_wallet_approve_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x2F);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_agent_wallet_approve_request(
+            authority,
+            key_pair,
+        ),
+        encode_agent_policy_revoke_signature_payload,
+        "signed agent policy revoke request"
+    );
+    signed_request_signature_case!(
+        signed_agent_wallet_spend_request_uses_verifiable_signature,
+        0x2E,
+        |authority, key_pair| {
+            let amount = "0.001".parse().expect("canonical exact amount");
+            signed_agent_wallet_spend_request(
+                "ops_agent",
+                "61CtjvNd9T3THAR65GsMVHr82Bjc",
+                &amount,
+                authority,
+                key_pair,
+            )
+        },
+        encode_agent_wallet_spend_signature_payload,
+        "signed agent wallet spend request"
+    );
+    signed_request_signature_case!(
+        signed_agent_wallet_approve_request_uses_verifiable_signature,
+        0x2F,
+        |authority, key_pair| signed_agent_wallet_approve_request(
             "ops_agent",
             "ops_agent:wallet:7",
-            &authority,
-            &key_pair,
-        )
-        .expect("signed agent wallet approve request");
-        let payload = encode_agent_wallet_approve_signature_payload(&request.payload)
-            .expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
-    #[test]
-    fn signed_agent_message_send_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x30);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_agent_message_send_request(
+            authority,
+            key_pair,
+        ),
+        encode_agent_wallet_approve_signature_payload,
+        "signed agent wallet approve request"
+    );
+    signed_request_signature_case!(
+        signed_agent_message_send_request_uses_verifiable_signature,
+        0x30,
+        |authority, key_pair| signed_agent_message_send_request(
             "ops_agent",
             "worker_agent",
             "ops.sync",
             "rotate-key-42",
-            &authority,
-            &key_pair,
-        )
-        .expect("signed agent message send request");
-        let payload =
-            encode_agent_message_send_signature_payload(&request.payload).expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
-    #[test]
-    fn signed_agent_message_ack_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x31);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_agent_message_ack_request(
+            authority,
+            key_pair,
+        ),
+        encode_agent_message_send_signature_payload,
+        "signed agent message send request"
+    );
+    signed_request_signature_case!(
+        signed_agent_message_ack_request_uses_verifiable_signature,
+        0x31,
+        |authority, key_pair| signed_agent_message_ack_request(
             "worker_agent",
             "worker_agent:mail:3",
-            &authority,
-            &key_pair,
-        )
-        .expect("signed agent message ack request");
-        let payload =
-            encode_agent_message_ack_signature_payload(&request.payload).expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
-    #[test]
-    fn signed_agent_artifact_allow_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x32);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_agent_artifact_allow_request(
+            authority,
+            key_pair,
+        ),
+        encode_agent_message_ack_signature_payload,
+        "signed agent message ack request"
+    );
+    signed_request_signature_case!(
+        signed_agent_artifact_allow_request_uses_verifiable_signature,
+        0x32,
+        |authority, key_pair| signed_agent_artifact_allow_request(
             "ops_agent",
             "hash:ABCD0123#01",
             Some("hash:PROV0001#01"),
-            &authority,
-            &key_pair,
-        )
-        .expect("signed agent artifact allow request");
-        let payload = encode_agent_artifact_allow_signature_payload(&request.payload)
-            .expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
+            authority,
+            key_pair,
+        ),
+        encode_agent_artifact_allow_signature_payload,
+        "signed agent artifact allow request"
+    );
     #[test]
     fn signed_agent_autonomy_run_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x33);
@@ -18748,11 +18715,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("{\"inputs\":[\"alpha\",\"beta\"],\"parameters\":{\"max_new_tokens\":4}}")
         );
     }
-    #[test]
-    fn signed_training_job_start_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x34);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_training_job_start_request(
+    signed_request_signature_case!(
+        signed_training_job_start_request_uses_verifiable_signature,
+        0x34,
+        |authority, key_pair| signed_training_job_start_request(
             "web_portal",
             "model-1",
             "job-1",
@@ -18763,53 +18729,44 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             500,
             50_000,
             4_000,
-            Some(&authority),
-            &key_pair,
-        )
-        .expect("signed training start request");
-        let payload =
-            encode_training_job_start_signature_payload(&request.payload).expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
-    #[test]
-    fn signed_training_job_checkpoint_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x35);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_training_job_checkpoint_request(
+            Some(authority),
+            key_pair,
+        ),
+        encode_training_job_start_signature_payload,
+        "signed training start request"
+    );
+    signed_request_signature_case!(
+        signed_training_job_checkpoint_request_uses_verifiable_signature,
+        0x35,
+        |authority, key_pair| signed_training_job_checkpoint_request(
             "web_portal",
             "job-1",
             20,
             1_024,
             Hash::new(b"metrics"),
-            Some(&authority),
-            &key_pair,
-        )
-        .expect("signed training checkpoint request");
-        let payload = encode_training_job_checkpoint_signature_payload(&request.payload)
-            .expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
-    #[test]
-    fn signed_training_job_retry_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x36);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_training_job_retry_request(
+            Some(authority),
+            key_pair,
+        ),
+        encode_training_job_checkpoint_signature_payload,
+        "signed training checkpoint request"
+    );
+    signed_request_signature_case!(
+        signed_training_job_retry_request_uses_verifiable_signature,
+        0x36,
+        |authority, key_pair| signed_training_job_retry_request(
             "web_portal",
             "job-1",
             "worker unavailable",
-            Some(&authority),
-            &key_pair,
-        )
-        .expect("signed training retry request");
-        let payload =
-            encode_training_job_retry_signature_payload(&request.payload).expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
-    #[test]
-    fn signed_model_artifact_register_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x37);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_model_artifact_register_request(
+            Some(authority),
+            key_pair,
+        ),
+        encode_training_job_retry_signature_payload,
+        "signed training retry request"
+    );
+    signed_request_signature_case!(
+        signed_model_artifact_register_request_uses_verifiable_signature,
+        0x37,
+        |authority, key_pair| signed_model_artifact_register_request(
             "web_portal",
             "model-1",
             "job-1",
@@ -18818,19 +18775,16 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Hash::new(b"train-config"),
             Hash::new(b"repro"),
             Hash::new(b"attestation"),
-            Some(&authority),
-            &key_pair,
-        )
-        .expect("signed model artifact request");
-        let payload = encode_model_artifact_register_signature_payload(&request.payload)
-            .expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
-    #[test]
-    fn signed_model_weight_register_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x38);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_model_weight_register_request(
+            Some(authority),
+            key_pair,
+        ),
+        encode_model_artifact_register_signature_payload,
+        "signed model artifact request"
+    );
+    signed_request_signature_case!(
+        signed_model_weight_register_request_uses_verifiable_signature,
+        0x38,
+        |authority, key_pair| signed_model_weight_register_request(
             "web_portal",
             "model-1",
             "1.0.0",
@@ -18841,49 +18795,41 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Hash::new(b"train-config"),
             Hash::new(b"repro"),
             Hash::new(b"attestation"),
-            Some(&authority),
-            &key_pair,
-        )
-        .expect("signed model weight register request");
-        let payload = encode_model_weight_register_signature_payload(&request.payload)
-            .expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
-    #[test]
-    fn signed_model_weight_promote_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x39);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_model_weight_promote_request(
+            Some(authority),
+            key_pair,
+        ),
+        encode_model_weight_register_signature_payload,
+        "signed model weight register request"
+    );
+    signed_request_signature_case!(
+        signed_model_weight_promote_request_uses_verifiable_signature,
+        0x39,
+        |authority, key_pair| signed_model_weight_promote_request(
             "web_portal",
             "model-1",
             "1.0.0",
             true,
             Hash::new(b"gate-report"),
-            Some(&authority),
-            &key_pair,
-        )
-        .expect("signed model weight promote request");
-        let payload = encode_model_weight_promote_signature_payload(&request.payload)
-            .expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
-    #[test]
-    fn signed_model_weight_rollback_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x3A);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_model_weight_rollback_request(
+            Some(authority),
+            key_pair,
+        ),
+        encode_model_weight_promote_signature_payload,
+        "signed model weight promote request"
+    );
+    signed_request_signature_case!(
+        signed_model_weight_rollback_request_uses_verifiable_signature,
+        0x3A,
+        |authority, key_pair| signed_model_weight_rollback_request(
             "web_portal",
             "model-1",
             "0.9.0",
             "gate regression",
-            Some(&authority),
-            &key_pair,
-        )
-        .expect("signed model weight rollback request");
-        let payload = encode_model_weight_rollback_signature_payload(&request.payload)
-            .expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-    }
+            Some(authority),
+            key_pair,
+        ),
+        encode_model_weight_rollback_signature_payload,
+        "signed model weight rollback request"
+    );
     #[test]
     fn bundle_signature_payload_layout_is_canonical_layout() {
         let container = fixture_container();
@@ -18899,209 +18845,187 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let expected = norito::to_bytes(&bundle).expect("encode canonical layout");
         assert_eq!(encoded, expected);
     }
-    #[test]
-    fn rollback_signature_payload_layout_is_canonical_tuple() {
-        let payload = RollbackPayload {
+    macro_rules! signature_payload_layout_case {
+        ($name:ident, $payload:ident = $value:expr, $encoder:ident, $expected:expr $(, $extra:block)?) => {
+            #[test]
+            fn $name() {
+                let $payload = $value;
+                let encoded = $encoder(&$payload).expect("encode signature payload");
+                let expected = norito::to_bytes(&$expected).expect("encode canonical tuple");
+                assert_eq!(encoded, expected);
+                $($extra)?
+            }
+        };
+    }
+    signature_payload_layout_case!(
+        rollback_signature_payload_layout_is_canonical_tuple,
+        payload = RollbackPayload {
             service_name: "web_portal".to_owned(),
             target_version: Some("1.0.0".to_owned()),
-        };
-        let encoded =
-            encode_rollback_signature_payload(&payload).expect("encode signature payload");
-        let expected = norito::to_bytes(&(
+        },
+        encode_rollback_signature_payload,
+        (
             payload.service_name.as_str(),
-            payload.target_version.as_deref(),
-        ))
-        .expect("encode canonical tuple");
-        assert_eq!(encoded, expected);
-    }
-    #[test]
-    fn rollout_signature_payload_layout_is_canonical_tuple() {
-        let governance_tx_hash = Hash::new(b"governance");
-        let payload = RolloutAdvancePayload {
+            payload.target_version.as_deref()
+        )
+    );
+    signature_payload_layout_case!(
+        rollout_signature_payload_layout_is_canonical_tuple,
+        payload = RolloutAdvancePayload {
             service_name: "web_portal".to_owned(),
             rollout_handle: "web_portal:rollout:2".to_owned(),
             healthy: true,
             promote_to_percent: Some(100),
-            governance_tx_hash: governance_tx_hash.clone(),
-        };
-        let encoded = encode_rollout_signature_payload(&payload).expect("encode signature payload");
-        let expected = norito::to_bytes(&(
+            governance_tx_hash: Hash::new(b"governance"),
+        },
+        encode_rollout_signature_payload,
+        (
             payload.service_name.as_str(),
             payload.rollout_handle.as_str(),
             payload.healthy,
             payload.promote_to_percent,
-            governance_tx_hash,
-        ))
-        .expect("encode canonical tuple");
-        assert_eq!(encoded, expected);
-    }
-    #[test]
-    fn agent_deploy_signature_payload_layout_is_canonical_tuple() {
-        let manifest = fixture_agent_apartment();
-        let payload = AgentDeployPayload {
-            manifest: manifest.clone(),
+            payload.governance_tx_hash.clone(),
+        )
+    );
+    signature_payload_layout_case!(
+        agent_deploy_signature_payload_layout_is_canonical_tuple,
+        payload = AgentDeployPayload {
+            manifest: fixture_agent_apartment(),
             lease_ticks: 120,
             autonomy_budget_units: Some(500),
-        };
-        let encoded =
-            encode_agent_deploy_signature_payload(&payload).expect("encode signature payload");
-        let expected =
-            norito::to_bytes(&(manifest, 120u64, Some(500u64))).expect("encode canonical tuple");
-        assert_eq!(encoded, expected);
-    }
-    #[test]
-    fn agent_lease_renew_signature_payload_layout_is_canonical_tuple() {
-        let payload = AgentLeaseRenewPayload {
+        },
+        encode_agent_deploy_signature_payload,
+        (
+            payload.manifest.clone(),
+            payload.lease_ticks,
+            payload.autonomy_budget_units,
+        )
+    );
+    signature_payload_layout_case!(
+        agent_lease_renew_signature_payload_layout_is_canonical_tuple,
+        payload = AgentLeaseRenewPayload {
             apartment_name: "ops_agent".to_owned(),
             lease_ticks: 120,
-        };
-        let encoded =
-            encode_agent_lease_renew_signature_payload(&payload).expect("encode signature payload");
-        let expected = norito::to_bytes(&(payload.apartment_name.as_str(), payload.lease_ticks))
-            .expect("encode canonical tuple");
-        assert_eq!(encoded, expected);
-    }
-    #[test]
-    fn agent_restart_signature_payload_layout_is_canonical_tuple() {
-        let payload = AgentRestartPayload {
+        },
+        encode_agent_lease_renew_signature_payload,
+        (payload.apartment_name.as_str(), payload.lease_ticks)
+    );
+    signature_payload_layout_case!(
+        agent_restart_signature_payload_layout_is_canonical_tuple,
+        payload = AgentRestartPayload {
             apartment_name: "ops_agent".to_owned(),
             reason: "manual-restart".to_owned(),
-        };
-        let encoded =
-            encode_agent_restart_signature_payload(&payload).expect("encode signature payload");
-        let expected =
-            norito::to_bytes(&(payload.apartment_name.as_str(), payload.reason.as_str()))
-                .expect("encode canonical tuple");
-        assert_eq!(encoded, expected);
-    }
-    #[test]
-    fn agent_policy_revoke_signature_payload_layout_is_canonical_tuple() {
-        let payload = AgentPolicyRevokePayload {
+        },
+        encode_agent_restart_signature_payload,
+        (payload.apartment_name.as_str(), payload.reason.as_str())
+    );
+    signature_payload_layout_case!(
+        agent_policy_revoke_signature_payload_layout_is_canonical_tuple,
+        payload = AgentPolicyRevokePayload {
             apartment_name: "ops_agent".to_owned(),
             capability: "agent.autonomy.run".to_owned(),
             reason: Some("manual-review".to_owned()),
-        };
-        let encoded = encode_agent_policy_revoke_signature_payload(&payload)
-            .expect("encode signature payload");
-        let expected = norito::to_bytes(&(
+        },
+        encode_agent_policy_revoke_signature_payload,
+        (
             payload.apartment_name.as_str(),
             payload.capability.as_str(),
             payload.reason.as_deref(),
-        ))
-        .expect("encode canonical tuple");
-        assert_eq!(encoded, expected);
-    }
-    #[test]
-    fn agent_wallet_spend_signature_payload_layout_is_canonical_tuple() {
-        let payload = AgentWalletSpendPayload {
+        )
+    );
+    signature_payload_layout_case!(
+        agent_wallet_spend_signature_payload_layout_is_canonical_tuple,
+        payload = AgentWalletSpendPayload {
             apartment_name: "ops_agent".to_owned(),
             asset_definition: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
             amount: "340282366920938463463374607431768211456.0000000001"
                 .parse()
                 .expect("wide exact amount"),
-        };
-        let encoded = encode_agent_wallet_spend_signature_payload(&payload)
-            .expect("encode signature payload");
-        let expected = norito::to_bytes(&(
+        },
+        encode_agent_wallet_spend_signature_payload,
+        (
             payload.apartment_name.as_str(),
             payload.asset_definition.as_str(),
             payload.amount.clone(),
-        ))
-        .expect("encode canonical tuple");
-        assert_eq!(encoded, expected);
-        let value = json::to_value(&payload).expect("serialize wallet spend payload");
-        let object = value.as_object().expect("wallet spend payload object");
-        assert_eq!(
-            object.get("amount").and_then(norito::json::Value::as_str),
-            Some("340282366920938463463374607431768211456.0000000001")
-        );
-        assert!(!object.contains_key("amount_nanos"));
-    }
-    #[test]
-    fn agent_wallet_approve_signature_payload_layout_is_canonical_tuple() {
-        let payload = AgentWalletApprovePayload {
+        ),
+        {
+            let value = json::to_value(&payload).expect("serialize wallet spend payload");
+            let object = value.as_object().expect("wallet spend payload object");
+            assert_eq!(
+                object.get("amount").and_then(norito::json::Value::as_str),
+                Some("340282366920938463463374607431768211456.0000000001")
+            );
+            assert!(!object.contains_key("amount_nanos"));
+        }
+    );
+    signature_payload_layout_case!(
+        agent_wallet_approve_signature_payload_layout_is_canonical_tuple,
+        payload = AgentWalletApprovePayload {
             apartment_name: "ops_agent".to_owned(),
             request_id: "ops_agent:wallet:7".to_owned(),
-        };
-        let encoded = encode_agent_wallet_approve_signature_payload(&payload)
-            .expect("encode signature payload");
-        let expected =
-            norito::to_bytes(&(payload.apartment_name.as_str(), payload.request_id.as_str()))
-                .expect("encode canonical tuple");
-        assert_eq!(encoded, expected);
-    }
-    #[test]
-    fn agent_message_send_signature_payload_layout_is_canonical_tuple() {
-        let payload = AgentMessageSendPayload {
+        },
+        encode_agent_wallet_approve_signature_payload,
+        (payload.apartment_name.as_str(), payload.request_id.as_str())
+    );
+    signature_payload_layout_case!(
+        agent_message_send_signature_payload_layout_is_canonical_tuple,
+        payload = AgentMessageSendPayload {
             from_apartment: "ops_agent".to_owned(),
             to_apartment: "worker_agent".to_owned(),
             channel: "ops.sync".to_owned(),
             payload: "rotate-key-42".to_owned(),
-        };
-        let encoded = encode_agent_message_send_signature_payload(&payload)
-            .expect("encode signature payload");
-        let expected = norito::to_bytes(&(
+        },
+        encode_agent_message_send_signature_payload,
+        (
             payload.from_apartment.as_str(),
             payload.to_apartment.as_str(),
             payload.channel.as_str(),
             payload.payload.as_str(),
-        ))
-        .expect("encode canonical tuple");
-        assert_eq!(encoded, expected);
-    }
-    #[test]
-    fn agent_message_ack_signature_payload_layout_is_canonical_tuple() {
-        let payload = AgentMessageAckPayload {
+        )
+    );
+    signature_payload_layout_case!(
+        agent_message_ack_signature_payload_layout_is_canonical_tuple,
+        payload = AgentMessageAckPayload {
             apartment_name: "worker_agent".to_owned(),
             message_id: "worker_agent:mail:3".to_owned(),
-        };
-        let encoded =
-            encode_agent_message_ack_signature_payload(&payload).expect("encode signature payload");
-        let expected =
-            norito::to_bytes(&(payload.apartment_name.as_str(), payload.message_id.as_str()))
-                .expect("encode canonical tuple");
-        assert_eq!(encoded, expected);
-    }
-    #[test]
-    fn agent_artifact_allow_signature_payload_layout_is_canonical_tuple() {
-        let payload = AgentArtifactAllowPayload {
+        },
+        encode_agent_message_ack_signature_payload,
+        (payload.apartment_name.as_str(), payload.message_id.as_str())
+    );
+    signature_payload_layout_case!(
+        agent_artifact_allow_signature_payload_layout_is_canonical_tuple,
+        payload = AgentArtifactAllowPayload {
             apartment_name: "ops_agent".to_owned(),
             artifact_hash: "hash:ABCD0123#01".to_owned(),
             provenance_hash: Some("hash:PROV0001#01".to_owned()),
-        };
-        let encoded = encode_agent_artifact_allow_signature_payload(&payload)
-            .expect("encode signature payload");
-        let expected = norito::to_bytes(&(
+        },
+        encode_agent_artifact_allow_signature_payload,
+        (
             payload.apartment_name.as_str(),
             payload.artifact_hash.as_str(),
             payload.provenance_hash.as_deref(),
-        ))
-        .expect("encode canonical tuple");
-        assert_eq!(encoded, expected);
-    }
-    #[test]
-    fn agent_autonomy_run_signature_payload_layout_is_canonical_tuple() {
-        let payload = AgentAutonomyRunPayload {
+        )
+    );
+    signature_payload_layout_case!(
+        agent_autonomy_run_signature_payload_layout_is_canonical_tuple,
+        payload = AgentAutonomyRunPayload {
             apartment_name: "ops_agent".to_owned(),
             artifact_hash: "hash:ABCD0123#01".to_owned(),
             provenance_hash: Some("hash:PROV0001#01".to_owned()),
             budget_units: 120,
             run_label: "nightly-train-step-1".to_owned(),
             workflow_input_json: Some("{\"inputs\":\"nightly\"}".to_owned()),
-        };
-        let encoded = encode_agent_autonomy_run_signature_payload(&payload)
-            .expect("encode signature payload");
-        let expected = norito::to_bytes(&(
+        },
+        encode_agent_autonomy_run_signature_payload,
+        (
             payload.apartment_name.as_str(),
             payload.artifact_hash.as_str(),
             payload.provenance_hash.as_deref(),
             payload.budget_units,
             payload.run_label.as_str(),
             payload.workflow_input_json.as_deref(),
-        ))
-        .expect("encode canonical tuple");
-        assert_eq!(encoded, expected);
-    }
+        )
+    );
     #[test]
     fn canonicalize_agent_workflow_input_json_compacts_payload() {
         let canonical = canonicalize_agent_workflow_input_json(
@@ -19529,14 +19453,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .contains("--model-id or --model-name is required")
         );
     }
-    #[test]
-    fn post_torii_mutation_rejects_invalid_url() {
-        let payload = norito::json!({ "noop": true });
-        let err =
-            post_torii_soracloud_mutation("not-a-url", "v1/soracloud/deploy", &payload, None, 5)
-                .expect_err("invalid URL must fail");
-        assert!(err.to_string().contains("invalid --torii-url"));
-    }
     include!("soracloud/network_auth_tests.rs");
     #[test]
     fn build_soracloud_mutation_auth_headers_rejects_witness_account_mismatch() {
@@ -19657,13 +19573,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.torii_url, server.base_url);
         assert!(output.uses_api_token);
         assert!(output.workspace_dir.contains("deploy_service_projection"));
-        assert!(
-            output
-                .workspace_scripts
-                .local_dev
-                .as_deref()
-                .is_some_and(|path| path.ends_with("dev.sh"))
-        );
+        assert_optional_path_ends_with(output.workspace_scripts.local_dev.as_deref(), "dev.sh");
         assert!(
             output
                 .routes
@@ -19684,12 +19594,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .and_then(norito::json::Value::as_str),
             Some("1.0.0")
         );
-        assert!(
-            output
-                .notes
-                .iter()
-                .any(|note| note.contains("live Torii status"))
-        );
+        assert_notes_contain(&output.notes, "live Torii status");
     }
     #[test]
     fn upgrade_returns_manifest_backed_service_projection() {
@@ -19726,13 +19631,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.torii_url, server.base_url);
         assert!(!output.uses_api_token);
         assert!(output.workspace_dir.contains("upgrade_service_projection"));
-        assert!(
-            output
-                .workspace_scripts
-                .upgrade
-                .as_deref()
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
+        assert_optional_path_ends_with(output.workspace_scripts.upgrade.as_deref(), "upgrade.sh");
         assert!(
             output
                 .routes
@@ -19753,12 +19652,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .and_then(norito::json::Value::as_str),
             Some("1.0.0")
         );
-        assert!(
-            output
-                .notes
-                .iter()
-                .any(|note| note.contains("live Torii status"))
-        );
+        assert_notes_contain(&output.notes, "live Torii status");
     }
     #[test]
     fn init_http_service_template_scaffolds_inrou_service() {
@@ -19768,199 +19662,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             InitTemplate::HttpService,
         );
         assert_eq!(output.template, "http-service");
-        assert!(dir.join("http-service/app/server.mjs").exists());
-        assert!(dir.join("http-service/build.sh").exists());
-        assert!(dir.join("http-service/dev.sh").exists());
-        assert!(dir.join("dev.sh").exists());
-        assert!(dir.join("build-and-sync.sh").exists());
-        assert!(dir.join("doctor.sh").exists());
-        assert!(dir.join("release.sh").exists());
-        assert!(dir.join("deploy.sh").exists());
-        assert!(dir.join("upgrade.sh").exists());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            assert_eq!(
-                fs::metadata(dir.join("http-service/build.sh"))
-                    .expect("http-service build.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("http-service/dev.sh"))
-                    .expect("http-service dev.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("dev.sh"))
-                    .expect("http-service dev.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("build-and-sync.sh"))
-                    .expect("http-service build-and-sync.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("doctor.sh"))
-                    .expect("http-service doctor.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("release.sh"))
-                    .expect("http-service release.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("deploy.sh"))
-                    .expect("http-service deploy.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("upgrade.sh"))
-                    .expect("http-service upgrade.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-        }
-        let readme = fs::read_to_string(dir.join("http-service/README.md"))
-            .expect("read http-service readme");
-        assert!(readme.contains("runtime = Inrou"));
-        assert!(readme.contains("SORACLOUD_LEASE_VOLUME_APP_DATA_DIR"));
-        assert!(readme.contains("PersistentRootLeaseVolume"));
-        assert!(readme.contains("starter routes `/health` and `/echo`"));
-        assert!(readme.contains(
-            "iroha soracloud service plan --container ./container_manifest.json --service ./service_manifest.json"
-        ));
-        assert!(readme.contains("./dev.sh"));
-        assert!(readme.contains("./build-and-sync.sh"));
-        assert!(readme.contains("IROHA_BIN"));
-        assert!(readme.contains("IROHA_MANIFEST_PATH"));
-        assert!(readme.contains("IROHA_CARGO_HOME"));
-        assert!(readme.contains("IROHA_CARGO_TARGET_DIR"));
-        assert!(readme.contains(
-            "iroha soracloud service dev --container ./container_manifest.json --service ./service_manifest.json"
-        ));
-        assert!(readme.contains("wrappers return the same route, handler-count, replica, and"));
-        assert!(readme.contains(
-            "iroha soracloud service build --container ./container_manifest.json --service ./service_manifest.json"
-        ));
-        assert!(readme.contains("TORII_URL=http://127.0.0.1:8080 ./deploy.sh"));
-        assert!(readme.contains(
-            "iroha soracloud service deploy --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080"
-        ));
-        assert!(readme.contains(
-            "iroha soracloud service deploy --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080"
-        ));
-        assert!(readme.contains(
-            "direct `iroha soracloud service deploy` and `upgrade` commands also keep the"
-        ));
-        assert!(readme.contains("TORII_URL=http://127.0.0.1:8080 ./upgrade.sh"));
-        assert!(readme.contains(
-            "iroha soracloud service upgrade --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080"
-        ));
-        assert!(readme.contains(
-            "iroha soracloud service upgrade --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080"
-        ));
-        assert!(readme.contains(
-            "iroha soracloud service status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080"
-        ));
-        assert!(readme.contains("status` is driven from `--container` plus `--service`"));
-        assert!(readme.contains("## Service control-plane commands"));
-        assert!(readme.contains("`service_plan` projection that `plan` reports"));
-        assert!(readme.contains(
-            "iroha soracloud service config-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080"
-        ));
-        assert!(readme.contains(
-            "iroha soracloud service secret-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080"
-        ));
-        assert!(readme.contains(
-            "iroha soracloud service rollback --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080"
-        ));
-        assert!(readme.contains("hf deploy"));
-        assert!(readme.contains("hf status"));
-        assert!(readme.contains("training-job-*"));
-        assert!(readme.contains("model artifact-*"));
-        assert!(readme.contains("model weight-*"));
-        assert!(readme.contains("model upload-encryption-recipient"));
-        assert!(readme.contains("model upload-register"));
-        assert!(readme.contains("model upload-status"));
-        let deploy_sh =
-            fs::read_to_string(dir.join("deploy.sh")).expect("read http-service deploy.sh");
-        assert!(deploy_sh.contains("soracloud service deploy"));
-        assert!(deploy_sh.contains("${BASH_SOURCE[0]}"));
-        assert!(!deploy_sh.contains("${{BASH_SOURCE[0]}}"));
-        assert!(deploy_sh.contains("IROHA_BIN"));
-        assert!(deploy_sh.contains("IROHA_MANIFEST_PATH"));
-        assert!(deploy_sh.contains("IROHA_CARGO_HOME"));
-        assert!(deploy_sh.contains("IROHA_CARGO_TARGET_DIR"));
-        assert!(deploy_sh.contains("exec \"${IROHA_CMD[@]}\""));
-        let build_and_sync_sh =
-            fs::read_to_string(dir.join("build-and-sync.sh")).expect("read build-and-sync.sh");
-        assert!(build_and_sync_sh.contains("IROHA_BIN"));
-        assert!(build_and_sync_sh.contains("IROHA_MANIFEST_PATH"));
-        assert!(build_and_sync_sh.contains("IROHA_CARGO_HOME"));
-        assert!(build_and_sync_sh.contains("IROHA_CARGO_TARGET_DIR"));
-        assert!(build_and_sync_sh.contains("\"${IROHA_CMD[@]}\""));
-        let doctor_sh =
-            fs::read_to_string(dir.join("doctor.sh")).expect("read http-service doctor.sh");
-        assert!(doctor_sh.contains("\"$SCRIPT_DIR/build-and-sync.sh\""));
-        assert!(doctor_sh.contains("soracloud service plan"));
-        assert!(doctor_sh.contains("IROHA_BIN"));
-        assert!(doctor_sh.contains("IROHA_MANIFEST_PATH"));
-        assert!(doctor_sh.contains("exec \"${IROHA_CMD[@]}\""));
-        let release_sh =
-            fs::read_to_string(dir.join("release.sh")).expect("read http-service release.sh");
-        assert!(release_sh.contains("\"$SCRIPT_DIR/doctor.sh\""));
-        assert!(release_sh.contains("soracloud service deploy"));
-        assert!(release_sh.contains("IROHA_BIN"));
-        assert!(release_sh.contains("IROHA_MANIFEST_PATH"));
-        assert!(release_sh.contains("exec \"${IROHA_CMD[@]}\""));
-        let upgrade_sh =
-            fs::read_to_string(dir.join("upgrade.sh")).expect("read http-service upgrade.sh");
-        assert!(upgrade_sh.contains("soracloud service upgrade"));
-        assert!(upgrade_sh.contains("\"$SCRIPT_DIR/build-and-sync.sh\""));
-        assert!(upgrade_sh.contains("IROHA_BIN"));
-        assert!(upgrade_sh.contains("IROHA_MANIFEST_PATH"));
-        assert!(upgrade_sh.contains("IROHA_CARGO_HOME"));
-        assert!(upgrade_sh.contains("IROHA_CARGO_TARGET_DIR"));
-        assert!(upgrade_sh.contains("exec \"${IROHA_CMD[@]}\""));
-        if bash_available() {
-            run_bash_syntax_check(&dir.join("dev.sh"));
-            run_bash_syntax_check(&dir.join("build-and-sync.sh"));
-            run_bash_syntax_check(&dir.join("doctor.sh"));
-            run_bash_syntax_check(&dir.join("release.sh"));
-            run_bash_syntax_check(&dir.join("deploy.sh"));
-            run_bash_syntax_check(&dir.join("upgrade.sh"));
-        }
-        let server = fs::read_to_string(dir.join("http-service/app/server.mjs"))
-            .expect("read http-service server");
-        assert!(server.contains("/echo"));
-        assert!(server.contains("SORACLOUD_LEASE_VOLUME_APP_DATA_DIR"));
-        assert!(!server.contains("/search"));
-        assert!(!server.contains("/airports/search"));
+        assert_scaffold_file_contract(&dir, "init_http_service_template_scaffolds_inrou_service");
         let container: SoraContainerManifestV1 =
             load_json(&dir.join("container_manifest.json")).expect("container manifest");
         assert_eq!(container.runtime, SoraContainerRuntimeV1::Inrou);
@@ -20030,12 +19732,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .iter()
                 .any(|route| route.route_kind == "hosted_http_prefix" && route.path == "/api/v1")
         );
-        assert!(
-            output
-                .notes
-                .iter()
-                .any(|note| note.contains("hosted HttpService + Inrou"))
-        );
+        assert_notes_contain(&output.notes, "hosted HttpService + Inrou");
     }
     #[test]
     fn local_plan_single_api_service_reports_deterministic_handler_routes() {
@@ -20054,13 +19751,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.state_binding_count, 0);
         assert_eq!(output.lease_volume_count, 0);
         assert!(output.workspace_dir.contains("services/api"));
-        assert!(
-            output
-                .workspace_scripts
-                .local_dev
-                .as_deref()
-                .is_some_and(|path| path.ends_with("dev.sh"))
-        );
+        assert_optional_path_ends_with(output.workspace_scripts.local_dev.as_deref(), "dev.sh");
         assert_eq!(output.workspace_scripts.build_and_sync, None);
         assert_eq!(output.workspace_scripts.deploy, None);
         assert_eq!(output.workspace_scripts.upgrade, None);
@@ -20076,12 +19767,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 && route.path == "/api/healthz"
                 && route.handler_class.as_deref() == Some("Query")
         }));
-        assert!(
-            output
-                .notes
-                .iter()
-                .any(|note| note.contains("deterministic IVM"))
-        );
+        assert_notes_contain(&output.notes, "deterministic IVM");
     }
     #[test]
     fn local_dev_http_service_dry_run_reports_manifest_adjacent_script() {
@@ -20106,25 +19792,14 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.route_path_prefix.as_deref(), Some("/api/v1"));
         assert_eq!(output.replica_count, 1);
         assert_eq!(output.lease_volume_count, 2);
-        assert!(
-            output
-                .workspace_scripts
-                .local_dev
-                .as_deref()
-                .is_some_and(|path| path.ends_with("dev.sh"))
-        );
+        assert_optional_path_ends_with(output.workspace_scripts.local_dev.as_deref(), "dev.sh");
         assert!(
             output
                 .routes
                 .iter()
                 .any(|route| route.route_kind == "hosted_http_prefix" && route.path == "/api/v1")
         );
-        assert!(
-            output
-                .notes
-                .iter()
-                .any(|note| note.contains("hosted HttpService + Inrou"))
-        );
+        assert_notes_contain(&output.notes, "hosted HttpService + Inrou");
     }
     #[test]
     fn local_dev_http_service_executes_manifest_adjacent_script() {
@@ -20146,12 +19821,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.execution_plane, "HttpService");
         assert_eq!(output.runtime, "Inrou");
         assert_eq!(output.route_path_prefix.as_deref(), Some("/api/v1"));
-        assert!(
-            output
-                .workspace_scripts
-                .build_and_sync
-                .as_deref()
-                .is_some_and(|path| path.ends_with("build-and-sync.sh"))
+        assert_optional_path_ends_with(
+            output.workspace_scripts.build_and_sync.as_deref(),
+            "build-and-sync.sh",
         );
         assert_eq!(output.command, vec!["./dev.sh".to_owned()]);
         assert!(
@@ -20181,19 +19853,8 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.mode, "interrupted");
         assert_eq!(output.exit_status, Some(130));
         assert_eq!(output.route_path_prefix.as_deref(), Some("/api/v1"));
-        assert!(
-            output
-                .workspace_scripts
-                .upgrade
-                .as_deref()
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
-        assert!(
-            output
-                .notes
-                .iter()
-                .any(|note| note.contains("interactive interrupt"))
-        );
+        assert_optional_path_ends_with(output.workspace_scripts.upgrade.as_deref(), "upgrade.sh");
+        assert_notes_contain(&output.notes, "interactive interrupt");
     }
     #[test]
     fn build_and_sync_http_service_executes_manifest_adjacent_script() {
@@ -20219,24 +19880,13 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.runtime, "Inrou");
         assert_eq!(output.route_path_prefix.as_deref(), Some("/api/v1"));
         assert_eq!(output.lease_volume_count, 2);
-        assert!(
-            output
-                .workspace_scripts
-                .deploy
-                .as_deref()
-                .is_some_and(|path| path.ends_with("deploy.sh"))
-        );
+        assert_optional_path_ends_with(output.workspace_scripts.deploy.as_deref(), "deploy.sh");
         assert_eq!(output.command, vec!["./build-and-sync.sh".to_owned()]);
         assert!(
             dir.join("http-service-build-and-sync-ran.txt").exists(),
             "build-and-sync command should run the manifest-adjacent script"
         );
-        assert!(
-            output
-                .notes
-                .iter()
-                .any(|note| note.contains("build-and-sync completed"))
-        );
+        assert_notes_contain(&output.notes, "build-and-sync completed");
     }
     #[test]
     fn deploy_workspace_http_service_dry_run_reports_manifest_adjacent_script() {
@@ -20265,13 +19915,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.route_path_prefix.as_deref(), Some("/api/v1"));
         assert_eq!(output.state_binding_count, 0);
         assert_eq!(output.lease_volume_count, 2);
-        assert!(
-            output
-                .workspace_scripts
-                .deploy
-                .as_deref()
-                .is_some_and(|path| path.ends_with("deploy.sh"))
-        );
+        assert_optional_path_ends_with(output.workspace_scripts.deploy.as_deref(), "deploy.sh");
         assert_eq!(
             output.command,
             vec![
@@ -20281,12 +19925,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             ]
         );
         assert!(output.script_path.ends_with("deploy.sh"));
-        assert!(
-            output
-                .notes
-                .iter()
-                .any(|note| note.contains("exporting TORII_URL"))
-        );
+        assert_notes_contain(&output.notes, "exporting TORII_URL");
     }
     #[test]
     fn deploy_workspace_http_service_executes_manifest_adjacent_script() {
@@ -20328,13 +19967,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.torii_url, "http://127.0.0.1:8080");
         assert!(output.uses_api_token);
         assert_eq!(output.route_path_prefix.as_deref(), Some("/api/v1"));
-        assert!(
-            output
-                .workspace_scripts
-                .local_dev
-                .as_deref()
-                .is_some_and(|path| path.ends_with("dev.sh"))
-        );
+        assert_optional_path_ends_with(output.workspace_scripts.local_dev.as_deref(), "dev.sh");
         assert_eq!(
             fs::read_to_string(dir.join("deploy-torii.txt")).expect("read deploy torii"),
             "http://127.0.0.1:8080"
@@ -20350,12 +19983,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert!(args.contains(resolved_secrets.to_string_lossy().as_ref()));
         assert!(args.contains("--timeout-secs"));
         assert!(args.contains("27"));
-        assert!(
-            output
-                .notes
-                .iter()
-                .any(|note| note.contains("deploy completed"))
-        );
+        assert_notes_contain(&output.notes, "deploy completed");
     }
     #[test]
     fn upgrade_workspace_http_service_executes_manifest_adjacent_script() {
@@ -20385,13 +20013,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.exit_status, Some(0));
         assert_eq!(output.script_name, "upgrade.sh");
         assert_eq!(output.route_path_prefix.as_deref(), Some("/api/v1"));
-        assert!(
-            output
-                .workspace_scripts
-                .upgrade
-                .as_deref()
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
+        assert_optional_path_ends_with(output.workspace_scripts.upgrade.as_deref(), "upgrade.sh");
         assert_eq!(
             fs::read_to_string(dir.join("upgrade-torii.txt")).expect("read upgrade torii"),
             "http://127.0.0.1:8080"
@@ -20399,12 +20021,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let args = fs::read_to_string(dir.join("upgrade-args.txt")).expect("read upgrade args");
         assert!(args.contains("--timeout-secs"));
         assert!(args.contains("19"));
-        assert!(
-            output
-                .notes
-                .iter()
-                .any(|note| note.contains("upgrade completed"))
-        );
+        assert_notes_contain(&output.notes, "upgrade completed");
     }
     #[test]
     fn init_site_template_scaffolds_vue_and_sorafs_workflow() {
@@ -20442,29 +20059,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     fn init_webapp_template_scaffolds_frontend_and_api() {
         let (dir, output) = service_fixture("webapp_template", InitTemplate::Webapp);
         assert_eq!(output.template, "webapp");
-        assert!(dir.join("webapp/frontend/package.json").exists());
-        assert!(dir.join("webapp/api/server.mjs").exists());
-        let api = fs::read_to_string(dir.join("webapp/api/server.mjs")).expect("read api file");
-        assert!(api.contains("/api/auth/challenge"));
-        assert!(api.contains("/api/auth/login"));
-        assert!(api.contains("/api/auth/logout"));
-        assert!(api.contains("/api/auth/me"));
-        assert!(api.contains("AUTH_CHALLENGE_REPLAYED"));
-        assert!(
-            !api.contains("verifyChainIdentity"),
-            "placeholder auth stub must be removed from webapp scaffold"
-        );
-        assert!(
-            !api.contains("TODO"),
-            "placeholder TODO markers must be removed from webapp scaffold auth"
-        );
-        let readme = fs::read_to_string(dir.join("webapp/README.md")).expect("read webapp readme");
-        assert!(readme.contains("SESSION_HMAC_KEY"));
-        assert!(readme.contains("AUTH_SESSION_TTL_SECS"));
-        assert!(readme.contains("AUTH_CHALLENGE_TTL_SECS"));
-        assert!(readme.contains("AUTH_CAPABILITY_MAP_JSON"));
-        assert!(readme.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE"));
-        assert!(readme.contains("PUBLIC_BASE_URL"));
+        assert_scaffold_file_contract(&dir, "init_webapp_template_scaffolds_frontend_and_api");
         let service: SoraServiceManifestV1 =
             load_json(&dir.join("service_manifest.json")).expect("service manifest");
         assert_eq!(
@@ -20507,8 +20102,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     fn init_pii_app_template_scaffolds_private_policy_workflows() {
         let (dir, output) = service_fixture("pii_app_template", InitTemplate::PiiApp);
         assert_eq!(output.template, "pii-app");
-        assert!(dir.join("pii-app/frontend/package.json").exists());
-        assert!(dir.join("pii-app/api/server.mjs").exists());
+        assert_scaffold_file_contract(
+            &dir,
+            "init_pii_app_template_scaffolds_private_policy_workflows",
+        );
         assert!(
             dir.join("pii-app/policy/consent_policy_template.json")
                 .exists()
@@ -20520,29 +20117,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert!(
             dir.join("pii-app/policy/deletion_workflow_template.json")
                 .exists()
-        );
-        let readme = fs::read_to_string(dir.join("pii-app/README.md")).expect("read pii readme");
-        assert!(readme.contains("consent_policy_template.json"));
-        assert!(readme.contains("retention_policy_template.json"));
-        assert!(readme.contains("deletion_workflow_template.json"));
-        assert!(readme.contains("AUTH_CAPABILITY_MAP_JSON"));
-        assert!(readme.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE"));
-        let api = fs::read_to_string(dir.join("pii-app/api/server.mjs")).expect("read api file");
-        assert!(api.contains("/pii/api/auth/challenge"));
-        assert!(api.contains("/pii/api/auth/login"));
-        assert!(api.contains("requireAuthenticatedSession"));
-        assert!(api.contains("pii.records.read"));
-        assert!(api.contains("pii.consent.grant"));
-        assert!(api.contains("pii.consent.revoke"));
-        assert!(api.contains("pii.records.retention.sweep"));
-        assert!(api.contains("pii.records.delete"));
-        assert!(
-            !api.contains("verifyChainIdentity"),
-            "placeholder auth stub must be removed from pii-app scaffold"
-        );
-        assert!(
-            !api.contains("TODO"),
-            "placeholder TODO markers must be removed from pii-app scaffold auth"
         );
         let service: SoraServiceManifestV1 =
             load_json(&dir.join("service_manifest.json")).expect("service manifest");
@@ -20611,77 +20185,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     fn app_init_single_api_template_scaffolds_admissible_root_binding_service() {
         let (dir, output) = single_api_fixture("single_api_template");
         assert_eq!(output.template, "single-api");
-        assert!(dir.join("web/package.json").exists());
-        assert!(dir.join("web/src/App.vue").exists());
-        assert!(dir.join("services/api/contract/api_service.ko").exists());
-        assert!(dir.join("services/api/dev-server.mjs").exists());
-        assert!(dir.join("services/api/dev.sh").exists());
-        assert!(dir.join("services/api/build.sh").exists());
-        assert!(dir.join("services/api/verify-build.sh").exists());
-        assert!(dir.join("dev.sh").exists());
-        assert!(dir.join("build-and-sync.sh").exists());
-        assert!(dir.join("deploy.sh").exists());
-        assert!(dir.join("upgrade.sh").exists());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            assert_eq!(
-                fs::metadata(dir.join("services/api/dev.sh"))
-                    .expect("single-api dev.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("services/api/build.sh"))
-                    .expect("single-api build.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("services/api/verify-build.sh"))
-                    .expect("single-api verify-build.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("dev.sh"))
-                    .expect("single-api dev.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("build-and-sync.sh"))
-                    .expect("single-api build-and-sync.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("deploy.sh"))
-                    .expect("single-api deploy.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("upgrade.sh"))
-                    .expect("single-api upgrade.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-        }
+        assert_scaffold_file_contract(
+            &dir,
+            "app_init_single_api_template_scaffolds_admissible_root_binding_service",
+        );
         assert!(
             output
                 .template_artifacts
@@ -20726,85 +20233,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             service.handlers[0].certified_response,
             SoraCertifiedResponsePolicyV1::AuditReceipt
         );
-        let frontend_app =
-            fs::read_to_string(dir.join("web/src/App.vue")).expect("read single-api frontend");
-        assert!(frontend_app.contains("fetch(\"/api/healthz\")"));
-        let frontend_vite =
-            fs::read_to_string(dir.join("web/vite.config.ts")).expect("read single-api vite");
-        assert!(frontend_vite.contains("SORACLOUD_SINGLE_API_DEV_PROXY_TARGET"));
-        assert!(frontend_vite.contains("\"/api\""));
-        let contract = fs::read_to_string(dir.join("services/api/contract/api_service.ko"))
-            .expect("read single-api contract");
-        assert!(contract.contains("seiyaku travel_ops_api_service {"));
-        assert!(contract.contains("view fn serve_healthz"));
-        let dev_server = fs::read_to_string(dir.join("services/api/dev-server.mjs"))
-            .expect("read single-api dev server");
-        assert!(dev_server.contains("/api/healthz"));
-        assert!(dev_server.contains("local_dev_shim"));
-        let api_readme = fs::read_to_string(dir.join("services/api/README.md"))
-            .expect("read single-api api readme");
-        assert!(api_readme.contains("./dev.sh"));
-        assert!(api_readme.contains("./verify-build.sh"));
-        assert!(api_readme.contains("koto build"));
-        let readme = fs::read_to_string(dir.join("README.md")).expect("read single-api readme");
-        assert!(readme.contains("./dev.sh"));
-        assert!(readme.contains("./build-and-sync.sh"));
-        assert!(readme.contains("IROHA_BIN"));
-        assert!(readme.contains("IROHA_MANIFEST_PATH"));
-        assert!(readme.contains("IROHA_CARGO_HOME"));
-        assert!(readme.contains("IROHA_CARGO_TARGET_DIR"));
-        assert!(readme.contains("app dev --manifest ./app_manifest.json"));
-        assert!(readme.contains("app build --manifest ./app_manifest.json"));
-        assert!(readme.contains("app doctor --manifest ./app_manifest.json"));
-        assert!(readme.contains("app release --manifest ./app_manifest.json"));
-        assert!(readme.contains("TORII_URL=http://127.0.0.1:8080 ./deploy.sh"));
-        assert!(readme.contains(
-            "iroha soracloud app deploy --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080"
-        ));
-        assert!(readme.contains("TORII_URL=http://127.0.0.1:8080 ./upgrade.sh"));
-        assert!(readme.contains(
-            "iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080"
-        ));
-        assert!(readme.contains("https://travel-ops.sora/api/healthz"));
-        assert!(readme.contains("./verify-build.sh"));
-        assert!(readme.contains("app plan --manifest ./app_manifest.json"));
-        assert!(readme.contains("workspace_dir"));
-        assert!(readme.contains("workspace_scripts"));
-        assert!(readme.contains("root `hostname`"));
-        assert!(readme.contains("child service scripts"));
-        assert!(readme.contains(
-            "iroha soracloud app status --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080"
-        ));
-        assert!(readme.contains("Torii control-plane status"));
-        assert!(readme.contains("publish projection"));
-        assert!(readme.contains("top-level `routes` split"));
-        assert!(readme.contains("root `manifest_path`"));
-        assert!(readme.contains("root `workspace_scripts`"));
-        assert!(readme.contains("services/api/container_manifest.json"));
-        assert!(readme.contains("services/api/service_manifest.json"));
-        assert!(readme.contains("attach the same local `service_plan` projection"));
-        let upgrade_sh =
-            fs::read_to_string(dir.join("upgrade.sh")).expect("read single-api upgrade.sh");
-        assert!(upgrade_sh.contains("soracloud app upgrade"));
-        assert!(upgrade_sh.contains("\"$SCRIPT_DIR/build-and-sync.sh\""));
-        assert!(upgrade_sh.contains("IROHA_BIN"));
-        assert!(upgrade_sh.contains("IROHA_MANIFEST_PATH"));
-        assert!(upgrade_sh.contains("IROHA_CARGO_HOME"));
-        assert!(upgrade_sh.contains("IROHA_CARGO_TARGET_DIR"));
-        assert!(upgrade_sh.contains("exec \"${IROHA_CMD[@]}\""));
-        let build_and_sync_sh =
-            fs::read_to_string(dir.join("build-and-sync.sh")).expect("read build-and-sync.sh");
-        assert!(build_and_sync_sh.contains("IROHA_BIN"));
-        assert!(build_and_sync_sh.contains("IROHA_MANIFEST_PATH"));
-        assert!(build_and_sync_sh.contains("IROHA_CARGO_HOME"));
-        assert!(build_and_sync_sh.contains("IROHA_CARGO_TARGET_DIR"));
-        assert!(build_and_sync_sh.contains("\"${IROHA_CMD[@]}\""));
-        if bash_available() {
-            run_bash_syntax_check(&dir.join("dev.sh"));
-            run_bash_syntax_check(&dir.join("build-and-sync.sh"));
-            run_bash_syntax_check(&dir.join("deploy.sh"));
-            run_bash_syntax_check(&dir.join("upgrade.sh"));
-        }
         let bundle = SoraDeploymentBundleV1 {
             schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
             container,
@@ -20844,112 +20272,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     fn app_init_split_app_template_scaffolds_live_and_vault_services() {
         let (dir, output) = split_app_fixture("split_app_template");
         assert_eq!(output.template, "split-app");
-        assert!(dir.join("frontend/src/App.vue").exists());
-        assert!(dir.join("services/live/app/server.mjs").exists());
-        assert!(dir.join("services/live/dev.sh").exists());
-        assert!(dir.join("services/live/inrou/README.md").exists());
-        assert!(dir.join("services/live/inrou/x86_64/.gitkeep").exists());
-        assert!(dir.join("services/live/inrou/aarch64/.gitkeep").exists());
-        assert!(dir.join("services/vault/contract/vault_api.ko").exists());
-        assert!(dir.join("services/vault/dev-server.mjs").exists());
-        assert!(dir.join("services/vault/dev.sh").exists());
-        assert!(dir.join("services/vault/verify-build.sh").exists());
-        assert!(dir.join("dev.sh").exists());
-        assert!(dir.join("build-and-sync.sh").exists());
-        assert!(dir.join("deploy.sh").exists());
-        assert!(dir.join("upgrade.sh").exists());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            assert_eq!(
-                fs::metadata(dir.join("services/live/build.sh"))
-                    .expect("live build.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("services/live/dev.sh"))
-                    .expect("live dev.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("services/vault/build.sh"))
-                    .expect("vault build.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("services/vault/dev.sh"))
-                    .expect("vault dev.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("services/vault/verify-build.sh"))
-                    .expect("vault verify-build.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("dev.sh"))
-                    .expect("dev.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("build-and-sync.sh"))
-                    .expect("build-and-sync.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("doctor.sh"))
-                    .expect("doctor.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("release.sh"))
-                    .expect("release.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("deploy.sh"))
-                    .expect("deploy.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-            assert_eq!(
-                fs::metadata(dir.join("upgrade.sh"))
-                    .expect("upgrade.sh metadata")
-                    .permissions()
-                    .mode()
-                    & 0o111,
-                0o111
-            );
-        }
+        assert_scaffold_file_contract(
+            &dir,
+            "app_init_split_app_template_scaffolds_live_and_vault_services",
+        );
         let manifest: SoracloudAppManifestV1 =
             load_json(&dir.join("app_manifest.json")).expect("app manifest");
         assert_eq!(
@@ -21037,28 +20363,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             inrou.ssh_authorized_keys,
             vec!["ssh-ed25519 CHANGE_ME soracloud-inrou-template".to_owned()]
         );
-        let live_server =
-            fs::read_to_string(dir.join("services/live/app/server.mjs")).expect("read live server");
-        assert!(live_server.contains("/airports/search"));
-        assert!(live_server.contains("/filters/metadata"));
-        assert!(live_server.contains("/luxury/catalog"));
-        assert!(live_server.contains("/links/resolve"));
-        assert!(
-            !live_server.contains("\"BNE\""),
-            "split-app live scaffold must not fabricate airport defaults"
-        );
-        assert!(
-            !live_server.contains("\"HND\""),
-            "split-app live scaffold must not fabricate destination defaults"
-        );
-        assert!(
-            !live_server.contains("\"business\""),
-            "split-app live scaffold must not fabricate cabin defaults"
-        );
-        let live_inrou_readme = fs::read_to_string(dir.join("services/live/inrou/README.md"))
-            .expect("read inrou readme");
-        assert!(live_inrou_readme.contains("x86_64/vmlinux"));
-        assert!(live_inrou_readme.contains("aarch64/vmlinux"));
         let vault_container: SoraContainerManifestV1 =
             load_json(&dir.join("services/vault/container_manifest.json"))
                 .expect("vault container");
@@ -21105,140 +20409,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .iter()
                 .any(|handler| handler.route_path.as_deref() == Some("/auth/health"))
         );
-        let vault_contract = fs::read_to_string(dir.join("services/vault/contract/vault_api.ko"))
-            .expect("read vault contract");
-        assert!(vault_contract.contains("seiyaku travel_ops_vault_api {"));
-        assert!(!vault_contract.contains("seiyaku travel-ops_vault_api {"));
-        assert!(vault_contract.contains("serve_saved_searches"));
-        assert!(vault_contract.contains("store_saved_search"));
-        assert!(!vault_contract.contains("serve_auth_health"));
-        assert!(!vault_contract.contains("saved_items"));
-        let frontend_package =
-            fs::read_to_string(dir.join("frontend/package.json")).expect("read frontend package");
-        assert!(frontend_package.contains("validate-production-env.mjs"));
-        let frontend_guard =
-            fs::read_to_string(dir.join("frontend/scripts/validate-production-env.mjs"))
-                .expect("read frontend build guard");
-        assert!(frontend_guard.contains("VITE_PUBLIC_API_BASE must be exactly '/api'"));
-        assert!(frontend_guard.contains("VITE_DATA_MODE must be exactly 'live'"));
-        let frontend_vite =
-            fs::read_to_string(dir.join("frontend/vite.config.ts")).expect("read vite config");
-        assert!(frontend_vite.contains("SORACLOUD_LIVE_DEV_PROXY_TARGET"));
-        assert!(frontend_vite.contains("SORACLOUD_VAULT_DEV_PROXY_TARGET"));
-        assert!(frontend_vite.contains("\"/api/auth\""));
-        assert!(frontend_vite.contains("\"/api/v1/user\""));
-        assert!(frontend_vite.contains("\"/api/v1/search\""));
-        assert!(frontend_vite.contains("rewrite: rewriteApiPrefix"));
-        assert!(frontend_vite.contains("path.replace(/^\\/api/, \"\")"));
-        let frontend_app =
-            fs::read_to_string(dir.join("frontend/src/App.vue")).expect("read frontend app");
         assert!(
             frontend_app
                 .contains("const apiBase = import.meta.env.VITE_PUBLIC_API_BASE ?? \"/api\";")
         );
-        assert!(!frontend_app.contains("destination: \"HND\""));
-        let live_readme =
-            fs::read_to_string(dir.join("services/live/README.md")).expect("read live readme");
-        assert!(live_readme.contains("SORACLOUD_LEASE_VOLUME_*"));
-        assert!(live_readme.contains("build/live-api.tgz"));
-        assert!(live_readme.contains("./dev.sh"));
-        let vault_readme =
-            fs::read_to_string(dir.join("services/vault/README.md")).expect("read vault readme");
-        assert!(vault_readme.contains("deterministic IVM plane"));
-        assert!(vault_readme.contains("build/vault-api.to"));
-        assert!(vault_readme.contains("./dev.sh"));
-        assert!(vault_readme.contains("local HTTP shim"));
-        assert!(vault_readme.contains("./verify-build.sh"));
-        assert!(vault_readme.contains("koto build"));
-        let app_readme = fs::read_to_string(dir.join("README.md")).expect("read app readme");
-        assert!(app_readme.contains("/sorafs/cid/"));
-        assert!(app_readme.contains("share `/api` on the host origin"));
-        assert!(app_readme.contains("without manual pin"));
-        assert!(app_readme.contains("SSH-only steps"));
-        assert!(app_readme.contains("app plan"));
-        assert!(app_readme.contains("workspace_dir"));
-        assert!(app_readme.contains("workspace_scripts"));
-        assert!(app_readme.contains("root `hostname`"));
-        assert!(app_readme.contains("child service scripts"));
-        assert!(app_readme.contains(
-            "iroha soracloud app status --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080"
-        ));
-        assert!(app_readme.contains("Torii control-plane status"));
-        assert!(app_readme.contains("publish projection"));
-        assert!(app_readme.contains("top-level mixed `routes` split"));
-        assert!(app_readme.contains("root `manifest_path`"));
-        assert!(app_readme.contains("root `workspace_scripts`"));
-        assert!(app_readme.contains("./dev.sh"));
-        assert!(app_readme.contains("app dev --manifest ./app_manifest.json"));
-        assert!(app_readme.contains("./build-and-sync.sh"));
-        assert!(app_readme.contains("IROHA_BIN"));
-        assert!(app_readme.contains("IROHA_MANIFEST_PATH"));
-        assert!(app_readme.contains("IROHA_CARGO_HOME"));
-        assert!(app_readme.contains("IROHA_CARGO_TARGET_DIR"));
-        assert!(app_readme.contains("app build --manifest ./app_manifest.json"));
-        assert!(app_readme.contains("./doctor.sh"));
-        assert!(app_readme.contains("./release.sh"));
-        assert!(app_readme.contains("app doctor --manifest ./app_manifest.json"));
-        assert!(app_readme.contains("app release --manifest ./app_manifest.json"));
-        assert!(app_readme.contains("app doctor --manifest ./app_manifest.json"));
-        assert!(app_readme.contains("app release --manifest ./app_manifest.json"));
-        assert!(app_readme.contains("TORII_URL=http://127.0.0.1:8080 ./deploy.sh"));
-        assert!(app_readme.contains("TORII_URL=http://127.0.0.1:8080 ./release.sh"));
-        assert!(app_readme.contains("TORII_URL=http://127.0.0.1:8080 ./upgrade.sh"));
-        assert!(app_readme.contains(
-            "iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080"
-        ));
-        assert!(app_readme.contains("services/live"));
-        assert!(app_readme.contains("services/vault"));
-        assert!(app_readme.contains("services/live/container_manifest.json"));
-        assert!(app_readme.contains("services/live/service_manifest.json"));
-        assert!(app_readme.contains("services/vault/container_manifest.json"));
-        assert!(app_readme.contains("services/vault/service_manifest.json"));
-        assert!(app_readme.contains("attach the same local `service_plan` projection"));
-        let build_and_sync_sh =
-            fs::read_to_string(dir.join("build-and-sync.sh")).expect("read build-and-sync.sh");
-        assert!(build_and_sync_sh.contains("IROHA_BIN"));
-        assert!(build_and_sync_sh.contains("IROHA_MANIFEST_PATH"));
-        assert!(build_and_sync_sh.contains("IROHA_CARGO_HOME"));
-        assert!(build_and_sync_sh.contains("IROHA_CARGO_TARGET_DIR"));
-        assert!(build_and_sync_sh.contains("\"${IROHA_CMD[@]}\""));
-        let upgrade_sh =
-            fs::read_to_string(dir.join("upgrade.sh")).expect("read split-app upgrade.sh");
-        assert!(upgrade_sh.contains("soracloud app upgrade"));
-        assert!(upgrade_sh.contains("\"$SCRIPT_DIR/doctor.sh\""));
-        assert!(upgrade_sh.contains("IROHA_BIN"));
-        assert!(upgrade_sh.contains("IROHA_MANIFEST_PATH"));
-        assert!(upgrade_sh.contains("IROHA_CARGO_HOME"));
-        assert!(upgrade_sh.contains("IROHA_CARGO_TARGET_DIR"));
-        assert!(upgrade_sh.contains("exec \"${IROHA_CMD[@]}\""));
-        let deploy_sh =
-            fs::read_to_string(dir.join("deploy.sh")).expect("read split-app deploy.sh");
-        assert!(deploy_sh.contains("\"$SCRIPT_DIR/release.sh\""));
-        let doctor_sh =
-            fs::read_to_string(dir.join("doctor.sh")).expect("read split-app doctor.sh");
-        assert!(doctor_sh.contains("\"$SCRIPT_DIR/build-and-sync.sh\""));
-        assert!(doctor_sh.contains("IROHA_BIN"));
-        assert!(doctor_sh.contains("IROHA_MANIFEST_PATH"));
-        assert!(doctor_sh.contains("IROHA_CARGO_HOME"));
-        assert!(doctor_sh.contains("IROHA_CARGO_TARGET_DIR"));
-        assert!(doctor_sh.contains("exec \"${IROHA_CMD[@]}\""));
-        let release_sh =
-            fs::read_to_string(dir.join("release.sh")).expect("read split-app release.sh");
-        assert!(release_sh.contains("\"$SCRIPT_DIR/doctor.sh\""));
-        assert!(release_sh.contains("soracloud app release"));
-        assert!(release_sh.contains("IROHA_BIN"));
-        assert!(release_sh.contains("IROHA_MANIFEST_PATH"));
-        assert!(release_sh.contains("IROHA_CARGO_HOME"));
-        assert!(release_sh.contains("IROHA_CARGO_TARGET_DIR"));
-        assert!(release_sh.contains("exec \"${IROHA_CMD[@]}\""));
-        if bash_available() {
-            run_bash_syntax_check(&dir.join("dev.sh"));
-            run_bash_syntax_check(&dir.join("build-and-sync.sh"));
-            run_bash_syntax_check(&dir.join("doctor.sh"));
-            run_bash_syntax_check(&dir.join("release.sh"));
-            run_bash_syntax_check(&dir.join("deploy.sh"));
-            run_bash_syntax_check(&dir.join("upgrade.sh"));
-        }
     }
     #[test]
     fn app_init_split_app_existing_repo_template_omits_starter_sources() {
@@ -21250,27 +20424,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .run()
         .expect("split-app existing-repo init should succeed");
         assert_eq!(output.template, "split-app");
-        assert!(dir.join("app_manifest.json").exists());
-        assert!(dir.join("services/live/container_manifest.json").exists());
-        assert!(dir.join("services/live/service_manifest.json").exists());
-        assert!(dir.join("services/vault/container_manifest.json").exists());
-        assert!(dir.join("services/vault/service_manifest.json").exists());
-        assert!(dir.join("build-and-sync.sh").exists());
-        assert!(dir.join("doctor.sh").exists());
-        assert!(dir.join("release.sh").exists());
-        assert!(dir.join("deploy.sh").exists());
-        assert!(dir.join("upgrade.sh").exists());
-        assert!(dir.join("README.md").exists());
-        assert!(!dir.join("frontend").exists());
-        assert!(!dir.join("dev.sh").exists());
-        assert!(!dir.join("services/live/app/server.mjs").exists());
-        assert!(!dir.join("services/live/dev.sh").exists());
-        assert!(!dir.join("services/live/build.sh").exists());
-        assert!(!dir.join("services/vault/contract/vault_api.ko").exists());
-        assert!(!dir.join("services/vault/dev-server.mjs").exists());
-        assert!(!dir.join("services/vault/dev.sh").exists());
-        assert!(!dir.join("services/vault/build.sh").exists());
-        assert!(!dir.join("services/vault/verify-build.sh").exists());
+        assert_scaffold_file_contract(
+            &dir,
+            "app_init_split_app_existing_repo_template_omits_starter_sources",
+        );
         let manifest: SoracloudAppManifestV1 =
             load_json(&dir.join("app_manifest.json")).expect("app manifest");
         assert_eq!(
@@ -21285,25 +20442,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             2,
             "existing-repo mode must still wire both services into the app manifest"
         );
-        let build_and_sync_sh =
-            fs::read_to_string(dir.join("build-and-sync.sh")).expect("read build-and-sync.sh");
-        assert!(build_and_sync_sh.contains("replace build-and-sync.sh with your real"));
-        assert!(build_and_sync_sh.contains("soracloud service sync-manifests"));
-        assert!(!build_and_sync_sh.contains("npm install"));
-        assert!(!build_and_sync_sh.contains("services/live"));
-        assert!(!build_and_sync_sh.contains("services/vault"));
-        let app_readme = fs::read_to_string(dir.join("README.md")).expect("read app readme");
-        assert!(app_readme.contains("Existing-Repo Template"));
-        assert!(app_readme.contains("does not generate starter source"));
-        assert!(app_readme.contains("replace `build-and-sync.sh`"));
-        assert!(!app_readme.contains("./dev.sh"));
-        if bash_available() {
-            run_bash_syntax_check(&dir.join("build-and-sync.sh"));
-            run_bash_syntax_check(&dir.join("doctor.sh"));
-            run_bash_syntax_check(&dir.join("release.sh"));
-            run_bash_syntax_check(&dir.join("deploy.sh"));
-            run_bash_syntax_check(&dir.join("upgrade.sh"));
-        }
     }
     #[test]
     fn app_init_existing_repo_rejects_non_split_templates() {
@@ -21497,26 +20635,17 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .ends_with("services/api/service_manifest.json")
         );
         assert!(service.workspace_dir.ends_with("services/api"));
-        assert!(
-            service
-                .workspace_scripts
-                .dev
-                .as_deref()
-                .is_some_and(|path| path.ends_with("services/api/dev.sh"))
+        assert_optional_path_ends_with(
+            service.workspace_scripts.dev.as_deref(),
+            "services/api/dev.sh",
         );
-        assert!(
-            service
-                .workspace_scripts
-                .build
-                .as_deref()
-                .is_some_and(|path| path.ends_with("services/api/build.sh"))
+        assert_optional_path_ends_with(
+            service.workspace_scripts.build.as_deref(),
+            "services/api/build.sh",
         );
-        assert!(
-            service
-                .workspace_scripts
-                .verify_build
-                .as_deref()
-                .is_some_and(|path| path.ends_with("services/api/verify-build.sh"))
+        assert_optional_path_ends_with(
+            service.workspace_scripts.verify_build.as_deref(),
+            "services/api/verify-build.sh",
         );
         assert_eq!(service.execution_plane, "DeterministicService");
         assert_eq!(service.runtime, "Ivm");
@@ -21579,13 +20708,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.mode, "completed");
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.workspace_dir.contains("single_api_local_dev_run"));
-        assert!(
-            output
-                .workspace_scripts
-                .local_dev
-                .as_deref()
-                .is_some_and(|path| path.ends_with("dev.sh"))
-        );
+        assert_optional_path_ends_with(output.workspace_scripts.local_dev.as_deref(), "dev.sh");
         assert_eq!(output.exit_status, Some(0));
         assert_eq!(output.command, vec!["./dev.sh".to_owned()]);
         assert_eq!(output.services.len(), 1);
@@ -21622,12 +20745,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         );
         assert_eq!(output.exit_status, Some(130));
         assert_eq!(output.services.len(), 1);
-        assert!(
-            output
-                .notes
-                .iter()
-                .any(|note| note.contains("interactive interrupt"))
-        );
+        assert_notes_contain(&output.notes, "interactive interrupt");
     }
     #[test]
     fn app_build_and_sync_split_app_dry_run_reports_manifest_adjacent_script() {
@@ -21690,12 +20808,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .workspace_dir
                 .contains("single_api_build_and_sync_run")
         );
-        assert!(
-            output
-                .workspace_scripts
-                .build_and_sync
-                .as_deref()
-                .is_some_and(|path| path.ends_with("build-and-sync.sh"))
+        assert_optional_path_ends_with(
+            output.workspace_scripts.build_and_sync.as_deref(),
+            "build-and-sync.sh",
         );
         assert_eq!(output.exit_status, Some(0));
         assert_eq!(output.command, vec!["./build-and-sync.sh".to_owned()]);
@@ -21704,12 +20819,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             dir.join("build-and-sync-ran.txt").exists(),
             "build-and-sync command should run the manifest-adjacent script"
         );
-        assert!(
-            output
-                .notes
-                .iter()
-                .any(|note| note.contains("build-and-sync completed"))
-        );
+        assert_notes_contain(&output.notes, "build-and-sync completed");
     }
     #[test]
     fn app_doctor_workspace_split_app_dry_run_reports_manifest_adjacent_script() {
@@ -21728,20 +20838,8 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .workspace_dir
                 .contains("split_app_doctor_workspace_dry_run")
         );
-        assert!(
-            output
-                .workspace_scripts
-                .doctor
-                .as_deref()
-                .is_some_and(|path| path.ends_with("doctor.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .release
-                .as_deref()
-                .is_some_and(|path| path.ends_with("release.sh"))
-        );
+        assert_optional_path_ends_with(output.workspace_scripts.doctor.as_deref(), "doctor.sh");
+        assert_optional_path_ends_with(output.workspace_scripts.release.as_deref(), "release.sh");
         assert_eq!(output.script_name, "doctor.sh");
         assert_eq!(output.command, vec!["./doctor.sh".to_owned()]);
         assert!(output.script_path.ends_with("doctor.sh"));
@@ -21776,20 +20874,8 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .workspace_dir
                 .contains("single_api_release_workspace_run")
         );
-        assert!(
-            output
-                .workspace_scripts
-                .doctor
-                .as_deref()
-                .is_some_and(|path| path.ends_with("doctor.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .release
-                .as_deref()
-                .is_some_and(|path| path.ends_with("release.sh"))
-        );
+        assert_optional_path_ends_with(output.workspace_scripts.doctor.as_deref(), "doctor.sh");
+        assert_optional_path_ends_with(output.workspace_scripts.release.as_deref(), "release.sh");
         assert_eq!(output.exit_status, Some(0));
         assert_eq!(output.script_name, "release.sh");
         assert_eq!(output.torii_url, "http://127.0.0.1:8080");
@@ -21807,12 +20893,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             fs::read_to_string(dir.join("app-release-args.txt")).expect("read app release args");
         assert!(args.contains("--timeout-secs"));
         assert!(args.contains("29"));
-        assert!(
-            output
-                .notes
-                .iter()
-                .any(|note| note.contains("release completed"))
-        );
+        assert_notes_contain(&output.notes, "release completed");
     }
     #[test]
     fn app_deploy_workspace_split_app_dry_run_reports_manifest_adjacent_script() {
@@ -21858,12 +20939,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|service| service.service_name == "travel-ops_vault"
                     && service.workspace_dir.ends_with("services/vault"))
         );
-        assert!(
-            output
-                .notes
-                .iter()
-                .any(|note| note.contains("exporting TORII_URL"))
-        );
+        assert_notes_contain(&output.notes, "exporting TORII_URL");
     }
     #[test]
     fn app_upgrade_workspace_executes_manifest_adjacent_script() {
@@ -21912,12 +20988,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             fs::read_to_string(dir.join("app-upgrade-args.txt")).expect("read app upgrade args");
         assert!(args.contains("--timeout-secs"));
         assert!(args.contains("23"));
-        assert!(
-            output
-                .notes
-                .iter()
-                .any(|note| note.contains("upgrade completed"))
-        );
+        assert_notes_contain(&output.notes, "upgrade completed");
     }
     #[test]
     fn app_doctor_validates_split_app_release_contract() {
@@ -22085,12 +21156,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .as_ref()
                 .is_some_and(|build| build.mode == "dry_run")
         );
-        assert!(
-            output
-                .notes
-                .iter()
-                .any(|note| note.contains("deploy-then-upgrade-on-conflict"))
-        );
+        assert_notes_contain(&output.notes, "deploy-then-upgrade-on-conflict");
     }
     #[test]
     fn app_release_runs_build_and_then_deploys_split_app() {
@@ -22554,29 +21620,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     fn init_hayahi_app_template_scaffolds_real_ivm_api_project() {
         let (dir, output) = service_fixture("hayahi_app_template", InitTemplate::HayahiApp);
         assert_eq!(output.template, "hayahi-app");
-        assert!(dir.join("hayahi-app/package.json").exists());
-        assert!(dir.join("hayahi-app/build.sh").exists());
-        assert!(dir.join("hayahi-app/contract/hayahi_api.ko").exists());
-        let readme =
-            fs::read_to_string(dir.join("hayahi-app/README.md")).expect("read hayahi readme");
-        assert!(readme.contains("build/hayahi-app-api.to"));
-        assert!(readme.contains("sync-manifests"));
-        assert!(readme.contains("/api/v1/user/preferences"));
-        assert!(readme.contains("/api/v1/user/saved-searches"));
-        assert!(readme.contains("/api/auth/challenge"));
-        assert!(readme.contains("/api/v1/search"));
-        let contract = fs::read_to_string(dir.join("hayahi-app/contract/hayahi_api.ko"))
-            .expect("read hayahi contract");
-        assert!(contract.contains("view fn serve_health"));
-        assert!(contract.contains("view fn serve_state_overview"));
-        assert!(contract.contains("view fn serve_collector_status"));
-        assert!(contract.contains("view fn issue_auth_challenge"));
-        assert!(contract.contains("view fn complete_auth_login"));
-        assert!(contract.contains("view fn store_user_preferences"));
-        assert!(contract.contains("view fn store_saved_search"));
-        assert!(
-            !contract.contains("TODO"),
-            "placeholder TODO markers must be removed from hayahi-app scaffold"
+        assert_scaffold_file_contract(
+            &dir,
+            "init_hayahi_app_template_scaffolds_real_ivm_api_project",
         );
         let service: SoraServiceManifestV1 =
             load_json(&dir.join("service_manifest.json")).expect("service manifest");
@@ -23097,26 +22143,17 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .ends_with("services/vault/service_manifest.json")
         );
         assert!(vault.workspace_dir.ends_with("services/vault"));
-        assert!(
-            vault
-                .workspace_scripts
-                .dev
-                .as_deref()
-                .is_some_and(|path| path.ends_with("services/vault/dev.sh"))
+        assert_optional_path_ends_with(
+            vault.workspace_scripts.dev.as_deref(),
+            "services/vault/dev.sh",
         );
-        assert!(
-            vault
-                .workspace_scripts
-                .build
-                .as_deref()
-                .is_some_and(|path| path.ends_with("services/vault/build.sh"))
+        assert_optional_path_ends_with(
+            vault.workspace_scripts.build.as_deref(),
+            "services/vault/build.sh",
         );
-        assert!(
-            vault
-                .workspace_scripts
-                .verify_build
-                .as_deref()
-                .is_some_and(|path| path.ends_with("services/vault/verify-build.sh"))
+        assert_optional_path_ends_with(
+            vault.workspace_scripts.verify_build.as_deref(),
+            "services/vault/verify-build.sh",
         );
         assert_eq!(
             vault
@@ -23336,33 +22373,19 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(api_service.runtime, "Ivm");
         assert_eq!(api_service.route_path_prefix.as_deref(), Some("/api"));
         assert!(api_service.workspace_dir.ends_with("services/api"));
-        assert!(
-            api_service
-                .workspace_scripts
-                .dev
-                .as_deref()
-                .is_some_and(|path| path.ends_with("services/api/dev.sh"))
+        assert_optional_path_ends_with(
+            api_service.workspace_scripts.dev.as_deref(),
+            "services/api/dev.sh",
         );
-        assert!(
-            api_service
-                .workspace_scripts
-                .build
-                .as_deref()
-                .is_some_and(|path| path.ends_with("services/api/build.sh"))
+        assert_optional_path_ends_with(
+            api_service.workspace_scripts.build.as_deref(),
+            "services/api/build.sh",
         );
-        assert!(
-            api_service
-                .workspace_scripts
-                .verify_build
-                .as_deref()
-                .is_some_and(|path| path.ends_with("services/api/verify-build.sh"))
+        assert_optional_path_ends_with(
+            api_service.workspace_scripts.verify_build.as_deref(),
+            "services/api/verify-build.sh",
         );
-        assert!(
-            api_service
-                .notes
-                .iter()
-                .any(|note| note.contains("deterministic IVM"))
-        );
+        assert_notes_contain(&api_service.notes, "deterministic IVM");
         let publication = output
             .published_static_site
             .as_ref()
@@ -23639,12 +22662,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(vault.runtime, "Ivm");
         assert_eq!(vault.route_path_prefix.as_deref(), Some("/api"));
         assert!(vault.workspace_dir.ends_with("services/vault"));
-        assert!(
-            vault
-                .workspace_scripts
-                .verify_build
-                .as_deref()
-                .is_some_and(|path| path.ends_with("services/vault/verify-build.sh"))
+        assert_optional_path_ends_with(
+            vault.workspace_scripts.verify_build.as_deref(),
+            "services/vault/verify-build.sh",
         );
         let publication = output
             .published_static_site
@@ -23787,371 +22807,138 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     generated_auth_harness_test!(
         generated_webapp_auth_startup_fails_on_weak_session_key_in_strict_mode,
-        "webapp_auth_strict_key",
-        InitTemplate::Webapp,
-        &[
-            "SESSION_HMAC_KEY must be set to at least 32 characters",
-            "resolveSessionHmacKey"
-        ],
-        "webapp_auth_strict_key_fail.mjs",
-        6,
-        false,
+        6
     );
-    generated_auth_harness_test!(
-        generated_webapp_auth_startup_fails_on_invalid_auth_mode,
-        "webapp_auth_invalid_mode",
-        InitTemplate::Webapp,
-        &["normalizeAuthMode", "AUTH_MODE must be strict or dev"],
-        "webapp_auth_invalid_mode_fail.mjs",
-        7,
-        false,
-    );
+    generated_auth_harness_test!(generated_webapp_auth_startup_fails_on_invalid_auth_mode, 7);
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_on_weak_session_key_in_strict_mode,
-        "strict_key",
-        &[("SESSION_HMAC_KEY", "too-short")],
-        "SESSION_HMAC_KEY must be set to at least 32 characters in strict/production mode",
-        &[
-            "SESSION_HMAC_KEY must be set to at least 32 characters",
-            "resolveSessionHmacKey",
-        ],
+        "strict_key"
     );
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_on_invalid_auth_mode,
-        "invalid_mode",
-        &[("AUTH_MODE", "permissive")],
-        "AUTH_MODE must be strict or dev, got: permissive",
-        &["normalizeAuthMode", "AUTH_MODE must be strict or dev"],
+        "invalid_mode"
     );
     generated_auth_harness_test!(
         generated_webapp_auth_startup_fails_when_external_state_is_required_without_adapter,
-        "webapp_auth_missing_external_adapter",
-        InitTemplate::Webapp,
-        &[
-            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE",
-            "__soracloudSharedStateAdapter",
-            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled"
-        ],
-        "webapp_auth_external_state_required_fail.mjs",
-        8,
-        false,
+        8
     );
     generated_auth_harness_test!(
         generated_webapp_auth_startup_fails_when_external_state_is_defaulted_without_adapter,
-        "webapp_auth_default_external_adapter_required",
-        InitTemplate::Webapp,
-        &[
-            "AUTH_MODE === \"strict\" || IS_PRODUCTION",
-            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled"
-        ],
-        "webapp_auth_external_state_default_required_fail.mjs",
-        9,
-        false,
+        9
     );
     generated_auth_harness_test!(
         generated_webapp_auth_startup_fails_when_production_disables_external_state_requirement,
-        "webapp_auth_production_disables_external_state",
-        InitTemplate::Webapp,
-        &["AUTH_REQUIRE_EXTERNAL_SHARED_STATE cannot be disabled"],
-        "webapp_auth_external_state_production_disable_fail.mjs",
-        10,
-        false,
+        10
     );
     generated_auth_harness_test!(
         generated_webapp_auth_startup_fails_with_invalid_external_state_adapter_shape,
-        "webapp_auth_invalid_external_adapter_shape",
-        InitTemplate::Webapp,
-        &["__soracloudSharedStateAdapter", "must be a function"],
-        "webapp_auth_invalid_external_adapter_shape_fail.mjs",
-        11,
-        false,
+        11
     );
     generated_auth_harness_test!(
         generated_webapp_auth_external_state_adapter_path_mints_sessions_without_file_fallback,
-        "webapp_auth_external_adapter",
-        InitTemplate::Webapp,
-        &[
-            "__soracloudSharedStateAdapter",
-            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE",
-            "shared state adapter entries(prefix) must return [key, value][]"
-        ],
-        "webapp_auth_external_adapter_smoke.mjs",
-        12,
-        false,
+        12
     );
     generated_auth_harness_test!(
         generated_pii_app_auth_startup_fails_when_external_state_is_required_without_adapter,
-        "pii_auth_missing_external_adapter",
-        InitTemplate::PiiApp,
-        &[
-            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE",
-            "__soracloudSharedStateAdapter",
-            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled"
-        ],
-        "pii_auth_external_state_required_fail.mjs",
-        13,
-        false,
+        13
     );
     generated_auth_harness_test!(
         generated_pii_app_auth_startup_fails_when_external_state_is_defaulted_without_adapter,
-        "pii_auth_default_external_adapter_required",
-        InitTemplate::PiiApp,
-        &[
-            "AUTH_MODE === \"strict\" || IS_PRODUCTION",
-            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled"
-        ],
-        "pii_auth_external_state_default_required_fail.mjs",
-        14,
-        false,
+        14
     );
     generated_auth_harness_test!(
         generated_pii_app_auth_startup_fails_when_production_disables_external_state_requirement,
-        "pii_auth_production_disables_external_state",
-        InitTemplate::PiiApp,
-        &["AUTH_REQUIRE_EXTERNAL_SHARED_STATE cannot be disabled"],
-        "pii_auth_external_state_production_disable_fail.mjs",
-        15,
-        false,
+        15
     );
     generated_auth_harness_test!(
         generated_pii_app_auth_startup_fails_with_invalid_external_state_adapter_shape,
-        "pii_auth_invalid_external_adapter_shape",
-        InitTemplate::PiiApp,
-        &["__soracloudSharedStateAdapter", "must be a function"],
-        "pii_auth_invalid_external_adapter_shape_fail.mjs",
-        16,
-        false,
+        16
     );
     generated_auth_harness_test!(
         generated_pii_app_auth_external_state_adapter_path_mints_sessions_without_file_fallback,
-        "pii_auth_external_adapter",
-        InitTemplate::PiiApp,
-        &[
-            "__soracloudSharedStateAdapter",
-            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE",
-            "shared state adapter entries(prefix) must return [key, value][]"
-        ],
-        "pii_auth_external_adapter_smoke.mjs",
-        17,
-        false,
+        17
     );
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_without_capability_map,
-        "missing_capability_map",
-        &[("AUTH_CAPABILITY_MAP_JSON", "")],
-        "AUTH_CAPABILITY_MAP_JSON must be provided for private endpoints",
-        &[
-            "AUTH_CAPABILITY_MAP_JSON must be provided for private endpoints",
-            r#"parseCapabilityMap(process.env.AUTH_CAPABILITY_MAP_JSON ?? "", true)"#,
-        ],
+        "missing_capability_map"
     );
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_on_invalid_capability_map_json,
-        "invalid_capability_map",
-        &[("AUTH_CAPABILITY_MAP_JSON", "{not-json")],
-        "AUTH_CAPABILITY_MAP_JSON is invalid JSON",
-        &["AUTH_CAPABILITY_MAP_JSON is invalid JSON"],
+        "invalid_capability_map"
     );
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_on_empty_capability_map_object,
-        "empty_capability_map_object",
-        &[("AUTH_CAPABILITY_MAP_JSON", "{}")],
-        "AUTH_CAPABILITY_MAP_JSON must define at least one principal",
-        &["AUTH_CAPABILITY_MAP_JSON must define at least one principal"],
+        "empty_capability_map_object"
     );
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_on_non_object_capability_map,
-        "non_object_capability_map",
-        &[("AUTH_CAPABILITY_MAP_JSON", "[]")],
-        "AUTH_CAPABILITY_MAP_JSON must be an object",
-        &["AUTH_CAPABILITY_MAP_JSON must be an object"],
+        "non_object_capability_map"
     );
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_on_invalid_capability_map_principal,
-        "invalid_capability_map_principal",
-        &[(
-            "AUTH_CAPABILITY_MAP_JSON",
-            r#"{"not-a-public-key":["pii.records.read"]}"#,
-        )],
-        "AUTH_CAPABILITY_MAP_JSON principal must be 32 bytes of hex",
-        &["AUTH_CAPABILITY_MAP_JSON principal"],
+        "invalid_capability_map_principal"
     );
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_on_empty_capability_array,
-        "empty_capability_array",
-        &[(
-            "AUTH_CAPABILITY_MAP_JSON",
-            r#"{"1111111111111111111111111111111111111111111111111111111111111111":[]}"#,
-        )],
-        "AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays",
-        &["AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays"],
+        "empty_capability_array"
     );
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_on_non_array_capability_value,
-        "non_array_capability_value",
-        &[(
-            "AUTH_CAPABILITY_MAP_JSON",
-            r#"{"1111111111111111111111111111111111111111111111111111111111111111":"pii.records.read"}"#,
-        )],
-        "AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays",
-        &["AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays"],
+        "non_array_capability_value"
     );
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_on_non_string_capability,
-        "non_string_capability",
-        &[(
-            "AUTH_CAPABILITY_MAP_JSON",
-            r#"{"1111111111111111111111111111111111111111111111111111111111111111":[42]}"#,
-        )],
-        "AUTH_CAPABILITY_MAP_JSON capability must be a string",
-        &["AUTH_CAPABILITY_MAP_JSON capability"],
+        "non_string_capability"
     );
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_on_blank_capability,
-        "blank_capability",
-        &[(
-            "AUTH_CAPABILITY_MAP_JSON",
-            r#"{"1111111111111111111111111111111111111111111111111111111111111111":[" "]}"#,
-        )],
-        "AUTH_CAPABILITY_MAP_JSON capability must not be empty",
-        &["AUTH_CAPABILITY_MAP_JSON capability"],
+        "blank_capability"
     );
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_on_invalid_public_base_url,
-        "invalid_public_base_url",
-        &[("PUBLIC_BASE_URL", "http://")],
-        "PUBLIC_BASE_URL is invalid",
-        &["PUBLIC_BASE_URL is invalid"],
+        "invalid_public_base_url"
     );
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_on_invalid_session_ttl,
-        "invalid_session_ttl",
-        &[("AUTH_SESSION_TTL_SECS", "59")],
-        "AUTH_SESSION_TTL_SECS must be an integer in [60, 86400]",
-        &["AUTH_SESSION_TTL_SECS"],
+        "invalid_session_ttl"
     );
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_on_non_numeric_session_ttl,
-        "non_numeric_session_ttl",
-        &[("AUTH_SESSION_TTL_SECS", "not-a-number")],
-        "AUTH_SESSION_TTL_SECS must be an integer in [60, 86400]",
-        &["AUTH_SESSION_TTL_SECS"],
+        "non_numeric_session_ttl"
     );
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_on_invalid_challenge_ttl,
-        "invalid_challenge_ttl",
-        &[("AUTH_CHALLENGE_TTL_SECS", "4")],
-        "AUTH_CHALLENGE_TTL_SECS must be an integer in [5, 900]",
-        &["AUTH_CHALLENGE_TTL_SECS"],
+        "invalid_challenge_ttl"
     );
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_on_challenge_ttl_above_max,
-        "challenge_ttl_above_max",
-        &[("AUTH_CHALLENGE_TTL_SECS", "901")],
-        "AUTH_CHALLENGE_TTL_SECS must be an integer in [5, 900]",
-        &["AUTH_CHALLENGE_TTL_SECS"],
+        "challenge_ttl_above_max"
     );
     pii_startup_failure_test!(
         generated_pii_app_auth_startup_fails_on_invalid_external_state_boolean,
-        "invalid_external_state_boolean",
-        &[("AUTH_REQUIRE_EXTERNAL_SHARED_STATE", "maybe")],
-        "AUTH_REQUIRE_EXTERNAL_SHARED_STATE must be boolean (true/false/1/0)",
-        &["AUTH_REQUIRE_EXTERNAL_SHARED_STATE", "must be boolean"],
+        "invalid_external_state_boolean"
     );
     generated_auth_harness_test!(
         generated_webapp_private_route_requires_non_empty_capability_map,
-        "webapp_auth_capability_map_required",
-        InitTemplate::Webapp,
-        &["AUTH_CAPABILITY_MAP_REQUIRED", "capability map is required"],
-        "webapp_auth_capability_map_required.mjs",
-        18,
-        false,
+        18
     );
     generated_auth_harness_test!(
         generated_webapp_auth_smoke_rejects_replay_and_supports_shared_sessions,
-        "webapp_auth_smoke",
-        InitTemplate::Webapp,
-        &[
-            "AUTH_CHALLENGE_REPLAYED",
-            "AUTH_CHALLENGE_EXPIRED",
-            "AUTH_CHALLENGE_NOT_FOUND",
-            "AUTH_CHALLENGE_PRINCIPAL_MISMATCH",
-            "AUTH_SIGNATURE_INVALID",
-            "SameSite=Strict",
-            "/api/private/state"
-        ],
-        "webapp_auth_smoke.mjs",
-        19,
-        true,
+        19
     );
     generated_auth_harness_test!(
         generated_webapp_auth_replay_lock_contention_is_fail_closed,
-        "webapp_auth_replay_lock_contention",
-        InitTemplate::Webapp,
-        &[
-            "acquireChallengeConsumeLock",
-            "statePutIfAbsent",
-            "AUTH_CHALLENGE_REPLAYED"
-        ],
-        "webapp_auth_replay_lock_contention.mjs",
-        20,
-        false,
+        20
     );
     generated_auth_harness_test!(
         generated_pii_app_auth_replay_lock_contention_is_fail_closed,
-        "pii_auth_replay_lock_contention",
-        InitTemplate::PiiApp,
-        &[
-            "acquireChallengeConsumeLock",
-            "statePutIfAbsent",
-            "AUTH_CHALLENGE_REPLAYED"
-        ],
-        "pii_auth_replay_lock_contention.mjs",
-        21,
-        false,
+        21
     );
-    generated_auth_harness_test!(
-        generated_webapp_auth_smoke_rejects_origin_mismatch,
-        "webapp_auth_origin_mismatch",
-        InitTemplate::Webapp,
-        &[
-            "AUTH_ORIGIN_MISMATCH",
-            "requestOrigin(req)",
-            "shouldUseSecureCookie"
-        ],
-        "webapp_auth_origin_mismatch.mjs",
-        22,
-        false,
-    );
-    generated_auth_harness_test!(
-        generated_pii_app_auth_smoke_rejects_origin_mismatch,
-        "pii_auth_origin_mismatch",
-        InitTemplate::PiiApp,
-        &[
-            "AUTH_ORIGIN_MISMATCH",
-            "requestOrigin(req)",
-            "shouldUseSecureCookie"
-        ],
-        "pii_auth_origin_mismatch.mjs",
-        23,
-        false,
-    );
+    generated_auth_harness_test!(generated_webapp_auth_smoke_rejects_origin_mismatch, 22);
+    generated_auth_harness_test!(generated_pii_app_auth_smoke_rejects_origin_mismatch, 23);
     generated_auth_harness_test!(
         generated_pii_app_auth_smoke_enforces_capability_authorization,
-        "pii_auth_smoke",
-        InitTemplate::PiiApp,
-        &[
-            "AUTH_FORBIDDEN",
-            "required_capability",
-            "pii.consent.grant",
-            "pii.consent.revoke",
-            "pii.records.retention.sweep",
-            "pii.records.delete",
-            "pii.records.read"
-        ],
-        "pii_auth_smoke.mjs",
-        24,
-        true,
+        24
     );
     #[test]
     fn generated_pii_app_auth_core_normalizes_capabilities_and_parses_success_values() {

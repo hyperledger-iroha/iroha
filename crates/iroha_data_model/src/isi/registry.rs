@@ -289,11 +289,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 347;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 349;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 347;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 349;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 328;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 330;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -346,9 +346,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "6b62eae4361bed47f9b3d76ee2c4d34c5c1c9e6f0239db424d9c8c72c14e423e";
+            "6e45bdd0660c988a60e472f1f070e566728933ace51c1823165500616f8da87a";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "10a06c47bd6e3c28f02a826be08c26b721057427e93f602b0efebf0622253a53";
+            "69cae26fe4929e265f915592e1ce61ec7f97002b9f539dedfa35027c0d866c5f";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -594,6 +594,23 @@ mod tests {
             Some(offline::RegisterOfflineDeviceAttestation::WIRE_ID)
         );
         assert!(registry.contains(offline::RegisterOfflineDeviceAttestation::WIRE_ID));
+    }
+    #[test]
+    fn taira_canary_two_step_has_stable_wire_ids() {
+        let registry = default();
+        for (type_name, wire_id) in [
+            (
+                std::any::type_name::<offline::AuthorizeKagemushaTairaCanaryV4>(),
+                offline::AuthorizeKagemushaTairaCanaryV4::WIRE_ID,
+            ),
+            (
+                std::any::type_name::<offline::RecordKagemushaTairaCanaryV4>(),
+                offline::RecordKagemushaTairaCanaryV4::WIRE_ID,
+            ),
+        ] {
+            assert_eq!(registry.wire_id(type_name), Some(wire_id));
+            assert!(registry.contains(wire_id));
+        }
     }
     #[test]
     fn instruction_registry_excludes_direct_grouped_variants() {

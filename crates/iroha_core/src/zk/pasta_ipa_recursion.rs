@@ -62,11 +62,13 @@ impl PastaIpaProofShapeV1 {
     }
 
     /// Maximum constraint degree.
+    #[cfg(test)]
     pub(crate) const fn degree(&self) -> usize {
         self.degree
     }
 
     /// Number of advice columns committed by the prover.
+    #[cfg(test)]
     pub(crate) const fn advice_columns(&self) -> usize {
         self.advice_columns
     }
@@ -77,56 +79,67 @@ impl PastaIpaProofShapeV1 {
     }
 
     /// Number of distinct advice query pairs.
+    #[cfg(test)]
     pub(crate) const fn advice_queries(&self) -> usize {
         self.advice_queries
     }
 
     /// Number of configured instance query pairs.
+    #[cfg(test)]
     pub(crate) const fn instance_queries(&self) -> usize {
         self.instance_queries
     }
 
     /// Number of fixed-column query pairs before selector materialization.
+    #[cfg(test)]
     pub(crate) const fn fixed_queries(&self) -> usize {
         self.fixed_queries
     }
 
     /// Number of selectors materialized as current-row fixed queries.
+    #[cfg(test)]
     pub(crate) const fn selectors(&self) -> usize {
         self.selectors
     }
 
     /// Number of lookup arguments.
+    #[cfg(test)]
     pub(crate) const fn lookups(&self) -> usize {
         self.lookups
     }
 
     /// Number of equality-enabled permutation columns.
+    #[cfg(test)]
     pub(crate) const fn permutation_columns(&self) -> usize {
         self.permutation_columns
     }
 
     /// Number of permutation product-polynomial chunks.
+    #[cfg(test)]
     pub(crate) const fn permutation_chunks(&self) -> usize {
         self.permutation_chunks
     }
 
     /// Number of unique multi-opening rotation sets.
+    #[cfg(test)]
     pub(crate) const fn point_sets(&self) -> usize {
         self.point_sets
     }
 
     /// Number of curve commitments in the augmented transcript.
+    #[cfg(test)]
     pub(crate) const fn commitments(&self) -> usize {
         self.commitments
     }
 
     /// Number of scalar evaluations in the augmented transcript.
+    #[cfg(test)]
     pub(crate) const fn evaluations(&self) -> usize {
         self.evaluations
     }
 
     /// Total 32-byte transcript elements, including the folded-generator suffix.
+    #[cfg(test)]
     pub(crate) const fn transcript_elements(&self) -> usize {
         self.transcript_elements
     }

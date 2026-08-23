@@ -362,11 +362,32 @@ impl ApplyFixture {
     fn new_with_native_lane_lifecycle() -> Self {
         Self::new_with_options(false, false, true, true)
     }
+    fn new_for_production_recovered_decision_apply() -> Self {
+        Self::new_with_options_and_network(false, false, false, false, true)
+    }
+    fn new_for_production_recovered_decision_apply_with_lane_lifecycle() -> Self {
+        Self::new_with_options_and_network(false, false, true, false, true)
+    }
     fn new_with_options(
         include_lane_payload: bool,
         include_projection_policies: bool,
         include_lane_lifecycle: bool,
         include_native_lane: bool,
+    ) -> Self {
+        Self::new_with_options_and_network(
+            include_lane_payload,
+            include_projection_policies,
+            include_lane_lifecycle,
+            include_native_lane,
+            false,
+        )
+    }
+    fn new_with_options_and_network(
+        include_lane_payload: bool,
+        include_projection_policies: bool,
+        include_lane_lifecycle: bool,
+        include_native_lane: bool,
+        match_context_network: bool,
     ) -> Self {
         let chain_id: ChainId = "sumeragi-v2-apply-crash-test".into();
         let mut keys = (1_u8..=4)
@@ -424,12 +445,22 @@ impl ApplyFixture {
             include_projection_policies,
             include_native_lane,
         );
-        let mut state = State::new_with_chain_for_testing(
-            world,
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-            chain_id.clone(),
-        );
+        let mut state = if match_context_network {
+            State::new_with_chain_and_network_id_for_testing(
+                world,
+                Arc::clone(&kura),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+                context.network_id,
+            )
+        } else {
+            State::new_with_chain_for_testing(
+                world,
+                Arc::clone(&kura),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+            )
+        };
         let validator_set_pops = keys
             .iter()
             .map(|key| {
@@ -440,6 +471,10 @@ impl ApplyFixture {
         install_fixture_validator_authority(&state, &context, &validator_set_pops);
         if include_native_lane {
             install_fixture_native_lane(&mut state, &mut context);
+        }
+        if match_context_network {
+            context.nexus_amx_context_hash =
+                crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&state);
         }
         context.execution_policy_hash =
             crate::sumeragi::v2_recovery::committed_execution_policy_hash(&state)
@@ -1684,6 +1719,14 @@ fn merge_entry_with_reservations(
     let source_bundle = bundle
         .encode_framed()
         .expect("encode authenticated reservation fixture bundle");
+    let decoded_bundle =
+        norito::decode_canonical::<crate::kura::AutonomousLaneMergeBundleV1>(&source_bundle)
+            .expect("decode authenticated reservation fixture bundle");
+    decoded_bundle
+        .autonomous
+        .executable_payload
+        .validate(network_id, context.epoch)
+        .expect("canonical reservation fixture payload must remain valid after decoding");
     let source_bundle_hash = bundle
         .bundle_hash()
         .expect("hash authenticated reservation fixture bundle");
@@ -1733,6 +1776,7 @@ fn merge_entry_with_reservations(
         settlement_hash: iroha_data_model::nexus::compute_settlement_hash(&settlement_commitment)
             .expect("fixture settlement hashes canonically"),
         settlement_commitment,
+        fastpq_transcripts: Vec::new().into(),
     };
     let lanes = vec![execution];
     let base_state_hash =
@@ -1819,6 +1863,25 @@ fn reserve_transaction_for_lane_test_with_identity(
     crate::queue::LaneQueueReservationKeyV2,
     TransactionEntrypoint,
 ) {
+    // These fixtures exercise the strict global QueuePlan corridor, so their transaction must
+    // carry the same signature-bound intent and network domain as a production submission. The
+    // Apply fixture body itself is a genesis-domain Ordinary transaction and cannot be reused
+    // byte-for-byte after that admission contract became mandatory.
+    let mut payload = transaction.payload().clone();
+    payload.domain =
+        iroha_data_model::transaction::TransactionDomain::Network(*state.network_id_ref());
+    payload.admission_intent =
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced;
+    let transaction_key = KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::Ed25519)
+        .expect("deterministic reservation fixture transaction key");
+    assert_eq!(
+        payload.authority,
+        AccountId::new(transaction_key.public_key().clone()),
+        "reservation fixture must be controlled by the deterministic transaction key"
+    );
+    let transaction = TransactionBuilder::from_payload(payload)
+        .expect("rebuild signature-bound QueuePlan reservation fixture")
+        .sign(transaction_key.private_key());
     let entrypoint = TransactionEntrypoint::External(transaction.clone());
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
     let expected_route = RoutingDecision::new(lane_id, dataspace_id);

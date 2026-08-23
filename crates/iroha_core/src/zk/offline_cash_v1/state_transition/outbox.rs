@@ -1,6 +1,7 @@
 //! Authenticated durable staging for canonical sender payments.
 
 use super::*;
+use super::{guard::sealed, send::SendSplitPlanV1};
 use zeroize::Zeroize as _;
 
 const PAYMENT_OUTBOX_KEY_DOMAIN: &[u8] = b"iroha:offline-cash:v1:payment-outbox-key";

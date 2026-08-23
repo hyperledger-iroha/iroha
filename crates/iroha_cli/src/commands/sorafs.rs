@@ -265,7 +265,7 @@ macro_rules! assert_compact {
 
 #[cfg(test)]
 macro_rules! json_response_fixture {
-    ($status:expr, $body:expr) => {
+    ($status:expr, $body:expr $(,)?) => {
         Ok(Response::builder()
             .status($status)
             .header("Content-Type", "application/json")

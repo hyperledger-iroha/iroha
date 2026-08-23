@@ -1337,6 +1337,17 @@ class SealedCandidateBuildTests(unittest.TestCase):
                         builder._canonical_json_line(graph)
                     )
 
+    def test_unit_graph_boolean_version_is_not_integer_v1(self) -> None:
+        graph = json.loads(self.raw_unit_graph.read_bytes())
+        graph["version"] = True
+
+        with self.assertRaisesRegex(
+            builder.CandidateBuildError, "version is not exact V1"
+        ):
+            builder.normalize_source_seal_unit_graph(
+                builder._canonical_json_line(graph)
+            )
+
     def test_path_package_normalization_preserves_repository_location(self) -> None:
         """Same-name/version path packages in different directories cannot collide."""
 

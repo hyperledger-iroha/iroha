@@ -1,0 +1,28 @@
+
+[nexus]
+lane_count = 4
+
+[nexus.autoscale]
+enabled = true
+min_lanes = 4
+max_lanes = 5
+
+[[nexus.lane_catalog]]
+index = 0
+alias = "core"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 1
+alias = "governance"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 2
+alias = "zk"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 3
+alias = "reserved-base"
+metadata = {}

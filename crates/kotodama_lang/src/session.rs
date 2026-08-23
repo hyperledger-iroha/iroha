@@ -985,6 +985,11 @@ impl Default for CompilerSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn source_fixture(source: &'static str) -> &'static str {
+        source
+            .strip_suffix('\n')
+            .expect("source fixture must end with one storage newline")
+    }
     #[test]
     fn session_returns_structured_success_and_failure() {
         let session = CompilerSession::default();
@@ -1157,13 +1162,7 @@ mod tests {
     }
     #[test]
     fn session_rejects_aggregate_arguments_over_the_register_word_limit() {
-        let source = r#"seiyaku WideCall {
-  struct Wide {
-    int f00, int f01, int f02, int f03, int f04, int f05, int f06,
-    int f07, int f08, int f09, int f10, int f11, int f12, int f13
-  }
-  view fn inspect(Wide value) -> int { return value.f00; }
-}"#;
+        let source = source_fixture(include_str!("session/fixtures/wide_call.ko"));
         let session = CompilerSession::default();
         let request = CompileRequest {
             source,
@@ -1192,11 +1191,7 @@ mod tests {
             &source[usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap()],
             "value"
         );
-        let nested = r#"seiyaku NestedWideCall {
-  struct Inner { int a, int b, int c, int d, int e, int f, int g }
-  struct Outer { Inner left, Inner right }
-  view fn inspect_nested(Outer payload) -> int { return payload.left.a; }
-}"#;
+        let nested = source_fixture(include_str!("session/fixtures/nested_wide_call.ko"));
         let nested_error = session
             .check(CompileRequest {
                 source: nested,
@@ -1244,14 +1239,8 @@ mod tests {
     fn check_and_build_return_identical_resolution_records_for_contracts_and_modules() {
         let session = CompilerSession::default();
         for source in [
-            r#"seiyaku Broken {
-                fn first(Missing value) -> int { return unknown; }
-                fn second(bool flag) { flag = false; missing_call(); }
-            }"#,
-            r#"module Broken {
-                fn first(Missing value) -> int { return unknown; }
-                fn second(bool flag) { flag = false; missing_call(); }
-            }"#,
+            source_fixture(include_str!("session/fixtures/broken_contract.ko")),
+            source_fixture(include_str!("session/fixtures/broken_module.ko")),
         ] {
             let request = CompileRequest {
                 source,
@@ -1864,9 +1853,7 @@ mod tests {
     }
     #[test]
     fn production_rejects_test_only_helpers_and_test_capable_typed_hir() {
-        let source = r#"seiyaku Demo {
-            kotoage fn run() authorize("Run") { test::assert(true); }
-        }"#;
+        let source = source_fixture(include_str!("session/fixtures/test_helper.ko"));
         let request = CompileRequest {
             source,
             source_name: Some("test-helper.ko"),
@@ -1907,12 +1894,7 @@ mod tests {
     }
     #[test]
     fn typed_test_graph_is_restricted_to_test_mode_and_derives_a_clean_runtime() {
-        let source = r#"seiyaku Demo {
-            fn current() -> int { return 1; }
-            view fn value() -> int { return current(); }
-            #[test]
-            fn smoke() { test::assert(current() == 1); }
-        }"#;
+        let source = source_fixture(include_str!("session/fixtures/typed_test_graph.ko"));
         let target = TestSourceUnit {
             source_name: "suite.ko".to_owned(),
             source: source.to_owned(),
@@ -1972,19 +1954,8 @@ mod tests {
     fn typed_test_graph_projects_durable_state_map_intrinsics_into_runtime() {
         let target = TestSourceUnit {
             source_name: "state-map-runtime.ko".to_owned(),
-            source: r#"seiyaku StateMapRuntime {
-                state StateMap<Name, int> flags;
-                fn current() -> int {
-                    return match flags.get(Name::parse("paused")) {
-                        Option::some(value) => value,
-                        Option::none => 0,
-                    };
-                }
-                view fn paused() -> int { return current(); }
-                #[test]
-                fn absent_flag_is_zero() { test::assert(current() == 0); }
-            }"#
-            .to_owned(),
+            source: source_fixture(include_str!("session/fixtures/state_map_runtime.ko"))
+                .to_owned(),
         };
         let outputs = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
@@ -2034,12 +2005,7 @@ mod tests {
     fn typed_test_graph_without_runtime_entrypoint_skips_runtime_artifact() {
         let target = TestSourceUnit {
             source_name: "pure-suite.ko".to_owned(),
-            source: r#"seiyaku PureSuite {
-                fn helper() -> int { return 1; }
-                #[test]
-                fn smoke() { test::assert(helper() == 1); }
-            }"#
-            .to_owned(),
+            source: source_fixture(include_str!("session/fixtures/pure_suite.ko")).to_owned(),
         };
         let outputs = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
@@ -2061,19 +2027,7 @@ mod tests {
     fn test_target_projection_retains_lowered_list_intrinsics() {
         let target = TestSourceUnit {
             source_name: "list-runtime.ko".to_owned(),
-            source: r#"seiyaku ListRuntime {
-                view fn count(List<int, 4> values) -> int {
-                    let length = values.len();
-                    let _contains = values.contains(1);
-                    let _first = values.get(0);
-                    var List<int, 4> copy = [];
-                    let _pushed = copy.try_push(1);
-                    return length;
-                }
-                #[test]
-                fn runtime_projection_exists() { test::assert(true); }
-            }"#
-            .to_owned(),
+            source: source_fixture(include_str!("session/fixtures/list_runtime.ko")).to_owned(),
         };
         let outputs = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
@@ -2090,29 +2044,7 @@ mod tests {
     fn test_target_projection_retains_lowered_sum_type_intrinsics() {
         let target = TestSourceUnit {
             source_name: "sum-runtime.ko".to_owned(),
-            source: r#"seiyaku SumRuntime {
-                view fn exercise_sum_intrinsics(int fallback) -> int {
-                    let Option<int> present = Option::some(5);
-                    let Option<int> missing = Option::none;
-                    let Result<int, string> success = Result::ok(7);
-                    let Result<int, string> failure = Result::err("failed");
-                    let _present = present.is_some();
-                    let _missing = missing.is_none();
-                    let _success = success.is_ok();
-                    let _failure = failure.is_err();
-                    let value = present.unwrap_or(fallback);
-                    let error_value = failure.unwrap_err_or("fallback");
-                    if error_value == "failed" {
-                        return value + success.unwrap_or(fallback);
-                    }
-                    return fallback;
-                }
-                #[test]
-                fn exercises_sum_intrinsics() {
-                    test::assert(true);
-                }
-            }"#
-            .to_owned(),
+            source: source_fixture(include_str!("session/fixtures/sum_runtime.ko")).to_owned(),
         };
         let outputs = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
@@ -2129,31 +2061,15 @@ mod tests {
     fn standalone_test_graph_keeps_stable_distinct_sources_and_typed_target_state() {
         let target = TestSourceUnit {
             source_name: "contracts/counter.ko".to_owned(),
-            source: r#"seiyaku Counter {
-                state int counter;
-                hajimari() { counter = 0; }
-                fn current() -> int { return counter; }
-                view fn value() -> int { return current(); }
-            }"#
-            .to_owned(),
+            source: source_fixture(include_str!("session/fixtures/counter_contract.ko")).to_owned(),
         };
         let first = TestSourceUnit {
             source_name: "tests/first.test.ko".to_owned(),
-            source: r#"module FirstTests {
-                koto_test { target: "../contracts/counter.ko" }
-                #[test]
-                fn observes_target_state() { test::assert(counter == 0); }
-            }"#
-            .to_owned(),
+            source: source_fixture(include_str!("session/fixtures/first_tests.ko")).to_owned(),
         };
         let second = TestSourceUnit {
             source_name: "tests/second.test.ko".to_owned(),
-            source: r#"module SecondTests {
-                koto_test { target: "../contracts/counter.ko" }
-                #[test]
-                fn calls_target_helper() { test::assert(current() == 0); }
-            }"#
-            .to_owned(),
+            source: source_fixture(include_str!("session/fixtures/second_tests.ko")).to_owned(),
         };
         let session = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
@@ -2218,19 +2134,11 @@ mod tests {
             ("contracts/counter.ko", target.source.as_str()),
             (
                 "tests/first.test.ko",
-                r#"module FirstTests {
-                koto_test { target: "../contracts/counter.ko" }
-                #[test]
-                fn observes_target_state() { test::assert(counter == 0); }
-            }"#,
+                source_fixture(include_str!("session/fixtures/target_helper_tests.ko")),
             ),
             (
                 "tests/second.test.ko",
-                r#"module SecondTests {
-                koto_test { target: "../contracts/counter.ko" }
-                #[test]
-                fn calls_target_helper() { test::assert(current() == 0); }
-            }"#,
+                source_fixture(include_str!("session/fixtures/target_state_tests.ko")),
             ),
         ]);
         for entry in &forward.suite.report.source_map {
@@ -2252,11 +2160,7 @@ mod tests {
             source_name: "contracts/demo.ko".to_owned(),
             source: "seiyaku Demo {}".to_owned(),
         };
-        let source = r#"module Tests {
-            koto_test { target: "../contracts/demo.ko" }
-            #[test]
-            fn smoke() { test::assert(true); }
-        }"#;
+        let source = source_fixture(include_str!("session/fixtures/normalized_alias_tests.ko"));
         let first = TestSourceUnit {
             source_name: "tests/./demo.test.ko".to_owned(),
             source: source.to_owned(),
@@ -2300,25 +2204,10 @@ mod tests {
                 "missing {expected_code}: {diagnostics:?}"
             );
         }
-        let source = r#"
-            seiyaku PresenceAware {
-                state StateMap<int, int> values;
-
-                fn get(int value) -> int { return value; }
-
-                kotoage fn set(int key, int value) authorize("Write") {
-                    values[key] = value;
-                }
-
-                view fn read(int key) -> Option<int> {
-                    return values.get(key);
-                }
-
-                view fn echo(int value) -> int {
-                    return get(value);
-                }
-            }
-        "#;
+        let source = concat!(
+            include_str!("session/fixtures/presence_aware.ko"),
+            "        "
+        );
         let output = session
             .build(CompileRequest {
                 source,
@@ -2363,27 +2252,7 @@ mod tests {
     }
     #[test]
     fn session_builds_grouping_real_tuples_and_else_if_chains() {
-        let source = r#"
-            seiyaku Branches {
-                view fn classify(int value) -> int {
-                    if value < 0 {
-                        return -1;
-                    } else if value == 0 {
-                        return 0;
-                    } else {
-                        return 1;
-                    }
-                }
-
-                view fn grouped(int value) -> int {
-                    return (value);
-                }
-
-                view fn pair() -> (int, bool) {
-                    return (1, true);
-                }
-            }
-        "#;
+        let source = concat!(include_str!("session/fixtures/branching.ko"), "        ");
         let output = CompilerSession::default()
             .build(CompileRequest {
                 source,
@@ -2397,29 +2266,17 @@ mod tests {
         let session = CompilerSession::default();
         let sources = [
             (
-                r#"
-                seiyaku IntegerContract {
-                    struct Shared { int value; }
-                    fn make() -> Shared { return Shared { value: 7 }; }
-                    view fn read() -> int {
-                        let record = make();
-                        return record.value;
-                    }
-                }
-                "#,
+                concat!(
+                    include_str!("session/fixtures/integer_contract.ko"),
+                    "                "
+                ),
                 "IntegerContract",
             ),
             (
-                r#"
-                seiyaku BooleanContract {
-                    struct Shared { bool value; }
-                    fn make() -> Shared { return Shared { value: true }; }
-                    view fn read() -> bool {
-                        let record = make();
-                        return record.value;
-                    }
-                }
-                "#,
+                concat!(
+                    include_str!("session/fixtures/boolean_contract.ko"),
+                    "                "
+                ),
                 "BooleanContract",
             ),
         ];

@@ -109,7 +109,8 @@ fn decode_nested_int(payload: &[u8]) -> i64 {
 }
 pub(super) fn store_tlv(vm: &mut IVM, ty: PointerType, payload: &[u8]) -> u64 {
     let tlv = make_tlv(ty as u16, payload);
-    vm.alloc_input_tlv(&tlv).expect("allocate TLV input")
+    vm.alloc_host_tlv(&tlv)
+        .expect("allocate VM-owned TLV input")
 }
 pub(super) fn quantity_frame(value: &Quantity) -> Vec<u8> {
     QuantityValueV1::new(value.clone())

@@ -358,6 +358,7 @@ impl Fixture {
         let qpcs_roots = ZkAmsMkheRnsNativeQpcsRootsV1::new(
             transcript.binding_digest(),
             digest(b"qpcs-initial-root", context, 0),
+            digest(b"q-mask-s-root", context, 0),
             digest(b"qpcs-quotient-root", context, 0),
             fri_roots,
         )
@@ -428,6 +429,7 @@ impl Fixture {
 
     fn qpcs<'a>(&'a self, residual: &'a [u8]) -> QpcsBindingsV1<'a> {
         QpcsBindingsV1 {
+            relation_schedule_present: true,
             parameter_digest: self.qpcs_parameter_digest,
             transcript_digest: self.transcript.transcript_digest(),
             query_seed: self.transcript.qpcs_query_challenge_seed(),

@@ -105,6 +105,9 @@ paths = {
     "xcframework_build": Path("scripts/build_norito_xcframework.sh"),
     "mobile_check": Path("scripts/check_mobile_sdk_artifacts.sh"),
     "mobile_check_test": Path("scripts/check_mobile_sdk_artifacts_test.sh"),
+    "mobile_check_test_fixture_helpers": Path(
+        "scripts/tests/mobile_sdk_artifact_fixture_helpers.sh"
+    ),
 }
 
 texts: dict[str, str] = {}
@@ -113,6 +116,28 @@ for label, relative in paths.items():
     if not absolute.is_file():
         raise SystemExit(f"required ABI21 contract file is missing: {relative}")
     texts[label] = absolute.read_text(encoding="utf-8")
+
+mobile_check_test_shellcheck = (
+    "# shellcheck source=tests/mobile_sdk_artifact_fixture_helpers.sh"
+)
+mobile_check_test_source = (
+    'source "$SCRIPT_DIR/tests/mobile_sdk_artifact_fixture_helpers.sh"'
+)
+if texts["mobile_check_test"].count(mobile_check_test_shellcheck) != 1:
+    raise SystemExit(
+        f"{paths['mobile_check_test']}: expected exactly one canonical "
+        "fixture-helper shellcheck directive"
+    )
+if texts["mobile_check_test"].count(mobile_check_test_source) != 1:
+    raise SystemExit(
+        f"{paths['mobile_check_test']}: expected exactly one reviewed "
+        "fixture-helper source"
+    )
+texts["mobile_check_test"] = texts["mobile_check_test"].replace(
+    mobile_check_test_source,
+    texts["mobile_check_test_fixture_helpers"],
+    1,
+)
 
 data_model_include = 'include!("kagemusha_model.rs");'
 if texts["data_model"].count(data_model_include) != 1:

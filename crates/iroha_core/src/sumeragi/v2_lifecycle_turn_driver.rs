@@ -1,9 +1,12 @@
 //! Unified lifecycle ownership for one outer Completion or Ingress turn.
 
+use super::super::{
+    ingress_position::FairIngressQueueCutError, selector::CertifiedServeExactDequeueErrorV1,
+};
 use super::*;
 use crate::sumeragi::v2_lifecycle_coordinator::{
-    AdmissionDecision, CertifiedServeSchedulerObservationV1, LifecycleLedgerV1,
-    LifecycleValidateSidecarDriveV1, claim_certified_serve_turn_v1,
+    AdmissionDecision, CertifiedServeSchedulerObservationV1, LifecycleIngressSelectorError,
+    LifecycleLedgerV1, LifecycleValidateSidecarDriveV1, claim_certified_serve_turn_v1,
 };
 #[cfg(test)]
 pub(in crate::sumeragi) use crate::sumeragi::v2_runner::ordinary_ingress_consumer::ProductionPreparedCertifiedServeTestSettlementV1;
@@ -30,6 +33,11 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignCompletionSelection
     VoteBroadcastAndSign(ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1),
     /// A WAL-ahead Proposal produced its Broadcast and adjacent Prepare Sign.
     ProposalBroadcastAndSign(ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1),
+    /// Certified progress superseded the exact old signer fence and its
+    /// claimed lifecycle row was durably cancelled.
+    Superseded,
+    /// Active serialized-runtime mutation debt retained the guarded completion.
+    Retry,
     /// The parked completion could not be classified without changing owner.
     RestartRequired,
 }
@@ -54,9 +62,17 @@ impl ProductionRecoveredLifecycleSignCompletionSelectionV1 {
                 ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::None
                     | ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::RestartRequired
             ),
+            Self::Superseded | Self::Retry => false,
             Self::RestartRequired => true,
         }
     }
+}
+
+enum ParkedRecoveredLifecycleSignCompletionClassV1 {
+    Settlement(crate::sumeragi::v2::RecoveredLifecycleSignAdapterSettlementFamilyV1),
+    Superseded,
+    Retry,
+    RestartRequired,
 }
 
 /// Closed diagnostic for one lifecycle-selected Completion turn.
@@ -73,6 +89,8 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
     LifecycleValidatePublicationRetry,
     /// A missing-sidecar Validate remains parked under its immutable registration owner.
     LifecycleValidateDeferred,
+    /// A registered sidecar wait is externally parked and ordinary ingress may resume.
+    LifecycleValidateSidecarWaiting,
     /// The exact sidecar became durable and woke the same Validate row without a new ordinal.
     LifecycleValidateSidecarWoken,
     /// The exact missing-sidecar Apply owner remains parked for another turn.
@@ -142,6 +160,7 @@ impl ProductionLifecycleCompletionSelectionV1 {
             | Self::LifecycleValidatePublished
             | Self::LifecycleValidatePublicationRetry
             | Self::LifecycleValidateDeferred
+            | Self::LifecycleValidateSidecarWaiting
             | Self::LifecycleValidateSidecarWoken
             | Self::CertifiedFetchBodyPersisted
             | Self::CertifiedFetchBodyPersistenceRetry
@@ -442,7 +461,21 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
                 ProductionLifecycleIngressSelectionV1::RestartRequired,
             );
         }
-        Err((_error, retained)) => {
+        Err((FairIngressQueueCutError::QueueCutChanged, retained)) => {
+            iroha_logger::debug!(
+                "Certified-Serve fair-ingress ownership changed during authentication; retrying"
+            );
+            drop(retained);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::CertifiedServeRetry,
+            );
+        }
+        Err((error, retained)) => {
+            iroha_logger::error!(
+                ?error,
+                "authenticated current Certified-Serve cut failed structural narrowing"
+            );
             services
                 .lifecycle_output_guard()
                 .close_admission_for_restart();
@@ -455,7 +488,21 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
     };
     let selector = match executor.capture_lifecycle_ingress_selector(lifecycle_cut) {
         Ok(selector) => selector,
-        Err(_) => {
+        Err(LifecycleIngressSelectorError::QueueCutChanged) => {
+            iroha_logger::debug!(
+                "Certified-Serve fair-ingress census changed during classification; retrying"
+            );
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::CertifiedServeRetry,
+            );
+        }
+        Err(error) => {
+            let reason = error.detail();
+            iroha_logger::error!(
+                %reason,
+                "authenticated current Certified-Serve selector capture failed closed"
+            );
             services
                 .lifecycle_output_guard()
                 .close_admission_for_restart();
@@ -468,6 +515,17 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
     let (dequeue, target) =
         match selector.into_locked_certified_serve_dequeue(receiver, &authenticated) {
             Ok(prepared) => prepared,
+            Err(CertifiedServeExactDequeueErrorV1::Queue(
+                FairIngressQueueCutError::QueueCutChanged,
+            )) => {
+                iroha_logger::debug!(
+                    "Certified-Serve fair-ingress census changed before exact dequeue; retrying"
+                );
+                drop(runner);
+                return ProductionLifecycleIngressTurnV1::Selected(
+                    ProductionLifecycleIngressSelectionV1::CertifiedServeRetry,
+                );
+            }
             Err(error) => {
                 let reason = error.detail();
                 iroha_logger::error!(reason, "Certified-Serve exact dequeue failed closed");
@@ -840,7 +898,7 @@ impl LaunchedProductionLifecycleV1 {
                 self.pending_lifecycle_completion = Some(
                     PendingLifecycleCompletionV1::RegisteredDeferredValidate(registration),
                 );
-                ProductionLifecycleCompletionSelectionV1::LifecycleValidateDeferred
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWaiting
             }
             LifecycleValidateSidecarDriveV1::Woken => {
                 ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWoken
@@ -1479,13 +1537,16 @@ impl LaunchedProductionLifecycleV1 {
                 &self.services,
             ),
             FairIngressTurnContextCut::Lifecycle(cut) => {
-                let recovered = match self.executor.selected_cut_is_recovered_decision_fetch(&cut) {
-                    Ok(recovered) => recovered,
+                let response_owner = match self
+                    .executor
+                    .classify_selected_certified_body_response_owner(&cut)
+                {
+                    Ok(owner) => owner,
                     Err(error) => {
                         let reason = error.detail();
                         iroha_logger::error!(
                             %reason,
-                            "Sumeragi v2 recovered Fetch selection failed closed"
+                            "Sumeragi v2 certified response ownership classification failed closed"
                         );
                         self.close_output_for_restart();
                         drop(cut);
@@ -1495,43 +1556,57 @@ impl LaunchedProductionLifecycleV1 {
                         );
                     }
                 };
-                if !recovered {
-                    let selector = match self.executor.capture_lifecycle_ingress_selector(cut) {
-                        Ok(selector) => selector,
-                        Err(error) => {
-                            let reason = error.detail();
-                            iroha_logger::error!(
-                                %reason,
-                                "ordinary certified-Fetch selector capture failed closed"
-                            );
-                            self.close_output_for_restart();
-                            drop(runner);
-                            return ProductionLifecycleIngressTurnV1::Selected(
-                                ProductionLifecycleIngressSelectionV1::RestartRequired,
-                            );
-                        }
-                    };
-                    return self.drive_certified_fetch_ingress_selector(selector, runner);
-                }
-                let selector = match self
-                    .executor
-                    .prepare_recovered_decision_fetch_from_selected_cut(cut)
-                {
-                    Ok(selector) => selector,
-                    Err(error) => {
-                        let reason = error.detail();
-                        iroha_logger::error!(
-                            %reason,
-                            "Sumeragi v2 recovered Fetch preparation failed closed"
-                        );
-                        self.close_output_for_restart();
-                        drop(runner);
-                        return ProductionLifecycleIngressTurnV1::Selected(
-                            ProductionLifecycleIngressSelectionV1::RestartRequired,
-                        );
+                match response_owner {
+                    SelectedCertifiedBodyResponseOwnerV1::NonPriority => {
+                        dequeue_prepared_ordinary_ingress(
+                            &ingress,
+                            cut.into_ordinary_turn_cut(),
+                            runner,
+                            None,
+                            terminal_subject,
+                            &self.services,
+                        )
                     }
-                };
-                self.drive_recovered_ingress_selector(selector, runner)
+                    SelectedCertifiedBodyResponseOwnerV1::OrdinaryWinner => {
+                        let selector = match self.executor.capture_lifecycle_ingress_selector(cut) {
+                            Ok(selector) => selector,
+                            Err(error) => {
+                                let reason = error.detail();
+                                iroha_logger::error!(
+                                    %reason,
+                                    "ordinary certified-Fetch selector capture failed closed"
+                                );
+                                self.close_output_for_restart();
+                                drop(runner);
+                                return ProductionLifecycleIngressTurnV1::Selected(
+                                    ProductionLifecycleIngressSelectionV1::RestartRequired,
+                                );
+                            }
+                        };
+                        self.drive_certified_fetch_ingress_selector(selector, runner)
+                    }
+                    SelectedCertifiedBodyResponseOwnerV1::RecoveredWinner => {
+                        let selector = match self
+                            .executor
+                            .prepare_recovered_decision_fetch_from_selected_cut(cut)
+                        {
+                            Ok(selector) => selector,
+                            Err(error) => {
+                                let reason = error.detail();
+                                iroha_logger::error!(
+                                    %reason,
+                                    "Sumeragi v2 recovered Fetch preparation failed closed"
+                                );
+                                self.close_output_for_restart();
+                                drop(runner);
+                                return ProductionLifecycleIngressTurnV1::Selected(
+                                    ProductionLifecycleIngressSelectionV1::RestartRequired,
+                                );
+                            }
+                        };
+                        self.drive_recovered_ingress_selector(selector, runner)
+                    }
+                }
             }
         }
     }
@@ -1670,6 +1745,12 @@ impl LaunchedProductionLifecycleV1 {
         let result =
             self.owner
                 .plan_ingress_turn(&self.services, &self.executor, mode, selector, runner);
+        if let Err(error) = &result {
+            iroha_logger::error!(
+                reason = error.reason(),
+                "Sumeragi v2 certified Fetch ingress planning did not complete"
+            );
+        }
         let selected = match result {
             Ok(ProductionIngressTurnPreparation::CapacityWait(wait)) => {
                 assert!(self.pending_ingress_capacity.is_none());
@@ -1686,6 +1767,7 @@ impl LaunchedProductionLifecycleV1 {
             ) => ProductionLifecycleIngressSelectionV1::CertifiedFetchCompetingReady,
             Err(
                 ProductionIngressSchedulerInputsError::StaleModeObservation
+                | ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionDeferred { .. }
                 | ProductionIngressSchedulerInputsError::CommandPreparation { .. }
                 | ProductionIngressSchedulerInputsError::InFlightSelectedWork { .. }
                 | ProductionIngressSchedulerInputsError::Service { .. },
@@ -1696,6 +1778,8 @@ impl LaunchedProductionLifecycleV1 {
                 | ProductionIngressSchedulerInputsError::ForeignOutputGuard
                 | ProductionIngressSchedulerInputsError::ForeignRunnerObservation
                 | ProductionIngressSchedulerInputsError::BodyStoreNotBound
+                | ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionPreparation
+                | ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionSettlement
                 | ProductionIngressSchedulerInputsError::InvalidSelectedCarrier
                 | ProductionIngressSchedulerInputsError::InvalidReservedCommand
                 | ProductionIngressSchedulerInputsError::UnexpectedPlan
@@ -1711,27 +1795,46 @@ impl LaunchedProductionLifecycleV1 {
     fn settle_parked_recovered_sign_completion(
         &mut self,
     ) -> ProductionRecoveredLifecycleSignCompletionSelectionV1 {
-        let Some(class) = self.classify_parked_recovered_sign_completion() else {
-            self.close_output_for_restart();
-            return ProductionRecoveredLifecycleSignCompletionSelectionV1::RestartRequired;
-        };
-        match class {
-            crate::sumeragi::v2::RecoveredLifecycleSignAdapterSettlementFamilyV1::Broadcast => {
+        match self.classify_parked_recovered_sign_completion() {
+            ParkedRecoveredLifecycleSignCompletionClassV1::Superseded => {
+                if self.settle_superseded_recovered_lifecycle_sign() {
+                    ProductionRecoveredLifecycleSignCompletionSelectionV1::Superseded
+                } else {
+                    self.close_output_for_restart();
+                    ProductionRecoveredLifecycleSignCompletionSelectionV1::RestartRequired
+                }
+            }
+            ParkedRecoveredLifecycleSignCompletionClassV1::Retry => {
+                ProductionRecoveredLifecycleSignCompletionSelectionV1::Retry
+            }
+            ParkedRecoveredLifecycleSignCompletionClassV1::RestartRequired => {
+                self.close_output_for_restart();
+                ProductionRecoveredLifecycleSignCompletionSelectionV1::RestartRequired
+            }
+            ParkedRecoveredLifecycleSignCompletionClassV1::Settlement(
+                crate::sumeragi::v2::RecoveredLifecycleSignAdapterSettlementFamilyV1::Broadcast,
+            ) => {
                 ProductionRecoveredLifecycleSignCompletionSelectionV1::Broadcast(
                     self.settle_recovered_lifecycle_sign_broadcast(),
                 )
             }
-            crate::sumeragi::v2::RecoveredLifecycleSignAdapterSettlementFamilyV1::ProposalPrepareWal => {
+            ParkedRecoveredLifecycleSignCompletionClassV1::Settlement(
+                crate::sumeragi::v2::RecoveredLifecycleSignAdapterSettlementFamilyV1::ProposalPrepareWal,
+            ) => {
                 ProductionRecoveredLifecycleSignCompletionSelectionV1::ProposalPrepareWal(
                     self.settle_recovered_lifecycle_proposal_prepare_wal(),
                 )
             }
-            crate::sumeragi::v2::RecoveredLifecycleSignAdapterSettlementFamilyV1::VoteBroadcastAndSign => {
+            ParkedRecoveredLifecycleSignCompletionClassV1::Settlement(
+                crate::sumeragi::v2::RecoveredLifecycleSignAdapterSettlementFamilyV1::VoteBroadcastAndSign,
+            ) => {
                 ProductionRecoveredLifecycleSignCompletionSelectionV1::VoteBroadcastAndSign(
                     self.settle_recovered_lifecycle_vote_broadcast_and_sign(),
                 )
             }
-            crate::sumeragi::v2::RecoveredLifecycleSignAdapterSettlementFamilyV1::ProposalBroadcastAndSign => {
+            ParkedRecoveredLifecycleSignCompletionClassV1::Settlement(
+                crate::sumeragi::v2::RecoveredLifecycleSignAdapterSettlementFamilyV1::ProposalBroadcastAndSign,
+            ) => {
                 ProductionRecoveredLifecycleSignCompletionSelectionV1::ProposalBroadcastAndSign(
                     self.settle_recovered_lifecycle_proposal_broadcast_and_sign(),
                 )
@@ -1741,19 +1844,53 @@ impl LaunchedProductionLifecycleV1 {
 
     fn classify_parked_recovered_sign_completion(
         &mut self,
-    ) -> Option<crate::sumeragi::v2::RecoveredLifecycleSignAdapterSettlementFamilyV1> {
-        let completion = self
+    ) -> ParkedRecoveredLifecycleSignCompletionClassV1 {
+        let Some(completion) = self
             .pending_lifecycle_completion
-            .as_ref()?
-            .recovered_sign()?;
-        let authority = completion.project_adapter_completion_authority()?;
-        let preview = self
+            .as_ref()
+            .and_then(PendingLifecycleCompletionV1::recovered_sign)
+        else {
+            iroha_logger::error!("recovered Sign classifier lost its parked completion");
+            return ParkedRecoveredLifecycleSignCompletionClassV1::RestartRequired;
+        };
+        let Some(authority) = completion.project_adapter_completion_authority() else {
+            iroha_logger::error!(
+                ordinal = completion.dispatch_key().lifecycle_ordinal(),
+                "recovered Sign classifier rejected an inexact guarded worker result"
+            );
+            return ParkedRecoveredLifecycleSignCompletionClassV1::RestartRequired;
+        };
+        let preview = match self
             .executor
             .prepare_recovered_lifecycle_sign_completion(authority)
-            .ok()?;
-        let class = preview.settlement_family();
+        {
+            Ok(preview) => preview,
+            Err(crate::sumeragi::v2::AdapterError::RecoveredLifecycleSignCompletionSuperseded) => {
+                return ParkedRecoveredLifecycleSignCompletionClassV1::Superseded;
+            }
+            Err(crate::sumeragi::v2::AdapterError::RecoveredLifecycleSignCompletionRuntimeDebt) => {
+                return ParkedRecoveredLifecycleSignCompletionClassV1::Retry;
+            }
+            Err(error) => {
+                iroha_logger::error!(
+                    %error,
+                    ordinal = completion.dispatch_key().lifecycle_ordinal(),
+                    "recovered Sign adapter classification failed closed"
+                );
+                return ParkedRecoveredLifecycleSignCompletionClassV1::RestartRequired;
+            }
+        };
+        let class = preview
+            .settlement_family()
+            .map(ParkedRecoveredLifecycleSignCompletionClassV1::Settlement);
         drop(preview);
-        class
+        class.unwrap_or_else(|| {
+            iroha_logger::error!(
+                ordinal = completion.dispatch_key().lifecycle_ordinal(),
+                "recovered Sign adapter preview had no closed settlement family"
+            );
+            ParkedRecoveredLifecycleSignCompletionClassV1::RestartRequired
+        })
     }
 
     fn runner_turn_matches(

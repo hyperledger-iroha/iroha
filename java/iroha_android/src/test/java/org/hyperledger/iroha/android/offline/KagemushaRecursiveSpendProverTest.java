@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
@@ -49,6 +50,7 @@ public final class KagemushaRecursiveSpendProverTest {
     redemptionChangeRequestFailureDestroysTransferredOpening();
     redemptionChangeCarriersCloseOrTransferOneOwnerExactlyOnce();
     noteOpeningAndInitRequestCloseIdempotently();
+    canonicalArchiveHashSurvivesZeroizationWithoutRetainingEquality();
     temporarySecretArchivesAreWipedAfterPartialConstructionAndOwnerCopy();
     preparationConstructorFailuresDestroyStagedOpenings();
     artifactRoleInventoryRejectsCountsDuplicatesAndReordering();
@@ -91,6 +93,16 @@ public final class KagemushaRecursiveSpendProverTest {
     redemptionChangeCarriersCloseOrTransferOneOwnerExactlyOnce();
     temporarySecretArchivesAreWipedAfterPartialConstructionAndOwnerCopy();
     preparationConstructorFailuresDestroyStagedOpenings();
+  }
+
+  @org.junit.Test
+  public void canonicalArchiveHashSurvivesZeroizationWithoutRetainingEqualityUnderJUnit() {
+    canonicalArchiveHashSurvivesZeroizationWithoutRetainingEquality();
+  }
+
+  @org.junit.Test
+  public void nfcProtocolConstantsAreDefensiveUnderJUnit() {
+    nfcV4StreamsBeyondLegacyLimitAndRejectsDowngrade();
   }
 
   private static void heavyProofPermitIsReentrantButRejectsAnotherThreadWithoutWaiting() {
@@ -726,6 +738,79 @@ public final class KagemushaRecursiveSpendProverTest {
     init.close();
     assert init.isDestroyed();
     assertThrowsIllegalState(init::noritoEncoded);
+  }
+
+  private static void canonicalArchiveHashSurvivesZeroizationWithoutRetainingEquality() {
+    final byte[] encoded = archive("KagemushaNoteOpeningV2", 0x6b);
+    final KagemushaRecursiveSpendProver.NoteOpening first =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(encoded);
+    final KagemushaRecursiveSpendProver.NoteOpening equal =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(encoded);
+    final KagemushaRecursiveSpendProver.NoteOpening different =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x6c));
+    final int initialHashCode = first.hashCode();
+    final HashSet<KagemushaRecursiveSpendProver.NoteOpening> indexed = new HashSet<>();
+    indexed.add(first);
+    assert first.equals(equal);
+
+    final CountDownLatch start = new CountDownLatch(1);
+    final AtomicReference<Throwable> failure = new AtomicReference<>();
+    final Thread forward =
+        new Thread(
+            () -> {
+              try {
+                if (!start.await(5, TimeUnit.SECONDS)) {
+                  throw new AssertionError("timed out waiting to compare canonical archives");
+                }
+                for (int index = 0; index < 10_000; index++) {
+                  first.equals(equal);
+                }
+                synchronized (first) {
+                  first.close();
+                }
+              } catch (final Throwable error) {
+                failure.compareAndSet(null, error);
+              }
+            });
+    final Thread reverse =
+        new Thread(
+            () -> {
+              try {
+                if (!start.await(5, TimeUnit.SECONDS)) {
+                  throw new AssertionError("timed out waiting to compare canonical archives");
+                }
+                for (int index = 0; index < 10_000; index++) {
+                  equal.equals(first);
+                }
+              } catch (final Throwable error) {
+                failure.compareAndSet(null, error);
+              }
+            });
+    forward.setDaemon(true);
+    reverse.setDaemon(true);
+    forward.start();
+    reverse.start();
+    start.countDown();
+    try {
+      forward.join(5_000);
+      reverse.join(5_000);
+    } catch (final InterruptedException error) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError(error);
+    }
+
+    assert !forward.isAlive();
+    assert !reverse.isAlive();
+    if (failure.get() != null) throw new AssertionError(failure.get());
+    assert first.equals(first);
+    assert !first.equals(equal);
+    assert !equal.equals(first);
+    assert first.hashCode() == initialHashCode;
+    assert indexed.contains(first);
+    assert !first.equals(different);
+    equal.close();
+    different.close();
   }
 
   private static void preparationConstructorFailuresDestroyStagedOpenings() {
@@ -1385,6 +1470,16 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void nfcV4StreamsBeyondLegacyLimitAndRejectsDowngrade() {
+    final byte[] mutableAid = KagemushaNfcProtocol.defaultApplicationIdentifier();
+    final byte[] mutableSuccess = KagemushaNfcProtocol.statusSuccess();
+    Arrays.fill(mutableAid, (byte) 0);
+    Arrays.fill(mutableSuccess, (byte) 0);
+    assert hex(KagemushaNfcProtocol.defaultApplicationIdentifier())
+        .equals("f0504b45504b524e464301");
+    assert KagemushaNfcProtocol.parseCommand(KagemushaNfcProtocol.selectAidApdu()).type()
+        == KagemushaNfcProtocol.Type.SELECT;
+    assert KagemushaNfcProtocol.responseStatus(KagemushaNfcProtocol.response()) == 0x9000;
+
     final byte[] payload = new byte[70_003];
     for (int index = 0; index < payload.length; index++) {
       payload[index] = (byte) (index * 29 + 7);
@@ -1481,6 +1576,17 @@ public final class KagemushaRecursiveSpendProverTest {
             timestampMs,
             nonce);
     final AtomicReference<TransportRequest> captured = new AtomicReference<>();
+    final org.hyperledger.iroha.android.client.transport.TransportExecutor neverTransport =
+        request -> {
+          throw new AssertionError("invalid Torii base URI reached transport");
+        };
+    for (final String invalidBaseUri : Arrays.asList("http:opaque", "https:/missing-host")) {
+      assertThrowsIllegalArgument(
+          () -> KagemushaRecursiveSpendProver.newToriiClient(
+              URI.create(invalidBaseUri),
+              neverTransport,
+              new LocalSigningContext(networkId)));
+    }
     final KagemushaRecursiveSpendProver.ToriiClient client =
         KagemushaRecursiveSpendProver.newToriiClient(
             URI.create("https://torii.example/api/"),
@@ -1493,7 +1599,7 @@ public final class KagemushaRecursiveSpendProverTest {
                   TransportResponse.builder()
                       .setStatusCode(command ? 202 : 200)
                       .addHeader(
-                          "Content-Type",
+                          "content-type",
                           capability ? "application/json" : "application/x-norito")
                       .setBody(
                           capability

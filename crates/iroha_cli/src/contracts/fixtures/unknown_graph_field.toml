@@ -1,0 +1,8 @@
+
+                bundle_name = "demo"
+
+                [[contracts]]
+                name = "demo.app"
+                alias = "app::universal"
+                source = "app.ko"
+                wildcard_imports = true

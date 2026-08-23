@@ -743,6 +743,11 @@ impl LifecycleCoordinator {
         &self,
         reservation: Option<&DurableLifecycleOrdinalReservation>,
     ) -> Result<(), LifecycleLedgerError> {
+        if let Some(reservation) = reservation {
+            reservation
+                .mark_publication_started()
+                .map_err(LifecycleLedgerError::InvalidLedger)?;
+        }
         self.persist_durable_projection()?;
         if let Some(reservation) = reservation {
             reservation
@@ -750,6 +755,21 @@ impl LifecycleCoordinator {
                 .map_err(LifecycleLedgerError::InvalidLedger)?;
         }
         Ok(())
+    }
+
+    /// Fsync one staged successor and publish its reserved ordinal range.
+    pub(super) fn persist_exact_staged_successor_with_ordinal_reservation(
+        &self,
+        staged: &Self,
+        reservation: &DurableLifecycleOrdinalReservation,
+    ) -> Result<(), LifecycleLedgerError> {
+        reservation
+            .mark_publication_started()
+            .map_err(LifecycleLedgerError::InvalidLedger)?;
+        self.persist_exact_staged_successor(staged)?;
+        reservation
+            .commit_after_durable_publication()
+            .map_err(LifecycleLedgerError::InvalidLedger)
     }
     /// Fsync one staged successor against this coordinator's exact attached
     /// LedgerV1 frame.

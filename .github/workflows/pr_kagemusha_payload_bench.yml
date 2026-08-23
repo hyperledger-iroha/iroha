@@ -10,6 +10,8 @@ on:
       - "ci/check_connect_norito_bridge_header.sh"
       - "ci/check_kagemusha_*.sh"
       - "ci/check_kagemusha_production_readiness_source_contract.py"
+      - "ci/check_kagemusha_production_readiness_source_support.py"
+      - "ci/check_kagemusha_recursion_source_contract.py"
       - "ci/check_kagemusha_production_readiness_self_test.py"
       - "scripts/deploy_localnet.sh"
       - "scripts/tests/deploy_localnet_test.py"
@@ -805,6 +807,8 @@ jobs:
           --only-binary=:all:
           -r python/iroha_python/requirements-ci.lock
       - name: Build and install the exact native Python SDK
+        env:
+          IROHA_PYTHON_SKIP_RUNTIME_LINK: "1"
         run: |
           python -m pip install --no-deps -e python/norito_py -e python/iroha_torii_client
           wheel_dir="$(mktemp -d)"
@@ -862,8 +866,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo test -p iroha_data_model kagemusha_v4 --lib --tests
+      - run: cargo test -p iroha_data_model --test iroha_data_model_group_02 offline_public_schema_golden -- --nocapture
+      - run: cargo test -p iroha_data_model --lib --features transparent_api canary_ -- --nocapture
+      - run: cargo test -p iroha_data_model --lib --features transparent_api post_canary_liveness_rejects_receipt_and_transaction_wire_anchor_splices -- --nocapture
+      - run: cargo test -p iroha_data_model --lib --features transparent_api kagemusha_post_canary_validator_liveness -- --nocapture
       - run: cargo test -p iroha_data_model receiver_snapshot --lib
       - run: cargo test -p iroha_core kagemusha_v4 --lib
+      - run: cargo test -p iroha_core --lib taira_canary -- --nocapture
+      - run: cargo test -p iroha_core --lib autonomous_merge_admission_intent_ -- --nocapture
       - run: cargo test -p iroha_core offline_device_attestation_policy --lib
       - run: cargo test -p iroha_core device_registration_ --lib
       - run: cargo test -p iroha_core kagemusha_online_registration_ --lib
@@ -887,6 +897,7 @@ jobs:
       - run: cargo test -p iroha_torii generated_spec_documents_strict_typed_offline_request_schemas_and_states
       - run: cargo test -p iroha_torii generated_spec_offline
       - run: cargo test -p iroha_torii generated_spec_matches_offline_negotiation_and_operation_lifecycle
+      - run: cargo test -p iroha_torii --lib bridge_finality_attestation_route_tests -- --nocapture
       - run: cargo test -p iroha_torii readiness_authenticates_exact_release_without_global_backend_flag
       - run: cargo test -p iroha_torii v4_snapshot_admission_authenticates_exact_release_without_global_backend_flag
       - run: cargo test -p iroha_torii offline_commands --lib -- --nocapture
@@ -894,12 +905,61 @@ jobs:
       - run: cargo test -p iroha_config torii_kagemusha_commands_tests -- --nocapture
       - run: cargo test -p connect_norito_bridge recursive_spend_v4
       - run: cargo test -p connect_norito_bridge output_membership_local_carrier --lib
+      - run: cargo test -p iroha_cli --bin iroha kagemusha_rollout -- --nocapture
 
   swift:
     name: Swift lifecycle surface
     runs-on: macos-15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Bind the canonical mobile Python
+        shell: bash
+        run: |
+          mobile_python="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Install Apple Rust targets and prefetch locked dependencies
+        run: |
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
+          cargo fetch --locked
+      - name: Bind the first-release Apple Cargo envelope
+        run: |
+          cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-cargo"
+          mkdir -p "$cargo_target"
+          cargo_target="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
+          rustc_path="$(rustup which --toolchain 1.93.1 rustc)"
+          rustdoc_path="$(rustup which --toolchain 1.93.1 rustdoc)"
+          echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
+          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+          echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
+          echo "RUSTC=$rustc_path" >> "$GITHUB_ENV"
+          echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
+          echo "RUSTDOC=$rustdoc_path" >> "$GITHUB_ENV"
+      - name: Prepare external Apple native artifact roots
+        run: |
+          artifact_dir="$RUNNER_TEMP/iroha-kagemusha-apple-artifacts"
+          build_dir="$RUNNER_TEMP/iroha-kagemusha-apple-build"
+          scratch_dir="$RUNNER_TEMP/iroha-kagemusha-swift-tests"
+          mkdir -p "$artifact_dir" "$build_dir" "$scratch_dir"
+          echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
+          echo "KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH=$scratch_dir" >> "$GITHUB_ENV"
+      - name: Make reviewed Iroha source read-only
+        run: chmod -R a-w "$GITHUB_WORKSPACE"
+      - name: Build exact ABI-22 NoritoBridge XCFramework
+        run: scripts/build_norito_xcframework.sh
+      - name: Authenticate Apple native artifact
+        run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
       - run: ci/check_kagemusha_recursive_spend_swift_sdk.sh
 
   kotlin-java:
@@ -918,7 +978,10 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Prefetch locked Rust dependency graph
         run: cargo fetch --locked
-      - run: ci/check_kagemusha_candidate_android_lab_compile.sh
+      - name: Warm dependencies, then compile the Android candidate lab offline
+        env:
+          KAGEMUSHA_CANDIDATE_COMPILE_WARM_GRADLE_CACHE: "1"
+        run: ci/check_kagemusha_candidate_android_lab_compile.sh
       - name: Require fresh ABI-22 JNI bridge in complete Kotlin and Java suites
         run: >-
           NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"
@@ -946,5 +1009,7 @@ jobs:
           cache: npm
           cache-dependency-path: javascript/iroha_js/package-lock.json
       - run: npm ci --ignore-scripts
+        working-directory: javascript/iroha_js
+      - run: npm run build:dist
         working-directory: javascript/iroha_js
       - run: ci/check_kagemusha_recursive_spend_javascript_sdk.sh

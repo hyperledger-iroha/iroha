@@ -483,6 +483,58 @@ class KagemushaRecursiveSpendProverTest {
     }
 
     @Test
+    fun canonicalArchiveHashSurvivesZeroizationWithoutRetainingEquality() {
+        val encoded = archive("KagemushaNoteOpeningV2", 0x6b)
+        val first = KagemushaRecursiveSpendProver.decodeNoteOpening(encoded)
+        val equal = KagemushaRecursiveSpendProver.decodeNoteOpening(encoded)
+        val different = KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x6c),
+        )
+        val initialHashCode = first.hashCode()
+        val indexed = hashSetOf(first)
+        assertEquals(equal, first)
+
+        val start = CountDownLatch(1)
+        val failure = AtomicReference<Throwable?>()
+        val forward = Thread {
+            try {
+                check(start.await(5, TimeUnit.SECONDS))
+                repeat(10_000) { first == equal }
+                synchronized(first) { first.close() }
+            } catch (error: Throwable) {
+                failure.compareAndSet(null, error)
+            }
+        }
+        val reverse = Thread {
+            try {
+                check(start.await(5, TimeUnit.SECONDS))
+                repeat(10_000) { equal == first }
+            } catch (error: Throwable) {
+                failure.compareAndSet(null, error)
+            }
+        }
+        forward.isDaemon = true
+        reverse.isDaemon = true
+        forward.start()
+        reverse.start()
+        start.countDown()
+        forward.join(5_000)
+        reverse.join(5_000)
+
+        assertFalse(forward.isAlive)
+        assertFalse(reverse.isAlive)
+        failure.get()?.let { throw it }
+        assertEquals(first, first)
+        assertFalse(first == equal)
+        assertFalse(equal == first)
+        assertEquals(initialHashCode, first.hashCode())
+        assertTrue(first in indexed)
+        assertFalse(first == different)
+        equal.close()
+        different.close()
+    }
+
+    @Test
     fun preparationConstructorFailuresDestroyStagedOpenings() {
         val recipientOpening = KagemushaRecursiveSpendProver.decodeNoteOpening(
             archive("KagemushaNoteOpeningV2", 0x5e),
@@ -1565,6 +1617,16 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun nfcV4StreamsBeyondLegacyLimitAndRejectsDowngrade() {
+        val mutableAid = KagemushaNfcProtocol.defaultApplicationIdentifier()
+        mutableAid.fill(0)
+        assertEquals(
+            "F0504B45504B524E464301",
+            KagemushaNfcProtocol.defaultApplicationIdentifier().toHex().uppercase(),
+        )
+        val mutableSuccess = KagemushaNfcProtocol.statusSuccess()
+        mutableSuccess.fill(0)
+        assertEquals(0x9000, KagemushaNfcProtocol.responseStatus(KagemushaNfcProtocol.response()))
+
         val payload = ByteArray(70_003) { index -> (index * 29 + 7).toByte() }
         val commands = KagemushaNfcProtocol.writePayloadCommands(
             KagemushaPeerPayloadKind.PAYMENT,
@@ -1661,6 +1723,19 @@ class KagemushaRecursiveSpendProverTest {
             nonce,
         )
         val captured = AtomicReference<TransportRequest>()
+        val neverTransport = object : TransportExecutor {
+            override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> =
+                throw AssertionError("invalid Torii base URI reached transport")
+        }
+        listOf("http:opaque", "https:/missing-host").forEach { invalidBaseUri ->
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.newToriiClient(
+                    URI.create(invalidBaseUri),
+                    neverTransport,
+                    LocalSigningContext(networkId),
+                )
+            }
+        }
         val client = KagemushaRecursiveSpendProver.newToriiClient(
             URI.create("https://torii.example/api/"),
             object : TransportExecutor {
@@ -1673,7 +1748,7 @@ class KagemushaRecursiveSpendProverTest {
                         TransportResponse.builder()
                             .setStatusCode(if (command) 202 else 200)
                             .addHeader(
-                                "Content-Type",
+                                "content-type",
                                 if (capability) "application/json" else "application/x-norito",
                             )
                             .setBody(

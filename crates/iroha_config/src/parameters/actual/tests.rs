@@ -497,6 +497,23 @@ mod tests {
         assert!(offline.kagemusha_release_policy_path.is_none());
         assert!(offline.kagemusha_artifact_dir.is_none());
         assert!(offline.kagemusha_catalog_qualification_seal_path.is_none());
+        assert!(offline.kagemusha_promotion_controller_public_key.is_none());
+        assert!(
+            offline
+                .kagemusha_catalog_revalidation_authority_key_id
+                .is_none()
+        );
+        assert!(
+            offline
+                .kagemusha_catalog_revalidation_authority_public_key
+                .is_none()
+        );
+        assert!(offline.kagemusha_promotion_reservation_path.is_none());
+        assert!(
+            offline
+                .kagemusha_validator_qualification_seal_path
+                .is_none()
+        );
         assert_eq!(
             offline.kagemusha_max_decoded_bytes,
             defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES

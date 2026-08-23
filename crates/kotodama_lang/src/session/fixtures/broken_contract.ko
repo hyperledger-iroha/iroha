@@ -1,0 +1,4 @@
+seiyaku Broken {
+                fn first(Missing value) -> int { return unknown; }
+                fn second(bool flag) { flag = false; missing_call(); }
+            }

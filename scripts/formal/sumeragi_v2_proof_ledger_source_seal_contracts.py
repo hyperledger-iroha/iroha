@@ -569,6 +569,7 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/prune_commit_merge_support.rs",
     "kura/merge_ledger_latest_execution_index.rs",
     "kura/replica_advert_and_body_status.rs",
+    "kura/retired_pipeline_roster_rejection.rs",
     "kura/retained_finality_replica_authority.rs",
     "kura/queue_plan_admission_batch.rs",
     "kura/wsv_checkpoint_read_helpers.rs",
@@ -576,6 +577,7 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/prune_intent_publication.rs",
     "kura/prune_recovery_capacity.rs",
     "kura/block_store_definition_and_test_controls.rs",
+    "kura/startup_finality_session_reads.rs",
     "kura/pipeline_and_lane_artifacts.rs",
     "kura/autonomous_terminal_capacity.rs",
     "kura/autonomous_publication_temp_recovery.rs",
@@ -604,9 +606,11 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'block/autonomous_anchor_network_tests.rs',
         'block/sccp_soracloud_validation_tests.rs',
         'block/canonical_genesis_validation_tests.rs',
+        'block/genesis_validation_regression_tests.rs',
         'block/axt_shared_budget_across_envelopes_test.rs',
         'block/scheduler_variant_tests.rs',
         'block/validation_native_amx_test_support.rs',
+        'block/native_amx_receipt_regression_tests.rs',
         'block/native_amx_exact_quorum_cardinality_tests.rs',
         'block/native_amx_and_dag_tests.rs',
         'block/sequential_rejected_pipeline_trigger_tests.rs',
@@ -619,6 +623,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'actual/torii_tx_history.rs',
         'actual/torii_http_transport.rs',
         'actual/torii_mcp_profile.rs',
+        'actual/offline.rs',
         'actual/tests.rs',
     ),
     'crates/iroha_config/src/parameters/actual/tests.rs': (
@@ -644,6 +649,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_data_model/src/block/consensus_v2.rs': (
         'consensus_v2_tests.rs',
+    ),
+    'crates/iroha_data_model/src/block/consensus_v2_tests.rs': (
+        'consensus_v2_json_tests.rs',
     ),
     'crates/iroha_core/src/kura.rs': (
         *_KURA_PRODUCTION_COMPONENT_FILES,
@@ -686,6 +694,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'kura/tests/11_roster_and_progress_sidecars.rs',
         'kura/tests/12_sidecar_index_and_pruning.rs',
         'kura/tests/13_manifests_and_fsync.rs',
+    ),
+    'crates/iroha_core/src/kura/autonomous_application_evidence.rs': (
+        'passive_diagnostic_reads.rs',
     ),
     'crates/iroha_core/src/kura/tests/10_native_amx_and_roster.rs': (
         '10c_native_amx_latest_index_support_and_bounds.rs',
@@ -734,6 +745,18 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'queue/lane_reservation_terminal_fault_tests.rs',
         'queue/reservation_recovery_tests.rs',
     ),
+    'crates/iroha_core/src/queue/instruction_and_state_routing_tests.rs': (
+        'gossip_routing_metadata_tests.rs',
+        'gossip_route_validation_tests.rs',
+        'drain_revalidation_tests.rs',
+    ),
+    'crates/iroha_core/src/queue/lane_reservation_tests.rs': (
+        'lane_reservation_core_tests.rs',
+    ),
+    'crates/iroha_core/src/queue/reservation_recovery_tests.rs': (
+        'retired_release_snapshot_recovery_tests.rs',
+        'native_amx_reservation_tests.rs',
+    ),
     'crates/iroha_core/src/queue/journal.rs': (
         'journal_reservation_commit_preflight.rs',
         'journal_direct_file_io.rs',
@@ -741,6 +764,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'plan_journal_replay_tests.rs',
     ),
     'crates/iroha_core/src/smartcontracts/ivm/host.rs': (
+        'host/axt_persistent_budget_tests.rs',
         'host/core_codec_and_contract_tests.rs',
         'host/core_query_execution_tests.rs',
         'host/core_query_pagination_tests.rs',
@@ -754,6 +778,8 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'state/vpn_lease_validation.rs',
         'state/axt_handle_budget.rs',
         'state/zk_asset_state.rs',
+        'state/restored_staking_owner_tests.rs',
+        'state/confidential_policy_transition_index_tests.rs',
         'state/passive_lane_diagnostic_methods.rs',
         'state/lane_lifecycle_support.rs',
         'state/diagnostic_state_generation.rs',
@@ -785,6 +811,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'peer_tests.rs',
     ),
     'crates/irohad/src/main.rs': (
+        'main/kagemusha_runtime_effective_config_projection.rs',
         'main/shared_sorafs_provider_cache_tests.rs',
         'main/runtime_deps.rs',
         'sumeragi_lane_relay_item.rs',
@@ -792,6 +819,8 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'main/resolved_genesis_trust_anchor_wrong_hash_test.rs',
         'main_tests/governance_dag_publisher_binding_signer.rs',
         'main/governance_dag_launcher_tests.rs',
+        'main/kagemusha_runtime_effective_config_projection_tests.rs',
+        'main/kagemusha_startup_source_tests.rs',
         'main/runtime_budget_and_config_tests.rs',
         'main/startup_tail_tests.rs',
     ),
@@ -817,6 +846,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_verified_height_context_recovered_output_auth.rs',
         'v2_adapter_equivocation_evidence.rs',
         'v2_ready_durable_validate_adapter_preview.rs',
+        'v2_recovered_lifecycle_sign_completion.rs',
         'v2_wire_registry_and_authentication.rs',
         'tests/v2_adapter_main_00.rs',
         'tests/v2_adapter_main_01.rs',
@@ -824,7 +854,11 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_adapter_main_03.rs',
         'tests/v2_adapter_main_04.rs',
     ),
+    'crates/iroha_core/src/sumeragi/v2_recovery.rs': (
+        'v2_recovery_tests.rs',
+    ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs': (
+        'v2_lifecycle_coordinator_state_helpers.rs',
         'tests/v2_lifecycle_coordinator_explorer_cases.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs': (
@@ -860,6 +894,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_lifecycle_work_registry_validate_recovery_parent.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs': (
+        'v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs',
         'v2_lifecycle_work_registry_validate_completion_impl.rs',
         'v2_lifecycle_work_registry_access_impl.rs',
         'v2_lifecycle_work_registry_validate_recovery_execution_impl.rs',
@@ -1003,6 +1038,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_lane_work_observer_role.rs',
         'tests/v2_lane_work_native_body_recovery.rs',
         'tests/v2_lane_work_lifecycle_and_recovery_cases.rs',
+        'v2_lane_work/canonical_executed_block_recovery_drift_test.rs',
         'v2_lane_work/historical_recovery_and_carrier_tests.rs',
         'v2_lane_work_autonomous_ready_durability_tests.rs',
         'v2_lane_work/autonomous_retirement_and_merge_tests.rs',
@@ -1032,6 +1068,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_adapter_04b_lifecycle_startup.rs',
         'v2_adapter_05_direct_lifecycle.rs',
     ),
+    'crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle.rs': (
+        'v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs',
+    ),
     'crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs': (
         'v2_adapter_04_wal_recovery_decision_classifier_cases.rs',
     ),
@@ -1048,6 +1087,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_worker_backpressure_cases.rs',
         'v2_worker_recovered_lifecycle_output_cases.rs',
         'v2_worker_nonzero_view_restart.rs',
+    ),
+    'crates/iroha_core/src/sumeragi/tests/v2_worker_backpressure_cases.rs': (
+        'v2_worker_backpressure_retirement_cases.rs',
     ),
     'crates/iroha_core/src/sumeragi/tests/v2_effects_main_05.rs': (
         'v2_effects_kura_tip_replay.rs',
@@ -1093,19 +1135,19 @@ def _read_reviewed_rust_source_fixture(
                 f"{unknown_components!r}"
             )
     initial_error_count = len(errors)
-    include_invocations = (
-        _RECURSIVE_REVIEWED_RUST_SOURCE._rust_include_invocations(
-            source, path, errors,
+    provider_invocations = (
+        _RECURSIVE_REVIEWED_RUST_SOURCE._rust_provider_invocations(
+            source, path, manifest, errors,
         )
     )
     if len(errors) != initial_error_count:
         return path, ""
-    observed = tuple(invocation.relative for invocation in include_invocations)
+    observed = tuple(invocation.relative for invocation in provider_invocations)
     if observed != manifest:
         errors.append(
             f"{path}: reviewed Rust include inventory must equal {manifest!r}; "
-            f"found {observed!r} across {len(include_invocations)} include "
-            "invocation(s)"
+            f"found {observed!r} across {len(provider_invocations)} code-level "
+            "binding(s)"
         )
     component_sources: dict[str, str] = {}
     for component_relative in manifest:
@@ -1136,7 +1178,7 @@ def _read_reviewed_rust_source_fixture(
         component_sources[component_relative] = component_source
     expanded: list[str] = []
     cursor = 0
-    for invocation in include_invocations:
+    for invocation in provider_invocations:
         expanded.append(source[cursor:invocation.end])
         component_relative = invocation.relative
         component_source = component_sources.get(component_relative)
@@ -2402,7 +2444,7 @@ _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
         "7501414a5b20cfeacf429a9d2b43cf5dd2a797e2a579559c05d987437352ed8d"
     ),
     "production_capacity_saturation_admits_response_and_reconstructible_fetch": (
-        "c222912bd0fbfbb589269108834fa62252c4b61bed3ef4231b293b0b8b787719"
+        "902be400390561abf765799c869da64adb9ed53909fce4329734cfb60e04842b"
     ),
     "unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner": (
         "920f70f6d4ebf90ce3f9a4365e99bc88da19671d80e4f716aa57bc08caece7fd"
@@ -2442,7 +2484,7 @@ _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
     "23325cb037bc930c7503986845dbb25891ef80af6f08092533b1e0e1d8233fad"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "545c7687a3fe7d3cb7405b1e733c61c771f8d642e216423097e6fb0aefcb476f"
+    "57df39a06020e50d4b6e78a3914a20c36d8decbddff413eda9f889b56966f896"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -3229,7 +3271,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
         "f160be0e0bcce5a09813d9b1ce971c361991bff4ac9a33469a5130bbd11b80f6"
     ),
     "autonomous_lane_output_has_durable_reconstruction_source": (
-        "201b33a705d475efd18a2b3eda36b9a7997d7d1e7f947c7aaa4f81e200409f5b"
+        "0d806079c721d886405ad801b9fcb145b81387c2b9bc757534c82a4295a60e82"
     ),
     "take_attempt": "acc18d3997a0cc6fcca4926b72a63fedf5d0987ecb33c1114e93e0da3b2254d7",
     "mark_admitted": "c6e502433ef5249540446d75e0f88f665a7ffc456bf4014216f808fd123f072c",
@@ -3675,7 +3717,7 @@ _PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {
     "ordinary_loop": "fe38b2b2ab597569383e9b693deabb75346eee956713ec26e3c5174eca38f767",
     "pending_loop": "520469f9f7c3a23d8915e5aa63e32c459bc8e7b069e796f527540b082741ba38",
     "ordinary_finalize": "05a36cb47c73bd91e88590bfed1eb0f078a5c75915a5f314497fb89f352aa041",
-    "ordinary_active": "8a93a2ae69c84618d44942bcbf9013c47d219630e56d8e5288af9336354d29b2",
+    "ordinary_active": "3e029cae04b3604f15e565bc9945d43d01dcb6e0eba0a8bd9099dd59e3542b24",
     "pending_active": "2c6ba74ed2d7a1893c41305aae5dd50a4722216320f5c403a70c2200ac407fb9",
 }
 _PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "32e0bf9fb84c2f4ef83672eb6ee22ee14c0d89052cfcbb391cc10226730bb210"
@@ -3716,12 +3758,12 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "body_store:V2BodyStore::read_durable_body_for_certified_serve": "c3e4d12afaa3f18ad1d5b0865eb3a54f4ad892eff4449b9d9d5b72bfd8f26c87",
     "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed": "77930bc25fa0078aba267238ba1f3e8016eaa28f9a2d3aa58b4199c3f3333d10",
     "projection:super::ProductionLifecycleOwnerV1::settle_producer_turn_advanced": "d15b6ada19aa19ddd64ce9a23ca4ec06518cb4eb99cfe386976f7f85bc6f3917",
-    "ordinary:run_lifecycle_active_height": "8a93a2ae69c84618d44942bcbf9013c47d219630e56d8e5288af9336354d29b2",
+    "ordinary:run_lifecycle_active_height": "3e029cae04b3604f15e565bc9945d43d01dcb6e0eba0a8bd9099dd59e3542b24",
     "pending:run_pending_active_height": "2c6ba74ed2d7a1893c41305aae5dd50a4722216320f5c403a70c2200ac407fb9",
     "height:drain_lifecycle_v2_ingress": "4470158942921ed2d8eb896129fa13f3689e8b6b39449fb9c6957d4d56386cd3",
     "launch:ProductionLeaderWireIngressBindingV1::bind": "a2c191a1ada7ec3b3dd00c36c4f495b1ed6c06e2527b2ca9e68b3729f8071f81",
     "launch:ProductionLeaderWireIngressBindingV1::retire": "b2aca6532fa807ad78a8cbd4d202152209c53dd5dd8c5a4fd5bba45f7df18c4d",
-    "launch:ProductionLifecycleOwnerV1::launch": "c408b2d4fd7585818f327d89bc39f8c56f77119405ef9a357bb99017def17e3a",
+    "launch:ProductionLifecycleOwnerV1::launch": "1f889bb50a6c0fac71ef8ab4d5b76940d2932ea708422aba6d6343595ea2f980",
 }
 
 # Completion provenance remains separately sealed because the direct runtime
@@ -4320,7 +4362,7 @@ _PRODUCTION_RECOVERY_EAGER_BLOCK_SYNC_ITEM_SHA256 = {
 def _transport_geometry_refresh_resistant_errors(
     paths: dict[str, Path], sources: dict[str, str]
 ) -> list[str]:
-    """Check reviewed P2P/Taira semantics without formatting-sensitive seals."""
+    """Check reviewed P2P and production-Taira semantics without token seals."""
 
     errors: list[str] = []
     for role, item_name, required, description in (
@@ -4410,87 +4452,7 @@ self.validator_dial_scheduler.note_session_established(
                 paths[role], items[0], required, description, errors
             )
 
-    kagami_path = paths["kagami_profiles"]
-    kagami_source = sources["kagami_profiles"]
-    for declaration, description in (
-        (
-            "const TAIRA_MAX_FRAME_BYTES: usize = 23_068_700;",
-            "Kagami Taira encrypted-frame ceiling",
-        ),
-        (
-            "const TAIRA_MAX_FRAME_BYTES_BLOCK_SYNC: usize = 23_068_672;",
-            "Kagami Taira block-sync frame ceiling",
-        ),
-        (
-            "const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 13_631_488;",
-            "Kagami Taira transaction-gossip frame ceiling",
-        ),
-    ):
-        _require_rust_source_token_sequence(
-            kagami_path, kagami_source, declaration, description, errors
-        )
-    render_items = rust_items(kagami_source, "render_peer_config_with_private_keys")
-    if len(render_items) != 1:
-        errors.append(
-            f"{kagami_path}: require exactly one Kagami "
-            "render_peer_config_with_private_keys item; "
-            f"found {len(render_items)}"
-        )
-    if len(render_items) == 1:
-        render_source = render_items[0].source
-        expected_branch = '''let taira_network_frame_overrides = if spec.slug == "iroha3-taira" {
-        format!(
-            "\\nmax_frame_bytes = {TAIRA_MAX_FRAME_BYTES}\\n\\
-             max_frame_bytes_block_sync = {TAIRA_MAX_FRAME_BYTES_BLOCK_SYNC}\\n\\
-             max_frame_bytes_tx_gossip = {TAIRA_MAX_FRAME_BYTES_TX_GOSSIP}"
-        )
-    } else {
-        String::new()
-    };'''
-        expected_installation = '''[network]
-address = "{network_address}"
-public_address = "{network_public_address}"{taira_network_frame_overrides}
-
-[torii]'''
-        if render_source.count(expected_branch) != 1:
-            errors.append(
-                f"{kagami_path}:{render_items[0].line}: Taira-only Kagami frame "
-                "override branch must render all three reviewed constants"
-            )
-        if (
-            render_source.count(expected_installation) != 1
-            or render_source.count(
-                "taira_network_frame_overrides = taira_network_frame_overrides,"
-            )
-            != 1
-        ):
-            errors.append(
-                f"{kagami_path}:{render_items[0].line}: Kagami peer config must "
-                "install the Taira frame overrides in the network table"
-            )
-
     config_contracts = (
-        (
-            "taira_default",
-            ("sumeragi", "block"),
-            (("max_transactions", 96), ("max_payload_bytes", 16_777_216),
-             ("proposal_queue_scan_multiplier", 4)),
-            "default Taira profile pins the revision-4 payload ceiling with privacy framing headroom",
-        ),
-        (
-            "taira_default",
-            ("sumeragi", "queues"),
-            (("authenticated_non_validator_sources", 2), ("body_bytes", 311_427_072),
-             ("body_source_bytes", 34_603_008)),
-            "default seven-validator Taira profile pins H=2 and nine source partitions",
-        ),
-        (
-            "taira_default",
-            ("network",),
-            (("max_frame_bytes", 23_068_700), ("max_frame_bytes_block_sync", 23_068_672),
-             ("max_frame_bytes_tx_gossip", 13_631_488)),
-            "default Taira profile carries maximum privacy transaction and block-sync frames",
-        ),
         (
             "taira_config",
             ("sumeragi", "block"),
@@ -4514,7 +4476,7 @@ public_address = "{network_public_address}"{taira_network_frame_overrides}
         ),
     )
     parsed_configs: dict[str, dict[tuple[str, ...], list[int]]] = {}
-    for role in ("taira_default", "taira_config"):
+    for role in ("taira_config",):
         table: tuple[str, ...] = ()
         values: dict[tuple[str, ...], list[int]] = {}
         for line in sources[role].splitlines():
@@ -4544,7 +4506,6 @@ public_address = "{network_public_address}"{taira_network_frame_overrides}
 
     for role, description in (
         ("taira_genesis", "production Taira genesis DA pins the revision-4 protocol ceiling"),
-        ("taira_default_genesis", "default Taira genesis DA pins the revision-4 protocol ceiling"),
     ):
         try:
             genesis = json.loads(sources[role])

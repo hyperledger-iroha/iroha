@@ -5,9 +5,7 @@ use iroha_config::parameters::actual::NexusAxt as ActualAxtTiming;
 #[cfg(feature = "app_api")]
 use iroha_core::block::BlockBuilder;
 #[cfg(feature = "app_api")]
-use iroha_core::nexus::space_directory::{
-    SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
-};
+use iroha_core::nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet};
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -234,6 +232,28 @@ fn make_policy_snapshot(
         version: AxtPolicySnapshot::compute_version(&[entry]),
         entries: vec![entry],
     }
+}
+fn install_replay_probe_policy(
+    host: &mut CoreHost,
+    mut snapshot: AxtPolicySnapshot,
+    dsid: DataSpaceId,
+    handle_era: u64,
+    sub_nonce: u64,
+) {
+    let binding = snapshot
+        .entries
+        .iter_mut()
+        .find(|binding| binding.dsid == dsid)
+        .expect("replay probe dataspace policy");
+    binding.policy.active_handle_era = handle_era;
+    binding.policy.next_handle_counter = sub_nonce;
+    snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
+    host.refresh_axt_policy_snapshot(&snapshot)
+        .expect("replay probe policy should remain canonical");
+}
+fn anchor_axt_test_header(state: &mut State, header: BlockHeader) {
+    state.push_block_hash_for_testing(header.hash());
+    state.update_latest_block_header_cache_for_tests(header);
 }
 #[test]
 fn core_host_rejects_noncanonical_policy_snapshot_without_panicking() {
@@ -697,34 +717,6 @@ fn commit_single_handle_envelope(
     let mut vm = IVM::new(1_000_000);
     host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm)
 }
-#[cfg(feature = "app_api")]
-fn abi_asset_handle_from_model(handle: &iroha_data_model::nexus::AssetHandle) -> AssetHandle {
-    AssetHandle {
-        asset_definition_id: handle.asset_definition_id.clone(),
-        scope: handle.scope.clone(),
-        subject: HandleSubject {
-            account: handle.subject.account.clone(),
-            origin_dsid: handle.subject.origin_dsid,
-        },
-        budget: HandleBudget {
-            remaining: handle.budget.remaining.clone(),
-            per_use: handle.budget.per_use.clone(),
-        },
-        handle_era: handle.handle_era,
-        sub_nonce: handle.sub_nonce,
-        group_binding: GroupBinding {
-            composability_group_id: handle.group_binding.composability_group_id.clone(),
-            epoch_id: handle.group_binding.epoch_id,
-        },
-        target_lane: handle.target_lane,
-        axt_binding: handle.axt_binding.as_bytes().to_vec(),
-        manifest_view_root: handle.manifest_view_root.to_vec(),
-        expiry_slot: handle.expiry_slot,
-        max_clock_skew_ms: handle.max_clock_skew_ms,
-        issuer_context: handle.issuer_context,
-        issuer_signature: handle.issuer_signature.clone(),
-    }
-}
 fn nexus_with_lane_catalog(
     lane_catalog: iroha_data_model::nexus::LaneCatalog,
 ) -> iroha_config::parameters::actual::Nexus {
@@ -794,11 +786,11 @@ fn axt_policy_snapshot_refreshes_current_slot() {
     )
     .expect("slot refresh lane catalog");
     *state.nexus.get_mut() = nexus_with_lane_catalog(lane_catalog);
-    // Seed block hashes so the synthetic state exposes a non-zero AXT slot.
-    let h1 = iroha_crypto::Hash::prehashed([0xAA; 32]);
-    let typed: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader> =
-        iroha_crypto::HashOf::from_untyped_unchecked(h1);
-    state.push_block_hash_for_testing(typed);
+    // Seed a matching hash/header pair so the synthetic state exposes an
+    // authenticated, non-zero AXT slot.
+    let slot_length_ms = state.view().nexus().axt.slot_length_ms.get();
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, slot_length_ms, 0);
+    anchor_axt_test_header(&mut state, header);
     let entry = AxtPolicyEntry {
         manifest_root: [0x11; 32],
         target_lane,
@@ -1029,13 +1021,13 @@ fn axt_policy_reject_exposes_context() {
     let context = host
         .take_axt_reject_for_tests()
         .expect("axt reject context recorded");
-    assert_eq!(context.reason, AxtRejectReason::Manifest);
+    assert_eq!(context.reason, AxtRejectReason::PolicyDenied);
     assert_eq!(context.dataspace, Some(dsid));
     assert_eq!(context.lane, Some(lane));
     assert_eq!(context.snapshot_version, Some(snapshot.version));
     assert!(
-        context.detail.contains("manifest"),
-        "detail should mention manifest mismatch"
+        context.detail.contains("signature") || context.detail.contains("issuer"),
+        "detail should identify issuer authentication failure"
     );
 }
 #[test]
@@ -1231,7 +1223,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     use iroha_crypto::HashOf;
     use iroha_data_model::{
         nexus::{
-            AssetHandle as ModelAssetHandle, AxtEnvelopeRecord as ModelAxtEnvelopeRecord,
+            AssetHandleDraft as ModelAssetHandleDraft, AxtEnvelopeRecord as ModelAxtEnvelopeRecord,
             AxtHandleFragment as ModelAxtHandleFragment, AxtHandleReplayKey,
             AxtProofFragment as ModelAxtProofFragment, AxtTouchFragment as ModelAxtTouchFragment,
             GroupBinding as ModelGroupBinding, HandleBudget as ModelHandleBudget,
@@ -1247,6 +1239,8 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     let dsid = DataSpaceId::new(99);
     let lane = LaneId::new(0);
     let manifest_root = [0x58; 32];
+    let handle_era = 2;
+    let handle_sub_nonce = 5;
     let genesis_account = iroha_data_model::account::AccountId::new(
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
     );
@@ -1265,16 +1259,14 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-    state
-        .set_nexus(nexus.clone())
-        .expect("apply Nexus catalog for AXT tests");
+    *state.nexus.get_mut() = nexus.clone();
     state.set_axt_policy(
         dsid,
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            active_handle_era: 1,
-            next_handle_counter: 1,
+            active_handle_era: handle_era,
+            next_handle_counter: handle_sub_nonce,
             current_slot: 0,
         },
     );
@@ -1315,31 +1307,32 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             proof: model_proof_blob_for(dsid, manifest_root, b"kura-replay", 10_000),
         }],
         handles: vec![ModelAxtHandleFragment {
-            handle: ModelAssetHandle {
-                asset_definition_id: axt_test_asset_definition_id(),
-                scope: vec!["transfer".into()],
-                subject: ModelHandleSubject {
-                    account: authority.to_string(),
-                    origin_dsid: Some(dsid),
+            handle: signed_model_handle(
+                ModelAssetHandleDraft {
+                    asset_definition_id: axt_test_asset_definition_id(),
+                    scope: vec!["transfer".into()],
+                    subject: ModelHandleSubject {
+                        account: authority.to_string(),
+                        origin_dsid: Some(dsid),
+                    },
+                    budget: ModelHandleBudget {
+                        remaining: Quantity::from(50_u64),
+                        per_use: Some(Quantity::from(50_u64)),
+                    },
+                    handle_era,
+                    sub_nonce: handle_sub_nonce,
+                    group_binding: ModelGroupBinding {
+                        composability_group_id: vec![0; 32],
+                        epoch_id: 2,
+                    },
+                    target_lane: lane,
+                    axt_binding: binding,
+                    manifest_view_root: manifest_root,
+                    expiry_slot: 10_000,
+                    max_clock_skew_ms: Some(0),
                 },
-                budget: ModelHandleBudget {
-                    remaining: Quantity::from(50_u64),
-                    per_use: Some(Quantity::from(50_u64)),
-                },
-                handle_era: 2,
-                sub_nonce: 5,
-                group_binding: ModelGroupBinding {
-                    composability_group_id: vec![0; 32],
-                    epoch_id: 2,
-                },
-                target_lane: lane,
-                axt_binding: binding,
-                manifest_view_root: manifest_root,
-                expiry_slot: 10_000,
-                max_clock_skew_ms: Some(0),
-                issuer_context: Default::default(),
-                issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-            },
+                dsid,
+            ),
             intent: ModelRemoteSpendIntent {
                 asset_dsid: dsid,
                 op: ModelSpendOp {
@@ -1356,7 +1349,6 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         }],
         commit_height: 1,
     };
-    let snapshot = state.view().axt_policy_snapshot();
     let entry_hashes: Vec<HashOf<TransactionEntrypoint>> = Vec::new();
     let signer = checked_keypair();
     let (_, time_source) = TimeSource::new_mock(Duration::ZERO);
@@ -1366,19 +1358,57 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             .sign(signer.private_key())
             .unpack(|_| {})
             .into();
+    let mut state_block = state.block(base_block.header());
+    // A live State without an authenticated header cannot publish a policy
+    // snapshot. The candidate block context supplies the exact consensus slot
+    // and permanent counter projection used by deterministic validation.
+    let deterministic_snapshot = state_block.axt_policy_snapshot();
     base_block
         .set_transaction_results_with_transcripts(
             Vec::new(),
             &entry_hashes,
             Vec::new(),
             BTreeMap::new(),
-            vec![envelope.clone()],
-            snapshot.clone(),
+            Vec::new(),
+            deterministic_snapshot,
         )
-        .expect("empty test block should attach AXT envelope results");
-    let mut state_block = state.block(base_block.header());
+        .expect("empty validation block should advertise its deterministic AXT post-state");
+    // Empty live validation still commits its deterministic internal block
+    // phases, so advertise the exact count that validation will recompute.
+    base_block.set_committed_fragment_count(2);
     let valid_block = ValidBlock::validate_unchecked(base_block, &mut state_block).unpack(|_| {});
-    let committed = valid_block.commit_unchecked().unpack(|_| {});
+    let mut committed = valid_block.commit_unchecked().unpack(|_| {});
+    let mut replay_snapshot = committed
+        .as_ref()
+        .axt_policy_snapshot()
+        .cloned()
+        .expect("validated block should carry its deterministic AXT post-state");
+    let replay_policy = replay_snapshot
+        .entries
+        .iter_mut()
+        .find(|binding| binding.dsid == dsid)
+        .expect("replay dataspace policy should remain in the validated snapshot");
+    assert_eq!(replay_policy.policy.active_handle_era, handle_era);
+    assert_eq!(replay_policy.policy.next_handle_counter, handle_sub_nonce);
+    replay_policy.policy.next_handle_counter = handle_sub_nonce
+        .checked_add(1)
+        .expect("fixture handle counter should advance");
+    replay_snapshot.version = AxtPolicySnapshot::compute_version(&replay_snapshot.entries);
+    // `validate_unchecked` rebuilds live-execution results. Reattach the
+    // historical envelope and its exact ratcheted post-state to this explicitly
+    // synthetic replay fixture.
+    committed
+        .as_mut()
+        .set_transaction_results_with_transcripts(
+            Vec::new(),
+            &entry_hashes,
+            Vec::new(),
+            BTreeMap::new(),
+            vec![envelope.clone()],
+            replay_snapshot,
+        )
+        .expect("replay fixture should retain its AXT envelope");
+    committed.as_mut().set_committed_fragment_count(2);
     let peer_id = PeerId::new(signer.public_key().clone());
     let _ = state_block.apply_without_execution(&committed, vec![peer_id.clone()]);
     state_block
@@ -1394,16 +1424,14 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     };
     let replay_query = LiveQueryStore::start_test();
     let mut replay_state = State::new_for_testing(replay_world, Arc::clone(&kura), replay_query);
-    replay_state
-        .set_nexus(nexus)
-        .expect("apply Nexus catalog during replay");
+    *replay_state.nexus.get_mut() = nexus;
     replay_state.set_axt_policy(
         dsid,
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            active_handle_era: 1,
-            next_handle_counter: 1,
+            active_handle_era: handle_era,
+            next_handle_counter: handle_sub_nonce,
             current_slot: 0,
         },
     );
@@ -1433,6 +1461,14 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::from_state(authority.clone(), &replay_state)
         .expect("replayed fixture state should produce a valid CoreHost");
+    install_replay_probe_policy(
+        &mut host,
+        replay_state.axt_policy_snapshot(),
+        dsid,
+        envelope.handles[0].handle.handle_era,
+        envelope.handles[0].handle.sub_nonce,
+    );
+    configure_axt_test_host(&mut host, [(dsid, manifest_root)]);
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
@@ -1457,35 +1493,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             amount: Some(Quantity::from(5_u64)),
         },
     };
-    let replay_handle = AssetHandle {
-        asset_definition_id: envelope.handles[0].handle.asset_definition_id.clone(),
-        scope: envelope.handles[0].handle.scope.clone(),
-        subject: HandleSubject {
-            account: envelope.handles[0].handle.subject.account.clone(),
-            origin_dsid: envelope.handles[0].handle.subject.origin_dsid,
-        },
-        budget: HandleBudget {
-            remaining: envelope.handles[0].handle.budget.remaining.clone(),
-            per_use: envelope.handles[0].handle.budget.per_use.clone(),
-        },
-        handle_era: envelope.handles[0].handle.handle_era,
-        sub_nonce: envelope.handles[0].handle.sub_nonce,
-        group_binding: GroupBinding {
-            composability_group_id: envelope.handles[0]
-                .handle
-                .group_binding
-                .composability_group_id
-                .clone(),
-            epoch_id: envelope.handles[0].handle.group_binding.epoch_id,
-        },
-        target_lane: envelope.handles[0].handle.target_lane,
-        axt_binding: envelope.handles[0].handle.axt_binding.as_bytes().to_vec(),
-        manifest_view_root: envelope.handles[0].handle.manifest_view_root.to_vec(),
-        expiry_slot: envelope.handles[0].handle.expiry_slot,
-        max_clock_skew_ms: envelope.handles[0].handle.max_clock_skew_ms,
-        issuer_context: Default::default(),
-        issuer_signature: envelope.handles[0].handle.issuer_signature.clone(),
-    };
+    let replay_handle = abi_asset_handle_from_signed_model(envelope.handles[0].handle.clone());
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &replay_handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
@@ -1670,6 +1678,18 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::new(), kura, query_handle);
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(3_u32),
+        vec![LaneConfig {
+            id: lane,
+            dataspace_id: dsid,
+            alias: "replay-prune".to_owned(),
+            ..LaneConfig::default()
+        }],
+    )
+    .expect("replay prune lane catalog");
+    *state.nexus.get_mut() = nexus_with_lane_catalog(lane_catalog);
+    state.nexus.get_mut().axt.slot_length_ms = nonzero!(1_u64);
     state.nexus.get_mut().axt.replay_retention_slots =
         NonZeroU64::new(1).expect("non-zero retention");
     state.set_axt_policy(
@@ -1687,36 +1707,37 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
     let mut block = state.block(header);
     {
         use iroha_data_model::nexus::{
-            AssetHandle as ModelAssetHandle, GroupBinding as ModelGroupBinding,
+            AssetHandleDraft as ModelAssetHandleDraft, GroupBinding as ModelGroupBinding,
             HandleBudget as ModelHandleBudget, HandleSubject as ModelHandleSubject,
             RemoteSpendIntent as ModelRemoteSpendIntent, SpendOp as ModelSpendOp,
         };
         let mut stx = block.transaction();
-        let handle = ModelAssetHandle {
-            asset_definition_id: axt_test_asset_definition_id(),
-            scope: vec!["transfer".into()],
-            subject: ModelHandleSubject {
-                account: authority.to_string(),
-                origin_dsid: Some(dsid),
+        let handle = signed_model_handle(
+            ModelAssetHandleDraft {
+                asset_definition_id: axt_test_asset_definition_id(),
+                scope: vec!["transfer".into()],
+                subject: ModelHandleSubject {
+                    account: authority.to_string(),
+                    origin_dsid: Some(dsid),
+                },
+                budget: ModelHandleBudget {
+                    remaining: Quantity::from(5_u64),
+                    per_use: Some(Quantity::from(5_u64)),
+                },
+                handle_era: 1,
+                sub_nonce: 1,
+                group_binding: ModelGroupBinding {
+                    composability_group_id: vec![0; 32],
+                    epoch_id: 1,
+                },
+                target_lane: lane,
+                axt_binding: binding,
+                manifest_view_root: manifest_root,
+                expiry_slot: 2,
+                max_clock_skew_ms: Some(0),
             },
-            budget: ModelHandleBudget {
-                remaining: Quantity::from(5_u64),
-                per_use: Some(Quantity::from(5_u64)),
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: ModelGroupBinding {
-                composability_group_id: vec![0; 32],
-                epoch_id: 1,
-            },
-            target_lane: lane,
-            axt_binding: binding,
-            manifest_view_root: manifest_root,
-            expiry_slot: 2,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
+            dsid,
+        );
         let envelope = AxtEnvelopeRecord {
             binding,
             lane,
@@ -1782,31 +1803,32 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         }],
     };
     let binding_bytes = axt::compute_binding(&descriptor).expect("binding");
-    let model_handle = iroha_data_model::nexus::AssetHandle {
-        asset_definition_id: axt_test_asset_definition_id(),
-        scope: vec!["transfer".into()],
-        subject: iroha_data_model::nexus::HandleSubject {
-            account: authority.to_string(),
-            origin_dsid: Some(dsid),
+    let model_handle = signed_model_handle(
+        iroha_data_model::nexus::AssetHandleDraft {
+            asset_definition_id: axt_test_asset_definition_id(),
+            scope: vec!["transfer".into()],
+            subject: iroha_data_model::nexus::HandleSubject {
+                account: authority.to_string(),
+                origin_dsid: Some(dsid),
+            },
+            budget: iroha_data_model::nexus::HandleBudget {
+                remaining: Quantity::from(50_u64),
+                per_use: Some(Quantity::from(50_u64)),
+            },
+            handle_era: 1,
+            sub_nonce: 3,
+            group_binding: iroha_data_model::nexus::GroupBinding {
+                composability_group_id: vec![0; 32],
+                epoch_id: 1,
+            },
+            target_lane,
+            axt_binding: AxtBinding::new(binding_bytes),
+            manifest_view_root: manifest_root,
+            expiry_slot: 25,
+            max_clock_skew_ms: Some(0),
         },
-        budget: iroha_data_model::nexus::HandleBudget {
-            remaining: Quantity::from(50_u64),
-            per_use: Some(Quantity::from(50_u64)),
-        },
-        handle_era: 1,
-        sub_nonce: 3,
-        group_binding: iroha_data_model::nexus::GroupBinding {
-            composability_group_id: vec![0; 32],
-            epoch_id: 1,
-        },
-        target_lane,
-        axt_binding: AxtBinding::new(binding_bytes),
-        manifest_view_root: manifest_root,
-        expiry_slot: 25,
-        max_clock_skew_ms: Some(0),
-        issuer_context: Default::default(),
-        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-    };
+        dsid,
+    );
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::new(), kura, query);
@@ -1829,7 +1851,7 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
             manifest_root,
             target_lane,
             active_handle_era: 1,
-            next_handle_counter: 1,
+            next_handle_counter: 3,
             current_slot: 0,
         },
     );
@@ -1843,6 +1865,7 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     };
     let binding = AxtBinding::new(binding_bytes);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 5, 0);
+    let committed_header = header.clone();
     let mut block = state.block(header);
     {
         use iroha_data_model::nexus::{
@@ -1878,8 +1901,17 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         stx.apply();
     }
     block.commit().expect("commit replay ledger envelope");
+    anchor_axt_test_header(&mut state, committed_header);
     let mut host = CoreHost::from_state(authority.clone(), &state)
         .expect("fixture state should produce a valid CoreHost");
+    install_replay_probe_policy(
+        &mut host,
+        state.axt_policy_snapshot(),
+        dsid,
+        model_handle.handle_era,
+        model_handle.sub_nonce,
+    );
+    configure_axt_test_host(&mut host, [(dsid, manifest_root)]);
     let mut vm = IVM::new(1_000_000);
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
@@ -1893,14 +1925,10 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-    let proof = proof_blob_for(dsid, manifest_root, vec![0xAA, 0x55], 40);
-    let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
-    let intent = iroha_data_model::nexus::RemoteSpendIntent {
+    let handle = abi_asset_handle_from_signed_model(model_handle.clone());
+    let intent = RemoteSpendIntent {
         asset_dsid: dsid,
-        op: iroha_data_model::nexus::SpendOp {
+        op: SpendOp {
             asset_definition_id: axt_test_asset_definition_id(),
             kind: "transfer".into(),
             from: authority.to_string(),
@@ -1908,33 +1936,62 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
             amount: Some(Quantity::from(5_u64)),
         },
     };
-    let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &model_handle);
+    let proof = proof_blob_for_remote_spend(
+        dsid,
+        manifest_root,
+        vec![0xAA, 0x55],
+        40,
+        &handle,
+        &intent,
+        &Quantity::from(5_u64),
+    );
+    let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, proof_ptr);
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
+    let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
-    let reuse_result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
-    if let Err(err @ (VMError::PermissionDenied | VMError::NoritoInvalid)) = reuse_result {
-        if let Some(context) = host.take_axt_reject_for_tests() {
-            assert_eq!(context.reason, AxtRejectReason::ReplayCache);
-            assert_eq!(context.dataspace, Some(dsid));
-            assert_eq!(context.lane, Some(target_lane));
-        } else if err == VMError::PermissionDenied {
-            panic!("replay rejection should record context");
-        }
-    } else if reuse_result.is_err() {
-        panic!("unexpected result from reuse attempt: {reuse_result:?}");
-    }
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
+        Err(VMError::PermissionDenied)
+    );
+    let context = host
+        .take_axt_reject_for_tests()
+        .expect("replay rejection should record context");
+    assert_eq!(context.reason, AxtRejectReason::ReplayCache);
+    assert_eq!(context.dataspace, Some(dsid));
+    assert_eq!(context.lane, Some(target_lane));
     // Advance the ledger a few slots and rebuild the host to simulate a restart; the replay guard
     // should still block reuse until the retention window elapses.
-    for i in 0..10_u8 {
-        let hash = iroha_crypto::Hash::prehashed([i; 32]);
-        let typed: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader> =
-            iroha_crypto::HashOf::from_untyped_unchecked(hash);
-        state.push_block_hash_for_testing(typed);
+    let slot_length_ms = state.view().nexus().axt.slot_length_ms.get();
+    let mut previous_hash = state.view().latest_block_hash();
+    for height in 2..=11_u64 {
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("non-zero synthetic height"),
+            previous_hash,
+            None,
+            None,
+            slot_length_ms.saturating_mul(height),
+            0,
+        );
+        let hash = header.hash();
+        state.push_block_hash_for_testing(hash);
+        state.update_latest_block_header_cache_for_tests(header);
+        previous_hash = Some(hash);
     }
     let mut host = CoreHost::from_state(authority.clone(), &state)
         .expect("fixture state should produce a valid CoreHost");
+    install_replay_probe_policy(
+        &mut host,
+        state.axt_policy_snapshot(),
+        dsid,
+        model_handle.handle_era,
+        model_handle.sub_nonce,
+    );
+    configure_axt_test_host(&mut host, [(dsid, manifest_root)]);
     let mut vm = IVM::new(1_000_000);
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
@@ -1948,62 +2005,31 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-    let proof = proof_blob_for(dsid, manifest_root, vec![0xAA, 0x55], 40);
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
-    let handle = AssetHandle {
-        asset_definition_id: model_handle.asset_definition_id.clone(),
-        scope: model_handle.scope.clone(),
-        subject: HandleSubject {
-            account: model_handle.subject.account.clone(),
-            origin_dsid: model_handle.subject.origin_dsid,
-        },
-        budget: HandleBudget {
-            remaining: model_handle.budget.remaining,
-            per_use: model_handle.budget.per_use,
-        },
-        handle_era: model_handle.handle_era,
-        sub_nonce: model_handle.sub_nonce,
-        group_binding: GroupBinding {
-            composability_group_id: model_handle.group_binding.composability_group_id.clone(),
-            epoch_id: model_handle.group_binding.epoch_id,
-        },
-        target_lane: model_handle.target_lane,
-        axt_binding: model_handle.axt_binding.as_bytes().to_vec(),
-        manifest_view_root: model_handle.manifest_view_root.to_vec(),
-        expiry_slot: model_handle.expiry_slot,
-        max_clock_skew_ms: model_handle.max_clock_skew_ms,
-        issuer_context: Default::default(),
-        issuer_signature: model_handle.issuer_signature.clone(),
-    };
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
-    let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
-    assert!(
-        matches!(
-            result,
-            Err(VMError::PermissionDenied | VMError::NoritoInvalid)
-        ),
-        "replay ledger should block reuse after host rebuild (got {result:?})"
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
+        Err(VMError::PermissionDenied)
     );
-    if let Err(VMError::PermissionDenied) = result
-        && let Some(context) = host.take_axt_reject_for_tests()
-    {
-        assert_eq!(context.reason, AxtRejectReason::ReplayCache);
-        assert_eq!(context.dataspace, Some(dsid));
-        assert_eq!(context.lane, Some(target_lane));
-    }
+    let context = host
+        .take_axt_reject_for_tests()
+        .expect("replay rejection should survive host rebuild");
+    assert_eq!(context.reason, AxtRejectReason::ReplayCache);
+    assert_eq!(context.dataspace, Some(dsid));
+    assert_eq!(context.lane, Some(target_lane));
 }
 #[cfg(feature = "app_api")]
 #[test]
 fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
     use iroha_data_model::nexus::{
-        AssetHandle as ModelAssetHandle, AxtDescriptor as ModelAxtDescriptor,
+        AssetHandleDraft as ModelAssetHandleDraft, AxtDescriptor as ModelAxtDescriptor,
         AxtEnvelopeRecord as ModelAxtEnvelopeRecord, AxtHandleFragment as ModelAxtHandleFragment,
         AxtProofFragment as ModelAxtProofFragment, AxtTouchFragment as ModelAxtTouchFragment,
         AxtTouchSpec as ModelAxtTouchSpec, GroupBinding as ModelGroupBinding,
@@ -2027,9 +2053,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
-    state
-        .set_nexus(nexus)
-        .expect("apply Nexus catalog for AXT handle test");
+    *state.nexus.get_mut() = nexus;
     state.set_axt_policy(
         dsid,
         AxtPolicyEntry {
@@ -2062,31 +2086,32 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         proof: model_proof_blob_for(dsid, manifest_root, b"policy-reset", 50),
     };
     let handle_fragment = ModelAxtHandleFragment {
-        handle: ModelAssetHandle {
-            asset_definition_id: axt_test_asset_definition_id(),
-            scope: vec!["transfer".into()],
-            subject: ModelHandleSubject {
-                account: authority.to_string(),
-                origin_dsid: Some(dsid),
+        handle: signed_model_handle(
+            ModelAssetHandleDraft {
+                asset_definition_id: axt_test_asset_definition_id(),
+                scope: vec!["transfer".into()],
+                subject: ModelHandleSubject {
+                    account: authority.to_string(),
+                    origin_dsid: Some(dsid),
+                },
+                budget: ModelHandleBudget {
+                    remaining: Quantity::from(50_u64),
+                    per_use: Some(Quantity::from(50_u64)),
+                },
+                handle_era: 2,
+                sub_nonce: 5,
+                group_binding: ModelGroupBinding {
+                    composability_group_id: vec![0; 32],
+                    epoch_id: 2,
+                },
+                target_lane: lane,
+                axt_binding: binding,
+                manifest_view_root: manifest_root,
+                expiry_slot: 100,
+                max_clock_skew_ms: Some(0),
             },
-            budget: ModelHandleBudget {
-                remaining: Quantity::from(50_u64),
-                per_use: Some(Quantity::from(50_u64)),
-            },
-            handle_era: 2,
-            sub_nonce: 5,
-            group_binding: ModelGroupBinding {
-                composability_group_id: vec![0; 32],
-                epoch_id: 2,
-            },
-            target_lane: lane,
-            axt_binding: binding,
-            manifest_view_root: manifest_root,
-            expiry_slot: 100,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        },
+            dsid,
+        ),
         intent: ModelRemoteSpendIntent {
             asset_dsid: dsid,
             op: ModelSpendOp {
@@ -2122,6 +2147,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         commit_height: 1,
     };
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let committed_header = header.clone();
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_lane_id = Some(lane);
@@ -2129,6 +2155,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         .expect("exact replay-ledger AXT sequence should stage");
     stx.apply();
     block.commit().expect("commit initial replay envelope");
+    anchor_axt_test_header(&mut state, committed_header);
     state.set_axt_policy(
         dsid,
         AxtPolicyEntry {
@@ -2142,6 +2169,14 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::from_state(authority.clone(), &state)
         .expect("fixture state should produce a valid CoreHost");
+    install_replay_probe_policy(
+        &mut host,
+        state.axt_policy_snapshot(),
+        dsid,
+        handle_fragment.handle.handle_era,
+        handle_fragment.handle.sub_nonce,
+    );
+    configure_axt_test_host(&mut host, [(dsid, manifest_root)]);
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
@@ -2166,7 +2201,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
             amount: Some(Quantity::from(5_u64)),
         },
     };
-    let replayed_handle = abi_asset_handle_from_model(&handle_fragment.handle);
+    let replayed_handle = abi_asset_handle_from_signed_model(handle_fragment.handle.clone());
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &replayed_handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
@@ -2183,7 +2218,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
 #[test]
 fn axt_replay_ledger_persists_across_apply_without_execution() {
     use iroha_data_model::nexus::{
-        AssetHandle as ModelAssetHandle, AxtDescriptor as ModelAxtDescriptor,
+        AssetHandleDraft as ModelAssetHandleDraft, AxtDescriptor as ModelAxtDescriptor,
         AxtEnvelopeRecord as ModelAxtEnvelopeRecord, AxtHandleFragment as ModelAxtHandleFragment,
         AxtProofFragment as ModelAxtProofFragment, AxtTouchFragment as ModelAxtTouchFragment,
         AxtTouchSpec as ModelAxtTouchSpec, GroupBinding as ModelGroupBinding,
@@ -2195,6 +2230,8 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
     let dsid = DataSpaceId::new(58);
     let lane = LaneId::new(1);
     let manifest_root = [0x44; 32];
+    let handle_era = 2;
+    let handle_sub_nonce = 5;
     let world = World::new();
     let lane_meta = iroha_data_model::nexus::LaneConfig {
         id: lane,
@@ -2207,16 +2244,14 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
-    state
-        .set_nexus(nexus)
-        .expect("apply Nexus catalog for AXT expiry test");
+    *state.nexus.get_mut() = nexus;
     state.set_axt_policy(
         dsid,
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            active_handle_era: 1,
-            next_handle_counter: 1,
+            active_handle_era: handle_era,
+            next_handle_counter: handle_sub_nonce,
             current_slot: 0,
         },
     );
@@ -2242,31 +2277,32 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         proof: model_proof_blob_for(dsid, manifest_root, b"apply-without-execution", 200),
     };
     let handle_fragment = ModelAxtHandleFragment {
-        handle: ModelAssetHandle {
-            asset_definition_id: axt_test_asset_definition_id(),
-            scope: vec!["transfer".into()],
-            subject: ModelHandleSubject {
-                account: authority.to_string(),
-                origin_dsid: Some(dsid),
+        handle: signed_model_handle(
+            ModelAssetHandleDraft {
+                asset_definition_id: axt_test_asset_definition_id(),
+                scope: vec!["transfer".into()],
+                subject: ModelHandleSubject {
+                    account: authority.to_string(),
+                    origin_dsid: Some(dsid),
+                },
+                budget: ModelHandleBudget {
+                    remaining: Quantity::from(50_u64),
+                    per_use: Some(Quantity::from(50_u64)),
+                },
+                handle_era,
+                sub_nonce: handle_sub_nonce,
+                group_binding: ModelGroupBinding {
+                    composability_group_id: vec![0; 32],
+                    epoch_id: 2,
+                },
+                target_lane: lane,
+                axt_binding: binding,
+                manifest_view_root: manifest_root,
+                expiry_slot: 200,
+                max_clock_skew_ms: Some(0),
             },
-            budget: ModelHandleBudget {
-                remaining: Quantity::from(50_u64),
-                per_use: Some(Quantity::from(50_u64)),
-            },
-            handle_era: 2,
-            sub_nonce: 5,
-            group_binding: ModelGroupBinding {
-                composability_group_id: vec![0; 32],
-                epoch_id: 2,
-            },
-            target_lane: lane,
-            axt_binding: binding,
-            manifest_view_root: manifest_root,
-            expiry_slot: 200,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        },
+            dsid,
+        ),
         intent: ModelRemoteSpendIntent {
             asset_dsid: dsid,
             op: ModelSpendOp {
@@ -2311,20 +2347,42 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             .unpack(|_| {})
             .into();
     let envelopes = vec![envelope.clone()];
+    let mut state_block = state.block(base_block.header());
+    // Derive the advertised post-state from the authenticated candidate block
+    // so its slot and permanent counter projection match live validation.
+    let deterministic_snapshot = state_block.axt_policy_snapshot();
     base_block
         .set_transaction_results_with_transcripts(
             Vec::new(),
             &entry_hashes,
             Vec::new(),
             BTreeMap::new(),
-            envelopes.clone(),
-            state.axt_policy_snapshot(),
+            Vec::new(),
+            deterministic_snapshot,
         )
-        .expect("empty test block should attach AXT envelope results");
-    let mut state_block = state.block(base_block.header());
+        .expect("empty validation block should advertise its deterministic AXT post-state");
+    // Empty live validation still commits its deterministic internal block
+    // phases, so advertise the exact count that validation will recompute.
+    base_block.set_committed_fragment_count(2);
     let valid = iroha_core::block::ValidBlock::validate_unchecked(base_block, &mut state_block)
         .unpack(|_| {});
     let mut committed = valid.commit_unchecked().unpack(|_| {});
+    let mut replay_snapshot = committed
+        .as_ref()
+        .axt_policy_snapshot()
+        .cloned()
+        .expect("validated block should carry its deterministic AXT post-state");
+    let replay_policy = replay_snapshot
+        .entries
+        .iter_mut()
+        .find(|binding| binding.dsid == dsid)
+        .expect("replay dataspace policy should remain in the validated snapshot");
+    assert_eq!(replay_policy.policy.active_handle_era, handle_era);
+    assert_eq!(replay_policy.policy.next_handle_counter, handle_sub_nonce);
+    replay_policy.policy.next_handle_counter = handle_sub_nonce
+        .checked_add(1)
+        .expect("fixture handle counter should advance");
+    replay_snapshot.version = AxtPolicySnapshot::compute_version(&replay_snapshot.entries);
     committed
         .as_mut()
         .set_transaction_results_with_transcripts(
@@ -2333,9 +2391,10 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             Vec::new(),
             BTreeMap::new(),
             envelopes.clone(),
-            state.axt_policy_snapshot(),
+            replay_snapshot,
         )
         .expect("empty committed test block should attach AXT envelope results");
+    committed.as_mut().set_committed_fragment_count(2);
     assert_eq!(
         committed
             .as_ref()
@@ -2346,19 +2405,17 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
     );
     let _ = state_block.apply_without_execution(&committed, Vec::new());
     state_block.commit().expect("commit replay ledger");
-    state.set_axt_policy(
-        dsid,
-        AxtPolicyEntry {
-            manifest_root,
-            target_lane: lane,
-            active_handle_era: 1,
-            next_handle_counter: 1,
-            current_slot: 0,
-        },
-    );
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::from_state(authority.clone(), &state)
         .expect("fixture state should produce a valid CoreHost");
+    install_replay_probe_policy(
+        &mut host,
+        state.axt_policy_snapshot(),
+        dsid,
+        handle_fragment.handle.handle_era,
+        handle_fragment.handle.sub_nonce,
+    );
+    configure_axt_test_host(&mut host, [(dsid, manifest_root)]);
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
@@ -2373,12 +2430,6 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch");
-    let proof = proof_blob_for(dsid, manifest_root, vec![0xCC], 180);
-    let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
-        .expect("verify proof");
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -2389,7 +2440,21 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             amount: Some(Quantity::from(10_u64)),
         },
     };
-    let replayed_handle = abi_asset_handle_from_model(&handle_fragment.handle);
+    let replayed_handle = abi_asset_handle_from_signed_model(handle_fragment.handle.clone());
+    let proof = proof_blob_for_remote_spend(
+        dsid,
+        manifest_root,
+        vec![0xCC],
+        replayed_handle.expiry_slot,
+        &replayed_handle,
+        &intent,
+        &Quantity::from(10_u64),
+    );
+    let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, proof_ptr);
+    host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
+        .expect("verify proof");
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &replayed_handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
@@ -2411,7 +2476,7 @@ fn axt_replay_entries_expire_after_retention_window() {
         state::{State, World},
     };
     use iroha_data_model::nexus::{
-        AssetHandle as ModelAssetHandle, AxtHandleReplayKey, AxtReplayRecord,
+        AssetHandleDraft as ModelAssetHandleDraft, AxtHandleReplayKey, AxtReplayRecord,
         GroupBinding as ModelGroupBinding, HandleBudget as ModelHandleBudget,
         HandleSubject as ModelHandleSubject,
     };
@@ -2448,9 +2513,7 @@ fn axt_replay_entries_expire_after_retention_window() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
-    state
-        .set_nexus(nexus)
-        .expect("apply Nexus catalog for retention test");
+    *state.nexus.get_mut() = nexus;
     state.prune_axt_replay_ledger_for_tests(5, retention_slots);
     state.set_axt_policy(
         dsid,
@@ -2458,36 +2521,37 @@ fn axt_replay_entries_expire_after_retention_window() {
             manifest_root,
             target_lane: lane,
             active_handle_era: 1,
-            next_handle_counter: 0,
+            next_handle_counter: 1,
             current_slot: 10,
         },
     );
     // Seed the replay ledger with a stale entry that should expire once the retention window elapses.
-    let stale_handle = ModelAssetHandle {
-        asset_definition_id: axt_test_asset_definition_id(),
-        scope: vec!["transfer".into()],
-        subject: ModelHandleSubject {
-            account: authority.to_string(),
-            origin_dsid: Some(dsid),
+    let stale_handle = signed_model_handle(
+        ModelAssetHandleDraft {
+            asset_definition_id: axt_test_asset_definition_id(),
+            scope: vec!["transfer".into()],
+            subject: ModelHandleSubject {
+                account: authority.to_string(),
+                origin_dsid: Some(dsid),
+            },
+            budget: ModelHandleBudget {
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
+            },
+            handle_era: 1,
+            sub_nonce: 1,
+            group_binding: ModelGroupBinding {
+                composability_group_id: vec![0; 32],
+                epoch_id: 1,
+            },
+            target_lane: lane,
+            axt_binding: binding,
+            manifest_view_root: manifest_root,
+            expiry_slot: 50,
+            max_clock_skew_ms: Some(0),
         },
-        budget: ModelHandleBudget {
-            remaining: Quantity::from(10_u64),
-            per_use: Some(Quantity::from(10_u64)),
-        },
-        handle_era: 1,
-        sub_nonce: 1,
-        group_binding: ModelGroupBinding {
-            composability_group_id: vec![0; 32],
-            epoch_id: 1,
-        },
-        target_lane: lane,
-        axt_binding: binding,
-        manifest_view_root: manifest_root,
-        expiry_slot: 50,
-        max_clock_skew_ms: Some(0),
-        issuer_context: Default::default(),
-        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-    };
+        dsid,
+    );
     state.insert_axt_replay_entry_for_tests(
         AxtHandleReplayKey::from_handle(dsid, &stale_handle),
         AxtReplayRecord {
@@ -2499,9 +2563,14 @@ fn axt_replay_entries_expire_after_retention_window() {
     );
     // Advance logical slot so the seeded entry expires before hydration.
     state.prune_axt_replay_ledger_for_tests(5, retention_slots);
+    anchor_axt_test_header(
+        &mut state,
+        BlockHeader::new(nonzero!(1_u64), None, None, None, 5, 0),
+    );
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::from_state(authority.clone(), &state)
         .expect("fixture state should produce a valid CoreHost");
+    configure_axt_test_host(&mut host, [(dsid, manifest_root)]);
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
@@ -2566,113 +2635,7 @@ fn axt_replay_entries_expire_after_retention_window() {
     );
     assert!(host.take_axt_reject_for_tests().is_none());
 }
-#[test]
-fn axt_commit_enforces_amx_budget() {
-    let authority = fixture_authority();
-    let dsid = DataSpaceId::new(11);
-    let manifest_root = [0x31; 32];
-    let mut vm = IVM::new(1_000_000);
-    let mut host = host_with_policy(authority.clone(), dsid, manifest_root, LaneId::new(0), 5);
-    host.set_amx_limits(AmxLimits {
-        per_dataspace_budget_ms: 0,
-        group_budget_ms: 0,
-        per_instruction_ns: 1,
-        per_memory_access_ns: 1,
-        per_syscall_ns: 1,
-    });
-    host.set_amx_analysis(ProgramAnalysis {
-        metadata: ivm::ProgramMetadata::default(),
-        instruction_count: 32,
-        registers: RegisterUsage::default(),
-        memory: MemoryAccesses::default(),
-        syscalls: Vec::new(),
-    });
-    let descriptor = axt::AxtDescriptor {
-        dsids: vec![dsid],
-        touches: vec![axt::AxtTouchSpec {
-            dsid,
-            read: vec!["orders".into()],
-            write: vec!["ledger".into()],
-        }],
-    };
-    let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
-    vm.set_register(10, desc_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
-    let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
-    let manifest = TouchManifest {
-        read: vec!["orders/0".into()],
-        write: vec!["ledger/0".into()],
-    };
-    let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, manifest_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-    let binding = axt::compute_binding(&descriptor).expect("binding");
-    let handle = signed_abi_handle(
-        AssetHandle {
-            asset_definition_id: axt_test_asset_definition_id(),
-            scope: vec!["transfer".into()],
-            subject: HandleSubject {
-                account: authority.to_string(),
-                origin_dsid: Some(dsid),
-            },
-            budget: HandleBudget {
-                remaining: Quantity::from(10_u64),
-                per_use: Some(Quantity::from(10_u64)),
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![0; 32],
-                epoch_id: 1,
-            },
-            target_lane: LaneId::new(0),
-            axt_binding: binding.to_vec(),
-            manifest_view_root: manifest_root.to_vec(),
-            expiry_slot: 20,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        },
-        dsid,
-    );
-    let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
-    let intent = RemoteSpendIntent {
-        asset_dsid: dsid,
-        op: SpendOp {
-            asset_definition_id: axt_test_asset_definition_id(),
-            kind: "transfer".into(),
-            from: authority.to_string(),
-            to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-            amount: Some(Quantity::from(5_u64)),
-        },
-    };
-    let amount = Quantity::from(5_u64);
-    let proof = proof_blob_for_remote_spend(
-        dsid,
-        manifest_root,
-        vec![0xAB],
-        20,
-        &handle,
-        &intent,
-        &amount,
-    );
-    let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
-    let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
-    vm.set_register(10, handle_ptr);
-    vm.set_register(11, intent_ptr);
-    vm.set_register(12, 0);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
-    match host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm) {
-        Err(VMError::AmxBudgetExceeded { stage, .. }) => {
-            assert_eq!(stage, iroha_data_model::errors::AmxStage::Commit);
-        }
-        other => panic!("expected AMX budget error, got {other:?}"),
-    }
-}
+include!("ivm_corehost_axt/amx_budget_test.rs");
 #[test]
 fn core_host_requires_proof_for_all_dataspaces() {
     let authority = fixture_authority();
@@ -2992,13 +2955,18 @@ impl axt::AxtPolicy for DenyHandlePolicy {
 fn core_host_policy_rejects_touch() {
     let authority = fixture_authority();
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::new(authority).with_axt_policy(Arc::new(DenyTouchPolicy {
-        denied: DataSpaceId::new(50),
-    }));
+    let dsid = DataSpaceId::new(50);
+    let snapshot = make_policy_snapshot(dsid, [0x50; 32], LaneId::new(0), 1, 1, 0);
+    let mut host = CoreHost::new(authority)
+        .with_axt_policy(Arc::new(DenyTouchPolicy { denied: dsid }))
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("fixture AXT policy snapshot should be canonical");
+    host.refresh_axt_policy_snapshot(&snapshot)
+        .expect("refresh should retain the supplemental policy hook");
     let descriptor = axt::AxtDescriptor {
-        dsids: vec![DataSpaceId::new(50)],
+        dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
-            dsid: DataSpaceId::new(50),
+            dsid,
             read: vec![],
             write: vec![],
         }],
@@ -3013,13 +2981,27 @@ fn core_host_policy_rejects_touch() {
         host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
         Err(VMError::PermissionDenied)
     ));
+    let context = host
+        .take_axt_reject_for_tests()
+        .expect("custom touch policy rejection should be recorded");
+    assert_eq!(context.reason, AxtRejectReason::PolicyDenied);
+    assert_eq!(context.dataspace, Some(dsid));
+    assert_eq!(context.lane, Some(LaneId::new(0)));
+    assert_eq!(context.snapshot_version, Some(snapshot.version));
+    assert_eq!(context.detail, "policy hook denied touch manifest");
 }
 #[test]
 fn core_host_policy_rejects_handle() {
     let authority = fixture_authority();
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::new(authority.clone()).with_axt_policy(Arc::new(DenyHandlePolicy));
     let dsid = DataSpaceId::new(51);
+    let manifest_root = [0x51; 32];
+    let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(0), 1, 1, 0);
+    let mut host = CoreHost::new(authority.clone())
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("fixture AXT policy snapshot should be canonical")
+        .with_axt_policy(Arc::new(DenyHandlePolicy));
+    configure_axt_test_host(&mut host, [(dsid, manifest_root)]);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -3036,31 +3018,34 @@ fn core_host_policy_rejects_handle() {
     vm.set_register(11, 0);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let handle = AssetHandle {
-        asset_definition_id: axt_test_asset_definition_id(),
-        scope: vec!["transfer".into()],
-        subject: HandleSubject {
-            account: authority.to_string(),
-            origin_dsid: Some(dsid),
+    let handle = signed_abi_handle(
+        AssetHandle {
+            asset_definition_id: axt_test_asset_definition_id(),
+            scope: vec!["transfer".into()],
+            subject: HandleSubject {
+                account: authority.to_string(),
+                origin_dsid: Some(dsid),
+            },
+            budget: HandleBudget {
+                remaining: Quantity::from(10_u64),
+                per_use: None,
+            },
+            handle_era: 1,
+            sub_nonce: 1,
+            group_binding: GroupBinding {
+                composability_group_id: vec![0; 32],
+                epoch_id: 1,
+            },
+            target_lane: LaneId::new(0),
+            axt_binding: binding.to_vec(),
+            manifest_view_root: manifest_root.to_vec(),
+            expiry_slot: 10,
+            max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         },
-        budget: HandleBudget {
-            remaining: Quantity::from(10_u64),
-            per_use: None,
-        },
-        handle_era: 1,
-        sub_nonce: 1,
-        group_binding: GroupBinding {
-            composability_group_id: vec![0; 32],
-            epoch_id: 1,
-        },
-        target_lane: LaneId::new(0),
-        axt_binding: binding.to_vec(),
-        manifest_view_root: vec![0; 32],
-        expiry_slot: 10,
-        max_clock_skew_ms: Some(0),
-        issuer_context: Default::default(),
-        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-    };
+        dsid,
+    );
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
@@ -3080,6 +3065,16 @@ fn core_host_policy_rejects_handle() {
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
         Err(VMError::PermissionDenied)
     ));
+    let context = host
+        .take_axt_reject_for_tests()
+        .expect("custom handle policy rejection should be recorded");
+    assert_eq!(context.reason, AxtRejectReason::PolicyDenied);
+    assert_eq!(context.dataspace, Some(dsid));
+    assert_eq!(context.lane, Some(LaneId::new(0)));
+    assert_eq!(context.snapshot_version, Some(snapshot.version));
+    assert_eq!(context.active_handle_era, Some(1));
+    assert_eq!(context.next_handle_counter, Some(1));
+    assert_eq!(context.detail, "policy hook denied handle usage");
 }
 fn use_handle_with_snapshot(
     authority: &AccountId,
@@ -3091,6 +3086,13 @@ fn use_handle_with_snapshot(
     let mut host = CoreHost::new(authority.clone())
         .with_axt_policy_snapshot(snapshot)
         .expect("fixture AXT policy snapshot should be canonical");
+    configure_axt_test_host(
+        &mut host,
+        snapshot
+            .entries
+            .iter()
+            .map(|entry| (entry.dsid, entry.policy.manifest_root)),
+    );
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -3108,6 +3110,7 @@ fn use_handle_with_snapshot(
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)?;
     let binding = axt::compute_binding(&descriptor).expect("descriptor binding");
     handle.axt_binding = binding.to_vec();
+    let handle = signed_abi_handle(handle, dsid);
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
@@ -3208,11 +3211,7 @@ fn axt_snapshot_policy_enforces_lanes_and_counters() {
 }
 #[test]
 fn core_host_reports_amx_budget_timeout() {
-    let authority = AccountId::new(
-        "ed0120B0D324376E617A1B5CB024B3BAC4BC4F6F2C9B70F0E1CE64E2B3F0859FEB347B"
-            .parse()
-            .expect("budget authority key"),
-    );
+    let authority = fixture_authority();
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::new(authority);
     let analysis = ProgramAnalysis {
@@ -3273,16 +3272,14 @@ fn core_host_reports_amx_budget_timeout() {
     }
 }
 #[cfg(feature = "app_api")]
-fn use_handle_with_state_policy(
-    state: &State,
+fn use_handle_with_host_policy(
+    host: &mut CoreHost,
     authority: &AccountId,
     dsid: DataSpaceId,
     descriptor: &axt::AxtDescriptor,
     mut handle: AssetHandle,
 ) -> Result<u64, VMError> {
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::from_state(authority.clone(), state)
-        .expect("fixture state should produce a valid CoreHost");
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, descriptor);
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)?;
@@ -3307,6 +3304,7 @@ fn use_handle_with_state_policy(
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)?;
     let binding = axt::compute_binding(descriptor).expect("descriptor binding");
     handle.axt_binding = binding.to_vec();
+    let handle = signed_abi_handle(handle, dsid);
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
@@ -3325,158 +3323,35 @@ fn use_handle_with_state_policy(
     host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
 }
 #[cfg(feature = "app_api")]
-#[test]
-fn core_host_from_state_enforces_space_directory_policy() {
-    let authority = fixture_authority();
-    let dsid = DataSpaceId::new(77);
-    let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"uaid-corehost-state"));
-    let manifest = AssetPermissionManifest {
-        version: ManifestVersion::default(),
-        uaid,
-        dataspace: dsid,
-        issued_ms: 0,
-        activation_epoch: 3,
-        expiry_epoch: None,
-        entries: Vec::new(),
-    };
-    let mut manifest_record = SpaceDirectoryManifestRecord::new(manifest);
-    manifest_record.lifecycle.mark_activated(3);
-    let mut manifest_set = SpaceDirectoryManifestSet::default();
-    manifest_set.upsert(manifest_record.clone());
-    let mut world = World::new();
-    world
-        .space_directory_manifests_mut_for_testing()
-        .insert(uaid, manifest_set);
-    let lane_meta = LaneConfig {
-        id: LaneId::new(0),
-        dataspace_id: dsid,
-        alias: "primary".to_owned(),
-        ..LaneConfig::default()
-    };
-    let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
-    let nexus = nexus_with_lane_catalog(lane_catalog);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(world, kura, query);
-    state
-        .set_nexus(nexus)
-        .expect("apply Nexus catalog for Space Directory seed");
-    assert!(
-        state.view().world().axt_policies().get(&dsid).is_some(),
-        "Space Directory manifests should seed AXT policy cache"
+fn use_handle_with_state_policy(
+    state: &State,
+    authority: &AccountId,
+    dsid: DataSpaceId,
+    descriptor: &axt::AxtDescriptor,
+    handle: AssetHandle,
+) -> Result<u64, VMError> {
+    let mut host = CoreHost::from_state(authority.clone(), state)
+        .expect("fixture state should produce a valid CoreHost");
+    configure_axt_test_host(
+        &mut host,
+        state
+            .view()
+            .axt_policy_snapshot()
+            .entries
+            .iter()
+            .map(|entry| (entry.dsid, entry.policy.manifest_root)),
     );
-    let descriptor = axt::AxtDescriptor {
-        dsids: vec![dsid],
-        touches: vec![axt::AxtTouchSpec {
-            dsid,
-            read: vec!["orders".into()],
-            write: vec!["ledger".into()],
-        }],
-    };
-    let mut manifest_root = [0u8; 32];
-    manifest_root.copy_from_slice(manifest_record.manifest_hash.as_ref());
-    let base_handle = AssetHandle {
-        asset_definition_id: axt_test_asset_definition_id(),
-        scope: vec!["transfer".into()],
-        subject: HandleSubject {
-            account: authority.to_string(),
-            origin_dsid: Some(dsid),
-        },
-        budget: HandleBudget {
-            remaining: Quantity::from(50_u64),
-            per_use: Some(Quantity::from(50_u64)),
-        },
-        handle_era: manifest_record
-            .lifecycle
-            .activated_epoch
-            .unwrap_or(manifest_record.manifest.activation_epoch),
-        sub_nonce: 1,
-        group_binding: GroupBinding {
-            composability_group_id: vec![0; 32],
-            epoch_id: 1,
-        },
-        target_lane: LaneId::new(0),
-        axt_binding: Vec::new(),
-        manifest_view_root: manifest_root.to_vec(),
-        expiry_slot: 5,
-        max_clock_skew_ms: Some(0),
-        issuer_context: Default::default(),
-        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-    };
-    assert_ok_gas!(use_handle_with_state_policy(
-        &state,
-        &authority,
-        dsid,
-        &descriptor,
-        base_handle.clone()
-    ));
-    let mut wrong_lane = base_handle.clone();
-    wrong_lane.target_lane = LaneId::new(1);
-    assert_eq!(
-        use_handle_with_state_policy(&state, &authority, dsid, &descriptor, wrong_lane),
-        Err(VMError::PermissionDenied)
-    );
-    let mut wrong_root = base_handle.clone();
-    wrong_root.manifest_view_root = vec![0xCC; 32];
-    assert_eq!(
-        use_handle_with_state_policy(&state, &authority, dsid, &descriptor, wrong_root),
-        Err(VMError::PermissionDenied)
-    );
-    let mut low_era = base_handle.clone();
-    low_era.handle_era = 1;
-    assert_eq!(
-        use_handle_with_state_policy(&state, &authority, dsid, &descriptor, low_era),
-        Err(VMError::PermissionDenied)
-    );
+    use_handle_with_host_policy(&mut host, authority, dsid, descriptor, handle)
 }
 #[cfg(feature = "app_api")]
 #[test]
 fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(88);
-    let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"uaid-corehost-placeholder"));
-    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
-    let account = Account::new(authority.clone())
-        .with_uaid(Some(uaid))
-        .build(&authority);
-    let domain = Domain::new(domain_id).build(&authority);
-    let mut world = World::with([domain], [account], []);
-    let mut bindings = UaidDataspaceBindings::default();
-    bindings.bind_account(dsid, authority.clone());
-    world
-        .uaid_dataspaces_mut_for_testing()
-        .insert(uaid, bindings);
-    let manifest = AssetPermissionManifest {
-        version: ManifestVersion::default(),
-        uaid,
-        dataspace: dsid,
-        issued_ms: 0,
-        activation_epoch: 1,
-        expiry_epoch: None,
-        entries: Vec::new(),
-    };
-    let manifest_record = SpaceDirectoryManifestRecord::new(manifest);
-    let mut manifest_set = SpaceDirectoryManifestSet::default();
-    manifest_set.upsert(manifest_record);
-    world
-        .space_directory_manifests_mut_for_testing()
-        .insert(uaid, manifest_set);
-    let lane_meta = LaneConfig {
-        id: LaneId::new(0),
-        dataspace_id: dsid,
-        alias: "primary".to_owned(),
-        ..LaneConfig::default()
-    };
-    let lane_catalog =
-        LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("lane catalog populated");
-    let nexus = nexus_with_lane_catalog(lane_catalog);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(world, kura, query);
-    state
-        .set_nexus(nexus)
-        .expect("apply Nexus catalog for AXT snapshot");
-    let snapshot = state.view().axt_policy_snapshot();
+    // Placeholder authorization is a host-policy input, not an active
+    // committed Space Directory binding. Model it explicitly so the test
+    // cannot accidentally promote an inactive manifest into live state.
+    let snapshot = make_policy_snapshot(dsid, [0; 32], LaneId::new(0), 0, 0, 0);
     let policy = snapshot
         .entries
         .iter()
@@ -3487,6 +3362,10 @@ fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
         policy.manifest_root.iter().all(|byte| *byte == 0),
         "placeholder policies must carry zeroed manifest roots"
     );
+    let mut host = CoreHost::new(authority.clone())
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("placeholder policy snapshot should be canonical");
+    configure_axt_test_host(&mut host, [(dsid, policy.manifest_root)]);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -3520,85 +3399,18 @@ fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
         issuer_context: Default::default(),
         issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
-    let result = use_handle_with_state_policy(&state, &authority, dsid, &descriptor, handle);
+    // A zero-root issuer context is itself non-canonical, so the public syscall
+    // must fail during issuer authentication. The host unit test exercises the
+    // downstream explicit zero-root policy guard directly.
+    let result = use_handle_with_host_policy(&mut host, &authority, dsid, &descriptor, handle);
     assert_eq!(result, Err(VMError::PermissionDenied));
-}
-#[cfg(feature = "app_api")]
-#[test]
-fn core_host_binds_proof_to_manifest_root() {
-    let authority = fixture_authority();
-    let dsid = DataSpaceId::new(77);
-    let manifest_root = [0xAB; 32];
-    let entries = vec![AxtPolicyBinding {
-        dsid,
-        policy: AxtPolicyEntry {
-            manifest_root,
-            target_lane: LaneId::new(0),
-            active_handle_era: 1,
-            next_handle_counter: 1,
-            current_slot: 5,
-        },
-    }];
-    let snapshot = AxtPolicySnapshot {
-        version: AxtPolicySnapshot::compute_version(&entries),
-        entries,
-    };
-    let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::new(authority.clone())
-        .with_axt_policy_snapshot(&snapshot)
-        .expect("fixture AXT policy snapshot should be canonical");
-    let descriptor = axt::AxtDescriptor {
-        dsids: vec![dsid],
-        touches: vec![axt::AxtTouchSpec {
-            dsid,
-            read: vec!["orders".into()],
-            write: vec!["ledger".into()],
-        }],
-    };
-    let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
-    vm.set_register(10, desc_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
-        .expect("begin");
-    let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
-    let manifest = TouchManifest {
-        read: vec!["orders/proof".into()],
-        write: vec!["ledger/proof".into()],
-    };
-    let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, manifest_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
-        .expect("touch");
-    let bad_proof = axt::ProofBlob {
-        payload: vec![0x01, 0x02],
-        expiry_slot: Some(10),
-    };
-    let bad_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &bad_proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, bad_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Err(VMError::NoritoInvalid)
-    );
-    let raw_root_proof = axt::ProofBlob {
-        payload: manifest_root.to_vec(),
-        expiry_slot: Some(10),
-    };
-    let raw_root_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &raw_root_proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, raw_root_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Err(VMError::NoritoInvalid)
-    );
-    let ok_proof = proof_blob_for(dsid, manifest_root, vec![0x03, 0x04], 10);
-    let ok_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &ok_proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, ok_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
-    // Cache hit in the same slot should also succeed.
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, ok_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
+    let rejection = host
+        .take_axt_reject_for_tests()
+        .expect("placeholder policy should record its fail-closed rejection");
+    assert_eq!(rejection.reason, AxtRejectReason::PolicyDenied);
+    assert_eq!(rejection.dataspace, Some(dsid));
+    assert_eq!(rejection.lane, Some(LaneId::new(0)));
+    assert_eq!(rejection.snapshot_version, Some(snapshot.version));
+    assert_eq!(rejection.detail, "AXT handle issuer signature is invalid");
 }
 include!("ivm_corehost_axt/state_envelope_tail.rs");

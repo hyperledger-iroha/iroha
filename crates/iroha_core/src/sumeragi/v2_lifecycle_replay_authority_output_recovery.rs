@@ -186,7 +186,7 @@ impl InvalidBodyReplaySourceV1 {
 /// Re-authenticate one exact output row from its canonical V1 replay source.
 ///
 /// `invalid_parent` is present only for `Validate -> InvalidBodyReport` and is
-/// already required to be the same-owner adjacent predecessor by LedgerV1.
+/// already required to be a same-owner forward predecessor by LedgerV1.
 /// Complete replay-family equality and body-frame identity are still checked
 /// here before a report carrier is returned.
 #[allow(clippy::too_many_arguments)]
