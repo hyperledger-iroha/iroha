@@ -101,7 +101,13 @@ const INSTRUCTION_BOX_SCHEMA_HASH = Buffer.from(
 const MAX_BROWSER_INSTRUCTIONS = 64;
 const MAX_CONTRACT_ARGUMENT_RECORD_BYTES = 1024 * 1024;
 const MAX_CONTRACT_ENTRYPOINT_BYTES = 1024;
+const DEFAULT_TRANSACTION_TIME_TO_LIVE_MS = 100_000n;
+const TRANSACTION_ADMISSION_ORDINARY_TAG = 0;
 const TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG = 1;
+const HASHABLE_TRANSACTION_ADMISSION_TAGS = Object.freeze([
+  TRANSACTION_ADMISSION_ORDINARY_TAG,
+  TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
+]);
 const SMART_CONTRACT_DEPLOYMENT_WIRE_IDS = new Set([
   "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk",
   "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload",
@@ -897,6 +903,12 @@ function rustPlainJsonString(value) {
       case "\\":
         output += "\\\\";
         break;
+      case "\b":
+        output += "\\b";
+        break;
+      case "\f":
+        output += "\\f";
+        break;
       case "\n":
         output += "\\n";
         break;
@@ -908,7 +920,7 @@ function rustPlainJsonString(value) {
         break;
       default:
         if (codePoint < 0x20) {
-          output += `\\u00${codePoint.toString(16).toUpperCase().padStart(2, "0")}`;
+          output += `\\u00${codePoint.toString(16).padStart(2, "0")}`;
         } else {
           output += character;
         }
@@ -1174,8 +1186,10 @@ function normalizeTransactionInputTail(
     UINT64_MAX,
     "creationTimeMs",
   );
-  let ttlMs = normalizeOptionalUnsigned(input.ttlMs, UINT64_MAX, "ttlMs");
-  if (ttlMs === 0n) ttlMs = 1n;
+  const ttlMs =
+    normalizeOptionalUnsigned(input.ttlMs, UINT64_MAX, "ttlMs", {
+      nonZero: true,
+    }) ?? DEFAULT_TRANSACTION_TIME_TO_LIVE_MS;
   const nonce = normalizeOptionalUnsigned(input.nonce, UINT32_MAX, "nonce", {
     nonZero: true,
   });
@@ -1779,14 +1793,18 @@ function validateFeePaymentArchive(payload, context) {
   return { gasLimit };
 }
 
-function validateTransactionAdmissionIntentArchive(payload, expectedTag, context) {
+function validateTransactionAdmissionIntentArchive(payload, expectedTags, context) {
   const reader = new Reader(payload, context);
   const tag = reader.readU32("intent");
   reader.assertEof();
-  if (tag !== expectedTag) {
+  const allowedTags = Array.isArray(expectedTags) ? expectedTags : [expectedTags];
+  if (!allowedTags.includes(tag)) {
     fail(
       UNSUPPORTED_PAYLOAD,
-      `${context} must be TransactionAdmissionIntent::QueuePlanSynced`,
+      allowedTags.length === 1 &&
+        allowedTags[0] === TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG
+        ? `${context} must be TransactionAdmissionIntent::QueuePlanSynced`
+        : `${context} uses unsupported TransactionAdmissionIntent tag ${tag}`,
     );
   }
 }
@@ -2158,6 +2176,7 @@ function validateTransactionPayload(
   payload,
   authorityLiteral,
   expectedNetworkId = null,
+  expectedAdmissionIntentTags = TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
 ) {
   return validateTransactionPayloadEnvelope(
     payload,
@@ -2175,6 +2194,8 @@ function validateTransactionPayload(
         );
       }
     },
+    undefined,
+    expectedAdmissionIntentTags,
   );
 }
 
@@ -2182,6 +2203,7 @@ function validateInstructionTransactionPayload(
   payload,
   authorityLiteral,
   expectedNetworkId = null,
+  expectedAdmissionIntentTags = TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
 ) {
   return validateTransactionPayloadEnvelope(
     payload,
@@ -2211,6 +2233,7 @@ function validateInstructionTransactionPayload(
         );
       }
     },
+    expectedAdmissionIntentTags,
   );
 }
 
@@ -2220,6 +2243,7 @@ function validateTransactionPayloadEnvelope(
   expectedNetworkId,
   validateExecutable,
   validateFeePayment,
+  expectedAdmissionIntentTags = TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
 ) {
   if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
     fail(BOUNDS_EXCEEDED, `payloadBytes must contain 1..=${MAX_PAYLOAD_BYTES} bytes`);
@@ -2272,7 +2296,7 @@ function validateTransactionPayloadEnvelope(
   validateFeePayment?.(executableValidation, feePayment);
   validateTransactionAdmissionIntentArchive(
     reader.readField("admissionIntent"),
-    TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
+    expectedAdmissionIntentTags,
     "transaction payload.admissionIntent",
   );
   rejectLegacyFeeMetadata(
@@ -2901,18 +2925,37 @@ export function browserSignedTransactionHashHex(signedTransaction) {
       "signedTransaction must be non-empty exact version-1 SignedTransaction bytes",
     );
   }
-  const bare = versioned.subarray(1);
-  const reader = new Reader(bare, "signed transaction");
-  const signatureValue = new Reader(reader.readField("signature"), "signed transaction.signature");
-  const rawSignature = validateConstVecBytes(
-    signatureValue.readField("payload"),
-    "signed transaction.signature.payload",
-    64,
-  );
-  signatureValue.assertEof();
-  const payload = reader.readField("payload");
-  const multisig = reader.readField("multisigSignatures");
-  reader.assertEof();
+  let rawSignature;
+  let payload;
+  let multisig;
+  try {
+    const bare = versioned.subarray(1);
+    const reader = new Reader(bare, "signed transaction");
+    const signatureValue = new Reader(
+      reader.readField("signature"),
+      "signed transaction.signature",
+    );
+    rawSignature = validateConstVecBytes(
+      signatureValue.readField("payload"),
+      "signed transaction.signature.payload",
+      64,
+    );
+    signatureValue.assertEof();
+    payload = reader.readField("payload");
+    multisig = reader.readField("multisigSignatures");
+    reader.assertEof();
+  } catch (error) {
+    if (
+      error instanceof BrowserTransactionCodecError &&
+      error.code === BOUNDS_EXCEEDED
+    ) {
+      throw error;
+    }
+    fail(
+      MALFORMED_SIGNED_TRANSACTION,
+      `signedTransaction has malformed outer framing (${error.message})`,
+    );
+  }
   if (
     rawSignature.length !== 64 ||
     !multisig.equals(Buffer.of(0)) ||
@@ -2926,11 +2969,21 @@ export function browserSignedTransactionHashHex(signedTransaction) {
   }
   let transferError;
   try {
-    validateTransactionPayload(payload, null);
+    validateTransactionPayload(
+      payload,
+      null,
+      null,
+      HASHABLE_TRANSACTION_ADMISSION_TAGS,
+    );
   } catch (error) {
     transferError = error;
     try {
-      validateInstructionTransactionPayload(payload, null);
+      validateInstructionTransactionPayload(
+        payload,
+        null,
+        null,
+        HASHABLE_TRANSACTION_ADMISSION_TAGS,
+      );
     } catch (instructionError) {
       const boundsError = [transferError, instructionError].find(
         (error) =>
