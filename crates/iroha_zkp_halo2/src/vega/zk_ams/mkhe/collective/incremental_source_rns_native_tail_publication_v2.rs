@@ -90,6 +90,16 @@ const READ_RECEIPT_OWNER_BYTES_V2: usize =
 const RETAINED_V1_READ_RECEIPTS_V2: usize = 4 * RECORDS_V2 * LEGACY_LIMBS_V2;
 const QPCS_REPETITIONS_V2: usize = 5;
 const QPCS_EVALUATIONS_V2: usize = TARGET_LIMBS_V2 * QPCS_REPETITIONS_V2;
+const TAIL_COEFFICIENTS_V2: u64 =
+    TAIL_OBJECTS_V2 as u64 * ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 as u64;
+const TAIL_AUTHENTICATED_TRANSFER_BYTES_V2: u64 =
+    3 * TAIL_OBJECTS_V2 as u64 * OBJECT_BYTES_V2 as u64;
+const EXISTING_READER_IO_BYTES_V2: u64 = 3_691_001_600;
+const EXISTING_READER_WORK_UNITS_V2: u64 = 8_772_852_640;
+const TAIL_WORK_UNITS_V2: u64 = TAIL_AUTHENTICATED_TRANSFER_BYTES_V2 + TAIL_COEFFICIENTS_V2;
+const TAIL_PLUS_READER_IO_BYTES_V2: u64 =
+    TAIL_AUTHENTICATED_TRANSFER_BYTES_V2 + EXISTING_READER_IO_BYTES_V2;
+const TAIL_PLUS_READER_WORK_UNITS_V2: u64 = TAIL_WORK_UNITS_V2 + EXISTING_READER_WORK_UNITS_V2;
 
 const TAIL_LIFECYCLE_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.mkhe.rns-native.tail-publication.lifecycle";
@@ -142,20 +152,20 @@ pub(super) struct RnsNativeTailPublicationResourceLedgerV2 {
 pub(super) const RNS_NATIVE_TAIL_PUBLICATION_RESOURCE_LEDGER_V2:
     RnsNativeTailPublicationResourceLedgerV2 = RnsNativeTailPublicationResourceLedgerV2 {
     tail_objects: 176,
-    tail_coefficients: 23_068_672,
+    tail_coefficients: TAIL_COEFFICIENTS_V2,
     tail_canonical_bytes: 184_550_080,
     tail_coefficient_chunks: 22_528,
     tail_publication_writes: 22_704,
     tail_transport_operations: 68_112,
-    tail_authenticated_transfer_bytes: 553_650_240,
-    tail_work_units: 576_718_912,
+    tail_authenticated_transfer_bytes: TAIL_AUTHENTICATED_TRANSFER_BYTES_V2,
+    tail_work_units: TAIL_WORK_UNITS_V2,
     tail_pointer_frame_bytes: 13_728,
     tail_publication_receipt_bytes: (TAIL_OBJECTS_V2 * PUBLICATION_RECEIPT_OWNER_BYTES_V2) as u32,
     all_publication_receipt_bytes: (FULL_OBJECTS_V2 * PUBLICATION_RECEIPT_OWNER_BYTES_V2) as u32,
     retained_v1_read_receipt_bytes: (RETAINED_V1_READ_RECEIPTS_V2 * READ_RECEIPT_OWNER_BYTES_V2)
         as u32,
-    tail_plus_reader_io_bytes: 4_244_651_840,
-    tail_plus_reader_work_units: 9_349_571_552,
+    tail_plus_reader_io_bytes: TAIL_PLUS_READER_IO_BYTES_V2,
+    tail_plus_reader_work_units: TAIL_PLUS_READER_WORK_UNITS_V2,
 };
 
 const _: () = {
@@ -184,13 +194,10 @@ const _: () = {
     assert!(TAIL_OBJECTS_V2 * WRITES_PER_OBJECT_V2 == 22_704);
     assert!(3 * TAIL_OBJECTS_V2 * WRITES_PER_OBJECT_V2 == 68_112);
     assert!(3 * TAIL_OBJECTS_V2 * OBJECT_BYTES_V2 == 553_650_240);
-    assert!(553_650_240 + 23_068_672 == 576_718_912);
     assert!(TAIL_OBJECTS_V2 * ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1 == 13_728);
     assert!(TAIL_OBJECTS_V2 * PUBLICATION_RECEIPT_OWNER_BYTES_V2 == 123_904);
     assert!(FULL_OBJECTS_V2 * PUBLICATION_RECEIPT_OWNER_BYTES_V2 == 2_478_080);
     assert!(RETAINED_V1_READ_RECEIPTS_V2 * READ_RECEIPT_OWNER_BYTES_V2 == 1_620_928);
-    assert!(553_650_240 + 3_691_001_600 == 4_244_651_840);
-    assert!(576_718_912 + 8_772_852_640 == 9_349_571_552);
     assert!(
         RNS_NATIVE_TAIL_PUBLICATION_RESOURCE_LEDGER_V2.tail_plus_reader_io_bytes
             < ZK_AMS_MKHE_RNS_NATIVE_IO_MAX_BYTES_V1

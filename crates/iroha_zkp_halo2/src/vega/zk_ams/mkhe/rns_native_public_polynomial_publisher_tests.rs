@@ -18,6 +18,22 @@ const FIXTURE_STAGING_ID_V1: [u8; 32] = [0x81; 32];
 const FIXTURE_SEAL_ID_V1: [u8; 32] = [0x91; 32];
 const FIXTURE_PUBLISHED_ID_V1: [u8; 32] = [0xa1; 32];
 
+const _: () = {
+    assert!(AUTHENTICATED_TRANSFER_BYTES_V1 < ZK_AMS_MKHE_RNS_NATIVE_IO_MAX_BYTES_V1);
+    assert!(COARSE_WORK_UNITS_V1 < ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1);
+};
+
+const _: () = {
+    assert!(RNS_NATIVE_PUBLIC_POLYNOMIAL_PUBLISHER_DECLARED_V1);
+    assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_UPSTREAM_40_LIMB_OWNER_AVAILABLE_V1);
+    assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_PRODUCTION_ADAPTER_INHABITED_V1);
+    assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_PUBLISHER_INTEGRATED_V1);
+    assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_PUBLISHER_READINESS_V1);
+    assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_PUBLISHER_RELEASE_GATE_V1);
+    assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_LATER_READER_RESOURCE_EVIDENCE_INCLUDED_V1);
+    assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_MEASURED_RSS_EVIDENCE_INCLUDED_V1);
+};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FixtureSourceFaultV1 {
     None,
@@ -804,24 +820,25 @@ fn source_drift_fails_before_staging_and_permanently_poisons_traversal() {
     let mut source = FixtureCoefficientSourceV1::new_v1(position, 2, FixtureSourceFaultV1::None);
     let source_identity = source.source_identity_v1().unwrap();
     source.drift_at_identity_call = Some(2);
-    let mut provider = FixtureCasV1::new_v1(FixtureCasFaultV1::None);
-    let mut hash = Keccak256::new();
-    let mut traversal = RnsNativePublicPolynomialAuthenticatedTraversalV1::new_v1(
-        &mut source,
-        &mut provider,
-        source_identity,
-        FIXTURE_PUBLICATION_ID_V1,
-    )
-    .unwrap();
-    assert!(matches!(
-        traversal.publish_next_v1(plan, &mut hash),
-        Err(RnsNativePublicPolynomialPublisherErrorV1::InvalidSource)
-    ));
-    assert!(traversal.is_poisoned_v1());
-    assert_eq!(traversal.publisher.begin_calls, 0);
-    assert!(traversal.publish_next_v1(plan, &mut hash).is_err());
-    assert_eq!(traversal.publisher.begin_calls, 0);
-    drop(traversal);
+    {
+        let mut provider = FixtureCasV1::new_v1(FixtureCasFaultV1::None);
+        let mut hash = Keccak256::new();
+        let mut traversal = RnsNativePublicPolynomialAuthenticatedTraversalV1::new_v1(
+            &mut source,
+            &mut provider,
+            source_identity,
+            FIXTURE_PUBLICATION_ID_V1,
+        )
+        .unwrap();
+        assert!(matches!(
+            traversal.publish_next_v1(plan, &mut hash),
+            Err(RnsNativePublicPolynomialPublisherErrorV1::InvalidSource)
+        ));
+        assert!(traversal.is_poisoned_v1());
+        assert_eq!(traversal.publisher.begin_calls, 0);
+        assert!(traversal.publish_next_v1(plan, &mut hash).is_err());
+        assert_eq!(traversal.publisher.begin_calls, 0);
+    }
     assert!(source.finish_source_v1().is_err());
 }
 
@@ -832,26 +849,27 @@ fn unfilled_source_chunk_is_rejected_without_seal_or_retry_capability() {
     let mut source =
         FixtureCoefficientSourceV1::new_v1(position, 2, FixtureSourceFaultV1::LeaveOneUnfilled);
     let source_identity = source.source_identity_v1().unwrap();
-    let mut provider = FixtureCasV1::new_v1(FixtureCasFaultV1::None);
-    let mut hash = Keccak256::new();
-    let mut traversal = RnsNativePublicPolynomialAuthenticatedTraversalV1::new_v1(
-        &mut source,
-        &mut provider,
-        source_identity,
-        FIXTURE_PUBLICATION_ID_V1,
-    )
-    .unwrap();
-    assert!(matches!(
-        traversal.publish_next_v1(plan, &mut hash),
-        Err(RnsNativePublicPolynomialPublisherErrorV1::InvalidCoefficient)
-    ));
-    assert!(traversal.is_poisoned_v1());
-    assert!(traversal.publisher.seal.is_none());
-    assert!(traversal.publisher.object.is_none());
-    let writes = traversal.publisher.write_calls;
-    assert!(traversal.publish_next_v1(plan, &mut hash).is_err());
-    assert_eq!(traversal.publisher.write_calls, writes);
-    drop(traversal);
+    {
+        let mut provider = FixtureCasV1::new_v1(FixtureCasFaultV1::None);
+        let mut hash = Keccak256::new();
+        let mut traversal = RnsNativePublicPolynomialAuthenticatedTraversalV1::new_v1(
+            &mut source,
+            &mut provider,
+            source_identity,
+            FIXTURE_PUBLICATION_ID_V1,
+        )
+        .unwrap();
+        assert!(matches!(
+            traversal.publish_next_v1(plan, &mut hash),
+            Err(RnsNativePublicPolynomialPublisherErrorV1::InvalidCoefficient)
+        ));
+        assert!(traversal.is_poisoned_v1());
+        assert!(traversal.publisher.seal.is_none());
+        assert!(traversal.publisher.object.is_none());
+        let writes = traversal.publisher.write_calls;
+        assert!(traversal.publish_next_v1(plan, &mut hash).is_err());
+        assert_eq!(traversal.publisher.write_calls, writes);
+    }
     assert!(source.finish_source_v1().is_err());
 }
 
@@ -862,24 +880,25 @@ fn caught_source_unwind_leaves_traversal_permanently_poisoned() {
     let mut source =
         FixtureCoefficientSourceV1::new_v1(position, 2, FixtureSourceFaultV1::PanicFill);
     let source_identity = source.source_identity_v1().unwrap();
-    let mut provider = FixtureCasV1::new_v1(FixtureCasFaultV1::None);
-    let mut hash = Keccak256::new();
-    let mut traversal = RnsNativePublicPolynomialAuthenticatedTraversalV1::new_v1(
-        &mut source,
-        &mut provider,
-        source_identity,
-        FIXTURE_PUBLICATION_ID_V1,
-    )
-    .unwrap();
-    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = traversal.publish_next_v1(plan, &mut hash);
-    }));
-    assert!(unwind.is_err());
-    assert!(traversal.is_poisoned_v1());
-    assert!(traversal.publish_next_v1(plan, &mut hash).is_err());
-    assert!(traversal.publisher.seal.is_none());
-    assert!(traversal.publisher.object.is_none());
-    drop(traversal);
+    {
+        let mut provider = FixtureCasV1::new_v1(FixtureCasFaultV1::None);
+        let mut hash = Keccak256::new();
+        let mut traversal = RnsNativePublicPolynomialAuthenticatedTraversalV1::new_v1(
+            &mut source,
+            &mut provider,
+            source_identity,
+            FIXTURE_PUBLICATION_ID_V1,
+        )
+        .unwrap();
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = traversal.publish_next_v1(plan, &mut hash);
+        }));
+        assert!(unwind.is_err());
+        assert!(traversal.is_poisoned_v1());
+        assert!(traversal.publish_next_v1(plan, &mut hash).is_err());
+        assert!(traversal.publisher.seal.is_none());
+        assert!(traversal.publisher.object.is_none());
+    }
     assert!(source.finish_source_v1().is_err());
 }
 
@@ -899,24 +918,25 @@ fn caught_cas_unwinds_leave_no_receipt_or_retry_capability() {
         let mut source =
             FixtureCoefficientSourceV1::new_v1(position, 2, FixtureSourceFaultV1::None);
         let source_identity = source.source_identity_v1().unwrap();
-        let mut provider = FixtureCasV1::new_v1(fault);
-        let mut hash = Keccak256::new();
-        let mut traversal = RnsNativePublicPolynomialAuthenticatedTraversalV1::new_v1(
-            &mut source,
-            &mut provider,
-            source_identity,
-            FIXTURE_PUBLICATION_ID_V1,
-        )
-        .unwrap();
-        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = traversal.publish_next_v1(plan, &mut hash);
-        }));
-        assert!(unwind.is_err(), "fault did not unwind: {fault:?}");
-        assert!(traversal.is_poisoned_v1());
-        let begin_calls = traversal.publisher.begin_calls;
-        assert!(traversal.publish_next_v1(plan, &mut hash).is_err());
-        assert_eq!(traversal.publisher.begin_calls, begin_calls);
-        drop(traversal);
+        {
+            let mut provider = FixtureCasV1::new_v1(fault);
+            let mut hash = Keccak256::new();
+            let mut traversal = RnsNativePublicPolynomialAuthenticatedTraversalV1::new_v1(
+                &mut source,
+                &mut provider,
+                source_identity,
+                FIXTURE_PUBLICATION_ID_V1,
+            )
+            .unwrap();
+            let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = traversal.publish_next_v1(plan, &mut hash);
+            }));
+            assert!(unwind.is_err(), "fault did not unwind: {fault:?}");
+            assert!(traversal.is_poisoned_v1());
+            let begin_calls = traversal.publisher.begin_calls;
+            assert!(traversal.publish_next_v1(plan, &mut hash).is_err());
+            assert_eq!(traversal.publisher.begin_calls, begin_calls);
+        }
         assert!(source.finish_source_v1().is_err());
     }
 }
@@ -1042,8 +1062,6 @@ fn publication_geometry_and_resource_accounting_are_exact() {
     assert_eq!(COARSE_WORK_UNITS_V1, 11_534_378_240);
     assert_eq!(POINTER_FRAME_BYTES_V1, 274_560);
     assert_eq!(PUBLICATION_STACK_WORKSPACE_BYTES_V1, 24_576);
-    assert!(AUTHENTICATED_TRANSFER_BYTES_V1 < ZK_AMS_MKHE_RNS_NATIVE_IO_MAX_BYTES_V1);
-    assert!(COARSE_WORK_UNITS_V1 < ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1);
     assert!(
         PUBLICATION_RESOURCE_ACCOUNTING_SCOPE_V1
             .windows(b"excludes-later-public-polynomial-reader".len())
@@ -1054,8 +1072,6 @@ fn publication_geometry_and_resource_accounting_are_exact() {
             .windows(b"excludes-measured-rss-and-device-evidence".len())
             .any(|window| window == b"excludes-measured-rss-and-device-evidence")
     );
-    assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_LATER_READER_RESOURCE_EVIDENCE_INCLUDED_V1);
-    assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_MEASURED_RSS_EVIDENCE_INCLUDED_V1);
     let position = RnsNativePublicPolynomialPositionV1::from_ordinal_v1(0).unwrap();
     let production = RnsNativePublicPolynomialTraversalPlanV1::production_v1(position).unwrap();
     assert_eq!(production.coefficient_count, 131_072);
@@ -1368,14 +1384,6 @@ fn source_terminals_are_exact_and_production_adapter_remains_uninhabited() {
         .0;
     assert!(!adapter_declaration.contains("fn new"));
     assert!(!adapter_declaration.contains("unsafe"));
-    assert!(RNS_NATIVE_PUBLIC_POLYNOMIAL_PUBLISHER_DECLARED_V1);
     let parent = include_str!("../mkhe.rs");
     assert!(parent.contains("mod rns_native_public_polynomial_publisher;"));
-    assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_UPSTREAM_40_LIMB_OWNER_AVAILABLE_V1);
-    assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_PRODUCTION_ADAPTER_INHABITED_V1);
-    assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_PUBLISHER_INTEGRATED_V1);
-    assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_PUBLISHER_READINESS_V1);
-    assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_PUBLISHER_RELEASE_GATE_V1);
-    assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_LATER_READER_RESOURCE_EVIDENCE_INCLUDED_V1);
-    assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_MEASURED_RSS_EVIDENCE_INCLUDED_V1);
 }

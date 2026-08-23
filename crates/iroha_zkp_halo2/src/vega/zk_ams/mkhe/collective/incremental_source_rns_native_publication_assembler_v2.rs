@@ -589,13 +589,15 @@ impl RnsNativePublicPolynomialPublicationAssemblerV2 {
         )?;
 
         let canonical_manifest_digest = canonical_manifest_digest_v2(
-            self.v1.authority_identity,
-            self.tails.key_tail_owner_digest,
-            self.tails.lifecycle_digest,
-            composite_provider,
-            &self.v1.ciphertext_manifests,
-            &self.tails.records,
-            &descriptors,
+            RnsNativeCanonicalManifestInputsV2 {
+                authority: self.v1.authority_identity,
+                key_tail_owner_digest: self.tails.key_tail_owner_digest,
+                lifecycle_digest: self.tails.lifecycle_digest,
+                composite_provider,
+                v1_manifests: &self.v1.ciphertext_manifests,
+                tail_records: &self.tails.records,
+                descriptors: &descriptors,
+            },
             digest_engine,
         )?;
         let reader_handoff_digest =
@@ -651,7 +653,7 @@ impl RnsNativePublicPolynomialPublishedSetV2 {
         if provider.composite_provider_identity_v2() != self.composite_provider {
             return Err(RnsNativeReaderHandoffFailureV2 {
                 error: RnsNativePublicationAssemblyErrorV2::HandoffProviderMismatch,
-                published: self,
+                published: Box::new(self),
                 provider,
             });
         }
@@ -682,7 +684,7 @@ pub(super) trait RnsNativeCompositeReadProviderV2: sealed::CompositeReadProvider
 /// A failed handoff owns and destroys both inputs; it deliberately offers no recovery API.
 pub(super) struct RnsNativeReaderHandoffFailureV2<P> {
     error: RnsNativePublicationAssemblyErrorV2,
-    published: RnsNativePublicPolynomialPublishedSetV2,
+    published: Box<RnsNativePublicPolynomialPublishedSetV2>,
     provider: P,
 }
 
@@ -746,7 +748,7 @@ impl<R> RnsNativeIntegratedPublicReaderCapabilityV2<R> {
 
 pub(super) struct RnsNativeExistingReaderBuildFailureV2<E, P> {
     error: E,
-    published: RnsNativePublicPolynomialPublishedSetV2,
+    published: Box<RnsNativePublicPolynomialPublishedSetV2>,
     provider: P,
 }
 
@@ -779,7 +781,7 @@ impl<P> RnsNativePublicPolynomialReaderHandoffV2<P> {
             Ok(reader) => Ok(RnsNativeIntegratedPublicReaderCapabilityV2 { reader, published }),
             Err((error, provider)) => Err(RnsNativeExistingReaderBuildFailureV2 {
                 error,
-                published,
+                published: Box::new(published),
                 provider,
             }),
         }
@@ -1147,16 +1149,29 @@ fn composite_provider_identity_v2<H: RnsNativePublicationDigestEngineV2>(
     })
 }
 
-fn canonical_manifest_digest_v2<H: RnsNativePublicationDigestEngineV2>(
+struct RnsNativeCanonicalManifestInputsV2<'a> {
     authority: RnsNativeFinalizedStreamingAuthorityIdentityV2,
     key_tail_owner_digest: RnsNativeContractDigestV2,
     lifecycle_digest: RnsNativeContractDigestV2,
     composite_provider: RnsNativeCompositeProviderIdentityV2,
-    v1_manifests: &[RnsNativeV1CiphertextManifestEvidenceV2],
-    tail_records: &[RnsNativeV2TailRecordEvidenceV2],
-    descriptors: &[RnsNativePublicPolynomialDescriptorContractV2],
+    v1_manifests: &'a [RnsNativeV1CiphertextManifestEvidenceV2],
+    tail_records: &'a [RnsNativeV2TailRecordEvidenceV2],
+    descriptors: &'a [RnsNativePublicPolynomialDescriptorContractV2],
+}
+
+fn canonical_manifest_digest_v2<H: RnsNativePublicationDigestEngineV2>(
+    inputs: RnsNativeCanonicalManifestInputsV2<'_>,
     digest_engine: &mut H,
 ) -> Result<RnsNativeContractDigestV2, RnsNativePublicationAssemblyErrorV2> {
+    let RnsNativeCanonicalManifestInputsV2 {
+        authority,
+        key_tail_owner_digest,
+        lifecycle_digest,
+        composite_provider,
+        v1_manifests,
+        tail_records,
+        descriptors,
+    } = inputs;
     let mut transcript = Vec::with_capacity(320 + descriptors.len() * 145);
     append_u64_v2(&mut transcript, 2);
     append_u64_v2(&mut transcript, RNS_NATIVE_LEGACY_LIMB_COUNT_V2 as u64);

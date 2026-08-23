@@ -61,6 +61,11 @@ pub(super) const RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ARTIFACT_DIGESTS_V1: usize =
     2 * ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 + 2 * PUBLIC_LIMB_DIGEST_COUNT_V1;
 pub(super) const RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ARTIFACT_DIGEST_BYTES_V1: usize =
     RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ARTIFACT_DIGESTS_V1 * DIGEST_BYTES_V1;
+type RnsNativePreTranscriptRecordFactsV1 = (
+    [RnsNativePublicRecordMetadataV1; OPENING_COUNT_V1],
+    [u8; DIGEST_BYTES_V1],
+    [u8; DIGEST_BYTES_V1],
+);
 pub(super) const RNS_NATIVE_PRETRANSCRIPT_SOURCE_READS_V1: u64 =
     ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_SLOTS_V1 + ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_SLOTS_V1;
 pub(super) const RNS_NATIVE_PRETRANSCRIPT_SOURCE_PLAINTEXT_BYTES_V1: u64 =
@@ -1381,14 +1386,7 @@ pub(super) fn derive_rns_native_pre_transcript_record_facts_v1<S>(
     public_b_limb_digests: &[[u8; DIGEST_BYTES_V1]],
     ciphertext_c0_limb_digests: &[[u8; DIGEST_BYTES_V1]],
     ciphertext_c1_limb_digests: &[[u8; DIGEST_BYTES_V1]],
-) -> Result<
-    (
-        [RnsNativePublicRecordMetadataV1; 43],
-        [u8; DIGEST_BYTES_V1],
-        [u8; DIGEST_BYTES_V1],
-    ),
-    RnsNativeRlweSourceStatementErrorV1,
->
+) -> Result<RnsNativePreTranscriptRecordFactsV1, RnsNativeRlweSourceStatementErrorV1>
 where
     S: ZkAmsMkheRnsNativeSourceSnapshotV1,
 {
@@ -1438,7 +1436,7 @@ where
         [0; DIGEST_BYTES_V1],
     );
     let mut records = [empty_record; OPENING_COUNT_V1];
-    for ordinal in 0..OPENING_COUNT_V1 {
+    for (ordinal, record) in records.iter_mut().enumerate() {
         let position = record_position_v1(ordinal)
             .ok_or(RnsNativeRlweSourceStatementErrorV1::InvalidSourceOrder)?;
         let mut ephemeral_nonzero = false;
@@ -1513,7 +1511,7 @@ where
         )?;
         registry.insert_v1(nonce_binding_digest)?;
         registry.insert_v1(record_digest)?;
-        records[ordinal] = RnsNativePublicRecordMetadataV1::new(
+        *record = RnsNativePublicRecordMetadataV1::new(
             position.ordinal,
             position.family,
             position.family_index,

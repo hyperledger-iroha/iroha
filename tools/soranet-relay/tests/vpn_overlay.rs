@@ -71,8 +71,10 @@ fn overlay_rejects_short_frame() {
 }
 #[test]
 fn overlay_rejects_flow_label_overflow_for_configured_width() {
-    let mut cfg = VpnConfig::default();
-    cfg.flow_label_bits = 8;
+    let cfg = VpnConfig {
+        flow_label_bits: 8,
+        ..VpnConfig::default()
+    };
     let error = cfg
         .validate()
         .expect_err("v1 must reject configurable flow-label widths");

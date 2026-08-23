@@ -1488,7 +1488,7 @@ pub(super) mod tests {
         }
     }
 
-    pub(crate) fn signed_liveness_evidence_fixture()
+    pub fn signed_liveness_evidence_fixture()
     -> KagemushaV4PostCanaryValidatorLivenessEvidenceV1 {
         let fixture = Fixture::new();
         let body = fixture.evidence_body();

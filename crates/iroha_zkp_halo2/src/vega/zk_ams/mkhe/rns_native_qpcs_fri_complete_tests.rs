@@ -28,6 +28,14 @@ const DOWNSTREAM_BYTES_OFFSET_V1: usize = 28;
 const DESCRIPTORS_OFFSET_V1: usize = 32;
 const SCHEDULE_DIGEST_OFFSET_V1: usize = 352;
 
+const _: () = {
+    assert!(PRE_AUTH_CLAIMED_QPCS_TYPESTATE_SOURCE_IMPLEMENTED_V1);
+    assert!(!PRE_AUTH_CLAIMED_QPCS_INTEGRATED_V1);
+    assert!(!PRE_AUTH_CLAIMED_QPCS_VERIFICATION_AUTHORITY_V1);
+    assert!(!PRE_AUTH_CLAIMED_QPCS_READINESS_V1);
+    assert!(!PRE_AUTH_CLAIMED_QPCS_RELEASE_READY_V1);
+};
+
 #[derive(Clone, Copy)]
 struct TestNodeV1 {
     index: u32,
@@ -867,12 +875,6 @@ fn authenticated_claimed_qpcs_requires_the_exact_state_and_unescaped_schedule() 
 
 #[test]
 fn pre_auth_claimed_qpcs_surface_is_move_only_source_only_and_fail_closed() {
-    assert!(PRE_AUTH_CLAIMED_QPCS_TYPESTATE_SOURCE_IMPLEMENTED_V1);
-    assert!(!PRE_AUTH_CLAIMED_QPCS_INTEGRATED_V1);
-    assert!(!PRE_AUTH_CLAIMED_QPCS_VERIFICATION_AUTHORITY_V1);
-    assert!(!PRE_AUTH_CLAIMED_QPCS_READINESS_V1);
-    assert!(!PRE_AUTH_CLAIMED_QPCS_RELEASE_READY_V1);
-
     let source = include_str!("rns_native_qpcs_fri_complete.rs");
     for type_name in [
         "RnsNativeQpcsPreAuthClaimedV1",
@@ -1164,10 +1166,6 @@ fn claimed_inventory_direct_join_preserves_the_sole_schedule_and_whole_chronolog
     assert!(!qpcs.contains("fn from_schedule("));
     assert!(!qpcs.contains("fn same_lineage"));
     assert!(!qpcs.contains("fn into_parts_v2"));
-    assert!(!PRE_AUTH_CLAIMED_QPCS_INTEGRATED_V1);
-    assert!(!PRE_AUTH_CLAIMED_QPCS_VERIFICATION_AUTHORITY_V1);
-    assert!(!PRE_AUTH_CLAIMED_QPCS_READINESS_V1);
-    assert!(!PRE_AUTH_CLAIMED_QPCS_RELEASE_READY_V1);
 }
 
 #[test]
@@ -1671,8 +1669,7 @@ fn claimed_source_numeric_tail_kat_materializes_all_200_ordered_rows() {
     let mut encoded = [0_u8; CLAIMED_SOURCE_QPCS_EVALUATION_BYTES_V1];
     let mut points = [0_u64; CLAIMED_SOURCE_RELATIONS_V1];
     let mut public_evaluations = Vec::with_capacity(CLAIMED_SOURCE_RELATIONS_V1);
-    for limb in 0..ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 {
-        let modulus = ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[limb];
+    for (limb, modulus) in ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1.into_iter().enumerate() {
         for repetition in 0..CLAIMED_SOURCE_REPETITIONS_V1 {
             let relation = limb * CLAIMED_SOURCE_REPETITIONS_V1 + repetition;
             let (point, factor) = claimed_source_nonzero_factor_point_kat_v1(relation, modulus);

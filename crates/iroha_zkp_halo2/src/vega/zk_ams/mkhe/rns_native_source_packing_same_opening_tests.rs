@@ -19,6 +19,10 @@ const EXPECTED_FOCUSED_RELATION_MSMS_V1: usize = 11;
 const EXPECTED_FOCUSED_SUCCESSFUL_REPLAYS_V1: usize = 13;
 const EXPECTED_FOCUSED_FULL_COMMITMENT_SCANS_V1: usize = 17;
 
+const _: () = {
+    assert!(RNS_NATIVE_SOURCE_PACKING_SAME_OPENING_SOURCE_SETTLED_V1);
+};
+
 fn digest_v1(tag: u8) -> [u8; DIGEST_BYTES_V1] {
     [tag; DIGEST_BYTES_V1]
 }
@@ -775,8 +779,6 @@ fn exact_owner_order_geometry_and_cap_are_settled() {
         RNS_NATIVE_SOURCE_PACKING_SAME_OPENING_SUCCESSOR_MAX_BYTES_V1,
         108_339
     );
-    assert!(RNS_NATIVE_SOURCE_PACKING_SAME_OPENING_SOURCE_SETTLED_V1);
-
     assert_eq!(
         owner_coordinate_v1(0).expect("D0"),
         RnsNativeSourcePackingOwnerCoordinateV1::Difference { group: 0 }

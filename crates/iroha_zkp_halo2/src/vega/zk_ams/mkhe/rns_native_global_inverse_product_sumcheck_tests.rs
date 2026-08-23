@@ -594,10 +594,12 @@ fn production_codec_and_soundness_accounting_are_exact_and_fail_closed() {
         RNS_NATIVE_GLOBAL_INVERSE_PRODUCT_RESIDUAL_MAX_BYTES_V1,
         110_115
     );
-    assert!(INVERSE_PRODUCT_RELATION_VERIFIED_V1);
-    assert!(!LOOKUP_MEMBERSHIP_VERIFIED_V1);
-    assert!(!CROSS_FIELD_GLOBAL_LOOKUP_VERIFIED_V1);
-    assert!(!RELEASE_READY_V1);
+    const {
+        assert!(INVERSE_PRODUCT_RELATION_VERIFIED_V1);
+        assert!(!LOOKUP_MEMBERSHIP_VERIFIED_V1);
+        assert!(!CROSS_FIELD_GLOBAL_LOOKUP_VERIFIED_V1);
+        assert!(!RELEASE_READY_V1);
+    }
 
     let messages = vec![0_u8; MESSAGE_BYTES_V1];
     let endpoint = vec![0_u8; ENDPOINT_CORE_BYTES_V1];
