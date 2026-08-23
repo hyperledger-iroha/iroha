@@ -321,40 +321,56 @@ mod tests {
         )
     }
 
+    struct WireVerificationContext<'a> {
+        key: &'a CommitmentKey,
+        shape: &'a Shape,
+        wire_shape: &'a RegularShapeWire,
+        relaxed: &'a RelaxedInstance,
+        regular: &'a Instance,
+        nifs: &'a NovaNifs,
+        folded: &'a RelaxedInstance,
+    }
+
     fn verify_wire(
-        key: &CommitmentKey,
-        shape: &Shape,
-        wire_shape: &RegularShapeWire,
-        relaxed: &RelaxedInstance,
-        regular: &Instance,
-        nifs: &NovaNifs,
-        folded: &RelaxedInstance,
+        context: &WireVerificationContext<'_>,
         proof: &RelaxedSpartanWire,
     ) -> Result<(), super::super::wire::McCodecError> {
         let mut transcript = VegaTranscriptV1::new_neutron_nova();
-        let replayed = nifs
-            .verify(key, shape, &mut transcript, relaxed, regular)
+        let replayed = context
+            .nifs
+            .verify(
+                context.key,
+                context.shape,
+                &mut transcript,
+                context.relaxed,
+                context.regular,
+            )
             .map_err(|_| super::super::wire::McCodecError::InvalidEncoding)?;
-        if &replayed != folded {
+        if &replayed != context.folded {
             return Err(super::super::wire::McCodecError::InvalidEncoding);
         }
-        verify::verify_relaxed_spartan(proof, wire_shape, key, folded, &mut transcript)
+        verify::verify_relaxed_spartan(
+            proof,
+            context.wire_shape,
+            context.key,
+            context.folded,
+            &mut transcript,
+        )
     }
 
     #[test]
     fn canonical_wire_conversion_matches_the_independent_spartan_kat() {
         let (key, shape, wire_shape, relaxed, regular, nifs, folded, proof) = composed_fixture();
-        verify_wire(
-            &key,
-            &shape,
-            &wire_shape,
-            &relaxed,
-            &regular,
-            &nifs,
-            &folded,
-            &proof,
-        )
-        .expect("wire-level compatibility replay");
+        let context = WireVerificationContext {
+            key: &key,
+            shape: &shape,
+            wire_shape: &wire_shape,
+            relaxed: &relaxed,
+            regular: &regular,
+            nifs: &nifs,
+            folded: &folded,
+        };
+        verify_wire(&context, &proof).expect("wire-level compatibility replay");
         assert_eq!(proof.outer_sumcheck.rounds.len(), 2);
         assert_eq!(proof.inner_sumcheck.rounds.len(), 3);
         assert_eq!(
@@ -374,6 +390,15 @@ mod tests {
     #[test]
     fn every_wire_response_category_is_rejected_after_mutation() {
         let (key, shape, wire_shape, relaxed, regular, nifs, folded, proof) = composed_fixture();
+        let context = WireVerificationContext {
+            key: &key,
+            shape: &shape,
+            wire_shape: &wire_shape,
+            relaxed: &relaxed,
+            regular: &regular,
+            nifs: &nifs,
+            folded: &folded,
+        };
         let mutations: [fn(&mut RelaxedSpartanWire); 7] = [
             |value| value.outer_sumcheck.rounds[0].coefficients_except_linear[0] += Scalar::one(),
             |value| value.outer_claims[0] += Scalar::one(),
@@ -386,19 +411,7 @@ mod tests {
         for mutate in mutations {
             let mut changed = proof.clone();
             mutate(&mut changed);
-            assert!(
-                verify_wire(
-                    &key,
-                    &shape,
-                    &wire_shape,
-                    &relaxed,
-                    &regular,
-                    &nifs,
-                    &folded,
-                    &changed,
-                )
-                .is_err()
-            );
+            assert!(verify_wire(&context, &changed).is_err());
         }
     }
 

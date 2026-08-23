@@ -472,12 +472,11 @@ impl<'a> CanonicalQpcsEvaluationGridV1<'a> {
             return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidQpcsEvaluation);
         }
         let grid = Self { bytes };
-        for limb in 0..ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 {
+        for (limb, modulus) in ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1.iter().copied().enumerate() {
             for repetition in 0..REPETITIONS_V1 {
                 let value = grid
                     .get_v1(limb, repetition)
                     .ok_or(RnsNativeCrossFieldInventoryErrorV1::InvalidQpcsEvaluation)?;
-                let modulus = ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[limb];
                 if value.product >= modulus || value.opening_quotient >= modulus {
                     return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidQpcsEvaluation);
                 }

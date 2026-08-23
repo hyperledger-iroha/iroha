@@ -1318,7 +1318,7 @@ fn derive_aggregation_challenges_v1(
     for (limb, modulus) in ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1.into_iter().enumerate() {
         let mut used = [0_u64; ROWS_PER_LIMB_V1];
         let mut used_len = 0_usize;
-        for repetition in 0..REPETITION_COUNT_V1 {
+        for (repetition, challenge) in challenges[limb].iter_mut().enumerate() {
             let gamma = derive_aggregation_challenge_coordinate_v1(
                 seed,
                 parameter_digest,
@@ -1350,7 +1350,7 @@ fn derive_aggregation_challenges_v1(
             }
             prior_pairs[prior_pair_count] = (gamma, beta);
             prior_pair_count += 1;
-            challenges[limb][repetition] = AggregationChallengeV1 { gamma, beta };
+            *challenge = AggregationChallengeV1 { gamma, beta };
         }
     }
     Ok(challenges)

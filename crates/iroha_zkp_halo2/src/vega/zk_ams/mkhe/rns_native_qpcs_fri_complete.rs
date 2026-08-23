@@ -470,28 +470,39 @@ fn authenticate_fri_after_fold_zero_v1<'a>(
     let relation_schedule = prefix
         .take_relation_schedule_v1()
         .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidPrefix)?;
-    verify_closure_parts_with_retained_evaluations_v1(
-        context,
-        relation_schedule,
-        prefix.queries(),
-        prefix.fri_one_indices(),
-        prefix.fri_one_values(),
-        prefix.evaluations(),
-        prefix.evaluation_binding_digest(),
-        prefix.residual(),
-    )
+    let closure_parts = FriClosurePartsV1 {
+        queries: prefix.queries(),
+        fri_one_indices: prefix.fri_one_indices(),
+        fri_one_values: prefix.fri_one_values(),
+        evaluations: prefix.evaluations(),
+        evaluation_binding_digest: prefix.evaluation_binding_digest(),
+        closure: prefix.residual(),
+    };
+    verify_closure_parts_with_retained_evaluations_v1(context, relation_schedule, closure_parts)
 }
 
-fn verify_closure_parts_with_retained_evaluations_v1<'a>(
+struct FriClosurePartsV1<'input, 'proof> {
+    queries: &'input [u32; QUERY_COUNT_V1],
+    fri_one_indices: IndexSetV1,
+    fri_one_values: &'input [u8],
+    evaluations: &'proof [u8],
+    evaluation_binding_digest: [u8; DIGEST_BYTES_V1],
+    closure: &'proof [u8],
+}
+
+fn verify_closure_parts_with_retained_evaluations_v1<'proof>(
     context: FriClosureContextV1,
     relation_schedule: RnsNativeQpcsRelationScheduleV1,
-    queries: &[u32; QUERY_COUNT_V1],
-    fri_one_indices: IndexSetV1,
-    fri_one_values: &[u8],
-    evaluations: &'a [u8],
-    evaluation_binding_digest: [u8; DIGEST_BYTES_V1],
-    closure: &'a [u8],
-) -> Result<RnsNativeQpcsFriCompleteStageV1<'a>, RnsNativeQpcsFriCompleteErrorV1> {
+    parts: FriClosurePartsV1<'_, 'proof>,
+) -> Result<RnsNativeQpcsFriCompleteStageV1<'proof>, RnsNativeQpcsFriCompleteErrorV1> {
+    let FriClosurePartsV1 {
+        queries,
+        fri_one_indices,
+        fri_one_values,
+        evaluations,
+        evaluation_binding_digest,
+        closure,
+    } = parts;
     let shape = closure_shape_v1(queries)?;
     let expected_fri_one = query_pair_indices_v1(queries, DOMAIN_SIZE_V1 / 2)
         .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidPrefix)?;
@@ -571,15 +582,18 @@ fn verify_closure_parts_v1<'a>(
 ) -> Result<RnsNativeQpcsFriCompleteStageV1<'a>, RnsNativeQpcsFriCompleteErrorV1> {
     static TEST_EVALUATIONS_V1: [u8; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * 5 * 2 * 8] =
         [0; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * 5 * 2 * 8];
-    verify_closure_parts_with_retained_evaluations_v1(
-        context,
-        RnsNativeQpcsRelationScheduleV1::test_fixture_v1(context.parameter_digest),
+    let closure_parts = FriClosurePartsV1 {
         queries,
         fri_one_indices,
         fri_one_values,
-        &TEST_EVALUATIONS_V1,
-        [0x5e; DIGEST_BYTES_V1],
+        evaluations: &TEST_EVALUATIONS_V1,
+        evaluation_binding_digest: [0x5e; DIGEST_BYTES_V1],
         closure,
+    };
+    verify_closure_parts_with_retained_evaluations_v1(
+        context,
+        RnsNativeQpcsRelationScheduleV1::test_fixture_v1(context.parameter_digest),
+        closure_parts,
     )
 }
 

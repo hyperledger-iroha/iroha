@@ -867,16 +867,19 @@ fn verify_prefix_parts_with_schedule_v1<'a>(
         context.parameter_digest,
         context.fri_one_root,
     )?;
-    verify_relations_openings_and_batch_with_schedule_v1(
-        context,
-        &relation_schedule,
+    let relation_openings = RelationOpeningsV1 {
         initial_indices,
         initial_values,
         quotient_indices,
-        view.quotient.values,
+        quotient_values: view.quotient.values,
         fri_zero_indices,
-        view.fri_zero.values,
-        view.evaluations,
+        fri_zero_values: view.fri_zero.values,
+        evaluations: view.evaluations,
+    };
+    verify_relations_openings_and_batch_with_schedule_v1(
+        context,
+        &relation_schedule,
+        relation_openings,
     )?;
     verify_first_fold_v1(
         context,
@@ -1103,8 +1106,7 @@ fn exact_authentication_count_v1(
     mut length: usize,
 ) -> Result<usize, RnsNativeQpcsPrefixErrorV1> {
     if !length.is_power_of_two()
-        || length < 2
-        || length > DOMAIN_SIZE_V1
+        || !(2..=DOMAIN_SIZE_V1).contains(&length)
         || indices.len == 0
         || indices.values[..indices.len]
             .iter()
@@ -1261,18 +1263,28 @@ pub(super) fn authenticate_tree_v1(
 #[cfg(test)]
 fn verify_relations_openings_and_batch_v1(
     context: PrefixContextV1,
-    initial_indices: &[u32],
-    initial_values: &[u8],
-    quotient_indices: IndexSetV1,
-    quotient_values: &[u8],
-    fri_zero_indices: IndexSetV1,
-    fri_zero_values: &[u8],
-    evaluations: &[u8],
+    openings: RelationOpeningsV1<'_>,
 ) -> Result<(), RnsNativeQpcsPrefixErrorV1> {
     let relation_schedule = RnsNativeQpcsRelationScheduleV1::from_context_v1(context)?;
-    verify_relations_openings_and_batch_with_schedule_v1(
-        context,
-        &relation_schedule,
+    verify_relations_openings_and_batch_with_schedule_v1(context, &relation_schedule, openings)
+}
+
+struct RelationOpeningsV1<'a> {
+    initial_indices: &'a [u32],
+    initial_values: &'a [u8],
+    quotient_indices: IndexSetV1,
+    quotient_values: &'a [u8],
+    fri_zero_indices: IndexSetV1,
+    fri_zero_values: &'a [u8],
+    evaluations: &'a [u8],
+}
+
+fn verify_relations_openings_and_batch_with_schedule_v1(
+    context: PrefixContextV1,
+    relation_schedule: &RnsNativeQpcsRelationScheduleV1,
+    openings: RelationOpeningsV1<'_>,
+) -> Result<(), RnsNativeQpcsPrefixErrorV1> {
+    let RelationOpeningsV1 {
         initial_indices,
         initial_values,
         quotient_indices,
@@ -1280,24 +1292,7 @@ fn verify_relations_openings_and_batch_v1(
         fri_zero_indices,
         fri_zero_values,
         evaluations,
-    )
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the authenticated tree openings and exact relation owner stay explicit"
-)]
-fn verify_relations_openings_and_batch_with_schedule_v1(
-    context: PrefixContextV1,
-    relation_schedule: &RnsNativeQpcsRelationScheduleV1,
-    initial_indices: &[u32],
-    initial_values: &[u8],
-    quotient_indices: IndexSetV1,
-    quotient_values: &[u8],
-    fri_zero_indices: IndexSetV1,
-    fri_zero_values: &[u8],
-    evaluations: &[u8],
-) -> Result<(), RnsNativeQpcsPrefixErrorV1> {
+    } = openings;
     if evaluations.len() != EVALUATION_BYTES_V1 {
         return Err(RnsNativeQpcsPrefixErrorV1::InvalidCount);
     }
@@ -1626,7 +1621,7 @@ pub(super) fn fold_value_with_inverse_x_v1(
     negative: Fq2V1,
     alpha: Fq2V1,
 ) -> Fq2V1 {
-    let inverse_two = (field.modulus + 1) / 2;
+    let inverse_two = field.modulus.div_ceil(2);
     let inverse_two_x = field.scale(inverse_x, inverse_two);
     let even = field.scale(field.add(positive, negative), inverse_two);
     let odd = field.mul(field.sub(positive, negative), inverse_two_x);

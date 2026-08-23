@@ -711,14 +711,18 @@ impl KagemushaV4ReleaseLifecycleStateV1 {
             &device_attestation_policy_norito,
             OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1,
         )?;
-        if self.promotion_binding.manifest_sha256 != self.artifact_binding.manifest_sha256
-            || self.promotion_binding.release_record_sha256 != self.release_record_norito.sha256
-            || !self
-                .promotion_binding
-                .device_attestation_policy_norito
-                .matches_bytes(&device_attestation_policy_norito)
+        if self.promotion_binding.manifest_sha256 != self.artifact_binding.manifest_sha256 {
+            return Err(invalid("lifecycle.manifest_identity"));
+        }
+        if self.promotion_binding.release_record_sha256 != self.release_record_norito.sha256 {
+            return Err(invalid("lifecycle.release_record_identity"));
+        }
+        if !self
+            .promotion_binding
+            .device_attestation_policy_norito
+            .matches_bytes(&device_attestation_policy_norito)
         {
-            return Err(invalid("lifecycle.release_identity"));
+            return Err(invalid("lifecycle.device_attestation_policy_identity"));
         }
         let Some(governance_policy) = self.governance_authority.controller().multisig_policy()
         else {

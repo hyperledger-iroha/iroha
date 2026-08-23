@@ -463,7 +463,7 @@ impl ZeroPaddingCheckedV1 {
 enum FirstPartyStageAuthorityV1 {
     Production,
     #[cfg(test)]
-    ExactFixture(ExactFixtureStageAuthorityV1),
+    ExactFixture(Box<ExactFixtureStageAuthorityV1>),
 }
 
 impl FirstPartyStageAuthorityV1 {

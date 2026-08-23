@@ -5263,6 +5263,32 @@ mod kagemusha_v4_artifact_contract_tests {
     }
     #[cfg(feature = "transparent_api")]
     #[test]
+    fn release_lifecycle_state_binds_the_promoted_release_record() {
+        let staged = lifecycle_staged_state_fixture();
+        assert_eq!(
+            staged.promotion_binding.release_record_sha256,
+            staged.release_record_norito.sha256,
+            "the retained record must carry the promoted release-record digest",
+        );
+        assert_ne!(
+            staged.promotion_binding.release_record_sha256,
+            staged.promotion_binding.release_policy_source.sha256,
+            "the fixture must distinguish the release record from its policy source",
+        );
+        staged.validate().expect("valid release-record binding");
+
+        let mut changed_release_record = staged;
+        changed_release_record.release_record_norito.sha256[0] ^= 0xFF;
+        assert_eq!(
+            changed_release_record.validate(),
+            Err(KagemushaV4ReleaseLifecycleValidationError::InvalidField(
+                "lifecycle.release_record_identity",
+            )),
+            "a retained record digest outside the signed promotion must fail closed",
+        );
+    }
+    #[cfg(feature = "transparent_api")]
+    #[test]
     fn release_lifecycle_state_enforces_exact_predecessors_and_terminal_phases() {
         let staged = lifecycle_staged_state_fixture();
         staged.validate().expect("valid staged lifecycle");
