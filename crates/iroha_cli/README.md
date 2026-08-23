@@ -167,39 +167,43 @@ Build governance transaction skeletons and query governance state via Torii app 
 ```bash
 iroha app gov deploy propose \
   --contract-address irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw \
-  --code-hash 0123...ABCD --abi-hash 0123...ABCD \
-  --abi-version v1 --window-lower 12345 --window-upper 12400 \
-  --mode Plain
+  --code-hash 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  --abi-hash fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210 \
+  --abi-version 1 --window-lower 12345 --window-upper 12400 \
+  --manifest-provenance-file manifest-provenance.json --mode Plain
 ```
 
-Responds with `{ ok, proposal_id, tx_instructions: [{ wire_id, payload_hex }] }`.
+Responds with `{ ok, proposal_id, tx_instructions: [{ wire_id, payload_hex }] }`. Add
+`--apply` and an explicit global fee payer to compare the exact typed draft,
+sign it from the local client configuration, submit it, and wait for finality.
 
 - Submit a ballot (auto-detects referendum mode unless overridden):
 
 ```bash
 iroha app gov vote --referendum-id r1 --backend halo2/ipa \
   --envelope-b64 BASE64_ENVELOPE \
-  [--public public.json]
+  [--public public.json] [--apply]
 ```
 
 For plain (non-ZK) referenda provide the required fields explicitly:
 
 ```bash
 iroha app gov vote --referendum-id r1 --mode plain --owner <canonical-i105-owner> \
-  --amount 1000 --duration-blocks 6000 --direction Aye
+  --amount 1000 --duration-blocks 6000 --direction Aye [--apply]
 ```
 
 - Finalize a referendum (compute tally, emit Approved/Rejected):
 
 ```bash
-curl -sS -X POST -H 'Content-Type: application/json' \
-  "$TORII/v1/gov/finalize" \
-  -d '{"referendum_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","proposal_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}' | jq .
+iroha app gov finalize \
+  --referendum-id 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  --proposal-id 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  [--apply]
 ```
 
 - Build an enactment transaction (for an approved proposal):
 
-  iroha app gov enact --proposal-id 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  iroha app gov enact --proposal-id 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef [--apply]
 
 - Apply protected namespaces on the server (admin/testing):
 
