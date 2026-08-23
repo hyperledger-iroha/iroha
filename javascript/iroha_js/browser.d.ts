@@ -2,6 +2,7 @@
 export type * from "./index.js";
 
 export {
+  NetworkId,
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,

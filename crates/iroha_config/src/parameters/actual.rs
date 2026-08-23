@@ -4520,7 +4520,7 @@ impl LaneConfigEntry {
             key_prefix,
             manifest_policy,
             confidential_compute: meta.confidential_compute.clone(),
-            scheduler: meta.scheduler.clone(),
+            scheduler: meta.scheduler,
             settlement_buffer: meta.settlement_buffer.clone(),
         }
     }
