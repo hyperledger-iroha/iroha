@@ -30299,9 +30299,7 @@ fn canonical_stream_high_load_threshold(
     }
 }
 #[cfg(feature = "app_api")]
-fn canonical_stream_is_sse(
-    route: iroha_torii_shared::route_catalog::RouteDescriptor,
-) -> bool {
+fn canonical_stream_is_sse(route: iroha_torii_shared::route_catalog::RouteDescriptor) -> bool {
     matches!(
         route.stable_route_id(),
         id if id == route_catalog::streaming::EVENTS_SSE.stable_route_id()

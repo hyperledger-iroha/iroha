@@ -2756,12 +2756,14 @@ pub mod isi {
             .into());
         }
         if registration.platform == OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT {
-            let release_snapshot = release_policy.android_status_snapshot.as_ref().ok_or_else(|| {
-                labeled_invariant(
-                    "attestation_policy_changed",
-                    "the release-scoped Android policy has no authenticated status snapshot",
-                )
-            })?;
+            let release_snapshot = release_policy.android_status_snapshot.as_ref().ok_or_else(
+                || {
+                    labeled_invariant(
+                        "attestation_policy_changed",
+                        "the release-scoped Android policy has no authenticated status snapshot",
+                    )
+                },
+            )?;
             let admission_snapshot =
                 admission_policy.android_status_snapshot.as_ref().ok_or_else(|| {
                     labeled_invariant(
@@ -2853,8 +2855,7 @@ pub mod isi {
         }
         validate_offline_attestation_platform_profile(registration)?;
         validate_offline_attestation_optional_metadata(registration)?;
-        let release_policy_hash =
-            canonical_offline_device_attestation_policy_hash(release_policy)?;
+        let release_policy_hash = canonical_offline_device_attestation_policy_hash(release_policy)?;
         if state.admission_policy_hash == release_policy_hash {
             validate_offline_attestation_policy(
                 release_policy,

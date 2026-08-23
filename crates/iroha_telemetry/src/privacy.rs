@@ -823,10 +823,7 @@ impl SoranetSecureAggregator {
     ///
     /// # Errors
     /// Returns an error when a line fails to parse or the bounded historical backlog is full.
-    pub fn ingest_historical_ndjson(
-        &self,
-        payload: &str,
-    ) -> Result<usize, PrivacyEventError> {
+    pub fn ingest_historical_ndjson(&self, payload: &str) -> Result<usize, PrivacyEventError> {
         self.ingest_ndjson_inner(payload, true)
     }
     fn ingest_ndjson_inner(

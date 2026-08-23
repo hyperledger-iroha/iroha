@@ -52,7 +52,10 @@ class FakeRuntime:
         self.api_port = module.DEFAULT_API_PORT
         self.help_options = {
             option
-            for _binary, _subcommands, options in module.CLI_SURFACES
+            for _binary, _subcommands, options in (
+                *module.CLI_SURFACES,
+                *module.INROU_CLI_SURFACES,
+            )
             for option in options
         } | {"--public-root", "--json"}
         self.sumeragi_status_http = 200
@@ -329,6 +332,7 @@ class TairaDevnetTests(unittest.TestCase):
                 for command in config_checks
             )
         )
+
         self.assertEqual(sum("--no-wait" in command for command in runtime.commands), 1)
         self.assertEqual(sum("--wait" in command for command in runtime.commands), 1)
         self.assertEqual(sum("doctor" in command for command in runtime.commands), 0)
@@ -402,6 +406,51 @@ class TairaDevnetTests(unittest.TestCase):
             if url.endswith("v1/mcp") and payload is None
         }
         self.assertEqual(mcp_roots, set(module.torii_roots(module.DEFAULT_API_PORT)))
+
+    def test_default_up_excludes_unused_sorafs_and_inrou_gates(self) -> None:
+        (self.bin_dir / "sorafs-node").unlink()
+        runtime = FakeRuntime()
+
+        report = module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        self.assertFalse(report["inrou_canary"])
+        help_commands = [
+            command for command in runtime.commands if "--help" in command
+        ]
+        self.assertFalse(
+            any(command[0].endswith("sorafs-node") for command in help_commands)
+        )
+        self.assertFalse(any("inrou-stage" in command for command in help_commands))
+        self.assertFalse(any("inrou-canary" in command for command in help_commands))
+
+    def test_inrou_opt_in_requires_and_preflights_optional_toolchain(self) -> None:
+        workspace = self.inrou_canary_workspace()
+        (self.bin_dir / "sorafs-node").unlink()
+        runtime = FakeRuntime()
+        args = self.up_args("--inrou-canary-dir", str(workspace))
+
+        with self.assertRaisesRegex(module.DevnetError, "sorafs-node"):
+            module.up(args, run=runtime.run, request=runtime.request)
+
+        self.assertEqual(runtime.commands, [])
+        executable(self.bin_dir / "sorafs-node")
+
+        report = module.up(args, run=runtime.run, request=runtime.request)
+
+        self.assertTrue(report["inrou_canary"])
+        help_commands = [
+            command for command in runtime.commands if "--help" in command
+        ]
+        self.assertIn((str(self.bin_dir / "sorafs-node"), "--help"), help_commands)
+        self.assertIn(
+            (str(self.bin_dir / "iroha"), "taira", "inrou-stage", "--help"),
+            help_commands,
+        )
+        self.assertIn(
+            (str(self.bin_dir / "iroha"), "taira", "inrou-canary", "--help"),
+            help_commands,
+        )
+        self.assertFalse(any("doctor" in command for command in help_commands))
 
     def test_storage_overlay_fails_closed_before_rewriting_any_peer(self) -> None:
         source_nexus = (
@@ -675,12 +724,12 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "not the sole running process"):
             module.check(args, run=runtime.run, request=runtime.request)
 
-    def test_down_does_not_run_legacy_stop_before_exact_process_ownership(self) -> None:
+    def test_down_does_not_run_generated_stop_before_exact_process_ownership(self) -> None:
         runtime = FakeRuntime()
         module.up(self.up_args(), run=runtime.run, request=runtime.request)
         target = self.root / "state" / "network"
         runtime.process_commands[10_000] = (
-            f"/fake/iroha3d --sora --config {target / 'peer0.toml'}.backup"
+            f"/fake/iroha3d_taira --sora --config {target / 'peer0.toml'}.backup"
         )
         stop_count = sum(
             command[0] == "/bin/bash" and command[1].endswith("/stop.sh")
@@ -821,8 +870,16 @@ class TairaDevnetTests(unittest.TestCase):
             run=runtime.run,
             request=runtime.request,
         )
-        stages = [command for command in runtime.commands if "inrou-stage" in command]
-        canaries = [command for command in runtime.commands if "inrou-canary" in command]
+        stages = [
+            command
+            for command in runtime.commands
+            if "inrou-stage" in command and "--stage-dir" in command
+        ]
+        canaries = [
+            command
+            for command in runtime.commands
+            if "inrou-canary" in command and "--stage-dir" in command
+        ]
         ingests = [command for command in runtime.commands if "ingest" in command]
         doctor = [
             command
@@ -883,10 +940,14 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertIn("--fee-payer", canary)
         self.assertEqual(doctor[0][doctor[0].index("--public-root") + 1], "http://127.0.0.1:29080/")
         ping_index = next(
-            index for index, command in enumerate(runtime.commands) if "ping" in command
+            index
+            for index, command in enumerate(runtime.commands)
+            if "ping" in command and "--no-wait" in command
         )
         status_index = next(
-            index for index, command in enumerate(runtime.commands) if "status" in command
+            index
+            for index, command in enumerate(runtime.commands)
+            if "status" in command and "--wait" in command
         )
         stage_index = runtime.commands.index(stage)
         ingest_indexes = [runtime.commands.index(command) for command in ingests]
@@ -972,19 +1033,32 @@ class TairaDevnetTests(unittest.TestCase):
 
         self.assertEqual(runtime.commands, [])
 
-    def test_build_command_has_no_retired_release_features(self) -> None:
+    def test_build_command_selects_only_the_requested_toolchain(self) -> None:
         command = module.cargo_build_command("local-release", Path("/tmp/taira-target"))
         self.assertEqual(command[0], str(REPO_ROOT / "scripts" / "cargo_fast.sh"))
         self.assertIn("--stable-local-metadata", command)
         self.assertIn("--no-sccache", command)
         self.assertEqual(command[command.index("--target-dir") + 1], "/tmp/taira-target")
-        self.assertEqual(command.count("--bin"), 4)
+        self.assertEqual(command.count("--bin"), 3)
         rendered = " ".join(command)
         self.assertIn("iroha3d_taira", rendered)
-        self.assertIn("sorafs-node", rendered)
+        self.assertNotIn("sorafs-node", rendered)
         self.assertNotIn("external-software-signer-bin", rendered)
         self.assertIn("--locked", command)
         self.assertNotIn("--features", command)
+
+        inrou_command = module.cargo_build_command(
+            "local-release",
+            Path("/tmp/taira-target"),
+            include_inrou=True,
+        )
+        self.assertEqual(inrou_command.count("--bin"), 4)
+        self.assertIn("sorafs_node", inrou_command)
+        self.assertIn("sorafs-node", inrou_command)
+        self.assertEqual(
+            inrou_command[: len(command)],
+            command,
+        )
 
         runtime = FakeRuntime()
         state = module.managed_root(self.root / "state", create=True)
@@ -1004,7 +1078,7 @@ class TairaDevnetTests(unittest.TestCase):
         target_dir = self.root / "target"
         bin_dir = target_dir / "local-release"
         bin_dir.mkdir(parents=True)
-        for name in ("kagami", "iroha3d", "iroha"):
+        for name in ("kagami", "iroha3d_taira", "iroha"):
             executable(bin_dir / name)
         args = module.parser().parse_args(
             [
