@@ -122,4 +122,7 @@ pub fn set_metal_queue_policy(
 ) -> std::result::Result<(), &'static str> {
     Ok(())
 }
-pub use poseidon_manifest::{PoseidonManifest, poseidon_manifest, poseidon_manifest_sha256};
+pub use poseidon_manifest::{
+    PoseidonManifest, poseidon_manifest, poseidon_manifest_sha256, poseidon_profile_id,
+    poseidon_profile_sha256,
+};

@@ -1904,10 +1904,6 @@ fn sign_moderation_transaction(
     }
     Ok(transaction)
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the fixed native signer role matrix is exhaustive"
-)]
 fn sign_native_transaction(
     state: &BrokerServerStateV1,
     binding: &ProviderBindingWireV1,

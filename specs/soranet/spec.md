@@ -43,27 +43,44 @@ This document satisfies **SNNet-1** (handshake, salt rotation, capability TLVs) 
   client and `1` for the QUIC server; stream kind is `0` for bidirectional and
   `1` for unidirectional; and stream index is the QUIC stream number after
   removing the two type bits. The ChaCha20-Poly1305 nonce is four zero bytes
-  followed by the record sequence as `u64be`.
+  followed by the record sequence as `u64be`. Each stream context may be
+  derived only once per session. Implementations retain at most 65,536 used
+  contexts per first-release session and reject reuse or capacity exhaustion.
 - Relays reject TLS 0-RTT and VPN helper clients do not offer it, so relay or
   helper authentication and hybrid key derivation always complete before
   application streams can carry data.
-- On top of TLS, a Noise XX hybrid handshake negotiates PQ and classical keys, binding capabilities.
+- On top of TLS, the required `snnet.suite_list` capability selects one of the
+  two first-release, two-flight hybrid suites: `nk2.hybrid.v1` or
+  `nk3.pq_forward_secure.v1`. The retired Noise XX/three-flight transcript is
+  not accepted. Both suites bind the authenticated directory identity,
+  descriptor commitment, exact capability bytes, X25519 material, and ML-KEM
+  material before deriving application keys.
+- The classical schedule is contributory rather than cosmetic: both peers
+  derive ordered X25519 `ee`, `es`, and `se` Noise-XX terms, reject any all-zero
+  DH output, and length-prefix all three into the HKDF-SHA3-256 input before the
+  suite's ML-KEM secret material. Changing any one contribution therefore
+  changes the session key. NK2's relay confirmation comes from that same hybrid
+  schedule; NK3's per-KEM confirmation tags remain transcript-bound checks of
+  their respective ML-KEM secrets.
 - Steps:
   1. **QUIC/TLS**: client connects to relay, completes TLS handshake using Ed25519 certificates signed by governance CA. TLS session used for initial key material.
-  2. **Noise XX Hybrid**:
-     - Protocol name: `Noise_XXhybrid_25519+Kyber768_AESGCM_SHA256`.
-     - Prologue includes `tls-exporter` secret ensuring binding to TLS session.
-     - Message pattern:
-       - `-> e, s`
-       - `<- e, ee, se, s, pq_ciphertext` (relay sends Kyber public key encapsulation)
-       - `-> ee, se, pq_ciphertext` (client responds with encapsulation)
-     - Derives shared secret mixing classical (Curve25519 DH) + PQ (Kyber768) outputs.
-  3. **Capability TLV**: final handshake message includes TLV set:
-     - `snnet.pqkem` (Kyber level)
-     - `snnet.pqsig` (Dilithium)
-     - `snnet.role` (entry/middle/exit)
-     - `snnet.version` (protocol version)
-     - `snnet.grease` (random filler values for negotiation resilience)
+  2. **Hybrid client flight**: the client sends the exact sorted capability
+     vector, fresh nonce and ephemeral material required by its preferred
+     suite. `NK2` carries the X25519 plus baseline ML-KEM contribution;
+     `NK3` additionally binds its forward-secure ML-KEM commitment.
+  3. **Authenticated relay flight**: the relay intersects capabilities,
+     returns the selected suite and KEM material, and signs the exact
+     transcript with the Ed25519 identity pinned by the authenticated
+     directory entry. The client verifies that signature and descriptor
+     binding before KEM decapsulation or session-key acceptance. No
+     `ClientFinish` or legacy third flight is emitted.
+  4. **Capability TLVs**: the transcript contains the governed
+     `snnet.pqkem`, `snnet.pqsig`, `snnet.transcript_commit`,
+     `snnet.suite_list`, relay-only `snnet.role`, `snnet.padding`, optional
+     `snnet.constant_rate`, and reserved `0x7Fxx` GREASE entries. Unknown
+     non-GREASE types, malformed payloads, duplicate singletons, repeated
+     algorithm identifiers, undefined flags, or vectors above 4,096 bytes are
+     rejected rather than assigned fallback meaning.
 - When the directory publishes a puzzle policy, clients must send a
   `PowTicketV1` frame *before* the `ClientHello` unless they present a valid
   admission token. The frame is prefixed with a 16-bit length and carries:
@@ -78,11 +95,15 @@ This document satisfies **SNNet-1** (handshake, salt rotation, capability TLVs) 
   }
   ```
 
-  The relay reconstructs the Argon2id challenge by hashing the descriptor
-  commitment, relay identifier, required admission transcript binding, and
-  client nonce. The binding is carried in the `ClientHello` resume-hash field
-  and must be exactly 32 non-zero bytes. Unbound tickets and client hellos are
-  invalid. The
+  The fixed-width `client_nonce` slot is the domain-separated commitment
+  `BLAKE3("soranet.pow.ticket_binding.v1" || u64be(len(descriptor_commit)) ||
+  descriptor_commit || u64be(len(relay_id)) || relay_id ||
+  u64be(len(transcript_hash)) || transcript_hash)`. The relay recomputes and
+  compares it in constant time before Argon2id, then reconstructs the challenge
+  by hashing the descriptor commitment, relay identifier, required admission
+  transcript binding, exact commitment, and expiry. The transcript binding is
+  carried in the `ClientHello` resume-hash field and must be exactly 32 non-zero
+  bytes. Unbound tickets and client hellos are invalid. The
   resulting digest must contain at least `difficulty` leading zero bits once the
   client-supplied solution is hashed with `Argon2id(memory_kib, time_cost,
   lanes)`. The first-release default is 6 bits and zero is invalid. Tickets

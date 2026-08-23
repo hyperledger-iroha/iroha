@@ -533,6 +533,8 @@ fn unwrap_or_skip<T>(result: MetalResult<T>, context: &str) -> Option<T> {
 }
 #[cfg(test)]
 mod bn254_parity {
+    use crate::bn254::{cpu_fft, cpu_lde};
+
     use super::{ensure_multi_queue_env, unwrap_or_skip, *};
     fn sample_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>> {
         let len = 1usize << log_size;
@@ -564,52 +566,6 @@ mod bn254_parity {
                 out
             })
             .collect()
-    }
-    fn cpu_fft(columns: &mut [Vec<Bn254Scalar>], log_size: u32, twiddles: &[Bn254Scalar]) {
-        let n = 1usize << log_size;
-        for column in columns {
-            for stage in 0..log_size {
-                let len = 1usize << (stage + 1);
-                let half = len / 2;
-                let stage_offset = stage as usize * (n / 2);
-                for block in (0..n).step_by(len) {
-                    for pair in 0..half {
-                        let idx = block + pair;
-                        let twiddle = twiddles[stage_offset + pair];
-                        let u = column[idx];
-                        let v = column[idx + half].mul(twiddle);
-                        column[idx] = u.add(v);
-                        column[idx + half] = u.sub(v);
-                    }
-                }
-            }
-        }
-    }
-    fn cpu_lde(
-        coeffs: &[Vec<Bn254Scalar>],
-        trace_log: u32,
-        blowup_log: u32,
-        twiddles: &[Bn254Scalar],
-        coset: Bn254Scalar,
-    ) -> Vec<Vec<Bn254Scalar>> {
-        let eval_log = trace_log + blowup_log;
-        let trace_len = 1usize << trace_log;
-        let eval_len = 1usize << eval_log;
-        let mut outputs = Vec::with_capacity(coeffs.len());
-        for column in coeffs {
-            let mut data = vec![Bn254Scalar::zero(); eval_len];
-            data[..trace_len].copy_from_slice(column);
-            // Scale coefficients by coset^i so the FFT evaluates over the coset domain.
-            let mut coset_power = Bn254Scalar::one();
-            for coeff in data.iter_mut().take(trace_len) {
-                *coeff = coeff.mul(coset_power);
-                coset_power = coset_power.mul(coset);
-            }
-            let mut column_fft = vec![data];
-            cpu_fft(&mut column_fft, eval_log, twiddles);
-            outputs.push(column_fft.pop().expect("single column present"));
-        }
-        outputs
     }
     #[test]
     fn fft_matches_cpu_reference() {
@@ -1527,7 +1483,7 @@ const METAL_KERNEL_DESCRIPTORS: &[MetalKernelDescriptor] = &[
         kind: KernelKind::Poseidon,
         threadgroup_cap: Some(POSEIDON_THREADGROUP_CAPACITY),
         tile_stage_cap: None,
-        notes: "High-occupancy Poseidon2 permutation over STATE_WIDTH=3 words. \
+        notes: "High-occupancy dense-MDS Poseidon permutation over STATE_WIDTH=3 words. \
                 Threadgroups cache the round constants/MDS matrix in threadgroup memory, \
                 each lane walks multiple states (tunable via FASTPQ_METAL_POSEIDON_BATCH) \
                 with unrolled rounds, and FASTPQ_METAL_POSEIDON_LANES pins the launch width \

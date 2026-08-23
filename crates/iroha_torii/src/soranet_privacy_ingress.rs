@@ -15,6 +15,9 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use iroha_data_model::soranet::privacy_metrics::{
+    SoranetPrivacyCollectorIdV1, derive_soranet_privacy_collector_id,
+};
 use iroha_torii_shared::ErrorEnvelope;
 use std::net::IpAddr;
 /// Maximum encoded body accepted by either SoraNet privacy ingest route.
@@ -30,7 +33,12 @@ pub(crate) struct SoranetPrivacyCollectorAuthState {
 }
 #[derive(Clone, Copy, Debug)]
 /// Marker inserted only after a collector passes secondary privacy admission.
-pub(crate) struct VerifiedSoranetPrivacyCollector;
+pub(crate) struct VerifiedSoranetPrivacyCollector(SoranetPrivacyCollectorIdV1);
+fn collector_id_for_operator(
+    operator: &AuthenticatedOperatorPublicKey,
+) -> SoranetPrivacyCollectorIdV1 {
+    derive_soranet_privacy_collector_id(&operator.0)
+}
 fn privacy_reject(status: StatusCode, code: &'static str, message: impl Into<String>) -> Response {
     let payload = ErrorEnvelope::new(code, message.into());
     (status, utils::NoritoBody(payload)).into_response()
@@ -134,7 +142,9 @@ pub(crate) async fn enforce_soranet_privacy_collector_authentication(
     }
     request
         .extensions_mut()
-        .insert(VerifiedSoranetPrivacyCollector);
+        .insert(VerifiedSoranetPrivacyCollector(collector_id_for_operator(
+            &operator,
+        )));
     next.run(request).await
 }
 #[cfg(feature = "telemetry")]
@@ -152,9 +162,19 @@ pub(super) async fn handler_post_soranet_privacy_event(
 /// Record one authenticated SoraNet privacy collector share.
 pub(super) async fn handler_post_soranet_privacy_share(
     State(app): State<SharedAppState>,
-    Extension(_collector): Extension<VerifiedSoranetPrivacyCollector>,
+    Extension(collector): Extension<VerifiedSoranetPrivacyCollector>,
     request: NoritoJson<RecordSoranetPrivacyShareDto>,
 ) -> Result<Response, Error> {
+    if request.0.share.collector_id != collector.0 {
+        app.telemetry
+            .record_soranet_privacy_ingest_reject("share", "collector_identity_mismatch")
+            .await;
+        return Ok(privacy_reject(
+            StatusCode::FORBIDDEN,
+            "soranet_privacy_collector_identity_mismatch",
+            "collector_id does not match the authenticated operator public key",
+        ));
+    }
     routing::handle_post_soranet_privacy_share(app.telemetry.clone(), request)
         .await
         .map(IntoResponse::into_response)
@@ -175,7 +195,9 @@ pub(crate) async fn test_handler_post_soranet_privacy_event_with_ingress(
     }
     handler_post_soranet_privacy_event(
         State(app),
-        Extension(VerifiedSoranetPrivacyCollector),
+        Extension(VerifiedSoranetPrivacyCollector(collector_id_for_operator(
+            &operator,
+        ))),
         request,
     )
     .await
@@ -196,7 +218,9 @@ pub(crate) async fn test_handler_post_soranet_privacy_share_with_ingress(
     }
     handler_post_soranet_privacy_share(
         State(app),
-        Extension(VerifiedSoranetPrivacyCollector),
+        Extension(VerifiedSoranetPrivacyCollector(collector_id_for_operator(
+            &operator,
+        ))),
         request,
     )
     .await

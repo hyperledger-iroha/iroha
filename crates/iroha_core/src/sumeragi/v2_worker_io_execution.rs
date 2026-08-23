@@ -32,7 +32,7 @@ fn send_tracked_completion_with_lifecycle_ordinal(
     completion: V2IoCompletion,
     runtime_lifecycle_ordinal: Option<u128>,
 ) -> Result<(), mpsc::SendError<V2IoCompletion>> {
-    let recovered_decision_apply = completion.recovered_decision_apply_key();
+    let lifecycle_decision_apply = completion.lifecycle_decision_apply_key();
     let recovered_lifecycle_sign = completion.recovered_lifecycle_sign_key();
     let recovered_decision_fetch = completion.recovered_decision_fetch_key();
     let lifecycle_validate = completion.lifecycle_validate_key();
@@ -41,7 +41,7 @@ fn send_tracked_completion_with_lifecycle_ordinal(
         Instant::now(),
         completion.requires_runtime_capacity(),
         runtime_lifecycle_ordinal,
-        recovered_decision_apply,
+        lifecycle_decision_apply,
         recovered_lifecycle_sign,
         recovered_decision_fetch,
         lifecycle_validate,
@@ -64,7 +64,7 @@ fn try_send_tracked_completion_with_lifecycle_ordinal(
     completion: V2IoCompletion,
     runtime_lifecycle_ordinal: Option<u128>,
 ) -> Result<(), mpsc::TrySendError<V2IoCompletion>> {
-    let recovered_decision_apply = completion.recovered_decision_apply_key();
+    let lifecycle_decision_apply = completion.lifecycle_decision_apply_key();
     let recovered_lifecycle_sign = completion.recovered_lifecycle_sign_key();
     let recovered_decision_fetch = completion.recovered_decision_fetch_key();
     let lifecycle_validate = completion.lifecycle_validate_key();
@@ -73,7 +73,7 @@ fn try_send_tracked_completion_with_lifecycle_ordinal(
         Instant::now(),
         completion.requires_runtime_capacity(),
         runtime_lifecycle_ordinal,
-        recovered_decision_apply,
+        lifecycle_decision_apply,
         recovered_lifecycle_sign,
         recovered_decision_fetch,
         lifecycle_validate,

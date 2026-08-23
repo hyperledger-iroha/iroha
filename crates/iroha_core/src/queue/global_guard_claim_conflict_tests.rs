@@ -103,6 +103,115 @@ fn globally_bound_gossip_waits_for_certificate_and_retains_it_after_exact_marker
 }
 
 #[test]
+fn popped_expired_exact_global_admission_is_selected_at_bound_proposal_height() {
+    let fixture = globally_bound_guard_fixture_at_height(5);
+    let hash = fixture.transaction.hash_as_entrypoint();
+    assert_eq!(fixture.binding.admission_context.authority_height, 5);
+    assert_eq!(fixture.binding.admission_context.proposal_height, 6);
+    install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
+    assert_eq!(
+        fixture
+            .state
+            .queue_plan_admission_binding_registry_match(&fixture.binding)
+            .expect("read exact expired global owner"),
+        QueuePlanAdmissionRegistryMatch::Exact
+    );
+
+    fixture
+        .time_handle
+        .advance(fixture.transaction_time_to_live + Duration::from_millis(1));
+    assert!(fixture.queue.is_expired(&fixture.transaction));
+    let mut expired = Vec::new();
+    let guard = fixture
+        .queue
+        .pop_from_queue(&fixture.state.view(), &mut expired)
+        .expect("an exact canonical owner must remain selectable after local TTL expiry");
+    assert_eq!(guard.clone_accepted().hash_as_entrypoint(), hash);
+    assert!(expired.is_empty());
+    assert_eq!(fixture.queue.active_len(), 1);
+    assert_eq!(fixture.queue.queued_len(), 0);
+
+    drop(guard);
+    fixture.assert_restored_fifo_owner();
+}
+
+#[test]
+fn popped_expired_unbound_transaction_still_drops() {
+    let mut state = State::new(
+        world_with_test_domains(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let config = config_factory();
+    let transaction_time_to_live = config.transaction_time_to_live;
+    let queue = Arc::new(Queue::test(config, &time_source));
+    let transaction = accepted_tx_by_someone(&time_source);
+    let hash = transaction.hash_as_entrypoint();
+    register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
+    queue
+        .push_with_lane_with_state(transaction.clone(), &state)
+        .expect("enqueue ordinary transaction");
+
+    time_handle.advance(transaction_time_to_live + Duration::from_millis(1));
+    assert!(queue.is_expired(&transaction));
+    let mut expired = Vec::new();
+    assert!(queue.pop_from_queue(&state.view(), &mut expired).is_none());
+    assert_eq!(expired.len(), 1);
+    assert_eq!(expired[0].tx.hash_as_entrypoint(), hash);
+    assert_eq!(queue.active_len(), 0);
+    assert_eq!(queue.queued_len(), 0);
+}
+
+#[test]
+fn popped_expired_conflicting_global_admission_remains_fail_closed() {
+    let fixture = globally_bound_guard_fixture_at_height(5);
+    let hash = fixture.transaction.hash_as_entrypoint();
+    let routing_plan = fixture
+        .binding
+        .routing_plan()
+        .expect("fixture binding routing plan");
+    let conflicting_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        fixture.state.network_id_ref(),
+        fixture.transaction.entrypoint(),
+        &routing_plan,
+        fixture.binding.admission_context.clone(),
+        fixture.binding.enqueue_timestamp_ms.saturating_add(1),
+    )
+    .expect("build coherent conflicting expired global owner");
+    install_queue_plan_registry_value_for_test(&fixture.state, &conflicting_binding);
+    assert_eq!(
+        fixture
+            .state
+            .queue_plan_admission_binding_registry_match(&fixture.binding)
+            .expect("read conflicting expired global owner"),
+        QueuePlanAdmissionRegistryMatch::Conflict
+    );
+
+    fixture
+        .time_handle
+        .advance(fixture.transaction_time_to_live + Duration::from_millis(1));
+    assert!(fixture.queue.is_expired(&fixture.transaction));
+    let mut expired = Vec::new();
+    assert!(
+        fixture
+            .queue
+            .pop_from_queue(&fixture.state.view(), &mut expired)
+            .is_none(),
+        "a conflicting canonical owner must never be selected"
+    );
+    assert!(expired.is_empty());
+    assert!(
+        !fixture
+            .queue
+            .global_selection_owners
+            .lock()
+            .contains_key(&hash)
+    );
+    fixture.assert_terminally_removed();
+}
+
+#[test]
 fn exact_pending_body_handoff_preserves_historical_admission_after_ttl() {
     let dir = tempdir().expect("exact pending body-handoff directory");
     let journal_path = dir.path().join("exact_pending_body_handoff.norito");

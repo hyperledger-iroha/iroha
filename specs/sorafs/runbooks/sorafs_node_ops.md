@@ -49,6 +49,7 @@ the bundled CLI.【crates/sorafs_node/src/bin/sorafs-node.rs:1】
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
   --data-dir ./storage/sorafs \
+  --max-capacity-bytes=10737418240 \
   --manifest ./fixtures/manifest.to \
   --payload ./fixtures/payload.bin
 

@@ -5,7 +5,9 @@ use std::time::Duration;
 use iroha_config::parameters::actual::{NodeRole, Root as Config};
 use iroha_data_model::{
     NetworkId,
-    block::consensus_v2::{ConsensusMode, SumeragiV2GenesisContextParameters},
+    block::consensus_v2::{
+        ConsensusMode, SnapshotV2BootstrapRecord, SumeragiV2GenesisContextParameters,
+    },
     isi::{Instruction as _, SetParameter},
     offline::{
         KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT, KagemushaV4RuntimeEffectiveConfigProjectionV1,
@@ -15,6 +17,7 @@ use iroha_data_model::{
         Parameter,
         system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
     },
+    peer::PeerId,
     transaction::Executable,
 };
 use iroha_genesis::GenesisBlock;
@@ -49,8 +52,7 @@ impl VerifiedKagemushaV4RuntimeEffectiveConfigV1 {
             nexus_amx_context_hash: *context.nexus_amx_context_hash.as_ref(),
             execution_policy_hash: *context.execution_policy_hash.as_ref(),
         };
-        if config.sumeragi.role != NodeRole::Validator
-            || metadata.mode != SumeragiConsensusMode::Permissioned
+        if metadata.mode != SumeragiConsensusMode::Permissioned
             || context.mode != ConsensusMode::Permissioned
             || metadata.sumeragi_v2 != staged_parameters
             || context.network_id != NetworkId::from_genesis_hash(genesis.0.hash())
@@ -63,17 +65,124 @@ impl VerifiedKagemushaV4RuntimeEffectiveConfigV1 {
                     .to_owned(),
             );
         }
-        let genesis_authority = genesis
-            .0
-            .external_transactions()
-            .next()
-            .and_then(|transaction| transaction.authority().try_signatory())
-            .ok_or_else(|| "signed genesis has no canonical root authority".to_owned())?;
-        if config.genesis.expected_hash != genesis.0.hash()
-            || &config.genesis.public_key != genesis_authority
-        {
-            return Err("effective genesis roots differ from signed genesis".to_owned());
+        require_signed_genesis_root(config, genesis)?;
+        let context_validators = context
+            .roster
+            .iter()
+            .map(|member| member.validator.clone())
+            .collect::<Vec<_>>();
+        let signed = signed_genesis_validator_pops(genesis)
+            .map_err(|error| format!("invalid signed genesis voting authority: {error}"))?;
+        let exact_pops = signed.len() == staged_pops.len()
+            && signed
+                .iter()
+                .zip(context_validators.iter().zip(staged_pops))
+                .all(|((signed_id, signed_pop), (staged_id, staged_pop))| {
+                    signed_id == staged_id && signed_pop == staged_pop
+                });
+        if !exact_pops {
+            return Err("staged validator topology or PoPs differ from signed genesis".to_owned());
         }
+        let validator_pops = context_validators
+            .into_iter()
+            .zip(staged_pops.iter().cloned())
+            .collect();
+        Self::derive_from_authenticated_parts(
+            config,
+            context.network_id.clone(),
+            context.mode,
+            staged_parameters,
+            Duration::from_millis(metadata.block_cadence_ms.get()),
+            validator_pops,
+        )
+    }
+
+    /// Derive the local gate identity from the exact signed-genesis authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless signed genesis and the effective local runtime
+    /// form the exact permissioned four-validator projection.
+    pub fn derive_from_signed_genesis(
+        config: &Config,
+        genesis: &GenesisBlock,
+    ) -> Result<Self, String> {
+        let metadata = exact_signed_consensus_metadata(genesis)?;
+        require_signed_genesis_root(config, genesis)?;
+        let validator_pops = signed_genesis_validator_pops(genesis)
+            .map_err(|error| format!("invalid signed genesis voting authority: {error}"))?
+            .into_iter()
+            .collect();
+        Self::derive_from_authenticated_parts(
+            config,
+            NetworkId::from_genesis_hash(genesis.0.hash()),
+            metadata.mode.into(),
+            metadata.sumeragi_v2,
+            Duration::from_millis(metadata.block_cadence_ms.get()),
+            validator_pops,
+        )
+    }
+
+    /// Derive the local gate identity from an already authenticated snapshot lineage.
+    ///
+    /// The caller must obtain `bootstrap` from
+    /// [`crate::state::State::authenticated_snapshot_v2_bootstrap`] and
+    /// `signed_genesis_context` from the exact verified local validator
+    /// qualification seal. An unauthenticated snapshot candidate or caller
+    /// assertion is not an admissible source.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the retained snapshot authority and effective
+    /// local runtime form the exact permissioned four-validator projection.
+    pub fn derive_from_authenticated_snapshot(
+        config: &Config,
+        bootstrap: &SnapshotV2BootstrapRecord,
+        block_cadence: Duration,
+        signed_genesis_context: SumeragiV2GenesisContextParameters,
+    ) -> Result<Self, String> {
+        bootstrap
+            .validate()
+            .map_err(|error| format!("invalid authenticated snapshot bootstrap: {error}"))?;
+        let validator_pops = bootstrap
+            .context
+            .roster
+            .iter()
+            .map(|member| member.validator.clone())
+            .zip(bootstrap.validator_set_pops.iter().cloned())
+            .collect();
+        Self::derive_from_authenticated_parts(
+            config,
+            bootstrap.context.network_id.clone(),
+            bootstrap.context.mode,
+            signed_genesis_context,
+            block_cadence,
+            validator_pops,
+        )
+    }
+
+    fn derive_from_authenticated_parts(
+        config: &Config,
+        network_id: NetworkId,
+        mode: ConsensusMode,
+        genesis_context: SumeragiV2GenesisContextParameters,
+        block_cadence: Duration,
+        mut validator_pops: Vec<(PeerId, Vec<u8>)>,
+    ) -> Result<Self, String> {
+        if config.sumeragi.role != NodeRole::Validator
+            || mode != ConsensusMode::Permissioned
+            || network_id != NetworkId::from_genesis_hash(config.genesis.expected_hash)
+            || validator_pops.len() != KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT
+        {
+            return Err(
+                "Kagemusha runtime-effective config requires exact permissioned four-validator authority"
+                    .to_owned(),
+            );
+        }
+        genesis_context
+            .validate()
+            .map_err(|error| format!("invalid Kagemusha genesis context: {error}"))?;
+        validator_pops.sort_by(|(left, _), (right, _)| left.cmp(right));
 
         let trusted = config.common.trusted_peers.value();
         let local_id = config.common.peer.id();
@@ -82,39 +191,30 @@ impl VerifiedKagemushaV4RuntimeEffectiveConfigV1 {
         {
             return Err("effective local peer differs from trusted myself identity".to_owned());
         }
-        let context_validators = context
-            .roster
+        let validator_ids = validator_pops
             .iter()
-            .map(|member| member.validator.clone())
+            .map(|(validator_id, _)| validator_id.clone())
             .collect::<Vec<_>>();
         let mut configured_validators = filter_validators_from_trusted(trusted);
         configured_validators.sort();
-        let signed = signed_genesis_validator_pops(genesis)
-            .map_err(|error| format!("invalid signed genesis voting authority: {error}"))?;
-        let exact_pops = signed.len() == staged_pops.len()
-            && signed.len() == trusted.pops.len()
-            && signed
-                .iter()
-                .zip(context_validators.iter().zip(staged_pops))
-                .all(|((signed_id, signed_pop), (staged_id, staged_pop))| {
-                    signed_id == staged_id
-                        && signed_pop == staged_pop
-                        && trusted.pops.get(signed_id.public_key()) == Some(signed_pop)
-                });
-        if configured_validators != context_validators
-            || !context_validators.contains(local_id)
+        let exact_pops = trusted.pops.len() == validator_pops.len()
+            && validator_pops.iter().all(|(validator_id, pop)| {
+                trusted.pops.get(validator_id.public_key()) == Some(pop)
+                    && iroha_crypto::bls_normal_pop_verify(validator_id.public_key(), pop).is_ok()
+            });
+        if configured_validators != validator_ids
+            || !validator_ids.contains(local_id)
             || !exact_pops
         {
             return Err(
-                "effective trusted-validator topology or PoPs differ from staged signed genesis"
+                "effective trusted-validator topology or PoPs differ from authenticated authority"
                     .to_owned(),
             );
         }
 
-        let validators = context_validators
+        let validators = validator_pops
             .iter()
-            .zip(staged_pops)
-            .map(|(validator_id, staged_pop)| {
+            .map(|(validator_id, pop)| {
                 let public_address = if validator_id == local_id {
                     config.network.public_address.value().clone()
                 } else {
@@ -130,7 +230,7 @@ impl VerifiedKagemushaV4RuntimeEffectiveConfigV1 {
                 Ok(KagemushaV4RuntimeValidatorProjectionV1 {
                     validator_id: validator_id.clone(),
                     public_address,
-                    bls_pop: staged_pop.clone(),
+                    bls_pop: pop.clone(),
                 })
             })
             .collect::<Result<Vec<_>, String>>()?
@@ -138,10 +238,7 @@ impl VerifiedKagemushaV4RuntimeEffectiveConfigV1 {
             .map_err(|_| "effective validator projection is not exactly four peers".to_owned())?;
         let sumeragi = config
             .sumeragi
-            .v2_config(
-                Duration::from_millis(metadata.block_cadence_ms.get()),
-                context.mode,
-            )
+            .v2_config(block_cadence, mode)
             .map_err(|error| format!("invalid effective Sumeragi V2 config: {error}"))?;
         let projection = KagemushaV4RuntimeEffectiveConfigProjectionV1 {
             chain: config.common.chain.clone(),
@@ -151,7 +248,7 @@ impl VerifiedKagemushaV4RuntimeEffectiveConfigV1 {
             genesis_expected_hash: config.genesis.expected_hash,
             validators,
             sumeragi_config_fingerprint: sumeragi.fingerprint(),
-            genesis_context: staged_parameters,
+            genesis_context,
             kagemusha_max_decoded_bytes: config.settlement.offline.kagemusha_max_decoded_bytes,
         };
         projection.validate().map_err(|error| error.to_string())?;
@@ -163,6 +260,21 @@ impl VerifiedKagemushaV4RuntimeEffectiveConfigV1 {
     pub const fn projection(&self) -> &KagemushaV4RuntimeEffectiveConfigProjectionV1 {
         &self.projection
     }
+}
+
+fn require_signed_genesis_root(config: &Config, genesis: &GenesisBlock) -> Result<(), String> {
+    let genesis_authority = genesis
+        .0
+        .external_transactions()
+        .next()
+        .and_then(|transaction| transaction.authority().try_signatory())
+        .ok_or_else(|| "signed genesis has no canonical root authority".to_owned())?;
+    if config.genesis.expected_hash != genesis.0.hash()
+        || &config.genesis.public_key != genesis_authority
+    {
+        return Err("effective genesis roots differ from signed genesis".to_owned());
+    }
+    Ok(())
 }
 
 fn exact_signed_consensus_metadata(

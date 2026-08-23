@@ -109,8 +109,10 @@ mod tests {
     #[test]
     fn nexus_consensus_policy_digest_excludes_lane_operator_metadata() {
         let mut left = Nexus::default();
-        let mut left_lane = LaneConfigMetadata::default();
-        left_lane.description = Some("left operator note".to_owned());
+        let mut left_lane = LaneConfigMetadata {
+            description: Some("left operator note".to_owned()),
+            ..LaneConfigMetadata::default()
+        };
         left_lane
             .metadata
             .insert("operator.owner".to_owned(), "left".to_owned());
@@ -1459,8 +1461,10 @@ mod tests {
     #[test]
     fn sumeragi_v2_nexus_amx_hash_excludes_operator_descriptions() {
         let mut left = Nexus::default();
-        let mut left_lane = LaneConfigMetadata::default();
-        left_lane.description = Some("left lane note".to_owned());
+        let mut left_lane = LaneConfigMetadata {
+            description: Some("left lane note".to_owned()),
+            ..LaneConfigMetadata::default()
+        };
         left_lane
             .metadata
             .insert("operator.owner".to_owned(), "left".to_owned());

@@ -177,6 +177,43 @@ def x509_fixture_certificate(
     return der(0x30, tbs + signature_algorithm + der(0x03, b"\0" + signature))
 
 
+def x509_alternate_outer_signature(certificate_der: bytes) -> bytes:
+    """Return the same TBS certificate with the other valid ECDSA `s` value."""
+
+    certificate = production_evidence._parse_x509_certificate(
+        certificate_der, "fixture certificate"
+    )
+    r, s = production_evidence._parse_ecdsa_der_for_order(
+        certificate.signature_der,
+        certificate.public_key_curve.n,
+        production_evidence.X509_SIGNATURE_DER_MAX_BYTES,
+        "fixture certificate signature",
+    )
+    alternate_signature = der(
+        0x30,
+        der_integer(r) + der_integer(certificate.public_key_curve.n - s),
+    )
+    outer = production_evidence._der_single(
+        certificate_der, 0x30, "fixture certificate"
+    )
+    reader = production_evidence._DerReader(
+        outer.content, "fixture certificate"
+    )
+    tbs = reader.element(0x30)
+    signature_algorithm = reader.element(0x30)
+    reader.element(0x03)
+    reader.finish()
+    alternate = der(
+        0x30,
+        tbs.encoded
+        + signature_algorithm.encoded
+        + der(0x03, b"\0" + alternate_signature),
+    )
+    if alternate == certificate_der:
+        raise AssertionError("alternate ECDSA signature encoding did not change")
+    return alternate
+
+
 def x509_ca_extensions(path_length: int) -> list[tuple[str, bool, bytes]]:
     return [
         (
@@ -368,8 +405,8 @@ class Fixture:
             "source_tree_sha256": source_tree,
             "source_repo_dirty": False,
             "reviewed_source_closure_descriptor_sha256": reviewed_closure,
-            "iphoneos_sdk_version": "26.0",
-            "xcode_version": "Xcode 26.0\nBuild version 17A1",
+            "iphoneos_sdk_version": "26.6",
+            "xcode_version": "Xcode 26.6\nBuild version 17G1",
             "cargo_version_verbose": "cargo 1.93.1\nrelease: 1.93.1",
             "rustc_version_verbose": "rustc 1.93.1\ncommit-hash: fixture",
             "required_symbols": [
@@ -811,7 +848,7 @@ class ProductionFixture:
                         "sha256": sha256(self.root_der),
                     }
                 ],
-                "revoked_certificate_sha256": [],
+                "revoked_certificate_tbs_sha256": [],
                 "x509_validation_profile": production_evidence.X509_VALIDATION_PROFILE,
                 "secure_enclave_key_profile": production_evidence.SECURE_ENCLAVE_KEY_PROFILE,
             },
@@ -1207,6 +1244,21 @@ class ProductionFixture:
 
 
 class IosCandidateEvidenceTest(unittest.TestCase):
+    def test_private_json_zero_length_write_fails_without_publishing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            root.chmod(0o700)
+            output = root / "signed-evidence.json"
+            writer = mock.Mock(side_effect=[0, OSError("write loop continued")])
+            with (
+                mock.patch.object(evidence_lib.os, "write", writer),
+                self.assertRaisesRegex(evidence_lib.EvidenceError, "written durably"),
+            ):
+                evidence_lib.write_private_json(output, {"schema": "test"})
+            self.assertEqual(writer.call_count, 1)
+            self.assertFalse(output.exists())
+            self.assertEqual(list(root.iterdir()), [])
+
     def test_apple_2026_attestation_auth_data_accepts_at_without_ed(self) -> None:
         """Accept Apple's published App Attest authData flag contract."""
 
@@ -1283,7 +1335,7 @@ class IosCandidateEvidenceTest(unittest.TestCase):
             "bundle_id": "com.example.myapp",
             "allowed_validation_categories": [1],
             "allowed_bundle_versions": ["1"],
-            "revoked_certificate_sha256": [],
+            "revoked_certificate_tbs_sha256": [],
             "trusted_app_attest_roots": [
                 {"der_base64": base64.b64encode(trusted_root).decode("ascii")}
             ],
@@ -1588,11 +1640,73 @@ class IosCandidateEvidenceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             fixture = self.production_fixture(temporary)
             policy = json.loads(fixture.policy.read_text(encoding="utf-8"))
-            policy["revoked_certificate_sha256"] = [sha256(fixture.leaf_der)]
+            policy["revoked_certificate_tbs_sha256"] = [
+                sha256(
+                    production_evidence._parse_x509_certificate(
+                        fixture.leaf_der, "fixture leaf"
+                    ).tbs_der
+                )
+            ]
             write_json(fixture.policy, policy)
             errors = fixture.errors()
             self.assertTrue(
                 any("revoked by static production policy" in error for error in errors),
+                errors,
+            )
+
+    def test_production_ios_tbs_revocation_survives_outer_signature_substitution(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.production_fixture(temporary)
+            original = production_evidence._parse_x509_certificate(
+                fixture.leaf_der, "fixture leaf"
+            )
+            alternate_der = x509_alternate_outer_signature(fixture.leaf_der)
+            alternate = production_evidence._parse_x509_certificate(
+                alternate_der, "alternate fixture leaf"
+            )
+            self.assertNotEqual(sha256(fixture.leaf_der), sha256(alternate_der))
+            self.assertEqual(original.tbs_der, alternate.tbs_der)
+            production_evidence._verify_x509_signature(
+                alternate,
+                production_evidence._parse_x509_certificate(
+                    fixture.intermediate_der, "fixture intermediate"
+                ),
+                "alternate fixture leaf",
+            )
+
+            fixture.mutate_attestation(
+                lambda statement: statement.__setitem__(
+                    "x5c", (alternate_der, statement["x5c"][1])
+                )
+            )
+            fixture._write_freshness_receipt()
+            self.assertEqual(fixture.errors(), [])
+
+            policy = json.loads(fixture.policy.read_text(encoding="utf-8"))
+            policy["revoked_certificate_tbs_sha256"] = [sha256(original.tbs_der)]
+            write_json(fixture.policy, policy)
+
+            errors = fixture.errors()
+            self.assertTrue(
+                any("revoked by static production policy" in error for error in errors),
+                errors,
+            )
+
+    def test_production_ios_duplicate_chain_uses_tbs_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.production_fixture(temporary)
+            alternate_der = x509_alternate_outer_signature(fixture.leaf_der)
+            fixture.mutate_attestation(
+                lambda statement: statement.__setitem__(
+                    "x5c",
+                    (alternate_der, fixture.leaf_der, statement["x5c"][1]),
+                )
+            )
+            errors = fixture.errors()
+            self.assertTrue(
+                any("duplicate certificates" in error for error in errors),
                 errors,
             )
 
@@ -1987,7 +2101,7 @@ class IosCandidateEvidenceTest(unittest.TestCase):
                     "sha256": sha256(apple_root),
                 }
             ],
-            "revoked_certificate_sha256": [],
+            "revoked_certificate_tbs_sha256": [],
             "x509_validation_profile": production_evidence.X509_VALIDATION_PROFILE,
             "secure_enclave_key_profile": production_evidence.SECURE_ENCLAVE_KEY_PROFILE,
         }
@@ -2003,7 +2117,7 @@ class IosCandidateEvidenceTest(unittest.TestCase):
             baseline = json.loads(fixture.policy.read_text(encoding="utf-8"))
             for field, invalid in (
                 ("allowed_bundle_versions", ["1", 2]),
-                ("revoked_certificate_sha256", [nonzero_digest("revoked"), 2]),
+                ("revoked_certificate_tbs_sha256", [nonzero_digest("revoked"), 2]),
             ):
                 policy = dict(baseline)
                 policy[field] = invalid
@@ -2346,6 +2460,22 @@ class IosCandidateEvidenceTest(unittest.TestCase):
             self.assert_error_contains(
                 fixture,
                 "native build manifest file digest mismatch",
+            )
+
+    def test_native_build_manifest_rejects_a_different_xcode_with_valid_signature(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.fixture(temporary)
+            fixture.sign()
+            fixture.mutate_json(
+                "input/native-build-manifest.json",
+                lambda value: value.__setitem__(
+                    "xcode_version", "Xcode 26.2\nBuild version 17C52"
+                ),
+            )
+            fixture.resign_without_semantic_preflight()
+            self.assert_error_contains(
+                fixture,
+                "xcode_version must be exact Xcode 26.6",
             )
 
     def test_simulator_receipt_is_rejected_with_valid_signature(self) -> None:

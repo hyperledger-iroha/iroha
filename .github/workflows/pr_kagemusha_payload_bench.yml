@@ -13,6 +13,7 @@ on:
       - "ci/check_kagemusha_production_readiness_source_contract.py"
       - "ci/check_kagemusha_production_readiness_source_support.py"
       - "ci/check_kagemusha_recursion_source_contract.py"
+      - "ci/check_kagemusha_lifecycle_source_contract.py"
       - "ci/check_kagemusha_production_readiness_self_test.py"
       - "scripts/deploy_localnet.sh"
       - "scripts/tests/deploy_localnet_test.py"
@@ -759,6 +760,8 @@ on:
       - "artifacts/openapi/torii.json"
       - "scripts/check_android_device_lab_slot.py"
       - "scripts/build_norito_xcframework.sh"
+      - "scripts/capture_android_attestation_status.py"
+      - "scripts/android_attestation_certificate_profile.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
       - "scripts/check_swift_offline_device_attestation_fixture.py"
@@ -782,6 +785,9 @@ on:
       - "ci/check_kagemusha_jvm_native_bridge.sh"
       - "rust-toolchain.toml"
       - "scripts/tests/check_android_device_lab_slot_test.py"
+      - "scripts/tests/capture_android_attestation_status_test.py"
+      - "scripts/tests/android_attestation_certificate_profile_fixtures.py"
+      - "scripts/tests/android_attestation_certificate_profile_test.py"
       - "scripts/tests/kagemusha_production_promotion_workflow_test.py"
       - "tools/kotlin-fixture-gen/**"
   workflow_dispatch:
@@ -846,6 +852,7 @@ jobs:
           scripts/tests/build_kagemusha_v4_candidate_bundle_test.py
           scripts/tests/build_kagemusha_production_ios_policy_test.py
           scripts/tests/check_kagemusha_candidate_ios_evidence_test.py
+          scripts/tests/kagemusha_candidate_ios_lab_source_test.py
           scripts/tests/kagemusha_app_attest_freshness_authority_test.py
           scripts/tests/kagemusha_production_app_attest_lab_source_test.py
           scripts/tests/measure_kagemusha_production_app_attest_bundle_test.py
@@ -856,6 +863,8 @@ jobs:
           scripts/tests/kagemusha_production_promotion_workflow_test.py
           scripts/tests/stage_kagemusha_candidate_android_artifacts_test.py
           scripts/tests/stage_kagemusha_candidate_android_lab_test.py
+          scripts/tests/capture_android_attestation_status_test.py
+          scripts/tests/android_attestation_certificate_profile_test.py
           pytests/scripts/run_kagemusha_v4_generation_test.py
           pytests/scripts/run_kagemusha_v4_generation_benchmark_test.py
       - name: Run Taira devnet orchestration regressions
@@ -869,20 +878,28 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - run: cargo test -p iroha_data_model kagemusha_v4 --lib --tests
+      - run: cargo test -p iroha_data_model --lib --features transparent_api kagemusha_v4 -- --nocapture
       - run: cargo test -p iroha_data_model --test iroha_data_model_group_02 offline_public_schema_golden -- --nocapture
       - run: cargo test -p iroha_data_model --lib --features transparent_api canary_ -- --nocapture
       - run: cargo test -p iroha_data_model --lib --features transparent_api post_canary_liveness_rejects_receipt_and_transaction_wire_anchor_splices -- --nocapture
       - run: cargo test -p iroha_data_model --lib --features transparent_api kagemusha_post_canary_validator_liveness -- --nocapture
       - run: cargo test -p iroha_data_model receiver_snapshot --lib
       - run: cargo test -p iroha_core kagemusha_v4 --lib
+      - run: cargo test -p iroha_core direct_ordinary_multisig_cancel_executes_exact_staged_transition --lib -- --nocapture
+      - run: cargo test -p iroha_core direct_ordinary_multisig_deactivate_executes_exact_enabled_transition --lib -- --nocapture
+      - run: cargo test -p iroha_core production_proposal_validation_enforces_kagemusha_runtime_projection --lib -- --nocapture
+      - run: cargo test -p iroha_core production_commit_apply_enforces_kagemusha_runtime_projection --lib -- --nocapture
+      - run: cargo test -p iroha_core production_vote_worker_rejects_missing_and_mismatched_kagemusha_projection --lib -- --nocapture
+      - run: cargo test -p iroha_core production_vote_worker_signs_prepare_and_commit_for_exact_kagemusha_projection --lib -- --nocapture
+      - run: cargo test -p irohad --bin iroha3d authenticated_snapshot_ -- --nocapture
       - run: cargo test -p iroha_core --lib taira_canary -- --nocapture
       - run: cargo test -p iroha_core --lib autonomous_merge_admission_intent_ -- --nocapture
+      - run: cargo test -p iroha_core --lib attestation_certificate_validation_tests -- --nocapture
       - run: cargo test -p iroha_core offline_device_attestation_policy --lib
       - run: cargo test -p iroha_core device_registration_ --lib
       - run: cargo test -p iroha_core kagemusha_online_registration_ --lib
       - run: cargo test -p iroha_core active_receiver_snapshot_ --lib
-      - run: cargo test -p iroha_core --features "dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab" --bin kagemusha_recursive_spend_v4_bundle final_release_inventory_is_exact_and_includes_recursive_qualification_receipt
+      - run: cargo test -p iroha_core --features "dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab" --bin kagemusha_recursive_spend_v4_bundle final_release_inventory_is_exact_and_includes_both_receipts
       - run: cargo test -p iroha_core sparse_confidential_subtree_roots_match_dense_reference --lib
       - run: cargo test -p iroha_core next_zero_confidential_path_matches_padded_tree_path --lib
       - run: cargo test -p iroha_core sequential_append_paths --lib
@@ -896,6 +913,7 @@ jobs:
       - run: cargo test -p iroha_kagami --bin kagami private_custody_readme_invokes_non_executable_scripts_through_bash
       - run: cargo test -p iroha_kagami --bin kagami raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed
       - run: cargo test -p iroha_kagami --bin kagami atomic_activation_
+      - run: cargo test -p iroha_kagami --bin kagami lifecycle_ -- --nocapture
       - run: cargo test -p iroha_kagami --bin kagami backing_
       - run: cargo test -p iroha_torii_shared offline_api --lib
       - run: cargo test -p iroha_torii generated_spec_documents_strict_typed_offline_request_schemas_and_states

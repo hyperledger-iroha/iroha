@@ -150,6 +150,14 @@ fn validator_qualification_fixture() -> (
             vec!["41".to_owned(), "42".to_owned()],
             "com.pk.retailwallet".to_owned(),
             vec![[0x55; 32], [0x66; 32]],
+            iroha_data_model::offline::OfflineAndroidAttestationStatusSnapshotV1 {
+                version: iroha_data_model::offline::OFFLINE_ANDROID_ATTESTATION_STATUS_SNAPSHOT_VERSION_V1,
+                payload_sha256: [0x99; 32],
+                response_date_ms: 1_800_000_000_000,
+                last_modified_ms: Some(1_800_000_000_000),
+                cache_max_age_seconds: 86_400,
+                non_valid_serials: Vec::new(),
+            },
             1_800_000_000_000,
         )
         .expect("production validator qualification policy");
@@ -920,6 +928,39 @@ fn validator_qualification_freshness_is_bounded_at_the_signing_clock() {
     );
     assert!(validate_validator_qualification_freshness_at_v1(&subject, expires + 1).is_err());
     assert!(validate_validator_qualification_freshness_at_v1(&subject, 0).is_err());
+
+    let mut boundary_policy = subject.device_attestation_policy().clone();
+    boundary_policy
+        .android_status_snapshot
+        .as_mut()
+        .expect("qualification fixture has an Android status snapshot")
+        .cache_max_age_seconds =
+        u32::try_from((expires - issued) / 1_000).expect("fixture status lifetime fits u32");
+    KagemushaV4ValidatorQualificationSubjectV1::try_new(
+        subject.promotion_controller().clone(),
+        subject.promotion_reservation(),
+        subject.promotion_id(),
+        authenticated.manifest_sha256(),
+        boundary_policy.clone(),
+        issued,
+        issued,
+        expires - 1,
+    )
+    .expect("status freshness through the inclusive millisecond before expiry is sufficient");
+    assert!(
+        KagemushaV4ValidatorQualificationSubjectV1::try_new(
+            subject.promotion_controller().clone(),
+            subject.promotion_reservation(),
+            subject.promotion_id(),
+            authenticated.manifest_sha256(),
+            boundary_policy,
+            issued,
+            issued,
+            expires,
+        )
+        .is_err(),
+        "an inclusive qualification expiry at the first stale status millisecond must fail closed",
+    );
 
     assert!(
         KagemushaV4ValidatorQualificationSubjectV1::try_new(

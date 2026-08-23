@@ -320,11 +320,22 @@ fn exact_geometry_root_and_move_only_prerequisite_are_frozen() {
     token
         .validate_context_v1(&fixture.transcript)
         .expect("retained exact context");
+    let verified_root = token
+        .verified_zero_padding_root_v1(&fixture.transcript)
+        .expect("verified zero root for the exact final transcript");
+    assert!(verified_root.matches_claimed_zero_padding_root_v1(
+        fixture.transcript.zero_padding_root(),
+        fixture.transcript.transcript_digest(),
+    ));
     let substituted = build_transcript(97, fixture.transcript.zero_padding_root());
     assert_eq!(
         token.validate_context_v1(&substituted),
         Err(RnsNativeZeroPaddingCommitmentErrorV1::ContextMismatch)
     );
+    assert!(matches!(
+        token.verified_zero_padding_root_v1(&substituted),
+        Err(RnsNativeZeroPaddingCommitmentErrorV1::ContextMismatch)
+    ));
     let source = include_str!("rns_native_zero_padding_commitment.rs");
     let declaration = "pub(super) struct RnsNativeZeroPaddingCommitmentPrerequisiteV1";
     let declaration_offset = source.find(declaration).expect("token declaration");
@@ -339,6 +350,52 @@ fn exact_geometry_root_and_move_only_prerequisite_are_frozen() {
     assert!(!attributes.contains("derive(Copy"));
     assert!(!token_body.contains("pub fn"));
     assert!(!token_body.contains("candidate"));
+
+    let verified_declaration = source
+        .find("pub(super) struct RnsNativeVerifiedZeroPaddingRootV1")
+        .expect("verified zero-root declaration");
+    let verified_attributes =
+        &source[verified_declaration.saturating_sub(420)..verified_declaration];
+    assert!(!verified_attributes.contains("derive(Clone"));
+    assert!(!verified_attributes.contains("derive(Copy"));
+    let verified_surface = source[verified_declaration..]
+        .split_once("impl RnsNativeZeroPaddingCommitmentPrerequisiteV1")
+        .expect("verified zero-root surface boundary")
+        .0;
+    assert!(verified_surface.contains("fn matches_claimed_zero_padding_root_v1("));
+    for forbidden in [
+        "pub(super) fn new(",
+        "pub(super) fn from",
+        "pub(super) fn root(",
+        "pub(super) const fn root(",
+        "pub(super) fn final_transcript_tag(",
+        "pub(super) const fn final_transcript_tag(",
+        "pub(super) fn into_parts(",
+        "impl AsRef",
+        "impl core::ops::Deref",
+    ] {
+        assert!(!verified_surface.contains(forbidden));
+    }
+    let mint_surface = source
+        .split_once("pub(super) fn verified_zero_padding_root_v1(")
+        .expect("verified zero-root mint")
+        .1
+        .split_once("\n    }")
+        .expect("verified zero-root mint boundary")
+        .0;
+    let context_validation = mint_surface
+        .find("self.validate_context_v1(transcript)?;")
+        .expect("exact context revalidation");
+    let evidence_construction = mint_surface
+        .find("Ok(RnsNativeVerifiedZeroPaddingRootV1")
+        .expect("opaque evidence construction");
+    assert!(context_validation < evidence_construction);
+    assert_eq!(
+        source
+            .matches("Ok(RnsNativeVerifiedZeroPaddingRootV1 {")
+            .count(),
+        1
+    );
 }
 
 #[test]

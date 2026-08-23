@@ -1111,7 +1111,7 @@ value = {
             "sha256": hashlib.sha256(root_bytes).hexdigest(),
         }
     ],
-    "revoked_certificate_sha256": [],
+    "revoked_certificate_tbs_sha256": [],
     "x509_validation_profile": "apple-app-attest-x509-chain-and-nonce-v1",
     "secure_enclave_key_profile": "dcappattest-generated-secure-enclave-key-v1",
 }

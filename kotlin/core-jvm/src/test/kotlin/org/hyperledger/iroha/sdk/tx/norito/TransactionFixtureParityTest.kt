@@ -689,6 +689,7 @@ class TransactionFixtureParityTest {
                         "payer" to "authority",
                         "value" to mapOf(
                             "charge_limits" to emptyList<Map<String, Any?>>(),
+                            "gas_limit" to null,
                         ),
                     ),
                     "admission_intent" to admissionIntent("ordinary"),
@@ -742,6 +743,7 @@ class TransactionFixtureParityTest {
                         "payer" to "authority",
                         "value" to mapOf(
                             "charge_limits" to emptyList<Map<String, Any?>>(),
+                            "gas_limit" to null,
                         ),
                     ),
                     "admission_intent" to admissionIntent("ordinary"),
@@ -789,6 +791,7 @@ class TransactionFixtureParityTest {
                         "payer" to "authority",
                         "value" to mapOf(
                             "charge_limits" to emptyList<Map<String, Any?>>(),
+                            "gas_limit" to null,
                         ),
                     ),
                     "admission_intent" to admissionIntent("ordinary"),

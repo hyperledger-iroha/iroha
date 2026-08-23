@@ -10,6 +10,7 @@ use ed25519_dalek::VerifyingKey;
 use hex::FromHexError;
 use iroha_crypto::soranet::{
     certificate::{CertificateValidationPhase, RelayCertificateBundleV2, SRC_V2_MAX_BUNDLE_BYTES},
+    handshake::{HandshakeSuite, update_suite_list},
     pow, puzzle,
     replay::REPLAY_LEDGER_MAX_ENTRIES_V1,
     token::{
@@ -45,7 +46,8 @@ const ML_KEM_768_SECRET_LEN: usize = 2_400;
 // First-release admission limits for operator-controlled relay artifacts. The
 // 1 MiB config corridor fits 8,192 inline 32-byte revocations (the existing
 // replay-store capacity) plus the rest of the config. Its 128 KiB field limit
-// admits the largest legal GREASE value: u16::MAX bytes as 131,070 hex bytes.
+// permits syntactic admission of a u16-sized hex field; handshake validation
+// separately enforces the smaller aggregate capability-vector wire limit.
 const RELAY_CONFIG_JSON_MAX_BYTES_V1: usize = 1024 * 1024;
 const RELAY_CONFIG_JSON_MAX_FIELD_BYTES_V1: usize = 128 * 1024;
 const RELAY_CONFIG_JSON_MAX_TOTAL_STRING_BYTES_V1: usize = 768 * 1024;
@@ -64,6 +66,12 @@ const DESCRIPTOR_MANIFEST_JSON_MAX_SEQUENCE_ELEMENTS_V1: usize = 1_024;
 const DESCRIPTOR_MANIFEST_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 4_096;
 const DESCRIPTOR_MANIFEST_JSON_MAX_ALLOCATED_BYTES_V1: usize = 1024 * 1024;
 const DESCRIPTOR_MANIFEST_JSON_MAX_DEPTH_V1: usize = 16;
+fn absolute_replay_state_path(path: &Path) -> io::Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    Ok(std::env::current_dir()?.join(path))
+}
 const RELAY_CONFIG_JSON_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1,
     RELAY_CONFIG_JSON_MAX_FIELD_BYTES_V1,
@@ -107,16 +115,16 @@ const fn descriptor_manifest_json_preflight_limits_v1() -> json::JsonPreflightLi
     )
 }
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-const O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
+pub(crate) const O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 #[cfg(any(target_os = "linux", target_os = "android"))]
-const O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
+pub(crate) const O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
 #[cfg(any(
     target_os = "freebsd",
     target_os = "netbsd",
     target_os = "openbsd",
     target_os = "dragonfly"
 ))]
-const O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
+pub(crate) const O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 #[cfg(all(
     unix,
     not(any(
@@ -235,7 +243,23 @@ fn config_file_metadata_unchanged(_left: &FsMetadata, _right: &FsMetadata) -> bo
 }
 #[cfg(unix)]
 fn validate_private_file_permissions(metadata: &FsMetadata, artifact: &str) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let owner = metadata.uid();
+    let effective_uid = effective_uid()?;
+    if owner != effective_uid && owner != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "{artifact} must be owned by the effective user ({effective_uid}) or root, not UID {owner}"
+            ),
+        ));
+    }
+    if metadata.nlink() != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{artifact} must have exactly one hard link"),
+        ));
+    }
     if metadata.permissions().mode() & 0o077 != 0 {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -244,9 +268,86 @@ fn validate_private_file_permissions(metadata: &FsMetadata, artifact: &str) -> i
     }
     Ok(())
 }
+#[cfg(unix)]
+pub(crate) fn effective_uid() -> io::Result<u32> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    Ok(tempfile::tempfile()?.metadata()?.uid())
+}
+#[cfg(unix)]
+const fn trusted_private_ancestor(owner: u32, mode: u32, effective_uid: u32) -> bool {
+    let trusted_owner = owner == effective_uid || owner == 0;
+    let rejects_unsafe_writes = mode & 0o022 == 0 || (owner == 0 && mode & 0o1000 != 0);
+    trusted_owner && rejects_unsafe_writes
+}
+#[cfg(unix)]
+fn trusted_private_file_path(path: &Path, artifact: &str) -> io::Result<PathBuf> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    if !path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{artifact} path must be absolute"),
+        ));
+    }
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{artifact} path must name a file"),
+        )
+    })?;
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{artifact} path must have a parent directory"),
+        )
+    })?;
+    // Resolve the parent once, then use only the canonical path. This permits
+    // system-owned aliases such as macOS `/var` while preventing later swaps of
+    // an untrusted alias from redirecting the file open.
+    let canonical_parent = fs::canonicalize(parent)?;
+    let effective_uid = effective_uid()?;
+    for ancestor in canonical_parent.ancestors() {
+        let metadata = fs::symlink_metadata(ancestor)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "{artifact} parent {} must be a direct directory",
+                    ancestor.display()
+                ),
+            ));
+        }
+        let owner = metadata.uid();
+        if !trusted_private_ancestor(owner, metadata.permissions().mode(), effective_uid) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "{artifact} parent {} must be owned by the effective user or root and must not be unsafely writable",
+                    ancestor.display()
+                ),
+            ));
+        }
+    }
+    Ok(canonical_parent.join(file_name))
+}
 #[cfg(not(unix))]
-fn validate_private_file_permissions(_metadata: &FsMetadata, _artifact: &str) -> io::Result<()> {
-    Ok(())
+fn trusted_private_file_path(_path: &Path, artifact: &str) -> io::Result<PathBuf> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!(
+            "{artifact} cannot be loaded securely on this platform because Unix owner/mode custody checks are unavailable"
+        ),
+    ))
+}
+#[cfg(not(unix))]
+fn validate_private_file_permissions(_metadata: &FsMetadata, artifact: &str) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!(
+            "{artifact} cannot be loaded securely on this platform because Unix owner/mode custody checks are unavailable"
+        ),
+    ))
 }
 fn validate_direct_regular_file_policy(
     metadata: &FsMetadata,
@@ -291,9 +392,10 @@ pub fn read_bounded_direct_regular_file(
 /// Read one immutable private-file snapshot with the same bounds and direct
 /// identity checks as [`read_bounded_direct_regular_file`].
 ///
-/// On Unix, every metadata observation in the open/read chain must have no group or other
-/// permission bits. This binds the permission decision to the descriptor that supplies the returned
-/// bytes instead of trusting a separate path inspection.
+/// Every Unix metadata observation in the open/read chain must have no group or other permission
+/// bits. This binds the permission decision to the descriptor that supplies the returned bytes
+/// instead of trusting a separate path inspection. Other platforms fail closed until an equivalent
+/// owner/ACL and stable-path custody policy is implemented.
 pub fn read_bounded_private_regular_file(
     path: &Path,
     maximum: usize,
@@ -307,6 +409,13 @@ fn read_bounded_direct_regular_file_with_policy(
     artifact: &str,
     require_private_permissions: bool,
 ) -> io::Result<Vec<u8>> {
+    let trusted_path;
+    let path = if require_private_permissions {
+        trusted_path = trusted_private_file_path(path, artifact)?;
+        trusted_path.as_path()
+    } else {
+        path
+    };
     let before = fs::symlink_metadata(path)?;
     validate_direct_regular_file_policy(&before, artifact, require_private_permissions)?;
     let maximum_u64 = u64::try_from(maximum).unwrap_or(u64::MAX);
@@ -350,7 +459,8 @@ fn read_bounded_direct_regular_file_with_policy(
         )
     })?;
     bytes.resize(expected_len, 0);
-    file.read_exact(&mut bytes).map_err(|error| {
+    let mut bytes = SensitiveReadBuffer(bytes);
+    file.read_exact(&mut bytes.0).map_err(|error| {
         if error.kind() == io::ErrorKind::UnexpectedEof {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -360,8 +470,8 @@ fn read_bounded_direct_regular_file_with_policy(
             error
         }
     })?;
-    let mut growth_probe = [0_u8; 1];
-    if file.read(&mut growth_probe)? != 0 {
+    let mut growth_probe = SensitiveReadProbe([0_u8; 1]);
+    if file.read(&mut growth_probe.0)? != 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("{artifact} grew while being read or exceeds its {maximum}-byte limit"),
@@ -379,7 +489,34 @@ fn read_bounded_direct_regular_file_with_policy(
             format!("{artifact} changed while being read"),
         ));
     }
-    Ok(bytes)
+    Ok(bytes.into_vec())
+}
+struct SensitiveReadBuffer(Vec<u8>);
+impl SensitiveReadBuffer {
+    fn clear(&mut self) {
+        self.0.fill(0);
+        std::hint::black_box(self.0.as_mut_slice());
+    }
+    fn into_vec(mut self) -> Vec<u8> {
+        std::mem::take(&mut self.0)
+    }
+}
+impl Drop for SensitiveReadBuffer {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+struct SensitiveReadProbe([u8; 1]);
+impl SensitiveReadProbe {
+    fn clear(&mut self) {
+        self.0.fill(0);
+        std::hint::black_box(&mut self.0);
+    }
+}
+impl Drop for SensitiveReadProbe {
+    fn drop(&mut self) {
+        self.clear();
+    }
 }
 fn validate_config_list_len(field: &str, length: usize) -> Result<(), String> {
     if length > RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1 {
@@ -390,7 +527,8 @@ fn validate_config_list_len(field: &str, length: usize) -> Result<(), String> {
     Ok(())
 }
 const DEFAULT_PRIVACY_BUCKET_SECS: u64 = 60;
-const DEFAULT_VPN_BACKEND_ENDPOINT: &str = "unix:/tmp/sora-vpn-backend.sock";
+const DEFAULT_VPN_BACKEND_ENDPOINT: &str = "unix:/run/sora-vpn-backend.sock";
+const VPN_SHARED_SECRET_FILE_MAX_BYTES_V1: usize = 65;
 const DEFAULT_PRIVACY_MIN_HANDSHAKES: u64 = 12;
 const DEFAULT_PRIVACY_FLUSH_DELAY_BUCKETS: u64 = 1;
 const DEFAULT_PRIVACY_FORCE_FLUSH_BUCKETS: u64 = 6;
@@ -403,6 +541,8 @@ pub const PRIVACY_MAX_OPEN_BUCKETS_V1: u64 = 256;
 pub const PRIVACY_MAX_COMPLETED_BUCKETS_V1: usize = 256;
 /// Maximum first-release capacity of either in-memory privacy event queue.
 pub const PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1: usize = 16_384;
+/// Maximum first-release collector contributions retained for one privacy bucket.
+pub const PRIVACY_MAX_EXPECTED_SHARES_V1: u16 = 16;
 /// Maximum first-release entries retained by either admission quota tracker.
 pub const QUOTA_TRACKER_MAX_ENTRIES_V1: usize = 65_536;
 /// Maximum first-release number of simultaneously active relay circuits.
@@ -421,6 +561,36 @@ const DEFAULT_VPN_USAGE_VOUCHER_DEBT_WINDOW_BYTES: u64 = 1_048_576;
 const DEFAULT_VPN_HELPER_TICKET_REPLAY_STORE_CAPACITY: usize = 8_192;
 const DEFAULT_VPN_METER_HASH_HEX: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
+/// Maximum byte length of one canonical first-release GAR category.
+pub(crate) const GAR_CATEGORY_MAX_BYTES_V1: usize = 64;
+
+/// Return whether a GAR category is in the canonical first-release form.
+pub(crate) fn is_canonical_gar_category_v1(category: &str) -> bool {
+    if category.is_empty() || category.len() > GAR_CATEGORY_MAX_BYTES_V1 {
+        return false;
+    }
+    category.split('.').all(|segment| {
+        let bytes = segment.as_bytes();
+        bytes
+            .first()
+            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            && bytes
+                .last()
+                .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            && bytes.iter().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+            })
+    })
+}
+
+pub(crate) fn validate_gar_category_v1(field: &str, category: &str) -> Result<(), ConfigError> {
+    if is_canonical_gar_category_v1(category) {
+        return Ok(());
+    }
+    Err(ConfigError::Routing(format!(
+        "{field} must be 1..={GAR_CATEGORY_MAX_BYTES_V1} bytes of canonical lowercase ASCII dot-separated segments"
+    )))
+}
 /// Operating mode for the relay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayMode {
@@ -592,6 +762,12 @@ impl PrivacyTelemetryConfig {
                 "privacy.expected_shares must be greater than zero".to_string(),
             ));
         }
+        if self.expected_shares > PRIVACY_MAX_EXPECTED_SHARES_V1 {
+            return Err(ConfigError::Privacy(format!(
+                "privacy.expected_shares ({}) exceeds the first-release limit of {PRIVACY_MAX_EXPECTED_SHARES_V1}",
+                self.expected_shares
+            )));
+        }
         if self.event_buffer_capacity == 0 {
             self.event_buffer_capacity = DEFAULT_PRIVACY_EVENT_BUFFER_CAPACITY;
         }
@@ -600,6 +776,11 @@ impl PrivacyTelemetryConfig {
                 "privacy.event_buffer_capacity ({}) exceeds the first-release limit of {PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1}",
                 self.event_buffer_capacity
             )));
+        }
+        if self.force_flush_buckets == 0 {
+            return Err(ConfigError::Privacy(
+                "privacy.force_flush_buckets must be greater than zero".to_string(),
+            ));
         }
         if self.flush_delay_buckets > PRIVACY_MAX_OPEN_BUCKETS_V1
             || self.force_flush_buckets > PRIVACY_MAX_OPEN_BUCKETS_V1
@@ -722,6 +903,12 @@ impl ExitRoutingConfig {
                 )));
             }
             route.torii_ws_url = trimmed.to_owned();
+            if let Some(category) = route.gar_category_read_only.as_deref() {
+                validate_gar_category_v1("norito_stream.gar_category_read_only", category)?;
+            }
+            if let Some(category) = route.gar_category_authenticated.as_deref() {
+                validate_gar_category_v1("norito_stream.gar_category_authenticated", category)?;
+            }
         }
         if let Some(route) = self.kaigi_stream.as_mut() {
             route.apply_defaults();
@@ -737,6 +924,12 @@ impl ExitRoutingConfig {
                 )));
             }
             route.hub_ws_url = trimmed.to_owned();
+            if let Some(category) = route.gar_category_public.as_deref() {
+                validate_gar_category_v1("kaigi_stream.gar_category_public", category)?;
+            }
+            if let Some(category) = route.gar_category_authenticated.as_deref() {
+                validate_gar_category_v1("kaigi_stream.gar_category_authenticated", category)?;
+            }
         }
         Ok(())
     }
@@ -842,9 +1035,9 @@ pub struct VpnConfig {
     /// DNS resolver overrides pushed into the VPN client on connect.
     #[norito(default)]
     pub dns_overrides: Vec<String>,
-    /// Optional 32-byte shared secret (hex) used to verify helper-authenticated VPN tickets.
+    /// Owner-private file containing the 32-byte helper-ticket secret as hex.
     #[norito(default)]
-    pub helper_ticket_secret_hex: Option<String>,
+    pub helper_ticket_secret_path: Option<PathBuf>,
     /// Maximum active helper-ticket consumptions retained durably (65,536 in v1).
     #[norito(default = "default_vpn_helper_ticket_replay_store_capacity")]
     pub helper_ticket_replay_store_capacity: usize,
@@ -856,9 +1049,9 @@ pub struct VpnConfig {
     /// Supported forms are `unix:/absolute/path` and `tcp://host:port`.
     #[norito(default)]
     pub backend_endpoint: Option<String>,
-    /// Optional 32-byte shared secret (hex) used to authenticate TCP backend bootstrap frames.
+    /// Owner-private file containing the backend bootstrap secret as hex.
     #[norito(default)]
-    pub backend_bootstrap_secret_hex: Option<String>,
+    pub backend_bootstrap_secret_path: Option<PathBuf>,
     /// Optional on-disk spool directory for operator-submitted VPN settlement artifacts.
     #[norito(default)]
     pub receipt_spool_dir: Option<PathBuf>,
@@ -885,11 +1078,11 @@ impl Default for VpnConfig {
             dns_push_interval_secs: default_vpn_dns_push_interval_secs(),
             route_push: Vec::new(),
             dns_overrides: Vec::new(),
-            helper_ticket_secret_hex: None,
+            helper_ticket_secret_path: None,
             helper_ticket_replay_store_capacity: default_vpn_helper_ticket_replay_store_capacity(),
             helper_ticket_replay_store_path: default_vpn_helper_ticket_replay_store_path(),
             backend_endpoint: None,
-            backend_bootstrap_secret_hex: None,
+            backend_bootstrap_secret_path: None,
             receipt_spool_dir: None,
             usage_voucher_debt_window_bytes: default_vpn_usage_voucher_debt_window_bytes(),
             cover: VpnCoverTrafficConfig::default(),
@@ -971,11 +1164,14 @@ impl VpnConfig {
         }
         let routes = self.parse_route_push()?;
         let dns_overrides = self.parse_dns_overrides()?;
-        let helper_ticket_secret_hex = self.parse_helper_ticket_secret_hex()?;
         self.receipt_spool_dir = self.parse_receipt_spool_dir();
-        if helper_ticket_secret_hex.is_none() {
+        if self
+            .helper_ticket_secret_path
+            .as_ref()
+            .is_none_or(|path| path.as_os_str().is_empty())
+        {
             return Err(ConfigError::Vpn(
-                "vpn.helper_ticket_secret_hex must be set when vpn.enabled is true".to_string(),
+                "vpn.helper_ticket_secret_path must be set when vpn.enabled is true".to_string(),
             ));
         }
         if self.helper_ticket_replay_store_capacity == 0 {
@@ -989,16 +1185,13 @@ impl VpnConfig {
             ));
         }
         let backend_endpoint = self.parse_backend_endpoint()?;
-        let backend_bootstrap_secret_hex = self.parse_backend_bootstrap_secret_hex()?;
-        if matches!(
-            backend_endpoint
-                .as_deref()
-                .and_then(|endpoint| parse_vpn_backend_endpoint(endpoint).ok()),
-            Some(VpnBackendEndpoint::Tcp(_))
-        ) && backend_bootstrap_secret_hex.is_none()
+        if self
+            .backend_bootstrap_secret_path
+            .as_ref()
+            .is_none_or(|path| path.as_os_str().is_empty())
         {
             return Err(ConfigError::Vpn(
-                "vpn.backend_bootstrap_secret_hex must be set when vpn.backend_endpoint uses tcp://"
+                "vpn.backend_bootstrap_secret_path must be set when vpn.enabled is true"
                     .to_string(),
             ));
         }
@@ -1010,9 +1203,7 @@ impl VpnConfig {
         }
         self.route_push = routes.into_iter().map(|route| route.cidr.clone()).collect();
         self.dns_overrides = dns_overrides;
-        self.helper_ticket_secret_hex = helper_ticket_secret_hex;
         self.backend_endpoint = backend_endpoint;
-        self.backend_bootstrap_secret_hex = backend_bootstrap_secret_hex;
         Ok(())
     }
     /// Return the configured meter hash as raw bytes.
@@ -1103,29 +1294,6 @@ impl VpnConfig {
         }
         Ok(parsed)
     }
-    pub(crate) fn parse_helper_ticket_secret_hex(&self) -> Result<Option<String>, ConfigError> {
-        let Some(secret) = self.helper_ticket_secret_hex.as_ref() else {
-            return Ok(None);
-        };
-        let trimmed = secret
-            .trim()
-            .trim_start_matches("0x")
-            .trim_start_matches("0X");
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-        let decoded = hex::decode(trimmed).map_err(|err| {
-            ConfigError::Vpn(format!(
-                "vpn.helper_ticket_secret_hex must be valid hex: {err}"
-            ))
-        })?;
-        if decoded.len() != 32 {
-            return Err(ConfigError::Vpn(
-                "vpn.helper_ticket_secret_hex must decode to 32 bytes".to_string(),
-            ));
-        }
-        Ok(Some(trimmed.to_ascii_lowercase()))
-    }
     pub(crate) fn parse_backend_endpoint(&self) -> Result<Option<String>, ConfigError> {
         let trimmed = self
             .backend_endpoint
@@ -1136,29 +1304,6 @@ impl VpnConfig {
         let endpoint = parse_vpn_backend_endpoint(trimmed)?;
         Ok(Some(endpoint.to_string()))
     }
-    pub(crate) fn parse_backend_bootstrap_secret_hex(&self) -> Result<Option<String>, ConfigError> {
-        let Some(secret) = self.backend_bootstrap_secret_hex.as_ref() else {
-            return Ok(None);
-        };
-        let trimmed = secret
-            .trim()
-            .trim_start_matches("0x")
-            .trim_start_matches("0X");
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-        let decoded = hex::decode(trimmed).map_err(|err| {
-            ConfigError::Vpn(format!(
-                "vpn.backend_bootstrap_secret_hex must be valid hex: {err}"
-            ))
-        })?;
-        if decoded.len() != 32 {
-            return Err(ConfigError::Vpn(
-                "vpn.backend_bootstrap_secret_hex must decode to 32 bytes".to_string(),
-            ));
-        }
-        Ok(Some(trimmed.to_ascii_lowercase()))
-    }
     pub(crate) fn parse_receipt_spool_dir(&self) -> Option<PathBuf> {
         self.receipt_spool_dir
             .as_ref()
@@ -1166,26 +1311,10 @@ impl VpnConfig {
             .cloned()
     }
     pub fn try_helper_ticket_secret_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
-        let Some(secret) = self.parse_helper_ticket_secret_hex()? else {
+        let Some(path) = self.helper_ticket_secret_path.as_ref() else {
             return Ok(None);
         };
-        let decoded = hex::decode(&secret).map_err(|err| {
-            ConfigError::Vpn(format!(
-                "vpn.helper_ticket_secret_hex must be valid hex: {err}"
-            ))
-        })?;
-        if decoded.len() != 32 {
-            return Err(ConfigError::Vpn(
-                "vpn.helper_ticket_secret_hex must decode to 32 bytes".to_string(),
-            ));
-        }
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&decoded);
-        Ok(Some(bytes))
-    }
-    pub fn helper_ticket_secret_bytes(&self) -> Option<[u8; 32]> {
-        self.try_helper_ticket_secret_bytes()
-            .expect("validated vpn.helper_ticket_secret_hex to decode")
+        read_vpn_shared_secret(path, "VPN helper-ticket secret").map(Some)
     }
     pub fn try_backend_endpoint(&self) -> Result<Option<VpnBackendEndpoint>, ConfigError> {
         self.parse_backend_endpoint()?
@@ -1198,26 +1327,55 @@ impl VpnConfig {
             .expect("validated vpn.backend_endpoint to parse")
     }
     pub fn try_backend_bootstrap_secret_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
-        let Some(secret) = self.parse_backend_bootstrap_secret_hex()? else {
+        let Some(path) = self.backend_bootstrap_secret_path.as_ref() else {
             return Ok(None);
         };
-        let decoded = hex::decode(&secret).map_err(|err| {
-            ConfigError::Vpn(format!(
-                "vpn.backend_bootstrap_secret_hex must be valid hex: {err}"
-            ))
-        })?;
-        if decoded.len() != 32 {
-            return Err(ConfigError::Vpn(
-                "vpn.backend_bootstrap_secret_hex must decode to 32 bytes".to_string(),
-            ));
-        }
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&decoded);
-        Ok(Some(bytes))
+        read_vpn_shared_secret(path, "VPN backend bootstrap secret").map(Some)
     }
-    pub fn backend_bootstrap_secret_bytes(&self) -> Option<[u8; 32]> {
-        self.try_backend_bootstrap_secret_bytes()
-            .expect("validated vpn.backend_bootstrap_secret_hex to decode")
+}
+fn read_vpn_shared_secret(path: &Path, artifact: &str) -> Result<[u8; 32], ConfigError> {
+    let mut raw =
+        read_bounded_private_regular_file(path, VPN_SHARED_SECRET_FILE_MAX_BYTES_V1, artifact)
+            .map_err(|error| {
+                ConfigError::Vpn(format!(
+                    "failed to read {artifact} at {}: {error}",
+                    path.display()
+                ))
+            })?;
+    let mut bytes = [0u8; 32];
+    let decoded = (|| {
+        if raw.len() != 64
+            || !raw
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(ConfigError::Vpn(format!(
+                "{artifact} must contain exactly 64 lowercase hexadecimal bytes with no newline"
+            )));
+        }
+        hex::decode_to_slice(&raw, &mut bytes)
+            .map_err(|error| ConfigError::Vpn(format!("{artifact} must be valid hex: {error}")))?;
+        if bytes.iter().all(|byte| *byte == 0) {
+            return Err(ConfigError::Vpn(format!(
+                "{artifact} must not be the all-zero key"
+            )));
+        }
+        Ok(())
+    })();
+    raw.fill(0);
+    std::hint::black_box(raw.as_mut_slice());
+    match decoded {
+        Ok(()) => {
+            let result = bytes;
+            bytes.fill(0);
+            std::hint::black_box(&mut bytes);
+            Ok(result)
+        }
+        Err(error) => {
+            bytes.fill(0);
+            std::hint::black_box(&mut bytes);
+            Err(error)
+        }
     }
 }
 /// Parsed local VPN backend endpoint.
@@ -1248,17 +1406,18 @@ fn parse_vpn_backend_endpoint(endpoint: &str) -> Result<VpnBackendEndpoint, Conf
     }
     if let Some(addr) = endpoint.strip_prefix("tcp://") {
         let addr = addr.trim();
-        let Some((host, port)) = addr.rsplit_once(':') else {
+        let socket_addr = addr.parse::<SocketAddr>().map_err(|_| {
+            ConfigError::Vpn(
+                "vpn.backend_endpoint TCP endpoints must use tcp://IP:port".to_string(),
+            )
+        })?;
+        if !socket_addr.ip().is_loopback() {
             return Err(ConfigError::Vpn(
-                "vpn.backend_endpoint tcp endpoints must use tcp://host:port".to_string(),
-            ));
-        };
-        if host.trim().is_empty() || port.parse::<u16>().is_err() {
-            return Err(ConfigError::Vpn(
-                "vpn.backend_endpoint tcp endpoints must use tcp://host:port".to_string(),
+                "vpn.backend_endpoint TCP endpoints must use a loopback address because packet frames are not a remote transport security boundary"
+                    .to_string(),
             ));
         }
-        return Ok(VpnBackendEndpoint::Tcp(addr.to_owned()));
+        return Ok(VpnBackendEndpoint::Tcp(socket_addr.to_string()));
     }
     Err(ConfigError::Vpn(
         "vpn.backend_endpoint must start with unix:/path or tcp://host:port".to_string(),
@@ -1801,12 +1960,6 @@ pub struct TokenConfig {
     /// Hex-encoded verifier key for validating admission tokens.
     #[norito(default)]
     pub issuer_public_key_hex: Option<String>,
-    /// Hex-encoded issuer secret key used to mint admission tokens (test only).
-    #[norito(default)]
-    pub issuer_secret_key_hex: Option<String>,
-    /// Path to a file containing the issuer secret key (test only).
-    #[norito(default)]
-    pub issuer_secret_key_path: Option<PathBuf>,
     /// Maximum TTL for admission tokens accepted by the relay.
     #[norito(default = "TokenConfig::default_max_ttl_secs")]
     pub max_ttl_secs: u64,
@@ -1963,12 +2116,19 @@ impl TokenConfig {
         .map_err(|err| {
             ConfigError::Token(format!("invalid pow.token replay store settings: {err}"))
         })?;
+        let replay_store_path =
+            absolute_replay_state_path(&self.replay_store_path).map_err(|err| {
+                ConfigError::Token(format!(
+                    "failed to resolve pow.token replay store path ({}): {err}",
+                    self.replay_store_path.display()
+                ))
+            })?;
         let persistent =
-            PersistentTokenStore::load(&self.replay_store_path, store_limits, SystemTime::now())
+            PersistentTokenStore::load(&replay_store_path, store_limits, SystemTime::now())
                 .map_err(|err| {
                     ConfigError::Token(format!(
                         "failed to load pow.token replay store ({}): {err}",
-                        self.replay_store_path.display()
+                        replay_store_path.display()
                     ))
                 })?;
         let store: Arc<Mutex<dyn TokenStore + Send>> = Arc::new(Mutex::new(persistent));
@@ -2574,7 +2734,7 @@ impl CongestionConfig {
     }
 }
 /// Compliance logging settings.
-#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
+#[derive(Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 pub struct ComplianceConfig {
     /// Whether compliance logging is enabled.
     #[norito(default)]
@@ -2582,9 +2742,9 @@ pub struct ComplianceConfig {
     /// Path to the compliance log file.
     #[norito(default)]
     pub log_path: Option<PathBuf>,
-    /// Optional hex-encoded salt mixed into anonymised hashes.
+    /// Owner-private file containing the 32-byte anonymisation key as lowercase hex.
     #[norito(default)]
-    pub hash_salt_hex: Option<String>,
+    pub hash_salt_path: Option<PathBuf>,
     /// Maximum size of the compliance log before rotation.
     #[norito(default = "ComplianceConfig::default_max_log_bytes")]
     pub max_log_bytes: u64,
@@ -2600,7 +2760,7 @@ impl Default for ComplianceConfig {
         Self {
             enable: false,
             log_path: None,
-            hash_salt_hex: None,
+            hash_salt_path: None,
             max_log_bytes: Self::default_max_log_bytes(),
             max_backup_files: Self::default_max_backup_files(),
             pipeline_spool_dir: None,
@@ -2620,6 +2780,17 @@ impl ComplianceConfig {
                 "compliance logging enabled but `log_path` not provided".to_string(),
             ));
         }
+        if self.enable
+            && self
+                .hash_salt_path
+                .as_ref()
+                .is_none_or(|path| path.as_os_str().is_empty())
+        {
+            return Err(ConfigError::Compliance(
+                "compliance logging enabled but owner-private `hash_salt_path` not provided"
+                    .to_string(),
+            ));
+        }
         if self.max_log_bytes == 0 {
             self.max_log_bytes = Self::default_max_log_bytes();
         }
@@ -2632,32 +2803,79 @@ impl ComplianceConfig {
         self.log_path.as_deref()
     }
     pub fn hash_salt_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
-        self.hash_salt_hex
-            .as_ref()
-            .map(|hex_value| {
-                let decoded = hex::decode(hex_value).map_err(|err| ConfigError::Hex {
-                    field: "compliance.hash_salt_hex".to_string(),
-                    kind: err,
-                })?;
-                if decoded.len() != 32 {
-                    return Err(ConfigError::Compliance(
-                        "compliance.hash_salt_hex must decode to 32 bytes".to_string(),
-                    ));
-                }
-                let mut salt = [0u8; 32];
-                salt.copy_from_slice(&decoded);
-                Ok(salt)
-            })
-            .transpose()
+        let Some(path) = self.hash_salt_path.as_ref() else {
+            return Ok(None);
+        };
+        let mut encoded = read_bounded_private_regular_file(path, 64, "compliance hash salt")
+            .map_err(|error| {
+                ConfigError::Compliance(format!(
+                    "failed to read compliance.hash_salt_path {}: {error}",
+                    path.display()
+                ))
+            })?;
+        let mut salt = [0u8; 32];
+        let decoded = (|| {
+            if encoded.len() != 64
+                || !encoded
+                    .iter()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            {
+                return Err(ConfigError::Compliance(
+                    "compliance hash salt file must contain exactly 64 lowercase hexadecimal bytes with no newline"
+                        .to_string(),
+                ));
+            }
+            hex::decode_to_slice(&encoded, &mut salt).map_err(|error| {
+                ConfigError::Compliance(format!("invalid compliance hash salt: {error}"))
+            })?;
+            if salt.iter().all(|byte| *byte == salt[0]) {
+                return Err(ConfigError::Compliance(
+                    "compliance hash salt must not be an all-zero or repeated-byte degenerate key"
+                        .to_string(),
+                ));
+            }
+            Ok(())
+        })();
+        encoded.fill(0);
+        std::hint::black_box(encoded.as_mut_slice());
+        match decoded {
+            Ok(()) => {
+                let result = salt;
+                salt.fill(0);
+                std::hint::black_box(&mut salt);
+                Ok(Some(result))
+            }
+            Err(error) => {
+                salt.fill(0);
+                std::hint::black_box(&mut salt);
+                Err(error)
+            }
+        }
     }
     pub fn pipeline_spool_dir(&self) -> Option<&Path> {
         self.pipeline_spool_dir.as_deref()
     }
 }
+impl std::fmt::Debug for ComplianceConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ComplianceConfig")
+            .field("enable", &self.enable)
+            .field("log_path", &self.log_path)
+            .field(
+                "hash_salt_path",
+                &self.hash_salt_path.as_ref().map(|_| "<redacted>"),
+            )
+            .field("max_log_bytes", &self.max_log_bytes)
+            .field("max_backup_files", &self.max_backup_files)
+            .field("pipeline_spool_dir", &self.pipeline_spool_dir)
+            .finish()
+    }
+}
 /// Advertised KEM capability in the handshake policy.
 #[derive(Debug, Clone, JsonDeserialize, JsonSerialize)]
 pub struct KemPolicyEntry {
-    /// Identifier of the KEM suite (e.g., `ml-kem-768`).
+    /// Identifier of the KEM suite (`ml-kem-512`, `ml-kem-768`, or `ml-kem-1024`).
     pub id: String,
     /// Whether this KEM must be supported by peers.
     #[norito(default)]
@@ -2666,7 +2884,7 @@ pub struct KemPolicyEntry {
 /// Advertised signature capability in the handshake policy.
 #[derive(Debug, Clone, JsonDeserialize, JsonSerialize)]
 pub struct SignaturePolicyEntry {
-    /// Identifier of the signature suite (e.g., `dilithium3`).
+    /// Identifier of the v1 transcript signature suite (`dilithium3`).
     pub id: String,
     /// Whether this signature suite must be supported by peers.
     #[norito(default)]
@@ -2695,9 +2913,6 @@ pub struct HandshakePolicy {
     /// Extra GREASE TLVs appended to handshake responses.
     #[norito(default)]
     pub grease: Vec<GreasePolicyEntry>,
-    /// Optional Ed25519 private key to override the manifest identity.
-    #[norito(default)]
-    pub identity_private_key_hex: Option<String>,
     /// Optional path to a descriptor manifest for key extraction.
     #[norito(default)]
     pub descriptor_manifest_path: Option<PathBuf>,
@@ -2797,18 +3012,73 @@ impl CertificateConfig {
     }
 }
 /// ML-KEM keypair decoded from the descriptor manifest.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct MlKemKeys {
     /// ML-KEM-768 public key bytes.
     pub public: Vec<u8>,
     /// ML-KEM-768 secret key bytes.
     pub private: Vec<u8>,
 }
-#[derive(Debug, Clone)]
+impl MlKemKeys {
+    fn clear_private_material(&mut self) {
+        self.private.fill(0);
+        std::hint::black_box(self.private.as_mut_slice());
+    }
+}
+impl fmt::Debug for MlKemKeys {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MlKemKeys")
+            .field("public_len", &self.public.len())
+            .field("private", &"<redacted>")
+            .finish()
+    }
+}
+impl Drop for MlKemKeys {
+    fn drop(&mut self) {
+        self.clear_private_material();
+    }
+}
 pub(crate) struct ManifestSecrets {
     pub(crate) identity_private_key: Option<[u8; 32]>,
     pub(crate) ml_kem_private_key: Option<Vec<u8>>,
     pub(crate) ml_kem_public_key: Option<Vec<u8>>,
+}
+impl ManifestSecrets {
+    fn clear_private_material(&mut self) {
+        if let Some(seed) = self.identity_private_key.as_mut() {
+            seed.fill(0);
+            std::hint::black_box(seed);
+        }
+        if let Some(private) = self.ml_kem_private_key.as_mut() {
+            private.fill(0);
+            std::hint::black_box(private.as_mut_slice());
+        }
+    }
+}
+impl fmt::Debug for ManifestSecrets {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ManifestSecrets")
+            .field(
+                "identity_private_key",
+                &self.identity_private_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "ml_kem_private_key",
+                &self.ml_kem_private_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "ml_kem_public_key_len",
+                &self.ml_kem_public_key.as_ref().map(Vec::len),
+            )
+            .finish()
+    }
+}
+impl Drop for ManifestSecrets {
+    fn drop(&mut self) {
+        self.clear_private_material();
+    }
 }
 impl Default for HandshakePolicy {
     fn default() -> Self {
@@ -2832,7 +3102,6 @@ impl Default for HandshakePolicy {
                     value_hex: "cafebabe".to_string(),
                 },
             ],
-            identity_private_key_hex: None,
             descriptor_manifest_path: None,
             certificate: None,
         }
@@ -2867,21 +3136,39 @@ impl HandshakePolicy {
                 "handshake.signatures list cannot be empty".to_string(),
             ));
         }
+        let mut seen_kem = [false; 256];
         for entry in &self.kem {
-            if parse_kem_id(&entry.id).is_none() {
+            let Some(id) = parse_kem_id(&entry.id) else {
                 return Err(ConfigError::Handshake(format!(
                     "unknown KEM identifier `{}`",
                     entry.id
                 )));
+            };
+            let slot = &mut seen_kem[usize::from(id.code())];
+            if *slot {
+                return Err(ConfigError::Handshake(format!(
+                    "duplicate KEM identifier `{}`",
+                    entry.id
+                )));
             }
+            *slot = true;
         }
+        let mut seen_signature = [false; 256];
         for entry in &self.signatures {
-            if parse_signature_id(&entry.id).is_none() {
+            let Some(id) = parse_signature_id(&entry.id) else {
                 return Err(ConfigError::Handshake(format!(
                     "unknown signature identifier `{}`",
                     entry.id
                 )));
+            };
+            let slot = &mut seen_signature[usize::from(id.code())];
+            if *slot {
+                return Err(ConfigError::Handshake(format!(
+                    "duplicate signature identifier `{}`",
+                    entry.id
+                )));
             }
+            *slot = true;
         }
         if let Some(hex) = &self.descriptor_commit_hex {
             if hex.len() != 64 {
@@ -2893,6 +3180,7 @@ impl HandshakePolicy {
                 ConfigError::Handshake("descriptor_commit_hex must decode to 32 bytes".to_string())
             })?;
         }
+        let mut configured_grease = Vec::with_capacity(self.grease.len());
         for grease in &self.grease {
             if !(0x7F00..=0x7FFF).contains(&grease.typ) {
                 return Err(ConfigError::Handshake(format!(
@@ -2903,33 +3191,95 @@ impl HandshakePolicy {
             let maximum_hex_len = usize::from(u16::MAX) * 2;
             if grease.value_hex.len() > maximum_hex_len {
                 return Err(ConfigError::Handshake(format!(
-                    "GREASE type {:04x} encoded value length {} exceeds {maximum_hex_len}",
+                    "GREASE type {:04x} encoded value length {} exceeds u16::MAX decoded bytes ({maximum_hex_len} hex characters)",
                     grease.typ,
                     grease.value_hex.len()
                 )));
             }
-            hex::decode(&grease.value_hex)
+            let value = hex::decode(&grease.value_hex)
                 .map_err(|err| ConfigError::Hex {
                     field: format!("handshake.grease[{:#06x}]", grease.typ),
                     kind: err,
                 })
-                .and_then(|value| validate_grease_value_len(grease.typ, value.len()))?;
+                .and_then(|value| {
+                    validate_grease_value_len(grease.typ, value.len())?;
+                    Ok(value)
+                })?;
+            configured_grease.push(GreaseEntry {
+                ty: grease.typ,
+                value,
+            });
         }
-        if let Some(identity_hex) = &self.identity_private_key_hex {
-            if identity_hex.len() != 64 {
-                return Err(ConfigError::Handshake(
-                    "identity_private_key_hex must contain exactly 64 hex characters".to_string(),
-                ));
-            }
-            let decoded = hex::decode(identity_hex).map_err(|err| ConfigError::Hex {
-                field: "handshake.identity_private_key_hex".to_string(),
-                kind: err,
-            })?;
-            if decoded.len() != 32 {
-                return Err(ConfigError::Handshake(
-                    "identity_private_key_hex must decode to 32 bytes".to_string(),
-                ));
-            }
+        // Reserve every optional first-release relay capability here. Runtime
+        // negotiation can add a certificate descriptor, constant-rate mode,
+        // and both handshake suites even when they are absent from this policy.
+        // Computing the base through the production encoders keeps admission
+        // aligned with the canonical wire grammar rather than duplicating its
+        // TLV sizes in configuration code.
+        let worst_case_kem = parse_kem_id(&self.kem[0].id).ok_or_else(|| {
+            ConfigError::Handshake("validated KEM identifier became unavailable".to_string())
+        })?;
+        let worst_case_signatures = self
+            .signatures
+            .iter()
+            .map(|entry| {
+                parse_signature_id(&entry.id)
+                    .map(|id| capability::SignatureAdvertisement {
+                        id,
+                        required: entry.required,
+                    })
+                    .ok_or_else(|| {
+                        ConfigError::Handshake(
+                            "validated signature identifier became unavailable".to_string(),
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let constant_rate_cell_bytes = u16::try_from(CONSTANT_RATE_CELL_BYTES).map_err(|_| {
+            ConfigError::Handshake("first-release constant-rate cell size exceeds u16".to_string())
+        })?;
+        let relay_capabilities = capability::encode_relay_advertisement(
+            &capability::NegotiatedCapabilities {
+                kem: capability::KemAdvertisement {
+                    id: worst_case_kem,
+                    required: self.kem[0].required,
+                },
+                signatures: worst_case_signatures,
+                padding: u16::MAX,
+                descriptor_commit: Some([0_u8; 32]),
+                grease: configured_grease,
+                constant_rate: Some(capability::ConstantRateCapability {
+                    version: 1,
+                    mode: ConstantRateMode::Strict,
+                    cell_bytes: constant_rate_cell_bytes,
+                }),
+            },
+            0x07,
+        )
+        .map_err(|error| {
+            ConfigError::Handshake(format!(
+                "failed to encode the worst-case relay capability vector: {error}"
+            ))
+        })?;
+        let relay_capabilities = update_suite_list(
+            &relay_capabilities,
+            &[
+                HandshakeSuite::Nk2Hybrid,
+                HandshakeSuite::Nk3PqForwardSecure,
+            ],
+            true,
+        )
+        .map_err(|error| {
+            ConfigError::Handshake(format!(
+                "failed to encode the worst-case relay handshake suite list: {error}"
+            ))
+        })?;
+        if relay_capabilities.len() > capability::MAX_CAP_VECTOR_LEN {
+            return Err(ConfigError::Handshake(format!(
+                "worst-case relay capability vector is {} bytes; first-release maximum is {} bytes",
+                relay_capabilities.len(),
+                capability::MAX_CAP_VECTOR_LEN
+            )));
         }
         if let Some(certificate) = &self.certificate {
             certificate.validate()?;
@@ -2959,25 +3309,6 @@ impl HandshakePolicy {
             entries.push(GreaseEntry { ty: g.typ, value });
         }
         Ok(entries)
-    }
-    pub fn identity_private_key_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
-        self.identity_private_key_hex
-            .as_ref()
-            .map(|hex| {
-                let decoded = hex::decode(hex).map_err(|err| ConfigError::Hex {
-                    field: "handshake.identity_private_key_hex".to_string(),
-                    kind: err,
-                })?;
-                if decoded.len() != 32 {
-                    return Err(ConfigError::Handshake(
-                        "identity_private_key_hex must decode to 32 bytes".to_string(),
-                    ));
-                }
-                let mut key = [0u8; 32];
-                key.copy_from_slice(&decoded);
-                Ok(key)
-            })
-            .transpose()
     }
     /// Load and verify the configured certificate at an explicit Unix second.
     ///
@@ -3013,7 +3344,7 @@ impl HandshakePolicy {
         let Some(path) = self.descriptor_manifest_path() else {
             return Ok(None);
         };
-        let bytes = read_bounded_direct_regular_file(
+        let mut bytes = read_bounded_private_regular_file(
             path,
             DESCRIPTOR_MANIFEST_JSON_MAX_BYTES_V1,
             "RelayDescriptorManifestV1 JSON",
@@ -3021,14 +3352,14 @@ impl HandshakePolicy {
         .map_err(|err| {
             manifest_error(path, format!("failed to read descriptor manifest: {err}"))
         })?;
-        norito::json::preflight_slice(&bytes, descriptor_manifest_json_preflight_limits_v1())
-            .map_err(|err| {
+        let value = (|| {
+            norito::json::preflight_slice(&bytes, descriptor_manifest_json_preflight_limits_v1())
+                .map_err(|err| {
                 manifest_error(
                     path,
                     format!("descriptor manifest JSON admission failed: {err}"),
                 )
             })?;
-        let value: norito::json::Value =
             norito::with_decode_limits_scope(DESCRIPTOR_MANIFEST_JSON_DECODE_LIMITS_V1, || {
                 norito::json::from_slice(&bytes)
             })
@@ -3037,13 +3368,17 @@ impl HandshakePolicy {
                     path,
                     format!("failed to parse descriptor manifest JSON: {err}"),
                 )
-            })?;
-        let identity_private_key = extract_manifest_identity_private_key(&value)
+            })
+        })();
+        bytes.fill(0);
+        std::hint::black_box(bytes.as_mut_slice());
+        let value = SensitiveManifestJson(value?);
+        let identity_private_key = extract_manifest_identity_private_key(&value.0)
             .map(|hex| {
                 decode_manifest_identity_seed(hex).map_err(|message| manifest_error(path, message))
             })
             .transpose()?;
-        let (private_hex, public_hex) = extract_manifest_ml_kem_hex(&value);
+        let (private_hex, public_hex) = extract_manifest_ml_kem_hex(&value.0);
         let private_hex = private_hex.map(str::trim).filter(|value| !value.is_empty());
         let public_hex = public_hex.map(str::trim).filter(|value| !value.is_empty());
         let (ml_kem_private_key, ml_kem_public_key) = match (private_hex, public_hex) {
@@ -3074,8 +3409,11 @@ impl HandshakePolicy {
         }))
     }
     pub fn ml_kem_keys_from_manifest(&self) -> Result<Option<MlKemKeys>, ConfigError> {
-        Ok(self.manifest_secrets()?.and_then(|secrets| {
-            match (secrets.ml_kem_public_key, secrets.ml_kem_private_key) {
+        Ok(self.manifest_secrets()?.and_then(|mut secrets| {
+            match (
+                secrets.ml_kem_public_key.take(),
+                secrets.ml_kem_private_key.take(),
+            ) {
                 (Some(public), Some(private)) => Some(MlKemKeys { public, private }),
                 _ => None,
             }
@@ -3083,11 +3421,10 @@ impl HandshakePolicy {
     }
     pub fn identity_private_key_from_manifest(&self) -> Result<Option<[u8; 32]>, ConfigError> {
         match self.manifest_secrets()? {
-            Some(ManifestSecrets {
-                identity_private_key: Some(seed),
-                ..
-            }) => Ok(Some(seed)),
-            Some(_) => {
+            Some(mut secrets) => {
+                if let Some(seed) = secrets.identity_private_key.take() {
+                    return Ok(Some(seed));
+                }
                 let path = self
                     .descriptor_manifest_path()
                     .expect("descriptor manifest path available when secrets loaded");
@@ -3098,6 +3435,34 @@ impl HandshakePolicy {
             }
             None => Ok(None),
         }
+    }
+}
+struct SensitiveManifestJson(norito::json::Value);
+impl Drop for SensitiveManifestJson {
+    fn drop(&mut self) {
+        clear_manifest_json_strings(&mut self.0);
+    }
+}
+fn clear_manifest_json_strings(value: &mut norito::json::Value) {
+    use norito::json::Value;
+    match value {
+        Value::String(string) => {
+            let len = string.len();
+            string.clear();
+            string.extend(std::iter::repeat_n('\0', len));
+            std::hint::black_box(string.as_bytes());
+        }
+        Value::Array(values) => {
+            for value in values {
+                clear_manifest_json_strings(value);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                clear_manifest_json_strings(value);
+            }
+        }
+        _ => {}
     }
 }
 fn manifest_error(path: &Path, message: impl Into<String>) -> ConfigError {
@@ -3113,16 +3478,12 @@ fn decode_manifest_identity_seed(hex_value: &str) -> Result<[u8; 32], String> {
             hex_value.len()
         ));
     }
-    let decoded =
-        hex::decode(hex_value).map_err(|err| format!("identity private key hex invalid: {err}"))?;
-    if decoded.len() != 32 {
-        return Err(format!(
-            "identity private key hex must decode to 32 bytes (got {})",
-            decoded.len()
-        ));
-    }
     let mut seed = [0u8; 32];
-    seed.copy_from_slice(&decoded);
+    if let Err(err) = hex::decode_to_slice(hex_value, &mut seed) {
+        seed.fill(0);
+        std::hint::black_box(&mut seed);
+        return Err(format!("identity private key hex invalid: {err}"));
+    }
     Ok(seed)
 }
 fn decode_manifest_ml_kem_key(
@@ -3137,14 +3498,10 @@ fn decode_manifest_ml_kem_key(
             hex_value.len()
         ));
     }
-    let decoded = hex::decode(hex_value).map_err(|err| format!("{field} invalid: {err}"))?;
-    if decoded.len() != expected_len {
-        return Err(format!(
-            "{field} must decode to {expected_len} bytes (got {})",
-            decoded.len()
-        ));
-    }
-    Ok(decoded)
+    let mut decoded = SensitiveReadBuffer(vec![0; expected_len]);
+    hex::decode_to_slice(hex_value, &mut decoded.0)
+        .map_err(|err| format!("{field} invalid: {err}"))?;
+    Ok(decoded.into_vec())
 }
 fn extract_manifest_identity_private_key(value: &norito::json::Value) -> Option<&str> {
     use norito::json::Value;
@@ -3276,21 +3633,67 @@ pub struct RelayConfig {
     #[norito(default)]
     pub constant_rate_profile: ConstantRateProfileName,
 }
+
+fn reject_retired_secret_config_fields(value: &norito::json::Value) -> Result<(), ConfigError> {
+    const RETIRED_FIELDS: &[(&[&str], &str)] = &[
+        (&["handshake"], "identity_private_key_hex"),
+        (&["vpn"], "helper_ticket_secret_hex"),
+        (&["vpn"], "backend_bootstrap_secret_hex"),
+        (&["compliance"], "hash_salt_hex"),
+        (&["pow", "token"], "issuer_secret_key_hex"),
+        (&["pow", "token"], "issuer_secret_key_path"),
+    ];
+
+    for &(object_path, field) in RETIRED_FIELDS {
+        let mut current = value;
+        let mut present = true;
+        for segment in object_path {
+            let Some(next) = current.as_object().and_then(|object| object.get(*segment)) else {
+                present = false;
+                break;
+            };
+            current = next;
+        }
+        if present
+            && current
+                .as_object()
+                .is_some_and(|object| object.contains_key(field))
+        {
+            return Err(ConfigError::JsonAdmission(format!(
+                "retired secret-bearing configuration field `{}.{field}` is not accepted",
+                object_path.join(".")
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl RelayConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
-        let data = read_bounded_direct_regular_file(
+        let mut data = read_bounded_direct_regular_file(
             path.as_ref(),
             RELAY_CONFIG_JSON_MAX_BYTES_V1,
             "relay configuration JSON",
         )?;
-        json::preflight_slice(&data, relay_config_json_preflight_limits_v1())
-            .map_err(|error| ConfigError::JsonAdmission(error.to_string()))?;
-        let mut config: RelayConfig =
-            norito::with_decode_limits_scope(RELAY_CONFIG_JSON_DECODE_LIMITS_V1, || {
-                json::from_slice(&data)
-            })?;
-        config.validate()?;
-        Ok(config)
+        let result = (|| {
+            json::preflight_slice(&data, relay_config_json_preflight_limits_v1())
+                .map_err(|error| ConfigError::JsonAdmission(error.to_string()))?;
+            let value =
+                norito::with_decode_limits_scope(RELAY_CONFIG_JSON_DECODE_LIMITS_V1, || {
+                    json::from_slice(&data)
+                })?;
+            let value = SensitiveManifestJson(value);
+            reject_retired_secret_config_fields(&value.0)?;
+            let mut config: RelayConfig =
+                norito::with_decode_limits_scope(RELAY_CONFIG_JSON_DECODE_LIMITS_V1, || {
+                    json::from_slice(&data)
+                })?;
+            config.validate()?;
+            Ok(config)
+        })();
+        data.fill(0);
+        std::hint::black_box(data.as_mut_slice());
+        result
     }
     pub fn validate(&mut self) -> Result<(), ConfigError> {
         let tls = self.tls.get_or_insert_with(TlsConfig::default);
@@ -3400,9 +3803,7 @@ impl RelayConfig {
                     "vpn.enabled requires a verified handshake.certificate bundle".to_owned(),
                 ));
             }
-            if policy.identity_private_key_hex.is_none()
-                && policy.descriptor_manifest_path.is_none()
-            {
+            if policy.descriptor_manifest_path.is_none() {
                 return Err(ConfigError::Vpn(
                     "vpn.enabled requires a persistent relay identity key".to_owned(),
                 ));
@@ -3570,7 +3971,7 @@ pub enum ConfigError {
 }
 pub(crate) fn parse_kem_id(id: &str) -> Option<capability::KemId> {
     match id {
-        "classic" => Some(capability::KemId::Classic),
+        "ml-kem-512" => Some(capability::KemId::MlKem512),
         "ml-kem-768" => Some(capability::KemId::MlKem768),
         "ml-kem-1024" => Some(capability::KemId::MlKem1024),
         _ => None,
@@ -3578,9 +3979,7 @@ pub(crate) fn parse_kem_id(id: &str) -> Option<capability::KemId> {
 }
 pub(crate) fn parse_signature_id(id: &str) -> Option<capability::SignatureId> {
     match id {
-        "ed25519" => Some(capability::SignatureId::Ed25519),
         "dilithium3" => Some(capability::SignatureId::Dilithium3),
-        "falcon512" => Some(capability::SignatureId::Falcon512),
         _ => None,
     }
 }

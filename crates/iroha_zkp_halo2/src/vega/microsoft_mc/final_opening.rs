@@ -307,7 +307,7 @@ pub(super) fn build(
     let expected_row = application_key
         .commit(bound_row.as_slice(), &[bound_blinding.get()])
         .map_err(|_| Figure9FinalOpeningError::Commitment)?;
-    if expected_row.points() != &[committed_row] {
+    if expected_row.points() != [committed_row] {
         return Err(Figure9FinalOpeningError::EvaluationMismatch);
     }
     let expected_evaluation = evaluation_key
@@ -815,8 +815,8 @@ mod tests {
         .expect("exact verifier replay");
 
         let mutations: [fn(&mut LinearIpaWire, &HyraxKeyWire); 5] = [
-            |proof, key| proof.delta = proof.delta + key.generators[0],
-            |proof, key| proof.beta = proof.beta + key.generators[0],
+            |proof, key| proof.delta += key.generators[0],
+            |proof, key| proof.beta += key.generators[0],
             |proof, _| proof.responses[0] += Scalar::one(),
             |proof, _| proof.delta_response += Scalar::one(),
             |proof, _| proof.beta_response += Scalar::one(),
@@ -834,7 +834,7 @@ mod tests {
         }
 
         let mut wrong_commitment_points = fixture.3.points().to_vec();
-        wrong_commitment_points[0] = wrong_commitment_points[0] + fixture.1.generators[0];
+        wrong_commitment_points[0] += fixture.1.generators[0];
         let wrong_commitment =
             Commitment::from_points(wrong_commitment_points).expect("non-identity mutation");
         assert!(
@@ -850,7 +850,7 @@ mod tests {
         );
 
         let mut wrong_evaluation_points = fixture.5.points().to_vec();
-        wrong_evaluation_points[0] = wrong_evaluation_points[0] + fixture.2.generators[0];
+        wrong_evaluation_points[0] += fixture.2.generators[0];
         let wrong_evaluation =
             Commitment::from_points(wrong_evaluation_points).expect("non-identity mutation");
         assert!(

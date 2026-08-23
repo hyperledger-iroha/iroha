@@ -1,11 +1,32 @@
 use assert_cmd::cargo::cargo_bin_cmd;
+#[cfg(unix)]
 use norito::json::{self, Value};
+#[cfg(unix)]
 use std::fs;
+#[cfg(unix)]
 use tempfile::TempDir;
+#[cfg(unix)]
 #[test]
 fn simulate_writes_frames_and_telemetry() {
     let _serial = crate::serial_guard();
     let temp = TempDir::new().expect("tempdir");
+    let client_secret_path = temp.path().join("client-static-sk.hex");
+    let relay_secret_path = temp.path().join("relay-static-sk.hex");
+    fs::write(
+        &client_secret_path,
+        "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+    )
+    .expect("write client static secret");
+    fs::write(
+        &relay_secret_path,
+        "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100",
+    )
+    .expect("write relay static secret");
+    use std::os::unix::fs::PermissionsExt as _;
+    fs::set_permissions(&client_secret_path, fs::Permissions::from_mode(0o600))
+        .expect("make client secret private");
+    fs::set_permissions(&relay_secret_path, fs::Permissions::from_mode(0o600))
+        .expect("make relay secret private");
     let frames_dir = temp.path().join("frames");
     let telemetry_path = temp.path().join("telemetry.json");
     let json_path = temp.path().join("report.json");
@@ -16,10 +37,10 @@ fn simulate_writes_frames_and_telemetry() {
         "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe",
         "--relay-hex",
         "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f12000412345678",
-        "--client-static-sk-hex",
-        "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-        "--relay-static-sk-hex",
-        "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100",
+        "--client-static-sk-file",
+        client_secret_path.to_str().expect("client secret path"),
+        "--relay-static-sk-file",
+        relay_secret_path.to_str().expect("relay secret path"),
         "--descriptor-commit-hex",
         "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
         "--client-nonce-hex",

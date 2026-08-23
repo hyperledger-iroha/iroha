@@ -1,12 +1,10 @@
 use crate::{
     bundle::ProofBundleV1,
     limits::{
-        MAX_CHILD_STRINGS, MAX_CONFIG_BYTES, MAX_FIELD_BYTES, MAX_HEADERS_PER_SOURCE,
-        MAX_IDENTIFIER_BYTES, MAX_LISTEN_ADDRESSES, MAX_PROOF_BUNDLE_BYTES, MAX_RAD_SNAPSHOT_BYTES,
-        MAX_SOURCE_BATCH_RETAINED_BYTES, MAX_SOURCE_REFERENCES, MAX_SOURCES_PER_KIND,
+        MAX_CHILD_STRINGS, MAX_CONFIG_BYTES, MAX_FIELD_BYTES, MAX_IDENTIFIER_BYTES,
+        MAX_LISTEN_ADDRESSES, MAX_PROOF_BUNDLE_BYTES, MAX_RAD_SNAPSHOT_BYTES, MAX_SOURCES_PER_KIND,
         MAX_STATIC_RECORDS, MAX_STATIC_ZONE_RETAINED_BYTES, MAX_STATIC_ZONES, config_decode_limits,
         preflight_json, proof_bundle_decode_limits, read_bounded_file, read_bounded_file_async,
-        read_http_body_bounded,
     },
     rad::{ResolverAttestation, decode_rad_entries},
 };
@@ -17,12 +15,10 @@ use hickory_proto::rr::{
 };
 use norito::{decode_from_bytes_with_limits, json};
 use norito_derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use reqwest::header::HeaderName;
 use std::{
     convert::TryFrom,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
-    str::FromStr,
     time::Duration,
 };
 /// Resolver configuration with normalised runtime values.
@@ -32,8 +28,8 @@ pub struct ResolverConfig {
     pub region: String,
     doh_listen: Vec<SocketAddr>,
     dot_listen: Vec<SocketAddr>,
-    doq_listen: Vec<SocketAddr>,
     event_listen: Option<SocketAddr>,
+    operations_auth_token_path: Option<PathBuf>,
     bundle_sources: Vec<BundleSource>,
     rad_sources: Vec<RadSource>,
     dot_tls: Option<DotTlsConfig>,
@@ -83,10 +79,6 @@ impl ResolverConfig {
         &self.dot_listen
     }
     #[must_use]
-    pub(crate) fn doq_listen(&self) -> &[SocketAddr] {
-        &self.doq_listen
-    }
-    #[must_use]
     pub(crate) fn bundle_sources(&self) -> &[BundleSource] {
         &self.bundle_sources
     }
@@ -97,6 +89,10 @@ impl ResolverConfig {
     #[must_use]
     pub(crate) fn event_listen(&self) -> Option<SocketAddr> {
         self.event_listen
+    }
+    #[must_use]
+    pub(crate) fn operations_auth_token_path(&self) -> Option<&Path> {
+        self.operations_auth_token_path.as_deref()
     }
     #[must_use]
     pub(crate) fn dot_tls(&self) -> Option<&DotTlsConfig> {
@@ -128,6 +124,11 @@ impl TryFrom<ResolverConfigRaw> for ResolverConfig {
     type Error = eyre::Error;
     fn try_from(raw: ResolverConfigRaw) -> Result<Self> {
         raw.validate_bounds()?;
+        if raw.event_log_path.is_some() {
+            bail!(
+                "event_log_path is disabled in v1; use the bounded loopback event stream or process logging"
+            );
+        }
         let raw_bundle_sources = raw.bundle_sources.unwrap_or_default();
         let mut bundle_sources = Vec::new();
         bundle_sources
@@ -163,10 +164,35 @@ impl TryFrom<ResolverConfigRaw> for ResolverConfig {
             static_zones.push(zone);
         }
         let doh_listen = parse_socket_list("doh_listen", raw.doh_listen)?;
+        validate_loopback_listeners("doh_listen", &doh_listen)?;
         let dot_listen = parse_socket_list("dot_listen", raw.dot_listen)?;
-        let doq_listen = parse_socket_list("doq_listen", raw.doq_listen)?;
+        if raw.doq_listen.is_some() {
+            bail!(
+                "doq_listen is not part of the v1 resolver schema; authenticated QUIC transport is not implemented"
+            );
+        }
         let event_listen = parse_socket("event_listen", raw.event_listen)?;
-        let event_log_path = raw.event_log_path.map(PathBuf::from);
+        if let Some(address) = event_listen
+            && !address.ip().is_loopback()
+        {
+            bail!(
+                "event_listen must use a loopback address because its bearer-authenticated metrics and event streams use plaintext HTTP behind a local TLS proxy"
+            );
+        }
+        let operations_auth_token_path = raw
+            .operations_auth_token_path
+            .map(PathBuf::from)
+            .filter(|path| !path.as_os_str().is_empty());
+        match (event_listen, operations_auth_token_path.as_ref()) {
+            (Some(_), None) => bail!(
+                "operations_auth_token_path is required when event_listen enables operational endpoints"
+            ),
+            (None, Some(_)) => bail!(
+                "operations_auth_token_path requires event_listen so the credential is not loaded unused"
+            ),
+            _ => {}
+        }
+        let event_log_path = None;
         let dot_tls = match raw.dot_tls {
             Some(tls) => Some(tls.try_into_config()?),
             None => None,
@@ -181,8 +207,8 @@ impl TryFrom<ResolverConfigRaw> for ResolverConfig {
             region: raw.region,
             doh_listen,
             dot_listen,
-            doq_listen,
             event_listen,
+            operations_auth_token_path,
             bundle_sources,
             rad_sources,
             dot_tls,
@@ -202,6 +228,7 @@ struct ResolverConfigRaw {
     dot_listen: Option<Vec<String>>,
     doq_listen: Option<Vec<String>>,
     event_listen: Option<String>,
+    operations_auth_token_path: Option<String>,
     dot_tls: Option<DotTlsConfigRaw>,
     static_zones: Option<Vec<StaticZoneConfig>>,
     event_log_path: Option<String>,
@@ -219,6 +246,11 @@ impl ResolverConfigRaw {
         check_optional_string(
             "event_log_path",
             self.event_log_path.as_deref(),
+            MAX_FIELD_BYTES,
+        )?;
+        check_optional_string(
+            "operations_auth_token_path",
+            self.operations_auth_token_path.as_deref(),
             MAX_FIELD_BYTES,
         )?;
         let bundle_sources = self.bundle_sources.as_deref().unwrap_or_default();
@@ -245,16 +277,7 @@ impl ResolverConfigRaw {
             self.static_zones.as_deref(),
             MAX_STATIC_ZONES,
         )?;
-        let mut references = 0usize;
         for source in bundle_sources {
-            references = references
-                .checked_add(source.reference_count())
-                .filter(|count| *count <= MAX_SOURCE_REFERENCES)
-                .ok_or_else(|| {
-                    eyre::eyre!(
-                        "bundle source references exceed the {MAX_SOURCE_REFERENCES}-entry limit"
-                    )
-                })?;
             source.validate_bounds()?;
         }
         for source in rad_sources {
@@ -333,6 +356,14 @@ fn parse_socket(name: &str, value: Option<String>) -> Result<Option<SocketAddr>>
         })
         .transpose()
 }
+fn validate_loopback_listeners(name: &str, addresses: &[SocketAddr]) -> Result<()> {
+    if let Some(address) = addresses.iter().find(|address| !address.ip().is_loopback()) {
+        bail!(
+            "{name} address {address} must be loopback because v1 serves plaintext HTTP; terminate TLS at a local proxy"
+        );
+    }
+    Ok(())
+}
 /// TLS configuration for DoT listeners.
 #[derive(Debug, Clone)]
 pub struct DotTlsConfig {
@@ -367,84 +398,27 @@ impl DotTlsConfigRaw {
 pub(crate) enum BundleSource {
     File {
         path: PathBuf,
-    },
-    Torii {
-        base_url: String,
-        namehashes: Vec<String>,
-        headers: Vec<HeaderEntry>,
-    },
-    SoraFs {
-        gateway: String,
-        cids: Vec<String>,
-        headers: Vec<HeaderEntry>,
+        expected_blake3: [u8; 32],
     },
 }
 impl BundleSource {
-    pub async fn fetch(&self, client: &reqwest::Client) -> Result<Vec<ProofBundleV1>> {
+    pub async fn fetch(&self, _client: &reqwest::Client) -> Result<Vec<ProofBundleV1>> {
         match self {
-            Self::File { path } => {
+            Self::File {
+                path,
+                expected_blake3,
+            } => {
                 let label = format!("proof bundle `{}`", path.display());
                 let bytes =
                     read_bounded_file_async(path.clone(), MAX_PROOF_BUNDLE_BYTES, label.clone())
                         .await?;
+                verify_pinned_snapshot(&bytes, expected_blake3, &label)?;
                 let bundle = decode_proof_bundle(&bytes, &label)?;
                 let mut bundles = Vec::new();
                 bundles
                     .try_reserve_exact(1)
                     .wrap_err("failed to reserve local bundle result")?;
                 bundles.push(bundle);
-                Ok(bundles)
-            }
-            Self::Torii {
-                base_url,
-                namehashes,
-                headers,
-            } => {
-                let base = trim_trailing_slash(base_url);
-                let mut bundles = Vec::new();
-                let mut retained_bytes = 0usize;
-                bundles
-                    .try_reserve_exact(namehashes.len())
-                    .wrap_err("failed to reserve Torii bundle result list")?;
-                for namehash in namehashes {
-                    let url = format!("{base}/v1/soradns/proof/{namehash}");
-                    let request = apply_headers(client.get(&url), headers);
-                    let response = request
-                        .send()
-                        .await
-                        .wrap_err_with(|| format!("failed to fetch proof bundle from `{url}`"))?;
-                    let label = format!("proof bundle response from `{url}`");
-                    let bytes =
-                        read_http_body_bounded(response, MAX_PROOF_BUNDLE_BYTES, &label).await?;
-                    let bundle = decode_proof_bundle(&bytes, &label)?;
-                    push_fetched_bundle(&mut bundles, bundle, &mut retained_bytes)?;
-                }
-                Ok(bundles)
-            }
-            Self::SoraFs {
-                gateway,
-                cids,
-                headers,
-            } => {
-                let base = trim_trailing_slash(gateway);
-                let mut bundles = Vec::new();
-                let mut retained_bytes = 0usize;
-                bundles
-                    .try_reserve_exact(cids.len())
-                    .wrap_err("failed to reserve SoraFS bundle result list")?;
-                for cid in cids {
-                    let url = format!("{base}/ipfs/{cid}");
-                    let request = apply_headers(client.get(&url), headers);
-                    let response = request
-                        .send()
-                        .await
-                        .wrap_err_with(|| format!("failed to fetch proof bundle from `{url}`"))?;
-                    let label = format!("proof bundle response from `{url}`");
-                    let bytes =
-                        read_http_body_bounded(response, MAX_PROOF_BUNDLE_BYTES, &label).await?;
-                    let bundle = decode_proof_bundle(&bytes, &label)?;
-                    push_fetched_bundle(&mut bundles, bundle, &mut retained_bytes)?;
-                }
                 Ok(bundles)
             }
         }
@@ -455,67 +429,34 @@ impl BundleSource {
 pub(crate) enum RadSource {
     File {
         path: PathBuf,
-    },
-    Torii {
-        base_url: String,
-        headers: Vec<HeaderEntry>,
-    },
-    SoraFs {
-        gateway: String,
-        path: String,
-        headers: Vec<HeaderEntry>,
+        expected_blake3: [u8; 32],
     },
 }
 impl RadSource {
-    pub async fn fetch(&self, client: &reqwest::Client) -> Result<Vec<ResolverAttestation>> {
+    pub async fn fetch(&self, _client: &reqwest::Client) -> Result<Vec<ResolverAttestation>> {
         match self {
-            Self::File { path } => {
+            Self::File {
+                path,
+                expected_blake3,
+            } => {
                 let label = format!("RAD snapshot `{}`", path.display());
                 let bytes =
                     read_bounded_file_async(path.clone(), MAX_RAD_SNAPSHOT_BYTES, label.clone())
                         .await?;
+                verify_pinned_snapshot(&bytes, expected_blake3, &label)?;
                 let entries = decode_rad_entries(&bytes).wrap_err_with(|| {
                     format!("failed to decode RAD snapshot `{}`", path.display())
                 })?;
                 Ok(entries)
             }
-            Self::Torii { base_url, headers } => {
-                let base = trim_trailing_slash(base_url);
-                let url = format!("{base}/v1/soradns/resolvers");
-                let request = apply_headers(client.get(&url), headers);
-                let response = request
-                    .send()
-                    .await
-                    .wrap_err_with(|| format!("failed to fetch resolver adverts from `{url}`"))?;
-                let label = format!("RAD response from `{url}`");
-                let bytes =
-                    read_http_body_bounded(response, MAX_RAD_SNAPSHOT_BYTES, &label).await?;
-                let entries = decode_rad_entries(&bytes).wrap_err_with(|| {
-                    format!("failed to decode resolver attestations fetched from `{url}`")
-                })?;
-                Ok(entries)
-            }
-            Self::SoraFs {
-                gateway,
-                path,
-                headers,
-            } => {
-                let base = trim_trailing_slash(gateway);
-                let object = format!("{base}/{}", path.trim_start_matches('/'));
-                let request = apply_headers(client.get(&object), headers);
-                let response = request.send().await.wrap_err_with(|| {
-                    format!("failed to fetch resolver adverts from `{object}`")
-                })?;
-                let label = format!("RAD response from `{object}`");
-                let bytes =
-                    read_http_body_bounded(response, MAX_RAD_SNAPSHOT_BYTES, &label).await?;
-                let entries = decode_rad_entries(&bytes).wrap_err_with(|| {
-                    format!("failed to decode resolver attestations fetched from `{object}`")
-                })?;
-                Ok(entries)
-            }
         }
     }
+}
+fn verify_pinned_snapshot(bytes: &[u8], expected: &[u8; 32], label: &str) -> Result<()> {
+    if blake3::hash(bytes).as_bytes() != expected {
+        bail!("{label} does not match its independently provisioned BLAKE3 digest");
+    }
+    Ok(())
 }
 fn decode_proof_bundle(bytes: &[u8], label: &str) -> Result<ProofBundleV1> {
     if bytes.len() > MAX_PROOF_BUNDLE_BYTES {
@@ -528,136 +469,42 @@ fn decode_proof_bundle(bytes: &[u8], label: &str) -> Result<ProofBundleV1> {
         .wrap_err_with(|| format!("{label} exceeds proof-bundle field limits"))?;
     Ok(bundle)
 }
-fn push_fetched_bundle(
-    bundles: &mut Vec<ProofBundleV1>,
-    bundle: ProofBundleV1,
-    retained_bytes: &mut usize,
-) -> Result<()> {
-    let entry_bytes = bundle
-        .retained_bytes()?
-        .checked_add(std::mem::size_of::<ProofBundleV1>())
-        .ok_or_else(|| eyre::eyre!("proof-bundle fetch accounting overflow"))?;
-    let next = retained_bytes
-        .checked_add(entry_bytes)
-        .filter(|bytes| *bytes <= MAX_SOURCE_BATCH_RETAINED_BYTES)
-        .ok_or_else(|| {
-            eyre::eyre!(
-                "one proof-bundle source exceeds the {MAX_SOURCE_BATCH_RETAINED_BYTES}-byte retained-memory limit"
-            )
-        })?;
-    bundles.push(bundle);
-    *retained_bytes = next;
-    Ok(())
-}
 #[derive(Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "kind", content = "value")]
 enum BundleSourceConfig {
     #[norito(rename = "file")]
-    File { path: String },
-    #[norito(rename = "torii")]
-    Torii {
-        base_url: String,
-        namehashes: Vec<String>,
-        headers: Option<Vec<HeaderConfig>>,
-    },
-    #[norito(rename = "sorafs")]
-    SoraFs {
-        gateway: String,
-        cids: Vec<String>,
-        headers: Option<Vec<HeaderConfig>>,
+    File {
+        path: String,
+        expected_blake3_hex: String,
     },
 }
 impl BundleSourceConfig {
-    fn reference_count(&self) -> usize {
-        match self {
-            Self::File { .. } => 1,
-            Self::Torii { namehashes, .. } => namehashes.len(),
-            Self::SoraFs { cids, .. } => cids.len(),
-        }
-    }
     fn validate_bounds(&self) -> Result<()> {
         match self {
-            Self::File { path } => check_string("bundle source path", path, MAX_FIELD_BYTES),
-            Self::Torii {
-                base_url,
-                namehashes,
-                headers,
+            Self::File {
+                path,
+                expected_blake3_hex,
             } => {
-                check_string("torii bundle source base_url", base_url, MAX_FIELD_BYTES)?;
-                check_count(
-                    "torii bundle source namehashes",
-                    namehashes.len(),
-                    MAX_SOURCE_REFERENCES,
-                )?;
-                for namehash in namehashes {
-                    check_string(
-                        "torii bundle source namehash",
-                        namehash,
-                        MAX_IDENTIFIER_BYTES,
-                    )?;
-                }
-                validate_headers(headers.as_deref())
-            }
-            Self::SoraFs {
-                gateway,
-                cids,
-                headers,
-            } => {
-                check_string("sorafs bundle source gateway", gateway, MAX_FIELD_BYTES)?;
-                check_count(
-                    "sorafs bundle source cids",
-                    cids.len(),
-                    MAX_SOURCE_REFERENCES,
-                )?;
-                for cid in cids {
-                    check_string("sorafs bundle source cid", cid, MAX_IDENTIFIER_BYTES)?;
-                }
-                validate_headers(headers.as_deref())
+                check_string("bundle source path", path, MAX_FIELD_BYTES)?;
+                check_string("bundle source expected_blake3_hex", expected_blake3_hex, 64)
             }
         }
     }
     fn try_into_source(self) -> Result<BundleSource> {
         match self {
-            Self::File { path } => {
+            Self::File {
+                path,
+                expected_blake3_hex,
+            } => {
                 if path.trim().is_empty() {
                     bail!("bundle source path must not be empty");
                 }
                 Ok(BundleSource::File {
                     path: PathBuf::from(path),
-                })
-            }
-            Self::Torii {
-                base_url,
-                namehashes,
-                headers,
-            } => {
-                if base_url.trim().is_empty() {
-                    bail!("torii bundle source base_url must not be empty");
-                }
-                if namehashes.is_empty() {
-                    bail!("torii bundle source requires at least one namehash");
-                }
-                Ok(BundleSource::Torii {
-                    base_url,
-                    namehashes,
-                    headers: convert_headers(headers)?,
-                })
-            }
-            Self::SoraFs {
-                gateway,
-                cids,
-                headers,
-            } => {
-                if gateway.trim().is_empty() {
-                    bail!("sorafs bundle source gateway must not be empty");
-                }
-                if cids.is_empty() {
-                    bail!("sorafs bundle source requires at least one cid");
-                }
-                Ok(BundleSource::SoraFs {
-                    gateway,
-                    cids,
-                    headers: convert_headers(headers)?,
+                    expected_blake3: parse_snapshot_digest(
+                        &expected_blake3_hex,
+                        "bundle source expected_blake3_hex",
+                    )?,
                 })
             }
         }
@@ -667,126 +514,54 @@ impl BundleSourceConfig {
 #[norito(tag = "kind", content = "value")]
 enum RadSourceConfig {
     #[norito(rename = "file")]
-    File { path: String },
-    #[norito(rename = "torii")]
-    Torii {
-        base_url: String,
-        headers: Option<Vec<HeaderConfig>>,
-    },
-    #[norito(rename = "sorafs")]
-    SoraFs {
-        gateway: String,
+    File {
         path: String,
-        headers: Option<Vec<HeaderConfig>>,
+        expected_blake3_hex: String,
     },
 }
 impl RadSourceConfig {
     fn validate_bounds(&self) -> Result<()> {
         match self {
-            Self::File { path } => check_string("RAD source path", path, MAX_FIELD_BYTES),
-            Self::Torii { base_url, headers } => {
-                check_string("torii RAD source base_url", base_url, MAX_FIELD_BYTES)?;
-                validate_headers(headers.as_deref())
-            }
-            Self::SoraFs {
-                gateway,
+            Self::File {
                 path,
-                headers,
+                expected_blake3_hex,
             } => {
-                check_string("sorafs RAD source gateway", gateway, MAX_FIELD_BYTES)?;
-                check_string("sorafs RAD source path", path, MAX_FIELD_BYTES)?;
-                validate_headers(headers.as_deref())
+                check_string("RAD source path", path, MAX_FIELD_BYTES)?;
+                check_string("RAD source expected_blake3_hex", expected_blake3_hex, 64)
             }
         }
     }
     fn try_into_source(self) -> Result<RadSource> {
         match self {
-            Self::File { path } => {
+            Self::File {
+                path,
+                expected_blake3_hex,
+            } => {
                 if path.trim().is_empty() {
                     bail!("rad source path must not be empty");
                 }
                 Ok(RadSource::File {
                     path: PathBuf::from(path),
-                })
-            }
-            Self::Torii { base_url, headers } => {
-                if base_url.trim().is_empty() {
-                    bail!("torii rad source base_url must not be empty");
-                }
-                Ok(RadSource::Torii {
-                    base_url,
-                    headers: convert_headers(headers)?,
-                })
-            }
-            Self::SoraFs {
-                gateway,
-                path,
-                headers,
-            } => {
-                if gateway.trim().is_empty() {
-                    bail!("sorafs rad source gateway must not be empty");
-                }
-                if path.trim().is_empty() {
-                    bail!("sorafs rad source path must not be empty");
-                }
-                Ok(RadSource::SoraFs {
-                    gateway,
-                    path,
-                    headers: convert_headers(headers)?,
+                    expected_blake3: parse_snapshot_digest(
+                        &expected_blake3_hex,
+                        "RAD source expected_blake3_hex",
+                    )?,
                 })
             }
         }
     }
 }
-#[derive(Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
-struct HeaderConfig {
-    name: String,
-    value: String,
-}
-#[derive(Debug, Clone)]
-pub(crate) struct HeaderEntry {
-    name: HeaderName,
-    value: String,
-}
-fn validate_headers(headers: Option<&[HeaderConfig]>) -> Result<()> {
-    check_optional_count("source headers", headers, MAX_HEADERS_PER_SOURCE)?;
-    for header in headers.unwrap_or_default() {
-        check_string("source header name", &header.name, 256)?;
-        check_string("source header value", &header.value, MAX_FIELD_BYTES)?;
+fn parse_snapshot_digest(value: &str, field: &str) -> Result<[u8; 32]> {
+    if value.len() != 64 {
+        bail!("{field} must contain exactly 64 hexadecimal characters");
     }
-    Ok(())
-}
-fn convert_headers(configs: Option<Vec<HeaderConfig>>) -> Result<Vec<HeaderEntry>> {
-    let mut entries = Vec::new();
-    if let Some(headers) = configs {
-        entries
-            .try_reserve_exact(headers.len())
-            .wrap_err("failed to reserve source header table")?;
-        for header in headers {
-            if header.name.trim().is_empty() {
-                bail!("header name must not be empty");
-            }
-            let name = HeaderName::from_str(&header.name)
-                .wrap_err_with(|| format!("invalid header name `{}`", header.name))?;
-            entries.push(HeaderEntry {
-                name,
-                value: header.value,
-            });
-        }
+    let mut digest = [0u8; 32];
+    hex::decode_to_slice(value, &mut digest)
+        .wrap_err_with(|| format!("{field} must be valid hexadecimal"))?;
+    if digest.iter().all(|byte| *byte == 0) {
+        bail!("{field} must not be the all-zero placeholder");
     }
-    Ok(entries)
-}
-fn apply_headers(
-    mut request: reqwest::RequestBuilder,
-    headers: &[HeaderEntry],
-) -> reqwest::RequestBuilder {
-    for header in headers {
-        request = request.header(header.name.clone(), header.value.clone());
-    }
-    request
-}
-fn trim_trailing_slash(input: &str) -> String {
-    input.trim_end_matches('/').to_string()
+    Ok(digest)
 }
 fn normalize_domain(domain: &str) -> Result<String> {
     let name =
@@ -1084,7 +859,8 @@ mod tests {
     {{
       "kind": "file",
       "value": {{
-        "path": "{}"
+        "path": "{}",
+        "expected_blake3_hex": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
       }}
     }}
   ],
@@ -1092,13 +868,15 @@ mod tests {
     {{
       "kind": "file",
       "value": {{
-        "path": "{}"
+        "path": "{}",
+        "expected_blake3_hex": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
       }}
     }}
   ],
   "doh_listen": ["127.0.0.1:8443"],
   "dot_listen": ["127.0.0.1:853"],
   "event_listen": "127.0.0.1:9000",
+  "operations_auth_token_path": "/run/secrets/soradns-operations-token",
   "static_zones": [
     {{
       "domain": "example.sora",
@@ -1116,7 +894,6 @@ mod tests {
       }}
     }}
   ],
-  "event_log_path": "resolver.log",
   "sync_interval_secs": 45
 }}"#,
             temp_bundle.path().display(),
@@ -1129,6 +906,10 @@ mod tests {
         assert_eq!(config.doh_listen.len(), 1);
         assert_eq!(config.dot_listen.len(), 1);
         assert!(config.event_listen().is_some());
+        assert_eq!(
+            config.operations_auth_token_path(),
+            Some(Path::new("/run/secrets/soradns-operations-token"))
+        );
         assert_eq!(config.static_zones().len(), 1);
         let zone = &config.static_zones()[0];
         let freeze = zone.freeze.as_ref().expect("freeze metadata parsed");
@@ -1136,8 +917,142 @@ mod tests {
         assert_eq!(freeze.ticket.as_deref(), Some("SNS-DF-123"));
         assert_eq!(freeze.expires_at.as_deref(), Some("2026-03-01T00:00:00Z"));
         assert_eq!(freeze.notes, vec!["guardian review".to_string()]);
-        assert!(config.event_log_path().is_some());
+        assert!(config.event_log_path().is_none());
         assert_eq!(config.sync_interval(), Duration::from_secs(45));
+    }
+    #[test]
+    fn config_rejects_unbounded_file_event_sink() {
+        let temp_bundle = NamedTempFile::new().expect("bundle file");
+        let temp_rad = NamedTempFile::new().expect("rad file");
+        let config_json = format!(
+            r#"{{
+  "resolver_id": "resolver.sora.test",
+  "region": "global",
+  "bundle_sources": [{{"kind":"file","value":{{"path":"{}","expected_blake3_hex":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"}}}}],
+  "rad_sources": [{{"kind":"file","value":{{"path":"{}","expected_blake3_hex":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"}}}}],
+  "event_log_path": "resolver.log"
+}}"#,
+            temp_bundle.path().display(),
+            temp_rad.path().display()
+        );
+        let file = write_config(&config_json);
+        let error = ResolverConfig::load_from_path(file.path())
+            .expect_err("file event sink must fail closed");
+        assert!(error.to_string().contains("event_log_path is disabled"));
+    }
+    #[test]
+    fn config_rejects_raw_udp_doq_listener() {
+        let temp_bundle = NamedTempFile::new().expect("bundle file");
+        let temp_rad = NamedTempFile::new().expect("rad file");
+        let config_json = format!(
+            r#"{{
+  "resolver_id": "resolver.sora.test",
+  "region": "global",
+  "bundle_sources": [{{"kind":"file","value":{{"path":"{}","expected_blake3_hex":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"}}}}],
+  "rad_sources": [{{"kind":"file","value":{{"path":"{}","expected_blake3_hex":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"}}}}],
+  "doq_listen": ["0.0.0.0:8853"]
+}}"#,
+            temp_bundle.path().display(),
+            temp_rad.path().display()
+        );
+        let file = write_config(&config_json);
+        let error = ResolverConfig::load_from_path(file.path())
+            .expect_err("raw UDP DoQ listener must fail closed");
+        assert!(error.to_string().contains("authenticated QUIC"));
+    }
+    #[test]
+    fn config_rejects_plaintext_non_loopback_http_listeners() {
+        let temp_bundle = NamedTempFile::new().expect("bundle file");
+        let temp_rad = NamedTempFile::new().expect("rad file");
+        for listener in [
+            r#""doh_listen":["0.0.0.0:8443"]"#,
+            r#""event_listen":"0.0.0.0:9000""#,
+        ] {
+            let config_json = format!(
+                r#"{{
+  "resolver_id":"resolver.sora.test",
+  "region":"global",
+  "bundle_sources":[{{"kind":"file","value":{{"path":"{}","expected_blake3_hex":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"}}}}],
+  "rad_sources":[{{"kind":"file","value":{{"path":"{}","expected_blake3_hex":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"}}}}],
+  {listener}
+}}"#,
+                temp_bundle.path().display(),
+                temp_rad.path().display(),
+            );
+            let file = write_config(&config_json);
+            let error = ResolverConfig::load_from_path(file.path())
+                .expect_err("remote plaintext listener must fail closed");
+            assert!(error.to_string().contains("loopback"));
+        }
+    }
+    #[test]
+    fn operational_listener_requires_exactly_one_private_credential_path() {
+        let temp_bundle = NamedTempFile::new().expect("bundle file");
+        let temp_rad = NamedTempFile::new().expect("rad file");
+        let base = format!(
+            r#"{{
+  "resolver_id":"resolver.sora.test",
+  "region":"global",
+  "bundle_sources":[{{"kind":"file","value":{{"path":"{}","expected_blake3_hex":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"}}}}],
+  "rad_sources":[{{"kind":"file","value":{{"path":"{}","expected_blake3_hex":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"}}}}],
+  REPLACEMENT
+}}"#,
+            temp_bundle.path().display(),
+            temp_rad.path().display(),
+        );
+        for replacement in [
+            r#""event_listen":"127.0.0.1:9000""#,
+            r#""operations_auth_token_path":"/run/secrets/soradns-operations-token""#,
+        ] {
+            let file = write_config(&base.replace("REPLACEMENT", replacement));
+            let error = ResolverConfig::load_from_path(file.path())
+                .expect_err("listener and credential path must be configured together");
+            assert!(error.to_string().contains("operations_auth_token_path"));
+        }
+    }
+    #[test]
+    fn remote_source_kinds_are_absent_from_the_v1_schema() {
+        for kind in ["torii", "sorafs"] {
+            let file = write_config(&format!(
+                r#"{{
+  "resolver_id":"resolver.sora.test",
+  "region":"global",
+  "bundle_sources":[{{"kind":"{kind}","value":{{"headers":[{{"name":"authorization","value":"Bearer secret"}}]}}}}]
+}}"#,
+            ));
+            let error = ResolverConfig::load_from_path(file.path())
+                .expect_err("unknown remote source kind must fail during config decoding");
+            assert!(
+                error
+                    .to_string()
+                    .contains("failed to parse resolver config JSON")
+            );
+
+            let file = write_config(&format!(
+                r#"{{
+  "resolver_id":"resolver.sora.test",
+  "region":"global",
+  "rad_sources":[{{"kind":"{kind}","value":{{"headers":[{{"name":"authorization","value":"Bearer secret"}}]}}}}]
+}}"#,
+            ));
+            let error = ResolverConfig::load_from_path(file.path())
+                .expect_err("unknown remote RAD source kind must fail during config decoding");
+            assert!(
+                error
+                    .to_string()
+                    .contains("failed to parse resolver config JSON")
+            );
+        }
+    }
+    #[test]
+    fn independently_pinned_snapshot_digest_is_enforced() {
+        let bytes = b"authenticated snapshot";
+        let expected = *blake3::hash(bytes).as_bytes();
+        verify_pinned_snapshot(bytes, &expected, "fixture").expect("matching pin");
+        let error = verify_pinned_snapshot(bytes, &[0xAA; 32], "fixture")
+            .expect_err("mismatched pin must fail");
+        assert!(error.to_string().contains("BLAKE3 digest"));
+        assert!(parse_snapshot_digest(&"00".repeat(32), "fixture pin").is_err());
     }
     #[test]
     fn static_zone_retained_bytes_accounts_for_optional_freeze_notes() {
@@ -1200,8 +1115,8 @@ mod tests {
             r#"{{
   "resolver_id": "resolver.default",
   "region": "global",
-  "bundle_sources": [{{"kind":"file","value":{{"path":"{}"}}}}],
-  "rad_sources": [{{"kind":"file","value":{{"path":"{}"}}}}]
+  "bundle_sources": [{{"kind":"file","value":{{"path":"{}","expected_blake3_hex":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"}}}}],
+  "rad_sources": [{{"kind":"file","value":{{"path":"{}","expected_blake3_hex":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"}}}}]
 }}"#,
             temp_bundle.path().display(),
             temp_rad.path().display()
@@ -1221,8 +1136,8 @@ mod tests {
             r#"{{
   "resolver_id": "resolver.zero",
   "region": "global",
-  "bundle_sources": [{{"kind":"file","value":{{"path":"{}"}}}}],
-  "rad_sources": [{{"kind":"file","value":{{"path":"{}"}}}}],
+  "bundle_sources": [{{"kind":"file","value":{{"path":"{}","expected_blake3_hex":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"}}}}],
+  "rad_sources": [{{"kind":"file","value":{{"path":"{}","expected_blake3_hex":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"}}}}],
   "sync_interval_secs": 0
 }}"#,
             temp_bundle.path().display(),
@@ -1240,8 +1155,8 @@ mod tests {
             r#"{{
   "resolver_id": "resolver.override",
   "region": "global",
-  "bundle_sources": [{{"kind":"file","value":{{"path":"{}"}}}}],
-  "rad_sources": [{{"kind":"file","value":{{"path":"{}"}}}}]
+  "bundle_sources": [{{"kind":"file","value":{{"path":"{}","expected_blake3_hex":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"}}}}],
+  "rad_sources": [{{"kind":"file","value":{{"path":"{}","expected_blake3_hex":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"}}}}]
 }}"#,
             temp_bundle.path().display(),
             temp_rad.path().display()
@@ -1261,8 +1176,8 @@ mod tests {
             r#"{{
   "resolver_id": "resolver.override.zero",
   "region": "global",
-  "bundle_sources": [{{"kind":"file","value":{{"path":"{}"}}}}],
-  "rad_sources": [{{"kind":"file","value":{{"path":"{}"}}}}]
+  "bundle_sources": [{{"kind":"file","value":{{"path":"{}","expected_blake3_hex":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"}}}}],
+  "rad_sources": [{{"kind":"file","value":{{"path":"{}","expected_blake3_hex":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"}}}}]
 }}"#,
             temp_bundle.path().display(),
             temp_rad.path().display()
@@ -1295,8 +1210,6 @@ mod tests {
     fn collection_corridors_accept_exact_and_reject_plus_one() {
         for (label, maximum) in [
             ("test sources", MAX_SOURCES_PER_KIND),
-            ("test references", MAX_SOURCE_REFERENCES),
-            ("test headers", MAX_HEADERS_PER_SOURCE),
             ("test listeners", MAX_LISTEN_ADDRESSES),
             ("test static zones", MAX_STATIC_ZONES),
             ("test static records", MAX_STATIC_RECORDS),

@@ -2296,17 +2296,17 @@ def _apply_exact_output_non_runtime_extended_mutations(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(",
+            "pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(",
             "|| !self.recovered_decision_fetch_request_index_is_exact_and_empty()",
             "|| false",
-            "recovered Decision Apply completion must not overtake retained executor work",
+            "lifecycle Decision Apply completion must not overtake retained work",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "pub(in crate::sumeragi) fn commit_recovered_decision_apply_finality(",
+            "pub(in crate::sumeragi) fn commit_lifecycle_decision_apply_finality(",
             "&& self.recovered_decision_fetch_request_index_is_exact_and_empty()",
             "&& true",
-            "recovered Decision Apply finality must authenticate its height, artifact, receipt, and drained runtime",
+            "lifecycle Decision Apply finality must consume the exact live owner or prove recovered non-substitution",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -2397,8 +2397,8 @@ def _apply_exact_output_non_runtime_extended_mutations(
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
             "pub(crate) fn complete_application<S: V2EffectServices>(",
             "            ownership: FinalityCompletionOwner::Runtime(ownership),\n        });",
-            "            ownership: FinalityCompletionOwner::RecoveredDecisionApply(\n"
-            "                RecoveredDecisionApplyDispatchKeyV1::new_for_test(),\n            ),\n        });",
+            "            ownership: FinalityCompletionOwner::LifecycleDecisionApply(\n"
+            "                LifecycleDecisionApplyDispatchKeyV1::for_test(1, 1),\n            ),\n        });",
             "durable Apply completion must retain the exact tag",
         ),
         (
@@ -2417,31 +2417,31 @@ def _apply_exact_output_non_runtime_extended_mutations(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(",
+            "pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(",
             "|| !pending_recovery_is_exact",
             "|| false",
-            "recovered Decision Apply completion must not overtake retained executor work",
+            "lifecycle Decision Apply completion must retain exact pending-Kura recovery evidence",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(",
+            "pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(",
             "|| self.finality_completion.is_some()",
             "|| false",
-            "recovered Decision Apply completion must not overtake retained executor work",
+            "lifecycle Decision Apply completion must not overtake retained work",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "pub(in crate::sumeragi) fn commit_recovered_decision_apply_finality(",
+            "pub(in crate::sumeragi) fn commit_lifecycle_decision_apply_finality(",
             "&& pending_recovery_is_exact",
             "&& true",
-            "recovered Decision Apply finality must authenticate its height, artifact, receipt, and drained runtime",
+            "lifecycle Decision Apply finality must authenticate exact pending-Kura recovery evidence",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "pub(in crate::sumeragi) fn commit_recovered_decision_apply_finality(",
+            "pub(in crate::sumeragi) fn commit_lifecycle_decision_apply_finality(",
             "&& dispatch_key.matches_height_context(&self.context)",
             "&& true",
-            "recovered Decision Apply finality must authenticate its height, artifact, receipt, and drained runtime",
+            "lifecycle Decision Apply finality must consume the exact live owner or prove recovered non-substitution",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -2460,18 +2460,18 @@ def _apply_exact_output_non_runtime_extended_mutations(
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "fn new_with_output_guard_and_transport_inner(",
-            "recovered_apply_sidecar_waits: BTreeSet::new(),\n"
-            "            rejected_recovered_apply_sidecars: BTreeMap::new(),",
-            "recovered_apply_sidecar_waits: BTreeSet::new(),\n"
-            "            rejected_recovered_apply_sidecars: BTreeMap::from([]),",
-            "lane construction must initialize distinct recovered Apply wait and rejection owners",
+            "lifecycle_decision_apply_sidecar_waits: BTreeSet::new(),\n"
+            "            rejected_lifecycle_decision_apply_sidecars: BTreeMap::new(),",
+            "lifecycle_decision_apply_sidecar_waits: BTreeSet::new(),\n"
+            "            rejected_lifecycle_decision_apply_sidecars: BTreeMap::from([]),",
+            "lane construction must initialize distinct lifecycle Apply wait and rejection owners",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(in crate::sumeragi) fn defer_missing_recovered_decision_apply_sidecar(",
-            "self.recovered_apply_sidecar_waits.insert(entry_hash);",
-            "self.recovered_apply_sidecar_waits.remove(&entry_hash);",
-            "recovered Apply sidecar deferral must retain only live wait ownership",
+            "pub(in crate::sumeragi) fn defer_missing_lifecycle_decision_apply_sidecar(",
+            "self.lifecycle_decision_apply_sidecar_waits.insert(entry_hash);",
+            "self.lifecycle_decision_apply_sidecar_waits.remove(&entry_hash);",
+            "lifecycle Apply sidecar deferral must retain only live wait ownership",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",

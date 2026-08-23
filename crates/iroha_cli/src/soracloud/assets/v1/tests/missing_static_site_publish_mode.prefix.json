@@ -1,0 +1,16 @@
+{
+              "schema_version": 1,
+              "app_name": "missing_publish_mode",
+              "public_url": "https://missing-publish-mode.sora",
+              "static_site": {
+                "dist_dir": "site/dist",
+                "mount_path": "/",
+                "api_base_path": "/api"
+              },
+              "services": [
+                {
+                  "service_name": "missing_publish_mode_api",
+                  "container_manifest": "container_manifest.json",
+                  "service_manifest": "service_manifest.json"
+                }
+              ]

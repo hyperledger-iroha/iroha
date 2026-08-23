@@ -160,15 +160,20 @@ Example (JSON-like, annotated)
 ## STARK: FRI-Style Multi-Fold Envelope
 
 Hashing and transcript
-- Leaves: SHA-256 uses `LEAF || u64_le(value)`; Poseidon2 uses the
+- Leaves: SHA-256 uses `LEAF || u64_le(value)`; selector `2` uses the
   `iroha:zk:stark:leaf:v1` domain over the field value.
-- Internal nodes: SHA-256(left || right), or Poseidon2 under
-  `iroha:zk:stark:node:v1` for Poseidon2 envelopes.
-- Per-layer challenge `r_k = H(label || params || root_k)` mapped to field, where `params` =
-  `version || n_log2 || blowup_log2 || fold_arity || merkle_arity || hash_fn || queries ||
-  len(domain_tag) || domain_tag`. The same prefix is used for query sampling.
-- Field: Goldilocks-like prime `p = 2^64 - 2^32 + 1`. Hash selector `hash_fn`
-  supports SHA-256 (`1`) and Poseidon2 (`2`).
+- Internal nodes: SHA-256(left || right), or selector `2` under
+  `iroha:zk:stark:node:v1`.
+- Per-layer challenge `r_k = H(label || params || u32_le(k) || root_k)` mapped to
+  the field, where `params` = `version || n_log2 || blowup_log2 || fold_arity ||
+  merkle_arity || hash_fn || queries || len(domain_tag) || domain_tag`. Query
+  sampling binds the same label/parameter prefix, the query ordinal, and every
+  layer root.
+- Field: Goldilocks prime `p = 2^64 - 2^32 + 1`. Raw hash selector `hash_fn`
+  supports SHA-256 (`1`) and the shared dense-MDS Goldilocks `x^7`
+  construction (`2`). The latter retains historical `Poseidon2` names in the
+  Rust constant/backend label, but it is not the Poseidon2 construction and a
+  one-field root is not ledger-grade.
 
 Wire types (as implemented in `iroha_core::zk_stark`)
 
@@ -179,7 +184,7 @@ Wire types (as implemented in `iroha_core::zk_stark`)
   - `fold_arity: u8` — FRI arity (power-of-two; current backend supports 2)
   - `queries: u16` — expected query count (must match `proof.queries.len()`)
   - `merkle_arity: u8` — Merkle branching factor (binary only in v1)
-  - `hash_fn: u8` — hash selector (`1 = SHA-256`, `2 = Poseidon2`)
+  - `hash_fn: u8` — hash selector (`1 = SHA-256`, `2 = legacy-named dense-MDS Goldilocks x^7`)
   - `domain_tag: String` — domain separator baked into the transcript/sampler
 
 - `MerklePath`
@@ -224,9 +229,12 @@ Wire types (as implemented in `iroha_core::zk_stark`)
   - `transcript_label: String`
 
 Limits and validation
-- Bounds enforced by the native verifier: `n_log2 ≤ 24`, `queries ≤ 32`, `layers ≤ 32`,
-  `merkle depth ≤ 32`, `aux_terms ≤ 64`, `domain_tag` length ≤ 64 bytes. `hash_fn` must be
-  `1 (SHA-256)` and `merkle_arity`/`fold_arity` must both be `2`.
+- Bounds enforced by the raw native verifier: `n_log2 ≤ 24`, `queries ≤ 32`,
+  `layers ≤ 32`, `merkle depth ≤ 32`, `aux_terms ≤ 64`, `domain_tag` length ≤
+  64 bytes. Raw `hash_fn` may be `1` or `2`, and `merkle_arity`/`fold_arity`
+  must both be `2`. Canonical ledger verifier keys must use `1 (SHA-256)`;
+  selector `2` is rejected because its one-field root has only roughly 32 bits
+  of generic collision binding.
 - Query sampling and per-round challenges are domain-separated by `domain_tag`, hash selector,
   blowup, fold arity, query count, and roots; mismatched headers or roots are rejected.
 - Bad roots, broken Merkle paths, tampered folds, non-canonical field encodings, and
@@ -236,17 +244,30 @@ Limits and validation
 Verifier behavior (native STARK)
 - For each query, replays all folds:
   - Verifies `y0`, `y1` Merkle openings under `roots[k]` and `z` under `roots[k+1]`.
-  - Derives the pair domain element `x` from the layer domain and checks
+  - Treats each layer as bit-reversed evaluation order, derives `x` from the
+    bit-reversed pair index, and checks
     `z == (y0 + y1)/2 + r_k * (y0 - y1)/(2x)` in the field.
 - If `comp_root` is present on a raw generic STARK envelope, verifies the
   composition leaf/path and checks it matches
   `constant + z_coeff * z_final + Σ coeff_i * value_i`. Auxiliary terms must appear
   in strictly increasing `wire_index` order.
+- For the V1 verifier-owned binding AIR, compares every coordinate of each
+  transcript-sampled current/next row with the deterministic row derived from
+  the bound public digest. Public residuals are not compressed with fixed
+  coefficients. The verifier also reconstructs the canonical full-domain trace
+  root with a streaming Merkle accumulator and requires exact equality. It also
+  reconstructs and exactly matches the Merkle root of the all-zero composition
+  vector. Generic binding domains are therefore capped at `n_log2 = 12`; larger
+  generic binding proofs and verifying keys fail closed. Explicit full-material
+  AIR verification instead recomputes both roots from every supplied row and
+  composition value; private profiles without that material still require a
+  separately qualified degree argument.
 - `OpenVerifyEnvelope` STARK verification rejects inner `comp_root`/`comp_values`
   sidecars. The high-level verifier reconstructs the V1 binding-AIR digest from
   backend, circuit id, VK hash, schema descriptor, and public input columns, and
   ZK-ACE wrappers reconstruct the ZK-ACE AIR/public-input digests from the outer
-  public-input payload.
+  public-input payload. The ZK-ACE engine currently rejects proving,
+  verification, and activation as unavailable pending commitment remediation.
 - Validation: query indices derive from the transcript label + params + roots; the verifier
   rejects mismatched `j`, missing folds, bad roots/paths, non-canonical field encodings,
   unsupported hash selectors, and mismatched query-count headers. Depth/size caps guard
@@ -306,6 +327,42 @@ Verifier behavior (native STARK)
   compared with the deterministic verifier key generated from the selected
   compiled circuit, so a parseable demo or attacker-controlled constraint
   system cannot be relabeled with an admitted production circuit id.
+- Production Halo2 `ProofBox.bytes` is a canonical data-model
+  `OpenVerifyEnvelope`. Its `public_inputs` field contains a schema descriptor,
+  not the concrete instance columns. Every admitted circuit id normalizes to one
+  closed, authoritative descriptor (IVM execution, Kaigi roster/usage,
+  confidential transfer/full-unshield/change-unshield, or Kagemusha top-up).
+  Preverification, guardrails, final dispatch, and verifying-key record
+  preparation require exact descriptor bytes or the Iroha hash of those bytes;
+  arbitrary nonempty replacements and unmapped circuits fail closed.
+- Kaigi commitment, nullifier, and usage `Hash` artifacts encode a canonical
+  Pasta Fp scalar injectively. Starting from its 32-byte little-endian field
+  representation, byte 31's seven used bits are shifted left once and bit 0 is
+  set as Iroha's mandatory `Hash` marker. Verification shifts that byte right
+  once and requires canonical `Fp::from_repr` decoding. Directly wrapping raw
+  scalar bytes with `Hash::prehashed` is noncanonical because it overwrites
+  scalar bit 248.
+- Kaigi roster proof construction remains a candidate-only low-level facility.
+  Production `ZkRosterV1` join admission rejects because the current instance
+  columns do not bind the signed participant authority; a NIZK and its
+  commitment/nullifier artifacts are transferable. Transparent Kaigi, usage
+  proofs, and host-signed lifecycle operations are distinct paths and remain
+  available. The exported JS and native roster builders reject rather than
+  returning an envelope that ledger admission cannot use. A future roster
+  profile must version the authority-bound instance schema and deterministic
+  key together before enabling joins.
+- `OpenVerifyEnvelope.proof_bytes` for production Halo2 contains exactly one
+  strict ZK1 carrier with `PROF` and optional `I10P` TLVs. The historical binary
+  `Halo2ProofEnvelope` is not accepted by production dispatch because its
+  caller-controlled `n_in`, `n_out`, and lookup flags were not absorbed into the
+  Halo2 transcript. Its standalone parser remains available only for non-ledger
+  compatibility tooling and rejects undefined flag bits.
+- Production Halo2 verifier-key bytes use a strict ZK1 carrier containing
+  exactly one `IPAK`, one `CID1`, and one non-empty `H2VK`. `CID1` is the
+  canonical normalized circuit identifier (for example,
+  `halo2/pasta/ipa/kaigi-roster-v1`), not a caller-selected alias. Kaigi client
+  fixtures hash this complete key carrier under its configured registry backend
+  and place the resulting nonzero commitment in the canonical outer envelope.
 - STARK `OpenVerifyEnvelope` construction, preverification, and guardrails bind
   circuit ids to the selected STARK family as well: the generic `stark/fri`
   entry point rejects circuit ids that advertise another proof family, including
@@ -316,8 +373,10 @@ Verifier behavior (native STARK)
   different STARK profile or the generic `stark/fri:` prefix.
 - Generic STARK `OpenVerifyEnvelope` construction and verification reserve the
   ZK-ACE and BFV full-bootstrap circuit ids for their dedicated wrappers. BFV
-  full-bootstrap native AIR proofs must use the BFV-specific verifier path so
-  sampled openings are checked against the public-padding row policy. Generic
+  full-bootstrap native AIR proofs must use the BFV-specific full-material
+  verifier path. The public-padding-only entry points reject unconditionally:
+  sampled public rows do not establish low degree for hidden trace columns.
+  Generic
   preverification rejects metadata-valid OpenVerify wrappers that advertise
   noncanonical ZK-ACE colon/slash aliases or the BFV full-bootstrap circuit id,
   including backend-prefixed colon/slash aliases, before deduplication. The
@@ -329,10 +388,12 @@ Verifier behavior (native STARK)
   BFV proof/commitment version tags, missing or foreign AIR sections, root
   drift, query/opening count drift, duplicate openings, opened row/path drift,
   FRI base-value drift, STARK parameter-profile drift, and caller-supplied
-  verifier-limit violations fail before native BFV acceptance. A valid envelope
-  also cannot be replayed with stale BFV prover-input material, including
-  layout metadata, trace/AIR digests, trace rows, composition values, or
-  prover/verifier proof-key roles.
+  verifier-limit violations fail before native BFV acceptance. The governed
+  full-material verifier performs the public structural checks, then
+  reconstructs and exactly matches the complete trace and composition roots. A
+  valid envelope also cannot be replayed with stale BFV prover-input material,
+  including layout metadata, trace/AIR digests, trace rows, composition values,
+  or prover/verifier proof-key roles.
 
 	Example (JSON-like, annotated)
 	```jsonc

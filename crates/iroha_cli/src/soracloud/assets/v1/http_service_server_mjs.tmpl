@@ -5,6 +5,7 @@ import path from "node:path";
 
 const SERVICE_NAME = __SORACLOUD_SERVICE_NAME_DEBUG__;
 const PORT = Number.parseInt(process.env.PORT ?? process.env.SORACLOUD_HTTP_PORT ?? "8787", 10);
+const REPLICA_SLOT = Number.parseInt(process.env.SORACLOUD_REPLICA_SLOT ?? "0", 10);
 const APP_DATA_DIR = process.env.SORACLOUD_LEASE_VOLUME_APP_DATA_DIR ?? path.join(process.cwd(), "tmp", "app-data");
 
 fs.mkdirSync(APP_DATA_DIR, { recursive: true });
@@ -66,6 +67,8 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 200, {
       service: SERVICE_NAME,
       runtime: "Inrou",
+      replica_slot: REPLICA_SLOT,
+      identity: `${SERVICE_NAME}:replica:${REPLICA_SLOT}`,
       routes: ["/health", "/echo"],
       lease_volumes: {
         app_data: APP_DATA_DIR

@@ -3229,22 +3229,87 @@ enum ConnScheme {
 }
 impl ConnScheme {
     fn from_request<B>(req: &axum::http::Request<B>) -> Self {
-        if req
+        let websocket_route = req
+            .extensions()
+            .get::<MatchedRouteMetadata>()
+            .is_some_and(|route| {
+                let route_id = route.stable_route_id();
+                route_id == route_catalog::streaming::P2P.stable_route_id()
+                    || route_id == route_catalog::streaming::SUBSCRIPTION_WS.stable_route_id()
+                    || route_id == route_catalog::streaming::BLOCKS_WS.stable_route_id()
+                    || route_id == route_catalog::connect::WEBSOCKET.stable_route_id()
+            });
+        let websocket_upgrade = {
+            let mut values = req.headers().get_all(axum::http::header::UPGRADE).iter();
+            values
+                .next()
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("websocket"))
+                && values.next().is_none()
+        };
+        let websocket_connection = req
             .headers()
-            .get(axum::http::header::UPGRADE)
-            .and_then(|value| value.to_str().ok())
-            .map_or(false, |v| v.eq_ignore_ascii_case("websocket"))
+            .get_all(axum::http::header::CONNECTION)
+            .iter()
+            .try_fold(false, |found, value| {
+                value.to_str().ok().map(|value| {
+                    found
+                        || value
+                            .split(',')
+                            .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
+                })
+            })
+            .unwrap_or(false);
+        let websocket_version = {
+            let mut values = req
+                .headers()
+                .get_all(axum::http::header::SEC_WEBSOCKET_VERSION)
+                .iter();
+            values
+                .next()
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.trim() == "13")
+                && values.next().is_none()
+        };
+        let websocket_key = {
+            let mut values = req
+                .headers()
+                .get_all(axum::http::header::SEC_WEBSOCKET_KEY)
+                .iter();
+            let valid = values
+                .next()
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| {
+                    base64::engine::general_purpose::STANDARD
+                        .decode(value.trim())
+                        .ok()
+                })
+                .is_some_and(|decoded| decoded.len() == 16);
+            valid && values.next().is_none()
+        };
+        if req.method() == axum::http::Method::GET
+            && websocket_route
+            && websocket_upgrade
+            && websocket_connection
+            && websocket_version
+            && websocket_key
         {
             Self::Ws
         } else if matches!(
             req.uri().path(),
             iroha_torii_shared::uri::TRANSACTION | iroha_torii_shared::uri::QUERY
-        ) || req
-            .headers()
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map_or(false, |ct| ct.contains(crate::utils::NORITO_MIME_TYPE))
-        {
+        ) || {
+            let mut values = req
+                .headers()
+                .get_all(axum::http::header::CONTENT_TYPE)
+                .iter();
+            values
+                .next()
+                .and_then(|value| value.to_str().ok())
+                .and_then(crate::utils::strict_typed_content_format)
+                .is_some_and(|format| format == crate::utils::TypedRequestContentFormat::Norito)
+                && values.next().is_none()
+        } {
             Self::NoritoRpc
         } else {
             Self::Http
@@ -3575,10 +3640,12 @@ fn evaluate_norito_rpc_gate(
     }
 }
 fn norito_rpc_token_from_headers(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(HEADER_API_TOKEN)
+    let mut values = headers.get_all(HEADER_API_TOKEN).iter();
+    let value = values
+        .next()
         .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.is_empty())?;
+    values.next().is_none().then_some(value)
 }
 fn norito_rpc_mtls_present(
     headers: &HeaderMap,
@@ -4232,9 +4299,21 @@ mod preauth_connection_lifetime_tests {
     fn request(path: &str, websocket: bool) -> Request<Body> {
         let mut builder = Request::builder().uri(path);
         if websocket {
-            builder = builder.header(header::UPGRADE, "websocket");
+            builder = builder
+                .header(header::CONNECTION, "keep-alive, Upgrade")
+                .header(header::UPGRADE, "websocket")
+                .header(header::SEC_WEBSOCKET_VERSION, "13")
+                .header(header::SEC_WEBSOCKET_KEY, "dGhlIHNhbXBsZSBub25jZQ==");
         }
-        builder.body(Body::empty()).expect("request")
+        let mut request = builder.body(Body::empty()).expect("request");
+        if websocket {
+            request
+                .extensions_mut()
+                .insert(MatchedRouteMetadata::from_descriptor(
+                    route_catalog::streaming::SUBSCRIPTION_WS,
+                ));
+        }
+        request
     }
     #[tokio::test]
     async fn partially_consumed_sse_body_holds_http_capacity_until_drop() {
@@ -5438,8 +5517,7 @@ async fn enforce_soracloud_signed_mutation_request(
         Err(error) => return Ok(error.into_response()),
     };
     let route_group = soracloud_signed_mutation_route_group(&path);
-    let rate_key =
-        soracloud_signed_mutation_rate_key(&parts.headers, &verified.account, route_group);
+    let rate_key = soracloud_signed_mutation_rate_key(&verified.account, route_group);
     if !app.soracloud_mutation_rate_limiter.allow(&rate_key).await {
         return Ok(soracloud_rate_limit_response(route_group, response_format));
     }
@@ -5528,19 +5606,8 @@ fn soracloud_signed_mutation_route_group(path: &str) -> &'static str {
     }
 }
 #[cfg(feature = "app_api")]
-fn soracloud_signed_mutation_rate_key(
-    headers: &HeaderMap,
-    account: &AccountId,
-    route_group: &str,
-) -> String {
-    let origin = headers
-        .get(axum::http::header::ORIGIN)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("no-origin")
-        .chars()
-        .take(256)
-        .collect::<String>();
-    format!("soracloud:{route_group}:account:{account}:origin:{origin}")
+fn soracloud_signed_mutation_rate_key(account: &AccountId, route_group: &str) -> String {
+    format!("soracloud:{route_group}:account:{account}")
 }
 #[cfg(feature = "app_api")]
 fn soracloud_rate_limit_response(
@@ -5980,6 +6047,9 @@ async fn capture_response_format(
     Ok(response)
 }
 const MAX_TYPED_ERROR_BODY_BYTES: usize = 256 * 1024;
+// Handler error bodies are expected to be local and immediately available;
+// cap their drain at the same ten-second scale used by bounded Torii ingress.
+const TYPED_ERROR_BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
 fn generic_error_for_status(status: StatusCode) -> (&'static str, &'static str) {
     match status {
         StatusCode::BAD_REQUEST => ("bad_request", "The request is invalid."),
@@ -6339,6 +6409,13 @@ async fn enforce_typed_error_contract(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<AxResponse, Infallible> {
+    enforce_typed_error_contract_with_body_timeout(req, next, TYPED_ERROR_BODY_READ_TIMEOUT).await
+}
+async fn enforce_typed_error_contract_with_body_timeout(
+    req: axum::http::Request<Body>,
+    next: Next,
+    body_read_timeout: Duration,
+) -> Result<AxResponse, Infallible> {
     use axum::body::HttpBody as _;
     let method = req.method().clone();
     let accept = response_boundary_accept_header(req.headers());
@@ -6406,9 +6483,13 @@ async fn enforce_typed_error_contract(
         .and_then(|accept| utils::negotiate_response_format(accept.as_ref()).ok())
         .unwrap_or(ResponseFormat::Json);
     let (parts, body) = response.into_parts();
-    let bytes = axum::body::to_bytes(body, MAX_TYPED_ERROR_BODY_BYTES)
-        .await
-        .ok();
+    let bytes = tokio::time::timeout(
+        body_read_timeout,
+        axum::body::to_bytes(body, MAX_TYPED_ERROR_BODY_BYTES),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok);
     let envelope = bytes
         .as_deref()
         .filter(|bytes| !bytes.is_empty())
@@ -7590,6 +7671,13 @@ mod typed_error_contract_tests {
     fn with_error_contract(router: Router) -> Router {
         router.layer(axum::middleware::from_fn(enforce_typed_error_contract))
     }
+    fn with_error_contract_timeout(router: Router, timeout: Duration) -> Router {
+        router.layer(axum::middleware::from_fn(
+            move |request: Request<Body>, next: Next| {
+                enforce_typed_error_contract_with_body_timeout(request, next, timeout)
+            },
+        ))
+    }
     async fn body_bytes(response: AxResponse) -> Bytes {
         response
             .into_body()
@@ -7597,6 +7685,71 @@ mod typed_error_contract_tests {
             .await
             .expect("collect response body")
             .to_bytes()
+    }
+    #[tokio::test]
+    async fn error_body_read_deadline_fails_closed_without_blocking_other_errors() {
+        let router = with_error_contract_timeout(
+            Router::new()
+                .route(
+                    "/pending",
+                    get(|| async {
+                        let frames = futures::stream::pending::<
+                            Result<hyper::body::Frame<Bytes>, Infallible>,
+                        >();
+                        Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::new(http_body_util::StreamBody::new(frames)))
+                            .expect("pending error response")
+                    }),
+                )
+                .route(
+                    "/ordinary",
+                    get(|| async {
+                        Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(
+                                r#"{"code":"invalid_request","message":"ordinary failure"}"#,
+                            ))
+                            .expect("ordinary error response")
+                    }),
+                ),
+            Duration::from_millis(10),
+        );
+
+        let pending = tokio::time::timeout(
+            Duration::from_secs(1),
+            router.clone().oneshot(
+                Request::builder()
+                    .uri("/pending")
+                    .header(header::ACCEPT, "application/json")
+                    .body(Body::empty())
+                    .expect("request"),
+            ),
+        )
+        .await
+        .expect("error boundary must not hang on a pending body")
+        .expect("pending response");
+        assert_eq!(pending.status(), StatusCode::BAD_REQUEST);
+        let envelope: ErrorEnvelope =
+            norito::json::from_slice(&body_bytes(pending).await).expect("decode fail-closed error");
+        assert_eq!(envelope.code(), "bad_request");
+
+        let ordinary = router
+            .oneshot(
+                Request::builder()
+                    .uri("/ordinary")
+                    .header(header::ACCEPT, "application/json")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("ordinary response");
+        let envelope: ErrorEnvelope =
+            norito::json::from_slice(&body_bytes(ordinary).await).expect("decode ordinary error");
+        assert_eq!(envelope.code(), "invalid_request");
+        assert_eq!(envelope.message(), "ordinary failure");
     }
     #[tokio::test]
     async fn bare_error_defaults_to_canonical_norito_envelope() {
@@ -8809,16 +8962,31 @@ async fn execute_admitted_signed_query_with_opts(
     let admitted = admit_ordinary_query_execution(app, &request, &opts).await?;
     execute_prepared_ordinary_query(app, request, admitted).await
 }
+fn query_response_cursor_query_id(
+    response: &iroha_data_model::query::QueryResponse,
+) -> Option<&str> {
+    match response {
+        iroha_data_model::query::QueryResponse::Iterable(output) => output
+            .continue_cursor
+            .as_ref()
+            .map(|cursor| cursor.query.as_str()),
+        iroha_data_model::query::QueryResponse::Singular(_) => None,
+    }
+}
 fn encode_server_owned_query_response(
     app: &AppState,
     response: iroha_core::query::snapshot::ServerOwnedQueryResponse,
     format: ResponseFormat,
 ) -> Response {
     let (response, memory_lease) = response.into_parts();
+    let cursor_query_id = query_response_cursor_query_id(&response).map(ToOwned::to_owned);
     let max_response_bytes =
         match usize::try_from(app.ordinary_query_policy.limits.max_response_bytes()) {
             Ok(bytes) => bytes,
             Err(_) => {
+                if let Some(query_id) = cursor_query_id.as_ref() {
+                    app.query_service.drop_query(query_id);
+                }
                 return torii_proxy_error_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "query_capacity_exceeded",
@@ -8826,24 +8994,49 @@ fn encode_server_owned_query_response(
                 );
             }
         };
+    encode_query_response_with_memory_lease_bounded(
+        app,
+        response,
+        memory_lease,
+        format,
+        max_response_bytes,
+    )
+}
+fn encode_query_response_with_memory_lease_bounded(
+    app: &AppState,
+    response: iroha_data_model::query::QueryResponse,
+    memory_lease: iroha_core::smartcontracts::isi::query::OrdinaryQueryMemoryLease,
+    format: ResponseFormat,
+    max_response_bytes: usize,
+) -> Response {
+    let cursor_query_id = query_response_cursor_query_id(&response).map(ToOwned::to_owned);
     match crate::utils::respond_with_format_bounded(response, format, max_response_bytes) {
         Ok(response) => hold_ordinary_query_memory_in_response_body(
             response,
             OrdinaryQueryResponseMemory::new(memory_lease),
         ),
-        Err(
-            crate::utils::BoundedResponseEncodeError::BodyTooLarge { .. }
-            | crate::utils::BoundedResponseEncodeError::JsonBodyTooLarge { .. },
-        ) => torii_proxy_error_response(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "query_capacity_exceeded",
-            "ordinary query response exceeds its admitted body reservation",
-        ),
-        Err(crate::utils::BoundedResponseEncodeError::Serialization) => torii_proxy_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "query_encoding_failed",
-            "ordinary query response serialization failed",
-        ),
+        Err(error) => {
+            if let Some(query_id) = cursor_query_id.as_ref() {
+                app.query_service.drop_query(query_id);
+            }
+            match error {
+                crate::utils::BoundedResponseEncodeError::BodyTooLarge { .. }
+                | crate::utils::BoundedResponseEncodeError::JsonBodyTooLarge { .. } => {
+                    torii_proxy_error_response(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "query_capacity_exceeded",
+                        "ordinary query response exceeds its admitted body reservation",
+                    )
+                }
+                crate::utils::BoundedResponseEncodeError::Serialization => {
+                    torii_proxy_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "query_encoding_failed",
+                        "ordinary query response serialization failed",
+                    )
+                }
+            }
+        }
     }
 }
 #[cfg(feature = "app_api")]
@@ -10137,8 +10330,12 @@ async fn handler_account_get(
         &[],
         routing::ENDPOINT_ACCOUNTS_GET,
     )?;
-    let use_target_account_routes =
-        trusted_internal_read_source(app.as_ref(), &headers, remote_ip) || visibility.is_signed();
+    let use_target_account_routes = torii_should_use_target_account_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        visibility.caller(),
+        trusted_internal_read_source(app.as_ref(), &headers, remote_ip),
+    );
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
         visibility.caller(),
@@ -10217,8 +10414,12 @@ async fn handler_account_transactions_query(
         raw.as_ref(),
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
     )?;
-    let use_target_account_routes =
-        trusted_internal_read_source(app.as_ref(), &headers, remote_ip) || caller.is_signed();
+    let use_target_account_routes = torii_should_use_target_account_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        caller.caller(),
+        trusted_internal_read_source(app.as_ref(), &headers, remote_ip),
+    );
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
         caller.caller(),
@@ -10381,7 +10582,7 @@ async fn handler_account_assets(
         check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, enforce, cost)
             .await?;
     }
-    let (_parsed_account_id, canonical_account_id) =
+    let (parsed_account_id, canonical_account_id) =
         match routing::parse_account_path_segment_with_state(
             app.state.as_ref(),
             &key_hint,
@@ -10391,7 +10592,7 @@ async fn handler_account_assets(
             Ok(parsed) => parsed,
             Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
         };
-    let _caller = torii_visibility_account_from_headers(
+    let caller = torii_visibility_account_from_headers(
         &app,
         &headers,
         &method,
@@ -10399,8 +10600,26 @@ async fn handler_account_assets(
         &[],
         routing::ENDPOINT_ACCOUNTS_ASSETS,
     )?;
-    let route_scope = ToriiFanoutRouteScopeV1::AllDataspaces;
-    let routes = torii_account_assets_read_routes(app.as_ref());
+    let use_target_account_routes = torii_should_use_target_account_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        caller.caller(),
+        trusted_internal_read_source(app.as_ref(), &headers, remote_ip),
+    );
+    let route_scope = torii_account_read_route_scope(
+        &parsed_account_id,
+        caller.caller(),
+        use_target_account_routes,
+    );
+    let routes = match torii_account_assets_read_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        caller.caller(),
+        use_target_account_routes,
+    ) {
+        Ok(routes) => routes,
+        Err(response) => return Ok(response),
+    };
     if routes.is_empty() {
         return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
     }
@@ -10454,8 +10673,12 @@ async fn handler_account_permissions(
         &[],
         "/v1/accounts/{account_id}/permissions",
     )?;
-    let use_target_account_routes =
-        trusted_internal_read_source(app.as_ref(), &headers, remote_ip) || caller.is_signed();
+    let use_target_account_routes = torii_should_use_target_account_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        caller.caller(),
+        trusted_internal_read_source(app.as_ref(), &headers, remote_ip),
+    );
     let route_scope = torii_account_permissions_route_scope(
         &parsed_account_id,
         caller.caller(),
@@ -10518,7 +10741,7 @@ async fn handler_account_assets_query(
         check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, true, cost)
             .await?;
     }
-    let (_parsed_account_id, canonical_account_id) =
+    let (parsed_account_id, canonical_account_id) =
         match routing::parse_account_path_segment_with_state(
             app.state.as_ref(),
             &key_hint,
@@ -10528,7 +10751,7 @@ async fn handler_account_assets_query(
             Ok(parsed) => parsed,
             Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
         };
-    let _caller = torii_visibility_account_from_headers(
+    let caller = torii_visibility_account_from_headers(
         &app,
         &headers,
         &method,
@@ -10536,8 +10759,26 @@ async fn handler_account_assets_query(
         raw.as_ref(),
         routing::ENDPOINT_ACCOUNTS_ASSETS_QUERY,
     )?;
-    let route_scope = ToriiFanoutRouteScopeV1::AllDataspaces;
-    let routes = torii_account_assets_read_routes(app.as_ref());
+    let use_target_account_routes = torii_should_use_target_account_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        caller.caller(),
+        trusted_internal_read_source(app.as_ref(), &headers, remote_ip),
+    );
+    let route_scope = torii_account_read_route_scope(
+        &parsed_account_id,
+        caller.caller(),
+        use_target_account_routes,
+    );
+    let routes = match torii_account_assets_read_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        caller.caller(),
+        use_target_account_routes,
+    ) {
+        Ok(routes) => routes,
+        Err(response) => return Ok(response),
+    };
     if routes.is_empty() {
         return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
     }
@@ -10602,8 +10843,12 @@ async fn handler_account_transactions_get(
         &[],
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )?;
-    let use_target_account_routes =
-        trusted_internal_read_source(app.as_ref(), &headers, remote_ip) || caller.is_signed();
+    let use_target_account_routes = torii_should_use_target_account_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        caller.caller(),
+        trusted_internal_read_source(app.as_ref(), &headers, remote_ip),
+    );
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
         caller.caller(),
@@ -10679,8 +10924,12 @@ async fn handler_account_history_get(
         &[],
         routing::ENDPOINT_ACCOUNTS_HISTORY,
     )?;
-    let use_target_account_routes =
-        trusted_internal_read_source(app.as_ref(), &headers, remote_ip) || caller.is_signed();
+    let use_target_account_routes = torii_should_use_target_account_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        caller.caller(),
+        trusted_internal_read_source(app.as_ref(), &headers, remote_ip),
+    );
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
         caller.caller(),
@@ -11393,6 +11642,7 @@ async fn handler_accounts_portfolio(
         )
         .await?;
     }
+    let uaid_literal = routing::canonical_routed_uaid_literal(&uaid_literal)?;
     let query_string = encode_torii_proxy_query(&query)?;
     Ok(execute_torii_fanout_portfolio_read(&app, uaid_literal, query_string).await)
 }
@@ -11550,8 +11800,24 @@ async fn handler_space_directory_bindings(
         )
         .await?;
     }
+    let uaid_literal = routing::canonical_routed_uaid_literal(&uaid_literal)?;
     let query_string = encode_torii_proxy_query(&query)?;
     Ok(execute_torii_fanout_space_directory_bindings_read(&app, uaid_literal, query_string).await)
+}
+#[cfg(feature = "app_api")]
+fn space_directory_manifest_fanout_query(
+    query: &crate::routing::SpaceDirectoryManifestQuery,
+    fetch_limit: u64,
+) -> crate::routing::SpaceDirectoryManifestQuery {
+    // Preserve the client's count intent in the coordinator request. Nexus rewrites only the
+    // per-shard query to bounded mode after decoding this value.
+    crate::routing::SpaceDirectoryManifestQuery {
+        dataspace: query.dataspace,
+        status: query.status.clone(),
+        limit: Some(fetch_limit),
+        offset: Some(0),
+        count_mode: query.count_mode.clone(),
+    }
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
@@ -11575,25 +11841,14 @@ async fn handler_space_directory_manifests(
         )
         .await?;
     }
-    let client_offset = query.offset.unwrap_or(0);
-    let client_limit = query.limit.filter(|&value| value > 0);
+    let uaid_literal = routing::canonical_routed_uaid_literal(&uaid_literal)?;
+    let _ = routing::space_directory_manifest_status_filter(query.status.as_deref())?;
+    let (client_offset, client_page_limit) =
+        routing::space_directory_manifest_pagination(query.limit, query.offset.unwrap_or(0))?;
+    let client_limit = Some(client_page_limit);
     if let Some(dataspace_id) = query.dataspace.map(DataSpaceId::new) {
-        let query_string = encode_torii_proxy_query(&query)?;
         let route = match resolve_torii_route_for_dataspace_id(app.as_ref(), dataspace_id) {
             Ok(route) => route,
-            Err(
-                queue::RoutingResolveError::UnknownDataspace { .. }
-                | queue::RoutingResolveError::NoLaneForDataspace { .. },
-            ) => {
-                return Ok(execute_torii_fanout_space_directory_manifests_read(
-                    &app,
-                    uaid_literal,
-                    query_string,
-                    client_offset,
-                    client_limit,
-                )
-                .await);
-            }
             Err(error) => {
                 return Err(Error::PushIntoQueue {
                     source: Box::new(queue::Error::UnresolvedRoute {
@@ -11603,23 +11858,23 @@ async fn handler_space_directory_manifests(
                 });
             }
         };
-        return Ok(execute_torii_single_route_read(
-            &app,
-            route,
-            ToriiReadEndpointV1::SpaceDirectoryManifestsGet,
-            vec![uaid_literal],
-            query_string,
-            Vec::new(),
-        )
-        .await);
+        let shard_query = space_directory_manifest_fanout_query(&query, 1);
+        let query_string = encode_torii_proxy_query(&shard_query)?;
+        return Ok(
+            execute_torii_space_directory_manifests_read_for_resolved_routes(
+                &app,
+                vec![route],
+                uaid_literal,
+                query_string,
+                client_offset,
+                client_limit,
+            )
+            .await,
+        );
     }
-    let fanout_query = crate::routing::SpaceDirectoryManifestQuery {
-        dataspace: None,
-        status: query.status.clone(),
-        limit: None,
-        offset: None,
-        count_mode: None,
-    };
+    let fetch_limit =
+        routing::space_directory_manifest_fanout_window(client_offset, client_page_limit)?;
+    let fanout_query = space_directory_manifest_fanout_query(&query, fetch_limit);
     let query_string = encode_torii_proxy_query(&fanout_query)?;
     Ok(execute_torii_fanout_space_directory_manifests_read(
         &app,
@@ -13545,8 +13800,12 @@ async fn handler_explorer_account_detail(
         &[],
         CONTEXT_EXPLORER_ACCOUNT_DETAIL,
     )?;
-    let use_target_account_routes =
-        trusted_internal_read_source(app.as_ref(), &headers, remote_ip) || visibility.is_signed();
+    let use_target_account_routes = torii_should_use_target_account_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        visibility.caller(),
+        trusted_internal_read_source(app.as_ref(), &headers, remote_ip),
+    );
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
         visibility.caller(),
@@ -17498,43 +17757,6 @@ fn soracloud_runtime_status_sections(
             json_object(vec![json_entry("available", false)]),
         );
     };
-    if !runtime.materialization_available() {
-        let snapshot = runtime.snapshot();
-        let state_dir = runtime.state_dir().display().to_string();
-        return (
-            json_object(vec![
-                json_entry("mode", "embedded_runtime_manager"),
-                json_entry("status", "unavailable"),
-                json_entry(
-                    "message",
-                    "irohad is compiled without the `embedded-soracloud-runtime` feature; hosted Inrou materialization is disabled",
-                ),
-                json_entry("observed_height", snapshot.observed_height),
-                json_entry("observed_block_hash", snapshot.observed_block_hash.clone()),
-                json_entry("state_dir", state_dir.clone()),
-                json_entry("service_revisions", 0_u64),
-                json_entry("healthy_service_revisions", 0_u64),
-                json_entry("hydrating_service_revisions", 0_u64),
-                json_entry("degraded_service_revisions", 0_u64),
-                json_entry("unavailable_service_revisions", 0_u64),
-                json_entry("apartments", 0_u64),
-                json_entry("running_apartments", 0_u64),
-                json_entry("expired_apartments", 0_u64),
-            ]),
-            json_object(vec![
-                json_entry("enabled", false),
-                json_entry("state_dir", state_dir.clone()),
-                json_entry("observed_height", snapshot.observed_height),
-                json_entry("service_revisions", 0_u64),
-                json_entry("apartments", 0_u64),
-            ]),
-            json_object(vec![
-                json_entry("available", false),
-                json_entry("state_dir", state_dir),
-                json_entry("snapshot", snapshot),
-            ]),
-        );
-    }
     let snapshot = runtime.snapshot();
     let state_dir = runtime.state_dir().display().to_string();
     let mut service_revisions = 0_u64;
@@ -17660,33 +17882,21 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
     let view = app.state.view();
     let world = view.world();
     let mut active_capability_adverts = 0_u64;
-    let mut proxy_only_validator_count = 0_u64;
     for (_validator_account_id, capability) in world.soracloud_inrou_host_capabilities().iter() {
         if capability.is_active_at(now_ms) {
             active_capability_adverts = active_capability_adverts.saturating_add(1);
-            if capability.proxy_only {
-                proxy_only_validator_count = proxy_only_validator_count.saturating_add(1);
-            }
         }
     }
     let mut hosting_peers = std::collections::BTreeSet::new();
     let mut hosted_replica_count = 0_u64;
     let mut portable_vm = 0_u64;
-    let mut firecracker_kvm = 0_u64;
     for ((_service_name, _service_version), record) in
         world.soracloud_inrou_service_placements().iter()
     {
         for placement in &record.placements {
             hosted_replica_count = hosted_replica_count.saturating_add(1);
             hosting_peers.insert(placement.peer_id.clone());
-            match placement.selected_backend {
-                iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm => {
-                    portable_vm = portable_vm.saturating_add(1);
-                }
-                iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::FirecrackerKvm => {
-                    firecracker_kvm = firecracker_kvm.saturating_add(1);
-                }
-            }
+            portable_vm = portable_vm.saturating_add(1);
         }
     }
     json_object(vec![
@@ -17696,13 +17906,9 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
             u64::try_from(hosting_peers.len()).unwrap_or(u64::MAX),
         ),
         json_entry("hosted_replica_count", hosted_replica_count),
-        json_entry("proxy_only_validator_count", proxy_only_validator_count),
         json_entry(
             "backend_mix",
-            json_object(vec![
-                json_entry("portable_vm", portable_vm),
-                json_entry("firecracker_kvm", firecracker_kvm),
-            ]),
+            json_object(vec![json_entry("portable_vm", portable_vm)]),
         ),
     ])
 }
@@ -20361,8 +20567,24 @@ fn torii_account_read_routes(
     }
 }
 #[cfg(feature = "app_api")]
-fn torii_account_assets_read_routes(app: &AppState) -> Vec<RoutingDecision> {
-    torii_all_dataspace_routes(app)
+fn torii_should_use_target_account_routes(
+    app: &AppState,
+    target_account: &AccountId,
+    caller: Option<&AccountId>,
+    trusted_internal: bool,
+) -> bool {
+    trusted_internal
+        || caller
+            .is_some_and(|caller| torii_same_account_read_identity(app, caller, target_account))
+}
+#[cfg(feature = "app_api")]
+fn torii_account_assets_read_routes(
+    app: &AppState,
+    target_account: &AccountId,
+    caller: Option<&AccountId>,
+    use_target_account_routes: bool,
+) -> Result<Vec<RoutingDecision>, Response> {
+    torii_account_read_routes(app, target_account, caller, use_target_account_routes)
 }
 #[cfg(feature = "app_api")]
 fn torii_account_permissions_read_routes(
@@ -21221,7 +21443,10 @@ fn target_account_iterable_query_bounded(
             FindAssetsByAccountId, FindDomainsByAccountId, FindNftsByAccountId,
             FindPermissionsByAccountId, FindRolesByAccountId,
         },
-        query::QueryItemKind,
+        query::{
+            QueryItemKind,
+            escrow::prelude::{FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller},
+        },
     };
     macro_rules! target_account {
         ($query:ty, $payload:expr) => {
@@ -21236,6 +21461,14 @@ fn target_account_iterable_query_bounded(
         QueryItemKind::Nft => target_account!(FindNftsByAccountId, payload),
         QueryItemKind::Permission => target_account!(FindPermissionsByAccountId, payload),
         QueryItemKind::RoleId => target_account!(FindRolesByAccountId, payload),
+        QueryItemKind::AssetEscrowsBySeller => {
+            decode_query_payload_bounded::<FindAssetEscrowsBySeller>(payload, memory_limits)?
+                .map(|query| query.seller)
+        }
+        QueryItemKind::AssetEscrowsByBuyer => {
+            decode_query_payload_bounded::<FindAssetEscrowsByBuyer>(payload, memory_limits)?
+                .map(|query| query.buyer)
+        }
         _ => None,
     })
 }
@@ -22249,11 +22482,19 @@ fn should_skip_iterable_routed_query_route_error(response: &Response) -> bool {
         || torii_response_has_reject_code(response, "route_unavailable")
 }
 fn torii_response_has_reject_code(response: &Response, code: &str) -> bool {
-    response
-        .headers()
-        .get("x-iroha-reject-code")
-        .and_then(|value| value.to_str().ok())
-        == Some(code)
+    if !(response.status().is_client_error() || response.status().is_server_error()) {
+        return false;
+    }
+    let mut values = response.headers().get_all("x-iroha-reject-code").iter();
+    let Some(value) = values.next() else {
+        return false;
+    };
+    if values.next().is_some() {
+        return false;
+    }
+    value
+        .to_str()
+        .is_ok_and(|value| utils::is_valid_reject_code(value) && value == code)
 }
 include!("torii_fanout_diagnostics.rs");
 include!("torii_fanout_decode_helpers.rs");
@@ -23232,6 +23473,22 @@ struct AdmittedToriiProxySnapshot {
     ordinary_query_memory: Option<OrdinaryQueryResponseMemory>,
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn bounded_torii_proxy_snapshot_diagnostic_body(
+    diagnostic: &str,
+    max_body_bytes: usize,
+) -> Vec<u8> {
+    let mut end = diagnostic.len().min(max_body_bytes);
+    while !diagnostic.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    let bytes = &diagnostic.as_bytes()[..end];
+    let mut body = Vec::new();
+    if body.try_reserve_exact(bytes.len()).is_ok() {
+        body.extend_from_slice(bytes);
+    }
+    body
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn response_to_admitted_torii_proxy_snapshot(
     mut response: Response,
     max_body_bytes: usize,
@@ -23246,7 +23503,7 @@ async fn response_to_admitted_torii_proxy_snapshot(
                 snapshot: ToriiProxyHttpResponseV1 {
                     status_code: StatusCode::BAD_GATEWAY.as_u16(),
                     headers: Vec::new(),
-                    body: error.into_bytes(),
+                    body: bounded_torii_proxy_snapshot_diagnostic_body(&error, max_body_bytes),
                 },
                 fanout_reservation,
                 ordinary_query_memory,
@@ -23255,15 +23512,14 @@ async fn response_to_admitted_torii_proxy_snapshot(
     };
     let body = match axum::body::to_bytes(body, max_body_bytes).await {
         Ok(body) => body.to_vec(),
-        Err(error) => {
+        Err(_error) => {
+            const DIAGNOSTIC: &str =
+                "proxied response body could not be collected within configured bounds";
             return AdmittedToriiProxySnapshot {
                 snapshot: ToriiProxyHttpResponseV1 {
                     status_code: StatusCode::BAD_GATEWAY.as_u16(),
                     headers: Vec::new(),
-                    body: format!(
-                        "proxied response body exceeds configured limit of {max_body_bytes} bytes: {error}"
-                    )
-                    .into_bytes(),
+                    body: bounded_torii_proxy_snapshot_diagnostic_body(DIAGNOSTIC, max_body_bytes),
                 },
                 fanout_reservation,
                 ordinary_query_memory,
@@ -25816,6 +26072,13 @@ async fn execute_torii_read_via_public_dataspace_upstream(
         .headers()
         .get(axum::http::header::CONTENT_TYPE.as_str())
         .cloned();
+    let mut reject_codes = response.headers().get_all("x-iroha-reject-code").iter();
+    let reject_code = reject_codes
+        .next()
+        .filter(|_| reject_codes.next().is_none())
+        .filter(|_| status.is_client_error() || status.is_server_error())
+        .filter(|value| value.to_str().is_ok_and(crate::utils::is_valid_reject_code))
+        .cloned();
     let max_response_bytes =
         public_dataspace_upstream_response_body_limit(request.endpoint, max_response_bytes);
     let body = match read_reqwest_response_body_bounded(
@@ -25847,6 +26110,11 @@ async fn execute_torii_read_via_public_dataspace_upstream(
         response
             .headers_mut()
             .insert(axum::http::header::CONTENT_TYPE, content_type);
+    }
+    if let Some(reject_code) = reject_code {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-iroha-reject-code"), reject_code);
     }
     insert_routing_headers(&mut response, routing_decision, "external");
     response
@@ -30286,11 +30554,23 @@ fn canonical_stream_high_load_threshold(
     app: &SharedAppState,
     route: iroha_torii_shared::route_catalog::RouteDescriptor,
 ) -> usize {
-    if route.stable_route_id() == route_catalog::streaming::SUBSCRIPTION_WS.stable_route_id() {
+    if matches!(
+        route.stable_route_id(),
+        id if id == route_catalog::streaming::SUBSCRIPTION_WS.stable_route_id()
+            || id == route_catalog::streaming::BLOCKS_WS.stable_route_id()
+    ) {
         app.high_load_subscription_tx_threshold
     } else {
         app.high_load_stream_tx_threshold
     }
+}
+#[cfg(feature = "app_api")]
+fn canonical_stream_is_sse(route: iroha_torii_shared::route_catalog::RouteDescriptor) -> bool {
+    matches!(
+        route.stable_route_id(),
+        id if id == route_catalog::streaming::EVENTS_SSE.stable_route_id()
+            || id == route_catalog::streaming::CONTRACT_EVENTS_SSE.stable_route_id()
+    )
 }
 #[cfg(feature = "app_api")]
 async fn enforce_canonical_stream_admission(
@@ -30329,6 +30609,11 @@ async fn enforce_canonical_stream_admission(
                 iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
             ))
             .into_response());
+        }
+    }
+    if canonical_stream_is_sse(admission.route) {
+        if let Some(response) = sse_resume_rejection(req.headers()) {
+            return Ok(response);
         }
     }
     Ok(next.run(req).await)
@@ -36794,22 +37079,83 @@ fn connect_remote_ip_from_headers(headers: &axum::http::HeaderMap) -> Result<IpA
         .ok_or("connect: remote addr unavailable")
 }
 #[cfg(feature = "connect")]
+#[derive(Clone)]
+struct ConnectWsPermitHandoff(Arc<parking_lot::Mutex<Option<crate::connect::WsPermit>>>);
+#[cfg(feature = "connect")]
+impl ConnectWsPermitHandoff {
+    fn new(permit: crate::connect::WsPermit) -> Self {
+        Self(Arc::new(parking_lot::Mutex::new(Some(permit))))
+    }
+
+    fn take(&self) -> Option<crate::connect::WsPermit> {
+        self.0.lock().take()
+    }
+}
+#[cfg(feature = "connect")]
+#[derive(Clone, Copy)]
+struct ConnectSessionCreateAdmitted;
+#[cfg(feature = "connect")]
+async fn enforce_connect_enabled_request(
+    State(app): State<SharedAppState>,
+    req: axum::http::Request<Body>,
+    next: Next,
+) -> Response {
+    if let Err(error) = require_connect_enabled(&app) {
+        return error.into_response();
+    }
+    next.run(req).await
+}
+#[cfg(feature = "connect")]
+async fn enforce_connect_session_create_admission(
+    State(app): State<SharedAppState>,
+    mut req: axum::http::Request<Body>,
+    next: Next,
+) -> Response {
+    if let Err(error) = require_connect_enabled(&app) {
+        return error.into_response();
+    }
+    let remote_ip = match connect_remote_ip_from_headers(req.headers()) {
+        Ok(ip) => ip,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    if let Err((status, message)) = app.connect_bus.pre_session_create(remote_ip).await {
+        return connect_session_rejection_response(status, "connect_session_rate_limited", message);
+    }
+    req.extensions_mut().insert(ConnectSessionCreateAdmitted);
+    next.run(req).await
+}
+#[cfg(feature = "connect")]
+async fn enforce_connect_ws_admission(
+    State(app): State<SharedAppState>,
+    mut req: axum::http::Request<Body>,
+    next: Next,
+) -> Response {
+    if let Err(error) = require_connect_enabled(&app) {
+        return error.into_response();
+    }
+    let remote_ip = match connect_remote_ip_from_headers(req.headers()) {
+        Ok(ip) => ip,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    let permit = match app.connect_bus.pre_ws_handshake(remote_ip).await {
+        Ok(permit) => permit,
+        Err((status, message)) => return (status, message).into_response(),
+    };
+    req.extensions_mut()
+        .insert(ConnectWsPermitHandoff::new(permit));
+    next.run(req).await
+}
+#[cfg(feature = "connect")]
 async fn handle_connect_ws_logic(
     app: SharedAppState,
     headers: axum::http::HeaderMap,
     q: routing::ConnectWsQuery,
     ws: WebSocketUpgrade,
     preauth_guard: Option<Extension<PreAuthGuardHandoff>>,
+    mut permit: crate::connect::WsPermit,
 ) -> axum::response::Response {
     let bus = app.connect_bus.clone();
-    let remote_ip = match connect_remote_ip_from_headers(&headers) {
-        Ok(ip) => ip,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
-    };
-    let mut permit = match bus.pre_ws_handshake(remote_ip).await {
-        Ok(permit) => permit,
-        Err((code, msg)) => return (code, msg).into_response(),
-    };
+    let send_timeout = app.ws_message_timeout;
     let sid = match crate::connect::decode_sid(&q.sid) {
         Ok(sid) => sid,
         Err(_) => {
@@ -36836,10 +37182,14 @@ async fn handle_connect_ws_logic(
             return response;
         }
     };
-    if let Err((code, msg)) = bus.authorize_token(sid, role, &token.token).await {
-        permit.release().await;
-        return (code, msg).into_response();
-    }
+    let reservation = match bus.reserve_token(sid, role, &token.token).await {
+        Ok(reservation) => reservation,
+        Err((code, msg)) => {
+            permit.release().await;
+            return (code, msg).into_response();
+        }
+    };
+    let ws = bus.configure_websocket(ws);
     let ws = if let Some(protocol) = token.protocol {
         ws.protocols([protocol])
     } else {
@@ -36848,7 +37198,7 @@ async fn handle_connect_ws_logic(
     let preauth_guard = take_preauth_upgrade_guard(preauth_guard);
     ws.on_upgrade(move |ws| async move {
         let _preauth_guard = preauth_guard;
-        let result = connect::handle_ws(bus, q, ws).await;
+        let result = connect::handle_ws(bus, reservation, ws, send_timeout).await;
         permit.release().await;
         if let Err(e) = result {
             iroha_logger::warn!(%e, "connect ws session ended with error");
@@ -36878,6 +37228,7 @@ fn require_connect_enabled(app: &SharedAppState) -> Result<(), Error> {
 async fn handler_connect_ws(
     State(app): State<SharedAppState>,
     preauth_guard: Option<Extension<PreAuthGuardHandoff>>,
+    Extension(permit_handoff): Extension<ConnectWsPermitHandoff>,
     headers: axum::http::HeaderMap,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     ws: WebSocketUpgrade,
@@ -36889,31 +37240,48 @@ async fn handler_connect_ws(
         Ok(q) => q,
         Err(response) => return response,
     };
-    handle_connect_ws_logic(app, headers, query, ws, preauth_guard).await
+    let Some(permit) = permit_handoff.take() else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "connect: websocket admission permit unavailable",
+        )
+            .into_response();
+    };
+    handle_connect_ws_logic(app, headers, query, ws, preauth_guard, permit).await
+}
+#[cfg(feature = "connect")]
+fn connect_session_rejection_response(
+    status: StatusCode,
+    code: &'static str,
+    message: impl Into<String>,
+) -> Response {
+    let retry_after_seconds = (status == StatusCode::TOO_MANY_REQUESTS).then_some(1);
+    let payload = ErrorEnvelope::new(code, message.into()).with_details(ErrorDetails {
+        retry_after_seconds,
+        ..Default::default()
+    });
+    let mut response =
+        utils::respond_with_status_and_format(status, payload, utils::current_response_format());
+    response.headers_mut().insert(
+        HeaderName::from_static("x-iroha-reject-code"),
+        HeaderValue::from_static(code),
+    );
+    if retry_after_seconds.is_some() {
+        response.headers_mut().insert(
+            axum::http::header::RETRY_AFTER,
+            HeaderValue::from_static("1"),
+        );
+    }
+    response
 }
 #[cfg(feature = "connect")]
 async fn handler_connect_session(
     State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
+    Extension(_admitted): Extension<ConnectSessionCreateAdmitted>,
     NoritoJson(req): NoritoJson<routing::ConnectSessionRequest>,
-) -> Result<JsonBody<routing::ConnectSessionResponse>> {
+) -> Result<Response> {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     require_connect_enabled(&app)?;
-    let remote_ip = connect_remote_ip_from_headers(&headers).map_err(|message| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(message.to_owned()),
-        ))
-    })?;
-    app.connect_bus
-        .pre_session_create(remote_ip)
-        .await
-        .map_err(|(code, msg)| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "connect session rejected ({code}): {msg}"
-                )),
-            ))
-        })?;
     let network_id = *app.state.network_id_ref();
     let JsonBody(response) = routing::handle_connect_session(network_id, NoritoJson(req)).await?;
     let malformed = |msg: String| {
@@ -36937,7 +37305,8 @@ async fn handler_connect_session(
         .map_err(|err| malformed(format!("connect session nonce decode failed: {err}")))?
         .try_into()
         .map_err(|_| malformed("connect session nonce had wrong length".into()))?;
-    app.connect_bus
+    if let Err(error) = app
+        .connect_bus
         .clone()
         .register_tokens(
             sid,
@@ -36949,18 +37318,29 @@ async fn handler_connect_session(
             response.token_relay.clone(),
         )
         .await
-        .map_err(|err| match err {
-            crate::connect::RegisterSessionError::Exists => {
-                malformed("connect session already exists for provided sid".to_string())
-            }
-            crate::connect::RegisterSessionError::Capacity => {
-                malformed("connect session capacity reached; try again later".to_string())
-            }
+    {
+        let response = match error {
+            crate::connect::RegisterSessionError::Exists => connect_session_rejection_response(
+                StatusCode::CONFLICT,
+                "connect_session_exists",
+                "connect session already exists for provided sid",
+            ),
+            crate::connect::RegisterSessionError::Capacity => connect_session_rejection_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "connect_session_capacity",
+                "connect session capacity reached; try again later",
+            ),
             crate::connect::RegisterSessionError::InvalidIdentity => {
-                malformed("connect session identity was not canonically bound".to_string())
+                connect_session_rejection_response(
+                    StatusCode::BAD_REQUEST,
+                    "connect_session_identity_invalid",
+                    "connect session identity was not canonically bound",
+                )
             }
-        })?;
-    Ok(JsonBody(response))
+        };
+        return Ok(response);
+    }
+    Ok(JsonBody(response).into_response())
 }
 #[cfg(feature = "connect")]
 async fn handler_connect_session_delete(
@@ -36985,17 +37365,10 @@ async fn handler_connect_session_delete(
                 }
                 Err(response) => return response,
             };
-            if !app
-                .connect_bus
-                .authorize_management_token(sid, &token)
-                .await
-            {
-                return StatusCode::NOT_FOUND.into_response();
-            }
             let removed = app
                 .connect_bus
                 .clone()
-                .terminate_session(sid, crate::connect::CLOSE_REASON_PURGED)
+                .terminate_session_authorized(sid, &token, crate::connect::CLOSE_REASON_PURGED)
                 .await;
             if removed {
                 StatusCode::NO_CONTENT.into_response()
@@ -37113,8 +37486,11 @@ fn resolve_connect_ws_token(
 }
 #[cfg(all(test, feature = "connect"))]
 mod connect_token_tests {
-    use super::{connect_remote_ip_from_headers, parse_connect_ws_query, resolve_connect_ws_token};
-    use axum::http::{HeaderMap, HeaderName, StatusCode, header};
+    use super::{
+        ConnectWsPermitHandoff, connect_remote_ip_from_headers, connect_session_rejection_response,
+        parse_connect_ws_query, resolve_connect_ws_token,
+    };
+    use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
     #[test]
     fn connect_query_rejects_token_param() {
         let err = parse_connect_ws_query(Some("sid=abc&role=app&token=deadbeef"))
@@ -37156,6 +37532,18 @@ mod connect_token_tests {
         assert!(token.protocol.is_none());
     }
     #[test]
+    fn resolve_connect_ws_token_rejects_duplicate_authorization_headers() {
+        let mut headers = HeaderMap::new();
+        headers.append(header::AUTHORIZATION, "Bearer first-token".parse().unwrap());
+        headers.append(
+            header::AUTHORIZATION,
+            "Bearer second-token".parse().unwrap(),
+        );
+        let err = resolve_connect_ws_token(&headers)
+            .expect_err("ambiguous bearer credentials must fail closed");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+    #[test]
     fn connect_remote_ip_requires_injected_header() {
         let headers = HeaderMap::new();
         let err = connect_remote_ip_from_headers(&headers).expect_err("missing remote addr");
@@ -37181,15 +37569,60 @@ mod connect_token_tests {
         let err = connect_remote_ip_from_headers(&headers).expect_err("invalid remote addr");
         assert_eq!(err, "connect: remote addr unavailable");
     }
+    #[test]
+    fn connect_session_rejections_preserve_capacity_and_conflict_statuses() {
+        let rate_limited = connect_session_rejection_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            "connect_session_capacity",
+            "capacity reached",
+        );
+        assert_eq!(rate_limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            rate_limited.headers().get(header::RETRY_AFTER),
+            Some(&HeaderValue::from_static("1"))
+        );
+        assert_eq!(
+            rate_limited.headers().get("x-iroha-reject-code"),
+            Some(&HeaderValue::from_static("connect_session_capacity"))
+        );
+
+        let conflict = connect_session_rejection_response(
+            StatusCode::CONFLICT,
+            "connect_session_exists",
+            "already exists",
+        );
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
+        assert!(!conflict.headers().contains_key(header::RETRY_AFTER));
+    }
+    #[tokio::test]
+    async fn connect_ws_permit_handoff_is_single_owner() {
+        let bus = crate::connect::Bus::new();
+        let permit = bus
+            .pre_ws_handshake("192.0.2.91".parse().expect("test IP"))
+            .await
+            .expect("reserve WebSocket capacity");
+        let handoff = ConnectWsPermitHandoff::new(permit);
+        let mut permit = handoff.take().expect("first owner takes permit");
+        assert!(handoff.take().is_none());
+        permit.release().await;
+    }
 }
 #[allow(clippy::result_large_err)]
 fn parse_authorization_token(
     headers: &axum::http::HeaderMap,
 ) -> Result<Option<String>, axum::response::Response> {
     use axum::http::{StatusCode, header};
-    let Some(value) = headers.get(header::AUTHORIZATION) else {
+    let mut values = headers.get_all(header::AUTHORIZATION).iter();
+    let Some(value) = values.next() else {
         return Ok(None);
     };
+    if values.next().is_some() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "connect: authorization header must appear exactly once",
+        )
+            .into_response());
+    }
     let value_str = value
         .to_str()
         .map_err(|_| {
@@ -40068,11 +40501,13 @@ fn decode_tx_history_jwt_claims(
     auth_header: &str,
     jwt: &TxHistoryJwtConfig,
 ) -> Result<TxHistoryJwtClaims, String> {
-    let token = auth_header
-        .trim()
-        .strip_prefix("Bearer ")
-        .or_else(|| auth_header.trim().strip_prefix("bearer "))
-        .ok_or_else(|| "Authorization header must use Bearer token".to_string())?;
+    let mut authorization = auth_header.split_whitespace();
+    let scheme = authorization.next().unwrap_or_default();
+    let token = authorization.next().unwrap_or_default();
+    if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() || authorization.next().is_some()
+    {
+        return Err("Authorization header must use Bearer token".to_string());
+    }
     let key = jwt.key.decoding_key(jwt.algorithm)?;
     let mut parts = token.split('.');
     let header_part = parts.next().filter(|part| !part.is_empty());
@@ -40177,16 +40612,28 @@ fn tx_history_viewer_from_headers(
             "transaction history bearer auth is not configured",
         ));
     };
-    let auth_header = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| {
-            tx_history_reject(
-                StatusCode::UNAUTHORIZED,
-                "tx_history_authorization_missing",
-                "missing Authorization header",
-            )
-        })?;
+    let mut authorization_values = headers.get_all(axum::http::header::AUTHORIZATION).iter();
+    let authorization_value = authorization_values.next().ok_or_else(|| {
+        tx_history_reject(
+            StatusCode::UNAUTHORIZED,
+            "tx_history_authorization_missing",
+            "missing Authorization header",
+        )
+    })?;
+    if authorization_values.next().is_some() {
+        return Err(tx_history_reject(
+            StatusCode::UNAUTHORIZED,
+            "tx_history_authorization_invalid",
+            "Authorization header must appear exactly once",
+        ));
+    }
+    let auth_header = authorization_value.to_str().map_err(|_| {
+        tx_history_reject(
+            StatusCode::UNAUTHORIZED,
+            "tx_history_authorization_invalid",
+            "Authorization header must be visible ASCII",
+        )
+    })?;
     let claims = decode_tx_history_jwt_claims(auth_header, jwt).map_err(|message| {
         tx_history_reject(
             StatusCode::UNAUTHORIZED,
@@ -45397,16 +45844,51 @@ impl Torii {
     fn add_connect_routes(&self, builder: &mut RouterBuilder) {
         const CONNECT_SESSION_BODY_MAX_BYTES: usize = 64 * 1024;
         let app_state = builder.state().clone();
-        mount_catalog_route_rows!(
-            builder, connect;
-            SESSION_CREATE => limited_protocol_handshake_post(handler_connect_session, CONNECT_SESSION_BODY_MAX_BYTES);
-            SESSION_DELETE => protocol_handshake_delete(handler_connect_session_delete);
-            WEBSOCKET => protocol_handshake_get(handler_connect_ws);
-            SESSION_STATUS => protocol_handshake_get(handler_connect_session_status);
+        builder.route(
+            &route_catalog::connect::SESSION_CREATE,
+            catalog_post(handler_connect_session)
+                .layer(DefaultBodyLimit::max(CONNECT_SESSION_BODY_MAX_BYTES))
+                .layer(axum::middleware::from_fn_with_state(
+                    app_state.clone(),
+                    enforce_connect_session_create_admission,
+                ))
+                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+        );
+        builder.route(
+            &route_catalog::connect::SESSION_DELETE,
+            catalog_delete(handler_connect_session_delete)
+                .layer(axum::middleware::from_fn_with_state(
+                    app_state.clone(),
+                    enforce_connect_enabled_request,
+                ))
+                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+        );
+        builder.route(
+            &route_catalog::connect::WEBSOCKET,
+            catalog_get(handler_connect_ws)
+                .layer(axum::middleware::from_fn_with_state(
+                    app_state.clone(),
+                    enforce_connect_ws_admission,
+                ))
+                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+        );
+        builder.route(
+            &route_catalog::connect::SESSION_STATUS,
+            catalog_get(handler_connect_session_status)
+                .layer(axum::middleware::from_fn_with_state(
+                    app_state.clone(),
+                    enforce_connect_enabled_request,
+                ))
+                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
         );
         builder.route(
             &route_catalog::connect::STATUS,
-            catalog_get(handler_connect_status).authenticated_operator(app_state),
+            catalog_get(handler_connect_status)
+                .layer(axum::middleware::from_fn_with_state(
+                    app_state.clone(),
+                    enforce_connect_enabled_request,
+                ))
+                .authenticated_operator(app_state),
         );
     }
     #[cfg(not(feature = "connect"))]
@@ -48871,14 +49353,30 @@ async fn handler_mcp_jsonrpc(
             JsonBody(mcp::jsonrpc_rate_limited()),
         ));
     }
-    let request_bytes =
-        match axum::body::to_bytes(request.into_body(), app.mcp.max_request_bytes).await {
-            Ok(bytes) => bytes,
-            Err(_) => {
-                let (status, payload) = mcp::oversized_payload_response(app.mcp.max_request_bytes);
-                return mcp::private_no_store_response((status, JsonBody(payload)));
-            }
-        };
+    let request_bytes = match tokio::time::timeout(
+        mcp::MCP_BODY_READ_TIMEOUT,
+        axum::body::to_bytes(request.into_body(), app.mcp.max_request_bytes),
+    )
+    .await
+    {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(error)) if mcp::body_error_is_length_limit(&error) => {
+            let (status, payload) = mcp::oversized_payload_response(app.mcp.max_request_bytes);
+            return mcp::private_no_store_response((status, JsonBody(payload)));
+        }
+        Ok(Err(_)) => {
+            return mcp::private_no_store_response((
+                StatusCode::BAD_REQUEST,
+                JsonBody(mcp::jsonrpc_request_body_read_failed()),
+            ));
+        }
+        Err(_) => {
+            return mcp::private_no_store_response((
+                StatusCode::REQUEST_TIMEOUT,
+                JsonBody(mcp::jsonrpc_request_timeout()),
+            ));
+        }
+    };
     let payload = match norito::json::from_slice::<norito::json::Value>(&request_bytes) {
         Ok(payload) => payload,
         Err(err) => {
@@ -48895,22 +49393,43 @@ async fn handler_mcp_jsonrpc(
         norito::json::Value::Array(batch) if batch.is_empty() => {
             mcp::jsonrpc_invalid_request("batch request must not be empty")
         }
-        norito::json::Value::Array(batch) => {
-            let mut responses = Vec::new();
-            if responses.try_reserve_exact(batch.len()).is_err() {
-                mcp::jsonrpc_allocation_failed("failed to reserve MCP batch response storage")
-            } else {
-                for request_value in batch {
-                    let response =
-                        mcp::handle_jsonrpc_request(app.clone(), &headers, request_value).await;
-                    responses.push(response);
-                }
-                norito::json::Value::Array(responses)
-            }
+        norito::json::Value::Array(batch) if mcp::jsonrpc_batch_exceeds_dispatch_limit(&batch) => {
+            mcp::jsonrpc_batch_too_large()
         }
-        payload => mcp::handle_jsonrpc_request(app, &headers, payload).await,
+        norito::json::Value::Array(batch) => {
+            let mut responses =
+                match mcp::BoundedJsonArray::new(batch.len(), app.mcp.max_request_bytes) {
+                    Ok(responses) => responses,
+                    Err(norito::json::BoundedJsonError::BodyTooLarge) => {
+                        return mcp::bounded_jsonrpc_http_response(
+                            mcp::jsonrpc_response_too_large(None, app.mcp.max_request_bytes),
+                            app.mcp.max_request_bytes,
+                        );
+                    }
+                    Err(_) => {
+                        return mcp::private_no_store_response((
+                            StatusCode::OK,
+                            JsonBody(mcp::jsonrpc_allocation_failed(
+                                "failed to reserve MCP batch response storage",
+                            )),
+                        ));
+                    }
+                };
+            for request_value in batch {
+                let response =
+                    mcp::handle_jsonrpc_request(app.clone(), &headers, request_value).await;
+                if responses.try_push(response).is_err() {
+                    return mcp::bounded_jsonrpc_http_response(
+                        mcp::jsonrpc_response_too_large(None, app.mcp.max_request_bytes),
+                        app.mcp.max_request_bytes,
+                    );
+                }
+            }
+            norito::json::Value::Array(responses.into_values())
+        }
+        payload => mcp::handle_jsonrpc_request(app.clone(), &headers, payload).await,
     };
-    mcp::private_no_store_response((StatusCode::OK, JsonBody(response_payload)))
+    mcp::bounded_jsonrpc_http_response(response_payload, app.mcp.max_request_bytes)
 }
 #[cfg(feature = "app_api")]
 fn build_sorafs_cache(

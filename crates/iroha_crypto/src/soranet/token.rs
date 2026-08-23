@@ -25,12 +25,13 @@ use rand_core::TryCryptoRng;
 use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use std::{
     collections::HashMap,
-    fs,
+    fmt,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
+use zeroize::Zeroize as _;
 const TOKEN_MAGIC: &[u8; 4] = b"SNTK";
 const BODY_DOMAIN: &[u8; 21] = b"soranet.token.body.v1";
 const ID_DOMAIN: &[u8] = b"soranet.token.id.v1";
@@ -46,10 +47,11 @@ const TOKEN_FLAG_MASK: u8 = 0;
 const TOKEN_STORE_SNAPSHOT_BASE_LIMIT_BYTES: usize = 4 * 1024;
 const TOKEN_STORE_SNAPSHOT_ENTRY_LIMIT_BYTES: usize = 128;
 const TOKEN_STORE_SNAPSHOT_DECODE_MAX_NESTING_DEPTH_V1: usize = 8;
+const TOKEN_STORE_SNAPSHOT_VERSION_V1: u8 = 1;
 /// First-release hard ceiling for persistent admission-token replay entries.
 pub const TOKEN_STORE_MAX_ENTRIES_V1: usize = 65_536;
 /// Admission token issued by a relay operator or delegated gateway.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct AdmissionToken {
     /// Reserved flags (must be zero in v1).
     flags: u8,
@@ -60,6 +62,38 @@ pub struct AdmissionToken {
     nonce: [u8; 16],
     issuer_fingerprint: [u8; 32],
     signature: Vec<u8>,
+}
+impl fmt::Debug for AdmissionToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AdmissionToken")
+            .field("flags", &self.flags)
+            .field("issued_at", &self.issued_at)
+            .field("expires_at", &self.expires_at)
+            .field("relay_id", &"[REDACTED]")
+            .field("transcript_hash", &"[REDACTED]")
+            .field("nonce", &"[REDACTED]")
+            .field("issuer_fingerprint", &"[REDACTED]")
+            .field("signature", &"[REDACTED]")
+            .finish()
+    }
+}
+impl AdmissionToken {
+    fn zeroize_sensitive_fields(&mut self) {
+        self.flags.zeroize();
+        self.issued_at.zeroize();
+        self.expires_at.zeroize();
+        self.relay_id.zeroize();
+        self.transcript_hash.zeroize();
+        self.nonce.zeroize();
+        self.issuer_fingerprint.zeroize();
+        self.signature.zeroize();
+    }
+}
+impl Drop for AdmissionToken {
+    fn drop(&mut self) {
+        self.zeroize_sensitive_fields();
+    }
 }
 impl AdmissionToken {
     /// Current token format version.
@@ -212,8 +246,10 @@ impl AdmissionToken {
     /// Mint a new admission token using the provided issuer secret key.
     ///
     /// # Errors
-    /// Returns [`MintError`] if the time bounds are invalid, the provided issuer fingerprint does
-    /// not match the signing key, random bytes cannot be generated, or signing fails.
+    /// Returns [`MintError`] if either timestamp is not an exact whole Unix
+    /// second, the time bounds are invalid, the provided issuer fingerprint
+    /// does not match the signing key, random bytes cannot be generated, or
+    /// signing fails.
     #[allow(clippy::too_many_arguments)]
     pub fn mint<R: TryCryptoRng>(
         suite: MlDsaSuite,
@@ -226,14 +262,22 @@ impl AdmissionToken {
         flags: u8,
         rng: &mut R,
     ) -> Result<Self, MintError> {
-        let issued_secs = issued_at
+        let issued_duration = issued_at
             .duration_since(UNIX_EPOCH)
-            .map_err(MintError::Clock)?
-            .as_secs();
-        let expires_secs = expires_at
+            .map_err(MintError::Clock)?;
+        if issued_duration.subsec_nanos() != 0 {
+            return Err(MintError::NonCanonicalTimestamp { field: "issued_at" });
+        }
+        let expires_duration = expires_at
             .duration_since(UNIX_EPOCH)
-            .map_err(MintError::Clock)?
-            .as_secs();
+            .map_err(MintError::Clock)?;
+        if expires_duration.subsec_nanos() != 0 {
+            return Err(MintError::NonCanonicalTimestamp {
+                field: "expires_at",
+            });
+        }
+        let issued_secs = issued_duration.as_secs();
+        let expires_secs = expires_duration.as_secs();
         if expires_secs <= issued_secs {
             return Err(MintError::InvalidTemporalBounds);
         }
@@ -658,9 +702,17 @@ pub trait TokenStore: std::fmt::Debug + Send {
         now: SystemTime,
     ) -> Result<TokenInsertOutcome, TokenStoreError>;
     /// Check if the store currently contains a non-expired token id.
-    fn contains(&self, token_id: &[u8; 32], now: SystemTime) -> bool;
+    ///
+    /// # Errors
+    /// Returns [`TokenStoreError`] if a previously failed store mutation cannot
+    /// be made durable before the result is returned.
+    fn contains(&mut self, token_id: &[u8; 32], now: SystemTime) -> Result<bool, TokenStoreError>;
     /// Number of non-expired entries tracked by the store.
-    fn len(&self, now: SystemTime) -> usize;
+    ///
+    /// # Errors
+    /// Returns [`TokenStoreError`] if a previously failed store mutation cannot
+    /// be made durable before the count is returned.
+    fn len(&mut self, now: SystemTime) -> Result<usize, TokenStoreError>;
     /// Purge expired entries and return the number removed.
     ///
     /// # Errors
@@ -675,20 +727,27 @@ struct TokenRecord {
 struct TokenStoreEntry {
     id: [u8; 32],
     expires_at_secs: u64,
+    expires_at_nanos: u32,
 }
 #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
 struct TokenStoreSnapshot {
+    version: u8,
+    high_watermark_secs: u64,
+    high_watermark_nanos: u32,
     entries: Vec<TokenStoreEntry>,
 }
 /// In-memory implementation of a bounded admission token store.
 ///
 /// Tokens that are expired at the time of insertion are rejected. When the
 /// store reaches capacity, inserts fail closed with `Capacity`; an active
-/// replay record is never discarded to admit a newer token.
+/// replay record is never discarded to admit a newer token. Every operation
+/// advances an in-memory monotonic wall-clock high-water mark, so a clock
+/// rollback cannot reactivate an expired record.
 #[derive(Debug)]
 pub struct InMemoryTokenStore {
     limits: TokenStoreLimits,
+    high_watermark: SystemTime,
     records: HashMap<[u8; 32], TokenRecord>,
 }
 impl InMemoryTokenStore {
@@ -699,8 +758,13 @@ impl InMemoryTokenStore {
     pub fn new(limits: TokenStoreLimits) -> Result<Self, TokenStoreError> {
         Ok(Self {
             limits: TokenStoreLimits::new(limits.max_entries, limits.max_ttl)?,
+            high_watermark: UNIX_EPOCH,
             records: HashMap::new(),
         })
+    }
+    fn observe_now(&mut self, now: SystemTime) -> SystemTime {
+        self.high_watermark = self.high_watermark.max(now);
+        self.high_watermark
     }
     fn prune_expired(&mut self, now: SystemTime) {
         self.records
@@ -714,11 +778,12 @@ impl TokenStore for InMemoryTokenStore {
         expires_at: SystemTime,
         now: SystemTime,
     ) -> Result<TokenInsertOutcome, TokenStoreError> {
-        self.prune_expired(now);
-        if is_expired(expires_at, now) {
+        let effective_now = self.observe_now(now);
+        self.prune_expired(effective_now);
+        if is_expired(expires_at, effective_now) {
             return Ok(TokenInsertOutcome::rejected(TokenInsertStatus::Expired));
         }
-        if exceeds_ttl(expires_at, now, self.limits.max_ttl) {
+        if exceeds_ttl(expires_at, effective_now, self.limits.max_ttl) {
             return Ok(TokenInsertOutcome::rejected(TokenInsertStatus::TtlExceeded));
         }
         if self.records.contains_key(&token_id) {
@@ -733,20 +798,25 @@ impl TokenStore for InMemoryTokenStore {
         self.records.insert(token_id, TokenRecord { expires_at });
         Ok(TokenInsertOutcome::accepted())
     }
-    fn contains(&self, token_id: &[u8; 32], now: SystemTime) -> bool {
-        self.records
+    fn contains(&mut self, token_id: &[u8; 32], now: SystemTime) -> Result<bool, TokenStoreError> {
+        let effective_now = self.observe_now(now);
+        Ok(self
+            .records
             .get(token_id)
-            .is_some_and(|record| !is_expired(record.expires_at, now))
+            .is_some_and(|record| !is_expired(record.expires_at, effective_now)))
     }
-    fn len(&self, now: SystemTime) -> usize {
-        self.records
+    fn len(&mut self, now: SystemTime) -> Result<usize, TokenStoreError> {
+        let effective_now = self.observe_now(now);
+        Ok(self
+            .records
             .values()
-            .filter(|record| !is_expired(record.expires_at, now))
-            .count()
+            .filter(|record| !is_expired(record.expires_at, effective_now))
+            .count())
     }
     fn purge_expired(&mut self, now: SystemTime) -> Result<usize, TokenStoreError> {
+        let effective_now = self.observe_now(now);
         let before = self.records.len();
-        self.prune_expired(now);
+        self.prune_expired(effective_now);
         Ok(before.saturating_sub(self.records.len()))
     }
 }
@@ -754,20 +824,29 @@ impl TokenStore for InMemoryTokenStore {
 ///
 /// The store prunes expired entries on load and before every insert. Active records that violate
 /// the configured TTL or capacity make loading fail closed. Inserts never evict an active record. A
-/// process-lifetime sidecar lock prevents concurrent writers from forking replay history.
+/// process-lifetime sidecar lock prevents concurrent writers from forking replay history. Mutating
+/// operations and rejected insertion decisions durably advance a monotonic clock high-water mark.
+/// Read-only queries retain expired records and do not write merely because wall time advanced;
+/// after clock rollback, a retained record becomes active again and therefore fails closed.
 #[derive(Debug)]
 pub struct PersistentTokenStore {
     limits: TokenStoreLimits,
+    high_watermark: SystemTime,
     records: HashMap<[u8; 32], TokenRecord>,
-    path: PathBuf,
-    _ledger_lock: ExclusiveLedgerLock,
+    dirty: bool,
+    ledger_lock: ExclusiveLedgerLock,
 }
 impl PersistentTokenStore {
     /// Load or create a persistent token store at `path`.
     ///
+    /// The path must be absolute and its parent chain must be custodied by the
+    /// process owner or root; snapshots and sidecar locks are owner-private.
+    /// Persistent custody is currently supported only on Unix. Portable
+    /// callers can continue to use the in-memory [`TokenStore`].
+    ///
     /// # Errors
     /// Returns [`TokenStoreError`] if the snapshot cannot be read or parsed or if the
-    /// backing directory cannot be created.
+    /// backing path cannot be safely custodied or created.
     pub fn load(
         path: impl Into<PathBuf>,
         limits: TokenStoreLimits,
@@ -782,23 +861,17 @@ impl PersistentTokenStore {
             .map_err(|err| TokenStoreError::Io(err.to_string()))?;
         let mut store = Self {
             limits,
+            high_watermark: now.max(UNIX_EPOCH),
             records: HashMap::new(),
-            path,
-            _ledger_lock: ledger_lock,
+            dirty: true,
+            ledger_lock,
         };
-        if let Some(parent) = store
-            .path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent).map_err(|err| TokenStoreError::Io(err.to_string()))?;
-        }
         store.load_from_disk(now)?;
         Ok(store)
     }
     fn load_from_disk(&mut self, now: SystemTime) -> Result<(), TokenStoreError> {
         let bytes = match read_optional_bounded_regular_file(
-            &self.path,
+            self.ledger_lock.custody(),
             self.limits.max_snapshot_bytes(),
             "token replay snapshot",
         ) {
@@ -821,8 +894,21 @@ impl PersistentTokenStore {
             TokenStoreError::Parse(format!("norito decode failed: {decode_err}"))
         })?;
         drop(bytes);
+        if snapshot.version != TOKEN_STORE_SNAPSHOT_VERSION_V1 {
+            return Err(TokenStoreError::Parse(format!(
+                "unsupported token replay snapshot version {}",
+                snapshot.version
+            )));
+        }
+        let persisted_high_watermark = decode_token_store_timestamp(
+            snapshot.high_watermark_secs,
+            snapshot.high_watermark_nanos,
+            "token replay high-water timestamp",
+        )?;
+        self.high_watermark = self.high_watermark.max(persisted_high_watermark);
         self.ingest_snapshot(snapshot, now)?;
-        self.prune_expired(now);
+        let effective_now = self.observe_now(now);
+        self.prune_expired(effective_now);
         self.persist()
     }
     fn ingest_snapshot(
@@ -830,6 +916,7 @@ impl PersistentTokenStore {
         snapshot: TokenStoreSnapshot,
         now: SystemTime,
     ) -> Result<(), TokenStoreError> {
+        let effective_now = self.effective_now(now);
         if snapshot.entries.len() > self.limits.max_entries {
             return Err(TokenStoreError::Parse(
                 "token replay snapshot exceeds capacity".to_string(),
@@ -850,14 +937,11 @@ impl PersistentTokenStore {
                 entries: snapshot.entries.len(),
             })?;
         for entry in snapshot.entries {
-            let expires_at = UNIX_EPOCH
-                .checked_add(Duration::from_secs(entry.expires_at_secs))
-                .ok_or_else(|| {
-                    TokenStoreError::Parse(format!(
-                        "token expiry timestamp {} overflows system time",
-                        entry.expires_at_secs
-                    ))
-                })?;
+            let expires_at = decode_token_store_timestamp(
+                entry.expires_at_secs,
+                entry.expires_at_nanos,
+                "token expiry timestamp",
+            )?;
             if self
                 .records
                 .insert(entry.id, TokenRecord { expires_at })
@@ -867,28 +951,45 @@ impl PersistentTokenStore {
                     "duplicate token id in snapshot".to_string(),
                 ));
             }
-            if !is_expired(expires_at, now) && exceeds_ttl(expires_at, now, self.limits.max_ttl) {
+            if !is_expired(expires_at, effective_now)
+                && exceeds_ttl(expires_at, effective_now, self.limits.max_ttl)
+            {
                 return Err(TokenStoreError::Parse(format!(
                     "active token expiry exceeds configured max_ttl of {:?}",
                     self.limits.max_ttl
                 )));
             }
         }
-        self.prune_expired(now);
+        self.prune_expired(effective_now);
         Ok(())
     }
     fn prune_expired(&mut self, now: SystemTime) {
+        let previous_len = self.records.len();
         self.records
             .retain(|_, record| !is_expired(record.expires_at, now));
+        self.dirty |= self.records.len() != previous_len;
     }
-    fn persist(&self) -> Result<(), TokenStoreError> {
-        if let Some(parent) = self
-            .path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent).map_err(|err| TokenStoreError::Io(err.to_string()))?;
+    fn effective_now(&self, now: SystemTime) -> SystemTime {
+        self.high_watermark.max(now)
+    }
+    fn observe_now(&mut self, now: SystemTime) -> SystemTime {
+        if now > self.high_watermark {
+            self.high_watermark = now;
+            self.dirty = true;
         }
+        self.high_watermark
+    }
+    fn effective_now_for_read(&mut self, now: SystemTime) -> Result<SystemTime, TokenStoreError> {
+        // Read-only observations never prune records or advance the durable
+        // clock. Retaining an entry makes a later clock rollback stricter: the
+        // entry becomes active again. A dirty mutation is different; no later
+        // successful decision may escape until its full snapshot is durable.
+        if self.dirty {
+            self.persist()?;
+        }
+        Ok(self.high_watermark.max(now))
+    }
+    fn persist(&mut self) -> Result<(), TokenStoreError> {
         let mut entries = Vec::new();
         entries
             .try_reserve_exact(self.records.len())
@@ -896,23 +997,28 @@ impl PersistentTokenStore {
                 entries: self.records.len(),
             })?;
         for (id, record) in &self.records {
-            let expires_at_secs = record
-                .expires_at
-                .duration_since(UNIX_EPOCH)
-                .map_err(|_| {
-                    TokenStoreError::Parse("token expiry predates the Unix epoch".to_owned())
-                })?
-                .as_secs();
+            let (expires_at_secs, expires_at_nanos) =
+                encode_token_store_timestamp(record.expires_at, "token expiry timestamp")?;
             entries.push(TokenStoreEntry {
                 id: *id,
                 expires_at_secs,
+                expires_at_nanos,
             });
         }
         entries.sort_by(token_store_entry_order);
-        let snapshot = TokenStoreSnapshot { entries };
-        let tmp =
-            create_temporary_direct_regular_file(&self.path, "temporary token replay snapshot")
-                .map_err(|err| TokenStoreError::Io(err.to_string()))?;
+        let (high_watermark_secs, high_watermark_nanos) =
+            encode_token_store_timestamp(self.high_watermark, "token replay high-water timestamp")?;
+        let snapshot = TokenStoreSnapshot {
+            version: TOKEN_STORE_SNAPSHOT_VERSION_V1,
+            high_watermark_secs,
+            high_watermark_nanos,
+            entries,
+        };
+        let tmp = create_temporary_direct_regular_file(
+            self.ledger_lock.custody(),
+            "temporary token replay snapshot",
+        )
+        .map_err(|err| TokenStoreError::Io(err.to_string()))?;
         let mut bounded = BoundedWriter::new(
             tmp,
             self.limits.max_snapshot_bytes(),
@@ -924,18 +1030,14 @@ impl PersistentTokenStore {
         tmp.as_file()
             .sync_all()
             .map_err(|err| TokenStoreError::Io(err.to_string()))?;
-        persist_temporary_snapshot(tmp, &self.path)
+        persist_temporary_snapshot(tmp, self.ledger_lock.custody(), "token replay snapshot")
             .map_err(|err| TokenStoreError::Io(err.to_string()))?;
         #[cfg(unix)]
-        if let Some(parent) = self
-            .path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|err| TokenStoreError::Io(err.to_string()))?;
-        }
+        self.ledger_lock
+            .custody()
+            .sync_parent()
+            .map_err(|err| TokenStoreError::Io(err.to_string()))?;
+        self.dirty = false;
         Ok(())
     }
 }
@@ -946,42 +1048,64 @@ impl TokenStore for PersistentTokenStore {
         expires_at: SystemTime,
         now: SystemTime,
     ) -> Result<TokenInsertOutcome, TokenStoreError> {
-        self.prune_expired(now);
-        if is_expired(expires_at, now) {
+        let effective_now = self.observe_now(now);
+        self.prune_expired(effective_now);
+        if is_expired(expires_at, effective_now) {
+            if self.dirty {
+                self.persist()?;
+            }
             return Ok(TokenInsertOutcome::rejected(TokenInsertStatus::Expired));
         }
-        if exceeds_ttl(expires_at, now, self.limits.max_ttl) {
+        if exceeds_ttl(expires_at, effective_now, self.limits.max_ttl) {
+            if self.dirty {
+                self.persist()?;
+            }
             return Ok(TokenInsertOutcome::rejected(TokenInsertStatus::TtlExceeded));
         }
         if self.records.contains_key(&token_id) {
+            if self.dirty {
+                self.persist()?;
+            }
             return Ok(TokenInsertOutcome::rejected(TokenInsertStatus::Duplicate));
         }
         if self.records.len() >= self.limits.max_entries {
+            if self.dirty {
+                self.persist()?;
+            }
             return Ok(TokenInsertOutcome::rejected(TokenInsertStatus::Capacity));
         }
-        self.records
-            .try_reserve(1)
-            .map_err(|_| TokenStoreError::Allocation { entries: 1 })?;
+        if self.records.try_reserve(1).is_err() {
+            if self.dirty {
+                self.persist()?;
+            }
+            return Err(TokenStoreError::Allocation { entries: 1 });
+        }
         self.records.insert(token_id, TokenRecord { expires_at });
+        self.dirty = true;
         self.persist()?;
         Ok(TokenInsertOutcome::accepted())
     }
-    fn contains(&self, token_id: &[u8; 32], now: SystemTime) -> bool {
-        self.records
+    fn contains(&mut self, token_id: &[u8; 32], now: SystemTime) -> Result<bool, TokenStoreError> {
+        let effective_now = self.effective_now_for_read(now)?;
+        Ok(self
+            .records
             .get(token_id)
-            .is_some_and(|record| !is_expired(record.expires_at, now))
+            .is_some_and(|record| !is_expired(record.expires_at, effective_now)))
     }
-    fn len(&self, now: SystemTime) -> usize {
-        self.records
+    fn len(&mut self, now: SystemTime) -> Result<usize, TokenStoreError> {
+        let effective_now = self.effective_now_for_read(now)?;
+        Ok(self
+            .records
             .values()
-            .filter(|record| !is_expired(record.expires_at, now))
-            .count()
+            .filter(|record| !is_expired(record.expires_at, effective_now))
+            .count())
     }
     fn purge_expired(&mut self, now: SystemTime) -> Result<usize, TokenStoreError> {
         let before = self.records.len();
-        self.prune_expired(now);
+        let effective_now = self.observe_now(now);
+        self.prune_expired(effective_now);
         let removed = before.saturating_sub(self.records.len());
-        if removed > 0 {
+        if self.dirty {
             self.persist()?;
         }
         Ok(removed)
@@ -990,7 +1114,31 @@ impl TokenStore for PersistentTokenStore {
 fn token_store_entry_order(left: &TokenStoreEntry, right: &TokenStoreEntry) -> std::cmp::Ordering {
     left.expires_at_secs
         .cmp(&right.expires_at_secs)
+        .then_with(|| left.expires_at_nanos.cmp(&right.expires_at_nanos))
         .then_with(|| left.id.cmp(&right.id))
+}
+fn decode_token_store_timestamp(
+    seconds: u64,
+    nanos: u32,
+    label: &str,
+) -> Result<SystemTime, TokenStoreError> {
+    if nanos >= 1_000_000_000 {
+        return Err(TokenStoreError::Parse(format!(
+            "{label} has noncanonical nanoseconds {nanos}"
+        )));
+    }
+    UNIX_EPOCH
+        .checked_add(Duration::new(seconds, nanos))
+        .ok_or_else(|| TokenStoreError::Parse(format!("{label} overflows system time")))
+}
+fn encode_token_store_timestamp(
+    timestamp: SystemTime,
+    label: &str,
+) -> Result<(u64, u32), TokenStoreError> {
+    let duration = timestamp
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| TokenStoreError::Parse(format!("{label} predates the Unix epoch")))?;
+    Ok((duration.as_secs(), duration.subsec_nanos()))
 }
 fn is_expired(expires_at: SystemTime, now: SystemTime) -> bool {
     expires_at <= now
@@ -1062,6 +1210,12 @@ fn fill_random<R: TryCryptoRng>(
             message: "rng returned all-zero material".to_owned(),
         });
     }
+    if dest.len() > 1 && dest.iter().all(|&byte| byte == dest[0]) {
+        return Err(MintError::RandomBytes {
+            operation,
+            message: "rng returned all-identical-byte material".to_owned(),
+        });
+    }
     Ok(())
 }
 /// Errors surfaced while decoding a token frame.
@@ -1125,6 +1279,12 @@ pub enum MintError {
     /// System clock not available.
     #[error("system clock error: {0}")]
     Clock(#[from] std::time::SystemTimeError),
+    /// Token v1 timestamps must be exact whole Unix seconds.
+    #[error("{field} must have whole-second precision for admission token v1")]
+    NonCanonicalTimestamp {
+        /// Timestamp field that contained a subsecond component.
+        field: &'static str,
+    },
     /// `expires_at` was not greater than `issued_at`.
     #[error("token expires_at must be greater than issued_at")]
     InvalidTemporalBounds,
@@ -1313,9 +1473,26 @@ mod tests {
     }
     fn write_token_store_snapshot(path: &std::path::Path, mut entries: Vec<TokenStoreEntry>) {
         entries.sort_by(token_store_entry_order);
-        let snapshot = TokenStoreSnapshot { entries };
+        let snapshot = TokenStoreSnapshot {
+            version: TOKEN_STORE_SNAPSHOT_VERSION_V1,
+            high_watermark_secs: 0,
+            high_watermark_nanos: 0,
+            entries,
+        };
         let content = encode_adaptive(&snapshot);
-        std::fs::write(path, content).expect("write token store snapshot");
+        write_private_test_file(path, &content);
+    }
+    fn write_private_test_file(path: &std::path::Path, bytes: &[u8]) {
+        use std::io::Write as _;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path).expect("open private test file");
+        file.write_all(bytes).expect("write private test file");
     }
     fn assert_mldsa_bad_encoding(err: VerifyError, field: &str, id: &str) {
         match err {
@@ -1466,6 +1643,45 @@ mod tests {
         assert_eq!(token.token_id(), decoded.token_id());
         assert_eq!(token.relay_id, decoded.relay_id);
         assert_eq!(token.transcript_hash, decoded.transcript_hash);
+    }
+    #[test]
+    fn admission_token_debug_output_redacts_bearer_material() {
+        let token = AdmissionToken {
+            flags: 0,
+            issued_at: 1,
+            expires_at: 2,
+            relay_id: [0x11; 32],
+            transcript_hash: [0x22; 32],
+            nonce: [0x33; 16],
+            issuer_fingerprint: [0x44; 32],
+            signature: vec![0x55; 4],
+        };
+        assert_eq!(
+            format!("{token:?}"),
+            "AdmissionToken { flags: 0, issued_at: 1, expires_at: 2, relay_id: \"[REDACTED]\", transcript_hash: \"[REDACTED]\", nonce: \"[REDACTED]\", issuer_fingerprint: \"[REDACTED]\", signature: \"[REDACTED]\" }"
+        );
+    }
+    #[test]
+    fn admission_token_zeroize_clears_all_bearer_fields() {
+        let mut token = AdmissionToken {
+            flags: u8::MAX,
+            issued_at: u64::MAX,
+            expires_at: u64::MAX,
+            relay_id: [0x11; 32],
+            transcript_hash: [0x22; 32],
+            nonce: [0x33; 16],
+            issuer_fingerprint: [0x44; 32],
+            signature: vec![0x55; 4],
+        };
+        token.zeroize_sensitive_fields();
+        assert_eq!(token.flags, 0);
+        assert_eq!(token.issued_at, 0);
+        assert_eq!(token.expires_at, 0);
+        assert_eq!(token.relay_id, [0; 32]);
+        assert_eq!(token.transcript_hash, [0; 32]);
+        assert_eq!(token.nonce, [0; 16]);
+        assert_eq!(token.issuer_fingerprint, [0; 32]);
+        assert!(token.signature.iter().all(|byte| *byte == 0));
     }
     // typed-matrix-residual:start token-runners
     #[test]
@@ -1674,7 +1890,7 @@ mod tests {
             .expect("verify");
     }
     #[test]
-    fn admission_token_verifier_preflight_matrix() {
+    fn admission_token_verifier_rejects_invalid_public_keys_at_construction() {
         let id = TOKEN_CASES[2].0;
         let err = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
@@ -1707,6 +1923,10 @@ mod tests {
             }
             other => panic!("{id}: expected ML-DSA public-key config error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn admission_token_verifier_rejects_malformed_public_key_before_replay() {
         let id = TOKEN_CASES[12].0;
         let mut fixture =
             minted_token_with_expectation(0x0BAD_5EED, 300, "ML-DSA keypair generation");
@@ -1726,7 +1946,15 @@ mod tests {
             .verify(&fixture.token, &RELAY_ID, &TRANSCRIPT, now)
             .expect_err("malformed verifier public key must fail closed");
         assert_mldsa_bad_encoding(err, "public key", id);
-        assert_eq!(store.lock().expect("store lock").len(now), 0, "{id}");
+        assert_eq!(
+            store.lock().expect("store lock").len(now).expect("len"),
+            0,
+            "{id}"
+        );
+    }
+
+    #[test]
+    fn admission_token_verifier_rejects_malformed_signatures_before_replay() {
         let id = TOKEN_CASES[13].0;
         let mut fixture = minted_token_with_expectation(0x51A, 300, "ML-DSA keypair generation");
         fixture
@@ -1739,7 +1967,11 @@ mod tests {
             .verify(&fixture.token, &RELAY_ID, &TRANSCRIPT, now)
             .expect_err("bad signature length must fail");
         assert_mldsa_bad_encoding(err, "signature", id);
-        assert_eq!(store.lock().expect("store lock").len(now), 0, "{id}");
+        assert_eq!(
+            store.lock().expect("store lock").len(now).expect("len"),
+            0,
+            "{id}"
+        );
         let id = TOKEN_CASES[14].0;
         let mut fixture = minted_token_with_expectation(0x51A0, 300, "ML-DSA keypair generation");
         fixture.token.signature.fill(0);
@@ -1753,7 +1985,15 @@ mod tests {
             .verify(&fixture.token, &RELAY_ID, &TRANSCRIPT, now)
             .expect_err("short all-zero signature must remain a malformed signature");
         assert_mldsa_bad_encoding(err, "signature", id);
-        assert_eq!(store.lock().expect("store lock").len(now), 0, "{id}");
+        assert_eq!(
+            store.lock().expect("store lock").len(now).expect("len"),
+            0,
+            "{id}"
+        );
+    }
+
+    #[test]
+    fn admission_token_verifier_rejects_inert_signature_before_replay() {
         let id = TOKEN_CASES[15].0;
         let mut fixture = minted_token_with_expectation(0x5A, 300, "ML-DSA keypair generation");
         fixture.token.signature.fill(0);
@@ -1763,7 +2003,11 @@ mod tests {
             .verify(&fixture.token, &RELAY_ID, &TRANSCRIPT, now)
             .expect_err("all-zero signature must fail before backend verification");
         assert!(matches!(err, VerifyError::InertSignature), "{id}");
-        assert_eq!(store.lock().expect("store lock").len(now), 0, "{id}");
+        assert_eq!(
+            store.lock().expect("store lock").len(now).expect("len"),
+            0,
+            "{id}"
+        );
     }
     #[test]
     fn admission_token_reuse_is_currently_allowed() {
@@ -1897,6 +2141,45 @@ mod tests {
         .expect("mint");
         let encoded = token.encode();
         assert!(frame_looks_like_token(&encoded));
+    }
+    #[test]
+    fn mint_rejects_subsecond_timestamps_in_whole_second_wire_format() {
+        let whole = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let mut rng = StdRng::seed_from_u64(0x51EC);
+        let issued_error = AdmissionToken::mint(
+            MlDsaSuite::MlDsa44,
+            &[],
+            [0; 32],
+            RELAY_ID,
+            TRANSCRIPT,
+            whole + Duration::from_nanos(1),
+            whole + Duration::from_secs(60),
+            0,
+            &mut rng,
+        )
+        .expect_err("subsecond issued_at must not be truncated");
+        assert!(matches!(
+            issued_error,
+            MintError::NonCanonicalTimestamp { field: "issued_at" }
+        ));
+        let expires_error = AdmissionToken::mint(
+            MlDsaSuite::MlDsa44,
+            &[],
+            [0; 32],
+            RELAY_ID,
+            TRANSCRIPT,
+            whole,
+            whole + Duration::from_secs(60) + Duration::from_nanos(1),
+            0,
+            &mut rng,
+        )
+        .expect_err("subsecond expires_at must not be truncated");
+        assert!(matches!(
+            expires_error,
+            MintError::NonCanonicalTimestamp {
+                field: "expires_at"
+            }
+        ));
     }
     #[test]
     fn admission_token_mint_matrix() {
@@ -2037,6 +2320,16 @@ mod tests {
             }
             other => panic!("expected all-zero nonce RandomBytes error, got {other:?}"),
         }
+
+        let mut rng = FixedTryRng { byte: 0xA5 };
+        let error = fill_random(&mut rng, "minting admission token nonce", &mut nonce)
+            .expect_err("stuck nonzero token RNG material must fail");
+        assert!(matches!(
+            error,
+            MintError::RandomBytes { operation, message }
+                if operation == "minting admission token nonce"
+                    && message.contains("all-identical-byte material")
+        ));
     }
     #[test]
     fn admission_token_temporal_matrix() {
@@ -2052,7 +2345,7 @@ mod tests {
         assert_eq!(expired_outcome.status, TokenInsertStatus::Expired, "{id}");
         let ttl_outcome = store.insert([0xBB; 32], too_far, now).expect("ttl insert");
         assert_eq!(ttl_outcome.status, TokenInsertStatus::TtlExceeded, "{id}");
-        assert_eq!(store.len(now), 0, "{id}");
+        assert_eq!(store.len(now).expect("len"), 0, "{id}");
     }
     #[test]
     fn token_store_limits_enforce_first_release_ceiling() {
@@ -2097,10 +2390,39 @@ mod tests {
         assert_eq!(insert_b.status, TokenInsertStatus::Accepted);
         let insert_c = store.insert([0x03; 32], c_exp, now).expect("insert c");
         assert_eq!(insert_c.status, TokenInsertStatus::Capacity);
-        assert!(store.contains(&[0x01; 32], now));
-        assert!(store.contains(&[0x02; 32], now));
-        assert!(!store.contains(&[0x03; 32], now));
-        assert_eq!(store.len(now), 2);
+        assert!(store.contains(&[0x01; 32], now).expect("contains a"));
+        assert!(store.contains(&[0x02; 32], now).expect("contains b"));
+        assert!(!store.contains(&[0x03; 32], now).expect("contains c"));
+        assert_eq!(store.len(now).expect("len"), 2);
+    }
+    #[test]
+    fn in_memory_store_never_regresses_observed_time() {
+        let limits = TokenStoreLimits::new(2, Duration::from_secs(300)).expect("limits");
+        let mut store = InMemoryTokenStore::new(limits).expect("store");
+        let initial = UNIX_EPOCH + Duration::from_secs(1_000);
+        let expiry = UNIX_EPOCH + Duration::from_secs(1_100);
+        let rollback = UNIX_EPOCH + Duration::from_secs(1_050);
+        store
+            .insert([0xA5; 32], expiry, initial)
+            .expect("insert marker");
+        assert!(
+            !store
+                .contains(&[0xA5; 32], expiry)
+                .expect("contains at expiry")
+        );
+        assert!(
+            !store
+                .contains(&[0xA5; 32], rollback)
+                .expect("contains after rollback")
+        );
+        assert_eq!(store.len(rollback).expect("len after rollback"), 0);
+        assert_eq!(
+            store
+                .insert([0x5A; 32], expiry, rollback)
+                .expect("insert after rollback")
+                .status,
+            TokenInsertStatus::Expired
+        );
     }
     #[test]
     fn admission_token_replay_store_matrix() {
@@ -2202,7 +2524,7 @@ mod tests {
             .verify(&token, &RELAY_ID, &TRANSCRIPT, now)
             .expect_err("invalid signature should be rejected");
         assert!(matches!(err, VerifyError::Signature(_)));
-        assert_eq!(store.lock().expect("store lock").len(now), 0);
+        assert_eq!(store.lock().expect("store lock").len(now).expect("len"), 0);
     }
     #[test]
     fn persistent_store_materializes_empty_ledger_on_load() {
@@ -2210,15 +2532,15 @@ mod tests {
         let now = UNIX_EPOCH + Duration::from_secs(10_000);
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("nested/replay_store.norito");
-        let store = PersistentTokenStore::load(&path, limits, now).expect("create ledger");
-        assert_eq!(store.len(now), 0);
+        let mut store = PersistentTokenStore::load(&path, limits, now).expect("create ledger");
+        assert_eq!(store.len(now).expect("len"), 0);
         assert!(
             std::fs::metadata(&path).expect("ledger metadata").len() > 0,
             "startup must materialize a parseable durable snapshot"
         );
         drop(store);
-        let reloaded = PersistentTokenStore::load(&path, limits, now).expect("reload ledger");
-        assert_eq!(reloaded.len(now), 0);
+        let mut reloaded = PersistentTokenStore::load(&path, limits, now).expect("reload ledger");
+        assert_eq!(reloaded.len(now).expect("len"), 0);
     }
     #[test]
     fn persistent_store_blocks_replay_after_restart() {
@@ -2231,14 +2553,170 @@ mod tests {
             let expires = now + Duration::from_secs(60);
             let outcome = store.insert([0xAA; 32], expires, now).expect("insert");
             assert_eq!(outcome.status, TokenInsertStatus::Accepted);
-            assert!(store.contains(&[0xAA; 32], now));
+            assert!(store.contains(&[0xAA; 32], now).expect("contains"));
         }
         let mut store = PersistentTokenStore::load(&path, limits, now).expect("reload");
-        assert!(store.contains(&[0xAA; 32], now));
+        assert!(store.contains(&[0xAA; 32], now).expect("contains"));
         let duplicate = store
             .insert([0xAA; 32], now + Duration::from_secs(30), now)
             .expect("duplicate insert");
         assert_eq!(duplicate.status, TokenInsertStatus::Duplicate);
+    }
+    #[test]
+    fn persistent_store_queries_do_not_write_and_rollback_fails_closed() {
+        let limits = TokenStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
+        let initial = UNIX_EPOCH + Duration::from_secs(1_000);
+        let expiry = UNIX_EPOCH + Duration::from_secs(1_100);
+        let rollback = UNIX_EPOCH + Duration::from_secs(1_050);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("query-clock-high-water.norito");
+        {
+            let mut store = PersistentTokenStore::load(&path, limits, initial).expect("load");
+            store
+                .insert([0xA5; 32], expiry, initial)
+                .expect("insert marker");
+            let snapshot_before_query = std::fs::read(&path).expect("read snapshot before query");
+            assert!(!store.contains(&[0xA5; 32], expiry).expect("expiry query"));
+            assert_eq!(store.len(expiry).expect("active length at expiry"), 0);
+            assert_eq!(
+                std::fs::read(&path).expect("read snapshot after query"),
+                snapshot_before_query,
+                "read-only queries must not force an atomic snapshot rewrite"
+            );
+        }
+        let mut reloaded =
+            PersistentTokenStore::load(&path, limits, rollback).expect("rollback reload");
+        assert!(
+            reloaded
+                .contains(&[0xA5; 32], rollback)
+                .expect("rollback query"),
+            "the retained replay record must become active again after rollback"
+        );
+        assert_eq!(
+            reloaded
+                .insert([0xA5; 32], expiry, rollback)
+                .expect("rollback insert")
+                .status,
+            TokenInsertStatus::Duplicate
+        );
+    }
+    #[test]
+    fn persistent_store_durably_observes_rejected_insert_time() {
+        let limits = TokenStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
+        let initial = UNIX_EPOCH + Duration::from_secs(1_000);
+        let observed = UNIX_EPOCH + Duration::from_secs(1_200);
+        let rollback = UNIX_EPOCH + Duration::from_secs(1_050);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("rejected-clock-high-water.norito");
+        {
+            let mut store = PersistentTokenStore::load(&path, limits, initial).expect("load");
+            assert_eq!(
+                store
+                    .insert([0xA5; 32], observed, observed)
+                    .expect("expired insert")
+                    .status,
+                TokenInsertStatus::Expired
+            );
+        }
+        let mut reloaded =
+            PersistentTokenStore::load(&path, limits, rollback).expect("rollback reload");
+        assert_eq!(
+            reloaded
+                .insert([0x5A; 32], observed, rollback)
+                .expect("rollback insert")
+                .status,
+            TokenInsertStatus::Expired
+        );
+    }
+    #[test]
+    fn persistent_store_retries_dirty_snapshot_after_failed_write() {
+        let limits = TokenStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
+        let now = UNIX_EPOCH + Duration::from_secs(1_000);
+        let expiry = now + Duration::from_secs(120);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("dirty-retry.norito");
+        let mut store = PersistentTokenStore::load(&path, limits, now).expect("load");
+        std::fs::remove_file(&path).expect("remove initial snapshot");
+        std::fs::create_dir(&path).expect("block snapshot destination");
+        let error = store
+            .insert([0xA5; 32], expiry, now)
+            .expect_err("the first snapshot write must fail");
+        assert!(matches!(error, TokenStoreError::Io(_)));
+        std::fs::remove_dir(&path).expect("remove snapshot blocker");
+
+        assert!(
+            store
+                .contains(&[0xA5; 32], now)
+                .expect("a later query must retry the dirty snapshot")
+        );
+        drop(store);
+
+        let mut reloaded = PersistentTokenStore::load(&path, limits, now).expect("reload");
+        assert!(
+            reloaded
+                .contains(&[0xA5; 32], now)
+                .expect("failed-write insertion must survive restart after retry")
+        );
+    }
+    #[test]
+    fn persistent_store_preserves_subsecond_expiry_and_high_watermark() {
+        let limits = TokenStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
+        let initial = UNIX_EPOCH + Duration::new(1_000, 100_000_000);
+        let expiry = UNIX_EPOCH + Duration::new(1_100, 500_000_000);
+        let before_expiry = UNIX_EPOCH + Duration::new(1_100, 250_000_000);
+        let dir = tempdir().expect("tempdir");
+        let expiry_path = dir.path().join("subsecond-expiry.norito");
+        {
+            let mut store =
+                PersistentTokenStore::load(&expiry_path, limits, initial).expect("load");
+            assert_eq!(
+                store
+                    .insert([0xA5; 32], expiry, initial)
+                    .expect("insert marker")
+                    .status,
+                TokenInsertStatus::Accepted
+            );
+        }
+        let mut reloaded = PersistentTokenStore::load(&expiry_path, limits, before_expiry)
+            .expect("reload before subsecond expiry");
+        assert!(
+            reloaded
+                .contains(&[0xA5; 32], before_expiry)
+                .expect("marker remains active")
+        );
+        assert_eq!(
+            reloaded
+                .insert([0xA5; 32], expiry, before_expiry)
+                .expect("duplicate marker")
+                .status,
+            TokenInsertStatus::Duplicate
+        );
+        drop(reloaded);
+
+        let high_water_path = dir.path().join("subsecond-high-water.norito");
+        let observed = UNIX_EPOCH + Duration::new(1_200, 500_000_000);
+        let rollback = UNIX_EPOCH + Duration::new(1_200, 250_000_000);
+        let rollback_expiry = UNIX_EPOCH + Duration::new(1_200, 400_000_000);
+        {
+            let mut store =
+                PersistentTokenStore::load(&high_water_path, limits, initial).expect("load");
+            assert_eq!(
+                store
+                    .insert([0x5A; 32], observed, observed)
+                    .expect("expired observation")
+                    .status,
+                TokenInsertStatus::Expired
+            );
+        }
+        let mut reloaded = PersistentTokenStore::load(&high_water_path, limits, rollback)
+            .expect("reload after subsecond rollback");
+        assert_eq!(
+            reloaded
+                .insert([0x3C; 32], rollback_expiry, rollback)
+                .expect("rollback insert")
+                .status,
+            TokenInsertStatus::Expired
+        );
     }
     #[test]
     fn persistent_store_capacity_preserves_active_records_across_restart() {
@@ -2258,11 +2736,11 @@ mod tests {
             .expect("insert c");
         assert_eq!(rejected.status, TokenInsertStatus::Capacity);
         drop(store);
-        let store = PersistentTokenStore::load(&path, limits, now).expect("reload");
-        assert!(store.contains(&[0x01; 32], now));
-        assert!(store.contains(&[0x02; 32], now));
-        assert!(!store.contains(&[0x03; 32], now));
-        assert_eq!(store.len(now), 2);
+        let mut store = PersistentTokenStore::load(&path, limits, now).expect("reload");
+        assert!(store.contains(&[0x01; 32], now).expect("contains a"));
+        assert!(store.contains(&[0x02; 32], now).expect("contains b"));
+        assert!(!store.contains(&[0x03; 32], now).expect("contains c"));
+        assert_eq!(store.len(now).expect("len"), 2);
     }
     #[test]
     fn persistent_store_prunes_expired_on_load() {
@@ -2284,17 +2762,38 @@ mod tests {
                 TokenStoreEntry {
                     id: [0xAA; 32],
                     expires_at_secs: expired_secs,
+                    expires_at_nanos: 0,
                 },
                 TokenStoreEntry {
                     id: [0xBB; 32],
                     expires_at_secs: valid_secs,
+                    expires_at_nanos: 0,
                 },
             ],
         );
-        let store = PersistentTokenStore::load(&path, limits, now).expect("load");
-        assert!(!store.contains(&[0xAA; 32], now));
-        assert!(store.contains(&[0xBB; 32], now));
-        assert_eq!(store.len(now), 1);
+        let mut store = PersistentTokenStore::load(&path, limits, now).expect("load");
+        assert!(!store.contains(&[0xAA; 32], now).expect("contains expired"));
+        assert!(store.contains(&[0xBB; 32], now).expect("contains active"));
+        assert_eq!(store.len(now).expect("len"), 1);
+    }
+    #[test]
+    fn persistent_store_rejects_noncanonical_snapshot_nanoseconds() {
+        let limits = TokenStoreLimits::new(2, Duration::from_secs(120)).expect("limits");
+        let now = UNIX_EPOCH + Duration::from_secs(10_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("noncanonical-nanoseconds.norito");
+        let snapshot = TokenStoreSnapshot {
+            version: TOKEN_STORE_SNAPSHOT_VERSION_V1,
+            high_watermark_secs: 10_000,
+            high_watermark_nanos: 1_000_000_000,
+            entries: Vec::new(),
+        };
+        write_private_test_file(&path, &encode_adaptive(&snapshot));
+        let error = PersistentTokenStore::load(&path, limits, now)
+            .expect_err("noncanonical nanoseconds must fail closed");
+        assert!(
+            matches!(error, TokenStoreError::Parse(message) if message.contains("noncanonical nanoseconds"))
+        );
     }
     #[test]
     fn admission_token_persistence_matrix() {
@@ -2304,10 +2803,12 @@ mod tests {
             TokenStoreEntry {
                 id: [0xAA; 32],
                 expires_at_secs: 10_030,
+                expires_at_nanos: 0,
             },
             TokenStoreEntry {
                 id: [0xAA; 32],
                 expires_at_secs: 10_060,
+                expires_at_nanos: 0,
             },
         ]);
         let err = fixture.load().expect_err("duplicate id should fail");
@@ -2325,6 +2826,7 @@ mod tests {
         fixture.write(vec![TokenStoreEntry {
             id: [0xAC; 32],
             expires_at_secs: 10_121,
+            expires_at_nanos: 0,
         }]);
         let err = fixture.load().expect_err("over-TTL entry should fail");
         assert!(store_parse_message(err, id).contains("max_ttl"), "{id}");
@@ -2334,10 +2836,12 @@ mod tests {
             TokenStoreEntry {
                 id: [0xAD; 32],
                 expires_at_secs: 10_030,
+                expires_at_nanos: 0,
             },
             TokenStoreEntry {
                 id: [0xAE; 32],
                 expires_at_secs: 10_060,
+                expires_at_nanos: 0,
             },
         ]);
         let err = fixture
@@ -2346,7 +2850,7 @@ mod tests {
         assert!(store_parse_message(err, id).contains("capacity"), "{id}");
         let id = TOKEN_CASES[19].0;
         let fixture = PersistentStoreFixture::new(2, 120, 10_000, "empty_store.txt");
-        std::fs::write(&fixture.path, b"").expect("write empty snapshot");
+        write_private_test_file(&fixture.path, b"");
         let err = fixture.load().expect_err("empty snapshot should fail");
         assert!(store_parse_message(err, id).contains("empty"), "{id}");
         let id = TOKEN_CASES[20].0;
@@ -2354,6 +2858,7 @@ mod tests {
         fixture.write(vec![TokenStoreEntry {
             id: [0xBB; 32],
             expires_at_secs: u64::MAX,
+            expires_at_nanos: 0,
         }]);
         let err = fixture.load().expect_err("overflow should fail");
         let message = store_parse_message(err, id);
@@ -2367,7 +2872,7 @@ mod tests {
         );
         let id = TOKEN_CASES[21].0;
         let fixture = PersistentStoreFixture::new(2, 120, 10_000, "invalid_store.txt");
-        std::fs::write(&fixture.path, b"not norito").expect("write invalid");
+        write_private_test_file(&fixture.path, b"not norito");
         let err = fixture.load().expect_err("invalid snapshot should fail");
         assert!(matches!(err, TokenStoreError::Parse(_)), "{id}");
         let id = TOKEN_CASES[22].0;

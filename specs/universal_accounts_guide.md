@@ -277,7 +277,7 @@ can consume the data through the following surfaces:
 |---------|-------|
 | `GET /v1/accounts/{uaid}/portfolio` | Returns dataspace → asset → balance summaries; described in `specs/torii/portfolio_api.md`. |
 | `GET /v1/space-directory/uaids/{uaid}` | Lists dataspace IDs + account literals tied to the UAID. |
-| `GET /v1/space-directory/uaids/{uaid}/manifests` | Provides the full `AssetPermissionManifest` history for audits. |
+| `GET /v1/space-directory/uaids/{uaid}/manifests` | Provides paginated `AssetPermissionManifest` history for audits. |
 | `iroha app space-directory bindings fetch --uaid <literal>` | CLI shortcut that wraps the bindings endpoint and optionally writes the JSON to disk (`--json-out`). |
 | `iroha app space-directory manifest fetch --uaid <literal> --json-out <path>` | Fetches the manifest JSON bundle for evidence packs. |
 

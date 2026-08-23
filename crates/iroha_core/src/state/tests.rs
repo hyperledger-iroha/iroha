@@ -16942,9 +16942,6 @@ state_test! { sync apply_lane_lifecycle_rejects_retiring_default_routing_lane
 }
 state_test! { sync apply_lane_lifecycle_rejects_same_plan_default_lane_replacement
     let state = blank_test_state();
-    {
-        let mut nexus = state.nexus.write();
-    }
     let initial_catalog = state.nexus_snapshot().lane_catalog;
     let_row! { initial_entry = state .nexus_snapshot() .lane_config .entry(LaneId::SINGLE) .expect("default lane config exists") .clone() };
     let_row! { plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![LaneConfig { id: LaneId::SINGLE, alias: "fresh-default-route".to_string(), ..LaneConfig::default() }], retire: vec![LaneId::SINGLE], } };
@@ -34133,9 +34130,9 @@ state_test! { sync block_rejects_failing_execute_trigger_and_rolls_back
         "asset definition created by a failing trigger must not persist after block application",
     );
 }
+include!("tests/kagemusha_runtime_effective_config_tests.rs");
 include!("tests/confidential_digest_and_queue_plan_helpers.rs");
-include!("autonomous_merge_and_queue_plan_tests.rs");
-// Queue-plan evidence and merge-ledger state validation, recovery, and cache cases.
+include!("autonomous_merge_and_queue_plan_tests.rs"); // Queue-plan and merge-ledger cases.
 include!("tests/queue_plan_and_merge_ledger_tests.rs");
 include!("proof_test_helpers_seed_records.rs");
 include!("trigger_execution_and_delta_merge_tests.rs");

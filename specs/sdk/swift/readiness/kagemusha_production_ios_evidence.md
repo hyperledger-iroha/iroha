@@ -18,7 +18,8 @@ in both one-time challenge schemas and the exact object is included in platform
 evidence, preventing another executable signed for the same App ID from being
 substituted after challenge issuance. The policy supplies the
 production App ID, permitted validation categories and bundle versions, Apple
-App Attest root DER certificates, revocations, X.509 validation profile, and
+App Attest root DER certificates, exact raw-`TBSCertificate`-DER SHA-256
+revocations, X.509 validation profile, and
 the `DCAppAttestService` Secure Enclave key profile.
 
 `scripts/kagemusha_production_ios_evidence.py` currently verifies, without a
@@ -41,7 +42,8 @@ PATH-selected cryptographic tool:
 - strict bounded X.509 v3 parsing, P-256/P-384 issuer-key validation, the exact
   leaf-to-intermediate-to-policy-root signature path, CA/basic-constraints and
   key-usage rules, certificate validity at the receipt-bound evidence time,
-  and the policy's static certificate-revocation digest set;
+  and the policy's static `revoked_certificate_tbs_sha256` digest set over the
+  exact raw DER encoding of each `TBSCertificate`;
 - the leaf P-256 key against the App Attest key ID and registered assertion
   key; and
 - the unique `1.2.840.113635.100.8.2` extension in its exact
@@ -76,7 +78,7 @@ accepted the embedded App Attest receipt; the returned PKCS#7/CMS signature
 and certificate path validate only to the digest-pinned Apple Root CA G3; the
 signed App ID, attested P-256 key, `RECEIPT` type, creation/expiry times, and
 risk metric match policy; and the static production policy did not list an
-App Attest certificate digest as revoked. The endpoint is a receipt
+App Attest certificate's exact raw-`TBSCertificate`-DER digest as revoked. The endpoint is a receipt
 refresh/risk-assessment service, not a general Apple PKI CRL or OCSP feed.
 The `apple_revocation_checked_at_unix_ms` value records the authority's
 verification/commit time; the independently signed CMS creation time is also
@@ -202,7 +204,8 @@ policy ID/hash substitution, malformed policy collection types, CBOR container
 count overflow, control bytes, omitted code-sign binding, raw-tree loss,
 prepared capture-app measurement/executable substitution, assertion-signature
 tampering, RP-ID substitution, fake and expired
-certificates, static revocation, nonce substitution, receipt-signature and
+certificates, TBS-identity static revocation (including altered outer-signature
+bytes), nonce substitution, receipt-signature and
 evidence-digest substitution, stale online revocation status, counter rollback,
 one-time consumption-ID reuse, two time-separated catalog releases, catalog
 substitution, stale catalog status, and cross-promotion replay. The repository's pinned Apple App

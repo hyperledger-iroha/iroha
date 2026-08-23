@@ -2,6 +2,7 @@ use crate::{
     HedgedChaCha20Rng, HedgedRngSeed, RngError, deterministic_chacha20_rng,
     hedged_chacha20_rng_from_rng,
 };
+use core::fmt;
 use pqcrypto_mldsa::{mldsa44, mldsa65, mldsa87};
 use pqcrypto_traits::{
     Error as PqError,
@@ -143,12 +144,20 @@ impl MlDsaSuite {
     }
 }
 /// ML-DSA keypair.
-#[derive(Debug)]
 pub struct MlDsaKeyPair {
     /// Public key bytes.
     pub public_key: Vec<u8>,
     /// Secret key bytes (zeroized on drop).
     pub secret_key: Zeroizing<Vec<u8>>,
+}
+impl fmt::Debug for MlDsaKeyPair {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MlDsaKeyPair")
+            .field("public_key_len", &self.public_key.len())
+            .field("secret_key", &"[REDACTED]")
+            .finish()
+    }
 }
 impl MlDsaKeyPair {
     /// Borrow the public key bytes.
@@ -923,6 +932,17 @@ mod tests {
             assert_eq!(keypair.secret_key().len(), suite.secret_key_len());
             assert_eq!(signature.as_bytes().len(), suite.signature_len());
         }
+    }
+    #[test]
+    fn keypair_debug_output_redacts_secret_material() {
+        let keypair = MlDsaKeyPair {
+            public_key: vec![0x11; 2],
+            secret_key: Zeroizing::new(vec![0xA5; 3]),
+        };
+        assert_eq!(
+            format!("{keypair:?}"),
+            "MlDsaKeyPair { public_key_len: 2, secret_key: \"[REDACTED]\" }"
+        );
     }
     #[test]
     fn sign_rejects_invalid_secret_key_length() {

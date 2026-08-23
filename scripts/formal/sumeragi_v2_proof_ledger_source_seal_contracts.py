@@ -2444,7 +2444,7 @@ _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
         "7501414a5b20cfeacf429a9d2b43cf5dd2a797e2a579559c05d987437352ed8d"
     ),
     "production_capacity_saturation_admits_response_and_reconstructible_fetch": (
-        "902be400390561abf765799c869da64adb9ed53909fce4329734cfb60e04842b"
+        "934cac43859cca5ef5975f978a32934d88fd586b3b50fb97df1d62038e36e2c8"
     ),
     "unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner": (
         "920f70f6d4ebf90ce3f9a4365e99bc88da19671d80e4f716aa57bc08caece7fd"
@@ -2481,10 +2481,10 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 864
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 84
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "23325cb037bc930c7503986845dbb25891ef80af6f08092533b1e0e1d8233fad"
+    "a7364ee89cfab31a3a48d13e7f74b6e353bc34871619da907200b84cdf482a07"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "57df39a06020e50d4b6e78a3914a20c36d8decbddff413eda9f889b56966f896"
+    "cd8ff3e24c006a404d0a05d1696557ff92909fb96676851b59647ac48965a295"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -3210,14 +3210,23 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = tuple(
 # batches. Bind the complete reviewed methods, then additionally check the
 # semantic ordering fragments below so failures identify the violated seam.
 _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
-    "consume_effects": (
-        "f730685e45f440d58c4f275f20685af94fefd5bf0b94a9acc8efcd6004b35cbc"
+    "consume_effects_with_runner_decision_cleanup": (
+        "a8ec6382990c3d0b358b0626f92234e1e49e08d8019de4b0fc4f75853dadb95b"
+    ),
+    "new_decision_batch_has_only_exact_apply": (
+        "95f2f1c852290fd5037f6b88797e6c15982672bffb1a635a18a683e285e2caf1"
+    ),
+    "plan_runner_decision_cleanup": (
+        "6c51a655bc569b9e6a4c4087d52e1348a38503d516d65d1f5d221f892351c9b9"
+    ),
+    "acknowledge_runner_decision_cleanup": (
+        "d0a366f336e417fd1fcaecd51cfc8500f11878417f969ee97c6e2affbac545d2"
     ),
     "retain_effect_batch": (
         "3976c357aa3b66c71eac8bf8003bab79e024f76e9e469468bb8fb86c4c58dcfe"
     ),
     "retain_effect_batch_at_frontier": (
-        "56512d3347fa9d328c342e3982e6b03f3a9699fcc4ed7daeac854277838d59f4"
+        "d6ed8d045a8446c7f915babf543832727f77b485fbf233954c3645612792a47b"
     ),
     "preflight_effect_batch_frontier": (
         "d2debd37b0ef330c5dba99fd01e483e44edc4be3df5ccee02513ef7203f3f96d"
@@ -3229,21 +3238,15 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
         "1deed24b38bdba50796b402def3fc3ef9e9eaad44c93449e8e96f1bdb38c430c"
     ),
     "drain_retained_effect_batch": (
-        "51ba6c85e281bcf33d97a748bb43ae093649762429e256a986b386019e52c338"
+        "988c941d0456dd0af66bf25bd1dba3cf5284bfbcf0a789c301f571383e1ba2c3"
     ),
-    "consume_pacemaker_effects": (
-        "36d01c500f897902a5680bf290b58076d1ca7b959fc6d20973f6df85900f92b2"
-    ),
-    "consume_pending_tip_recovery_effects": (
-        "275bb4749f89c76810b7154c1eca151f2c85e970c162fb3f737034870520578b"
+    "consume_pacemaker_effects_with_runner_decision_cleanup": (
+        "6e62b027c673e7cfe7122197f165cbcd316219ee6f8c1333bfcca64d1acd5343"
     ),
     "step_pacemaker_once": (
-        "d90bde4c655d3762e26e4fc3b8093188f70d2ab5adf2d55f39c09fe09342a320"
+        "c35c6e284b25bc13c1e08d351b5108be7ba72e51701b8beab9860765337bc163"
     ),
-    "step": "228b118113f804899bd2d0ca54254014ebb9ee0f671e6d1e900470c7e9a17c9c",
-    "step_pending_tip_recovery": (
-        "839907e02db4e0fdda25a94c9d17b3b98b8884e0037eb5038d45899d98c4c05e"
-    ),
+    "step": "4cb1b0ed16376658416f5aa7fd1aa48865c468637b5cf5f53f65d03cb7bc06cf",
 }
 
 _PRODUCTION_EFFECT_SCHEDULER_HANDOFF_ITEM_SHA256 = {
@@ -3717,8 +3720,8 @@ _PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {
     "ordinary_loop": "fe38b2b2ab597569383e9b693deabb75346eee956713ec26e3c5174eca38f767",
     "pending_loop": "520469f9f7c3a23d8915e5aa63e32c459bc8e7b069e796f527540b082741ba38",
     "ordinary_finalize": "05a36cb47c73bd91e88590bfed1eb0f078a5c75915a5f314497fb89f352aa041",
-    "ordinary_active": "3e029cae04b3604f15e565bc9945d43d01dcb6e0eba0a8bd9099dd59e3542b24",
-    "pending_active": "2c6ba74ed2d7a1893c41305aae5dd50a4722216320f5c403a70c2200ac407fb9",
+    "ordinary_active": "b31b841989c9debadd4df0b1c646ce8d14e4e3a0d22446e9986a091bd7c3038d",
+    "pending_active": "a1b420e97ed6b0026d1f76c8faa5ee6d217e15fefeb7ee1e06eaaf6856093d6c",
 }
 _PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "32e0bf9fb84c2f4ef83672eb6ee22ee14c0d89052cfcbb391cc10226730bb210"
 
@@ -3758,12 +3761,12 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "body_store:V2BodyStore::read_durable_body_for_certified_serve": "c3e4d12afaa3f18ad1d5b0865eb3a54f4ad892eff4449b9d9d5b72bfd8f26c87",
     "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed": "77930bc25fa0078aba267238ba1f3e8016eaa28f9a2d3aa58b4199c3f3333d10",
     "projection:super::ProductionLifecycleOwnerV1::settle_producer_turn_advanced": "d15b6ada19aa19ddd64ce9a23ca4ec06518cb4eb99cfe386976f7f85bc6f3917",
-    "ordinary:run_lifecycle_active_height": "3e029cae04b3604f15e565bc9945d43d01dcb6e0eba0a8bd9099dd59e3542b24",
-    "pending:run_pending_active_height": "2c6ba74ed2d7a1893c41305aae5dd50a4722216320f5c403a70c2200ac407fb9",
+    "ordinary:run_lifecycle_active_height": "b31b841989c9debadd4df0b1c646ce8d14e4e3a0d22446e9986a091bd7c3038d",
+    "pending:run_pending_active_height": "a1b420e97ed6b0026d1f76c8faa5ee6d217e15fefeb7ee1e06eaaf6856093d6c",
     "height:drain_lifecycle_v2_ingress": "4470158942921ed2d8eb896129fa13f3689e8b6b39449fb9c6957d4d56386cd3",
     "launch:ProductionLeaderWireIngressBindingV1::bind": "a2c191a1ada7ec3b3dd00c36c4f495b1ed6c06e2527b2ca9e68b3729f8071f81",
     "launch:ProductionLeaderWireIngressBindingV1::retire": "b2aca6532fa807ad78a8cbd4d202152209c53dd5dd8c5a4fd5bba45f7df18c4d",
-    "launch:ProductionLifecycleOwnerV1::launch": "1f889bb50a6c0fac71ef8ab4d5b76940d2932ea708422aba6d6343595ea2f980",
+    "launch:ProductionLifecycleOwnerV1::launch": "93b7ee656bf767b3e41bb2a6d4436a770bccbe8b7c7f41155a2ab4fa76188f88",
 }
 
 # Completion provenance remains separately sealed because the direct runtime

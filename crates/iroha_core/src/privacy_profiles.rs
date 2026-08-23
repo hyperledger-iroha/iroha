@@ -8,8 +8,10 @@
 #[cfg(feature = "zk-stark")]
 use crate::privacy_engines::zk_ace::{
     ZK_ACE_AIR_RELATION_SCHEMA_V1, ZK_ACE_AUTHORIZATION_PROJECTION_V1,
-    ZK_ACE_POSEIDON_MANIFEST_SHA256_V1, ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1,
-    ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1, ZK_ACE_PROOF_WIRE_V1, ZK_ACE_SOURCE_PROFILE_V1,
+    ZK_ACE_FULL_ENGINE_AVAILABLE_V1, ZK_ACE_POSEIDON_MANIFEST_SHA256_V1,
+    ZK_ACE_POSEIDON_PROFILE_V1, ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1,
+    ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1, ZK_ACE_PROOF_WIRE_V1,
+    ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1, ZK_ACE_SOURCE_PROFILE_V1,
     zk_ace_compiled_profile_digest_v1, zk_ace_stark_profile_descriptor_v1,
 };
 use crate::privacy_engines::{
@@ -339,7 +341,8 @@ const ZK_AMS_PROVISION_EFFECT_SCHEMA_V1: &[u8] = b"issuer_id:32|registry_id:32|c
 #[cfg(feature = "zk-stark")]
 const ZK_ACE_PROTOCOL_LABEL_V1: &[u8] = b"zk-ace-pq-authorization-v0";
 #[cfg(feature = "zk-stark")]
-const ZK_ACE_PARAMETER_SET_LABEL_V1: &[u8] = b"goldilocks-poseidon2-transparent-stark-v1";
+const ZK_ACE_PARAMETER_SET_LABEL_V1: &[u8] =
+    b"goldilocks-dense-mds-poseidon-x7-transparent-stark-candidate-v1";
 const ZK_X509_PARAMETER_SET_LABEL_V1: &[u8] =
     b"goldilocks-fp4-sha256-p256-rfc5280-fixed-capacity-v1";
 const ZK_X509_PROOF_WIRE_LABEL_V1: &[u8] =
@@ -1531,6 +1534,9 @@ pub(crate) fn validate_compiled_privacy_activation_against_profile_v1(
 #[cfg(feature = "zk-stark")]
 fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+    if !ZK_ACE_FULL_ENGINE_AVAILABLE_V1 {
+        return Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id });
+    }
     let compiled_profile_digest = zk_ace_compiled_profile_digest_v1();
     let proof_bytes = u64::from(ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1);
     if compiled_profile_digest == [0; 32]
@@ -1542,6 +1548,7 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
     let proof_bytes_encoded = proof_bytes.to_be_bytes();
     let global_proof_cap = TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1.to_be_bytes();
     let poseidon_manifest = ZK_ACE_POSEIDON_MANIFEST_SHA256_V1.as_bytes();
+    let poseidon_profile = ZK_ACE_POSEIDON_PROFILE_V1;
     let stark_profile = zk_ace_stark_profile_descriptor_v1();
     let parameter_id = digest_fields_v1(
         PARAMETER_ID_DOMAIN_V1,
@@ -1551,6 +1558,8 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             ZK_ACE_SOURCE_PROFILE_V1,
             TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
             poseidon_manifest,
+            poseidon_profile,
+            ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1566,6 +1575,8 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             ZK_ACE_AIR_RELATION_SCHEMA_V1,
             ZK_ACE_AUTHORIZATION_PROJECTION_V1,
             poseidon_manifest,
+            poseidon_profile,
+            ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1590,6 +1601,8 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             ZK_ACE_AIR_RELATION_SCHEMA_V1,
             ZK_ACE_AUTHORIZATION_PROJECTION_V1,
             poseidon_manifest,
+            poseidon_profile,
+            ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1611,6 +1624,8 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             ZK_ACE_AIR_RELATION_SCHEMA_V1,
             ZK_ACE_AUTHORIZATION_PROJECTION_V1,
             poseidon_manifest,
+            poseidon_profile,
+            ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,

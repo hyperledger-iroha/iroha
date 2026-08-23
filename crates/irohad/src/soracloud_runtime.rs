@@ -5,6 +5,15 @@
 //! reads/apartment observations directly from the committed snapshot plus the
 //! hydrated artifact cache. Soracloud runtime v1 runs IVM handlers directly
 //! and supervises hosted HTTP revisions (`Inrou`) as loopback services.
+//! PortableVM release workers run as an explicitly configured non-root Linux
+//! identity; the supervisor retains the public listener and only forwards to a
+//! QEMU-selected loopback endpoint attested over an anonymous, supervisor-held
+//! QMP socketpair. Every proxy connection re-attests that same QEMU-owned
+//! forward before releasing any client bytes. Root-owned `iptables` OUTPUT
+//! owner barriers in a locked, marker-owned chain admit only supervisor-owned
+//! sockets to both loopback ports, preventing local processes from bypassing
+//! Torii or the proxy. Any preexisting owned chain fails startup for explicit
+//! operator cleanup so a surviving prior QEMU never loses containment.
 //!
 //! Ordered mailbox execution and public query local reads now run admitted IVM
 //! bundles directly through the Soracloud host surface while asset local reads
@@ -74,6 +83,7 @@ use iroha_data_model::{
         SoracloudReadConfigResponseV1, SoracloudReadCredentialResponseV1,
         SoracloudReadSecretEnvelopeResponseV1, SoracloudReadSecretResponseV1,
         encode_inrou_host_advertise_provenance_payload,
+        encode_inrou_host_withdraw_provenance_payload,
         encode_model_host_heartbeat_provenance_payload,
     },
     sorafs::pin_registry::ManifestDigest,
@@ -112,16 +122,21 @@ use sorafs_car::{
     },
     compute_chunk_plan_digest_sha3, compute_por_root,
 };
-#[cfg(test)]
-use sorafs_node::store::StoredManifest;
+use sorafs_node::store::{StorageBackend, StoredManifest};
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd as _, OwnedFd};
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::FileTypeExt as _;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt};
+#[cfg(target_os = "linux")]
+use std::os::unix::net::UnixStream;
 use std::{
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, Read as _, Seek as _, Write as _},
-    net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs},
+    net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
@@ -129,7 +144,7 @@ use std::{
     str::FromStr,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering as AtomicOrdering},
+        atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
         mpsc,
     },
     thread,
@@ -156,6 +171,10 @@ const INROU_PORTABLE_BUNDLE_BLOCK_MEMBER: &str = "inrou_bundle.raw";
 const INROU_PORTABLE_BUNDLE_DEVICE_SERIAL: &str = "sora_bundle";
 const INROU_PORTABLE_BLOCK_SECTOR_BYTES: usize = 512;
 const INROU_PORTABLE_BUNDLE_GUEST_ROOT: &str = "/var/lib/soracloud/materialization/bundle";
+#[cfg(target_os = "linux")]
+const INROU_SHARED_VOLUME_GUEST_UID: u32 = 1_000;
+#[cfg(target_os = "linux")]
+const INROU_SHARED_VOLUME_GUEST_GID: u32 = 1_000;
 /// Largest variable response body a Soracloud syscall may materialize.
 ///
 /// Host-produced TLVs spill from INPUT into HEAP. Accepting a body larger than
@@ -175,7 +194,149 @@ const SORACLOUD_REMOTE_HYDRATION_MAX_SOURCES: usize = 4_096;
 const SORACLOUD_REMOTE_HYDRATION_MAX_PROVIDERS_PER_SOURCE: usize = 128;
 const SORACLOUD_REMOTE_HYDRATION_MAX_IN_MEMORY_PAYLOAD_BYTES: u64 = 256 * 1024 * 1024;
 const SORACLOUD_LOCAL_HYDRATION_STREAM_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
+const SORACLOUD_OPERATOR_PRESEED_MAX_MANIFEST_SCAN_V1: usize = 10_000;
 const SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const SORACLOUD_INROU_LOG_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const SORACLOUD_INROU_HOST_COMMAND_STDOUT_MAX_BYTES: usize = 64 * 1024;
+const SORACLOUD_INROU_BACKEND_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_QMP_MAX_MESSAGE_BYTES: usize = 64 * 1024;
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_QMP_MAX_MESSAGES_PER_COMMAND: usize = 32;
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_QMP_ATTEST_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_PROC_STATUS_MAX_BYTES: u64 = 64 * 1024;
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IPTABLES_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+const SORACLOUD_INROU_IPTABLES_CHAIN: &str = "IROHA_INROU_V1";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IPTABLES_CHAIN_MARKER: &str = "iroha-inrou-owned-v1";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IPTABLES_INPUT_CHAIN: &str = "IROHA_INROU_INPUT_V1";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IPTABLES_INPUT_CHAIN_MARKER: &str = "iroha-inrou-input-owned-v1";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IP6TABLES_CHAIN: &str = "IROHA_INROU6_V1";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IP6TABLES_CHAIN_MARKER: &str = "iroha-inrou6-owned-v1";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IPTABLES_LOCK_PATH: &str = "/run/iroha-inrou-firewall-v1.lock";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IPTABLES_MAX_OWNED_JUMPS: usize = 4;
+const SORACLOUD_INROU_PROXY_MAX_CONNECTIONS: usize = 256;
+const SORACLOUD_INROU_PROXY_SESSION_STACK_BYTES: usize = 256 * 1024;
+const SORACLOUD_INROU_PROXY_IO_POLL: Duration = Duration::from_millis(250);
+const SORACLOUD_INROU_PROXY_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_QMP_IO_POLL: Duration = Duration::from_millis(100);
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_QMP_SESSION_ATTEST_TIMEOUT: Duration = Duration::from_secs(2);
+const SORACLOUD_INROU_CHILD_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT: Duration = Duration::from_secs(1);
+const SORACLOUD_INROU_PRIMARY_ID_MIN: u32 = 65_536;
+const SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE: u32 = 524_288;
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_SERVICE_IDENTITY_NAME: &str = "iroha-inrou";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_SERVICE_HOME: &str = "/nonexistent";
+// Linux misc-device major 10, KVM minor 232 in the kernel dev_t encoding.
+const SORACLOUD_INROU_KVM_DEVICE_RDEV: u64 = (10_u64 << 8) | 232_u64;
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_QEMU_SANDBOX_POLICY: &str =
+    "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_CLOSE_FDS_SCRIPT: &str = r#"inrou_expected_uid=$1
+inrou_expected_gid=$2
+inrou_expected_groups=$3
+shift 3
+set -f
+IFS=$(printf ' \tX')
+IFS=${IFS%X}
+inrou_seen_uid=0
+inrou_seen_gid=0
+inrou_seen_groups=0
+inrou_seen_cap_inh=0
+inrou_seen_cap_prm=0
+inrou_seen_cap_eff=0
+inrou_seen_cap_bnd=0
+inrou_seen_cap_amb=0
+inrou_seen_no_new_privs=0
+inrou_exact_quad() {
+    inrou_expected=$1
+    shift
+    [ "$#" -eq 4 ] && [ "$1" = "${inrou_expected}" ] && [ "$2" = "${inrou_expected}" ] && [ "$3" = "${inrou_expected}" ] && [ "$4" = "${inrou_expected}" ]
+}
+inrou_exact_groups() {
+    inrou_expected=$1
+    shift
+    [ "$*" = "${inrou_expected}" ]
+}
+inrou_zero_capability() {
+    [ "$#" -eq 1 ] || return 1
+    case "$1" in
+        ''|*[!0]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+inrou_exact_one() {
+    inrou_expected=$1
+    shift
+    [ "$#" -eq 1 ] && [ "$1" = "${inrou_expected}" ]
+}
+while IFS=: read -r inrou_status_name inrou_status_value; do
+    case "${inrou_status_name}" in
+        Uid)
+            [ "${inrou_seen_uid}" -eq 0 ] && inrou_exact_quad "${inrou_expected_uid}" ${inrou_status_value} || exit 126
+            inrou_seen_uid=1
+            ;;
+        Gid)
+            [ "${inrou_seen_gid}" -eq 0 ] && inrou_exact_quad "${inrou_expected_gid}" ${inrou_status_value} || exit 126
+            inrou_seen_gid=1
+            ;;
+        Groups)
+            [ "${inrou_seen_groups}" -eq 0 ] && inrou_exact_groups "${inrou_expected_groups}" ${inrou_status_value} || exit 126
+            inrou_seen_groups=1
+            ;;
+        CapInh)
+            [ "${inrou_seen_cap_inh}" -eq 0 ] && inrou_zero_capability ${inrou_status_value} || exit 126
+            inrou_seen_cap_inh=1
+            ;;
+        CapPrm)
+            [ "${inrou_seen_cap_prm}" -eq 0 ] && inrou_zero_capability ${inrou_status_value} || exit 126
+            inrou_seen_cap_prm=1
+            ;;
+        CapEff)
+            [ "${inrou_seen_cap_eff}" -eq 0 ] && inrou_zero_capability ${inrou_status_value} || exit 126
+            inrou_seen_cap_eff=1
+            ;;
+        CapBnd)
+            [ "${inrou_seen_cap_bnd}" -eq 0 ] && inrou_zero_capability ${inrou_status_value} || exit 126
+            inrou_seen_cap_bnd=1
+            ;;
+        CapAmb)
+            [ "${inrou_seen_cap_amb}" -eq 0 ] && inrou_zero_capability ${inrou_status_value} || exit 126
+            inrou_seen_cap_amb=1
+            ;;
+        NoNewPrivs)
+            [ "${inrou_seen_no_new_privs}" -eq 0 ] && inrou_exact_one 1 ${inrou_status_value} || exit 126
+            inrou_seen_no_new_privs=1
+            ;;
+    esac
+done < /proc/self/status || exit 126
+[ "${inrou_seen_uid}" -eq 1 ] && [ "${inrou_seen_gid}" -eq 1 ] && [ "${inrou_seen_groups}" -eq 1 ] && [ "${inrou_seen_cap_inh}" -eq 1 ] && [ "${inrou_seen_cap_prm}" -eq 1 ] && [ "${inrou_seen_cap_eff}" -eq 1 ] && [ "${inrou_seen_cap_bnd}" -eq 1 ] && [ "${inrou_seen_cap_amb}" -eq 1 ] && [ "${inrou_seen_no_new_privs}" -eq 1 ] || exit 126
+set +f
+for inrou_fd_path in /proc/self/fd/*; do
+    inrou_fd=${inrou_fd_path##*/}
+    case "${inrou_fd}" in
+        0|1|2) continue ;;
+        ''|*[!0-9]*) exit 125 ;;
+    esac
+    eval "exec ${inrou_fd}>&-" || exit 125
+done
+exec "$@""#;
+const SORACLOUD_INROU_LOG_TRUNCATION_MARKER: &[u8] =
+    b"\n[Inrou runtime log truncated at the configured safety limit]\n";
 const SORACLOUD_HF_IMPORT_MANIFEST_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_MAX_REPLICAS: usize = 4_096;
@@ -472,6 +633,10 @@ pub(crate) struct SoracloudRuntimeManagerConfig {
     pub local_validator_account_id: Option<AccountId>,
     /// Local peer identifier used to confirm authoritative HF placement assignments.
     pub local_peer_id: Option<String>,
+    /// Test-only admission for exercising the unconfined implementation without
+    /// exposing a shipping configuration or programmatic bypass.
+    #[cfg(test)]
+    allow_unconfined_inrou: bool,
 }
 /// Internal sink used by the runtime manager to enqueue authoritative Soracloud mutations.
 pub(crate) trait SoracloudRuntimeMutationSink: Send + Sync {
@@ -498,6 +663,10 @@ pub(crate) trait SoracloudRuntimeMutationSink: Send + Sync {
         &self,
         capability: &SoraInrouHostCapabilityRecordV1,
     ) -> eyre::Result<()>;
+    /// Withdraw this sink's authoritative Inrou host advert.
+    fn submit_inrou_host_withdrawal(&self, _validator_account_id: &AccountId) -> eyre::Result<()> {
+        eyre::bail!("mutation sink does not support Inrou host withdrawal")
+    }
     /// Submit an authoritative Inrou placement reconciliation request.
     fn submit_inrou_placement_reconcile(&self) -> eyre::Result<()> {
         self.submit_instruction(
@@ -718,6 +887,41 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
         });
         self.submit_instruction(instruction, "/internal/soracloud/runtime/inrou-host-advert")
     }
+    fn submit_inrou_host_withdrawal(&self, validator_account_id: &AccountId) -> eyre::Result<()> {
+        if *validator_account_id != self.authority {
+            eyre::bail!(
+                "runtime Inrou host withdrawal validator `{validator_account_id}` does not match sink authority `{}`",
+                self.authority
+            );
+        }
+        let provenance_preimage =
+            encode_inrou_host_withdraw_provenance_payload(validator_account_id)
+                .wrap_err("encode runtime Inrou host withdrawal provenance payload")?;
+        let instruction = InstructionBox::from(isi::soracloud::WithdrawSoracloudInrouHost {
+            validator_account_id: validator_account_id.clone(),
+            provenance: ManifestProvenance {
+                signer: self
+                    .signer
+                    .public_key()
+                    .map_err(|error| eyre::eyre!("probe runtime signer key: {error:?}"))?,
+                signature: self
+                    .signer
+                    .sign_provenance(
+                        iroha_data_model::soracloud::SoracloudRuntimeProvenancePurposeV1::InrouHostWithdraw,
+                        &provenance_preimage,
+                    )
+                    .map_err(|error| {
+                        eyre::eyre!(
+                            "external signer refused Inrou host-withdrawal provenance: {error:?}"
+                        )
+                    })?,
+            },
+        });
+        self.submit_instruction(
+            instruction,
+            "/internal/soracloud/runtime/inrou-host-withdraw",
+        )
+    }
 }
 fn build_soracloud_runtime_submission_payload(
     network_id: iroha_data_model::NetworkId,
@@ -786,72 +990,208 @@ fn portable_vm_guest_machine_profile(
         },
     }
 }
-fn default_portable_vm_accel() -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        "hvf"
-    }
-    #[cfg(target_os = "windows")]
-    {
-        "whpx"
-    }
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    {
-        #[cfg(target_os = "linux")]
-        if Path::new("/dev/kvm").exists() {
-            return "kvm";
-        }
-        "tcg"
-    }
+#[cfg(not(target_os = "linux"))]
+fn ensure_portable_vm_backend_available(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<()> {
+    let _ = config;
+    eyre::bail!(
+        "Inrou PortableVM release hosting requires Linux procfs identity attestation, anonymous QMP capabilities, and QEMU seccomp"
+    )
 }
-fn portable_vm_accel() -> eyre::Result<String> {
-    portable_vm_accel_from(std::env::var("IROHA_INROU_PORTABLE_ACCEL").ok().as_deref())
+#[cfg(not(target_os = "linux"))]
+fn ensure_portable_vm_backend_statically_available(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<()> {
+    ensure_portable_vm_backend_available(config)
 }
-fn portable_vm_accel_from(configured: Option<&str>) -> eyre::Result<String> {
-    let configured = configured.unwrap_or("auto").trim().to_owned();
-    match configured.as_str() {
-        "" | "auto" => Ok(default_portable_vm_accel().to_owned()),
-        "tcg" | "kvm" | "hvf" | "whpx" => Ok(configured),
-        other => eyre::bail!(
-            "unsupported IROHA_INROU_PORTABLE_ACCEL `{other}`; expected one of auto, tcg, kvm, hvf, whpx"
-        ),
-    }
+#[cfg(target_os = "linux")]
+struct PortableVmBackendPreflight {
+    child_identity: PortableVmChildIdentity,
+    setpriv: PathBuf,
+    shell: PathBuf,
+    qemu: PathBuf,
 }
-fn portable_vm_backend_is_available() -> bool {
+#[cfg(target_os = "linux")]
+fn portable_vm_backend_static_preflight(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<PortableVmBackendPreflight> {
+    let child_identity = portable_vm_child_identity(config)?;
+    ensure_portable_vm_identity_reserved(&child_identity)
+        .wrap_err("validate the locked local Inrou QEMU service identity")?;
+    let setpriv = resolve_inrou_setpriv_executable().ok_or_else(|| {
+        eyre::eyre!(
+            "configured Inrou PortableVM backend requires root-owned `/usr/bin/setpriv` or `/bin/setpriv`"
+        )
+    })?;
+    let shell = resolve_inrou_shell_executable().ok_or_else(|| {
+        eyre::eyre!(
+            "configured Inrou PortableVM backend requires root-owned `/bin/sh` or `/usr/bin/sh` for fail-closed descriptor cleanup"
+        )
+    })?;
+    resolve_inrou_iptables_executable().ok_or_else(|| {
+        eyre::eyre!(
+            "configured Inrou PortableVM backend requires a root-owned iptables executable at a standard system path"
+        )
+    })?;
+    resolve_inrou_ip6tables_executable().ok_or_else(|| {
+        eyre::eyre!(
+            "configured Inrou PortableVM backend requires a root-owned ip6tables executable at a standard system path"
+        )
+    })?;
     let profile = portable_vm_guest_machine_profile(current_host_inrou_guest_isa());
-    resolve_executable_candidates(profile.emulator_candidates).is_some()
-        && resolve_inrou_qemu_img_executable().is_some()
+    let qemu = resolve_executable_candidates(profile.emulator_candidates).ok_or_else(|| {
+        eyre::eyre!(
+            "configured Inrou PortableVM backend requires one of {:?} on PATH",
+            profile.emulator_candidates
+        )
+    })?;
+    resolve_inrou_qemu_img_executable()
+        .ok_or_else(|| eyre::eyre!("configured Inrou PortableVM backend requires qemu-img"))?;
+    Ok(PortableVmBackendPreflight {
+        child_identity,
+        setpriv,
+        shell,
+        qemu,
+    })
 }
-fn firecracker_kvm_backend_is_available() -> bool {
-    #[cfg(target_os = "linux")]
+#[cfg(target_os = "linux")]
+fn probe_portable_vm_backend(
+    setpriv: &Path,
+    shell: &Path,
+    qemu: &Path,
+    child_identity: &PortableVmChildIdentity,
+) -> eyre::Result<()> {
+    let output = run_inrou_qemu_command_capture_stdout_bounded(
+        setpriv,
+        shell,
+        qemu,
+        child_identity,
+        &["-accel", "help"],
+        SORACLOUD_INROU_BACKEND_PROBE_TIMEOUT,
+        SORACLOUD_INROU_HOST_COMMAND_STDOUT_MAX_BYTES,
+    )
+    .wrap_err_with(|| format!("probe QEMU accelerators with {}", qemu.display()))?;
+    let advertised = String::from_utf8_lossy(&output);
+    let accelerator = "kvm";
+    if !advertised.lines().any(|line| line.trim() == accelerator) {
+        eyre::bail!(
+            "configured PortableVM accelerator `{accelerator}` is not advertised by {}",
+            qemu.display()
+        );
+    }
+    run_inrou_qemu_command_capture_stdout_bounded(
+        setpriv,
+        shell,
+        qemu,
+        child_identity,
+        &["-version"],
+        SORACLOUD_INROU_BACKEND_PROBE_TIMEOUT,
+        SORACLOUD_INROU_HOST_COMMAND_STDOUT_MAX_BYTES,
+    )
+    .wrap_err_with(|| {
+        format!(
+            "require QEMU seccomp sandbox support from {}",
+            qemu.display()
+        )
+    })?;
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn ensure_portable_vm_backend_available(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<()> {
+    let preflight = portable_vm_backend_static_preflight(config)?;
+    let _single_instance_lock =
+        acquire_inrou_iptables_lock().wrap_err("serialize the full Inrou QEMU startup probe")?;
+    ensure_portable_vm_identity_reserved(&preflight.child_identity)
+        .wrap_err("recheck the locked Inrou QEMU service identity under the global lock")?;
+    ensure_no_process_with_inrou_identity(&preflight.child_identity)
+        .wrap_err("require an exclusive Inrou QEMU identity before backend probes")?;
+    probe_portable_vm_backend(
+        &preflight.setpriv,
+        &preflight.shell,
+        &preflight.qemu,
+        &preflight.child_identity,
+    )?;
+    ensure_no_process_with_inrou_identity(&preflight.child_identity)
+        .wrap_err("require the startup QEMU probes to be fully reaped before advertisement")
+}
+#[cfg(target_os = "linux")]
+fn ensure_portable_vm_backend_statically_available(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<()> {
+    portable_vm_backend_static_preflight(config).map(|_| ())
+}
+fn validate_configured_inrou_backend_shape(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<()> {
+    if !config.enabled {
+        return Ok(());
+    }
+    if config.backends.is_empty() {
+        eyre::bail!("enabled Inrou hosting requires a nonempty backend allowlist");
+    }
+    if config.backends.len() != 1
+        || !config
+            .backends
+            .contains(&SoraInrouRuntimeBackendV1::PortableVm)
     {
-        Path::new("/dev/kvm").exists()
-            && resolve_executable_on_path("firecracker").is_some()
-            && resolve_executable_on_path("ip").is_some()
-            && resolve_executable_on_path("iptables").is_some()
-            && resolve_inrou_mke2fs_executable().is_some()
+        eyre::bail!("Inrou V1 runtime startup accepts only the `portable_vm` backend");
     }
-    #[cfg(not(target_os = "linux"))]
-    {
-        false
+    if config.max_concurrent_vms.get() != 1 {
+        eyre::bail!(
+            "Inrou PortableVM V1 requires max_concurrent_vms = 1 because its dedicated host identity is exclusive to one QEMU process"
+        );
     }
+    Ok(())
 }
-fn supported_inrou_backends_for_host() -> BTreeSet<SoraInrouRuntimeBackendV1> {
-    let mut backends = BTreeSet::new();
-    if portable_vm_backend_is_available() {
-        backends.insert(SoraInrouRuntimeBackendV1::PortableVm);
+fn validate_soracloud_runtime_manager_posture(
+    config: &SoracloudRuntimeManagerConfig,
+) -> eyre::Result<()> {
+    if config.inrou.enabled && !manager_allows_unconfined_inrou_for_tests(config) {
+        eyre::bail!(
+            "first-release iroha3d forbids Inrou hosting until PortableVM has mandatory mount, network, IPC, and MAC confinement"
+        );
     }
-    if firecracker_kvm_backend_is_available() {
-        backends.insert(SoraInrouRuntimeBackendV1::FirecrackerKvm);
-    }
-    backends
+    Ok(())
 }
-fn default_zero_capacity_inrou_backends() -> BTreeSet<SoraInrouRuntimeBackendV1> {
-    BTreeSet::from([SoraInrouRuntimeBackendV1::PortableVm])
+fn manager_allows_unconfined_inrou_for_tests(config: &SoracloudRuntimeManagerConfig) -> bool {
+    #[cfg(test)]
+    if config.allow_unconfined_inrou {
+        return true;
+    }
+    let _ = config;
+    false
+}
+fn ensure_configured_inrou_backends_available(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<()> {
+    validate_configured_inrou_backend_shape(config)?;
+    if config.enabled {
+        ensure_portable_vm_backend_available(config)
+            .wrap_err("preflight configured PortableVM backend")?;
+    }
+    Ok(())
+}
+fn ensure_configured_inrou_backends_statically_available(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<()> {
+    validate_configured_inrou_backend_shape(config)?;
+    if config.enabled {
+        ensure_portable_vm_backend_statically_available(config)
+            .wrap_err("statically revalidate configured PortableVM backend")?;
+    }
+    Ok(())
 }
 #[cfg(test)]
 fn inrou_host_platform_supports_local_materialization() -> bool {
-    !supported_inrou_backends_for_host().is_empty()
+    let mut config = iroha_config::parameters::actual::SoracloudRuntimeInrou::default();
+    config.enabled = true;
+    config
+        .backends
+        .insert(SoraInrouRuntimeBackendV1::PortableVm);
+    ensure_configured_inrou_backends_available(&config).is_ok()
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ModelHostViolationReportKey {
@@ -996,19 +1336,21 @@ impl SoracloudRuntimeManagerConfig {
     pub fn from_runtime_config(
         config: &iroha_config::parameters::actual::SoracloudRuntime,
     ) -> Self {
-        config.assert_production_posture();
+        config.assert_runtime_posture();
         Self {
             production_mode: config.production_mode,
             state_dir: config.state_dir.clone(),
             reconcile_interval: config.reconcile_interval,
             hydration_concurrency: config.hydration_concurrency,
             cache_budgets: config.cache_budgets.clone(),
-            inrou: config.inrou,
+            inrou: config.inrou.clone(),
             submission: config.submission.clone(),
             egress: config.egress.clone(),
             hf: config.hf.clone(),
             local_validator_account_id: None,
             local_peer_id: None,
+            #[cfg(test)]
+            allow_unconfined_inrou: false,
         }
     }
     /// Attach the local host identity used for placement-aware HF execution.
@@ -2052,9 +2394,6 @@ impl SoracloudRuntimeManagerHandle {
 fn uploaded_model_encryption_key_dir(state_dir: &Path) -> PathBuf {
     state_dir.join(SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_DIR)
 }
-fn uploaded_model_encryption_key_path(state_dir: &Path) -> PathBuf {
-    uploaded_model_encryption_key_dir(state_dir).join(SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_FILE)
-}
 fn generate_uploaded_model_encryption_secret_with_rng<R: TryCryptoRng>(
     rng: &mut R,
 ) -> io::Result<[u8; 32]> {
@@ -2064,26 +2403,322 @@ fn generate_uploaded_model_encryption_secret_with_rng<R: TryCryptoRng>(
             "uploaded model encryption key OS RNG failed: {error}"
         ))
     })?;
+    if secret_bytes.iter().all(|byte| *byte == secret_bytes[0]) {
+        return Err(io::Error::other(
+            "uploaded model encryption key OS RNG returned degenerate output",
+        ));
+    }
     Ok(X25519StaticSecret::from(secret_bytes).to_bytes())
 }
-fn load_or_create_uploaded_model_encryption_secret(state_dir: &Path) -> io::Result<[u8; 32]> {
-    let key_dir = uploaded_model_encryption_key_dir(state_dir);
-    fs::create_dir_all(&key_dir)?;
-    let key_path = uploaded_model_encryption_key_path(state_dir);
-    match read_soracloud_regular_file_bounded(&key_path, 32, "uploaded model encryption key") {
-        Ok(bytes) => bytes.try_into().map_err(|_| {
-            io::Error::new(
+
+#[cfg(unix)]
+fn prepare_uploaded_model_encryption_key_dir(path: &Path) -> io::Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
+
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700);
+    builder.create(path)?;
+
+    let named = fs::symlink_metadata(path)?;
+    if named.file_type().is_symlink() || !named.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "uploaded model encryption key directory {} must be a real directory",
+                path.display()
+            ),
+        ));
+    }
+    let effective_uid = rustix::process::geteuid().as_raw();
+    if named.uid() != effective_uid || named.mode() & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "uploaded model encryption key directory {} must be runtime-owned and owner-private",
+                path.display()
+            ),
+        ));
+    }
+
+    let canonical = fs::canonicalize(path)?;
+    for (index, ancestor) in canonical.ancestors().enumerate() {
+        let metadata = fs::metadata(ancestor)?;
+        if !metadata.is_dir() {
+            return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
-                    "uploaded model encryption key at `{}` must be exactly 32 bytes",
-                    key_path.display()
+                    "uploaded model encryption key ancestor {} must be a directory",
+                    ancestor.display()
                 ),
-            )
-        }),
+            ));
+        }
+        if metadata.uid() != 0 && metadata.uid() != effective_uid {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "uploaded model encryption key ancestor {} is not owned by root or the runtime uid {effective_uid}",
+                    ancestor.display()
+                ),
+            ));
+        }
+        let replaceable = metadata.mode() & 0o022 != 0;
+        let sticky = metadata.mode() & 0o1000 != 0;
+        if replaceable && (index == 0 || !sticky) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "uploaded model encryption key custody permits path replacement through {}",
+                    ancestor.display()
+                ),
+            ));
+        }
+    }
+
+    let directory = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(
+            (rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::CLOEXEC)
+                .bits() as i32,
+        )
+        .open(&canonical)?;
+    let opened = directory.metadata()?;
+    if opened.dev() != named.dev()
+        || opened.ino() != named.ino()
+        || opened.uid() != effective_uid
+        || opened.mode() & 0o077 != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "uploaded model encryption key directory {} changed or lost private custody while it was opened",
+                path.display()
+            ),
+        ));
+    }
+    Ok(canonical)
+}
+
+#[cfg(not(unix))]
+fn prepare_uploaded_model_encryption_key_dir(_path: &Path) -> io::Result<PathBuf> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "uploaded model encryption keys require enforceable owner-private filesystem custody",
+    ))
+}
+
+#[cfg(unix)]
+fn read_uploaded_model_encryption_secret(path: &Path) -> io::Result<[u8; 32]> {
+    let (mut file, fingerprint) =
+        open_soracloud_regular_file_no_follow(path, "uploaded model encryption key")?;
+    let effective_uid = rustix::process::geteuid().as_raw();
+    if fingerprint.uid() != effective_uid || fingerprint.mode() & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "uploaded model encryption key {} must be runtime-owned and owner-private",
+                path.display()
+            ),
+        ));
+    }
+    if fingerprint.len() != 32 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "uploaded model encryption key at `{}` must be exactly 32 bytes",
+                path.display()
+            ),
+        ));
+    }
+    let mut bytes = [0_u8; 32];
+    file.read_exact(&mut bytes)?;
+    let mut trailing = [0_u8; 1];
+    if file.read(&mut trailing)? != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "uploaded model encryption key at `{}` grew while it was read",
+                path.display()
+            ),
+        ));
+    }
+    let opened_after = file.metadata()?;
+    let named_after = fs::symlink_metadata(path)?;
+    if !same_soracloud_regular_file(&fingerprint, &opened_after)
+        || !same_soracloud_regular_file(&opened_after, &named_after)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "uploaded model encryption key {} changed while it was read",
+                path.display()
+            ),
+        ));
+    }
+    Ok(bytes)
+}
+
+#[cfg(not(unix))]
+fn read_uploaded_model_encryption_secret(_path: &Path) -> io::Result<[u8; 32]> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "uploaded model encryption keys require enforceable owner-private filesystem custody",
+    ))
+}
+
+fn create_uploaded_model_encryption_key_staging_file(
+    directory: &Path,
+) -> io::Result<(PathBuf, fs::File)> {
+    for _ in 0..128 {
+        let mut suffix = [0_u8; 16];
+        OsRng.try_fill_bytes(&mut suffix).map_err(|error| {
+            io::Error::other(format!(
+                "uploaded model encryption key staging OS RNG failed: {error}"
+            ))
+        })?;
+        if suffix.iter().all(|byte| *byte == suffix[0]) {
+            return Err(io::Error::other(
+                "uploaded model encryption key staging OS RNG returned degenerate output",
+            ));
+        }
+        let path = directory.join(format!(".x25519-v1-{}.tmp", hex::encode(suffix)));
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        match options.open(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "exhausted exclusive uploaded model encryption key staging names",
+    ))
+}
+
+fn remove_uploaded_model_encryption_key_staging_file(path: &Path, expected: &fs::Metadata) {
+    let remove = fs::symlink_metadata(path).is_ok_and(|actual| {
+        #[cfg(unix)]
+        {
+            actual.is_file() && actual.dev() == expected.dev() && actual.ino() == expected.ino()
+        }
+        #[cfg(not(unix))]
+        {
+            actual.is_file() && actual.len() == expected.len()
+        }
+    });
+    if remove {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn same_uploaded_model_encryption_key_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        left.is_file() && right.is_file() && left.dev() == right.dev() && left.ino() == right.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        left.is_file() && right.is_file()
+    }
+}
+
+fn load_or_create_uploaded_model_encryption_secret(state_dir: &Path) -> io::Result<[u8; 32]> {
+    let key_dir =
+        prepare_uploaded_model_encryption_key_dir(&uploaded_model_encryption_key_dir(state_dir))?;
+    let key_path = key_dir.join(SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_FILE);
+    match read_uploaded_model_encryption_secret(&key_path) {
+        Ok(bytes) => Ok(bytes),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let bytes = generate_uploaded_model_encryption_secret_with_rng(&mut OsRng)?;
-            fs::write(&key_path, bytes)?;
-            Ok(bytes)
+            let (staging_path, mut staging) =
+                create_uploaded_model_encryption_key_staging_file(&key_dir)?;
+            let staging_identity = staging.metadata()?;
+            let publish = (|| {
+                staging.write_all(&bytes)?;
+                staging.sync_all()?;
+                let written = staging.metadata()?;
+                if !same_uploaded_model_encryption_key_file(&staging_identity, &written)
+                    || written.len() != 32
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "uploaded model encryption key staging file changed while it was written",
+                    ));
+                }
+                #[cfg(unix)]
+                if written.nlink() != 1
+                    || written.uid() != rustix::process::geteuid().as_raw()
+                    || written.mode() & 0o077 != 0
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "uploaded model encryption key staging file lost private custody",
+                    ));
+                }
+                #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+                match rustix::fs::renameat_with(
+                    rustix::fs::CWD,
+                    &staging_path,
+                    rustix::fs::CWD,
+                    &key_path,
+                    rustix::fs::RenameFlags::NOREPLACE,
+                ) {
+                    Ok(()) => {}
+                    Err(rustix::io::Errno::EXIST) => {
+                        return Ok(false);
+                    }
+                    Err(error) => return Err(io::Error::from(error)),
+                }
+                #[cfg(not(any(
+                    target_os = "linux",
+                    target_os = "android",
+                    target_vendor = "apple"
+                )))]
+                {
+                    match fs::hard_link(&staging_path, &key_path) {
+                        Ok(()) => fs::remove_file(&staging_path)?,
+                        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                            return Ok(false);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                fs::File::open(&key_dir)?.sync_all()?;
+                Ok(true)
+            })();
+            drop(staging);
+            let published_new = match publish {
+                Ok(true) => true,
+                Ok(false) => {
+                    remove_uploaded_model_encryption_key_staging_file(
+                        &staging_path,
+                        &staging_identity,
+                    );
+                    false
+                }
+                Err(error) => {
+                    remove_uploaded_model_encryption_key_staging_file(
+                        &staging_path,
+                        &staging_identity,
+                    );
+                    return Err(error);
+                }
+            };
+            let installed = read_uploaded_model_encryption_secret(&key_path)?;
+            if published_new && installed != bytes {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "published uploaded model encryption key does not match the generated key",
+                ));
+            }
+            Ok(installed)
         }
         Err(error) => Err(error),
     }
@@ -3034,8 +3669,8 @@ impl SoracloudIvmHost {
         let path = self
             .state_dir
             .join(root_name)
-            .join(sanitize_path_component(self.service_name().as_ref()))
-            .join(sanitize_path_component(self.service_version()))
+            .join(storage_path_component(self.service_name().as_ref()))
+            .join(storage_path_component(self.service_version()))
             .join(relative);
         match read_soracloud_regular_file_bounded(
             &path,
@@ -3763,14 +4398,14 @@ struct HostedHttpWorkerCacheKey {
 struct HostedHttpWorker {
     cache_key: HostedHttpWorkerCacheKey,
     child: std::process::Child,
+    log_drains: Vec<thread::JoinHandle<()>>,
     listen_base_url: String,
     egress_accounting_offset_bytes: u64,
-    attachment: Option<HostedHttpWorkerAttachment>,
     stderr_log_path: PathBuf,
-}
-enum HostedHttpWorkerAttachment {
-    #[allow(dead_code)]
-    FirecrackerKvm(InrouTapNetworkAttachment),
+    port_forward: Option<PortableVmLoopbackProxy>,
+    qmp_control: Option<Arc<Mutex<PortableVmQmpControl>>>,
+    #[cfg(target_os = "linux")]
+    loopback_firewall: Option<InrouLoopbackOwnerFirewall>,
 }
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct InrouTapNetworkAttachment {
@@ -3788,7 +4423,6 @@ struct InrouTapNetworkAttachment {
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum InrouTapFirewallPlan {
-    Open,
     Isolated,
     Allowlist(Vec<InrouTapResolvedAllowlistEndpoint>),
 }
@@ -3814,10 +4448,10 @@ struct InrouNfsExport {
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 impl InrouTapFirewallPlan {
     fn installs_masquerade_rule(&self) -> bool {
-        matches!(self, Self::Open | Self::Allowlist(_))
+        matches!(self, Self::Allowlist(_))
     }
     fn installs_return_rule(&self) -> bool {
-        matches!(self, Self::Open | Self::Allowlist(_))
+        matches!(self, Self::Allowlist(_))
     }
 }
 #[derive(
@@ -3849,6 +4483,19 @@ struct HfGeneratedMetadataResponse {
     inference_bridge_enabled: bool,
 }
 /// Embedded `irohad` Soracloud runtime-manager actor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InrouStartupCapabilitySnapshot {
+    supported_backends: BTreeSet<SoraInrouRuntimeBackendV1>,
+    supported_guest_isas: BTreeSet<SoraInrouGuestIsaV1>,
+}
+impl InrouStartupCapabilitySnapshot {
+    fn from_config(config: &SoracloudRuntimeManagerConfig) -> Option<Self> {
+        (config.inrou.enabled && manager_allows_unconfined_inrou_for_tests(config)).then(|| Self {
+            supported_backends: config.inrou.backends.clone(),
+            supported_guest_isas: BTreeSet::from([current_host_inrou_guest_isa()]),
+        })
+    }
+}
 pub(crate) struct SoracloudRuntimeManager {
     config: SoracloudRuntimeManagerConfig,
     state: Arc<State>,
@@ -3862,10 +4509,13 @@ pub(crate) struct SoracloudRuntimeManager {
     last_model_host_heartbeat_attempt_ms: Mutex<Option<u64>>,
     last_inrou_host_advert_attempt_ms: Mutex<Option<u64>>,
     pending_inrou_host_capability_advert: Mutex<Option<SoraInrouHostCapabilityRecordV1>>,
+    inrou_startup_capability: Option<InrouStartupCapabilitySnapshot>,
+    last_inrou_host_withdraw_attempt_ms: Mutex<Option<u64>>,
     last_inrou_placement_reconcile_attempt_ms: Mutex<Option<u64>>,
     last_runtime_state_submission_commitments: Mutex<BTreeMap<(String, String, u16), Hash>>,
     last_service_lease_usage_submission_bytes: Mutex<BTreeMap<(String, String), u64>>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
+    operator_preseed_store: Option<Arc<StorageBackend>>,
     sorafs_provider_cache: Option<Arc<AsyncRwLock<ProviderAdvertCache>>>,
     remote_stream_token_operator: Option<remote_stream_token_auth::RemoteStreamTokenOperator>,
 }
@@ -3956,10 +4606,78 @@ fn inrou_runtime_state_matches_authoritative_snapshot(
     stable_inrou_runtime_state_submission_view(authoritative)
         == stable_inrou_runtime_state_submission_view(desired)
 }
+fn write_verified_sorafs_manifest_payload_to_cache(
+    manifest: &StoredManifest,
+    expected_hash: Hash,
+    cache_path: &Path,
+    maximum_bytes: u64,
+    mut read_payload_range: impl FnMut(&str, u64, usize) -> Result<Vec<u8>, String>,
+) -> io::Result<()> {
+    let content_length = manifest.content_length();
+    let manifest_id = manifest.manifest_id();
+    let expected_payload_digest = *manifest.payload_digest();
+    write_atomic_file(cache_path, |file| {
+        let mut payload_hasher = blake3::Hasher::new();
+        let mut cursor = 0_u64;
+        while cursor < content_length {
+            let remaining = content_length - cursor;
+            let read_len =
+                usize::try_from(remaining.min(SORACLOUD_LOCAL_HYDRATION_STREAM_CHUNK_BYTES))
+                    .map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "local SoraFS hydration chunk length does not fit this host",
+                        )
+                    })?;
+            let chunk = read_payload_range(manifest_id, cursor, read_len).map_err(|error| {
+                io::Error::other(format!(
+                    "read local SoraFS hydration chunk at {cursor}: {error}"
+                ))
+            })?;
+            if chunk.len() != read_len {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "local SoraFS hydration chunk was truncated",
+                ));
+            }
+            payload_hasher.update(&chunk);
+            file.write_all(&chunk)?;
+            cursor = cursor
+                .checked_add(u64::try_from(chunk.len()).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "local SoraFS hydration byte count does not fit u64",
+                    )
+                })?)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "local SoraFS hydration byte count overflow",
+                    )
+                })?;
+        }
+        if payload_hasher.finalize().as_bytes() != &expected_payload_digest {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "local SoraFS hydration payload digest mismatch",
+            ));
+        }
+        file.rewind()?;
+        let (actual_hash, hashed_bytes) = Hash::new_from_reader_bounded(&mut *file, maximum_bytes)?;
+        if hashed_bytes != content_length || actual_hash != expected_hash {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "local SoraFS hydration artifact hash mismatch",
+            ));
+        }
+        Ok(((), content_length))
+    })
+}
 impl SoracloudRuntimeManager {
     /// Construct the runtime manager for the supplied node state.
     #[must_use]
     pub fn new(config: SoracloudRuntimeManagerConfig, state: Arc<State>) -> Self {
+        let inrou_startup_capability = InrouStartupCapabilitySnapshot::from_config(&config);
         Self {
             config,
             state,
@@ -3972,10 +4690,13 @@ impl SoracloudRuntimeManager {
             last_model_host_heartbeat_attempt_ms: Mutex::new(None),
             last_inrou_host_advert_attempt_ms: Mutex::new(None),
             pending_inrou_host_capability_advert: Mutex::new(None),
+            inrou_startup_capability,
+            last_inrou_host_withdraw_attempt_ms: Mutex::new(None),
             last_inrou_placement_reconcile_attempt_ms: Mutex::new(None),
             last_runtime_state_submission_commitments: Mutex::new(BTreeMap::new()),
             last_service_lease_usage_submission_bytes: Mutex::new(BTreeMap::new()),
             sorafs_node: None,
+            operator_preseed_store: None,
             sorafs_provider_cache: None,
             remote_stream_token_operator: None,
         }
@@ -4006,6 +4727,15 @@ impl SoracloudRuntimeManager {
         self.sorafs_node = Some(sorafs_node);
         self
     }
+    /// Attach the deployment-owned, read-only hydration view over an operator-preseeded store.
+    ///
+    /// This store is intentionally separate from the embedded provider node: it exposes no
+    /// routes or workers and is admitted only while provider storage is disabled.
+    #[must_use]
+    pub(crate) fn with_operator_preseed_store(mut self, store: Arc<StorageBackend>) -> Self {
+        self.operator_preseed_store = Some(store);
+        self
+    }
     /// Attach the shared SoraFS provider-discovery cache used for remote hydration.
     #[must_use]
     pub fn with_sorafs_provider_cache(
@@ -4027,6 +4757,32 @@ impl SoracloudRuntimeManager {
         mut self,
         shutdown_signal: ShutdownSignal,
     ) -> eyre::Result<(SoracloudRuntimeManagerHandle, Child)> {
+        validate_soracloud_runtime_manager_posture(&self.config)
+            .wrap_err("validate Soracloud runtime-manager first-release posture")?;
+        if self.operator_preseed_store.is_some() {
+            if !self.config.inrou.enabled {
+                eyre::bail!(
+                    "operator-preseed storage is valid only while Inrou hosting is enabled"
+                );
+            }
+            if self
+                .sorafs_node
+                .as_ref()
+                .is_some_and(sorafs_node::NodeHandle::is_enabled)
+            {
+                eyre::bail!(
+                    "operator-preseed storage cannot be attached while embedded SoraFS provider storage is enabled"
+                );
+            }
+        }
+        ensure_configured_inrou_backends_available(&self.config.inrou)
+            .wrap_err("validate immutable Inrou startup capability")?;
+        #[cfg(target_os = "linux")]
+        if self.config.inrou.enabled {
+            let identity = portable_vm_child_identity(&self.config.inrou)?;
+            ensure_no_process_with_inrou_identity(&identity)
+                .wrap_err("require an unused dedicated Inrou QEMU identity at startup")?;
+        }
         remote_stream_token_auth::ensure_startup_binding(
             self.remote_stream_token_operator.as_ref(),
             self.state.network_id_ref(),
@@ -4165,6 +4921,8 @@ impl SoracloudRuntimeManager {
     }
     /// Reconcile the node-local materialization plan against authoritative state once.
     pub(crate) fn reconcile_once(&self) -> eyre::Result<()> {
+        validate_soracloud_runtime_manager_posture(&self.config)
+            .wrap_err("validate Soracloud runtime-manager first-release posture")?;
         fs::create_dir_all(self.services_root())
             .wrap_err_with(|| format!("create {}", self.services_root().display()))?;
         fs::create_dir_all(self.apartments_root())
@@ -4183,6 +4941,22 @@ impl SoracloudRuntimeManager {
             .wrap_err_with(|| format!("create {}", self.hf_sources_root().display()))?;
         fs::create_dir_all(self.service_data_root())
             .wrap_err_with(|| format!("create {}", self.service_data_root().display()))?;
+        let inrou_hosting_available = match ensure_configured_inrou_backends_statically_available(
+            &self.config.inrou,
+        ) {
+            Ok(()) => self.config.inrou.enabled,
+            Err(error) => {
+                iroha_logger::warn!(
+                    ?error,
+                    "configured Inrou backend is unavailable; withdrawing host and stopping local replicas"
+                );
+                false
+            }
+        };
+        if !inrou_hosting_available {
+            let view = self.state.view();
+            self.withdraw_local_inrou_host_if_needed(&view);
+        }
         let (
             bundle_registry,
             initial_snapshot,
@@ -4192,8 +4966,9 @@ impl SoracloudRuntimeManager {
             let view = self.state.view();
             self.report_local_model_host_advert_contradictions(&view);
             let bundle_registry = collect_service_revision_registry(&view);
-            let inrou_host_capability_refresh =
-                self.local_inrou_host_capability_refresh_candidate(&view);
+            let inrou_host_capability_refresh = inrou_hosting_available
+                .then(|| self.local_inrou_host_capability_refresh_candidate(&view))
+                .flatten();
             let inrou_placement_reconcile_needed = self
                 .inrou_placement_reconcile_needed(&view, &bundle_registry)
                 .wrap_err("calculate whether Inrou placement reconciliation is needed")?;
@@ -4205,7 +4980,7 @@ impl SoracloudRuntimeManager {
                 &self.config.cache_budgets,
                 self.config.local_validator_account_id.as_ref(),
                 self.config.local_peer_id.as_deref(),
-                self.config.inrou.enabled && !self.config.inrou.proxy_only,
+                inrou_hosting_available,
             )?;
             (
                 bundle_registry,
@@ -4254,7 +5029,7 @@ impl SoracloudRuntimeManager {
                 &self.config.cache_budgets,
                 self.config.local_validator_account_id.as_ref(),
                 self.config.local_peer_id.as_deref(),
-                self.config.inrou.enabled && !self.config.inrou.proxy_only,
+                inrou_hosting_available,
             )?
         };
         self.prune_stale_hf_local_workers(&snapshot);
@@ -4601,48 +5376,39 @@ impl SoracloudRuntimeManager {
     fn build_local_inrou_host_capability_record(
         &self,
         now_ms: u64,
-    ) -> Option<(SoraInrouHostCapabilityRecordV1, bool)> {
-        if !self.config.inrou.enabled {
-            return None;
-        }
+    ) -> Option<SoraInrouHostCapabilityRecordV1> {
+        let startup_capability = self.inrou_startup_capability.as_ref()?;
         let validator_account_id = self.config.local_validator_account_id.as_ref()?;
         let peer_id = self.config.local_peer_id.as_deref()?;
-        let discovered_backends = supported_inrou_backends_for_host();
-        let auto_proxy_only = !self.config.inrou.proxy_only && discovered_backends.is_empty();
-        let proxy_only = self.config.inrou.proxy_only || auto_proxy_only;
-        let supported_backends = if discovered_backends.is_empty() {
-            default_zero_capacity_inrou_backends()
-        } else {
-            discovered_backends
-        };
-        let supported_guest_isas = BTreeSet::from([current_host_inrou_guest_isa()]);
         let desired_expiry_ms = desired_inrou_host_heartbeat_expiry_ms(now_ms, &self.config);
-        Some((
-            SoraInrouHostCapabilityRecordV1 {
-                schema_version: SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
-                validator_account_id: validator_account_id.clone(),
-                peer_id: peer_id.to_owned(),
-                supported_backends,
-                supported_guest_isas,
-                max_hosted_replica_capacity: if proxy_only {
-                    0
-                } else {
-                    u16::try_from(self.config.inrou.max_concurrent_vms.get()).unwrap_or(u16::MAX)
-                },
-                max_cpu_millis: if proxy_only { 0 } else { u32::MAX },
-                max_memory_bytes: if proxy_only { 0 } else { u64::MAX },
-                max_storage_bytes: if proxy_only { 0 } else { u64::MAX },
-                proxy_only,
-                geography_tags: Default::default(),
-                observed_latency_ms: None,
-                advertised_at_ms: now_ms,
-                heartbeat_expires_at_ms: desired_expiry_ms,
-            },
-            auto_proxy_only,
-        ))
+        Some(SoraInrouHostCapabilityRecordV1 {
+            schema_version: SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
+            validator_account_id: validator_account_id.clone(),
+            peer_id: peer_id.to_owned(),
+            supported_backends: startup_capability.supported_backends.clone(),
+            supported_guest_isas: startup_capability.supported_guest_isas.clone(),
+            max_hosted_replica_capacity: self.config.inrou.max_concurrent_vms.get(),
+            max_cpu_millis: self.config.inrou.max_cpu_millis.get(),
+            max_memory_bytes: self.config.inrou.max_memory_bytes.get(),
+            max_storage_bytes: self.config.inrou.max_storage_bytes.get(),
+            geography_tags: Default::default(),
+            observed_latency_ms: None,
+            advertised_at_ms: now_ms,
+            heartbeat_expires_at_ms: desired_expiry_ms,
+        })
     }
     fn local_inrou_host_advert_attempt_allowed(&self, now_ms: u64) -> bool {
         let mut last_attempt_ms = self.last_inrou_host_advert_attempt_ms.lock();
+        if let Some(previous_attempt_ms) = *last_attempt_ms
+            && now_ms.saturating_sub(previous_attempt_ms) < INROU_HOST_ADVERT_ATTEMPT_COOLDOWN_MS
+        {
+            return false;
+        }
+        *last_attempt_ms = Some(now_ms);
+        true
+    }
+    fn local_inrou_host_withdraw_attempt_allowed(&self, now_ms: u64) -> bool {
+        let mut last_attempt_ms = self.last_inrou_host_withdraw_attempt_ms.lock();
         if let Some(previous_attempt_ms) = *last_attempt_ms
             && now_ms.saturating_sub(previous_attempt_ms) < INROU_HOST_ADVERT_ATTEMPT_COOLDOWN_MS
         {
@@ -4688,11 +5454,9 @@ impl SoracloudRuntimeManager {
     fn local_inrou_host_capability_refresh_candidate(
         &self,
         view: &StateView<'_>,
-    ) -> Option<(SoraInrouHostCapabilityRecordV1, bool)> {
+    ) -> Option<SoraInrouHostCapabilityRecordV1> {
         let now_ms = soracloud_runtime_observed_at_ms();
-        let Some((desired, auto_proxy_only)) =
-            self.build_local_inrou_host_capability_record(now_ms)
-        else {
+        let Some(desired) = self.build_local_inrou_host_capability_record(now_ms) else {
             return None;
         };
         let authoritative = view
@@ -4705,16 +5469,16 @@ impl SoracloudRuntimeManager {
             self.clear_pending_inrou_host_capability_advert();
             return None;
         }
-        Some((desired, auto_proxy_only))
+        Some(desired)
     }
     fn refresh_local_inrou_host_capability_if_needed(
         &self,
-        refresh: Option<(SoraInrouHostCapabilityRecordV1, bool)>,
+        refresh: Option<SoraInrouHostCapabilityRecordV1>,
     ) {
         let Some(mutation_sink) = self.mutation_sink.as_ref() else {
             return;
         };
-        let Some((desired, auto_proxy_only)) = refresh else {
+        let Some(desired) = refresh else {
             return;
         };
         let now_ms = soracloud_runtime_observed_at_ms();
@@ -4722,14 +5486,6 @@ impl SoracloudRuntimeManager {
             return;
         }
         if !self.local_inrou_host_advert_attempt_allowed(now_ms) {
-            return;
-        }
-        if !should_submit_local_inrou_host_capability(auto_proxy_only) {
-            iroha_logger::warn!(
-                validator_account_id = %desired.validator_account_id,
-                peer_id = %desired.peer_id,
-                "Inrou backend support is unavailable on this host; suppressing zero-capacity host advert"
-            );
             return;
         }
         if let Err(error) = mutation_sink.submit_inrou_host_capability(&desired) {
@@ -4742,6 +5498,43 @@ impl SoracloudRuntimeManager {
             return;
         }
         self.remember_pending_inrou_host_capability_advert(&desired);
+    }
+    fn withdraw_local_inrou_host_if_needed(&self, view: &StateView<'_>) {
+        let Some(validator_account_id) = self.config.local_validator_account_id.as_ref() else {
+            return;
+        };
+        if view
+            .world()
+            .soracloud_inrou_host_capabilities()
+            .get(validator_account_id)
+            .is_none()
+        {
+            self.clear_pending_inrou_host_capability_advert();
+            return;
+        }
+        let Some(mutation_sink) = self.mutation_sink.as_ref() else {
+            return;
+        };
+        let now_ms = soracloud_runtime_observed_at_ms();
+        if !self.local_inrou_host_withdraw_attempt_allowed(now_ms) {
+            return;
+        }
+        if let Err(error) = mutation_sink.submit_inrou_host_withdrawal(validator_account_id) {
+            iroha_logger::warn!(
+                ?error,
+                validator_account_id = %validator_account_id,
+                "failed to withdraw unavailable local Inrou host advert"
+            );
+            return;
+        }
+        self.clear_pending_inrou_host_capability_advert();
+        if let Err(error) = mutation_sink.submit_inrou_placement_reconcile() {
+            iroha_logger::warn!(
+                ?error,
+                validator_account_id = %validator_account_id,
+                "failed to request Inrou placement reconciliation after host withdrawal"
+            );
+        }
     }
     fn inrou_placement_reconcile_needed(
         &self,
@@ -5233,36 +6026,37 @@ impl SoracloudRuntimeManager {
         cache_key: HostedHttpWorkerCacheKey,
         egress_accounting_offset_bytes: u64,
     ) -> eyre::Result<HostedHttpWorker> {
+        validate_soracloud_runtime_manager_posture(&self.config)
+            .wrap_err("enforce first-release Inrou admission before worker launch")?;
         let selected_backend = plan
             .inrou
             .as_ref()
             .map(|inrou| inrou.selected_backend)
             .ok_or_else(|| eyre::eyre!("Inrou runtime requires a local runtime Inrou plan"))?;
-        match selected_backend {
-            SoraInrouRuntimeBackendV1::FirecrackerKvm => {
-                #[cfg(target_os = "linux")]
-                {
-                    self.start_inrou_worker_linux(
-                        plan,
-                        bundle,
-                        cache_key,
-                        egress_accounting_offset_bytes,
-                    )
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    let _ = (plan, bundle, cache_key, egress_accounting_offset_bytes);
-                    eyre::bail!("Inrou Firecracker/KVM execution is only available on Linux hosts");
-                }
-            }
-            SoraInrouRuntimeBackendV1::PortableVm => self.start_inrou_worker_portable(
-                plan,
-                bundle,
-                cache_key,
-                egress_accounting_offset_bytes,
-            ),
+        if !self.config.inrou.backends.contains(&selected_backend) {
+            eyre::bail!(
+                "placed Inrou backend `{}` is not present in this host's configured backend allowlist",
+                selected_backend.as_str()
+            );
         }
+        if selected_backend != SoraInrouRuntimeBackendV1::PortableVm {
+            eyre::bail!("Inrou V1 placement selected a non-PortableVm backend");
+        }
+        self.start_inrou_worker_portable(plan, bundle, cache_key, egress_accounting_offset_bytes)
     }
+    #[cfg(not(target_os = "linux"))]
+    fn start_inrou_worker_portable(
+        &self,
+        _plan: &SoracloudRuntimeServicePlan,
+        _bundle: &SoraDeploymentBundleV1,
+        _cache_key: HostedHttpWorkerCacheKey,
+        _egress_accounting_offset_bytes: u64,
+    ) -> eyre::Result<HostedHttpWorker> {
+        eyre::bail!(
+            "Inrou PortableVM release hosting requires Linux procfs identity attestation, anonymous QMP capabilities, and QEMU seccomp"
+        )
+    }
+    #[cfg(target_os = "linux")]
     fn start_inrou_worker_portable(
         &self,
         plan: &SoracloudRuntimeServicePlan,
@@ -5284,13 +6078,41 @@ impl SoracloudRuntimeManager {
         })?;
         let qemu_img = resolve_inrou_qemu_img_executable()
             .ok_or_else(|| eyre::eyre!("Inrou PortableVm execution requires `qemu-img` on PATH"))?;
-        let materialization_dir = PathBuf::from(&plan.materialization_dir);
-        fs::create_dir_all(&materialization_dir)
-            .wrap_err_with(|| format!("create {}", materialization_dir.display()))?;
+        let child_identity = portable_vm_child_identity(&self.config.inrou)?;
+        ensure_no_process_with_inrou_identity(&child_identity)
+            .wrap_err("require an unused dedicated Inrou QEMU identity before disk delegation")?;
+        let setpriv = resolve_inrou_setpriv_executable().ok_or_else(|| {
+            eyre::eyre!(
+                "Inrou PortableVm execution requires root-owned `/usr/bin/setpriv` or `/bin/setpriv`"
+            )
+        })?;
+        let shell = resolve_inrou_shell_executable().ok_or_else(|| {
+            eyre::eyre!(
+                "Inrou PortableVm execution requires root-owned `/bin/sh` or `/usr/bin/sh` for fail-closed descriptor cleanup"
+            )
+        })?;
+        let materialization_dir =
+            ensure_secure_inrou_disk_directory(Path::new(&plan.materialization_dir))
+                .wrap_err("secure and canonicalize Inrou PortableVm materialization directory")?;
+        // Reconciliation kills and waits for a tracked previous worker before
+        // reaching this launch. A daemon crash is covered by QEMU's
+        // exit-with-parent policy; after revoking path access, reclaim still
+        // scans procfs and fails closed if that old identity retains an fd.
         for volume in &plan.lease_volumes {
-            let volume_dir = PathBuf::from(&volume.local_materialization_dir);
-            fs::create_dir_all(&volume_dir)
-                .wrap_err_with(|| format!("create {}", volume_dir.display()))?;
+            let file_name = if volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume {
+                "rootfs.qcow2"
+            } else {
+                "lease.raw"
+            };
+            let volume_dir =
+                ensure_secure_inrou_disk_directory(Path::new(&volume.local_materialization_dir))
+                    .wrap_err_with(|| {
+                        format!(
+                            "secure and canonicalize Inrou volume `{}`",
+                            volume.volume_name
+                        )
+                    })?;
+            reclaim_inrou_qemu_file_if_present(&volume_dir.join(file_name), &child_identity)?;
         }
         let archive_limits = inrou_bundle_archive_limits(
             &self.config.inrou,
@@ -5310,6 +6132,7 @@ impl SoracloudRuntimeManager {
             resolve_inrou_bundle_member_path(&bundle_root, &inrou.kernel_image_path)?;
         let base_rootfs_image_path =
             resolve_inrou_bundle_member_path(&bundle_root, &inrou.rootfs_image_path)?;
+        let rootfs_base_binding = inrou_rootfs_base_binding(bundle, inrou)?;
         let initrd_image_path = inrou
             .initrd_image_path
             .as_ref()
@@ -5333,20 +6156,8 @@ impl SoracloudRuntimeManager {
             .ok_or_else(|| eyre::eyre!("Inrou service requires a route"))?
             .service_port
             .get();
-        let stdout_log_path = materialization_dir.join("inrou.stdout.log");
         let stderr_log_path = materialization_dir.join("inrou.stderr.log");
-        let console_log_path = materialization_dir.join("inrou.console.log");
-        let stdout = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&stdout_log_path)
-            .wrap_err_with(|| format!("open {}", stdout_log_path.display()))?;
-        let stderr = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&stderr_log_path)
+        let stderr_log = open_inrou_runtime_log(&stderr_log_path, "Inrou stderr log")
             .wrap_err_with(|| format!("open {}", stderr_log_path.display()))?;
         let (root_disk_path, root_disk_format) = match plan
             .lease_volumes
@@ -5354,8 +6165,13 @@ impl SoracloudRuntimeManager {
             .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
         {
             Some(root_volume) => (
-                ensure_inrou_portable_root_disk(&qemu_img, &base_rootfs_image_path, root_volume)
-                    .wrap_err("prepare Inrou mutable PortableVm root disk")?,
+                ensure_inrou_portable_root_disk(
+                    &qemu_img,
+                    &base_rootfs_image_path,
+                    root_volume,
+                    rootfs_base_binding,
+                )
+                .wrap_err("prepare Inrou mutable PortableVm root disk")?,
                 "qcow2",
             ),
             None => eyre::bail!("Inrou runtime requires one PersistentRootLeaseVolume"),
@@ -5363,10 +6179,31 @@ impl SoracloudRuntimeManager {
         let lease_disks = ensure_inrou_portable_lease_disks(&qemu_img, plan)
             .wrap_err("prepare PortableVm lease disks")?;
         let shared_filesystem_mounts = build_inrou_portable_shared_filesystem_mounts(&lease_disks);
-        let network_plan = build_portable_vm_network_plan(guest_port, &firewall_plan)
+        let PortableVmNetworkPlan {
+            netdev,
+            listen_base_url,
+            public_listener,
+            backend_reservation,
+            expected_backend,
+        } = build_portable_vm_network_plan(guest_port, &firewall_plan)
             .wrap_err("prepare PortableVm user-mode networking")?;
-        let hosts_overlay =
-            build_portable_vm_allowlist_hosts_overlay(&network_plan.allowlist_hosts);
+        let mut loopback_firewall = Some(
+            InrouLoopbackOwnerFirewall::install(
+                &public_listener,
+                &backend_reservation,
+                child_identity.uid,
+            )
+            .wrap_err("isolate Inrou loopback listeners by supervisor socket owner")?,
+        );
+        ensure_portable_vm_identity_reserved(&child_identity)
+            .wrap_err("recheck the locked Inrou QEMU service identity under the firewall lock")?;
+        ensure_no_process_with_inrou_identity(&child_identity).wrap_err(
+            "recheck the exclusive Inrou QEMU identity under the firewall lock before delegation",
+        )?;
+        probe_portable_vm_backend(&setpriv, &shell, &qemu, &child_identity)
+            .wrap_err("requalify the exact QEMU backend under the launch firewall lock")?;
+        ensure_no_process_with_inrou_identity(&child_identity)
+            .wrap_err("require the QEMU backend probe to be fully reaped before delegation")?;
         let network_config = build_inrou_portable_network_config();
         let portable_bundle_max_bytes = archive_limits.max_compressed_bytes;
         let (portable_bundle_path, portable_bundle_exact_bytes) =
@@ -5388,7 +6225,7 @@ impl SoracloudRuntimeManager {
             guest_port,
             &shared_filesystem_mounts,
             bootstrap_user_data.as_deref(),
-            hosts_overlay.as_deref(),
+            None,
             Some(portable_bundle),
         )?;
         let cloud_init_root = write_inrou_cloud_init_documents(
@@ -5398,13 +6235,52 @@ impl SoracloudRuntimeManager {
             &user_data,
         )
         .wrap_err("write PortableVm cloud-init documents")?;
+        ensure_no_process_with_inrou_identity(&child_identity)
+            .wrap_err("recheck the exclusive Inrou QEMU identity before file delegation")?;
+        let runtime_root = &self.config.state_dir;
+        prepare_inrou_qemu_file_access(runtime_root, &kernel_image_path, &child_identity, false)?;
+        prepare_inrou_qemu_file_access(
+            runtime_root,
+            &base_rootfs_image_path,
+            &child_identity,
+            false,
+        )?;
+        if let Some(initrd_image_path) = initrd_image_path.as_ref() {
+            prepare_inrou_qemu_file_access(
+                runtime_root,
+                initrd_image_path,
+                &child_identity,
+                false,
+            )?;
+        }
+        prepare_inrou_qemu_file_access(runtime_root, &root_disk_path, &child_identity, true)?;
+        prepare_inrou_qemu_file_access(
+            runtime_root,
+            &portable_bundle_path,
+            &child_identity,
+            false,
+        )?;
+        for disk in &lease_disks {
+            prepare_inrou_qemu_file_access(runtime_root, &disk.image_path, &child_identity, true)?;
+        }
+        for document in ["meta-data", "network-config", "user-data"] {
+            prepare_inrou_qemu_file_access(
+                runtime_root,
+                &cloud_init_root.join(document),
+                &child_identity,
+                false,
+            )?;
+        }
+        // vvfat enumerates this directory, so grant group read only after the
+        // individual no-follow file checks have finished preparing its chain.
+        prepare_inrou_qemu_readable_directory(runtime_root, &cloud_init_root, &child_identity)?;
         let memory_mib = portable_vm_memory_mib(&bundle.container.resources);
         let machine_arg = format!(
             "{},accel={},memory-backend=vmmem",
-            profile.machine_type,
-            portable_vm_accel()?
+            profile.machine_type, "kvm"
         );
-        let mut command = Command::new(&qemu);
+        let mut command =
+            build_inrou_portable_vm_command(&setpriv, &shell, &qemu, &child_identity)?;
         command
             .arg("-object")
             .arg(format!(
@@ -5431,14 +6307,13 @@ impl SoracloudRuntimeManager {
             .arg("none")
             .arg("-monitor")
             .arg("none")
-            .arg("-serial")
-            .arg(format!("file:{}", console_log_path.display()))
             .arg("-netdev")
-            .arg(&network_plan.netdev)
+            .arg(&netdev)
             .arg("-device")
             .arg(format!("{},netdev=net0", profile.net_device))
-            .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr));
+            .stderr(Stdio::piped());
+        let qmp_stream = configure_inrou_qmp_stdio(&mut command)
+            .wrap_err("create capability-bound Inrou QMP socketpair")?;
         append_portable_vm_drive(
             &mut command,
             profile,
@@ -5475,11 +6350,91 @@ impl SoracloudRuntimeManager {
             )
             .wrap_err_with(|| format!("attach PortableVm lease disk {index}"))?;
         }
+        ensure_no_process_with_inrou_identity(&child_identity)
+            .wrap_err("finalize the exclusive Inrou QEMU identity immediately before spawn")?;
+        ensure_portable_vm_identity_reserved(&child_identity)
+            .wrap_err("finalize the locked Inrou QEMU service identity before spawn")?;
+        // Keep the backend port reserved until the command is completely
+        // constructed. The owner firewall is already active, so an untrusted
+        // local process can only make QEMU's explicit bind fail after release;
+        // it cannot receive supervisor traffic on the reserved port.
+        drop(backend_reservation);
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
                 return Err(error)
                     .wrap_err_with(|| format!("spawn Inrou PortableVm via {}", qemu.display()));
+            }
+        };
+        let mut log_drains = match attach_inrou_runtime_log_drains(&mut child, stderr_log) {
+            Ok(log_drains) => log_drains,
+            Err(error) => {
+                let termination = terminate_inrou_child_bounded(&mut child);
+                preserve_inrou_firewall_after_failed_termination(
+                    &termination,
+                    &mut loopback_firewall,
+                );
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "attach bounded Inrou PortableVm log drains{}",
+                        inrou_termination_error_suffix(&termination)
+                    )
+                });
+            }
+        };
+        let (qemu_forward, qmp_control) = match query_inrou_qmp_host_forward(
+            &mut child,
+            qmp_stream,
+            &qemu,
+            &child_identity,
+            guest_port,
+        ) {
+            Ok(qemu_forward) => qemu_forward,
+            Err(error) => {
+                let termination = terminate_inrou_child_bounded(&mut child);
+                preserve_inrou_firewall_after_failed_termination(
+                    &termination,
+                    &mut loopback_firewall,
+                );
+                join_inrou_log_drains_bounded(&mut log_drains);
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "attest QEMU-owned Inrou host forwarding over QMP{}",
+                        inrou_termination_error_suffix(&termination)
+                    )
+                });
+            }
+        };
+        if qemu_forward != expected_backend {
+            let termination = terminate_inrou_child_bounded(&mut child);
+            preserve_inrou_firewall_after_failed_termination(&termination, &mut loopback_firewall);
+            join_inrou_log_drains_bounded(&mut log_drains);
+            eyre::bail!(
+                "QEMU published Inrou host forward {qemu_forward} instead of the firewall-protected endpoint {expected_backend}{}",
+                inrou_termination_error_suffix(&termination)
+            );
+        }
+        let qmp_control = Arc::new(Mutex::new(qmp_control));
+        let mut port_forward = match PortableVmLoopbackProxy::start(
+            public_listener,
+            qemu_forward,
+            Arc::clone(&qmp_control),
+            guest_port,
+        ) {
+            Ok(port_forward) => port_forward,
+            Err(error) => {
+                let termination = terminate_inrou_child_bounded(&mut child);
+                preserve_inrou_firewall_after_failed_termination(
+                    &termination,
+                    &mut loopback_firewall,
+                );
+                join_inrou_log_drains_bounded(&mut log_drains);
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "start supervisor-owned Inrou loopback proxy{}",
+                        inrou_termination_error_suffix(&termination)
+                    )
+                });
             }
         };
         let started_at = std::time::Instant::now();
@@ -5492,221 +6447,35 @@ impl SoracloudRuntimeManager {
             )))
             .max(INROU_PORTABLE_START_GRACE_FLOOR);
         loop {
-            if let Some(status) = child
-                .try_wait()
-                .wrap_err("poll Inrou PortableVm process during startup")?
-            {
-                let stderr = stderr_log_excerpt(&stderr_log_path);
-                let console = stderr_log_excerpt(&console_log_path);
-                eyre::bail!(
-                    "Inrou PortableVm process exited during startup with status {status}{}{}",
-                    if stderr.is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {stderr}")
-                    },
-                    if console.is_empty() {
-                        String::new()
-                    } else {
-                        format!("\nserial console:\n{console}")
-                    },
-                );
-            }
-            match probe_hosted_http_health(
-                &network_plan.listen_base_url,
-                bundle.container.lifecycle.healthcheck_path.as_deref(),
-            ) {
-                Ok(()) => {
-                    return Ok(HostedHttpWorker::new(
-                        cache_key,
-                        child,
-                        network_plan.listen_base_url,
-                        egress_accounting_offset_bytes,
-                        None,
-                        stderr_log_path,
-                    ));
-                }
-                Err(error) if started_at.elapsed() < startup_grace => {
-                    let _ = error;
-                    thread::sleep(Duration::from_millis(250));
-                }
+            let child_status = match child.try_wait() {
+                Ok(status) => status,
                 Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let stderr = stderr_log_excerpt(&stderr_log_path);
-                    eyre::bail!(
-                        "Inrou PortableVm failed healthcheck during startup: {}{}",
-                        error,
-                        if stderr.is_empty() {
-                            String::new()
-                        } else {
-                            format!(": {stderr}")
-                        }
+                    port_forward.stop();
+                    let termination = terminate_inrou_child_bounded(&mut child);
+                    preserve_inrou_firewall_after_failed_termination(
+                        &termination,
+                        &mut loopback_firewall,
                     );
+                    join_inrou_log_drains_bounded(&mut log_drains);
+                    return Err(error).wrap_err_with(|| {
+                        format!(
+                            "poll Inrou PortableVm process during startup{}",
+                            inrou_termination_error_suffix(&termination)
+                        )
+                    });
                 }
-            }
-        }
-    }
-    #[cfg(target_os = "linux")]
-    fn start_inrou_worker_linux(
-        &self,
-        plan: &SoracloudRuntimeServicePlan,
-        bundle: &SoraDeploymentBundleV1,
-        cache_key: HostedHttpWorkerCacheKey,
-        egress_accounting_offset_bytes: u64,
-    ) -> eyre::Result<HostedHttpWorker> {
-        let firewall_plan = inrou_tap_firewall_plan(&bundle.container.capabilities.network)?;
-        let inrou = plan
-            .inrou
-            .as_ref()
-            .ok_or_else(|| eyre::eyre!("Inrou runtime requires a local runtime Inrou plan"))?;
-        let materialization_dir = PathBuf::from(&plan.materialization_dir);
-        fs::create_dir_all(&materialization_dir)
-            .wrap_err_with(|| format!("create {}", materialization_dir.display()))?;
-        for volume in &plan.lease_volumes {
-            let volume_dir = PathBuf::from(&volume.local_materialization_dir);
-            fs::create_dir_all(&volume_dir)
-                .wrap_err_with(|| format!("create {}", volume_dir.display()))?;
-        }
-        let archive_limits = inrou_bundle_archive_limits(
-            &self.config.inrou,
-            self.config.cache_budgets.bundle_bytes.get(),
-        );
-        let bundle_root = materialization_dir.join("inrou_bundle");
-        ensure_native_bundle_extracted(
-            &PathBuf::from(&plan.bundle_cache_path),
-            bundle.container.bundle_hash,
-            &bundle_root,
-            &bundle.container.entrypoint,
-            archive_limits,
-        )?;
-        self.hydrate_published_inrou_guest_image_artifact(&bundle_root, bundle, inrou)?;
-        ensure_inrou_entrypoint_present(&bundle_root, &bundle.container.entrypoint)?;
-        let firecracker = resolve_executable_on_path("firecracker")
-            .ok_or_else(|| eyre::eyre!("Inrou runtime requires `firecracker` on PATH"))?;
-        let mke2fs = resolve_inrou_mke2fs_executable()
-            .ok_or_else(|| eyre::eyre!("Inrou runtime requires `mke2fs` or `mkfs.ext4` on PATH"))?;
-        let kernel_image_path =
-            resolve_inrou_bundle_member_path(&bundle_root, &inrou.kernel_image_path)?;
-        let base_rootfs_image_path =
-            resolve_inrou_bundle_member_path(&bundle_root, &inrou.rootfs_image_path)?;
-        let initrd_image_path = inrou
-            .initrd_image_path
-            .as_ref()
-            .map(|path| resolve_inrou_bundle_member_path(&bundle_root, path))
-            .transpose()?;
-        let bootstrap_user_data = match inrou.bootstrap_user_data_path.as_ref() {
-            Some(path) => Some(
-                read_soracloud_regular_text_bounded(
-                    &resolve_inrou_bundle_member_path(&bundle_root, path)?,
-                    SORACLOUD_INROU_BOOTSTRAP_USER_DATA_MAX_BYTES,
-                    "Inrou bootstrap user-data overlay",
-                )
-                .wrap_err("read bounded Inrou bootstrap user-data overlay")?,
-            ),
-            None => None,
-        };
-        let guest_port = bundle
-            .service
-            .route
-            .as_ref()
-            .ok_or_else(|| eyre::eyre!("Inrou service requires a route"))?
-            .service_port
-            .get();
-        let stdout_log_path = materialization_dir.join("inrou.stdout.log");
-        let stderr_log_path = materialization_dir.join("inrou.stderr.log");
-        let stdout = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&stdout_log_path)
-            .wrap_err_with(|| format!("open {}", stdout_log_path.display()))?;
-        let stderr = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&stderr_log_path)
-            .wrap_err_with(|| format!("open {}", stderr_log_path.display()))?;
-        let mut network_attachment =
-            setup_inrou_tap_network(&cache_key, &materialization_dir, firewall_plan)
-                .wrap_err("setup Inrou tap network")?;
-        let startup_paths = (|| -> eyre::Result<(PathBuf, PathBuf)> {
-            let root_disk_path = match plan
-                .lease_volumes
-                .iter()
-                .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
-            {
-                Some(root_volume) => ensure_inrou_root_disk(&base_rootfs_image_path, root_volume)
-                    .wrap_err("prepare Inrou mutable root disk")?,
-                None => eyre::bail!("Inrou runtime requires one PersistentRootLeaseVolume"),
             };
-            let leasefs_exports =
-                ensure_inrou_leasefs_exports(plan).wrap_err("prepare LeaseFs exports")?;
-            let shared_filesystem_mounts =
-                ensure_inrou_shared_filesystem_mounts(&leasefs_exports, &mut network_attachment)
-                    .wrap_err("prepare Inrou shared lease exports")?;
-            let seed_image_path = build_inrou_bootstrap_seed(
-                &mke2fs,
-                &materialization_dir,
-                plan,
-                &cache_key,
-                guest_port,
-                &network_attachment,
-                &shared_filesystem_mounts,
-                bootstrap_user_data.as_deref(),
-            )
-            .wrap_err("build Inrou bootstrap seed image")?;
-            let firecracker_config_path = write_inrou_firecracker_config(
-                &materialization_dir,
-                &kernel_image_path,
-                initrd_image_path.as_deref(),
-                &root_disk_path,
-                &seed_image_path,
-                &network_attachment,
-                bundle.container.resources,
-            )
-            .wrap_err("write Inrou Firecracker config")?;
-            let api_socket_path = materialization_dir.join("firecracker.sock");
-            if api_socket_path.exists() {
-                fs::remove_file(&api_socket_path)
-                    .wrap_err_with(|| format!("remove stale {}", api_socket_path.display()))?;
-            }
-            Ok((firecracker_config_path, api_socket_path))
-        })();
-        let (firecracker_config_path, api_socket_path) = match startup_paths {
-            Ok(paths) => paths,
-            Err(error) => {
-                network_attachment.cleanup();
-                return Err(error);
-            }
-        };
-        let mut command = Command::new(&firecracker);
-        command
-            .arg("--api-sock")
-            .arg(&api_socket_path)
-            .arg("--config-file")
-            .arg(&firecracker_config_path)
-            .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr));
-        let mut child = command
-            .spawn()
-            .wrap_err_with(|| format!("spawn Inrou microVM via {}", firecracker.display()))?;
-        let listen_base_url = format!("http://{}:{guest_port}", network_attachment.guest_ip);
-        let started_at = std::time::Instant::now();
-        loop {
-            if let Some(status) = child
-                .try_wait()
-                .wrap_err("poll Inrou Firecracker process during startup")?
-            {
+            if let Some(status) = child_status {
+                port_forward.stop();
+                join_inrou_log_drains_bounded(&mut log_drains);
                 let stderr = stderr_log_excerpt(&stderr_log_path);
-                network_attachment.cleanup();
                 eyre::bail!(
-                    "Inrou Firecracker process exited during startup with status {status}{}",
+                    "Inrou PortableVm process exited during startup with status {status}{}",
                     if stderr.is_empty() {
                         String::new()
                     } else {
                         format!(": {stderr}")
-                    }
+                    },
                 );
             }
             match probe_hosted_http_health(
@@ -5717,40 +6486,39 @@ impl SoracloudRuntimeManager {
                     return Ok(HostedHttpWorker::new(
                         cache_key,
                         child,
+                        log_drains,
                         listen_base_url,
                         egress_accounting_offset_bytes,
-                        Some(HostedHttpWorkerAttachment::FirecrackerKvm(
-                            network_attachment,
-                        )),
                         stderr_log_path,
+                        port_forward,
+                        qmp_control,
+                        loopback_firewall
+                            .take()
+                            .expect("installed Inrou loopback firewall"),
                     ));
                 }
-                Err(error)
-                    if started_at.elapsed()
-                        < self
-                            .config
-                            .inrou
-                            .start_grace
-                            .max(Duration::from_secs(u64::from(
-                                bundle.container.lifecycle.start_grace_secs.get(),
-                            ))) =>
-                {
+                Err(error) if started_at.elapsed() < startup_grace => {
                     let _ = error;
                     thread::sleep(Duration::from_millis(250));
                 }
                 Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    network_attachment.cleanup();
+                    port_forward.stop();
+                    let termination = terminate_inrou_child_bounded(&mut child);
+                    preserve_inrou_firewall_after_failed_termination(
+                        &termination,
+                        &mut loopback_firewall,
+                    );
+                    join_inrou_log_drains_bounded(&mut log_drains);
                     let stderr = stderr_log_excerpt(&stderr_log_path);
                     eyre::bail!(
-                        "Inrou microVM failed healthcheck during startup: {}{}",
+                        "Inrou PortableVm failed healthcheck during startup: {}{}{}",
                         error,
                         if stderr.is_empty() {
                             String::new()
                         } else {
                             format!(": {stderr}")
-                        }
+                        },
+                        inrou_termination_error_suffix(&termination),
                     );
                 }
             }
@@ -5763,10 +6531,10 @@ impl SoracloudRuntimeManager {
         self.config.state_dir.join("apartments")
     }
     fn hosted_http_concurrency_limit(&self) -> usize {
-        if !self.config.inrou.enabled || self.config.inrou.proxy_only {
+        if !self.config.inrou.enabled {
             0
         } else {
-            self.config.inrou.max_concurrent_vms.get()
+            usize::from(self.config.inrou.max_concurrent_vms.get())
         }
     }
     fn artifacts_root(&self) -> PathBuf {
@@ -5792,7 +6560,7 @@ impl SoracloudRuntimeManager {
     }
     fn hf_source_root(&self, source_id: &str) -> PathBuf {
         self.hf_sources_root()
-            .join(sanitize_path_component(source_id))
+            .join(storage_path_component(source_id))
     }
     fn write_service_materializations(
         &self,
@@ -5801,12 +6569,12 @@ impl SoracloudRuntimeManager {
         view: &StateView<'_>,
     ) -> eyre::Result<()> {
         for (service_name, versions) in &snapshot.services {
-            let service_dir_name = sanitize_path_component(service_name);
+            let service_dir_name = storage_path_component(service_name);
             let service_root = self.services_root().join(service_dir_name);
             fs::create_dir_all(&service_root)
                 .wrap_err_with(|| format!("create {}", service_root.display()))?;
             for (service_version, plan) in versions {
-                let version_dir = service_root.join(sanitize_path_component(service_version));
+                let version_dir = service_root.join(storage_path_component(service_version));
                 fs::create_dir_all(&version_dir)
                     .wrap_err_with(|| format!("create {}", version_dir.display()))?;
                 write_json_atomic(&version_dir.join("runtime_plan.json"), plan)?;
@@ -5861,7 +6629,7 @@ impl SoracloudRuntimeManager {
         for (apartment_name, plan) in &snapshot.apartments {
             let apartment_root = self
                 .apartments_root()
-                .join(sanitize_path_component(apartment_name));
+                .join(storage_path_component(apartment_name));
             fs::create_dir_all(&apartment_root)
                 .wrap_err_with(|| format!("create {}", apartment_root.display()))?;
             write_json_atomic(&apartment_root.join("runtime_plan.json"), plan)?;
@@ -5888,9 +6656,9 @@ impl SoracloudRuntimeManager {
             .map(|(service_name, versions)| {
                 let desired_versions = versions
                     .keys()
-                    .map(|version| sanitize_path_component(version))
+                    .map(|version| storage_path_component(version))
                     .collect();
-                (sanitize_path_component(service_name), desired_versions)
+                (storage_path_component(service_name), desired_versions)
             })
             .collect();
         prune_nested_directory_tree(self.services_root().as_path(), &desired)?;
@@ -5906,9 +6674,9 @@ impl SoracloudRuntimeManager {
             .map(|(service_name, versions)| {
                 let desired_versions = versions
                     .keys()
-                    .map(|version| sanitize_path_component(version))
+                    .map(|version| storage_path_component(version))
                     .collect();
-                (sanitize_path_component(service_name), desired_versions)
+                (storage_path_component(service_name), desired_versions)
             })
             .collect();
         prune_nested_directory_tree(self.secrets_root().as_path(), &desired)?;
@@ -5921,7 +6689,7 @@ impl SoracloudRuntimeManager {
         let desired: BTreeSet<String> = snapshot
             .apartments
             .keys()
-            .map(|name| sanitize_path_component(name))
+            .map(|name| storage_path_component(name))
             .collect();
         prune_flat_directory_tree(self.apartments_root().as_path(), &desired)?;
         Ok(())
@@ -5942,7 +6710,7 @@ impl SoracloudRuntimeManager {
             .filter(|(source_id, _plan)| {
                 self.local_hf_source_assignment_allowed(view, source_id.as_str())
             })
-            .map(|(source_id, _plan)| sanitize_path_component(source_id))
+            .map(|(source_id, _plan)| storage_path_component(source_id))
             .collect::<BTreeSet<_>>();
         prune_flat_directory_tree(self.hf_sources_root().as_path(), &desired_sources)?;
         if desired_sources.is_empty() {
@@ -5955,7 +6723,7 @@ impl SoracloudRuntimeManager {
         for (source_hash, source) in view.world().soracloud_hf_sources().iter() {
             let source_id = source_hash.to_string();
             if !snapshot.hf_sources.contains_key(&source_id)
-                || !desired_sources.contains(&sanitize_path_component(&source_id))
+                || !desired_sources.contains(&storage_path_component(&source_id))
                 || matches!(
                     source.status,
                     SoraHfSourceStatusV1::Failed | SoraHfSourceStatusV1::Retired
@@ -6483,6 +7251,13 @@ impl SoracloudRuntimeManager {
         cache_path: &Path,
         maximum_bytes: u64,
     ) -> eyre::Result<bool> {
+        if self.hydrate_operator_preseed_payload_to_cache(
+            expected_hash,
+            cache_path,
+            maximum_bytes,
+        )? {
+            return Ok(true);
+        }
         let Some(sorafs_node) = self.sorafs_node.as_ref() else {
             return Ok(false);
         };
@@ -6506,69 +7281,18 @@ impl SoracloudRuntimeManager {
             {
                 continue;
             }
-            let content_length = manifest.content_length();
             let manifest_id = manifest.manifest_id().to_owned();
-            let expected_payload_digest = *manifest.payload_digest();
-            let write_result = write_atomic_file(cache_path, |file| {
-                let mut payload_hasher = blake3::Hasher::new();
-                let mut cursor = 0_u64;
-                while cursor < content_length {
-                    let remaining = content_length - cursor;
-                    let read_len = usize::try_from(
-                        remaining.min(SORACLOUD_LOCAL_HYDRATION_STREAM_CHUNK_BYTES),
-                    )
-                    .map_err(|_| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "local SoraFS hydration chunk length does not fit this host",
-                        )
-                    })?;
-                    let chunk = sorafs_node
-                        .read_payload_range(&manifest_id, cursor, read_len)
-                        .map_err(|error| {
-                            io::Error::other(format!(
-                                "read local SoraFS hydration chunk at {cursor}: {error}"
-                            ))
-                        })?;
-                    if chunk.len() != read_len {
-                        return Err(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            "local SoraFS hydration chunk was truncated",
-                        ));
-                    }
-                    payload_hasher.update(&chunk);
-                    file.write_all(&chunk)?;
-                    cursor = cursor
-                        .checked_add(u64::try_from(chunk.len()).map_err(|_| {
-                            io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                "local SoraFS hydration byte count does not fit u64",
-                            )
-                        })?)
-                        .ok_or_else(|| {
-                            io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                "local SoraFS hydration byte count overflow",
-                            )
-                        })?;
-                }
-                if payload_hasher.finalize().as_bytes() != &expected_payload_digest {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "local SoraFS hydration payload digest mismatch",
-                    ));
-                }
-                file.rewind()?;
-                let (actual_hash, hashed_bytes) =
-                    Hash::new_from_reader_bounded(&mut *file, maximum_bytes)?;
-                if hashed_bytes != content_length || actual_hash != expected_hash {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "local SoraFS hydration artifact hash mismatch",
-                    ));
-                }
-                Ok(((), content_length))
-            });
+            let write_result = write_verified_sorafs_manifest_payload_to_cache(
+                &manifest,
+                expected_hash,
+                cache_path,
+                maximum_bytes,
+                |manifest_id, offset, len| {
+                    sorafs_node
+                        .read_payload_range(manifest_id, offset, len)
+                        .map_err(|error| error.to_string())
+                },
+            );
             match write_result {
                 Ok(()) => return Ok(true),
                 Err(error) => {
@@ -6576,6 +7300,53 @@ impl SoracloudRuntimeManager {
                         ?error,
                         manifest_id = %manifest_id,
                         "local committed SoraFS payload did not match the requested Soracloud artifact"
+                    );
+                }
+            }
+        }
+        Ok(false)
+    }
+    fn hydrate_operator_preseed_payload_to_cache(
+        &self,
+        expected_hash: Hash,
+        cache_path: &Path,
+        maximum_bytes: u64,
+    ) -> eyre::Result<bool> {
+        let Some(store) = self.operator_preseed_store.as_ref() else {
+            return Ok(false);
+        };
+        let mut manifests = store.manifests();
+        manifests.sort_by(|left, right| left.manifest_id().cmp(right.manifest_id()));
+        if manifests.len() > SORACLOUD_OPERATOR_PRESEED_MAX_MANIFEST_SCAN_V1 {
+            eyre::bail!(
+                "operator-preseed SoraFS store contains {} manifests, exceeding the V1 hydration scan limit of {}",
+                manifests.len(),
+                SORACLOUD_OPERATOR_PRESEED_MAX_MANIFEST_SCAN_V1
+            );
+        }
+        for manifest in manifests {
+            if manifest.content_length() == 0 || manifest.content_length() > maximum_bytes {
+                continue;
+            }
+            let manifest_id = manifest.manifest_id().to_owned();
+            let write_result = write_verified_sorafs_manifest_payload_to_cache(
+                &manifest,
+                expected_hash,
+                cache_path,
+                maximum_bytes,
+                |manifest_id, offset, len| {
+                    store
+                        .read_payload_range(manifest_id, offset, len)
+                        .map_err(|error| error.to_string())
+                },
+            );
+            match write_result {
+                Ok(()) => return Ok(true),
+                Err(error) => {
+                    iroha_logger::debug!(
+                        ?error,
+                        manifest_id = %manifest_id,
+                        "operator-preseed SoraFS payload did not match the requested Soracloud artifact"
                     );
                 }
             }
@@ -6896,6 +7667,52 @@ impl SoracloudRuntimeManager {
         }
         Ok(None)
     }
+    fn hydrate_operator_preseed_inrou_guest_image_artifact(
+        &self,
+        bundle_root: &Path,
+        plan: &SoracloudRuntimeInrouPlan,
+        manifest_digest: [u8; 32],
+        expected_manifest_cid: &[u8],
+    ) -> eyre::Result<bool> {
+        let Some(store) = self.operator_preseed_store.as_ref() else {
+            return Ok(false);
+        };
+        let Some(manifest) = store.manifest_by_digest(&manifest_digest) else {
+            return Ok(false);
+        };
+        if manifest.manifest_cid() != expected_manifest_cid {
+            eyre::bail!(
+                "operator-preseed SoraFS manifest CID does not match the signed Inrou artifact reference"
+            );
+        }
+        let files = manifest
+            .files()
+            .iter()
+            .map(|file| SorafsHydratedFileLayout {
+                path: file.path.clone(),
+                offset: file.offset,
+                size: file.size,
+            })
+            .collect::<Vec<_>>();
+        validate_published_inrou_guest_image_files(plan, &files)?;
+        let inrou_root = bundle_root.join("inrou");
+        materialize_operator_preseed_sorafs_files(
+            store,
+            &manifest,
+            &files,
+            &inrou_root,
+            self.config.hf.import_max_files,
+            self.config.inrou.max_storage_bytes.get(),
+        )
+        .wrap_err_with(|| {
+            format!(
+                "stream operator-preseed Inrou guest-image manifest {} into {}",
+                hex::encode(manifest_digest),
+                inrou_root.display()
+            )
+        })?;
+        Ok(true)
+    }
     fn hydrate_published_inrou_guest_image_artifact(
         &self,
         bundle_root: &Path,
@@ -6927,6 +7744,14 @@ impl SoracloudRuntimeManager {
             eyre::bail!(
                 "published Inrou guest-image storage manifest identifier does not match its manifest digest"
             );
+        }
+        if self.hydrate_operator_preseed_inrou_guest_image_artifact(
+            bundle_root,
+            plan,
+            manifest_digest,
+            &manifest_cid,
+        )? {
+            return Ok(());
         }
         let view = self.state.view();
         let remote_sources = collect_remote_hydration_sources(&view, &self.state);
@@ -10126,9 +10951,9 @@ fn apartment_execution_result_from_summary(
 fn apartment_autonomy_run_root(state_dir: &Path, apartment_name: &str, run_id: &str) -> PathBuf {
     state_dir
         .join("apartments")
-        .join(sanitize_path_component(apartment_name))
+        .join(storage_path_component(apartment_name))
         .join("runs")
-        .join(sanitize_path_component(run_id))
+        .join(storage_path_component(run_id))
 }
 fn apartment_autonomy_summary_path(
     state_dir: &Path,
@@ -10634,9 +11459,6 @@ fn inrou_host_heartbeat_refresh_due(
     existing.heartbeat_expires_at_ms
         <= now_ms.saturating_add(inrou_host_heartbeat_refresh_margin_ms(config))
 }
-fn should_submit_local_inrou_host_capability(auto_proxy_only: bool) -> bool {
-    !auto_proxy_only
-}
 fn inrou_host_capability_matches(
     existing: &SoraInrouHostCapabilityRecordV1,
     desired: &SoraInrouHostCapabilityRecordV1,
@@ -10649,7 +11471,6 @@ fn inrou_host_capability_matches(
         && existing.max_cpu_millis == desired.max_cpu_millis
         && existing.max_memory_bytes == desired.max_memory_bytes
         && existing.max_storage_bytes == desired.max_storage_bytes
-        && existing.proxy_only == desired.proxy_only
 }
 fn inrou_host_capability_refresh_needed(
     existing: Option<&SoraInrouHostCapabilityRecordV1>,
@@ -10867,16 +11688,16 @@ fn build_runtime_snapshot(
                 .is_some_and(|state| state.active_service_version == service_version);
             let service_dir = state_dir
                 .join("services")
-                .join(sanitize_path_component(&service_name))
-                .join(sanitize_path_component(&service_version));
+                .join(storage_path_component(&service_name))
+                .join(storage_path_component(&service_version));
             let config_dir = service_dir.join("configs");
             let config_exports_dir = service_dir.join("config_exports");
             let effective_env_path = service_dir.join("effective_env.json");
             let secret_envelopes_dir = service_dir.join("secret_envelopes");
             let secret_payload_dir = state_dir
                 .join("secrets")
-                .join(sanitize_path_component(&service_name))
-                .join(sanitize_path_component(&service_version));
+                .join(storage_path_component(&service_name))
+                .join(storage_path_component(&service_version));
             let service_data_dir = build_native_service_data_dir(state_dir, &service_name);
             let bundle_cache_path =
                 artifacts_root.join(hash_cache_name(bundle.container.bundle_hash));
@@ -11360,7 +12181,7 @@ fn build_apartment_plan(
 ) -> SoracloudRuntimeApartmentPlan {
     let apartment_root = state_dir
         .join("apartments")
-        .join(sanitize_path_component(apartment_name));
+        .join(storage_path_component(apartment_name));
     SoracloudRuntimeApartmentPlan {
         apartment_name: apartment_name.to_string(),
         manifest_hash: record.manifest_hash.to_string(),
@@ -11822,7 +12643,7 @@ fn sanitized_relative_material_path(key: &str) -> Result<PathBuf, VMError> {
         if component.is_empty() || matches!(component, "." | "..") {
             return Err(VMError::PermissionDenied);
         }
-        path.push(sanitize_path_component(component));
+        path.push(storage_path_component(component));
     }
     Ok(path)
 }
@@ -12205,7 +13026,7 @@ fn validate_hf_import_manifest_bounds(manifest: &HfLocalImportManifestV1) -> io:
 fn hf_local_source_root(state_dir: &Path, source_id: &str) -> PathBuf {
     state_dir
         .join("hf_sources")
-        .join(sanitize_path_component(source_id))
+        .join(storage_path_component(source_id))
 }
 fn hf_local_source_files_root(state_dir: &Path, source_id: &str) -> PathBuf {
     hf_local_source_root(state_dir, source_id).join("files")
@@ -12222,7 +13043,7 @@ fn hf_local_runner_stderr_log_path(state_dir: &Path, source_id: &str) -> PathBuf
     state_dir
         .join("hf_runtime")
         .join("workers")
-        .join(format!("{}.stderr.log", sanitize_path_component(source_id)))
+        .join(format!("{}.stderr.log", storage_path_component(source_id)))
 }
 fn ensure_hf_local_runner_script(state_dir: &Path) -> io::Result<PathBuf> {
     let path = hf_local_runner_script_path(state_dir);
@@ -12318,6 +13139,247 @@ fn remove_hf_local_runner_worker_if_same(
         .is_some_and(|current| Arc::ptr_eq(current, worker));
     if should_remove {
         workers.remove(source_id);
+    }
+}
+fn open_inrou_runtime_log(path: &Path, label: &str) -> io::Result<fs::File> {
+    let named = match fs::symlink_metadata(path) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    if let Some(metadata) = named.as_ref() {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{label} {} must be a regular file", path.display()),
+            ));
+        }
+        #[cfg(unix)]
+        {
+            let effective_uid = rustix::process::geteuid().as_raw();
+            if metadata.nlink() != 1
+                || metadata.uid() != effective_uid
+                || metadata.mode() & 0o077 != 0
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!(
+                        "{label} {} must be owner-private, runtime-owned, and singly linked",
+                        path.display()
+                    ),
+                ));
+            }
+        }
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.write(true);
+    if named.is_some() {
+        options.create(false);
+    } else {
+        options.create_new(true);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options
+            .mode(0o600)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path)?;
+    let opened = file.metadata()?;
+    if !opened.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} {} did not open as a regular file", path.display()),
+        ));
+    }
+    if let Some(named) = named.as_ref()
+        && !same_soracloud_regular_file(named, &opened)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} {} changed while it was opened", path.display()),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        let effective_uid = rustix::process::geteuid().as_raw();
+        if opened.nlink() != 1 || opened.uid() != effective_uid || opened.mode() & 0o077 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "{label} {} did not retain private runtime custody",
+                    path.display()
+                ),
+            ));
+        }
+    }
+    file.set_len(0)?;
+    Ok(file)
+}
+fn drain_inrou_runtime_log_bounded(mut reader: impl io::Read, mut log: fs::File) -> io::Result<()> {
+    let payload_limit = SORACLOUD_INROU_LOG_MAX_BYTES
+        .saturating_sub(SORACLOUD_INROU_LOG_TRUNCATION_MARKER.len() as u64);
+    let mut payload_written = 0_u64;
+    let mut marked_truncated = false;
+    let mut log_writable = true;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        let remaining = payload_limit.saturating_sub(payload_written);
+        let to_write = usize::try_from(remaining.min(read as u64)).unwrap_or(0);
+        if log_writable && to_write != 0 {
+            if let Err(error) = log.write_all(&buffer[..to_write]) {
+                iroha_logger::warn!(?error, "failed to append bounded Inrou runtime log");
+                log_writable = false;
+            } else {
+                payload_written = payload_written.saturating_add(to_write as u64);
+            }
+        }
+        if read > to_write && !marked_truncated {
+            if log_writable && let Err(error) = log.write_all(SORACLOUD_INROU_LOG_TRUNCATION_MARKER)
+            {
+                iroha_logger::warn!(?error, "failed to mark truncated Inrou runtime log");
+                log_writable = false;
+            }
+            marked_truncated = true;
+        }
+    }
+    if log_writable {
+        log.flush()?;
+    }
+    Ok(())
+}
+fn spawn_inrou_runtime_log_drain(
+    reader: impl io::Read + Send + 'static,
+    log: fs::File,
+    thread_name: &'static str,
+) -> io::Result<thread::JoinHandle<()>> {
+    thread::Builder::new()
+        .name(thread_name.to_owned())
+        .spawn(move || {
+            if let Err(error) = drain_inrou_runtime_log_bounded(reader, log) {
+                iroha_logger::warn!(?error, %thread_name, "Inrou runtime log drain failed");
+            }
+        })
+}
+fn attach_inrou_runtime_log_drains(
+    child: &mut std::process::Child,
+    stderr_log: fs::File,
+) -> eyre::Result<Vec<thread::JoinHandle<()>>> {
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => eyre::bail!("Inrou runtime stderr pipe was not configured"),
+    };
+    let stderr_drain = spawn_inrou_runtime_log_drain(stderr, stderr_log, "inrou-runtime-stderr")
+        .wrap_err("spawn Inrou stderr drain")?;
+    Ok(vec![stderr_drain])
+}
+fn terminate_inrou_child_bounded(
+    child: &mut std::process::Child,
+) -> eyre::Result<std::process::ExitStatus> {
+    let initial_poll_error = match child.try_wait() {
+        Ok(Some(status)) => return Ok(status),
+        Ok(None) => None,
+        Err(error) => Some(error),
+    };
+    let kill_error = child.kill().err();
+    let deadline = std::time::Instant::now() + SORACLOUD_INROU_CHILD_STOP_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                eyre::bail!(
+                    "Inrou child pid {} did not exit within {:?} after SIGKILL{}",
+                    child.id(),
+                    SORACLOUD_INROU_CHILD_STOP_TIMEOUT,
+                    format_inrou_child_stop_errors(
+                        initial_poll_error.as_ref(),
+                        kill_error.as_ref()
+                    ),
+                );
+            }
+            Err(error) => {
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "poll Inrou child pid {} after SIGKILL{}",
+                        child.id(),
+                        format_inrou_child_stop_errors(
+                            initial_poll_error.as_ref(),
+                            kill_error.as_ref()
+                        ),
+                    )
+                });
+            }
+        }
+    }
+}
+fn format_inrou_child_stop_errors(
+    initial_poll_error: Option<&io::Error>,
+    kill_error: Option<&io::Error>,
+) -> String {
+    let mut suffix = String::new();
+    if let Some(error) = initial_poll_error {
+        suffix.push_str(&format!("; initial status poll failed: {error}"));
+    }
+    if let Some(error) = kill_error {
+        suffix.push_str(&format!("; sending SIGKILL failed: {error}"));
+    }
+    suffix
+}
+fn inrou_termination_error_suffix(termination: &eyre::Result<std::process::ExitStatus>) -> String {
+    termination
+        .as_ref()
+        .err()
+        .map_or_else(String::new, |error| {
+            format!("; bounded child termination also failed: {error}")
+        })
+}
+#[cfg(target_os = "linux")]
+fn preserve_inrou_firewall_after_failed_termination(
+    termination: &eyre::Result<std::process::ExitStatus>,
+    firewall: &mut Option<InrouLoopbackOwnerFirewall>,
+) {
+    if termination.is_err()
+        && let Some(firewall) = firewall.take()
+    {
+        // A child that survived SIGKILL must never outlive the loopback owner
+        // barrier. Leaking the lock/rules makes the supervisor fail closed
+        // until process exit, when the kernel releases the lock descriptor.
+        std::mem::forget(firewall);
+    }
+}
+fn join_inrou_log_drains_bounded(log_drains: &mut Vec<thread::JoinHandle<()>>) {
+    let deadline = std::time::Instant::now() + SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT;
+    while log_drains.iter().any(|drain| !drain.is_finished())
+        && std::time::Instant::now() < deadline
+    {
+        thread::sleep(Duration::from_millis(10));
+    }
+    for drain in log_drains.drain(..) {
+        if drain.is_finished() {
+            let _ = drain.join();
+        } else {
+            iroha_logger::warn!(
+                timeout_ms = SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT.as_millis(),
+                "detaching an Inrou log drain that did not stop before its deadline"
+            );
+        }
     }
 }
 fn stderr_log_excerpt(path: &Path) -> String {
@@ -12647,34 +13709,29 @@ impl Drop for HfLocalRunnerWorker {
         self.stop();
     }
 }
-impl HostedHttpWorkerAttachment {
-    fn cleanup(&mut self) {
-        match self {
-            Self::FirecrackerKvm(attachment) => attachment.cleanup(),
-        }
-    }
-    fn accounted_egress_bytes(&self) -> io::Result<Option<u64>> {
-        match self {
-            Self::FirecrackerKvm(attachment) => attachment.accounted_egress_bytes().map(Some),
-        }
-    }
-}
 impl HostedHttpWorker {
     fn new(
         cache_key: HostedHttpWorkerCacheKey,
         child: std::process::Child,
+        log_drains: Vec<thread::JoinHandle<()>>,
         listen_base_url: String,
         egress_accounting_offset_bytes: u64,
-        attachment: Option<HostedHttpWorkerAttachment>,
         stderr_log_path: PathBuf,
+        port_forward: PortableVmLoopbackProxy,
+        qmp_control: Arc<Mutex<PortableVmQmpControl>>,
+        #[cfg(target_os = "linux")] loopback_firewall: InrouLoopbackOwnerFirewall,
     ) -> Self {
         Self {
             cache_key,
             child,
+            log_drains,
             listen_base_url,
             egress_accounting_offset_bytes,
-            attachment,
             stderr_log_path,
+            port_forward: Some(port_forward),
+            qmp_control: Some(qmp_control),
+            #[cfg(target_os = "linux")]
+            loopback_firewall: Some(loopback_firewall),
         }
     }
     fn pid(&self) -> Option<u32> {
@@ -12687,18 +13744,27 @@ impl HostedHttpWorker {
         if self.cache_key.runtime != SoraContainerRuntimeV1::Inrou {
             return None;
         }
-        self.attachment
-            .as_ref()
-            .and_then(|attachment| attachment.accounted_egress_bytes().ok().flatten())
-            .map(|tx_bytes| self.egress_accounting_offset_bytes.saturating_add(tx_bytes))
+        Some(self.egress_accounting_offset_bytes)
     }
     fn stop(&mut self) {
         let _ = &self.stderr_log_path;
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        if let Some(mut attachment) = self.attachment.take() {
-            attachment.cleanup();
+        if let Some(mut port_forward) = self.port_forward.take() {
+            port_forward.stop();
         }
+        let termination = terminate_inrou_child_bounded(&mut self.child);
+        #[cfg(target_os = "linux")]
+        preserve_inrou_firewall_after_failed_termination(&termination, &mut self.loopback_firewall);
+        if let Err(error) = termination {
+            iroha_logger::warn!(
+                ?error,
+                pid = self.child.id(),
+                "Inrou PortableVM child did not stop before its deadline; retaining the owner firewall"
+            );
+        }
+        join_inrou_log_drains_bounded(&mut self.log_drains);
+        let _ = self.qmp_control.take();
+        #[cfg(target_os = "linux")]
+        let _ = self.loopback_firewall.take();
     }
 }
 impl Drop for HostedHttpWorker {
@@ -12754,7 +13820,7 @@ fn read_hosted_http_runtime_state(
 fn build_native_service_data_dir(state_dir: &Path, service_name: &str) -> PathBuf {
     state_dir
         .join("service_data")
-        .join(sanitize_path_component(service_name))
+        .join(storage_path_component(service_name))
 }
 fn write_hosted_http_runtime_state_document(
     materialization_dir: &Path,
@@ -13043,14 +14109,14 @@ fn build_hosted_http_service_volume_dir(
 ) -> PathBuf {
     build_native_service_data_dir(state_dir, service_name)
         .join("revisions")
-        .join(sanitize_path_component(service_version))
+        .join(storage_path_component(service_version))
         .join("volumes")
         .join(if volume_kind.is_per_replica() {
             "per-replica"
         } else {
             "shared"
         })
-        .join(sanitize_path_component(volume_name))
+        .join(storage_path_component(volume_name))
 }
 struct InrouSharedFilesystemMount {
     mount_path: String,
@@ -13066,6 +14132,7 @@ enum InrouSharedFilesystemMountKind {
         device_serial: String,
         filesystem_type: String,
         mount_options: String,
+        initialize_filesystem: bool,
     },
 }
 #[allow(dead_code)]
@@ -13080,12 +14147,82 @@ struct PortableVmLeaseDisk {
     device_serial: String,
     filesystem_type: String,
     mount_options: String,
+    initialize_filesystem: bool,
 }
 struct PortableVmNetworkPlan {
     netdev: String,
     listen_base_url: String,
-    allowlist_hosts: Vec<(String, Ipv4Addr)>,
+    public_listener: TcpListener,
+    backend_reservation: TcpListener,
+    expected_backend: SocketAddr,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PortableVmChildIdentity {
+    uid: u32,
+    gid: u32,
+    supplementary_gids: Vec<u32>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PortableVmKvmDeviceAccess {
+    uid: u32,
+    gid: u32,
+    mode: u32,
+    hard_links: u64,
+    rdev: u64,
+    is_character_device: bool,
+}
+struct PortableVmQmpControl {
+    #[cfg(target_os = "linux")]
+    reader: io::BufReader<UnixStream>,
+}
+struct PortableVmLoopbackProxy {
+    listen_address: SocketAddr,
+    stop: Arc<AtomicBool>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+#[cfg(target_os = "linux")]
+struct InrouLoopbackOwnerFirewall {
+    iptables_binary: PathBuf,
+    ip6tables_binary: PathBuf,
+    _single_instance_lock: fs::File,
+    owns_chains: [bool; 3],
+}
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+enum InrouIptablesFamily {
+    Ipv4,
+    Ipv6,
+}
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+struct InrouOwnedIptablesChain {
+    name: &'static str,
+    marker: &'static str,
+    hook: &'static str,
+    family: InrouIptablesFamily,
+}
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IPTABLES_CHAINS: [InrouOwnedIptablesChain; 3] = [
+    InrouOwnedIptablesChain {
+        name: SORACLOUD_INROU_IPTABLES_CHAIN,
+        marker: SORACLOUD_INROU_IPTABLES_CHAIN_MARKER,
+        hook: "OUTPUT",
+        family: InrouIptablesFamily::Ipv4,
+    },
+    InrouOwnedIptablesChain {
+        name: SORACLOUD_INROU_IPTABLES_INPUT_CHAIN,
+        marker: SORACLOUD_INROU_IPTABLES_INPUT_CHAIN_MARKER,
+        hook: "INPUT",
+        family: InrouIptablesFamily::Ipv4,
+    },
+    InrouOwnedIptablesChain {
+        name: SORACLOUD_INROU_IP6TABLES_CHAIN,
+        marker: SORACLOUD_INROU_IP6TABLES_CHAIN_MARKER,
+        hook: "OUTPUT",
+        family: InrouIptablesFamily::Ipv6,
+    },
+];
+type PortableVmBackendAttestor = Arc<dyn Fn(SocketAddr, &AtomicBool) -> bool + Send + Sync>;
 #[derive(Clone, Copy)]
 struct PortableVmGuestMachineProfile {
     emulator_candidates: &'static [&'static str],
@@ -13112,18 +14249,14 @@ impl InrouTapNetworkAttachment {
                     export.guest_client,
                     export.export_path_on_host.display()
                 );
-                let _ = Command::new(exportfs_binary)
-                    .args(["-u", export_spec.as_str()])
-                    .status();
+                let _ = run_host_command(exportfs_binary, &["-u", export_spec.as_str()]);
             }
         }
         for args in self.installed_firewall_rules.iter().rev() {
             let delete_args = inrou_tap_delete_rule_args(args);
-            let _ = Command::new(&self.iptables_binary)
-                .args(&delete_args)
-                .status();
+            let _ = run_host_command_strings(&self.iptables_binary, &delete_args);
         }
-        let _ = Command::new(&self.ip_binary).args(delete_link).status();
+        let _ = run_host_command(&self.ip_binary, &delete_link);
     }
     fn accounted_egress_bytes(&self) -> io::Result<u64> {
         if !self.firewall_plan.installs_masquerade_rule() {
@@ -13154,11 +14287,696 @@ fn resolve_inrou_mke2fs_executable() -> Option<PathBuf> {
     resolve_executable_candidates(&["mke2fs", "mkfs.ext4"]).or_else(|| {
         known_host_executable_paths("mkfs.ext4")
             .into_iter()
-            .find(|candidate| candidate.is_file())
+            .find_map(|candidate| resolve_executable_candidate(&candidate))
     })
 }
 fn resolve_inrou_qemu_img_executable() -> Option<PathBuf> {
     resolve_executable_candidates(&["qemu-img"])
+}
+#[cfg(target_os = "linux")]
+fn resolve_inrou_setpriv_executable() -> Option<PathBuf> {
+    [Path::new("/usr/bin/setpriv"), Path::new("/bin/setpriv")]
+        .into_iter()
+        .find_map(|candidate| {
+            let canonical = fs::canonicalize(candidate).ok()?;
+            (is_resolved_executable(&canonical) && is_root_owned_executable_path(&canonical))
+                .then_some(canonical)
+        })
+}
+#[cfg(target_os = "linux")]
+fn resolve_inrou_shell_executable() -> Option<PathBuf> {
+    [Path::new("/bin/sh"), Path::new("/usr/bin/sh")]
+        .into_iter()
+        .find_map(|candidate| {
+            let canonical = fs::canonicalize(candidate).ok()?;
+            let command_metadata = fs::symlink_metadata(candidate).ok()?;
+            let command_entry_is_trusted = (command_metadata.is_file()
+                || command_metadata.file_type().is_symlink())
+                && command_metadata.uid() == 0
+                && candidate.ancestors().skip(1).all(|ancestor| {
+                    fs::metadata(ancestor).ok().is_some_and(|metadata| {
+                        metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0
+                    })
+                });
+            // Preserve the shell entry path in case the platform uses a
+            // multi-call binary whose applet is selected from argv[0].
+            (command_entry_is_trusted
+                && is_resolved_executable(&canonical)
+                && is_root_owned_executable_path(&canonical))
+            .then(|| candidate.to_path_buf())
+        })
+}
+#[cfg(target_os = "linux")]
+fn resolve_inrou_iptables_executable() -> Option<PathBuf> {
+    [
+        Path::new("/usr/sbin/iptables"),
+        Path::new("/sbin/iptables"),
+        Path::new("/usr/bin/iptables"),
+        Path::new("/bin/iptables"),
+    ]
+    .into_iter()
+    .find_map(|candidate| {
+        let canonical = fs::canonicalize(candidate).ok()?;
+        let command_metadata = fs::symlink_metadata(candidate).ok()?;
+        let command_entry_is_trusted = (command_metadata.is_file()
+            || command_metadata.file_type().is_symlink())
+            && command_metadata.uid() == 0
+            && candidate.ancestors().skip(1).all(|ancestor| {
+                fs::metadata(ancestor).ok().is_some_and(|metadata| {
+                    metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0
+                })
+            });
+        // Preserve the absolute `iptables` entry path: common Linux systems
+        // use an argv[0]-dispatched xtables multi-call binary, so executing its
+        // canonical target directly changes semantics. Both the entry chain
+        // and canonical target remain under root-only custody.
+        (command_entry_is_trusted
+            && is_resolved_executable(&canonical)
+            && is_root_owned_executable_path(&canonical))
+        .then(|| candidate.to_path_buf())
+    })
+}
+#[cfg(target_os = "linux")]
+fn resolve_inrou_ip6tables_executable() -> Option<PathBuf> {
+    [
+        Path::new("/usr/sbin/ip6tables"),
+        Path::new("/sbin/ip6tables"),
+        Path::new("/usr/bin/ip6tables"),
+        Path::new("/bin/ip6tables"),
+    ]
+    .into_iter()
+    .find_map(|candidate| {
+        let canonical = fs::canonicalize(candidate).ok()?;
+        let command_metadata = fs::symlink_metadata(candidate).ok()?;
+        let command_entry_is_trusted = (command_metadata.is_file()
+            || command_metadata.file_type().is_symlink())
+            && command_metadata.uid() == 0
+            && candidate.ancestors().skip(1).all(|ancestor| {
+                fs::metadata(ancestor).ok().is_some_and(|metadata| {
+                    metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0
+                })
+            });
+        (command_entry_is_trusted
+            && is_resolved_executable(&canonical)
+            && is_root_owned_executable_path(&canonical))
+        .then(|| candidate.to_path_buf())
+    })
+}
+#[cfg(target_os = "linux")]
+fn is_root_owned_executable_path(candidate: &Path) -> bool {
+    candidate.ancestors().enumerate().all(|(index, path)| {
+        fs::metadata(path).ok().is_some_and(|metadata| {
+            ((index == 0 && metadata.is_file()) || (index != 0 && metadata.is_dir()))
+                && metadata.uid() == 0
+                && metadata.mode() & 0o022 == 0
+        })
+    })
+}
+fn validate_portable_vm_kvm_identity(
+    identity: &PortableVmChildIdentity,
+    device: PortableVmKvmDeviceAccess,
+) -> eyre::Result<()> {
+    if !device.is_character_device
+        || device.uid != 0
+        || device.hard_links != 1
+        || device.rdev != SORACLOUD_INROU_KVM_DEVICE_RDEV
+        || device.mode & 0o007 != 0
+    {
+        eyre::bail!(
+            "`/dev/kvm` must be one direct root-owned Linux KVM character device (major 10, minor 232) with no world access"
+        );
+    }
+    if device.mode & 0o070 != 0o060 {
+        eyre::bail!("`/dev/kvm` must grant its owning group exact read/write access");
+    }
+    if device.gid == 0 {
+        eyre::bail!(
+            "`/dev/kvm` group is root, so the dedicated non-root QEMU identity cannot receive exact group access"
+        );
+    }
+    if identity.gid == device.gid {
+        eyre::bail!(
+            "the `/dev/kvm` group must remain distinct from the dedicated primary gid that protects QEMU disks"
+        );
+    }
+    let expected_supplementary_gids = vec![device.gid];
+    if identity.supplementary_gids != expected_supplementary_gids {
+        eyre::bail!(
+            "KVM PortableVM supplementary gids must be exactly {:?}, derived only from the direct `/dev/kvm` group",
+            expected_supplementary_gids
+        );
+    }
+    Ok(())
+}
+fn validate_portable_vm_child_identity_values(
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<()> {
+    for (label, id) in [("uid", identity.uid), ("primary gid", identity.gid)] {
+        if !(SORACLOUD_INROU_PRIMARY_ID_MIN..SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE).contains(&id)
+        {
+            eyre::bail!(
+                "dedicated Inrou QEMU {label} {id} must be in the fixed host-reserved corridor {}..{} (upper bound exclusive)",
+                SORACLOUD_INROU_PRIMARY_ID_MIN,
+                SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE,
+            );
+        }
+    }
+    if let Some(gid) = identity
+        .supplementary_gids
+        .iter()
+        .copied()
+        .find(|gid| inrou_supplementary_gid_is_host_reserved(*gid))
+    {
+        eyre::bail!(
+            "Inrou QEMU supplementary gid {gid} is a Linux overflow, nobody, dynamic-service, container, foreign, or unchanged-credential sentinel id"
+        );
+    }
+    Ok(())
+}
+fn inrou_supplementary_gid_is_host_reserved(gid: u32) -> bool {
+    matches!(gid, 65_534 | 65_535)
+        || (60_001..=60_705).contains(&gid)
+        || (61_184..=65_519).contains(&gid)
+        || (524_288..=1_879_048_191).contains(&gid)
+        || (2_147_352_576..=2_147_418_111).contains(&gid)
+        || gid >= 1 << 31
+}
+#[cfg(target_os = "linux")]
+fn read_inrou_root_custodied_identity_file(
+    path: &Path,
+    maximum_bytes: u64,
+    label: &str,
+) -> eyre::Result<String> {
+    for (index, component) in path.ancestors().enumerate() {
+        let metadata = fs::symlink_metadata(component)
+            .wrap_err_with(|| format!("inspect {label} path component {}", component.display()))?;
+        if metadata.file_type().is_symlink()
+            || metadata.uid() != 0
+            || metadata.mode() & 0o022 != 0
+            || (index == 0 && !metadata.is_file())
+            || (index != 0 && !metadata.is_dir())
+        {
+            eyre::bail!(
+                "{label} path component {} must be direct, root-owned, and non-writable by group/other",
+                component.display()
+            );
+        }
+    }
+    read_soracloud_regular_text_bounded(path, maximum_bytes, label).map_err(eyre::Report::from)
+}
+#[cfg(target_os = "linux")]
+fn read_optional_inrou_root_custodied_identity_file(
+    path: &Path,
+    maximum_bytes: u64,
+    label: &str,
+) -> eyre::Result<Option<String>> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => read_inrou_root_custodied_identity_file(path, maximum_bytes, label).map(Some),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).wrap_err_with(|| format!("inspect optional {label}")),
+    }
+}
+#[cfg(target_os = "linux")]
+fn validate_inrou_local_nsswitch(contents: &str) -> eyre::Result<()> {
+    let mut required = BTreeMap::new();
+    for raw_line in contents.lines() {
+        let line = raw_line.split('#').next().unwrap_or_default().trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((database, sources)) = line.split_once(':') else {
+            continue;
+        };
+        let database = database.trim().to_ascii_lowercase();
+        if !matches!(database.as_str(), "passwd" | "group" | "subid") {
+            continue;
+        }
+        if required.insert(database.clone(), sources.trim()).is_some() {
+            eyre::bail!("/etc/nsswitch.conf repeats the `{database}` database");
+        }
+    }
+    for database in ["passwd", "group"] {
+        let sources = required
+            .get(database)
+            .ok_or_else(|| eyre::eyre!("/etc/nsswitch.conf omits `{database}: files`"))?;
+        if sources.split_ascii_whitespace().collect::<Vec<_>>() != ["files"] {
+            eyre::bail!(
+                "Inrou PortableVM requires deterministic `{database}: files` NSS resolution; found `{sources}`"
+            );
+        }
+    }
+    if let Some(sources) = required.get("subid")
+        && sources.split_ascii_whitespace().collect::<Vec<_>>() != ["files"]
+    {
+        eyre::bail!(
+            "Inrou PortableVM requires deterministic `subid: files` resolution when that database is declared; found `{sources}`"
+        );
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn inrou_configured_decimal_identity_names(identity: &PortableVmChildIdentity) -> BTreeSet<String> {
+    [identity.uid, identity.gid]
+        .into_iter()
+        .chain(identity.supplementary_gids.iter().copied())
+        .map(|id| id.to_string())
+        .collect()
+}
+#[cfg(target_os = "linux")]
+fn validate_inrou_reserved_passwd(
+    contents: &str,
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<PathBuf> {
+    let forbidden_names = inrou_configured_decimal_identity_names(identity);
+    let mut names = BTreeSet::new();
+    let mut target_shell = None;
+    for (line_index, raw_line) in contents.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split(':').collect::<Vec<_>>();
+        if fields.len() != 7 || fields[0].is_empty() || !names.insert(fields[0]) {
+            eyre::bail!(
+                "local passwd database has a malformed or duplicate-name record on line {}",
+                line_index.saturating_add(1)
+            );
+        }
+        if forbidden_names.contains(fields[0]) {
+            eyre::bail!(
+                "local passwd name `{}` collides with a configured numeric Inrou identity",
+                fields[0]
+            );
+        }
+        let record_uid = fields[2].parse::<u32>().wrap_err_with(|| {
+            format!(
+                "parse local passwd uid on line {}",
+                line_index.saturating_add(1)
+            )
+        })?;
+        let record_gid = fields[3].parse::<u32>().wrap_err_with(|| {
+            format!(
+                "parse local passwd primary gid on line {}",
+                line_index.saturating_add(1)
+            )
+        })?;
+        let is_target_name = fields[0] == SORACLOUD_INROU_SERVICE_IDENTITY_NAME;
+        let is_target_uid = record_uid == identity.uid;
+        if is_target_name || is_target_uid {
+            if !(is_target_name && is_target_uid) || target_shell.is_some() {
+                eyre::bail!(
+                    "local passwd must contain exactly one `{}` record with uid {}",
+                    SORACLOUD_INROU_SERVICE_IDENTITY_NAME,
+                    identity.uid
+                );
+            }
+            if fields[1] != "x"
+                || record_gid != identity.gid
+                || fields[5] != SORACLOUD_INROU_SERVICE_HOME
+                || !matches!(
+                    fields[6],
+                    "/usr/sbin/nologin" | "/sbin/nologin" | "/usr/bin/false" | "/bin/false"
+                )
+            {
+                eyre::bail!(
+                    "the `{}` passwd record must use `x`, primary gid {}, home `{}`, and a literal trusted nologin/false shell",
+                    SORACLOUD_INROU_SERVICE_IDENTITY_NAME,
+                    identity.gid,
+                    SORACLOUD_INROU_SERVICE_HOME
+                );
+            }
+            target_shell = Some(PathBuf::from(fields[6]));
+        } else if record_gid == identity.gid {
+            eyre::bail!(
+                "dedicated Inrou primary gid {} is assigned to another passwd account `{}`",
+                identity.gid,
+                fields[0]
+            );
+        }
+    }
+    target_shell.ok_or_else(|| {
+        eyre::eyre!(
+            "local passwd must reserve uid {} as the locked `{}` service account",
+            identity.uid,
+            SORACLOUD_INROU_SERVICE_IDENTITY_NAME
+        )
+    })
+}
+#[cfg(target_os = "linux")]
+fn validate_inrou_reserved_group(
+    contents: &str,
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<()> {
+    let forbidden_names = inrou_configured_decimal_identity_names(identity);
+    let mut names = BTreeSet::new();
+    let mut found_target = false;
+    for (line_index, raw_line) in contents.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split(':').collect::<Vec<_>>();
+        if fields.len() != 4 || fields[0].is_empty() || !names.insert(fields[0]) {
+            eyre::bail!(
+                "local group database has a malformed or duplicate-name record on line {}",
+                line_index.saturating_add(1)
+            );
+        }
+        if forbidden_names.contains(fields[0]) {
+            eyre::bail!(
+                "local group name `{}` collides with a configured numeric Inrou gid",
+                fields[0]
+            );
+        }
+        let record_gid = fields[2].parse::<u32>().wrap_err_with(|| {
+            format!(
+                "parse local group gid on line {}",
+                line_index.saturating_add(1)
+            )
+        })?;
+        let is_target_name = fields[0] == SORACLOUD_INROU_SERVICE_IDENTITY_NAME;
+        let is_target_gid = record_gid == identity.gid;
+        if is_target_name || is_target_gid {
+            if !(is_target_name && is_target_gid) || found_target {
+                eyre::bail!(
+                    "local group must contain exactly one `{}` record with gid {}",
+                    SORACLOUD_INROU_SERVICE_IDENTITY_NAME,
+                    identity.gid
+                );
+            }
+            if fields[1] != "x" || !fields[3].is_empty() {
+                eyre::bail!(
+                    "the `{}` primary group must use `x` and have no explicit members",
+                    SORACLOUD_INROU_SERVICE_IDENTITY_NAME
+                );
+            }
+            found_target = true;
+        } else if fields[3]
+            .split(',')
+            .any(|member| member == SORACLOUD_INROU_SERVICE_IDENTITY_NAME)
+        {
+            eyre::bail!(
+                "the `{}` service account must not be listed in supplementary group `{}`",
+                SORACLOUD_INROU_SERVICE_IDENTITY_NAME,
+                fields[0]
+            );
+        }
+    }
+    if !found_target {
+        eyre::bail!(
+            "local group must reserve gid {} as the empty `{}` primary group",
+            identity.gid,
+            SORACLOUD_INROU_SERVICE_IDENTITY_NAME
+        );
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn validate_inrou_reserved_shadow(contents: &str) -> eyre::Result<()> {
+    let mut names = BTreeSet::new();
+    let mut found_target = false;
+    for (line_index, raw_line) in contents.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split(':').collect::<Vec<_>>();
+        if fields.len() != 9 || fields[0].is_empty() || !names.insert(fields[0]) {
+            eyre::bail!(
+                "local shadow database has a malformed or duplicate-name record on line {}",
+                line_index.saturating_add(1)
+            );
+        }
+        if fields[0] == SORACLOUD_INROU_SERVICE_IDENTITY_NAME {
+            if found_target || !matches!(fields[1].as_bytes().first(), Some(b'!' | b'*')) {
+                eyre::bail!(
+                    "the `{}` shadow record must occur once with a locked password",
+                    SORACLOUD_INROU_SERVICE_IDENTITY_NAME
+                );
+            }
+            found_target = true;
+        }
+    }
+    if !found_target {
+        eyre::bail!(
+            "local shadow must contain a locked `{}` record",
+            SORACLOUD_INROU_SERVICE_IDENTITY_NAME
+        );
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn validate_inrou_reserved_gshadow(contents: &str) -> eyre::Result<()> {
+    let mut names = BTreeSet::new();
+    let mut found_target = false;
+    for (line_index, raw_line) in contents.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split(':').collect::<Vec<_>>();
+        if fields.len() != 4 || fields[0].is_empty() || !names.insert(fields[0]) {
+            eyre::bail!(
+                "local gshadow database has a malformed or duplicate-name record on line {}",
+                line_index.saturating_add(1)
+            );
+        }
+        if fields[0] == SORACLOUD_INROU_SERVICE_IDENTITY_NAME {
+            if found_target
+                || !matches!(fields[1].as_bytes().first(), Some(b'!' | b'*'))
+                || !fields[2].is_empty()
+                || !fields[3].is_empty()
+            {
+                eyre::bail!(
+                    "the `{}` gshadow record must occur once, be locked, and have no administrators or members",
+                    SORACLOUD_INROU_SERVICE_IDENTITY_NAME
+                );
+            }
+            found_target = true;
+        } else if fields[2]
+            .split(',')
+            .chain(fields[3].split(','))
+            .any(|name| name == SORACLOUD_INROU_SERVICE_IDENTITY_NAME)
+        {
+            eyre::bail!(
+                "the `{}` service account must not administer or join gshadow group `{}`",
+                SORACLOUD_INROU_SERVICE_IDENTITY_NAME,
+                fields[0]
+            );
+        }
+    }
+    if !found_target {
+        eyre::bail!(
+            "local gshadow must contain a locked empty `{}` record",
+            SORACLOUD_INROU_SERVICE_IDENTITY_NAME
+        );
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn validate_inrou_subordinate_id_unmapped(
+    contents: &str,
+    database: &str,
+    id: u32,
+) -> eyre::Result<()> {
+    for (line_index, raw_line) in contents.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split(':').collect::<Vec<_>>();
+        if fields.len() != 3 || fields[0].is_empty() {
+            eyre::bail!(
+                "local {database} database has a malformed record on line {}",
+                line_index.saturating_add(1)
+            );
+        }
+        if fields[0] == SORACLOUD_INROU_SERVICE_IDENTITY_NAME || fields[0] == id.to_string() {
+            eyre::bail!(
+                "local {database} must not delegate a range to Inrou owner `{}` on line {}",
+                fields[0],
+                line_index.saturating_add(1)
+            );
+        }
+        let start = fields[1].parse::<u32>().wrap_err_with(|| {
+            format!(
+                "parse local {database} range start on line {}",
+                line_index.saturating_add(1)
+            )
+        })?;
+        let count = fields[2].parse::<u32>().wrap_err_with(|| {
+            format!(
+                "parse local {database} range count on line {}",
+                line_index.saturating_add(1)
+            )
+        })?;
+        if count == 0 {
+            eyre::bail!(
+                "local {database} range on line {} must be nonempty",
+                line_index.saturating_add(1)
+            );
+        }
+        let end_exclusive = u64::from(start)
+            .checked_add(u64::from(count))
+            .filter(|end| *end <= u64::from(u32::MAX) + 1)
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "local {database} range on line {} overflows Linux uid_t/gid_t",
+                    line_index.saturating_add(1)
+                )
+            })?;
+        if u64::from(id) >= u64::from(start) && u64::from(id) < end_exclusive {
+            eyre::bail!(
+                "dedicated Inrou id {id} falls within local {database} range {start}:{count}"
+            );
+        }
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn ensure_inrou_service_shell_custody(shell: &Path) -> eyre::Result<()> {
+    let entry = fs::symlink_metadata(shell)
+        .wrap_err_with(|| format!("inspect Inrou service shell {}", shell.display()))?;
+    if !(entry.is_file() || entry.file_type().is_symlink())
+        || entry.uid() != 0
+        || entry.mode() & 0o022 != 0
+        || !shell.ancestors().skip(1).all(|ancestor| {
+            fs::metadata(ancestor).ok().is_some_and(|metadata| {
+                metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0
+            })
+        })
+    {
+        eyre::bail!(
+            "Inrou service shell {} and its resolved ancestor chain must be root-custodied and non-writable by group/other",
+            shell.display()
+        );
+    }
+    let canonical = fs::canonicalize(shell)
+        .wrap_err_with(|| format!("resolve Inrou service shell {}", shell.display()))?;
+    if !is_resolved_executable(&canonical) || !is_root_owned_executable_path(&canonical) {
+        eyre::bail!(
+            "resolved Inrou service shell {} must be a root-custodied executable",
+            canonical.display()
+        );
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn ensure_portable_vm_identity_reserved(identity: &PortableVmChildIdentity) -> eyre::Result<()> {
+    const IDENTITY_FILE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+    let nsswitch = read_inrou_root_custodied_identity_file(
+        Path::new("/etc/nsswitch.conf"),
+        IDENTITY_FILE_MAX_BYTES,
+        "Inrou NSS configuration",
+    )?;
+    validate_inrou_local_nsswitch(&nsswitch)?;
+    let passwd = read_inrou_root_custodied_identity_file(
+        Path::new("/etc/passwd"),
+        IDENTITY_FILE_MAX_BYTES,
+        "Inrou local passwd database",
+    )?;
+    let shell = validate_inrou_reserved_passwd(&passwd, identity)?;
+    let group = read_inrou_root_custodied_identity_file(
+        Path::new("/etc/group"),
+        IDENTITY_FILE_MAX_BYTES,
+        "Inrou local group database",
+    )?;
+    validate_inrou_reserved_group(&group, identity)?;
+    let shadow = read_inrou_root_custodied_identity_file(
+        Path::new("/etc/shadow"),
+        IDENTITY_FILE_MAX_BYTES,
+        "Inrou local shadow database",
+    )?;
+    validate_inrou_reserved_shadow(&shadow)?;
+    let gshadow = read_inrou_root_custodied_identity_file(
+        Path::new("/etc/gshadow"),
+        IDENTITY_FILE_MAX_BYTES,
+        "Inrou local gshadow database",
+    )?;
+    validate_inrou_reserved_gshadow(&gshadow)?;
+    match fs::symlink_metadata(SORACLOUD_INROU_SERVICE_HOME) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Ok(_) => {
+            eyre::bail!("the Inrou service home `{SORACLOUD_INROU_SERVICE_HOME}` must not exist")
+        }
+        Err(error) => return Err(error).wrap_err("inspect the canonical Inrou service home"),
+    }
+    ensure_inrou_service_shell_custody(&shell)?;
+    let subuid = read_optional_inrou_root_custodied_identity_file(
+        Path::new("/etc/subuid"),
+        IDENTITY_FILE_MAX_BYTES,
+        "Inrou local subordinate uid database",
+    )?;
+    if let Some(subuid) = subuid {
+        validate_inrou_subordinate_id_unmapped(&subuid, "subuid", identity.uid)?;
+    }
+    let subgid = read_optional_inrou_root_custodied_identity_file(
+        Path::new("/etc/subgid"),
+        IDENTITY_FILE_MAX_BYTES,
+        "Inrou local subordinate gid database",
+    )?;
+    if let Some(subgid) = subgid {
+        validate_inrou_subordinate_id_unmapped(&subgid, "subgid", identity.gid)?;
+        for supplementary_gid in &identity.supplementary_gids {
+            validate_inrou_subordinate_id_unmapped(&subgid, "subgid", *supplementary_gid)?;
+        }
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn inspect_inrou_kvm_device() -> eyre::Result<PortableVmKvmDeviceAccess> {
+    let path = Path::new("/dev/kvm");
+    for ancestor in path.parent().into_iter().flat_map(Path::ancestors) {
+        let metadata = fs::symlink_metadata(ancestor)
+            .wrap_err_with(|| format!("inspect `/dev/kvm` ancestor {}", ancestor.display()))?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.uid() != 0
+            || metadata.mode() & 0o022 != 0
+        {
+            eyre::bail!(
+                "`/dev/kvm` ancestor {} must be a direct root-owned non-writable directory",
+                ancestor.display()
+            );
+        }
+    }
+    let metadata = fs::symlink_metadata(path).wrap_err("inspect direct `/dev/kvm`")?;
+    Ok(PortableVmKvmDeviceAccess {
+        uid: metadata.uid(),
+        gid: metadata.gid(),
+        mode: metadata.mode(),
+        hard_links: metadata.nlink(),
+        rdev: metadata.rdev(),
+        is_character_device: metadata.file_type().is_char_device(),
+    })
+}
+#[cfg(target_os = "linux")]
+fn portable_vm_child_identity(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<PortableVmChildIdentity> {
+    if rustix::process::geteuid().as_raw() != 0 {
+        eyre::bail!(
+            "Inrou PortableVM hosting must start from uid 0 so `setpriv` can establish a dedicated QEMU identity before exec"
+        );
+    }
+    let uid = config
+        .portable_vm_uid
+        .ok_or_else(|| eyre::eyre!("Inrou PortableVM hosting requires portable_vm_uid"))?
+        .get();
+    let gid = config
+        .portable_vm_gid
+        .ok_or_else(|| eyre::eyre!("Inrou PortableVM hosting requires portable_vm_gid"))?
+        .get();
+    let kvm_device = inspect_inrou_kvm_device()?;
+    let supplementary_gids = vec![kvm_device.gid];
+    let identity = PortableVmChildIdentity {
+        uid,
+        gid,
+        supplementary_gids,
+    };
+    validate_portable_vm_child_identity_values(&identity)?;
+    validate_portable_vm_kvm_identity(&identity, kvm_device)?;
+    Ok(identity)
 }
 #[cfg(target_os = "linux")]
 fn resolve_inrou_exportfs_executable() -> Option<PathBuf> {
@@ -13171,10 +14989,6 @@ fn resolve_inrou_rpc_nfsd_executable() -> Option<PathBuf> {
 #[allow(dead_code)]
 fn resolve_inrou_mount_executable() -> Option<PathBuf> {
     resolve_executable_on_path("mount")
-}
-#[allow(dead_code)]
-fn resolve_inrou_chown_executable() -> Option<PathBuf> {
-    resolve_executable_on_path("chown")
 }
 fn resolve_inrou_bundle_member_path(
     bundle_root: &Path,
@@ -13202,21 +15016,895 @@ fn resolve_inrou_bundle_member_path(
     }
     Ok(canonical)
 }
+fn validate_reusable_inrou_disk(path: &Path, exact_bytes: Option<u64>) -> eyre::Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("inspect reusable Inrou disk {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        eyre::bail!(
+            "reusable Inrou disk {} must be a regular file",
+            path.display()
+        );
+    }
+    if metadata.len() == 0 {
+        eyre::bail!("reusable Inrou disk {} must not be empty", path.display());
+    }
+    if let Some(exact_bytes) = exact_bytes
+        && metadata.len() != exact_bytes
+    {
+        eyre::bail!(
+            "reusable Inrou disk {} has {} bytes instead of the required {exact_bytes}",
+            path.display(),
+            metadata.len()
+        );
+    }
+    #[cfg(unix)]
+    {
+        let effective_uid = rustix::process::geteuid().as_raw();
+        if metadata.nlink() != 1 {
+            eyre::bail!(
+                "reusable Inrou disk {} must have exactly one hard link",
+                path.display()
+            );
+        }
+        if metadata.uid() != effective_uid {
+            eyre::bail!(
+                "reusable Inrou disk {} is owned by uid {} instead of the runtime uid {effective_uid}",
+                path.display(),
+                metadata.uid()
+            );
+        }
+        if metadata.mode() & 0o200 == 0 || metadata.mode() & 0o077 != 0 {
+            eyre::bail!(
+                "reusable Inrou disk {} must be owner-writable and inaccessible to group or other users",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+struct InrouWriteLease<'a> {
+    file: &'a fs::File,
+    active: bool,
+}
+#[cfg(target_os = "linux")]
+impl InrouWriteLease<'_> {
+    fn release(mut self) -> io::Result<()> {
+        set_inrou_linux_file_lease(self.file, rustix::process::FlockType::Unlocked)?;
+        verify_inrou_linux_file_lease(self.file, rustix::process::FlockType::Unlocked)?;
+        self.active = false;
+        Ok(())
+    }
+}
+#[cfg(target_os = "linux")]
+impl Drop for InrouWriteLease<'_> {
+    fn drop(&mut self) {
+        if self.active
+            && let Err(error) =
+                set_inrou_linux_file_lease(self.file, rustix::process::FlockType::Unlocked)
+        {
+            iroha_logger::error!(?error, "failed to release the Inrou QEMU disk write lease");
+        }
+    }
+}
+#[cfg(target_os = "linux")]
+fn acquire_inrou_write_lease(file: &fs::File) -> io::Result<InrouWriteLease<'_>> {
+    // Linux F_SETLEASE/F_WRLCK. Unlike an advisory record lock, a write lease
+    // fails while any conflicting open file description exists and therefore
+    // closes the SCM_RIGHTS race that a sequential procfs scan cannot close.
+    const F_SETOWN: i32 = 8;
+    const F_SETSIG: i32 = 10;
+    inrou_linux_fcntl_with_arg(file, F_SETOWN, rustix::process::getpid().as_raw_pid())?;
+    inrou_linux_fcntl_with_arg(file, F_SETSIG, rustix::runtime::Signal::URG.as_raw())?;
+    set_inrou_linux_file_lease(file, rustix::process::FlockType::WriteLock)?;
+    if let Err(error) = verify_inrou_linux_file_lease(file, rustix::process::FlockType::WriteLock) {
+        let _ = set_inrou_linux_file_lease(file, rustix::process::FlockType::Unlocked);
+        return Err(error);
+    }
+    Ok(InrouWriteLease { file, active: true })
+}
+#[cfg(target_os = "linux")]
+fn set_inrou_linux_file_lease(
+    file: &fs::File,
+    lease: rustix::process::FlockType,
+) -> io::Result<()> {
+    const F_SETLEASE: i32 = 1_024;
+    inrou_linux_fcntl_with_arg(file, F_SETLEASE, lease as i16 as i32).map(|_| ())
+}
+#[cfg(target_os = "linux")]
+fn verify_inrou_linux_file_lease(
+    file: &fs::File,
+    expected: rustix::process::FlockType,
+) -> io::Result<()> {
+    const F_GETLEASE: i32 = 1_025;
+    let actual = inrou_linux_fcntl(file, F_GETLEASE)?;
+    if actual == expected as i16 as i32 {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "Linux returned lease type {actual} instead of {}",
+            expected as i16 as i32
+        )))
+    }
+}
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn inrou_linux_fcntl_with_arg(file: &fs::File, command: i32, argument: i32) -> io::Result<i32> {
+    unsafe extern "C" {
+        fn fcntl(fd: i32, command: i32, ...) -> i32;
+    }
+    // SAFETY: `file.as_raw_fd()` is live for this call; these Linux fcntl
+    // commands consume one integer variadic argument and do not access memory.
+    let result = unsafe { fcntl(file.as_raw_fd(), command, argument) };
+    if result == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(result)
+    }
+}
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn inrou_linux_fcntl(file: &fs::File, command: i32) -> io::Result<i32> {
+    unsafe extern "C" {
+        fn fcntl(fd: i32, command: i32, ...) -> i32;
+    }
+    // SAFETY: `file.as_raw_fd()` is live for this call and F_GETLEASE takes no
+    // variadic argument and does not access user memory.
+    let result = unsafe { fcntl(file.as_raw_fd(), command) };
+    if result == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(result)
+    }
+}
+#[cfg(target_os = "linux")]
+fn reclaim_inrou_qemu_file_if_present(
+    path: &Path,
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).wrap_err_with(|| format!("inspect {}", path.display())),
+    };
+    let mode = metadata.mode() & 0o7777;
+    let private_runtime_file = metadata.gid() == 0 && mode == 0o600;
+    let delegated_qemu_file = metadata.gid() == identity.gid && mode == 0o660;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != 0
+        || (!private_runtime_file && !delegated_qemu_file)
+    {
+        eyre::bail!(
+            "reusable Inrou QEMU file {} is outside root/dedicated-child custody",
+            path.display()
+        );
+    }
+    let mut options = fs::OpenOptions::new();
+    use std::os::unix::fs::OpenOptionsExt as _;
+    options
+        .read(true)
+        .write(true)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    let file = options.open(path)?;
+    let opened = file.metadata()?;
+    if opened.dev() != metadata.dev() || opened.ino() != metadata.ino() {
+        eyre::bail!("reusable Inrou QEMU file changed while it was reclaimed");
+    }
+    rustix::fs::fchmod(&file, rustix::fs::Mode::from_raw_mode(0o600))?;
+    rustix::fs::fchown(
+        &file,
+        Some(rustix::fs::Uid::ROOT),
+        Some(rustix::fs::Gid::ROOT),
+    )?;
+    let reclaimed = file.metadata()?;
+    let write_lease = acquire_inrou_write_lease(&file).wrap_err_with(|| {
+        format!(
+            "acquire an exclusive Linux write lease for reclaimed Inrou QEMU disk {}; the backing filesystem must support leases and no stale descriptor may remain",
+            path.display()
+        )
+    })?;
+    ensure_no_process_open_file(&reclaimed, std::process::id(), file.as_raw_fd())?;
+    let named_after = fs::symlink_metadata(path)?;
+    if named_after.dev() != reclaimed.dev()
+        || named_after.ino() != reclaimed.ino()
+        || named_after.uid() != 0
+        || named_after.gid() != 0
+        || named_after.mode() & 0o7777 != 0o600
+        || named_after.nlink() != 1
+    {
+        eyre::bail!("reusable Inrou QEMU file changed after stale-fd exclusion");
+    }
+    validate_reusable_inrou_disk(path, None)?;
+    write_lease
+        .release()
+        .wrap_err("release the reclaimed Inrou QEMU disk write lease")
+}
+#[cfg(target_os = "linux")]
+fn ensure_no_process_open_file(
+    target: &fs::Metadata,
+    custody_pid: u32,
+    custody_fd: std::os::fd::RawFd,
+) -> eyre::Result<()> {
+    let processes = fs::read_dir("/proc").wrap_err("enumerate procfs for stale Inrou QEMU fds")?;
+    for process in processes {
+        let process = process.wrap_err("enumerate procfs process entry")?;
+        let Some(pid) = process
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let descriptors = match fs::read_dir(process.path().join("fd")) {
+            Ok(descriptors) => descriptors,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error)
+                    .wrap_err_with(|| format!("inspect procfs descriptors for process {pid}"));
+            }
+        };
+        for descriptor in descriptors {
+            let descriptor = match descriptor {
+                Ok(descriptor) => descriptor,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(error).wrap_err_with(|| {
+                        format!("enumerate procfs descriptors for process {pid}")
+                    });
+                }
+            };
+            let descriptor_fd = descriptor
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<std::os::fd::RawFd>().ok());
+            if pid == custody_pid && descriptor_fd == Some(custody_fd) {
+                continue;
+            }
+            let opened = match fs::metadata(descriptor.path()) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(error)
+                        .wrap_err_with(|| format!("inspect procfs descriptor for process {pid}"));
+                }
+            };
+            if opened.dev() == target.dev() && opened.ino() == target.ino() {
+                eyre::bail!("process {pid} still has the reclaimed Inrou QEMU disk open");
+            }
+        }
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn ensure_no_process_with_inrou_identity(identity: &PortableVmChildIdentity) -> eyre::Result<()> {
+    let processes =
+        fs::read_dir("/proc").wrap_err("enumerate procfs for the Inrou QEMU identity")?;
+    for process in processes {
+        let process = process.wrap_err("enumerate procfs process entry")?;
+        let Some(pid) = process
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        match read_inrou_proc_status(pid) {
+            Ok(status) => {
+                if !inrou_proc_status_matches_identity(&status, identity)? {
+                    continue;
+                }
+                eyre::bail!(
+                    "dedicated Inrou uid {} or primary gid {} is already active in process {pid}; the first-release identity and group must be locked and exclusive to one QEMU",
+                    identity.uid,
+                    identity.gid,
+                );
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).wrap_err_with(|| format!("inspect procfs process {pid}"));
+            }
+        }
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn prepare_inrou_qemu_directory_chain(
+    anchor: &Path,
+    target_parent: &Path,
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<()> {
+    let anchor = fs::canonicalize(anchor)
+        .wrap_err_with(|| format!("canonicalize Inrou runtime root {}", anchor.display()))?;
+    let target_parent = fs::canonicalize(target_parent).wrap_err_with(|| {
+        format!(
+            "canonicalize Inrou QEMU file parent {}",
+            target_parent.display()
+        )
+    })?;
+    if !target_parent.starts_with(&anchor) {
+        eyre::bail!(
+            "Inrou QEMU file parent {} escapes runtime root {}",
+            target_parent.display(),
+            anchor.display()
+        );
+    }
+    for ancestor in anchor.ancestors().skip(1) {
+        let metadata = fs::metadata(ancestor)?;
+        let child_can_traverse = metadata.mode() & 0o001 != 0
+            || (metadata.gid() == identity.gid
+                || identity.supplementary_gids.contains(&metadata.gid()))
+                && metadata.mode() & 0o010 != 0
+            || metadata.uid() == identity.uid && metadata.mode() & 0o100 != 0;
+        if !metadata.is_dir() || !child_can_traverse {
+            eyre::bail!(
+                "dedicated Inrou QEMU identity cannot traverse ancestor {}",
+                ancestor.display()
+            );
+        }
+    }
+    let mut directories = target_parent
+        .ancestors()
+        .take_while(|path| path.starts_with(&anchor))
+        .collect::<Vec<_>>();
+    directories.reverse();
+    for directory in directories {
+        let named = fs::symlink_metadata(directory)?;
+        if named.file_type().is_symlink()
+            || !named.is_dir()
+            || named.uid() != 0
+            || named.mode() & 0o022 != 0
+        {
+            eyre::bail!(
+                "Inrou QEMU ancestor {} must be root-owned, direct, and non-writable",
+                directory.display()
+            );
+        }
+        let mut options = fs::OpenOptions::new();
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.read(true).custom_flags(
+            (rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::CLOEXEC)
+                .bits() as i32,
+        );
+        let opened = options.open(directory)?;
+        let opened_metadata = opened.metadata()?;
+        if opened_metadata.dev() != named.dev() || opened_metadata.ino() != named.ino() {
+            eyre::bail!("Inrou QEMU ancestor changed while it was opened");
+        }
+        rustix::fs::fchown(
+            &opened,
+            Some(rustix::fs::Uid::ROOT),
+            Some(rustix::fs::Gid::from_raw(identity.gid)),
+        )?;
+        rustix::fs::fchmod(&opened, rustix::fs::Mode::from_raw_mode(0o710))?;
+        let after = opened.metadata()?;
+        let named_after = fs::symlink_metadata(directory)?;
+        if after.dev() != named_after.dev()
+            || after.ino() != named_after.ino()
+            || after.uid() != 0
+            || after.gid() != identity.gid
+            || after.mode() & 0o7777 != 0o710
+        {
+            eyre::bail!("Inrou QEMU ancestor did not retain exact delegated custody");
+        }
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn prepare_inrou_qemu_file_access(
+    anchor: &Path,
+    path: &Path,
+    identity: &PortableVmChildIdentity,
+    writable: bool,
+) -> eyre::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| eyre::eyre!("Inrou QEMU file must have a parent"))?;
+    prepare_inrou_qemu_directory_chain(anchor, parent, identity)?;
+    let named = fs::symlink_metadata(path)?;
+    if named.file_type().is_symlink() || !named.is_file() || named.nlink() != 1 || named.uid() != 0
+    {
+        eyre::bail!(
+            "Inrou QEMU file {} must be a singly-linked root-owned regular file",
+            path.display()
+        );
+    }
+    let mut options = fs::OpenOptions::new();
+    use std::os::unix::fs::OpenOptionsExt as _;
+    options
+        .read(true)
+        .write(writable)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    let file = options.open(path)?;
+    let opened = file.metadata()?;
+    if opened.dev() != named.dev() || opened.ino() != named.ino() {
+        eyre::bail!("Inrou QEMU file changed while it was opened");
+    }
+    let mode = if writable { 0o660 } else { 0o640 };
+    rustix::fs::fchown(
+        &file,
+        Some(rustix::fs::Uid::ROOT),
+        Some(rustix::fs::Gid::from_raw(identity.gid)),
+    )?;
+    rustix::fs::fchmod(&file, rustix::fs::Mode::from_raw_mode(mode))?;
+    let opened_after = file.metadata()?;
+    let named_after = fs::symlink_metadata(path)?;
+    if opened_after.dev() != named_after.dev()
+        || opened_after.ino() != named_after.ino()
+        || opened_after.uid() != 0
+        || opened_after.gid() != identity.gid
+        || opened_after.mode() & 0o7777 != mode
+        || opened_after.nlink() != 1
+    {
+        eyre::bail!("Inrou QEMU file did not retain exact delegated custody");
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn prepare_inrou_qemu_readable_directory(
+    anchor: &Path,
+    path: &Path,
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| eyre::eyre!("Inrou QEMU directory must have a parent"))?;
+    prepare_inrou_qemu_directory_chain(anchor, parent, identity)?;
+    let named = fs::symlink_metadata(path)?;
+    if named.file_type().is_symlink() || !named.is_dir() || named.uid() != 0 {
+        eyre::bail!("Inrou QEMU readable directory must be direct and root-owned");
+    }
+    let mut options = fs::OpenOptions::new();
+    use std::os::unix::fs::OpenOptionsExt as _;
+    options.read(true).custom_flags(
+        (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC)
+            .bits() as i32,
+    );
+    let directory = options.open(path)?;
+    let opened = directory.metadata()?;
+    if opened.dev() != named.dev() || opened.ino() != named.ino() {
+        eyre::bail!("Inrou QEMU readable directory changed while it was opened");
+    }
+    rustix::fs::fchown(
+        &directory,
+        Some(rustix::fs::Uid::ROOT),
+        Some(rustix::fs::Gid::from_raw(identity.gid)),
+    )?;
+    rustix::fs::fchmod(&directory, rustix::fs::Mode::from_raw_mode(0o750))?;
+    let after = directory.metadata()?;
+    let named_after = fs::symlink_metadata(path)?;
+    if after.dev() != named_after.dev()
+        || after.ino() != named_after.ino()
+        || after.uid() != 0
+        || after.gid() != identity.gid
+        || after.mode() & 0o7777 != 0o750
+    {
+        eyre::bail!("Inrou QEMU readable directory did not retain exact delegated custody");
+    }
+    Ok(())
+}
+fn ensure_secure_inrou_disk_directory(path: &Path) -> eyre::Result<PathBuf> {
+    let original = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .wrap_err("resolve the current directory for an Inrou disk path")?
+            .join(path)
+    };
+    ensure_inrou_path_has_no_symlink_components(&original)?;
+    let existed = match fs::symlink_metadata(&original) {
+        Ok(_) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(error).wrap_err_with(|| format!("inspect {}", original.display()));
+        }
+    };
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        builder.mode(0o700);
+    }
+    builder
+        .create(&original)
+        .wrap_err_with(|| format!("create {}", original.display()))?;
+    ensure_inrou_path_has_no_symlink_components(&original)?;
+    if !existed {
+        #[cfg(unix)]
+        fs::set_permissions(&original, fs::Permissions::from_mode(0o700))
+            .wrap_err_with(|| format!("secure {}", original.display()))?;
+    }
+    let named = fs::symlink_metadata(&original)
+        .wrap_err_with(|| format!("inspect Inrou disk directory {}", original.display()))?;
+    if named.file_type().is_symlink() || !named.is_dir() {
+        eyre::bail!(
+            "Inrou disk directory {} must be a real directory",
+            original.display()
+        );
+    }
+    let canonical = fs::canonicalize(&original)
+        .wrap_err_with(|| format!("canonicalize Inrou disk directory {}", original.display()))?;
+    #[cfg(unix)]
+    {
+        let effective_uid = rustix::process::geteuid().as_raw();
+        for (index, ancestor) in canonical.ancestors().enumerate() {
+            let metadata = fs::metadata(ancestor)
+                .wrap_err_with(|| format!("inspect Inrou disk ancestor {}", ancestor.display()))?;
+            if !metadata.is_dir() {
+                eyre::bail!(
+                    "Inrou disk ancestor {} must be a directory",
+                    ancestor.display()
+                );
+            }
+            if index == 0 && metadata.uid() != effective_uid {
+                eyre::bail!(
+                    "Inrou disk directory {} is owned by uid {} instead of the runtime uid {effective_uid}",
+                    original.display(),
+                    metadata.uid()
+                );
+            }
+            if index != 0 && metadata.uid() != 0 && metadata.uid() != effective_uid {
+                eyre::bail!(
+                    "Inrou disk ancestor {} is not owned by root or the runtime uid {effective_uid}",
+                    ancestor.display()
+                );
+            }
+            let writable_by_others = metadata.mode() & 0o022 != 0;
+            let protected_by_sticky_bit = metadata.mode() & 0o1000 != 0;
+            if writable_by_others && (index == 0 || !protected_by_sticky_bit) {
+                eyre::bail!(
+                    "Inrou disk directory custody permits path replacement through {}",
+                    ancestor.display()
+                );
+            }
+        }
+    }
+    Ok(canonical)
+}
+
+fn ensure_inrou_path_has_no_symlink_components(path: &Path) -> eyre::Result<()> {
+    let mut prefix = PathBuf::new();
+    for component in path.components() {
+        prefix.push(component.as_os_str());
+        match fs::symlink_metadata(&prefix) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                eyre::bail!(
+                    "Inrou disk path {} contains symlink component {}",
+                    path.display(),
+                    prefix.display()
+                );
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(error).wrap_err_with(|| {
+                    format!("inspect Inrou disk path component {}", prefix.display())
+                });
+            }
+        }
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn prepare_inrou_shared_export_directory(
+    path: &Path,
+    guest_uid: u32,
+    guest_gid: u32,
+) -> eyre::Result<PathBuf> {
+    let named = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            ensure_secure_inrou_disk_directory(path)?;
+            fs::symlink_metadata(path)
+                .wrap_err_with(|| format!("inspect new Inrou shared volume {}", path.display()))?
+        }
+        Err(error) => {
+            return Err(error)
+                .wrap_err_with(|| format!("inspect Inrou shared volume {}", path.display()));
+        }
+    };
+    if named.file_type().is_symlink() || !named.is_dir() {
+        eyre::bail!(
+            "Inrou shared volume {} must be a real directory",
+            path.display()
+        );
+    }
+
+    let canonical = fs::canonicalize(path)
+        .wrap_err_with(|| format!("canonicalize Inrou shared volume {}", path.display()))?;
+    let effective_uid = rustix::process::geteuid().as_raw();
+    let initial_mode = named.mode() & 0o7777;
+    let already_prepared =
+        named.uid() == guest_uid && named.gid() == guest_gid && initial_mode == 0o770;
+    for (index, ancestor) in canonical.ancestors().enumerate() {
+        let metadata = fs::metadata(ancestor).wrap_err_with(|| {
+            format!(
+                "inspect Inrou shared-volume ancestor {}",
+                ancestor.display()
+            )
+        })?;
+        if !metadata.is_dir() {
+            eyre::bail!(
+                "Inrou shared-volume ancestor {} must be a directory",
+                ancestor.display()
+            );
+        }
+        if index == 0 {
+            let private_runtime_leaf =
+                metadata.uid() == effective_uid && metadata.mode() & 0o077 == 0;
+            let prepared_guest_leaf = metadata.uid() == guest_uid
+                && metadata.gid() == guest_gid
+                && metadata.mode() & 0o7777 == 0o770;
+            if !private_runtime_leaf && !prepared_guest_leaf {
+                eyre::bail!(
+                    "Inrou shared volume {} must either be a private runtime-owned directory or have the exact guest ownership and mode",
+                    path.display()
+                );
+            }
+            continue;
+        }
+        if index != 0 && metadata.uid() != 0 && metadata.uid() != effective_uid {
+            eyre::bail!(
+                "Inrou shared-volume ancestor {} is not owned by root or the runtime uid {effective_uid}",
+                ancestor.display()
+            );
+        }
+        let writable_by_others = metadata.mode() & 0o022 != 0;
+        let protected_by_sticky_bit = metadata.mode() & 0o1000 != 0;
+        if writable_by_others && (index == 0 || index == 1 || !protected_by_sticky_bit) {
+            eyre::bail!(
+                "Inrou shared-volume custody permits path replacement through {}",
+                ancestor.display()
+            );
+        }
+    }
+
+    if !already_prepared && (named.uid() != effective_uid || initial_mode & 0o022 != 0) {
+        eyre::bail!(
+            "Inrou shared volume {} must either be a private runtime-owned directory or have the exact guest ownership and mode",
+            path.display()
+        );
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    use std::os::unix::fs::OpenOptionsExt as _;
+    options.custom_flags(
+        (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC)
+            .bits() as i32,
+    );
+    let directory = options
+        .open(&canonical)
+        .wrap_err_with(|| format!("open Inrou shared volume {}", canonical.display()))?;
+    let opened = directory
+        .metadata()
+        .wrap_err_with(|| format!("inspect open Inrou shared volume {}", canonical.display()))?;
+    if !opened.is_dir() || opened.dev() != named.dev() || opened.ino() != named.ino() {
+        eyre::bail!(
+            "Inrou shared volume {} changed while it was opened",
+            path.display()
+        );
+    }
+
+    if !already_prepared {
+        rustix::fs::fchown(
+            &directory,
+            Some(rustix::fs::Uid::from_raw(guest_uid)),
+            Some(rustix::fs::Gid::from_raw(guest_gid)),
+        )
+        .wrap_err_with(|| {
+            format!(
+                "set ownership on Inrou shared volume {}",
+                canonical.display()
+            )
+        })?;
+        rustix::fs::fchmod(&directory, rustix::fs::Mode::from_raw_mode(0o770))
+            .wrap_err_with(|| format!("set mode on Inrou shared volume {}", canonical.display()))?;
+    }
+
+    let opened = directory
+        .metadata()
+        .wrap_err_with(|| format!("reinspect Inrou shared volume {}", canonical.display()))?;
+    if opened.uid() != guest_uid || opened.gid() != guest_gid || opened.mode() & 0o7777 != 0o770 {
+        eyre::bail!(
+            "Inrou shared volume {} did not retain the required guest custody",
+            canonical.display()
+        );
+    }
+    let named_after = fs::symlink_metadata(&canonical)
+        .wrap_err_with(|| format!("reinspect Inrou shared volume path {}", canonical.display()))?;
+    if named_after.file_type().is_symlink()
+        || !named_after.is_dir()
+        || named_after.dev() != opened.dev()
+        || named_after.ino() != opened.ino()
+    {
+        eyre::bail!(
+            "Inrou shared volume {} changed while its custody was prepared",
+            canonical.display()
+        );
+    }
+    Ok(canonical)
+}
+fn create_unique_inrou_disk_staging_file(
+    directory: &Path,
+    final_file_name: &str,
+) -> eyre::Result<(PathBuf, fs::File)> {
+    for _ in 0..128 {
+        let mut suffix = [0_u8; 16];
+        OsRng
+            .try_fill_bytes(&mut suffix)
+            .map_err(|error| eyre::eyre!("Inrou disk staging OS RNG failed: {error}"))?;
+        let path = directory.join(format!(
+            ".{final_file_name}.inrou-stage-{}",
+            hex::encode(suffix)
+        ));
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        match options.open(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(error).wrap_err_with(|| {
+                    format!("create Inrou disk staging file {}", path.display())
+                });
+            }
+        }
+    }
+    eyre::bail!("failed to allocate an exclusive Inrou disk staging file")
+}
+fn remove_inrou_disk_staging_file(path: &Path) -> eyre::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() || metadata.file_type().is_symlink() => {
+            fs::remove_file(path)
+                .wrap_err_with(|| format!("remove Inrou disk staging file {}", path.display()))
+        }
+        Ok(_) => eyre::bail!(
+            "Inrou disk staging path {} changed to a non-file",
+            path.display()
+        ),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error)
+            .wrap_err_with(|| format!("inspect Inrou disk staging file {}", path.display())),
+    }
+}
+fn sync_inrou_disk_file(path: &Path) -> eyre::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    }
+    options
+        .open(path)
+        .wrap_err_with(|| format!("open Inrou disk {} for sync", path.display()))?
+        .sync_all()
+        .wrap_err_with(|| format!("sync Inrou disk {}", path.display()))
+}
+fn install_staged_inrou_disk(
+    staging_path: &Path,
+    final_path: &Path,
+    exact_bytes: Option<u64>,
+) -> eyre::Result<()> {
+    validate_reusable_inrou_disk(staging_path, exact_bytes)?;
+    sync_inrou_disk_file(staging_path)?;
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        staging_path,
+        rustix::fs::CWD,
+        final_path,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .wrap_err_with(|| {
+        format!(
+            "atomically install new staged Inrou disk {} as {} without replacing existing state",
+            staging_path.display(),
+            final_path.display()
+        )
+    })?;
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+    {
+        // A same-directory hard link is an atomic no-clobber publication on
+        // platforms without rename-with-flags. Removing the staging name
+        // restores the required single-link invariant before validation.
+        fs::hard_link(staging_path, final_path).wrap_err_with(|| {
+            format!(
+                "atomically install new staged Inrou disk {} as {} without replacing existing state",
+                staging_path.display(),
+                final_path.display()
+            )
+        })?;
+        fs::remove_file(staging_path).wrap_err_with(|| {
+            format!(
+                "remove staged Inrou disk name after publishing {}",
+                final_path.display()
+            )
+        })?;
+    }
+    sync_directory_if_supported(
+        final_path
+            .parent()
+            .ok_or_else(|| eyre::eyre!("Inrou disk path must have a parent"))?,
+    )?;
+    validate_reusable_inrou_disk(final_path, exact_bytes)
+}
+fn inrou_rootfs_base_binding(
+    bundle: &SoraDeploymentBundleV1,
+    plan: &SoracloudRuntimeInrouPlan,
+) -> eyre::Result<Hash> {
+    let image = bundle
+        .container
+        .inrou
+        .as_ref()
+        .and_then(|inrou| inrou.guest_images.get(&plan.selected_guest_isa))
+        .ok_or_else(|| {
+            eyre::eyre!("selected Inrou guest image is absent from the signed bundle")
+        })?;
+    if image.rootfs_image_path != plan.rootfs_image_path {
+        eyre::bail!("selected Inrou rootfs does not match the signed bundle");
+    }
+    Ok(Hash::new(Encode::encode(&(
+        "soracloud.inrou.rootfs-base-binding.v1".to_owned(),
+        bundle.container.bundle_hash,
+        plan.selected_guest_isa,
+        image.clone(),
+    ))))
+}
+fn inrou_root_disk_binding_path(root_disk_path: &Path) -> eyre::Result<PathBuf> {
+    let file_name = root_disk_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| eyre::eyre!("Inrou root disk path must end in a UTF-8 file name"))?;
+    Ok(root_disk_path.with_file_name(format!("{file_name}.base-binding-v1")))
+}
+fn validate_inrou_root_disk_binding(
+    root_disk_path: &Path,
+    expected_binding: Hash,
+) -> eyre::Result<()> {
+    let binding_path = inrou_root_disk_binding_path(root_disk_path)?;
+    let actual = read_soracloud_regular_text_bounded(
+        &binding_path,
+        128,
+        "Inrou persistent root-disk base binding",
+    )
+    .wrap_err_with(|| format!("read {}", binding_path.display()))?;
+    if actual != expected_binding.to_string() {
+        eyre::bail!(
+            "Inrou persistent root disk {} is bound to a different authenticated base image",
+            root_disk_path.display()
+        );
+    }
+    Ok(())
+}
+fn write_inrou_root_disk_binding(root_disk_path: &Path, binding: Hash) -> eyre::Result<()> {
+    let binding_path = inrou_root_disk_binding_path(root_disk_path)?;
+    write_bytes_atomic(&binding_path, binding.to_string().as_bytes())
+        .wrap_err_with(|| format!("write {}", binding_path.display()))
+}
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn ensure_inrou_root_disk(
     base_rootfs_image_path: &Path,
     root_volume: &SoracloudRuntimeLeaseVolumePlan,
+    base_binding: Hash,
 ) -> eyre::Result<PathBuf> {
-    let root_volume_dir = PathBuf::from(&root_volume.local_materialization_dir);
-    fs::create_dir_all(&root_volume_dir)
-        .wrap_err_with(|| format!("create {}", root_volume_dir.display()))?;
+    let root_volume_dir =
+        ensure_secure_inrou_disk_directory(Path::new(&root_volume.local_materialization_dir))?;
     let root_disk_path = root_volume_dir.join("rootfs.ext4");
-    if root_disk_path.exists() {
-        return Ok(root_disk_path);
-    }
-    let base_size = fs::metadata(base_rootfs_image_path)
-        .wrap_err_with(|| format!("stat {}", base_rootfs_image_path.display()))?
-        .len();
+    let (mut base_file, base_metadata) = open_soracloud_regular_file_no_follow(
+        base_rootfs_image_path,
+        "Inrou immutable base rootfs",
+    )
+    .wrap_err_with(|| format!("open {}", base_rootfs_image_path.display()))?;
+    let base_size = base_metadata.len();
     if base_size > root_volume.max_total_bytes {
         eyre::bail!(
             "Inrou base rootfs {} exceeds root lease budget {} bytes for volume `{}`",
@@ -13225,30 +15913,73 @@ fn ensure_inrou_root_disk(
             root_volume.volume_name
         );
     }
-    fs::copy(base_rootfs_image_path, &root_disk_path).wrap_err_with(|| {
-        format!(
-            "copy immutable Inrou rootfs {} into {}",
-            base_rootfs_image_path.display(),
-            root_disk_path.display()
-        )
-    })?;
+    match fs::symlink_metadata(&root_disk_path) {
+        Ok(_) => {
+            validate_reusable_inrou_disk(&root_disk_path, Some(base_size))?;
+            validate_inrou_root_disk_binding(&root_disk_path, base_binding)?;
+            return Ok(root_disk_path);
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).wrap_err("inspect mutable Inrou root disk"),
+    }
+    let (staging_path, mut staging_file) =
+        create_unique_inrou_disk_staging_file(&root_volume_dir, "rootfs.ext4")?;
+    let prepare_result = (|| -> eyre::Result<()> {
+        let copied = io::copy(&mut base_file, &mut staging_file).wrap_err_with(|| {
+            format!(
+                "copy immutable Inrou rootfs {} into {}",
+                base_rootfs_image_path.display(),
+                staging_path.display()
+            )
+        })?;
+        if copied != base_size {
+            eyre::bail!(
+                "Inrou immutable base rootfs changed length while it was copied: expected {base_size} bytes, copied {copied}"
+            );
+        }
+        staging_file
+            .sync_all()
+            .wrap_err_with(|| format!("sync staged root disk {}", staging_path.display()))?;
+        let opened_after = base_file.metadata()?;
+        let named_after = fs::symlink_metadata(base_rootfs_image_path)?;
+        if !same_soracloud_regular_file(&base_metadata, &opened_after)
+            || !same_soracloud_regular_file(&opened_after, &named_after)
+        {
+            eyre::bail!("Inrou immutable base rootfs changed while it was copied");
+        }
+        Ok(())
+    })();
+    drop(staging_file);
+    if let Err(error) = prepare_result {
+        remove_inrou_disk_staging_file(&staging_path)?;
+        return Err(error);
+    }
+    let install_result = (|| -> eyre::Result<()> {
+        validate_reusable_inrou_disk(&staging_path, Some(base_size))?;
+        install_staged_inrou_disk(&staging_path, &root_disk_path, Some(base_size))?;
+        write_inrou_root_disk_binding(&root_disk_path, base_binding)
+    })();
+    if let Err(error) = install_result {
+        remove_inrou_disk_staging_file(&staging_path)?;
+        return Err(error);
+    }
     Ok(root_disk_path)
 }
 fn ensure_inrou_portable_root_disk(
     qemu_img: &Path,
     base_rootfs_image_path: &Path,
     root_volume: &SoracloudRuntimeLeaseVolumePlan,
+    base_binding: Hash,
 ) -> eyre::Result<PathBuf> {
-    let root_volume_dir = PathBuf::from(&root_volume.local_materialization_dir);
-    fs::create_dir_all(&root_volume_dir)
-        .wrap_err_with(|| format!("create {}", root_volume_dir.display()))?;
+    let root_volume_dir =
+        ensure_secure_inrou_disk_directory(Path::new(&root_volume.local_materialization_dir))?;
     let root_disk_path = root_volume_dir.join("rootfs.qcow2");
-    if root_disk_path.exists() {
-        return Ok(root_disk_path);
-    }
-    let base_size = fs::metadata(base_rootfs_image_path)
-        .wrap_err_with(|| format!("stat {}", base_rootfs_image_path.display()))?
-        .len();
+    let (_, base_metadata) = open_soracloud_regular_file_no_follow(
+        base_rootfs_image_path,
+        "Inrou immutable base rootfs",
+    )
+    .wrap_err_with(|| format!("open {}", base_rootfs_image_path.display()))?;
+    let base_size = base_metadata.len();
     if base_size > root_volume.max_total_bytes {
         eyre::bail!(
             "Inrou base rootfs {} exceeds root lease budget {} bytes for volume `{}`",
@@ -13257,32 +15988,54 @@ fn ensure_inrou_portable_root_disk(
             root_volume.volume_name
         );
     }
-    run_host_command(
-        qemu_img,
-        &[
-            "create",
-            "-q",
-            "-f",
-            "qcow2",
-            "-F",
-            "raw",
-            "-b",
-            base_rootfs_image_path
-                .to_str()
-                .ok_or_else(|| eyre::eyre!("non-utf8 path"))?,
-            root_disk_path
-                .to_str()
-                .ok_or_else(|| eyre::eyre!("non-utf8 path"))?,
-            &root_volume.max_total_bytes.to_string(),
-        ],
-    )
-    .wrap_err_with(|| {
-        format!(
-            "create PortableVm root overlay {} with backing file {}",
-            root_disk_path.display(),
-            base_rootfs_image_path.display()
+    match fs::symlink_metadata(&root_disk_path) {
+        Ok(_) => {
+            validate_reusable_inrou_disk(&root_disk_path, None)?;
+            validate_inrou_root_disk_binding(&root_disk_path, base_binding)?;
+            return Ok(root_disk_path);
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).wrap_err("inspect mutable PortableVm root disk"),
+    }
+    let (staging_path, staging_file) =
+        create_unique_inrou_disk_staging_file(&root_volume_dir, "rootfs.qcow2")?;
+    drop(staging_file);
+    let create_result = (|| -> eyre::Result<()> {
+        run_host_command(
+            qemu_img,
+            &[
+                "create",
+                "-q",
+                "-f",
+                "qcow2",
+                "-F",
+                "raw",
+                "-b",
+                base_rootfs_image_path
+                    .to_str()
+                    .ok_or_else(|| eyre::eyre!("non-utf8 path"))?,
+                staging_path
+                    .to_str()
+                    .ok_or_else(|| eyre::eyre!("non-utf8 path"))?,
+                &root_volume.max_total_bytes.to_string(),
+            ],
         )
-    })?;
+        .wrap_err_with(|| {
+            format!(
+                "create PortableVm root overlay {} with backing file {}",
+                staging_path.display(),
+                base_rootfs_image_path.display()
+            )
+        })?;
+        validate_reusable_inrou_disk(&staging_path, None)?;
+        sync_inrou_disk_file(&staging_path)?;
+        install_staged_inrou_disk(&staging_path, &root_disk_path, None)?;
+        write_inrou_root_disk_binding(&root_disk_path, base_binding)
+    })();
+    if let Err(error) = create_result {
+        remove_inrou_disk_staging_file(&staging_path)?;
+        return Err(error);
+    }
     Ok(root_disk_path)
 }
 #[cfg(target_os = "linux")]
@@ -13330,25 +16083,11 @@ fn ensure_inrou_shared_filesystem_mounts(
         .ok_or_else(|| eyre::eyre!("Inrou shared service volumes require `rpc.nfsd` on PATH"))?;
     let mount_binary = resolve_inrou_mount_executable()
         .ok_or_else(|| eyre::eyre!("Inrou shared service volumes require `mount` on PATH"))?;
-    let chown_binary = resolve_inrou_chown_executable()
-        .ok_or_else(|| eyre::eyre!("Inrou shared service volumes require `chown` on PATH"))?;
     ensure_inrou_nfs_server_running(&mount_binary, &rpc_nfsd_binary)?;
     let mut mounts = Vec::new();
     for export in leasefs_exports {
         let volume_dir = &export.host_path;
-        fs::set_permissions(volume_dir, fs::Permissions::from_mode(0o770))
-            .wrap_err_with(|| format!("chmod {}", volume_dir.display()))?;
-        run_host_command(
-            &chown_binary,
-            &[
-                "1000:1000",
-                volume_dir
-                    .to_str()
-                    .ok_or_else(|| eyre::eyre!("non-utf8 path"))?,
-            ],
-        )
-        .wrap_err_with(|| format!("chown shared Inrou volume {}", volume_dir.display()))?;
-        let export_options = "rw,sync,no_subtree_check,insecure";
+        let export_options = "rw,sync,no_subtree_check,root_squash,secure";
         let export_spec = format!("{}:{}", network_attachment.guest_ip, volume_dir.display());
         run_host_command(
             &exportfs_binary,
@@ -13375,7 +16114,7 @@ fn ensure_inrou_shared_filesystem_mounts(
     }
     Ok(mounts)
 }
-#[allow(dead_code)]
+#[cfg(target_os = "linux")]
 fn ensure_inrou_leasefs_exports(
     plan: &SoracloudRuntimeServicePlan,
 ) -> eyre::Result<Vec<InrouLeaseFsExport>> {
@@ -13385,12 +16124,11 @@ fn ensure_inrou_leasefs_exports(
         .iter()
         .filter(|volume| volume.kind != SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
     {
-        let volume_dir = PathBuf::from(&volume.local_materialization_dir);
-        fs::create_dir_all(&volume_dir)
-            .wrap_err_with(|| format!("create {}", volume_dir.display()))?;
-        #[cfg(unix)]
-        fs::set_permissions(&volume_dir, fs::Permissions::from_mode(0o777))
-            .wrap_err_with(|| format!("chmod {}", volume_dir.display()))?;
+        let volume_dir = prepare_inrou_shared_export_directory(
+            Path::new(&volume.local_materialization_dir),
+            INROU_SHARED_VOLUME_GUEST_UID,
+            INROU_SHARED_VOLUME_GUEST_GID,
+        )?;
         exports.push(InrouLeaseFsExport {
             mount_path: volume.mount_path.clone(),
             host_path: volume_dir,
@@ -13408,32 +16146,53 @@ fn ensure_inrou_portable_lease_disks(
         .iter()
         .filter(|volume| volume.kind != SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
     {
-        let volume_dir = PathBuf::from(&volume.local_materialization_dir);
-        fs::create_dir_all(&volume_dir)
-            .wrap_err_with(|| format!("create {}", volume_dir.display()))?;
+        let volume_dir =
+            ensure_secure_inrou_disk_directory(Path::new(&volume.local_materialization_dir))?;
         let image_path = volume_dir.join("lease.raw");
-        if !image_path.exists() {
-            run_host_command(
-                qemu_img,
-                &[
-                    "create",
-                    "-q",
-                    "-f",
-                    "raw",
-                    image_path
-                        .to_str()
-                        .ok_or_else(|| eyre::eyre!("non-utf8 path"))?,
-                    &volume.max_total_bytes.to_string(),
-                ],
-            )
-            .wrap_err_with(|| {
-                format!(
-                    "create PortableVm lease disk {} for volume `{}`",
-                    image_path.display(),
-                    volume.volume_name
-                )
-            })?;
-        }
+        let initialize_filesystem = match fs::symlink_metadata(&image_path) {
+            Ok(_) => {
+                validate_reusable_inrou_disk(&image_path, Some(volume.max_total_bytes))?;
+                false
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let (staging_path, staging_file) =
+                    create_unique_inrou_disk_staging_file(&volume_dir, "lease.raw")?;
+                drop(staging_file);
+                let create_result = (|| -> eyre::Result<()> {
+                    run_host_command(
+                        qemu_img,
+                        &[
+                            "create",
+                            "-q",
+                            "-f",
+                            "raw",
+                            staging_path
+                                .to_str()
+                                .ok_or_else(|| eyre::eyre!("non-utf8 path"))?,
+                            &volume.max_total_bytes.to_string(),
+                        ],
+                    )
+                    .wrap_err_with(|| {
+                        format!(
+                            "create PortableVm lease disk {} for volume `{}`",
+                            staging_path.display(),
+                            volume.volume_name
+                        )
+                    })?;
+                    install_staged_inrou_disk(
+                        &staging_path,
+                        &image_path,
+                        Some(volume.max_total_bytes),
+                    )
+                })();
+                if let Err(error) = create_result {
+                    remove_inrou_disk_staging_file(&staging_path)?;
+                    return Err(error);
+                }
+                true
+            }
+            Err(error) => return Err(error).wrap_err("inspect PortableVm lease disk"),
+        };
         disks.push(PortableVmLeaseDisk {
             mount_path: volume.mount_path.clone(),
             image_path,
@@ -13441,6 +16200,7 @@ fn ensure_inrou_portable_lease_disks(
             device_serial: portable_vm_block_device_serial(&volume.volume_name),
             filesystem_type: "ext4".to_owned(),
             mount_options: "rw,nofail".to_owned(),
+            initialize_filesystem,
         });
     }
     Ok(disks)
@@ -13456,6 +16216,7 @@ fn build_inrou_portable_shared_filesystem_mounts(
                 device_serial: disk.device_serial.clone(),
                 filesystem_type: disk.filesystem_type.clone(),
                 mount_options: disk.mount_options.clone(),
+                initialize_filesystem: disk.initialize_filesystem,
             },
         })
         .collect()
@@ -13468,45 +16229,943 @@ fn build_portable_vm_network_plan(
     guest_port: u16,
     firewall_plan: &InrouTapFirewallPlan,
 ) -> eyre::Result<PortableVmNetworkPlan> {
-    let host_port = reserve_loopback_tcp_port()?;
-    let mut netdev_parts = vec![
+    let public_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .wrap_err("bind supervisor-owned loopback listener for PortableVm")?;
+    let public_address = public_listener
+        .local_addr()
+        .wrap_err("query supervisor-owned PortableVm listener")?;
+    let backend_reservation = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .wrap_err("reserve the QEMU loopback host-forward port")?;
+    let expected_backend = backend_reservation
+        .local_addr()
+        .wrap_err("query reserved QEMU host-forward port")?;
+    if !matches!(firewall_plan, InrouTapFirewallPlan::Isolated) {
+        eyre::bail!(
+            "PortableVM V1 supports only isolated networking until kernel-backed egress accounting is available"
+        );
+    }
+    let netdev_parts = [
         "user".to_owned(),
         "id=net0".to_owned(),
         "ipv6=off".to_owned(),
-        format!("hostfwd=tcp:127.0.0.1:{host_port}-:{guest_port}"),
+        "restrict=on".to_owned(),
+        format!(
+            "hostfwd=tcp:127.0.0.1:{}-:{guest_port}",
+            expected_backend.port()
+        ),
     ];
-    let mut allowlist_hosts = Vec::new();
-    match firewall_plan {
-        InrouTapFirewallPlan::Open => {}
-        InrouTapFirewallPlan::Isolated => {
-            netdev_parts.push("restrict=on".to_owned());
-        }
-        InrouTapFirewallPlan::Allowlist(endpoints) => {
-            netdev_parts.push("restrict=on".to_owned());
-            for endpoint in endpoints {
-                netdev_parts.push(format!(
-                    "guestfwd=tcp:{}:{}-tcp:{}:{}",
-                    endpoint.address, endpoint.port, endpoint.address, endpoint.port
-                ));
-                allowlist_hosts.push((endpoint.host.clone(), endpoint.address));
-            }
-            allowlist_hosts.sort();
-            allowlist_hosts.dedup();
-        }
-    }
     Ok(PortableVmNetworkPlan {
         netdev: netdev_parts.join(","),
-        listen_base_url: format!("http://127.0.0.1:{host_port}"),
-        allowlist_hosts,
+        listen_base_url: format!("http://{public_address}"),
+        public_listener,
+        backend_reservation,
+        expected_backend,
     })
 }
-fn reserve_loopback_tcp_port() -> eyre::Result<u16> {
-    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .wrap_err("bind loopback TCP port for PortableVm host forwarding")?;
-    listener
-        .local_addr()
-        .map(|address| address.port())
-        .wrap_err("query PortableVm loopback forwarding port")
+#[cfg(target_os = "linux")]
+impl InrouLoopbackOwnerFirewall {
+    fn install(
+        public_listener: &TcpListener,
+        backend_reservation: &TcpListener,
+        child_uid: u32,
+    ) -> eyre::Result<Self> {
+        let supervisor_uid = rustix::process::geteuid().as_raw();
+        if supervisor_uid != 0 {
+            eyre::bail!("Inrou loopback ownership firewall requires the root supervisor identity");
+        }
+        let iptables_binary = resolve_inrou_iptables_executable().ok_or_else(|| {
+            eyre::eyre!(
+                "Inrou PortableVM hosting requires root-owned `/usr/sbin/iptables`, `/sbin/iptables`, `/usr/bin/iptables`, or `/bin/iptables`"
+            )
+        })?;
+        let ip6tables_binary = resolve_inrou_ip6tables_executable().ok_or_else(|| {
+            eyre::eyre!(
+                "Inrou PortableVM hosting requires root-owned `/usr/sbin/ip6tables`, `/sbin/ip6tables`, `/usr/bin/ip6tables`, or `/bin/ip6tables`"
+            )
+        })?;
+        let public_address = public_listener
+            .local_addr()
+            .wrap_err("query the Inrou public loopback listener")?;
+        let backend_address = backend_reservation
+            .local_addr()
+            .wrap_err("query the reserved Inrou QEMU loopback listener")?;
+        if public_address.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST)
+            || backend_address.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST)
+            || public_address.port() == 0
+            || backend_address.port() == 0
+            || public_address == backend_address
+        {
+            eyre::bail!("Inrou ownership firewall requires two distinct IPv4 loopback ports");
+        }
+        let single_instance_lock = acquire_inrou_iptables_lock()?;
+        let mut firewall = Self {
+            iptables_binary,
+            ip6tables_binary,
+            _single_instance_lock: single_instance_lock,
+            owns_chains: [false; 3],
+        };
+        for chain in SORACLOUD_INROU_IPTABLES_CHAINS {
+            firewall.reject_preexisting_owned_chain(chain)?;
+        }
+        for (index, chain) in SORACLOUD_INROU_IPTABLES_CHAINS.into_iter().enumerate() {
+            firewall.create_owned_chain(index, chain)?;
+        }
+        for (context, args) in planned_inrou_output_isolation_rules(
+            public_address.port(),
+            backend_address.port(),
+            supervisor_uid,
+            child_uid,
+        ) {
+            run_inrou_iptables_command(&firewall.iptables_binary, &args).wrap_err(context)?;
+        }
+        run_inrou_iptables_command(
+            &firewall.iptables_binary,
+            &planned_inrou_backend_input_rule(backend_address.port()),
+        )
+        .wrap_err("install the non-loopback Inrou backend INPUT firewall")?;
+        run_inrou_iptables_command(
+            &firewall.iptables_binary,
+            &inrou_iptables_output_jump_args("-I", true),
+        )
+        .wrap_err("install the single owned Inrou OUTPUT jump")?;
+        run_inrou_iptables_command(
+            &firewall.iptables_binary,
+            &inrou_iptables_input_jump_args("-I", true),
+        )
+        .wrap_err("install the single owned Inrou INPUT jump")?;
+        run_inrou_iptables_command(
+            &firewall.ip6tables_binary,
+            &planned_inrou_qemu_ipv6_output_reject_rule(child_uid),
+        )
+        .wrap_err("deny every IPv6 packet from the Inrou QEMU identity")?;
+        run_inrou_iptables_command(
+            &firewall.ip6tables_binary,
+            &inrou_ip6tables_output_jump_args("-I", true),
+        )
+        .wrap_err("install the single owned Inrou IPv6 OUTPUT jump")?;
+        drain_inrou_pre_firewall_connections(public_listener)
+            .wrap_err("drain pre-firewall Inrou public connections")?;
+        Ok(firewall)
+    }
+
+    fn reject_preexisting_owned_chain(&self, chain: InrouOwnedIptablesChain) -> eyre::Result<()> {
+        let binary = self.binary_for_chain(chain);
+        let chain_exists = inrou_iptables_chain_exists(binary, chain.name)?;
+        let jump_exists = inrou_iptables_rule_exists(
+            binary,
+            chain.hook,
+            &inrou_iptables_hook_jump_args(chain, "-C", false),
+        )?;
+        if chain_exists || jump_exists {
+            eyre::bail!(
+                "preexisting Inrou firewall chain `{}` or its {} jump may contain a surviving prior QEMU; refusing automatic reconciliation and requiring explicit operator cleanup",
+                chain.name,
+                chain.hook
+            );
+        }
+        Ok(())
+    }
+
+    fn create_owned_chain(
+        &mut self,
+        index: usize,
+        chain: InrouOwnedIptablesChain,
+    ) -> eyre::Result<()> {
+        let binary = self.binary_for_chain(chain).to_path_buf();
+        self.reject_preexisting_owned_chain(chain)?;
+        run_inrou_iptables_command(&binary, &inrou_iptables_chain_control_args(chain, "-N"))
+            .wrap_err("create the owned Inrou firewall chain")?;
+        self.owns_chains[index] = true;
+        run_inrou_iptables_command(&binary, &inrou_iptables_chain_marker_args(chain, "-A"))
+            .wrap_err("mark the owned Inrou firewall chain")?;
+        Ok(())
+    }
+
+    fn remove_owned_jumps(&self, chain: InrouOwnedIptablesChain) -> eyre::Result<()> {
+        let binary = self.binary_for_chain(chain);
+        for _ in 0..SORACLOUD_INROU_IPTABLES_MAX_OWNED_JUMPS {
+            if !inrou_iptables_rule_exists(
+                binary,
+                chain.hook,
+                &inrou_iptables_hook_jump_args(chain, "-C", false),
+            )? {
+                return Ok(());
+            }
+            run_inrou_iptables_command(binary, &inrou_iptables_hook_jump_args(chain, "-D", false))
+                .wrap_err_with(|| format!("remove a stale owned Inrou {} jump", chain.hook))?;
+        }
+        if inrou_iptables_rule_exists(
+            binary,
+            chain.hook,
+            &inrou_iptables_hook_jump_args(chain, "-C", false),
+        )? {
+            eyre::bail!(
+                "more than {SORACLOUD_INROU_IPTABLES_MAX_OWNED_JUMPS} Inrou {} jumps exist; refusing ambiguous firewall reconciliation",
+                chain.hook
+            );
+        }
+        Ok(())
+    }
+
+    fn cleanup(&mut self) -> eyre::Result<()> {
+        for (index, chain) in SORACLOUD_INROU_IPTABLES_CHAINS
+            .into_iter()
+            .enumerate()
+            .rev()
+        {
+            self.cleanup_chain(index, chain)?;
+        }
+        Ok(())
+    }
+
+    fn cleanup_chain(&mut self, index: usize, chain: InrouOwnedIptablesChain) -> eyre::Result<()> {
+        if !self.owns_chains[index] {
+            return Ok(());
+        }
+        self.remove_owned_jumps(chain)?;
+        let binary = self.binary_for_chain(chain).to_path_buf();
+        run_inrou_iptables_command(&binary, &inrou_iptables_chain_control_args(chain, "-F"))
+            .wrap_err("flush the owned Inrou firewall chain during cleanup")?;
+        if let Err(error) =
+            run_inrou_iptables_command(&binary, &inrou_iptables_chain_control_args(chain, "-X"))
+        {
+            let marker_error =
+                run_inrou_iptables_command(&binary, &inrou_iptables_chain_marker_args(chain, "-A"))
+                    .err();
+            return Err(error).wrap_err_with(|| {
+                marker_error.map_or_else(
+                    || format!("delete the owned Inrou firewall chain `{}`", chain.name),
+                    |marker_error| {
+                        format!(
+                            "delete the owned Inrou firewall chain `{}`; restoring its ownership marker also failed: {marker_error}",
+                            chain.name
+                        )
+                    },
+                )
+            });
+        }
+        self.owns_chains[index] = false;
+        Ok(())
+    }
+
+    fn binary_for_chain(&self, chain: InrouOwnedIptablesChain) -> &Path {
+        match chain.family {
+            InrouIptablesFamily::Ipv4 => &self.iptables_binary,
+            InrouIptablesFamily::Ipv6 => &self.ip6tables_binary,
+        }
+    }
+}
+#[cfg(target_os = "linux")]
+impl Drop for InrouLoopbackOwnerFirewall {
+    fn drop(&mut self) {
+        if let Err(error) = self.cleanup() {
+            iroha_logger::warn!(
+                ?error,
+                "failed to reconcile the owned Inrou firewall chain during cleanup"
+            );
+        }
+    }
+}
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn planned_inrou_loopback_owner_rule(port: u16, supervisor_uid: u32) -> Vec<String> {
+    vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        "-I".to_owned(),
+        SORACLOUD_INROU_IPTABLES_CHAIN.to_owned(),
+        "1".to_owned(),
+        "-o".to_owned(),
+        "lo".to_owned(),
+        "-p".to_owned(),
+        "tcp".to_owned(),
+        "-d".to_owned(),
+        Ipv4Addr::LOCALHOST.to_string(),
+        "--dport".to_owned(),
+        port.to_string(),
+        "-m".to_owned(),
+        "owner".to_owned(),
+        "!".to_owned(),
+        "--uid-owner".to_owned(),
+        supervisor_uid.to_string(),
+        "-j".to_owned(),
+        "REJECT".to_owned(),
+        "--reject-with".to_owned(),
+        "tcp-reset".to_owned(),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn planned_inrou_backend_owner_rule(port: u16, supervisor_uid: u32) -> Vec<String> {
+    vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        "-I".to_owned(),
+        SORACLOUD_INROU_IPTABLES_CHAIN.to_owned(),
+        "1".to_owned(),
+        "-p".to_owned(),
+        "tcp".to_owned(),
+        "--dport".to_owned(),
+        port.to_string(),
+        "-m".to_owned(),
+        "owner".to_owned(),
+        "!".to_owned(),
+        "--uid-owner".to_owned(),
+        supervisor_uid.to_string(),
+        "-j".to_owned(),
+        "REJECT".to_owned(),
+        "--reject-with".to_owned(),
+        "tcp-reset".to_owned(),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn planned_inrou_qemu_output_reject_rule(child_uid: u32) -> Vec<String> {
+    vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        "-I".to_owned(),
+        SORACLOUD_INROU_IPTABLES_CHAIN.to_owned(),
+        "1".to_owned(),
+        "-m".to_owned(),
+        "owner".to_owned(),
+        "--uid-owner".to_owned(),
+        child_uid.to_string(),
+        "-j".to_owned(),
+        "REJECT".to_owned(),
+        "--reject-with".to_owned(),
+        "icmp-port-unreachable".to_owned(),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn planned_inrou_qemu_ipv6_output_reject_rule(child_uid: u32) -> Vec<String> {
+    vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        "-I".to_owned(),
+        SORACLOUD_INROU_IP6TABLES_CHAIN.to_owned(),
+        "1".to_owned(),
+        "-m".to_owned(),
+        "owner".to_owned(),
+        "--uid-owner".to_owned(),
+        child_uid.to_string(),
+        "-j".to_owned(),
+        "REJECT".to_owned(),
+        "--reject-with".to_owned(),
+        "icmp6-port-unreachable".to_owned(),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn planned_inrou_qemu_backend_reply_accept_rule(port: u16, child_uid: u32) -> Vec<String> {
+    vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        "-I".to_owned(),
+        SORACLOUD_INROU_IPTABLES_CHAIN.to_owned(),
+        "1".to_owned(),
+        "-o".to_owned(),
+        "lo".to_owned(),
+        "-p".to_owned(),
+        "tcp".to_owned(),
+        "-s".to_owned(),
+        Ipv4Addr::LOCALHOST.to_string(),
+        "--sport".to_owned(),
+        port.to_string(),
+        "-m".to_owned(),
+        "conntrack".to_owned(),
+        "--ctstate".to_owned(),
+        "ESTABLISHED".to_owned(),
+        "-m".to_owned(),
+        "owner".to_owned(),
+        "--uid-owner".to_owned(),
+        child_uid.to_string(),
+        "-j".to_owned(),
+        "ACCEPT".to_owned(),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn planned_inrou_output_isolation_rules(
+    public_port: u16,
+    backend_port: u16,
+    supervisor_uid: u32,
+    child_uid: u32,
+) -> Vec<(&'static str, Vec<String>)> {
+    // Each rule is inserted at position one. Install the narrow QEMU reply
+    // allowance last so it lands above the catch-all QEMU OUTPUT rejection.
+    vec![
+        (
+            "install the Inrou public-listener loopback owner firewall",
+            planned_inrou_loopback_owner_rule(public_port, supervisor_uid),
+        ),
+        (
+            "install the destination-independent Inrou backend owner firewall",
+            planned_inrou_backend_owner_rule(backend_port, supervisor_uid),
+        ),
+        (
+            "deny every non-proxy network action by the Inrou QEMU identity",
+            planned_inrou_qemu_output_reject_rule(child_uid),
+        ),
+        (
+            "allow only established Inrou QEMU backend replies to the supervisor proxy",
+            planned_inrou_qemu_backend_reply_accept_rule(backend_port, child_uid),
+        ),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn planned_inrou_backend_input_rule(port: u16) -> Vec<String> {
+    vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        "-I".to_owned(),
+        SORACLOUD_INROU_IPTABLES_INPUT_CHAIN.to_owned(),
+        "1".to_owned(),
+        "!".to_owned(),
+        "-i".to_owned(),
+        "lo".to_owned(),
+        "-p".to_owned(),
+        "tcp".to_owned(),
+        "--dport".to_owned(),
+        port.to_string(),
+        "-j".to_owned(),
+        "REJECT".to_owned(),
+        "--reject-with".to_owned(),
+        "tcp-reset".to_owned(),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn inrou_iptables_output_jump_args(operation: &str, include_position: bool) -> Vec<String> {
+    inrou_iptables_hook_jump_args(
+        SORACLOUD_INROU_IPTABLES_CHAINS[0],
+        operation,
+        include_position,
+    )
+}
+#[cfg(target_os = "linux")]
+fn inrou_iptables_input_jump_args(operation: &str, include_position: bool) -> Vec<String> {
+    inrou_iptables_hook_jump_args(
+        SORACLOUD_INROU_IPTABLES_CHAINS[1],
+        operation,
+        include_position,
+    )
+}
+#[cfg(target_os = "linux")]
+fn inrou_ip6tables_output_jump_args(operation: &str, include_position: bool) -> Vec<String> {
+    inrou_iptables_hook_jump_args(
+        SORACLOUD_INROU_IPTABLES_CHAINS[2],
+        operation,
+        include_position,
+    )
+}
+#[cfg(target_os = "linux")]
+fn inrou_iptables_hook_jump_args(
+    chain: InrouOwnedIptablesChain,
+    operation: &str,
+    include_position: bool,
+) -> Vec<String> {
+    let mut args = vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        operation.to_owned(),
+        chain.hook.to_owned(),
+    ];
+    if include_position {
+        args.push("1".to_owned());
+    }
+    args.extend(["-j".to_owned(), chain.name.to_owned()]);
+    args
+}
+#[cfg(target_os = "linux")]
+fn inrou_iptables_chain_control_args(
+    chain: InrouOwnedIptablesChain,
+    operation: &str,
+) -> Vec<String> {
+    vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        operation.to_owned(),
+        chain.name.to_owned(),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn inrou_iptables_chain_marker_args(
+    chain: InrouOwnedIptablesChain,
+    operation: &str,
+) -> Vec<String> {
+    vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        operation.to_owned(),
+        chain.name.to_owned(),
+        "-m".to_owned(),
+        "comment".to_owned(),
+        "--comment".to_owned(),
+        chain.marker.to_owned(),
+        "-j".to_owned(),
+        "RETURN".to_owned(),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn acquire_inrou_iptables_lock() -> eyre::Result<fs::File> {
+    let lock_path = Path::new(SORACLOUD_INROU_IPTABLES_LOCK_PATH);
+    let lock_parent = lock_path
+        .parent()
+        .ok_or_else(|| eyre::eyre!("Inrou firewall lock path has no parent"))?;
+    for ancestor in lock_parent.ancestors() {
+        let metadata = fs::symlink_metadata(ancestor).wrap_err_with(|| {
+            format!(
+                "inspect Inrou firewall lock ancestor {}",
+                ancestor.display()
+            )
+        })?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.uid() != 0
+            || metadata.gid() != 0
+            || metadata.mode() & 0o022 != 0
+        {
+            eyre::bail!(
+                "Inrou firewall lock ancestor {} must be a root-owned, non-writable directory without symlink indirection",
+                ancestor.display()
+            );
+        }
+    }
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    let file = options
+        .open(lock_path)
+        .wrap_err_with(|| format!("open Inrou firewall lock {}", lock_path.display()))?;
+    let opened = file.metadata()?;
+    let named = fs::symlink_metadata(lock_path)?;
+    if !opened.is_file()
+        || opened.nlink() != 1
+        || opened.uid() != 0
+        || opened.gid() != 0
+        || opened.mode() & 0o7777 != 0o600
+        || named.file_type().is_symlink()
+        || named.dev() != opened.dev()
+        || named.ino() != opened.ino()
+    {
+        eyre::bail!(
+            "Inrou firewall lock {} must be one root-owned, owner-private regular file",
+            lock_path.display()
+        );
+    }
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive).wrap_err(
+        "acquire the global Inrou firewall lock; another PortableVM supervisor may be active",
+    )?;
+    Ok(file)
+}
+#[cfg(target_os = "linux")]
+fn run_inrou_iptables_status(
+    program: &Path,
+    args: &[String],
+) -> eyre::Result<std::process::ExitStatus> {
+    let borrowed = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let mut command = Command::new(program);
+    sanitize_host_command_environment(&mut command);
+    command
+        .args(&borrowed)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = command
+        .spawn()
+        .wrap_err_with(|| format!("spawn {} {}", program.display(), borrowed.join(" ")))?;
+    let started_at = std::time::Instant::now();
+    loop {
+        let poll = match child.try_wait() {
+            Ok(poll) => poll,
+            Err(error) => {
+                let termination = terminate_inrou_iptables_child_bounded(&mut child);
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "poll {} {}{}",
+                        program.display(),
+                        borrowed.join(" "),
+                        termination
+                    )
+                });
+            }
+        };
+        match poll {
+            Some(status) => return Ok(status),
+            None if started_at.elapsed() < SORACLOUD_INROU_IPTABLES_COMMAND_TIMEOUT => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            None => {
+                let termination = terminate_inrou_iptables_child_bounded(&mut child);
+                eyre::bail!(
+                    "{} {} exceeded its {:?} Inrou firewall deadline{}",
+                    program.display(),
+                    borrowed.join(" "),
+                    SORACLOUD_INROU_IPTABLES_COMMAND_TIMEOUT,
+                    termination,
+                );
+            }
+        }
+    }
+}
+#[cfg(target_os = "linux")]
+fn terminate_inrou_iptables_child_bounded(child: &mut std::process::Child) -> String {
+    let kill_error = child.kill().err();
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    let mut reap_error = None;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                reap_error = Some("did not exit before the one-second reap deadline".to_owned());
+                break;
+            }
+            Err(error) => {
+                reap_error = Some(format!("reaping the command failed: {error}"));
+                break;
+            }
+        }
+    }
+    let mut suffix = String::new();
+    if let Some(error) = kill_error {
+        suffix.push_str(&format!("; terminating the command failed: {error}"));
+    }
+    if let Some(error) = reap_error {
+        suffix.push_str("; ");
+        suffix.push_str(&error);
+    }
+    suffix
+}
+#[cfg(target_os = "linux")]
+fn run_inrou_iptables_command(program: &Path, args: &[String]) -> eyre::Result<()> {
+    let status = run_inrou_iptables_status(program, args)?;
+    if !status.success() {
+        eyre::bail!(
+            "{} {} failed with status {status}",
+            program.display(),
+            args.join(" ")
+        );
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn inrou_iptables_chain_exists(program: &Path, chain: &str) -> eyre::Result<bool> {
+    let list = vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        "-L".to_owned(),
+        chain.to_owned(),
+        "-n".to_owned(),
+    ];
+    let status = run_inrou_iptables_status(program, &list)?;
+    if status.success() {
+        return Ok(true);
+    }
+    let output_probe = vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        "-L".to_owned(),
+        "OUTPUT".to_owned(),
+        "-n".to_owned(),
+    ];
+    let probe_status = run_inrou_iptables_status(program, &output_probe)?;
+    if !probe_status.success() {
+        eyre::bail!(
+            "iptables could not distinguish missing chain `{chain}` from an unavailable filter table (statuses {status} and {probe_status})"
+        );
+    }
+    Ok(false)
+}
+#[cfg(target_os = "linux")]
+fn inrou_iptables_rule_exists(
+    program: &Path,
+    chain: &str,
+    check_args: &[String],
+) -> eyre::Result<bool> {
+    let status = run_inrou_iptables_status(program, check_args)?;
+    if status.success() {
+        return Ok(true);
+    }
+    if !inrou_iptables_chain_exists(program, chain)? {
+        eyre::bail!("iptables chain `{chain}` disappeared while its Inrou rules were checked");
+    }
+    Ok(false)
+}
+#[cfg(target_os = "linux")]
+fn drain_inrou_pre_firewall_connections(listener: &TcpListener) -> io::Result<()> {
+    listener.set_nonblocking(true)?;
+    loop {
+        match listener.accept() {
+            Ok((stream, _peer)) => {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) => return Err(error),
+        }
+    }
+}
+impl PortableVmLoopbackProxy {
+    #[cfg(target_os = "linux")]
+    fn start(
+        public_listener: TcpListener,
+        backend: SocketAddr,
+        qmp_control: Arc<Mutex<PortableVmQmpControl>>,
+        guest_port: u16,
+    ) -> io::Result<Self> {
+        let attestor = Arc::new(move |expected_backend: SocketAddr, stop: &AtomicBool| {
+            let deadline = std::time::Instant::now() + SORACLOUD_INROU_QMP_SESSION_ATTEST_TIMEOUT;
+            loop {
+                if stop.load(AtomicOrdering::Acquire) {
+                    return false;
+                }
+                if let Some(mut control) = qmp_control.try_lock() {
+                    return attest_inrou_qmp_host_forward(
+                        &mut control,
+                        guest_port,
+                        expected_backend,
+                        deadline,
+                        Some(stop),
+                    )
+                    .is_ok();
+                }
+                if std::time::Instant::now() >= deadline {
+                    return false;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        });
+        Self::start_with_attestor(public_listener, backend, attestor)
+    }
+
+    fn start_with_attestor(
+        public_listener: TcpListener,
+        backend: SocketAddr,
+        attestor: PortableVmBackendAttestor,
+    ) -> io::Result<Self> {
+        if !backend.ip().is_loopback() || backend.port() == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "PortableVm proxy backend must be a concrete loopback endpoint",
+            ));
+        }
+        let listen_address = public_listener.local_addr()?;
+        if !listen_address.ip().is_loopback() || listen_address.port() == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "PortableVm public listener must be a concrete loopback endpoint",
+            ));
+        }
+        public_listener.set_nonblocking(true)?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker = thread::Builder::new()
+            .name("inrou-port-forward".to_owned())
+            .spawn(move || {
+                let mut sessions = Vec::<thread::JoinHandle<()>>::new();
+                while !worker_stop.load(AtomicOrdering::Acquire) {
+                    for index in (0..sessions.len()).rev() {
+                        if sessions[index].is_finished() {
+                            let session = sessions.swap_remove(index);
+                            let _ = session.join();
+                        }
+                    }
+                    match public_listener.accept() {
+                        Ok((client, _peer)) => {
+                            if sessions.len() >= SORACLOUD_INROU_PROXY_MAX_CONNECTIONS {
+                                let _ = client.shutdown(Shutdown::Both);
+                                continue;
+                            }
+                            let session_stop = Arc::clone(&worker_stop);
+                            let session_attestor = Arc::clone(&attestor);
+                            match thread::Builder::new()
+                                .name("inrou-port-session".to_owned())
+                                .stack_size(SORACLOUD_INROU_PROXY_SESSION_STACK_BYTES)
+                                .spawn(move || {
+                                    proxy_portable_vm_connection(
+                                        client,
+                                        backend,
+                                        session_stop,
+                                        session_attestor,
+                                    );
+                                }) {
+                                Ok(session) => sessions.push(session),
+                                Err(error) => {
+                                    iroha_logger::warn!(
+                                        ?error,
+                                        "failed to spawn bounded Inrou port-forward session"
+                                    );
+                                }
+                            }
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => {
+                            iroha_logger::warn!(
+                                ?error,
+                                "supervisor-owned Inrou port-forward listener failed"
+                            );
+                            break;
+                        }
+                    }
+                }
+                for session in sessions {
+                    let _ = session.join();
+                }
+            })?;
+        Ok(Self {
+            listen_address,
+            stop,
+            worker: Some(worker),
+        })
+    }
+
+    fn stop(&mut self) {
+        if self.stop.swap(true, AtomicOrdering::AcqRel) {
+            return;
+        }
+        let _ = TcpStream::connect_timeout(&self.listen_address, Duration::from_millis(100));
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+impl Drop for PortableVmLoopbackProxy {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+fn proxy_portable_vm_connection(
+    client: TcpStream,
+    backend: SocketAddr,
+    global_stop: Arc<AtomicBool>,
+    attestor: PortableVmBackendAttestor,
+) {
+    let Ok(server) = TcpStream::connect_timeout(&backend, Duration::from_secs(1)) else {
+        let _ = client.shutdown(Shutdown::Both);
+        return;
+    };
+    if global_stop.load(AtomicOrdering::Acquire) || !attestor(backend, &global_stop) {
+        let _ = client.shutdown(Shutdown::Both);
+        let _ = server.shutdown(Shutdown::Both);
+        return;
+    }
+    for stream in [&client, &server] {
+        if stream.set_nodelay(true).is_err()
+            || stream
+                .set_read_timeout(Some(SORACLOUD_INROU_PROXY_IO_POLL))
+                .is_err()
+            || stream
+                .set_write_timeout(Some(SORACLOUD_INROU_PROXY_IO_POLL))
+                .is_err()
+        {
+            let _ = client.shutdown(Shutdown::Both);
+            let _ = server.shutdown(Shutdown::Both);
+            return;
+        }
+    }
+    let Ok(client_reader) = client.try_clone() else {
+        return;
+    };
+    let Ok(server_writer) = server.try_clone() else {
+        return;
+    };
+    let session_stop = Arc::new(AtomicBool::new(false));
+    let upstream_global_stop = Arc::clone(&global_stop);
+    let upstream_session_stop = Arc::clone(&session_stop);
+    let upstream = thread::Builder::new()
+        .name("inrou-port-upstream".to_owned())
+        .stack_size(SORACLOUD_INROU_PROXY_SESSION_STACK_BYTES)
+        .spawn(move || {
+            proxy_portable_vm_direction(
+                client_reader,
+                server_writer,
+                &upstream_global_stop,
+                &upstream_session_stop,
+            );
+        });
+    proxy_portable_vm_direction(server, client, &global_stop, &session_stop);
+    session_stop.store(true, AtomicOrdering::Release);
+    if let Ok(upstream) = upstream {
+        let _ = upstream.join();
+    }
+}
+fn proxy_portable_vm_direction(
+    mut reader: TcpStream,
+    mut writer: TcpStream,
+    global_stop: &AtomicBool,
+    session_stop: &AtomicBool,
+) {
+    let mut buffer = [0_u8; 16 * 1024];
+    while !global_stop.load(AtomicOrdering::Acquire) && !session_stop.load(AtomicOrdering::Acquire)
+    {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                if write_inrou_proxy_buffer_bounded(
+                    &mut writer,
+                    &buffer[..read],
+                    global_stop,
+                    session_stop,
+                )
+                .is_err()
+                {
+                    break;
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => break,
+        }
+    }
+    session_stop.store(true, AtomicOrdering::Release);
+    let _ = reader.shutdown(Shutdown::Both);
+    let _ = writer.shutdown(Shutdown::Both);
+}
+fn write_inrou_proxy_buffer_bounded(
+    writer: &mut TcpStream,
+    mut payload: &[u8],
+    global_stop: &AtomicBool,
+    session_stop: &AtomicBool,
+) -> io::Result<()> {
+    let deadline = std::time::Instant::now() + SORACLOUD_INROU_PROXY_WRITE_TIMEOUT;
+    while !payload.is_empty() {
+        if global_stop.load(AtomicOrdering::Acquire) || session_stop.load(AtomicOrdering::Acquire) {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Inrou proxy stopped during a buffered write",
+            ));
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Inrou proxy buffered write exceeded its absolute deadline",
+            ));
+        }
+        match writer.write(payload) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "Inrou proxy socket stopped accepting bytes",
+                ));
+            }
+            Ok(written) => payload = &payload[written..],
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 fn write_inrou_cloud_init_documents(
     materialization_dir: &Path,
@@ -13571,20 +17230,6 @@ fn stage_portable_vm_bundle_block_device(
     write_bytes_atomic(&bundle_path, &bundle_bytes)
         .wrap_err_with(|| format!("stage verified bundle block {}", bundle_path.display()))?;
     Ok((bundle_path, exact_bytes))
-}
-fn build_portable_vm_allowlist_hosts_overlay(
-    allowlist_hosts: &[(String, Ipv4Addr)],
-) -> Option<String> {
-    let lines = allowlist_hosts
-        .iter()
-        .filter(|(host, _address)| host.parse::<IpAddr>().is_err())
-        .map(|(host, address)| format!("{address} {host}"))
-        .collect::<Vec<_>>();
-    (!lines.is_empty()).then(|| {
-        let mut overlay = lines.join("\n");
-        overlay.push('\n');
-        overlay
-    })
 }
 fn portable_vm_kernel_cmdline(profile: PortableVmGuestMachineProfile) -> String {
     format!(
@@ -13722,63 +17367,11 @@ fn build_inrou_bootstrap_seed_from_documents(
     Ok(seed_image_path)
 }
 #[cfg(target_os = "linux")]
-fn json_string_literal(value: impl AsRef<str>) -> String {
-    norito::json::to_string(&norito::json!(value.as_ref())).expect("valid json string")
-}
-#[cfg(target_os = "linux")]
-fn write_inrou_firecracker_config(
-    materialization_dir: &Path,
-    kernel_image_path: &Path,
-    initrd_image_path: Option<&Path>,
-    root_disk_path: &Path,
-    seed_image_path: &Path,
-    network_attachment: &InrouTapNetworkAttachment,
-    resources: iroha_data_model::soracloud::SoraResourceLimitsV1,
-) -> eyre::Result<PathBuf> {
-    let vcpu_count = u32::from(resources.cpu_millis.get()).div_ceil(1_000).max(1);
-    let mem_size_mib = resources.memory_bytes.get().div_ceil(1024 * 1024).max(128);
-    let mut drives = Vec::new();
-    drives.push(format!(
-        "{{\"drive_id\":\"rootfs\",\"path_on_host\":{},\"is_root_device\":true,\"is_read_only\":false}}",
-        json_string_literal(root_disk_path.display().to_string()),
-    ));
-    drives.push(format!(
-        "{{\"drive_id\":\"seed\",\"path_on_host\":{},\"is_root_device\":false,\"is_read_only\":true}}",
-        json_string_literal(seed_image_path.display().to_string()),
-    ));
-    let initrd_fragment = initrd_image_path.map_or_else(String::new, |initrd| {
-        format!(
-            ",\"initrd_path\":{}",
-            json_string_literal(initrd.display().to_string())
-        )
-    });
-    let config = format!(
-        concat!(
-            "{{",
-            "\"boot-source\":{{\"kernel_image_path\":{},\"boot_args\":\"console=ttyS0 reboot=k panic=1 pci=off\"{}}},",
-            "\"drives\":[{}],",
-            "\"machine-config\":{{\"vcpu_count\":{},\"mem_size_mib\":{},\"smt\":false}},",
-            "\"network-interfaces\":[{{\"iface_id\":\"eth0\",\"host_dev_name\":{},\"guest_mac\":{}}}]",
-            "}}"
-        ),
-        json_string_literal(kernel_image_path.display().to_string()),
-        initrd_fragment,
-        drives.join(","),
-        vcpu_count,
-        mem_size_mib,
-        json_string_literal(&network_attachment.tap_name),
-        json_string_literal(&network_attachment.guest_mac),
-    );
-    let config_path = materialization_dir.join("firecracker-config.json");
-    write_bytes_atomic(&config_path, config.as_bytes())
-        .wrap_err_with(|| format!("write {}", config_path.display()))?;
-    Ok(config_path)
-}
-#[cfg(target_os = "linux")]
 fn setup_inrou_tap_network(
     cache_key: &HostedHttpWorkerCacheKey,
     _materialization_dir: &Path,
     firewall_plan: InrouTapFirewallPlan,
+    allow_shared_storage_ingress: bool,
 ) -> eyre::Result<InrouTapNetworkAttachment> {
     if !inrou_ip_forward_enabled()? {
         eyre::bail!(
@@ -13801,9 +17394,10 @@ fn setup_inrou_tap_network(
     let guest_cidr = format!("{}/32", attachment.guest_ip);
     let link_path = Path::new("/sys/class/net").join(&attachment.tap_name);
     if link_path.exists() {
-        let _ = Command::new(&attachment.ip_binary)
-            .args(["link", "del", "dev", attachment.tap_name.as_str()])
-            .status();
+        let _ = run_host_command(
+            &attachment.ip_binary,
+            &["link", "del", "dev", attachment.tap_name.as_str()],
+        );
     }
     run_host_command(
         &attachment.ip_binary,
@@ -13833,7 +17427,11 @@ fn setup_inrou_tap_network(
         &["link", "set", "dev", attachment.tap_name.as_str(), "up"],
     )
     .wrap_err("bring Inrou tap device up")?;
-    if let Err(error) = install_inrou_tap_firewall_rules(&mut attachment, guest_cidr.as_str()) {
+    if let Err(error) = install_inrou_tap_firewall_rules(
+        &mut attachment,
+        guest_cidr.as_str(),
+        allow_shared_storage_ingress,
+    ) {
         attachment.cleanup();
         return Err(error);
     }
@@ -13844,22 +17442,26 @@ fn inrou_tap_firewall_plan(
     network_policy: &SoraNetworkPolicyV1,
 ) -> eyre::Result<InrouTapFirewallPlan> {
     match network_policy {
-        SoraNetworkPolicyV1::Open => Ok(InrouTapFirewallPlan::Open),
+        SoraNetworkPolicyV1::Open => {
+            eyre::bail!("Inrou V1 forbids unrestricted network egress")
+        }
         SoraNetworkPolicyV1::Isolated => Ok(InrouTapFirewallPlan::Isolated),
-        SoraNetworkPolicyV1::Allowlist(allowed_hosts) => Ok(InrouTapFirewallPlan::Allowlist(
-            resolve_inrou_allowlist_endpoints(allowed_hosts)?,
-        )),
+        SoraNetworkPolicyV1::Allowlist(_) => eyre::bail!(
+            "Inrou V1 forbids allowlisted egress until kernel-backed byte accounting is enforced"
+        ),
     }
 }
 #[cfg(target_os = "linux")]
 fn install_inrou_tap_firewall_rules(
     attachment: &mut InrouTapNetworkAttachment,
     guest_cidr: &str,
+    allow_shared_storage_ingress: bool,
 ) -> eyre::Result<()> {
     for rule in planned_inrou_tap_firewall_rules(
         attachment.tap_name.as_str(),
         guest_cidr,
         &attachment.firewall_plan,
+        allow_shared_storage_ingress,
     ) {
         install_inrou_iptables_rule(attachment, rule.args, rule.context)?;
     }
@@ -13902,24 +17504,29 @@ fn planned_inrou_tap_firewall_rules(
     tap_name: &str,
     guest_cidr: &str,
     firewall_plan: &InrouTapFirewallPlan,
+    allow_shared_storage_ingress: bool,
 ) -> Vec<InrouTapFirewallRuleSpec> {
     let mut rules = Vec::new();
-    rules.push(InrouTapFirewallRuleSpec {
-        args: vec![
-            "-I".to_owned(),
-            "INPUT".to_owned(),
-            "1".to_owned(),
-            "-i".to_owned(),
-            tap_name.to_owned(),
-            "-p".to_owned(),
-            "tcp".to_owned(),
-            "--dport".to_owned(),
-            "2049".to_owned(),
-            "-j".to_owned(),
-            "ACCEPT".to_owned(),
-        ],
-        context: "install Inrou shared-storage ingress rule",
-    });
+    if allow_shared_storage_ingress {
+        rules.push(InrouTapFirewallRuleSpec {
+            args: vec![
+                "-I".to_owned(),
+                "INPUT".to_owned(),
+                "1".to_owned(),
+                "-i".to_owned(),
+                tap_name.to_owned(),
+                "-s".to_owned(),
+                guest_cidr.to_owned(),
+                "-p".to_owned(),
+                "tcp".to_owned(),
+                "--dport".to_owned(),
+                "2049".to_owned(),
+                "-j".to_owned(),
+                "ACCEPT".to_owned(),
+            ],
+            context: "install Inrou shared-storage ingress rule",
+        });
+    }
     if firewall_plan.installs_masquerade_rule() {
         rules.push(InrouTapFirewallRuleSpec {
             args: vec![
@@ -13959,7 +17566,12 @@ fn planned_inrou_tap_firewall_rules(
         args: vec![
             "-I".to_owned(),
             "INPUT".to_owned(),
-            "3".to_owned(),
+            if allow_shared_storage_ingress {
+                "3"
+            } else {
+                "2"
+            }
+            .to_owned(),
             "-i".to_owned(),
             tap_name.to_owned(),
             "-j".to_owned(),
@@ -13986,18 +17598,6 @@ fn planned_inrou_tap_firewall_rules(
         });
     }
     match firewall_plan {
-        InrouTapFirewallPlan::Open => rules.push(InrouTapFirewallRuleSpec {
-            args: vec![
-                "-I".to_owned(),
-                "FORWARD".to_owned(),
-                "1".to_owned(),
-                "-i".to_owned(),
-                tap_name.to_owned(),
-                "-j".to_owned(),
-                "ACCEPT".to_owned(),
-            ],
-            context: "install Inrou forward-out rule",
-        }),
         InrouTapFirewallPlan::Isolated => rules.push(InrouTapFirewallRuleSpec {
             args: vec![
                 "-I".to_owned(),
@@ -14048,15 +17648,64 @@ fn planned_inrou_tap_firewall_rules(
     rules
 }
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn inrou_ipv4_endpoint_is_public(address: Ipv4Addr) -> bool {
+    let [first, second, third, fourth] = address.octets();
+    let is_shared = first == 100 && second & 0b1100_0000 == 0b0100_0000;
+    let is_protocol_assignment =
+        first == 192 && second == 0 && third == 0 && fourth != 9 && fourth != 10;
+    let is_benchmarking = first == 198 && second & 0xfe == 18;
+    let is_reserved = first & 0xf0 == 0xf0 && !address.is_broadcast();
+    !(first == 0
+        || address.is_private()
+        || is_shared
+        || address.is_loopback()
+        || address.is_link_local()
+        || is_protocol_assignment
+        || address.is_documentation()
+        || is_benchmarking
+        || is_reserved
+        || address.is_broadcast()
+        || address.is_multicast())
+}
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn resolve_inrou_allowlist_endpoints(
     entries: &[iroha_data_model::soracloud::SoraNetworkAllowlistEntryV1],
 ) -> eyre::Result<Vec<InrouTapResolvedAllowlistEndpoint>> {
+    if entries.is_empty() {
+        eyre::bail!("Inrou allowlist egress requires at least one host");
+    }
     let mut resolved = BTreeSet::new();
+    let mut seen_hosts = BTreeSet::new();
     for entry in entries {
-        let host = entry.host.trim();
+        let host = entry.host.as_str();
+        if host.is_empty()
+            || host.trim() != host
+            || host.chars().any(char::is_control)
+            || host.chars().any(char::is_whitespace)
+        {
+            eyre::bail!("Inrou allowlist host must be a nonempty canonical hostname or IP literal");
+        }
+        if !seen_hosts.insert(host.to_ascii_lowercase()) {
+            eyre::bail!("Inrou allowlist contains duplicate host `{host}`");
+        }
+        if entry.ports.is_empty() {
+            eyre::bail!("Inrou allowlist host `{host}` must declare at least one TCP port");
+        }
+        let mut seen_ports = BTreeSet::new();
+        for port in &entry.ports {
+            if *port == 0 {
+                eyre::bail!("Inrou allowlist host `{host}` contains invalid TCP port 0");
+            }
+            if !seen_ports.insert(*port) {
+                eyre::bail!("Inrou allowlist host `{host}` contains duplicate TCP port `{port}`");
+            }
+        }
         let mut host_endpoints = BTreeSet::new();
         if let Ok(address) = host.parse::<IpAddr>() {
             if let IpAddr::V4(address) = address {
+                if !inrou_ipv4_endpoint_is_public(address) {
+                    eyre::bail!("Inrou allowlist host `{host}` is not a public IPv4 endpoint");
+                }
                 for port in &entry.ports {
                     host_endpoints.insert(InrouTapResolvedAllowlistEndpoint {
                         host: host.to_owned(),
@@ -14072,6 +17721,12 @@ fn resolve_inrou_allowlist_endpoints(
                 })?;
                 for address in addresses {
                     if let SocketAddr::V4(address) = address {
+                        if !inrou_ipv4_endpoint_is_public(*address.ip()) {
+                            eyre::bail!(
+                                "Inrou allowlist host `{host}` resolved to non-public IPv4 endpoint `{}`",
+                                address.ip()
+                            );
+                        }
                         host_endpoints.insert(InrouTapResolvedAllowlistEndpoint {
                             host: host.to_owned(),
                             address: *address.ip(),
@@ -14137,30 +17792,345 @@ fn derive_inrou_tap_network_attachment(
 fn inrou_ip_forward_enabled() -> io::Result<bool> {
     Ok(fs::read_to_string("/proc/sys/net/ipv4/ip_forward")?.trim() == "1")
 }
-fn run_host_command(program: &Path, args: &[&str]) -> eyre::Result<()> {
-    let output = Command::new(program)
-        .args(args)
-        .output()
-        .wrap_err_with(|| format!("spawn {} {}", program.display(), args.join(" ")))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    eyre::bail!(
-        "{} {} failed with status {}{}{}",
-        program.display(),
-        args.join(" "),
-        output.status,
-        if output.stdout.is_empty() {
-            String::new()
-        } else {
-            format!(" stdout={}", String::from_utf8_lossy(&output.stdout).trim())
-        },
-        if output.stderr.is_empty() {
-            String::new()
-        } else {
-            format!(" stderr={}", String::from_utf8_lossy(&output.stderr).trim())
+fn sanitize_host_command_environment(command: &mut Command) {
+    command.env_clear();
+    #[cfg(not(windows))]
+    command.env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin");
+    #[cfg(windows)]
+    {
+        if let Some(system_root) = std::env::var_os("SystemRoot") {
+            command.env("SystemRoot", system_root);
         }
-    );
+        if let Some(path) = std::env::var_os("PATH") {
+            command.env("PATH", path);
+        }
+    }
+}
+#[cfg(target_os = "linux")]
+fn inrou_setpriv_qemu_arguments(
+    shell: &Path,
+    qemu: &Path,
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<Vec<String>> {
+    validate_portable_vm_child_identity_values(identity)?;
+    let shell = shell
+        .to_str()
+        .ok_or_else(|| eyre::eyre!("descriptor-cleanup shell path must be UTF-8"))?;
+    let qemu = qemu
+        .to_str()
+        .ok_or_else(|| eyre::eyre!("QEMU executable path must be UTF-8"))?;
+    let mut args = vec![
+        "--reuid".to_owned(),
+        identity.uid.to_string(),
+        "--regid".to_owned(),
+        identity.gid.to_string(),
+    ];
+    if identity.supplementary_gids.is_empty() {
+        args.push("--clear-groups".to_owned());
+    } else {
+        args.push("--groups".to_owned());
+        args.push(
+            identity
+                .supplementary_gids
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
+    args.extend([
+        "--securebits=+noroot,+noroot_locked,+no_setuid_fixup,+no_setuid_fixup_locked".to_owned(),
+        "--bounding-set=-all".to_owned(),
+        "--inh-caps=-all".to_owned(),
+        "--ambient-caps=-all".to_owned(),
+        "--no-new-privs".to_owned(),
+        "--".to_owned(),
+        shell.to_owned(),
+        "-c".to_owned(),
+        SORACLOUD_INROU_CLOSE_FDS_SCRIPT.to_owned(),
+        "inrou-close-fds".to_owned(),
+        identity.uid.to_string(),
+        identity.gid.to_string(),
+        identity
+            .supplementary_gids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(" "),
+        qemu.to_owned(),
+        "-no-user-config".to_owned(),
+        "-sandbox".to_owned(),
+        SORACLOUD_INROU_QEMU_SANDBOX_POLICY.to_owned(),
+        "-run-with".to_owned(),
+        "exit-with-parent=on".to_owned(),
+    ]);
+    Ok(args)
+}
+#[cfg(target_os = "linux")]
+fn build_inrou_portable_vm_command(
+    setpriv: &Path,
+    shell: &Path,
+    qemu: &Path,
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<Command> {
+    let mut command = Command::new(setpriv);
+    sanitize_host_command_environment(&mut command);
+    command
+        .current_dir("/")
+        .args(inrou_setpriv_qemu_arguments(shell, qemu, identity)?);
+    Ok(command)
+}
+#[cfg(target_os = "linux")]
+fn configure_inrou_qmp_stdio(command: &mut Command) -> io::Result<UnixStream> {
+    let (supervisor, child) = UnixStream::pair()?;
+    let child_output = child.try_clone()?;
+    command
+        .arg("-qmp")
+        .arg("stdio")
+        .arg("-chardev")
+        .arg(format!(
+            "ringbuf,id=inrou-serial,size={SORACLOUD_INROU_LOG_MAX_BYTES}"
+        ))
+        .arg("-serial")
+        .arg("chardev:inrou-serial")
+        .stdin(Stdio::from(OwnedFd::from(child)))
+        .stdout(Stdio::from(OwnedFd::from(child_output)));
+    Ok(supervisor)
+}
+#[cfg(target_os = "linux")]
+fn run_inrou_qemu_command_capture_stdout_bounded(
+    setpriv: &Path,
+    shell: &Path,
+    qemu: &Path,
+    identity: &PortableVmChildIdentity,
+    qemu_args: &[&str],
+    timeout: Duration,
+    maximum_stdout_bytes: usize,
+) -> eyre::Result<Vec<u8>> {
+    let mut args = inrou_setpriv_qemu_arguments(shell, qemu, identity)?;
+    args.extend(qemu_args.iter().map(|argument| (*argument).to_owned()));
+    let borrowed = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_host_command_capture_stdout_bounded(setpriv, &borrowed, timeout, maximum_stdout_bytes)
+}
+fn drain_host_command_stdout_bounded(
+    mut reader: impl io::Read,
+    maximum_bytes: usize,
+) -> io::Result<(Vec<u8>, bool)> {
+    if maximum_bytes == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "host-command stdout limit must be positive",
+        ));
+    }
+    let mut output = Vec::new();
+    output.try_reserve_exact(maximum_bytes).map_err(|error| {
+        io::Error::other(format!(
+            "reserve bounded host-command stdout buffer: {error}"
+        ))
+    })?;
+    let mut truncated = false;
+    let mut buffer = [0_u8; 8 * 1024];
+    loop {
+        let read = match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        let retained = maximum_bytes.saturating_sub(output.len()).min(read);
+        output.extend_from_slice(&buffer[..retained]);
+        truncated |= retained != read;
+    }
+    Ok((output, truncated))
+}
+fn run_host_command_capture_stdout_bounded(
+    program: &Path,
+    args: &[&str],
+    timeout: Duration,
+    maximum_stdout_bytes: usize,
+) -> eyre::Result<Vec<u8>> {
+    let (status, output) = run_host_command_capture_stdout_status_bounded(
+        program,
+        args,
+        timeout,
+        maximum_stdout_bytes,
+    )?;
+    if !status.success() {
+        eyre::bail!(
+            "{} {} failed with status {}",
+            program.display(),
+            args.join(" "),
+            status,
+        );
+    }
+    Ok(output)
+}
+fn run_host_command_capture_stdout_status_bounded(
+    program: &Path,
+    args: &[&str],
+    timeout: Duration,
+    maximum_stdout_bytes: usize,
+) -> eyre::Result<(std::process::ExitStatus, Vec<u8>)> {
+    if timeout.is_zero() {
+        eyre::bail!("host-command execution deadline must be positive");
+    }
+    let mut command = Command::new(program);
+    sanitize_host_command_environment(&mut command);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = command
+        .spawn()
+        .wrap_err_with(|| format!("spawn {} {}", program.display(), args.join(" ")))?;
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let termination = terminate_inrou_child_bounded(&mut child);
+            eyre::bail!(
+                "stdout pipe was not available for {} {}{}",
+                program.display(),
+                args.join(" "),
+                inrou_termination_error_suffix(&termination),
+            );
+        }
+    };
+    let drain = match thread::Builder::new()
+        .name("inrou-host-command-stdout".to_owned())
+        .spawn(move || drain_host_command_stdout_bounded(stdout, maximum_stdout_bytes))
+    {
+        Ok(drain) => drain,
+        Err(error) => {
+            let termination = terminate_inrou_child_bounded(&mut child);
+            return Err(error).wrap_err_with(|| {
+                format!(
+                    "spawn bounded host-command stdout drain{}",
+                    inrou_termination_error_suffix(&termination)
+                )
+            });
+        }
+    };
+    let started_at = std::time::Instant::now();
+    let status = loop {
+        let poll = match child.try_wait() {
+            Ok(poll) => poll,
+            Err(error) => {
+                let termination = terminate_inrou_child_bounded(&mut child);
+                finish_inrou_stdout_drain_bounded(drain).ok();
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "poll {} {}{}",
+                        program.display(),
+                        args.join(" "),
+                        inrou_termination_error_suffix(&termination)
+                    )
+                });
+            }
+        };
+        match poll {
+            Some(status) => break status,
+            None if started_at.elapsed() < timeout => thread::sleep(Duration::from_millis(10)),
+            None => {
+                let termination = terminate_inrou_child_bounded(&mut child);
+                finish_inrou_stdout_drain_bounded(drain).ok();
+                eyre::bail!(
+                    "{} {} exceeded its {:?} execution deadline{}",
+                    program.display(),
+                    args.join(" "),
+                    timeout,
+                    inrou_termination_error_suffix(&termination),
+                );
+            }
+        }
+    };
+    let (output, truncated) = finish_inrou_stdout_drain_bounded(drain)?;
+    if truncated {
+        eyre::bail!(
+            "{} {} exceeded the {maximum_stdout_bytes}-byte stdout limit",
+            program.display(),
+            args.join(" "),
+        );
+    }
+    Ok((status, output))
+}
+fn finish_inrou_stdout_drain_bounded(
+    drain: thread::JoinHandle<io::Result<(Vec<u8>, bool)>>,
+) -> eyre::Result<(Vec<u8>, bool)> {
+    let deadline = std::time::Instant::now() + SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT;
+    while !drain.is_finished() && std::time::Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    if !drain.is_finished() {
+        eyre::bail!(
+            "host-command stdout drain did not stop within {:?}",
+            SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT
+        );
+    }
+    drain
+        .join()
+        .map_err(|_| eyre::eyre!("host-command stdout drain panicked"))?
+        .wrap_err("drain bounded host-command stdout")
+}
+fn run_host_command(program: &Path, args: &[&str]) -> eyre::Result<()> {
+    run_host_command_with_timeout(program, args, Duration::from_secs(10 * 60))
+}
+fn run_host_command_with_timeout(
+    program: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> eyre::Result<()> {
+    let mut command = Command::new(program);
+    sanitize_host_command_environment(&mut command);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = command
+        .spawn()
+        .wrap_err_with(|| format!("spawn {} {}", program.display(), args.join(" ")))?;
+    let started_at = std::time::Instant::now();
+    loop {
+        let poll = match child.try_wait() {
+            Ok(poll) => poll,
+            Err(error) => {
+                let termination = terminate_inrou_child_bounded(&mut child);
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "poll {} {}{}",
+                        program.display(),
+                        args.join(" "),
+                        inrou_termination_error_suffix(&termination)
+                    )
+                });
+            }
+        };
+        match poll {
+            Some(status) if status.success() => return Ok(()),
+            Some(status) => {
+                eyre::bail!(
+                    "{} {} failed with status {}",
+                    program.display(),
+                    args.join(" "),
+                    status,
+                );
+            }
+            None if started_at.elapsed() < timeout => {
+                thread::sleep(Duration::from_millis(25));
+            }
+            None => {
+                let termination = terminate_inrou_child_bounded(&mut child);
+                eyre::bail!(
+                    "{} {} exceeded its {:?} execution deadline{}",
+                    program.display(),
+                    args.join(" "),
+                    timeout,
+                    inrou_termination_error_suffix(&termination),
+                );
+            }
+        }
+    }
 }
 #[allow(dead_code)]
 fn create_populated_ext4_image(
@@ -14459,16 +18429,17 @@ fn build_inrou_user_data(
             prepare_script.push_str(&shell_single_quote(&mount.mount_path));
             prepare_script.push('\n');
             prepare_script.push_str("if ! mkdir -p \"$mount_path\"; then\n");
-            prepare_script.push_str("  umount \"$mount_path\" >/dev/null 2>&1 || true\n");
-            prepare_script.push_str("  mkdir -p \"$mount_path\"\n");
+            prepare_script
+                .push_str("  echo \"Inrou volume mount path is unavailable: $mount_path\" >&2\n");
+            prepare_script.push_str("  exit 1\n");
             prepare_script.push_str("fi\n");
             prepare_script.push_str(
                 "if mountpoint -q \"$mount_path\" && ! mkdir -p \"$mount_path/.inrou-volume-check\"; then\n",
             );
             prepare_script.push_str(
-                "  echo \"Inrou PortableVm volume mount path is unhealthy; unmounting $mount_path\" >&2\n",
+                "  echo \"Inrou volume mount path is unhealthy; failing closed: $mount_path\" >&2\n",
             );
-            prepare_script.push_str("  umount \"$mount_path\" >/dev/null 2>&1 || true\n");
+            prepare_script.push_str("  exit 1\n");
             prepare_script.push_str("fi\n");
             prepare_script.push_str("if ! mountpoint -q \"$mount_path\"; then\n");
             match &mount.kind {
@@ -14494,6 +18465,7 @@ fn build_inrou_user_data(
                     device_serial,
                     filesystem_type,
                     mount_options,
+                    initialize_filesystem,
                 } => {
                     prepare_script.push_str("  mount_path=");
                     prepare_script.push_str(&shell_single_quote(&mount.mount_path));
@@ -14522,15 +18494,31 @@ fn build_inrou_user_data(
                     );
                     prepare_script.push_str("    exit 1\n");
                     prepare_script.push_str("  fi\n");
-                    prepare_script.push_str("  if ! command -v mkfs.ext4 >/dev/null 2>&1; then\n");
+                    if *initialize_filesystem {
+                        prepare_script
+                            .push_str("  if ! command -v mkfs.ext4 >/dev/null 2>&1; then\n");
+                        prepare_script.push_str(
+                            "    echo 'Inrou PortableVm block-volume initialization requires mkfs.ext4 in the guest image' >&2\n",
+                        );
+                        prepare_script.push_str("    exit 1\n");
+                        prepare_script.push_str("  fi\n");
+                        prepare_script
+                            .push_str("  if blkid \"$device_path\" >/dev/null 2>&1; then\n");
+                        prepare_script.push_str(
+                            "    echo \"new Inrou PortableVm volume unexpectedly contains a filesystem signature: $device_path\" >&2\n",
+                        );
+                        prepare_script.push_str("    exit 1\n");
+                        prepare_script.push_str("  fi\n");
+                        prepare_script.push_str("  mkfs.ext4 -F \"$device_path\"\n");
+                    }
+                    prepare_script.push_str("  actual_filesystem=$(blkid -s TYPE -o value \"$device_path\" 2>/dev/null || true)\n");
+                    prepare_script.push_str("  if [ \"$actual_filesystem\" != ");
+                    prepare_script.push_str(&shell_single_quote(filesystem_type));
+                    prepare_script.push_str(" ]; then\n");
                     prepare_script.push_str(
-                        "    echo 'Inrou PortableVm block volumes require mkfs.ext4 in the guest image' >&2\n",
+                        "    echo \"Inrou PortableVm volume has missing or unexpected filesystem type: $device_path\" >&2\n",
                     );
                     prepare_script.push_str("    exit 1\n");
-                    prepare_script.push_str("  fi\n");
-                    prepare_script
-                        .push_str("  if ! blkid \"$device_path\" >/dev/null 2>&1; then\n");
-                    prepare_script.push_str("    mkfs.ext4 -F \"$device_path\"\n");
                     prepare_script.push_str("  fi\n");
                     prepare_script.push_str("  if ! mount -t ");
                     prepare_script.push_str(&shell_single_quote(filesystem_type));
@@ -14540,30 +18528,22 @@ fn build_inrou_user_data(
                     prepare_script.push_str("\"$device_path\"");
                     prepare_script.push(' ');
                     prepare_script.push_str("\"$mount_path\"");
-                    prepare_script.push_str("; then\n");
                     prepare_script.push_str(
-                        "    echo \"Inrou PortableVm volume mount failed; reformatting $device_path\" >&2\n",
+                        "; then\n    echo \"Inrou PortableVm volume mount failed; refusing to modify $device_path\" >&2\n    exit 1\n  fi\n",
                     );
-                    prepare_script.push_str("    mkfs.ext4 -F \"$device_path\"\n");
-                    prepare_script.push_str("    mount -t ");
-                    prepare_script.push_str(&shell_single_quote(filesystem_type));
-                    prepare_script.push_str(" -o ");
-                    prepare_script.push_str(&shell_single_quote(mount_options));
-                    prepare_script.push_str(" \"$device_path\" \"$mount_path\"\n");
+                    prepare_script.push_str("  if ! mountpoint -q \"$mount_path\"; then\n");
+                    prepare_script.push_str(
+                        "    echo \"Inrou PortableVm volume mount was not established; refusing to modify $device_path\" >&2\n",
+                    );
+                    prepare_script.push_str("    exit 1\n");
                     prepare_script.push_str("  fi\n");
                     prepare_script
                         .push_str("  if ! mkdir -p \"$mount_path/.inrou-volume-check\"; then\n");
                     prepare_script.push_str(
-                        "    echo \"Inrou PortableVm volume filesystem check failed; reformatting $device_path\" >&2\n",
+                        "    echo \"Inrou PortableVm volume filesystem check failed; refusing to modify $device_path\" >&2\n",
                     );
                     prepare_script.push_str("    umount \"$mount_path\" >/dev/null 2>&1 || true\n");
-                    prepare_script.push_str("    mkfs.ext4 -F \"$device_path\"\n");
-                    prepare_script.push_str("    mount -t ");
-                    prepare_script.push_str(&shell_single_quote(filesystem_type));
-                    prepare_script.push_str(" -o ");
-                    prepare_script.push_str(&shell_single_quote(mount_options));
-                    prepare_script.push_str(" \"$device_path\" \"$mount_path\"\n");
-                    prepare_script.push_str("    mkdir -p \"$mount_path/.inrou-volume-check\"\n");
+                    prepare_script.push_str("    exit 1\n");
                     prepare_script.push_str("  fi\n");
                 }
             }
@@ -14940,6 +18920,389 @@ impl InrouMaterializationDirectoryIdentity {
         })
     }
 }
+#[cfg(target_os = "linux")]
+fn read_inrou_qmp_message(
+    reader: &mut io::BufReader<UnixStream>,
+    deadline: std::time::Instant,
+    stop: Option<&AtomicBool>,
+) -> eyre::Result<norito::json::Value> {
+    let mut line = Vec::new();
+    loop {
+        if stop.is_some_and(|stop| stop.load(AtomicOrdering::Acquire)) {
+            eyre::bail!("Inrou QMP response was cancelled during proxy shutdown");
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            eyre::bail!("Inrou QMP response exceeded its absolute deadline");
+        }
+        reader
+            .get_mut()
+            .set_read_timeout(Some(remaining.min(SORACLOUD_INROU_QMP_IO_POLL)))
+            .wrap_err("set bounded Inrou QMP read timeout")?;
+        let available = match reader.fill_buf() {
+            Ok(available) => available,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error).wrap_err("read Inrou QMP response"),
+        };
+        if available.is_empty() {
+            eyre::bail!("Inrou QMP closed before a complete response");
+        }
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let take = newline.map_or(available.len(), |index| index.saturating_add(1));
+        if line.len().saturating_add(take) > SORACLOUD_INROU_QMP_MAX_MESSAGE_BYTES {
+            eyre::bail!(
+                "Inrou QMP response exceeded the {}-byte message limit",
+                SORACLOUD_INROU_QMP_MAX_MESSAGE_BYTES
+            );
+        }
+        line.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if newline.is_some() {
+            break;
+        }
+    }
+    while matches!(line.last(), Some(b'\r' | b'\n')) {
+        let _ = line.pop();
+    }
+    norito::json::from_slice(&line).wrap_err("decode bounded Inrou QMP JSON response")
+}
+#[cfg(target_os = "linux")]
+fn read_inrou_qmp_command_response(
+    reader: &mut io::BufReader<UnixStream>,
+    expected_id: &str,
+    deadline: std::time::Instant,
+    stop: Option<&AtomicBool>,
+) -> eyre::Result<norito::json::Value> {
+    for _ in 0..SORACLOUD_INROU_QMP_MAX_MESSAGES_PER_COMMAND {
+        let message = read_inrou_qmp_message(reader, deadline, stop)?;
+        if message.get("id").and_then(norito::json::Value::as_str) != Some(expected_id) {
+            continue;
+        }
+        if let Some(error) = message.get("error") {
+            eyre::bail!("Inrou QMP command `{expected_id}` failed: {error:?}");
+        }
+        return message
+            .get("return")
+            .cloned()
+            .ok_or_else(|| eyre::eyre!("Inrou QMP command `{expected_id}` omitted `return`"));
+    }
+    eyre::bail!(
+        "Inrou QMP did not return command id `{expected_id}` within its bounded message window"
+    )
+}
+fn parse_inrou_qmp_usernet_forward(
+    output: &str,
+    expected_guest_port: u16,
+) -> eyre::Result<SocketAddr> {
+    let mut forwards = Vec::new();
+    for line in output.lines() {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if fields
+            .first()
+            .is_none_or(|protocol| !protocol.contains("[HOST_FORWARD]"))
+        {
+            continue;
+        }
+        if fields.len() < 6 || fields[0] != "TCP[HOST_FORWARD]" {
+            eyre::bail!("Inrou QMP reported an unsupported host-forward record");
+        }
+        let source_ip = fields[2]
+            .parse::<IpAddr>()
+            .wrap_err("parse QEMU usernet host-forward source address")?;
+        let source_port = fields[3]
+            .parse::<u16>()
+            .wrap_err("parse QEMU usernet host-forward source port")?;
+        let guest_port = fields[5]
+            .parse::<u16>()
+            .wrap_err("parse QEMU usernet host-forward guest port")?;
+        if source_ip != IpAddr::V4(Ipv4Addr::LOCALHOST)
+            || source_port == 0
+            || guest_port != expected_guest_port
+        {
+            eyre::bail!("Inrou QMP reported a host forward outside its exact binding");
+        }
+        forwards.push(SocketAddr::new(source_ip, source_port));
+    }
+    if forwards.len() != 1 {
+        eyre::bail!(
+            "Inrou QMP must report exactly one process-owned TCP host forward, found {}",
+            forwards.len()
+        );
+    }
+    Ok(forwards[0])
+}
+#[cfg(target_os = "linux")]
+fn query_inrou_qmp_usernet_forward(
+    control: &mut PortableVmQmpControl,
+    guest_port: u16,
+    deadline: std::time::Instant,
+    stop: Option<&AtomicBool>,
+) -> eyre::Result<SocketAddr> {
+    if stop.is_some_and(|stop| stop.load(AtomicOrdering::Acquire)) {
+        eyre::bail!("Inrou QMP forwarding attestation was cancelled");
+    }
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    if remaining.is_zero() {
+        eyre::bail!("Inrou QMP forwarding attestation exceeded its absolute deadline");
+    }
+    control
+        .reader
+        .get_mut()
+        .set_write_timeout(Some(remaining.min(SORACLOUD_INROU_QMP_IO_POLL)))?;
+    control.reader.get_mut().write_all(
+        b"{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info usernet\"},\"id\":\"inrou-usernet\"}\n",
+    )?;
+    let usernet =
+        read_inrou_qmp_command_response(&mut control.reader, "inrou-usernet", deadline, stop)?
+            .as_str()
+            .ok_or_else(|| eyre::eyre!("Inrou QMP usernet response must be text"))?
+            .to_owned();
+    parse_inrou_qmp_usernet_forward(&usernet, guest_port)
+}
+#[cfg(target_os = "linux")]
+fn attest_inrou_qmp_host_forward(
+    control: &mut PortableVmQmpControl,
+    guest_port: u16,
+    expected_backend: SocketAddr,
+    deadline: std::time::Instant,
+    stop: Option<&AtomicBool>,
+) -> eyre::Result<()> {
+    let actual = query_inrou_qmp_usernet_forward(control, guest_port, deadline, stop)?;
+    if actual != expected_backend {
+        eyre::bail!("live Inrou QEMU forwarding changed from {expected_backend} to {actual}");
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn validate_inrou_qemu_proc_status(
+    status: &str,
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<()> {
+    const REQUIRED_FIELDS: [&str; 9] = [
+        "Uid",
+        "Gid",
+        "Groups",
+        "CapInh",
+        "CapPrm",
+        "CapEff",
+        "CapBnd",
+        "CapAmb",
+        "NoNewPrivs",
+    ];
+    let mut fields = BTreeMap::new();
+    for line in status.lines() {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if (REQUIRED_FIELDS.contains(&name) || name == "Seccomp")
+            && fields.insert(name, value.trim()).is_some()
+        {
+            eyre::bail!("Inrou QEMU process status repeats `{name}`");
+        }
+    }
+    let required = |name: &str| {
+        fields
+            .get(name)
+            .copied()
+            .ok_or_else(|| eyre::eyre!("Inrou QEMU process status omitted `{name}`"))
+    };
+    let parse_ids = |name: &str| -> eyre::Result<Vec<u32>> {
+        required(name)?
+            .split_ascii_whitespace()
+            .map(|value| {
+                value
+                    .parse::<u32>()
+                    .wrap_err_with(|| format!("parse Inrou QEMU process `{name}` value"))
+            })
+            .collect()
+    };
+    if parse_ids("Uid")? != vec![identity.uid; 4] {
+        eyre::bail!("Inrou QEMU process did not retain the exact configured uid");
+    }
+    if parse_ids("Gid")? != vec![identity.gid; 4] {
+        eyre::bail!("Inrou QEMU process did not retain the exact configured gid");
+    }
+    if parse_ids("Groups")? != identity.supplementary_gids {
+        eyre::bail!("Inrou QEMU process did not retain the exact supplementary groups");
+    }
+    for name in ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"] {
+        let capabilities = u128::from_str_radix(required(name)?, 16)
+            .wrap_err_with(|| format!("parse Inrou QEMU process `{name}` value"))?;
+        if capabilities != 0 {
+            eyre::bail!("Inrou QEMU process retained capabilities in `{name}`");
+        }
+    }
+    if required("NoNewPrivs")? != "1" {
+        eyre::bail!("Inrou QEMU process did not enable NoNewPrivs");
+    }
+    if required("Seccomp")? != "2" {
+        eyre::bail!("Inrou QEMU process did not enter seccomp filter mode");
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn read_inrou_proc_status(pid: u32) -> io::Result<String> {
+    let path = PathBuf::from(format!("/proc/{pid}/status"));
+    let mut bytes = Vec::new();
+    fs::File::open(&path)?
+        .take(SORACLOUD_INROU_PROC_STATUS_MAX_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > SORACLOUD_INROU_PROC_STATUS_MAX_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Inrou QEMU process status exceeds its fixed byte limit",
+        ));
+    }
+    String::from_utf8(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+#[cfg(target_os = "linux")]
+fn inrou_proc_status_field<'a>(status: &'a str, name: &str) -> io::Result<&'a str> {
+    let prefix = format!("{name}:");
+    let mut fields = status.lines().filter_map(|line| line.strip_prefix(&prefix));
+    let value = fields.next().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("procfs status omitted {name}"),
+        )
+    })?;
+    if fields.next().is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("procfs status repeated {name}"),
+        ));
+    }
+    Ok(value)
+}
+
+#[cfg(target_os = "linux")]
+fn inrou_proc_status_ids(status: &str, name: &str) -> io::Result<Vec<u32>> {
+    inrou_proc_status_field(status, name)?
+        .split_ascii_whitespace()
+        .map(|value| {
+            value
+                .parse::<u32>()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn inrou_proc_status_quad_ids(status: &str, name: &str) -> io::Result<[u32; 4]> {
+    inrou_proc_status_ids(status, name)?
+        .try_into()
+        .map_err(|_ids: Vec<u32>| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("procfs status {name} must contain four credentials"),
+            )
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn inrou_proc_status_matches_identity(
+    status: &str,
+    identity: &PortableVmChildIdentity,
+) -> io::Result<bool> {
+    let uids = inrou_proc_status_quad_ids(status, "Uid")?;
+    let gids = inrou_proc_status_quad_ids(status, "Gid")?;
+    let groups = inrou_proc_status_ids(status, "Groups")?;
+    Ok(uids.contains(&identity.uid)
+        || gids.contains(&identity.gid)
+        || groups.contains(&identity.gid))
+}
+#[cfg(target_os = "linux")]
+fn attest_inrou_qemu_process(
+    child: &mut std::process::Child,
+    qemu: &Path,
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<()> {
+    let expected_executable = fs::metadata(qemu)
+        .wrap_err_with(|| format!("inspect configured QEMU executable {}", qemu.display()))?;
+    let process_executable = PathBuf::from(format!("/proc/{}/exe", child.id()));
+    let deadline = std::time::Instant::now() + SORACLOUD_INROU_QMP_ATTEST_TIMEOUT;
+    let mut last_mismatch = "setpriv has not exec'd QEMU".to_owned();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            eyre::bail!("Inrou QEMU exited before process attestation with status {status}");
+        }
+        match fs::metadata(&process_executable) {
+            Ok(actual_executable)
+                if actual_executable.dev() == expected_executable.dev()
+                    && actual_executable.ino() == expected_executable.ino() =>
+            {
+                match read_inrou_proc_status(child.id())
+                    .map_err(eyre::Report::from)
+                    .and_then(|status| validate_inrou_qemu_proc_status(&status, identity))
+                {
+                    Ok(()) => break,
+                    Err(error) => last_mismatch = error.to_string(),
+                }
+            }
+            Ok(_) => last_mismatch = "setpriv has not exec'd the pinned QEMU image".to_owned(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                last_mismatch = "spawned process has not published procfs identity".to_owned();
+            }
+            Err(error) => return Err(error).wrap_err("inspect spawned Inrou QEMU executable"),
+        }
+        if std::time::Instant::now() >= deadline {
+            eyre::bail!(
+                "spawned Inrou QEMU did not reach the exact sandboxed identity before the fixed deadline: {last_mismatch}"
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    if let Some(status) = child.try_wait()? {
+        eyre::bail!("Inrou QEMU exited during process attestation with status {status}");
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn query_inrou_qmp_host_forward(
+    child: &mut std::process::Child,
+    stream: UnixStream,
+    qemu: &Path,
+    identity: &PortableVmChildIdentity,
+    guest_port: u16,
+) -> eyre::Result<(SocketAddr, PortableVmQmpControl)> {
+    attest_inrou_qemu_process(child, qemu, identity)?;
+    let deadline = std::time::Instant::now() + SORACLOUD_INROU_QMP_ATTEST_TIMEOUT;
+    let mut control = PortableVmQmpControl {
+        reader: io::BufReader::new(stream),
+    };
+    let greeting = read_inrou_qmp_message(&mut control.reader, deadline, None)?;
+    if greeting
+        .get("QMP")
+        .and_then(norito::json::Value::as_object)
+        .is_none()
+    {
+        eyre::bail!("Inrou QMP endpoint did not send a canonical greeting");
+    }
+    control
+        .reader
+        .get_mut()
+        .set_write_timeout(Some(SORACLOUD_INROU_QMP_IO_POLL))?;
+    control
+        .reader
+        .get_mut()
+        .write_all(b"{\"execute\":\"qmp_capabilities\",\"id\":\"inrou-capabilities\"}\n")?;
+    let capabilities =
+        read_inrou_qmp_command_response(&mut control.reader, "inrou-capabilities", deadline, None)?;
+    if !capabilities.is_object() {
+        eyre::bail!("Inrou QMP capabilities response must be an object");
+    }
+    let forward = query_inrou_qmp_usernet_forward(&mut control, guest_port, deadline, None)?;
+    if let Some(status) = child.try_wait()? {
+        eyre::bail!("Inrou QEMU exited during QMP attestation with status {status}");
+    }
+    Ok((forward, control))
+}
 fn random_inrou_materialization_path(
     parent: &Path,
     root_name: &str,
@@ -15235,25 +19598,38 @@ fn ensure_inrou_entrypoint_present(bundle_root: &Path, entrypoint: &str) -> eyre
     Ok(())
 }
 fn resolve_executable_on_path(program: &str) -> Option<PathBuf> {
-    if program.contains(std::path::MAIN_SEPARATOR) {
+    if Path::new(program).components().count() > 1 {
         let candidate = PathBuf::from(program);
-        return candidate.exists().then_some(candidate);
+        if !candidate.is_absolute() {
+            return None;
+        }
+        return resolve_executable_candidate(&candidate);
     }
     let mut search_roots = std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
         .unwrap_or_default();
     search_roots.extend(known_host_executable_directories());
-    search_roots.sort();
-    search_roots.dedup();
+    resolve_executable_in_directories(program, &search_roots)
+}
+fn resolve_executable_in_directories(program: &str, search_roots: &[PathBuf]) -> Option<PathBuf> {
+    let mut seen = BTreeSet::new();
     for directory in search_roots {
+        if !directory.is_absolute() || !seen.insert(directory.clone()) {
+            continue;
+        }
         for candidate_name in executable_candidate_names(program) {
             let candidate = directory.join(candidate_name);
-            if is_resolved_executable(&candidate) {
+            if let Some(candidate) = resolve_executable_candidate(&candidate) {
                 return Some(candidate);
             }
         }
     }
     None
+}
+fn resolve_executable_candidate(candidate: &Path) -> Option<PathBuf> {
+    let canonical = fs::canonicalize(candidate).ok()?;
+    (is_resolved_executable(&canonical) && is_trusted_executable_path(&canonical))
+        .then_some(canonical)
 }
 fn resolve_executable_candidates(programs: &[&str]) -> Option<PathBuf> {
     programs
@@ -15284,6 +19660,10 @@ fn known_host_executable_directories() -> Vec<PathBuf> {
     let mut directories = Vec::new();
     #[cfg(not(windows))]
     {
+        directories.push(PathBuf::from("/usr/bin"));
+        directories.push(PathBuf::from("/bin"));
+        directories.push(PathBuf::from("/usr/sbin"));
+        directories.push(PathBuf::from("/sbin"));
         directories.push(PathBuf::from("/opt/homebrew/bin"));
         directories.push(PathBuf::from("/usr/local/bin"));
     }
@@ -15339,6 +19719,32 @@ fn is_resolved_executable(candidate: &Path) -> bool {
         true
     }
 }
+fn is_trusted_executable_path(candidate: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        let effective_uid = rustix::process::geteuid().as_raw();
+        for (index, component) in candidate.ancestors().enumerate() {
+            let metadata = fs::metadata(component).ok();
+            let Some(metadata) = metadata else {
+                return false;
+            };
+            if (index == 0 && !metadata.is_file()) || (index != 0 && !metadata.is_dir()) {
+                return false;
+            }
+            if metadata.uid() != 0 && metadata.uid() != effective_uid {
+                return false;
+            }
+            if metadata.mode() & 0o022 != 0 {
+                return false;
+            }
+        }
+        true
+    }
+    #[cfg(not(unix))]
+    {
+        candidate.is_absolute()
+    }
+}
 #[allow(dead_code)]
 fn append_ro_bind_try(command: &mut Command, host_path: &str) {
     if Path::new(host_path).exists() {
@@ -15351,7 +19757,29 @@ fn probe_hosted_http_health(
     listen_base_url: &str,
     healthcheck_path: Option<&str>,
 ) -> eyre::Result<()> {
+    let parsed = reqwest::Url::parse(listen_base_url)
+        .wrap_err_with(|| format!("parse hosted-HTTP listener URL `{listen_base_url}`"))?;
+    if parsed.scheme() != "http"
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.host_str() != Some("127.0.0.1")
+        || parsed.port().is_none()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        eyre::bail!(
+            "hosted-HTTP listener URL `{listen_base_url}` must be an explicit IPv4 loopback HTTP origin"
+        );
+    }
+    let port = parsed
+        .port()
+        .ok_or_else(|| eyre::eyre!("hosted-HTTP listener URL has no explicit port"))?;
     let Some(path) = healthcheck_path else {
+        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        let stream = TcpStream::connect_timeout(&address, Duration::from_secs(1))
+            .wrap_err_with(|| format!("connect to hosted-HTTP listener `{address}`"))?;
+        drop(stream);
         return Ok(());
     };
     let request_path = if path.starts_with('/') {
@@ -15360,11 +19788,24 @@ fn probe_hosted_http_health(
         format!("/{path}")
     };
     let url = format!("{listen_base_url}{request_path}");
+    let parsed_health_url = reqwest::Url::parse(&url)
+        .wrap_err_with(|| format!("parse hosted-HTTP healthcheck URL `{url}`"))?;
+    if parsed_health_url.scheme() != parsed.scheme()
+        || parsed_health_url.host_str() != parsed.host_str()
+        || parsed_health_url.port() != parsed.port()
+        || !parsed_health_url.username().is_empty()
+        || parsed_health_url.password().is_some()
+    {
+        eyre::bail!("hosted-HTTP healthcheck must remain on the configured loopback origin");
+    }
     let response = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .no_proxy()
         .build()
         .wrap_err("build hosted-HTTP healthcheck client")?
-        .get(&url)
+        .get(parsed_health_url)
         .send()
         .wrap_err_with(|| format!("probe hosted-HTTP healthcheck {url}"))?;
     if !response.status().is_success() {
@@ -16157,6 +20598,264 @@ fn canonical_remote_hydration_file_layouts(
         })
         .collect()
 }
+#[derive(Debug)]
+struct SorafsStreamMaterializationFile {
+    target: PathBuf,
+    offset: u64,
+    size: u64,
+}
+fn plan_operator_preseed_sorafs_files(
+    files: &[SorafsHydratedFileLayout],
+    target_root: &Path,
+    content_length: u64,
+    maximum_files: u32,
+    maximum_total_bytes: u64,
+) -> eyre::Result<Vec<SorafsStreamMaterializationFile>> {
+    if files.is_empty() {
+        eyre::bail!("operator-preseed SoraFS directory artifact did not declare any files");
+    }
+    let maximum_files = usize::try_from(maximum_files)
+        .wrap_err("convert operator-preseed SoraFS materialization file limit")?;
+    if files.len() > maximum_files {
+        eyre::bail!(
+            "operator-preseed SoraFS directory artifact declares {} files, above the configured limit of {maximum_files}",
+            files.len()
+        );
+    }
+    if content_length == 0 || content_length > maximum_total_bytes {
+        eyre::bail!(
+            "operator-preseed SoraFS directory artifact length {content_length} is outside the configured Inrou storage budget of {maximum_total_bytes} bytes"
+        );
+    }
+    let mut planned = Vec::new();
+    planned
+        .try_reserve_exact(files.len())
+        .wrap_err("reserve operator-preseed SoraFS materialization plan")?;
+    let mut targets = BTreeSet::new();
+    for file in files {
+        if file.size == 0 {
+            eyre::bail!(
+                "operator-preseed SoraFS file `{}` must not be empty",
+                file.path.join("/")
+            );
+        }
+        let end = file.offset.checked_add(file.size).ok_or_else(|| {
+            eyre::eyre!(
+                "operator-preseed SoraFS file `{}` range overflows u64",
+                file.path.join("/")
+            )
+        })?;
+        if end > content_length {
+            eyre::bail!(
+                "operator-preseed SoraFS file `{}` range {}..{} exceeds payload length {content_length}",
+                file.path.join("/"),
+                file.offset,
+                end
+            );
+        }
+        let target = sorafs_hydrated_file_target(target_root, &file.path)?;
+        if !targets.insert(target.clone()) {
+            eyre::bail!(
+                "operator-preseed SoraFS directory artifact repeats file path `{}`",
+                file.path.join("/")
+            );
+        }
+        planned.push(SorafsStreamMaterializationFile {
+            target,
+            offset: file.offset,
+            size: file.size,
+        });
+    }
+    planned.sort_by(|left, right| {
+        left.offset
+            .cmp(&right.offset)
+            .then_with(|| left.size.cmp(&right.size))
+            .then_with(|| left.target.cmp(&right.target))
+    });
+    let mut payload_cursor = 0_u64;
+    for file in &planned {
+        if file.offset != payload_cursor {
+            eyre::bail!(
+                "operator-preseed SoraFS file ranges are not an exact contiguous payload partition"
+            );
+        }
+        payload_cursor = payload_cursor
+            .checked_add(file.size)
+            .ok_or_else(|| eyre::eyre!("operator-preseed SoraFS payload range overflow"))?;
+    }
+    if payload_cursor != content_length {
+        eyre::bail!("operator-preseed SoraFS file ranges do not cover the complete payload");
+    }
+    for target in &targets {
+        let mut parent = target.parent();
+        while let Some(candidate) = parent {
+            if candidate == target_root {
+                break;
+            }
+            if targets.contains(candidate) {
+                eyre::bail!(
+                    "operator-preseed SoraFS directory artifact uses a file as another file's parent"
+                );
+            }
+            parent = candidate.parent();
+        }
+    }
+    Ok(planned)
+}
+fn create_real_sorafs_directory_chain(root: &Path, directory: &Path) -> eyre::Result<()> {
+    ensure_existing_directory_is_not_symlink(root, "operator-preseed materialization root")?;
+    let relative = directory.strip_prefix(root).map_err(|_| {
+        eyre::eyre!("operator-preseed materialization directory escaped its declared root")
+    })?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            eyre::bail!("operator-preseed materialization directory is not canonical");
+        };
+        current.push(component);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    eyre::bail!(
+                        "operator-preseed materialization parent {} is not a real directory",
+                        current.display()
+                    );
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                match fs::create_dir(&current) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(error) => {
+                        return Err(error)
+                            .wrap_err_with(|| format!("create {}", current.display()));
+                    }
+                }
+                ensure_existing_directory_is_not_symlink(
+                    &current,
+                    "operator-preseed materialization parent",
+                )?;
+            }
+            Err(error) => {
+                return Err(error).wrap_err_with(|| format!("inspect {}", current.display()));
+            }
+        }
+    }
+    Ok(())
+}
+fn materialize_operator_preseed_sorafs_files(
+    store: &StorageBackend,
+    manifest: &StoredManifest,
+    files: &[SorafsHydratedFileLayout],
+    target_root: &Path,
+    maximum_files: u32,
+    maximum_total_bytes: u64,
+) -> eyre::Result<()> {
+    let planned = plan_operator_preseed_sorafs_files(
+        files,
+        target_root,
+        manifest.content_length(),
+        maximum_files,
+        maximum_total_bytes,
+    )?;
+    let target_parent = target_root
+        .parent()
+        .ok_or_else(|| eyre::eyre!("operator-preseed materialization root must have a parent"))?;
+    ensure_existing_directory_is_not_symlink(
+        target_parent,
+        "operator-preseed materialization parent",
+    )?;
+    match fs::create_dir(target_root) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(error).wrap_err_with(|| format!("create {}", target_root.display()));
+        }
+    }
+    ensure_existing_directory_is_not_symlink(target_root, "operator-preseed materialization root")?;
+    let mut payload_hasher = blake3::Hasher::new();
+    for planned_file in &planned {
+        let parent = planned_file
+            .target
+            .parent()
+            .ok_or_else(|| eyre::eyre!("operator-preseed materialization target has no parent"))?;
+        create_real_sorafs_directory_chain(target_root, parent)?;
+        match fs::symlink_metadata(&planned_file.target) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    eyre::bail!(
+                        "operator-preseed materialization target {} is not a regular file",
+                        planned_file.target.display()
+                    );
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .wrap_err_with(|| format!("inspect {}", planned_file.target.display()));
+            }
+        }
+        write_atomic_file(&planned_file.target, |file| {
+            let end = planned_file
+                .offset
+                .checked_add(planned_file.size)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "operator-preseed materialization range overflow",
+                    )
+                })?;
+            let mut cursor = planned_file.offset;
+            while cursor < end {
+                let remaining = end - cursor;
+                let read_len =
+                    usize::try_from(remaining.min(SORACLOUD_LOCAL_HYDRATION_STREAM_CHUNK_BYTES))
+                        .map_err(|_| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "operator-preseed read length does not fit this host",
+                            )
+                        })?;
+                let chunk = store
+                    .read_payload_range(manifest.manifest_id(), cursor, read_len)
+                    .map_err(|error| {
+                        io::Error::other(format!(
+                            "read chunk-backed operator-preseed payload at {cursor}: {error}"
+                        ))
+                    })?;
+                if chunk.len() != read_len {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "operator-preseed payload range was truncated",
+                    ));
+                }
+                payload_hasher.update(&chunk);
+                file.write_all(&chunk)?;
+                cursor = cursor
+                    .checked_add(u64::try_from(chunk.len()).map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "operator-preseed read length does not fit u64",
+                        )
+                    })?)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "operator-preseed payload cursor overflow",
+                        )
+                    })?;
+            }
+            Ok(((), planned_file.size))
+        })
+        .wrap_err_with(|| format!("stream {}", planned_file.target.display()))?;
+    }
+    if payload_hasher.finalize().as_bytes() != manifest.payload_digest() {
+        eyre::bail!(
+            "operator-preseed SoraFS guest-image payload does not match admitted storage metadata"
+        );
+    }
+    Ok(())
+}
 fn materialize_sorafs_payload_files(
     payload: &[u8],
     files: &[SorafsHydratedFileLayout],
@@ -16727,6 +21426,23 @@ fn sanitize_path_component(raw: &str) -> String {
         })
         .collect()
 }
+fn storage_path_component(raw: &str) -> String {
+    const READABLE_PREFIX_CHARS: usize = 32;
+    let readable = sanitize_path_component(raw)
+        .chars()
+        .take(READABLE_PREFIX_CHARS)
+        .collect::<String>();
+    let readable = readable.trim_matches('.');
+    let readable = if readable.is_empty() {
+        "item"
+    } else {
+        readable
+    };
+    format!(
+        "sc-{readable}-{}",
+        hex::encode(Hash::new(raw.as_bytes()).as_ref())
+    )
+}
 fn build_effective_service_environment(
     bundle: &SoraDeploymentBundleV1,
     deployment: &SoraServiceDeploymentStateV1,
@@ -17287,6 +22003,37 @@ mod tests {
         thread,
         time::{SystemTime, UNIX_EPOCH},
     };
+    #[test]
+    fn storage_path_components_are_deterministic_and_collision_resistant() {
+        let slash = storage_path_component("tenant/service");
+        let question = storage_path_component("tenant?service");
+        assert_eq!(
+            sanitize_path_component("tenant/service"),
+            sanitize_path_component("tenant?service"),
+            "the legacy lossy spelling demonstrates the collision being prevented"
+        );
+        assert_ne!(slash, question);
+        assert_eq!(slash, storage_path_component("tenant/service"));
+        assert_ne!(
+            storage_path_component("Service"),
+            storage_path_component("service")
+        );
+        for component in [
+            slash,
+            question,
+            storage_path_component(".."),
+            storage_path_component(""),
+        ] {
+            assert!(component.len() <= 255);
+            assert_ne!(component, ".");
+            assert_ne!(component, "..");
+            assert!(
+                component
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+            );
+        }
+    }
     #[test]
     fn cooldown_tracker_expires_history_and_fails_closed_at_its_hard_cap() {
         let mut attempts = BTreeMap::new();
@@ -18448,6 +23195,63 @@ mod tests {
         );
         assert!(error.to_string().contains("failing uploaded model RNG"));
     }
+    struct RepeatingUploadedModelRng(u8);
+    impl TryRngCore for RepeatingUploadedModelRng {
+        type Error = std::convert::Infallible;
+        fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
+            Ok(u32::from(self.0) * 0x0101_0101)
+        }
+        fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
+            Ok(u64::from(self.0) * 0x0101_0101_0101_0101)
+        }
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> std::result::Result<(), Self::Error> {
+            dst.fill(self.0);
+            Ok(())
+        }
+    }
+    impl TryCryptoRng for RepeatingUploadedModelRng {}
+    #[test]
+    fn uploaded_model_encryption_secret_rejects_degenerate_rng_output() {
+        let error = generate_uploaded_model_encryption_secret_with_rng(
+            &mut RepeatingUploadedModelRng(0xA5),
+        )
+        .expect_err("repeating RNG output must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert!(error.to_string().contains("degenerate output"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn uploaded_model_encryption_secret_is_private_and_race_stable() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let state_dir = temp_dir.path().to_path_buf();
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let workers = (0..8)
+            .map(|_| {
+                let state_dir = state_dir.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    load_or_create_uploaded_model_encryption_secret(&state_dir)
+                })
+            })
+            .collect::<Vec<_>>();
+        let keys = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("key worker must not panic"))
+            .collect::<io::Result<Vec<_>>>()?;
+        assert!(keys.iter().all(|key| *key == keys[0]));
+
+        let key_dir = uploaded_model_encryption_key_dir(&state_dir);
+        let key_path = key_dir.join(SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_FILE);
+        let directory_metadata = fs::symlink_metadata(&key_dir)?;
+        let key_metadata = fs::symlink_metadata(&key_path)?;
+        assert_eq!(directory_metadata.mode() & 0o777, 0o700);
+        assert_eq!(key_metadata.mode() & 0o777, 0o600);
+        assert_eq!(key_metadata.uid(), rustix::process::geteuid().as_raw());
+        assert_eq!(key_metadata.nlink(), 1);
+        assert_eq!(fs::read_dir(&key_dir)?.count(), 1);
+        Ok(())
+    }
     use sorafs_node::{NodeHandle, config::StorageConfig};
     #[test]
     fn local_read_snapshot_allows_bounded_lag_but_rejects_wrong_tip() {
@@ -18814,7 +23618,7 @@ mod tests {
         });
         bundle.container.entrypoint = "/bin/sh".to_owned();
         bundle.container.args = vec!["-lc".to_owned(), "echo inrou-test".to_owned()];
-        bundle.container.capabilities.network = SoraNetworkPolicyV1::Open;
+        bundle.container.capabilities.network = SoraNetworkPolicyV1::Isolated;
         bundle.container.lifecycle.start_grace_secs =
             std::num::NonZeroU32::new(180).expect("nonzero");
         bundle.service.execution_plane =
@@ -18966,10 +23770,8 @@ mod tests {
         let service_dir = temp_dir
             .path()
             .join("services")
-            .join(sanitize_path_component(
-                bundle.service.service_name.as_ref(),
-            ))
-            .join(sanitize_path_component(&bundle.service.service_version));
+            .join(storage_path_component(bundle.service.service_name.as_ref()))
+            .join(storage_path_component(&bundle.service.service_version));
         let replica_plan: SoracloudRuntimeServicePlan = read_json_optional(
             service_dir
                 .join("replicas/replica-0001/runtime_plan.json")
@@ -19140,68 +23942,6 @@ mod tests {
             BundleArchiveFile::new("inrou/x86_64/vmlinux", 0o644, kernel_image.as_slice()),
         ];
         Ok(write_gzip_ustar(Vec::new(), &files)?)
-    }
-    #[cfg(target_os = "linux")]
-    fn linux_smoke_required_env_path(name: &str) -> Result<PathBuf> {
-        let value = std::env::var(name)
-            .wrap_err_with(|| format!("missing required environment variable `{name}`"))?;
-        let path = PathBuf::from(value);
-        if !path.is_file() {
-            eyre::bail!(
-                "environment variable `{name}` must point to an existing file, got {}",
-                path.display()
-            );
-        }
-        Ok(path)
-    }
-    #[cfg(target_os = "linux")]
-    fn require_linux_kvm_smoke_prerequisites() -> Result<()> {
-        if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-            println!(
-                "Skipping: set IROHA_RUN_IGNORED=1 to exercise the Linux/KVM Inrou smoke test."
-            );
-            return Ok(());
-        }
-        if std::env::var("IROHA_INROU_LINUX_KVM").ok().as_deref() != Some("1") {
-            println!(
-                "Skipping: set IROHA_INROU_LINUX_KVM=1 plus explicit guest asset env vars to run the Linux/KVM Inrou smoke test."
-            );
-            return Ok(());
-        }
-        if !Path::new("/dev/kvm").exists() {
-            eyre::bail!("/dev/kvm is required for the Linux/KVM Inrou smoke test");
-        }
-        if !Path::new("/dev/net/tun").exists() {
-            eyre::bail!("/dev/net/tun is required for the Linux/KVM Inrou smoke test");
-        }
-        let uid = Command::new("id").arg("-u").output()?;
-        if !uid.status.success() || String::from_utf8_lossy(&uid.stdout).trim() != "0" {
-            eyre::bail!(
-                "Linux/KVM Inrou smoke test must run as root so tap devices and firewall rules can be created"
-            );
-        }
-        if !inrou_ip_forward_enabled()? {
-            eyre::bail!("Linux/KVM Inrou smoke test requires /proc/sys/net/ipv4/ip_forward = 1");
-        }
-        let required_programs = [
-            "firecracker",
-            "ip",
-            "iptables",
-            "tar",
-            "exportfs",
-            "rpc.nfsd",
-            "mount",
-            "chown",
-        ];
-        for program in required_programs {
-            if resolve_executable_on_path(program).is_none() {
-                eyre::bail!("Linux/KVM Inrou smoke test requires `{program}` on PATH");
-            }
-        }
-        if resolve_inrou_mke2fs_executable().is_none() {
-            eyre::bail!("Linux/KVM Inrou smoke test requires `mke2fs` or `mkfs.ext4` on PATH");
-        }
-        Ok(())
     }
     fn portable_smoke_required_env_path(name: &str) -> Result<PathBuf> {
         let value = std::env::var(name)
@@ -19930,6 +24670,154 @@ mod tests {
             sources[1].manifest_digest_hex,
             hex::encode(fixtures[2].manifest_digest.as_bytes())
         );
+        Ok(())
+    }
+    #[test]
+    fn operator_preseed_bundle_hydration_requires_exact_iroha_hash() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let store = test_operator_preseed_store(&temp_dir);
+        let decoy = b"operator-preseed-decoy";
+        let (decoy_plan, decoy_manifest) = build_sorafs_manifest(decoy)?;
+        ingest_operator_preseed_payload(&store, &decoy_plan, &decoy_manifest, decoy)?;
+        let payload = b"operator-preseed-bundle";
+        let (plan, manifest) = build_sorafs_manifest(payload)?;
+        ingest_operator_preseed_payload(&store, &plan, &manifest, payload)?;
+        let state = test_state()?;
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().join("runtime-state")),
+            state,
+        )
+        .with_operator_preseed_store(store);
+        let cache_path = temp_dir.path().join("runtime-state/artifacts/bundle");
+        fs::create_dir_all(cache_path.parent().expect("cache path parent"))?;
+        assert!(!manager.hydrate_local_sorafs_payload_to_cache(
+            &[],
+            Hash::new(b"not-present"),
+            &cache_path,
+            1 << 20,
+        )?);
+        assert!(!cache_path.exists());
+        assert!(manager.hydrate_local_sorafs_payload_to_cache(
+            &[],
+            Hash::new(payload),
+            &cache_path,
+            1 << 20,
+        )?);
+        assert_eq!(fs::read(cache_path)?, payload);
+        Ok(())
+    }
+    #[test]
+    fn operator_preseed_inrou_layout_accepts_real_guest_size_without_buffering() -> Result<()> {
+        const KERNEL_BYTES: u64 = 27_236_288;
+        const ROOTFS_BYTES: u64 = 3_085_959_168;
+        const INITRD_BYTES: u64 = 13_923_072;
+        const TAIRA_INROU_STORAGE_BUDGET_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+        let rootfs_offset = KERNEL_BYTES;
+        let initrd_offset = rootfs_offset + ROOTFS_BYTES;
+        let content_length = initrd_offset + INITRD_BYTES;
+        assert!(content_length > SORACLOUD_REMOTE_HYDRATION_MAX_IN_MEMORY_PAYLOAD_BYTES);
+        let files = vec![
+            hydrated_file(&["aarch64", "vmlinux"], 0, KERNEL_BYTES),
+            hydrated_file(&["aarch64", "rootfs.ext4"], rootfs_offset, ROOTFS_BYTES),
+            hydrated_file(&["aarch64", "initrd.img"], initrd_offset, INITRD_BYTES),
+        ];
+        let planned = plan_operator_preseed_sorafs_files(
+            &files,
+            Path::new("/private/runtime/inrou"),
+            content_length,
+            3,
+            TAIRA_INROU_STORAGE_BUDGET_BYTES,
+        )?;
+        assert_eq!(planned.len(), 3);
+        assert_eq!(
+            planned.iter().map(|file| file.size).sum::<u64>(),
+            content_length
+        );
+        assert_report_contains(
+            plan_operator_preseed_sorafs_files(
+                &files,
+                Path::new("/private/runtime/inrou"),
+                content_length,
+                3,
+                SORACLOUD_REMOTE_HYDRATION_MAX_IN_MEMORY_PAYLOAD_BYTES,
+            )
+            .expect_err("the remote in-memory cap is not the Inrou preseed storage budget"),
+            "configured Inrou storage budget",
+        );
+        Ok(())
+    }
+    #[test]
+    fn operator_preseed_inrou_directory_hydration_requires_exact_manifest_binding() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let store = test_operator_preseed_store(&temp_dir);
+        let files = [
+            ("x86_64/initrd.img", b"preseed-initrd".as_slice()),
+            ("x86_64/rootfs.ext4", b"preseed-rootfs".as_slice()),
+            ("x86_64/vmlinux", b"preseed-kernel".as_slice()),
+        ];
+        let (car_plan, payload) = CarBuildPlan::from_files(
+            files
+                .iter()
+                .map(|(path, data)| FileEntry {
+                    path: path.split('/').map(ToOwned::to_owned).collect(),
+                    data: data.to_vec(),
+                })
+                .collect(),
+        )?;
+        let manifest = build_sorafs_manifest_from_plan(&car_plan, &payload)?;
+        let stored = ingest_operator_preseed_payload(&store, &car_plan, &manifest, &payload)?;
+        let manifest_digest_hex = hex::encode(stored.manifest_digest());
+        let correct_content_cid = encode_content_cid(stored.manifest_cid());
+        let guest_isa = SoraInrouGuestIsaV1::X8664;
+        let mut bundle = sample_inrou_test_bundle()?;
+        bundle
+            .container
+            .inrou
+            .as_mut()
+            .expect("Inrou fixture manifest")
+            .guest_images
+            .get_mut(&guest_isa)
+            .expect("x86_64 guest-image fixture")
+            .published_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
+            manifest_digest_hex: manifest_digest_hex.clone(),
+            content_cid: encode_content_cid(&sorafs_manifest::canonical_manifest_root_cid(
+                [0xA5; 32],
+            )),
+            manifest_id_hex: Some(manifest_digest_hex),
+            distribution: Default::default(),
+        });
+        let state = test_state()?;
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().join("runtime-state")),
+            state,
+        )
+        .with_operator_preseed_store(store);
+        let plan = sample_inrou_runtime_plan(&bundle, guest_isa);
+        let bundle_root = temp_dir.path().join("bundle");
+        fs::create_dir_all(&bundle_root)?;
+        assert_report_contains(
+            manager
+                .hydrate_published_inrou_guest_image_artifact(&bundle_root, &bundle, &plan)
+                .expect_err("a substituted manifest CID must fail"),
+            "manifest CID does not match",
+        );
+        bundle
+            .container
+            .inrou
+            .as_mut()
+            .expect("Inrou fixture manifest")
+            .guest_images
+            .get_mut(&guest_isa)
+            .expect("x86_64 guest-image fixture")
+            .published_artifact
+            .as_mut()
+            .expect("published guest-image fixture")
+            .content_cid = correct_content_cid;
+        let plan = sample_inrou_runtime_plan(&bundle, guest_isa);
+        manager.hydrate_published_inrou_guest_image_artifact(&bundle_root, &bundle, &plan)?;
+        for (path, expected) in files {
+            assert_eq!(fs::read(bundle_root.join("inrou").join(path))?, expected);
+        }
         Ok(())
     }
     #[test]
@@ -20926,12 +25814,18 @@ mod tests {
         Ok(())
     }
     fn test_runtime_manager_config(state_dir: PathBuf) -> SoracloudRuntimeManagerConfig {
-        let mut runtime = iroha_config::parameters::actual::SoracloudRuntime {
+        let runtime = iroha_config::parameters::actual::SoracloudRuntime {
             state_dir,
             ..Default::default()
         };
-        runtime.inrou.enabled = true;
-        SoracloudRuntimeManagerConfig::from_runtime_config(&runtime)
+        let mut config = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
+        config.inrou.enabled = true;
+        config
+            .inrou
+            .backends
+            .insert(SoraInrouRuntimeBackendV1::PortableVm);
+        config.allow_unconfined_inrou = true;
+        config
     }
     fn test_runtime_handle(
         manager: &SoracloudRuntimeManager,
@@ -21103,6 +25997,19 @@ mod tests {
                 })
                 .count()
         }
+        fn submitted_inrou_host_withdrawals(&self) -> usize {
+            self.instructions
+                .lock()
+                .iter()
+                .filter(|instruction| {
+                    iroha_data_model::isi::Instruction::as_any(*instruction)
+                        .downcast_ref::<
+                            iroha_data_model::isi::soracloud::WithdrawSoracloudInrouHost,
+                        >()
+                        .is_some()
+                })
+                .count()
+        }
     }
     impl SoracloudRuntimeMutationSink for RecordingRuntimeMutationSink {
         fn submit_instruction(
@@ -21152,6 +26059,26 @@ mod tests {
                             &ALICE_KEYPAIR,
                             &payload,
                             "sign test Inrou host advert provenance",
+                        )?,
+                    },
+                },
+            ));
+            Ok(())
+        }
+        fn submit_inrou_host_withdrawal(
+            &self,
+            validator_account_id: &AccountId,
+        ) -> eyre::Result<()> {
+            let payload = encode_inrou_host_withdraw_provenance_payload(validator_account_id)?;
+            self.instructions.lock().push(InstructionBox::from(
+                iroha_data_model::isi::soracloud::WithdrawSoracloudInrouHost {
+                    validator_account_id: validator_account_id.clone(),
+                    provenance: ManifestProvenance {
+                        signer: ALICE_KEYPAIR.public_key().clone(),
+                        signature: sign_soracloud_runtime_provenance(
+                            &ALICE_KEYPAIR,
+                            &payload,
+                            "sign test Inrou host withdrawal provenance",
                         )?,
                     },
                 },
@@ -21657,6 +26584,29 @@ mod tests {
                 .build(),
         )
     }
+    fn test_operator_preseed_store(temp_dir: &tempfile::TempDir) -> Arc<StorageBackend> {
+        Arc::new(
+            StorageBackend::new(
+                StorageConfig::builder()
+                    .enabled(false)
+                    .data_dir(temp_dir.path().join("operator-preseed-storage"))
+                    .build(),
+            )
+            .expect("operator-preseed storage fixture"),
+        )
+    }
+    fn ingest_operator_preseed_payload(
+        store: &StorageBackend,
+        plan: &CarBuildPlan,
+        manifest: &sorafs_manifest::ManifestV1,
+        payload: &[u8],
+    ) -> Result<StoredManifest> {
+        let mut reader = payload;
+        let manifest_id = store.ingest_manifest(manifest, plan, &mut reader)?;
+        store
+            .manifest(&manifest_id)
+            .ok_or_else(|| eyre::eyre!("ingested operator-preseed manifest is missing"))
+    }
     fn build_sorafs_manifest(
         payload: &[u8],
     ) -> Result<(CarBuildPlan, sorafs_manifest::ManifestV1)> {
@@ -21762,7 +26712,7 @@ mod tests {
     #[test]
     fn manager_config_uses_explicit_soracloud_runtime_settings() {
         let runtime = iroha_config::parameters::actual::SoracloudRuntime {
-            production_mode: true,
+            production_mode: false,
             state_dir: PathBuf::from("/tmp/iroha-soracloud-runtime-config"),
             reconcile_interval: Duration::from_secs(17),
             hydration_concurrency: std::num::NonZeroUsize::new(9)
@@ -21776,8 +26726,16 @@ mod tests {
                 model_weight_bytes: std::num::NonZeroU64::new(6_144).expect("nonzero"),
             },
             inrou: iroha_config::parameters::actual::SoracloudRuntimeInrou {
-                max_concurrent_vms: std::num::NonZeroUsize::new(2).expect("nonzero concurrent vms"),
-                enabled: true,
+                max_concurrent_vms: std::num::NonZeroU16::new(1).expect("nonzero concurrent vms"),
+                enabled: false,
+                backends: BTreeSet::new(),
+                portable_vm_uid: None,
+                portable_vm_gid: None,
+                max_cpu_millis: std::num::NonZeroU32::new(2_000).expect("nonzero CPU budget"),
+                max_memory_bytes: std::num::NonZeroU64::new(2 * 1024 * 1024 * 1024)
+                    .expect("nonzero memory budget"),
+                max_storage_bytes: std::num::NonZeroU64::new(16 * 1024 * 1024 * 1024)
+                    .expect("nonzero storage budget"),
                 bundle_archive_max_compressed_bytes: std::num::NonZeroU64::new(8_192)
                     .expect("nonzero compressed archive bound"),
                 bundle_archive_max_decoded_bytes: std::num::NonZeroU64::new(32_768)
@@ -21790,7 +26748,6 @@ mod tests {
                     .expect("nonzero archive total-file bound"),
                 start_grace: Duration::from_secs(11),
                 stop_grace: Duration::from_secs(13),
-                proxy_only: false,
             },
             submission: iroha_config::parameters::actual::SoracloudRuntimeSubmission {
                 fee_payer: iroha_config::parameters::actual::SoracloudRuntimeFeePayer::Authority,
@@ -21848,11 +26805,53 @@ mod tests {
             production_mode: true,
             ..Default::default()
         };
-        runtime.inrou.enabled = true;
         runtime.egress.default_allow = true;
         runtime.egress.rate_per_minute = std::num::NonZeroU32::new(60);
         runtime.egress.max_bytes_per_minute = std::num::NonZeroU64::new(1_048_576);
         let _ = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
+    }
+    #[test]
+    #[should_panic(expected = "first-release iroha3d forbids")]
+    fn manager_config_rejects_direct_actual_nonproduction_inrou() {
+        let mut runtime = iroha_config::parameters::actual::SoracloudRuntime {
+            production_mode: false,
+            ..Default::default()
+        };
+        runtime.inrou.enabled = true;
+        runtime
+            .inrou
+            .backends
+            .insert(SoraInrouRuntimeBackendV1::PortableVm);
+        let _ = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
+    }
+    #[test]
+    fn programmatic_manager_cannot_enable_or_advertise_inrou() {
+        let runtime = iroha_config::parameters::actual::SoracloudRuntime::default();
+        let mut config = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
+        let temp_dir = tempfile::tempdir().expect("temporary posture directory");
+        config.state_dir = temp_dir.path().join("must-not-materialize");
+        config.production_mode = false;
+        config.inrou.enabled = true;
+        config
+            .inrou
+            .backends
+            .insert(SoraInrouRuntimeBackendV1::PortableVm);
+
+        let error = validate_soracloud_runtime_manager_posture(&config)
+            .expect_err("programmatic config must not bypass the release-wide Inrou posture gate");
+        assert!(
+            error
+                .to_string()
+                .contains("first-release iroha3d forbids Inrou")
+        );
+        assert!(InrouStartupCapabilitySnapshot::from_config(&config).is_none());
+
+        let manager = SoracloudRuntimeManager::new(config, test_state().expect("test state"));
+        let error = manager
+            .reconcile_once()
+            .expect_err("reconcile must enforce the release-wide posture gate before writes");
+        assert!(error.to_string().contains("first-release posture"));
+        assert!(!temp_dir.path().join("must-not-materialize").exists());
     }
     #[test]
     #[should_panic(expected = "bundle_archive_max_compressed_bytes exceeds its hard ceiling")]
@@ -21896,6 +26895,26 @@ mod tests {
         );
     }
     #[test]
+    fn enabled_inrou_backend_preflight_rejects_an_empty_allowlist() {
+        let mut config = iroha_config::parameters::actual::SoracloudRuntimeInrou::default();
+        config.enabled = true;
+        let error = ensure_configured_inrou_backends_available(&config)
+            .expect_err("enabled Inrou hosting must name an exact backend");
+        assert!(error.to_string().contains("nonempty backend allowlist"));
+    }
+    #[test]
+    fn enabled_portable_vm_preflight_rejects_shared_identity_capacity() {
+        let mut config = iroha_config::parameters::actual::SoracloudRuntimeInrou::default();
+        config.enabled = true;
+        config
+            .backends
+            .insert(SoraInrouRuntimeBackendV1::PortableVm);
+        config.max_concurrent_vms = std::num::NonZeroU16::new(2).expect("nonzero Inrou capacity");
+        let error = ensure_configured_inrou_backends_available(&config)
+            .expect_err("one dedicated identity cannot isolate multiple live QEMUs");
+        assert!(error.to_string().contains("max_concurrent_vms = 1"));
+    }
+    #[test]
     fn inrou_archive_limits_use_the_tighter_bundle_cache_bound() {
         let mut config = iroha_config::parameters::actual::SoracloudRuntimeInrou::default();
         config.bundle_archive_max_compressed_bytes =
@@ -21910,34 +26929,36 @@ mod tests {
         );
     }
     #[test]
-    fn hosted_http_concurrency_limit_uses_inrou_vm_budget() {
+    fn hosted_http_concurrency_limit_uses_single_portable_vm_budget() {
         let mut config =
             test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime-limit"));
         config.inrou.max_concurrent_vms =
-            std::num::NonZeroUsize::new(2).expect("nonzero inrou vm limit");
+            std::num::NonZeroU16::new(1).expect("nonzero inrou vm limit");
         let manager = SoracloudRuntimeManager::new(config, test_state().expect("test state"));
-        assert_eq!(manager.hosted_http_concurrency_limit(), 2);
+        assert_eq!(manager.hosted_http_concurrency_limit(), 1);
     }
     #[test]
-    fn proxy_only_inrou_host_advertises_zero_capacity() {
+    fn inrou_host_advertises_exact_configured_capacity() {
         let mut config =
-            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime-proxy-only"));
-        config.inrou.proxy_only = true;
+            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime-capacity"));
         config.inrou.max_concurrent_vms =
-            std::num::NonZeroUsize::new(7).expect("nonzero inrou vm limit");
+            std::num::NonZeroU16::new(1).expect("nonzero inrou vm limit");
+        config.inrou.max_cpu_millis = std::num::NonZeroU32::new(7_000).expect("CPU budget");
+        config.inrou.max_memory_bytes =
+            std::num::NonZeroU64::new(14 * 1024 * 1024 * 1024).expect("memory budget");
+        config.inrou.max_storage_bytes =
+            std::num::NonZeroU64::new(70 * 1024 * 1024 * 1024).expect("storage budget");
         config =
-            config.with_local_host_identity(ALICE_ID.clone(), "12D3KooWProxyOnlyRuntimeHostAdvert");
+            config.with_local_host_identity(ALICE_ID.clone(), "12D3KooWRuntimeHostAdvertCapacity");
         let manager = SoracloudRuntimeManager::new(config, test_state().expect("test state"));
-        assert_eq!(manager.hosted_http_concurrency_limit(), 0);
-        let (capability, auto_proxy_only) = manager
+        assert_eq!(manager.hosted_http_concurrency_limit(), 1);
+        let capability = manager
             .build_local_inrou_host_capability_record(123)
             .expect("host identity configured");
-        assert!(!auto_proxy_only);
-        assert!(capability.proxy_only);
-        assert_eq!(capability.max_hosted_replica_capacity, 0);
-        assert_eq!(capability.max_cpu_millis, 0);
-        assert_eq!(capability.max_memory_bytes, 0);
-        assert_eq!(capability.max_storage_bytes, 0);
+        assert_eq!(capability.max_hosted_replica_capacity, 1);
+        assert_eq!(capability.max_cpu_millis, 7_000);
+        assert_eq!(capability.max_memory_bytes, 14 * 1024 * 1024 * 1024);
+        assert_eq!(capability.max_storage_bytes, 70 * 1024 * 1024 * 1024);
     }
     #[test]
     fn disabled_inrou_host_does_not_advertise_or_host() {
@@ -21981,7 +27002,7 @@ mod tests {
         let manager =
             SoracloudRuntimeManager::new(config.clone(), test_state().expect("test state"));
         let now_ms = 1_000_000;
-        let (desired, _) = manager
+        let desired = manager
             .build_local_inrou_host_capability_record(now_ms)
             .expect("host identity configured");
         let ttl_ms = inrou_host_heartbeat_ttl_ms(&config);
@@ -22020,7 +27041,7 @@ mod tests {
             "/tmp/test-soracloud-runtime-host-refresh-candidate",
         ))
         .with_local_host_identity(ALICE_ID.clone(), "12D3KooWRuntimeHostRefreshCandidate");
-        let (mut capability, _auto_proxy_only) = {
+        let mut capability = {
             let manager = SoracloudRuntimeManager::new(config.clone(), Arc::clone(&state));
             manager
                 .build_local_inrou_host_capability_record(123)
@@ -22037,8 +27058,7 @@ mod tests {
         *manager.pending_inrou_host_capability_advert.lock() = Some(
             manager
                 .build_local_inrou_host_capability_record(456)
-                .expect("host identity configured")
-                .0,
+                .expect("host identity configured"),
         );
         let view = state.view();
         assert!(
@@ -22056,10 +27076,9 @@ mod tests {
     }
     #[test]
     fn refresh_local_inrou_host_capability_submits_candidate() {
-        let mut config =
+        let config =
             test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime-host-refresh"));
-        config.inrou.proxy_only = true;
-        config =
+        let config =
             config.with_local_host_identity(ALICE_ID.clone(), "12D3KooWRuntimeHostRefreshSubmit");
         let state = test_state().expect("test state");
         let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
@@ -22072,15 +27091,14 @@ mod tests {
         manager.refresh_local_inrou_host_capability_if_needed(candidate);
         let capabilities = mutation_sink.submitted_inrou_host_capabilities();
         assert_eq!(capabilities.len(), 1);
-        assert!(capabilities[0].capability.proxy_only);
+        assert_eq!(capabilities[0].capability.max_hosted_replica_capacity, 8);
     }
     #[test]
     fn refresh_local_inrou_host_capability_suppresses_pending_duplicate() {
-        let mut config = test_runtime_manager_config(PathBuf::from(
+        let config = test_runtime_manager_config(PathBuf::from(
             "/tmp/test-soracloud-runtime-host-refresh-pending-duplicate",
         ));
-        config.inrou.proxy_only = true;
-        config =
+        let config =
             config.with_local_host_identity(ALICE_ID.clone(), "12D3KooWRuntimeHostRefreshPending");
         let state = test_state().expect("test state");
         let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
@@ -22107,25 +27125,24 @@ mod tests {
             .expect("host identity configured");
         assert_ne!(
             first_capability.heartbeat_expires_at_ms,
-            second_candidate.0.heartbeat_expires_at_ms
+            second_candidate.heartbeat_expires_at_ms
         );
         manager.refresh_local_inrou_host_capability_if_needed(Some(second_candidate));
         assert_eq!(mutation_sink.submitted_inrou_host_capabilities().len(), 1);
     }
     #[test]
     fn refresh_local_inrou_host_capability_allows_pending_refresh_near_expiry() {
-        let mut config = test_runtime_manager_config(PathBuf::from(
+        let config = test_runtime_manager_config(PathBuf::from(
             "/tmp/test-soracloud-runtime-host-refresh-pending-expiry",
         ));
-        config.inrou.proxy_only = true;
-        config =
+        let config =
             config.with_local_host_identity(ALICE_ID.clone(), "12D3KooWRuntimeHostRefreshExpiry");
         let state = test_state().expect("test state");
         let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
         let manager = SoracloudRuntimeManager::new(config.clone(), Arc::clone(&state))
             .with_mutation_sink(mutation_sink.clone());
         let now_ms = soracloud_runtime_observed_at_ms();
-        let (mut pending_capability, _) = manager
+        let mut pending_capability = manager
             .build_local_inrou_host_capability_record(now_ms)
             .expect("host identity configured");
         pending_capability.heartbeat_expires_at_ms =
@@ -22155,9 +27172,56 @@ mod tests {
         assert_eq!(mutation_sink.submitted_inrou_placement_reconciles(), 1);
     }
     #[test]
-    fn auto_proxy_only_inrou_host_advert_is_suppressed() {
-        assert!(!should_submit_local_inrou_host_capability(true));
-        assert!(should_submit_local_inrou_host_capability(false));
+    fn unavailable_inrou_host_withdrawal_requests_placement_reconcile() -> Result<()> {
+        let mut state = test_state()?;
+        let config =
+            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime-host-withdraw"))
+                .with_local_host_identity(ALICE_ID.clone(), "12D3KooWRuntimeHostWithdraw");
+        let capability = {
+            let manager = SoracloudRuntimeManager::new(config.clone(), Arc::clone(&state));
+            manager
+                .build_local_inrou_host_capability_record(123)
+                .expect("host identity configured")
+        };
+        Arc::get_mut(&mut state)
+            .expect("unique test state")
+            .world
+            .soracloud_inrou_host_capabilities_mut_for_testing()
+            .insert(ALICE_ID.clone(), capability);
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
+            .with_mutation_sink(mutation_sink.clone());
+        let view = state.view();
+        manager.withdraw_local_inrou_host_if_needed(&view);
+        assert_eq!(mutation_sink.submitted_inrou_host_withdrawals(), 1);
+        assert_eq!(mutation_sink.submitted_inrou_placement_reconciles(), 1);
+        Ok(())
+    }
+    #[test]
+    fn disabled_inrou_reconcile_withdraws_existing_local_host_advert() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let mut state = test_state()?;
+        let enabled_config = test_runtime_manager_config(temp_dir.path().join("runtime"))
+            .with_local_host_identity(ALICE_ID.clone(), "12D3KooWDisabledHostWithdraw");
+        let capability = SoracloudRuntimeManager::new(enabled_config.clone(), Arc::clone(&state))
+            .build_local_inrou_host_capability_record(123)
+            .expect("enabled fixture has a local Inrou host capability");
+        Arc::get_mut(&mut state)
+            .expect("unique test state")
+            .world
+            .soracloud_inrou_host_capabilities_mut_for_testing()
+            .insert(ALICE_ID.clone(), capability);
+
+        let mut disabled_config = enabled_config;
+        disabled_config.inrou.enabled = false;
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager = SoracloudRuntimeManager::new(disabled_config, Arc::clone(&state))
+            .with_mutation_sink(mutation_sink.clone());
+        manager.reconcile_once()?;
+
+        assert_eq!(mutation_sink.submitted_inrou_host_withdrawals(), 1);
+        assert_eq!(mutation_sink.submitted_inrou_placement_reconciles(), 1);
+        Ok(())
     }
     #[test]
     fn derive_hf_runtime_status_distinguishes_pending_deployment_and_ready() {
@@ -22333,30 +27397,20 @@ mod tests {
             7
         );
         assert!(fixture.path().join("runtime_snapshot.json").exists());
-        assert!(
-            fixture
-                .path()
-                .join("services/web_portal/2026.02.0/runtime_plan.json")
-                .exists()
-        );
-        assert!(
-            fixture
-                .path()
-                .join("services/web_portal/2026.02.0/deployment_bundle.json")
-                .exists()
-        );
+        let service_dir = PathBuf::from(&plan.materialization_dir);
+        assert!(service_dir.join("runtime_plan.json").exists());
+        assert!(service_dir.join("deployment_bundle.json").exists());
         assert_eq!(
             fs::read_to_string(
-                fixture
-                    .path()
-                    .join("services/web_portal/2026.02.0/configs/ui/settings"),
+                PathBuf::from(&plan.config_materialization_dir).join(
+                    sanitized_relative_material_path("ui/settings")
+                        .expect("valid config material path"),
+                ),
             )?,
             config_value.get().clone(),
         );
         let effective_env: BTreeMap<String, String> = read_json_optional(
-            &fixture
-                .path()
-                .join("services/web_portal/2026.02.0/effective_env.json"),
+            &PathBuf::from(&plan.effective_env_materialization_path),
             SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
             "test effective environment",
         )?
@@ -22369,16 +27423,16 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(
-                fixture
-                    .path()
-                    .join("services/web_portal/2026.02.0/config_exports/runtime/ui_settings.json"),
+                PathBuf::from(&plan.config_exports_materialization_dir)
+                    .join("runtime/ui_settings.json"),
             )?,
             config_value.get().clone(),
         );
         let materialized_secret_entry: SoraServiceSecretEntryV1 = read_json_optional(
-            &fixture
-                .path()
-                .join("services/web_portal/2026.02.0/secret_envelopes/db/password"),
+            &PathBuf::from(&plan.secret_envelopes_materialization_dir).join(
+                sanitized_relative_material_path("db/password")
+                    .expect("valid secret material path"),
+            ),
             SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
             "test materialized secret envelope",
         )?
@@ -22386,27 +27440,22 @@ mod tests {
         assert_eq!(materialized_secret_entry.secret_name, "db/password");
         assert_eq!(
             fs::read(
-                fixture
-                    .path()
-                    .join("secrets/web_portal/2026.02.0/db/password"),
+                PathBuf::from(&plan.secret_payload_materialization_dir).join(
+                    sanitized_relative_material_path("db/password")
+                        .expect("valid secret payload path"),
+                )
             )?,
             service_secret_ciphertext
         );
         assert!(fixture.path().join("journals").exists());
         assert!(fixture.path().join("checkpoints").exists());
         assert!(fixture.path().join("secrets").exists());
-        assert!(
-            fixture
-                .path()
-                .join("apartments/ops_agent/runtime_plan.json")
-                .exists()
-        );
-        assert!(
-            fixture
-                .path()
-                .join("apartments/ops_agent/apartment_manifest.json")
-                .exists()
-        );
+        let apartment_dir = fixture
+            .path()
+            .join("apartments")
+            .join(storage_path_component("ops_agent"));
+        assert!(apartment_dir.join("runtime_plan.json").exists());
+        assert!(apartment_dir.join("apartment_manifest.json").exists());
         Ok(())
     }
     #[test]
@@ -22468,15 +27517,26 @@ mod tests {
                 .map(|(artifact, payload)| (artifact.artifact_hash, payload)),
         )?;
         fixture.manager.reconcile_once()?;
-        let config_path = fixture
+        let service_dir = fixture
             .path()
-            .join("services/web_portal/2026.02.0/configs/runtime/feature_flag");
-        let secret_envelope_path = fixture
-            .path()
-            .join("services/web_portal/2026.02.0/secret_envelopes/db/password");
+            .join("services")
+            .join(storage_path_component("web_portal"))
+            .join(storage_path_component("2026.02.0"));
+        let config_path = service_dir.join("configs").join(
+            sanitized_relative_material_path("runtime/feature_flag")
+                .expect("valid config material path"),
+        );
+        let secret_envelope_path = service_dir.join("secret_envelopes").join(
+            sanitized_relative_material_path("db/password").expect("valid secret material path"),
+        );
         let secret_payload_path = fixture
             .path()
-            .join("secrets/web_portal/2026.02.0/db/password");
+            .join("secrets")
+            .join(storage_path_component("web_portal"))
+            .join(storage_path_component("2026.02.0"))
+            .join(
+                sanitized_relative_material_path("db/password").expect("valid secret payload path"),
+            );
         let runtime_path = fixture.path().to_path_buf();
         assert!(config_path.exists());
         assert!(secret_envelope_path.exists());
@@ -22565,7 +27625,7 @@ mod tests {
         let source_root = temp_dir
             .path()
             .join("hf_sources")
-            .join(sanitize_path_component(&source_id.to_string()));
+            .join(storage_path_component(&source_id.to_string()));
         fs::create_dir_all(source_root.join("files"))?;
         write_json_atomic(
             &source_root.join("import_manifest.json"),
@@ -22699,7 +27759,7 @@ mod tests {
         let source_root = temp_dir
             .path()
             .join("hf_sources")
-            .join(sanitize_path_component(&source_id.to_string()));
+            .join(storage_path_component(&source_id.to_string()));
         fs::create_dir_all(source_root.join("files"))?;
         write_json_atomic(
             &source_root.join("import_manifest.json"),
@@ -24106,53 +29166,6 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn reconcile_once_proxy_only_inrou_host_does_not_publish_replica_runtime_state() -> Result<()> {
-        let mut state = test_state()?;
-        let bundle = sample_inrou_test_bundle()?;
-        let local_peer_id = "12D3KooWProxyOnlyRuntimeHost";
-        let deployment_state = sample_deployment_state(&bundle);
-        {
-            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            insert_service_revision_fixture(world, &bundle);
-            insert_service_deployment_fixture(world, &bundle, deployment_state);
-            insert_local_inrou_service_placement_fixture(
-                world,
-                &bundle,
-                local_peer_id,
-                current_host_inrou_guest_isa(),
-            );
-        }
-        let temp_dir = tempfile::tempdir()?;
-        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf())
-            .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
-        config.inrou.proxy_only = true;
-        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
-        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
-            .with_mutation_sink(mutation_sink.clone());
-        manager.reconcile_once()?;
-        let capabilities = mutation_sink.submitted_inrou_host_capabilities();
-        assert_eq!(capabilities.len(), 1);
-        assert!(capabilities[0].capability.proxy_only);
-        assert_eq!(capabilities[0].capability.max_hosted_replica_capacity, 0);
-        assert!(
-            mutation_sink
-                .submitted_inrou_replica_runtime_states()
-                .is_empty()
-        );
-        let snapshot = manager.snapshot.read().clone();
-        let plan = snapshot
-            .services
-            .get(bundle.service.service_name.as_ref())
-            .and_then(|versions| versions.get(&bundle.service.service_version))
-            .expect("Inrou runtime plan present");
-        assert_eq!(plan.runtime, SoraContainerRuntimeV1::Inrou);
-        assert_eq!(plan.process_generation, None);
-        assert!(plan.local_replica_slots.is_empty());
-        assert!(plan.local_replicas.is_empty());
-        assert!(manager.hosted_http_workers.lock().is_empty());
-        Ok(())
-    }
-    #[test]
     fn reconcile_once_materializes_canary_http_service_inrou_runtime_state() -> Result<()> {
         let mut state = test_state()?;
         let mut active_bundle = load_deployment_bundle_fixture()?;
@@ -24244,17 +29257,23 @@ mod tests {
             canary_plan.health_status,
             SoraServiceHealthStatusV1::Degraded
         );
+        let active_service_dir = temp_dir
+            .path()
+            .join("services")
+            .join(storage_path_component("web_portal"))
+            .join(storage_path_component("2026.02.0"));
+        let canary_service_dir = temp_dir
+            .path()
+            .join("services")
+            .join(storage_path_component("web_portal"))
+            .join(storage_path_component("2026.03.0"));
         assert!(
-            temp_dir
-                .path()
-                .join("services/web_portal/2026.02.0")
+            active_service_dir
                 .join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1)
                 .exists()
         );
         assert!(
-            temp_dir
-                .path()
-                .join("services/web_portal/2026.03.0")
+            canary_service_dir
                 .join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1)
                 .exists()
         );
@@ -24311,7 +29330,11 @@ mod tests {
             Arc::clone(&state),
         );
         manager.reconcile_once()?;
-        let service_dir = temp_dir.path().join("services/web_portal/2026.02.0");
+        let service_dir = temp_dir
+            .path()
+            .join("services")
+            .join(storage_path_component("web_portal"))
+            .join(storage_path_component("2026.02.0"));
         let summary = read_hosted_http_runtime_state(&service_dir)?;
         let snapshot = manager.snapshot.read().clone();
         let plan = snapshot
@@ -24329,20 +29352,18 @@ mod tests {
                 plan.local_replicas[0].health_status,
                 SoraServiceHealthStatusV1::Degraded
             );
-            assert!(
-                plan.local_replicas[0]
-                    .materialization_dir
-                    .ends_with("services/web_portal/2026.02.0/replicas/replica-0001")
+            assert_eq!(
+                PathBuf::from(&plan.local_replicas[0].materialization_dir),
+                service_dir.join("replicas/replica-0001")
             );
             assert_eq!(plan.local_replicas[1].replica_slot, 2);
             assert_eq!(
                 plan.local_replicas[1].health_status,
                 SoraServiceHealthStatusV1::Degraded
             );
-            assert!(
-                plan.local_replicas[1]
-                    .materialization_dir
-                    .ends_with("services/web_portal/2026.02.0/replicas/replica-0002")
+            assert_eq!(
+                PathBuf::from(&plan.local_replicas[1].materialization_dir),
+                service_dir.join("replicas/replica-0002")
             );
             assert_eq!(summary.replicas.len(), 2);
             assert_eq!(summary.health_status, SoraServiceHealthStatusV1::Degraded);
@@ -24407,19 +29428,35 @@ mod tests {
                 .iter()
                 .find(|volume| volume.kind == SoraLeaseVolumeKindV1::ServiceLeaseVolume)
                 .expect("replica two shared service volume");
-            assert!(replica_one_root.local_materialization_dir.ends_with(
-                "service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0001/root_disk"
-            ));
-            assert!(replica_two_root.local_materialization_dir.ends_with(
-                "service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0002/root_disk"
-            ));
+            let root_volume_dir = build_hosted_http_service_volume_dir(
+                temp_dir.path(),
+                "web_portal",
+                "2026.02.0",
+                SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+                "root_disk",
+            );
+            assert_eq!(
+                PathBuf::from(&replica_one_root.local_materialization_dir),
+                hosted_http_per_replica_volume_materialization_dir(&root_volume_dir, 1)
+            );
+            assert_eq!(
+                PathBuf::from(&replica_two_root.local_materialization_dir),
+                hosted_http_per_replica_volume_materialization_dir(&root_volume_dir, 2)
+            );
             assert_eq!(
                 replica_one_shared.local_materialization_dir,
                 replica_two_shared.local_materialization_dir
             );
-            assert!(replica_one_shared.local_materialization_dir.ends_with(
-                "service_data/web_portal/revisions/2026.02.0/volumes/shared/index_state"
-            ));
+            assert_eq!(
+                PathBuf::from(&replica_one_shared.local_materialization_dir),
+                build_hosted_http_service_volume_dir(
+                    temp_dir.path(),
+                    "web_portal",
+                    "2026.02.0",
+                    SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+                    "index_state",
+                )
+            );
         } else {
             assert!(summary.is_none());
             assert!(plan.local_replica_slots.is_empty());
@@ -26193,11 +31230,13 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn inrou_tap_firewall_plan_supports_open_and_isolated() -> Result<()> {
-        assert_eq!(
-            inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Open)?,
-            InrouTapFirewallPlan::Open
-        );
+    fn inrou_tap_firewall_plan_accepts_only_isolated() -> Result<()> {
+        inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Open)
+            .expect_err("Inrou V1 must reject unrestricted egress");
+        inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Allowlist(vec![
+            SoraNetworkAllowlistEntryV1::new("8.8.8.8", [443]),
+        ]))
+        .expect_err("Inrou V1 must reject unmetered allowlist egress");
         assert_eq!(
             inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Isolated)?,
             InrouTapFirewallPlan::Isolated
@@ -26205,42 +31244,18 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn inrou_tap_firewall_plan_resolves_allowlist_ipv4_endpoints() -> Result<()> {
-        let plan = inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Allowlist(vec![
-            SoraNetworkAllowlistEntryV1::new("127.0.0.1", [80, 443]),
-        ]))?;
-        assert_eq!(
-            plan,
-            InrouTapFirewallPlan::Allowlist(vec![
-                InrouTapResolvedAllowlistEndpoint {
-                    host: "127.0.0.1".to_owned(),
-                    address: "127.0.0.1".parse().expect("valid IPv4"),
-                    port: 80,
-                },
-                InrouTapResolvedAllowlistEndpoint {
-                    host: "127.0.0.1".to_owned(),
-                    address: "127.0.0.1".parse().expect("valid IPv4"),
-                    port: 443,
-                },
-            ])
-        );
-        Ok(())
-    }
-    #[test]
-    fn resolve_inrou_allowlist_endpoints_deduplicates_ipv4_entries() -> Result<()> {
-        let endpoints = resolve_inrou_allowlist_endpoints(&[
-            SoraNetworkAllowlistEntryV1::new(" 127.0.0.1 ", [443, 443]),
-            SoraNetworkAllowlistEntryV1::new("127.0.0.1", [443]),
-        ])?;
-        assert_eq!(
-            endpoints,
-            vec![InrouTapResolvedAllowlistEndpoint {
-                host: "127.0.0.1".to_owned(),
-                address: "127.0.0.1".parse().expect("valid IPv4"),
-                port: 443,
-            }]
-        );
-        Ok(())
+    fn resolve_inrou_allowlist_endpoints_rejects_noncanonical_and_duplicate_entries() {
+        for entries in [
+            vec![SoraNetworkAllowlistEntryV1::new(" 8.8.8.8 ", [443])],
+            vec![SoraNetworkAllowlistEntryV1::new("8.8.8.8", [443, 443])],
+            vec![
+                SoraNetworkAllowlistEntryV1::new("8.8.8.8", [443]),
+                SoraNetworkAllowlistEntryV1::new("8.8.8.8", [8443]),
+            ],
+        ] {
+            resolve_inrou_allowlist_endpoints(&entries)
+                .expect_err("noncanonical or duplicate allowlist entries must fail closed");
+        }
     }
     #[test]
     fn resolve_inrou_allowlist_endpoints_rejects_ipv6_only_literals() {
@@ -26254,24 +31269,73 @@ mod tests {
     #[test]
     fn resolve_inrou_allowlist_endpoints_rejects_empty_port_lists() {
         let error = resolve_inrou_allowlist_endpoints(&[SoraNetworkAllowlistEntryV1::new(
-            "127.0.0.1",
+            "8.8.8.8",
             Vec::<u16>::new(),
         )])
         .expect_err("allowlist entries without ports should fail closed");
         let message = error.to_string();
-        assert!(message.contains("no IPv4 endpoints"));
-        assert!(message.contains("127.0.0.1"));
-        assert!(message.contains("[]"));
+        assert!(message.contains("at least one TCP port"));
+        assert!(message.contains("8.8.8.8"));
     }
     #[test]
-    fn inrou_tap_firewall_plan_rejects_allowlist_without_ipv4_endpoints() {
+    fn inrou_tap_firewall_plan_rejects_allowlist_before_resolution() {
         let error = inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Allowlist(vec![
             SoraNetworkAllowlistEntryV1::new("::1", [443]),
         ]))
         .expect_err("allowlist should fail closed when no IPv4 endpoint is enforceable");
+        assert!(
+            error
+                .to_string()
+                .contains("kernel-backed egress accounting")
+        );
+    }
+    #[test]
+    fn inrou_allowlist_accepts_only_public_ipv4_endpoints() {
+        for address in ["8.8.8.8", "1.1.1.1", "192.0.0.9", "192.0.0.10"] {
+            assert!(
+                inrou_ipv4_endpoint_is_public(address.parse().expect("valid public IPv4")),
+                "public endpoint {address} must remain admissible"
+            );
+        }
+        for address in [
+            "0.1.2.3",
+            "10.0.0.1",
+            "100.64.0.1",
+            "127.0.0.1",
+            "169.254.169.254",
+            "172.16.0.1",
+            "192.0.0.8",
+            "192.0.2.1",
+            "192.168.0.1",
+            "198.18.0.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "224.0.0.1",
+            "240.0.0.1",
+            "255.255.255.255",
+        ] {
+            let address = address.parse().expect("valid non-public IPv4");
+            assert!(!inrou_ipv4_endpoint_is_public(address));
+            resolve_inrou_allowlist_endpoints(&[SoraNetworkAllowlistEntryV1::new(
+                address.to_string(),
+                [443],
+            )])
+            .expect_err("non-public allowlist endpoints must fail closed before VMM setup");
+        }
+    }
+    #[test]
+    fn inrou_allowlist_rejects_dns_names_resolving_to_non_public_ipv4() {
+        let error = resolve_inrou_allowlist_endpoints(&[SoraNetworkAllowlistEntryV1::new(
+            "localhost",
+            [443],
+        )])
+        .expect_err("DNS-resolved loopback endpoints must fail closed before VMM setup");
         let message = error.to_string();
-        assert!(message.contains("no IPv4 endpoints"));
-        assert!(message.contains("::1"));
+        assert!(
+            message.contains("non-public IPv4 endpoint")
+                || message.contains("resolved to no IPv4 endpoints"),
+            "unexpected localhost rejection: {message}"
+        );
     }
     #[test]
     fn planned_inrou_tap_firewall_rules_place_allowlist_accepts_above_default_drop() {
@@ -26281,15 +31345,16 @@ mod tests {
             &InrouTapFirewallPlan::Allowlist(vec![
                 InrouTapResolvedAllowlistEndpoint {
                     host: "ton.example".to_owned(),
-                    address: "127.0.0.1".parse().expect("valid IPv4"),
+                    address: "8.8.8.8".parse().expect("valid IPv4"),
                     port: 443,
                 },
                 InrouTapResolvedAllowlistEndpoint {
                     host: "ton.example".to_owned(),
-                    address: "127.0.0.2".parse().expect("valid IPv4"),
+                    address: "1.1.1.1".parse().expect("valid IPv4"),
                     port: 8443,
                 },
             ]),
+            true,
         );
         assert_eq!(rules.len(), 8);
         assert_eq!(
@@ -26312,9 +31377,9 @@ mod tests {
         );
         assert_eq!(rules[6].context, "install Inrou allowlist forward rule");
         assert_eq!(rules[7].context, "install Inrou allowlist forward rule");
-        assert_eq!(rules[6].args[8], "127.0.0.1");
+        assert_eq!(rules[6].args[8], "8.8.8.8");
         assert_eq!(rules[6].args[10], "443");
-        assert_eq!(rules[7].args[8], "127.0.0.2");
+        assert_eq!(rules[7].args[8], "1.1.1.1");
         assert_eq!(rules[7].args[10], "8443");
     }
     #[test]
@@ -26323,6 +31388,7 @@ mod tests {
             "irtest0",
             "172.31.10.2/32",
             &InrouTapFirewallPlan::Allowlist(Vec::new()),
+            true,
         );
         assert_eq!(rules.len(), 6);
         assert_eq!(
@@ -26341,6 +31407,7 @@ mod tests {
             "irtest0",
             "172.31.10.2/32",
             &InrouTapFirewallPlan::Isolated,
+            true,
         );
         assert_eq!(rules.len(), 4);
         assert_eq!(
@@ -26348,7 +31415,7 @@ mod tests {
             "install Inrou shared-storage ingress rule"
         );
         assert_eq!(rules[0].args[1], "INPUT");
-        assert_eq!(rules[0].args[8], "2049");
+        assert_eq!(rules[0].args[10], "2049");
         assert_eq!(
             rules[1].context,
             "install Inrou established host-input rule"
@@ -26364,35 +31431,33 @@ mod tests {
         assert_eq!(rules[3].args[6], "DROP");
     }
     #[test]
-    fn planned_inrou_tap_firewall_rules_open_policy_keeps_return_path_before_forward_out() {
+    fn planned_inrou_tap_firewall_rules_do_not_expose_nfs_without_shared_storage() {
         let rules = planned_inrou_tap_firewall_rules(
             "irtest0",
             "172.31.10.2/32",
-            &InrouTapFirewallPlan::Open,
+            &InrouTapFirewallPlan::Isolated,
+            false,
         );
-        assert_eq!(rules.len(), 6);
+        assert_eq!(rules.len(), 3);
+        assert!(
+            rules
+                .iter()
+                .all(|rule| rule.context != "install Inrou shared-storage ingress rule")
+        );
+        assert!(
+            rules
+                .iter()
+                .all(|rule| !rule.args.iter().any(|arg| arg == "2049"))
+        );
         assert_eq!(
             rules[0].context,
-            "install Inrou shared-storage ingress rule"
-        );
-        assert_eq!(rules[1].context, "install Inrou egress masquerade rule");
-        assert_eq!(
-            rules[2].context,
             "install Inrou established host-input rule"
         );
         assert_eq!(
-            rules[3].context,
+            rules[1].context,
             "install Inrou host-input default-drop rule"
         );
-        assert_eq!(rules[4].context, "install Inrou return-traffic rule");
-        assert_eq!(rules[5].context, "install Inrou forward-out rule");
-        assert_eq!(rules[4].args[1], "FORWARD");
-        assert_eq!(rules[4].args[3], "-o");
-        assert_eq!(rules[4].args[4], "irtest0");
-        assert_eq!(rules[5].args[1], "FORWARD");
-        assert_eq!(rules[5].args[3], "-i");
-        assert_eq!(rules[5].args[4], "irtest0");
-        assert_eq!(rules[5].args[6], "ACCEPT");
+        assert_eq!(rules[2].context, "install Inrou isolated forward-drop rule");
     }
     #[test]
     fn inrou_tap_delete_rule_args_strip_insert_position_and_flip_mode() {
@@ -26422,57 +31487,1059 @@ mod tests {
         );
     }
     #[test]
-    fn build_portable_vm_network_plan_projects_host_forwarding_and_restricts_allowlists()
-    -> Result<()> {
-        let open = build_portable_vm_network_plan(8080, &InrouTapFirewallPlan::Open)?;
-        assert!(open.netdev.contains("hostfwd=tcp:127.0.0.1:"));
-        assert!(!open.netdev.contains("restrict=on"));
-        assert!(open.listen_base_url.starts_with("http://127.0.0.1:"));
+    fn build_portable_vm_network_plan_projects_host_forwarding_and_restricts_egress() -> Result<()>
+    {
         let isolated = build_portable_vm_network_plan(8080, &InrouTapFirewallPlan::Isolated)?;
+        assert!(isolated.netdev.contains(&format!(
+            "hostfwd=tcp:127.0.0.1:{}-:8080",
+            isolated.expected_backend.port()
+        )));
         assert!(isolated.netdev.contains("restrict=on"));
-        assert!(isolated.allowlist_hosts.is_empty());
-        let allowlist = build_portable_vm_network_plan(
+        assert!(isolated.listen_base_url.starts_with("http://127.0.0.1:"));
+        let public_address = isolated.public_listener.local_addr()?;
+        assert_eq!(
+            isolated.backend_reservation.local_addr()?,
+            isolated.expected_backend
+        );
+        assert_ne!(public_address, isolated.expected_backend);
+        assert!(
+            TcpListener::bind(public_address).is_err(),
+            "the supervisor must retain the public port from allocation through proxy startup"
+        );
+        assert!(
+            TcpListener::bind(isolated.expected_backend).is_err(),
+            "the supervisor must retain the QEMU port until its owner firewall is active"
+        );
+        build_portable_vm_network_plan(
             8080,
             &InrouTapFirewallPlan::Allowlist(vec![InrouTapResolvedAllowlistEndpoint {
                 host: "ton.example".to_owned(),
-                address: "127.0.0.1".parse().expect("IPv4"),
+                address: "8.8.8.8".parse().expect("IPv4"),
                 port: 443,
             }]),
-        )?;
-        assert!(allowlist.netdev.contains("restrict=on"));
+        )
+        .expect_err("PortableVM V1 must not construct unmetered guestfwd egress");
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_loopback_owner_rule_targets_the_dedicated_chain() {
+        let insert = planned_inrou_loopback_owner_rule(41_231, 0);
+        assert_eq!(
+            insert,
+            [
+                "-w",
+                "5",
+                "-I",
+                "IROHA_INROU_V1",
+                "1",
+                "-o",
+                "lo",
+                "-p",
+                "tcp",
+                "-d",
+                "127.0.0.1",
+                "--dport",
+                "41231",
+                "-m",
+                "owner",
+                "!",
+                "--uid-owner",
+                "0",
+                "-j",
+                "REJECT",
+                "--reject-with",
+                "tcp-reset",
+            ]
+            .map(ToOwned::to_owned)
+        );
+        let backend = planned_inrou_backend_owner_rule(41_232, 0);
+        assert!(!backend.iter().any(|argument| argument == "-o"));
+        assert!(!backend.iter().any(|argument| argument == "-d"));
         assert!(
-            allowlist
-                .netdev
-                .contains("guestfwd=tcp:127.0.0.1:443-tcp:127.0.0.1:443")
+            backend
+                .windows(2)
+                .any(|pair| pair[0] == "--dport" && pair[1] == "41232")
+        );
+        let input = planned_inrou_backend_input_rule(41_232);
+        assert!(
+            input
+                .windows(3)
+                .any(|args| args[0] == "!" && args[1] == "-i" && args[2] == "lo")
+        );
+        assert!(
+            input
+                .windows(2)
+                .any(|pair| pair[0] == "--dport" && pair[1] == "41232")
+        );
+        let output_rules = planned_inrou_output_isolation_rules(41_231, 41_232, 0, 60_001);
+        assert_eq!(output_rules.len(), 4);
+        assert!(
+            output_rules[2]
+                .1
+                .windows(2)
+                .any(|pair| { pair[0] == "--uid-owner" && pair[1] == "60001" })
         );
         assert_eq!(
-            allowlist.allowlist_hosts,
-            vec![("ton.example".to_owned(), "127.0.0.1".parse().expect("IPv4"))]
+            output_rules[2].1.last().map(String::as_str),
+            Some("icmp-port-unreachable")
+        );
+        assert_eq!(output_rules[3].1.last().map(String::as_str), Some("ACCEPT"));
+        assert!(
+            output_rules[3]
+                .1
+                .windows(2)
+                .any(|pair| pair[0] == "--sport" && pair[1] == "41232")
+        );
+        let ipv6_reject = planned_inrou_qemu_ipv6_output_reject_rule(60_001);
+        assert_eq!(ipv6_reject[3], "IROHA_INROU6_V1");
+        assert!(
+            ipv6_reject
+                .windows(2)
+                .any(|pair| pair[0] == "--uid-owner" && pair[1] == "60001")
+        );
+        assert_eq!(
+            ipv6_reject.last().map(String::as_str),
+            Some("icmp6-port-unreachable")
+        );
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_owned_chain_commands_reconcile_only_the_reserved_chain() {
+        assert_eq!(
+            inrou_iptables_output_jump_args("-I", true),
+            ["-w", "5", "-I", "OUTPUT", "1", "-j", "IROHA_INROU_V1"].map(ToOwned::to_owned)
+        );
+        assert_eq!(
+            inrou_iptables_output_jump_args("-D", false),
+            ["-w", "5", "-D", "OUTPUT", "-j", "IROHA_INROU_V1"].map(ToOwned::to_owned)
+        );
+        assert_eq!(
+            inrou_iptables_chain_marker_args(SORACLOUD_INROU_IPTABLES_CHAINS[0], "-A"),
+            [
+                "-w",
+                "5",
+                "-A",
+                "IROHA_INROU_V1",
+                "-m",
+                "comment",
+                "--comment",
+                "iroha-inrou-owned-v1",
+                "-j",
+                "RETURN",
+            ]
+            .map(ToOwned::to_owned)
+        );
+        assert_eq!(
+            inrou_iptables_input_jump_args("-I", true),
+            ["-w", "5", "-I", "INPUT", "1", "-j", "IROHA_INROU_INPUT_V1"].map(ToOwned::to_owned)
+        );
+        assert_eq!(
+            inrou_ip6tables_output_jump_args("-I", true),
+            ["-w", "5", "-I", "OUTPUT", "1", "-j", "IROHA_INROU6_V1"].map(ToOwned::to_owned)
+        );
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_owner_firewall_setup_drains_preexisting_public_connections() -> Result<()> {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let mut client = TcpStream::connect(listener.local_addr()?)?;
+        drain_inrou_pre_firewall_connections(&listener)?;
+        assert_eq!(
+            listener
+                .accept()
+                .expect_err("the accept queue must be empty")
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        client.set_read_timeout(Some(Duration::from_secs(1)))?;
+        let mut byte = [0_u8; 1];
+        match client.read(&mut byte) {
+            Ok(0) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
+                ) => {}
+            outcome => panic!("drained connection remained usable: {outcome:?}"),
+        }
+        Ok(())
+    }
+    #[test]
+    fn inrou_qmp_usernet_parser_requires_one_exact_loopback_forward() -> Result<()> {
+        let valid = concat!(
+            "VLAN -1 (net0):\n",
+            "  Protocol[State]    FD  Source Address  Port   Dest. Address  Port RecvQ SendQ\n",
+            "  TCP[HOST_FORWARD]  13  127.0.0.1       41231  10.0.2.15     8080 0     0\n",
+        );
+        assert_eq!(
+            parse_inrou_qmp_usernet_forward(valid, 8080)?,
+            "127.0.0.1:41231".parse::<SocketAddr>()?
+        );
+
+        let duplicate = format!(
+            "{valid}  TCP[HOST_FORWARD]  14  127.0.0.1       41232  10.0.2.15     8080 0     0\n"
+        );
+        parse_inrou_qmp_usernet_forward(&duplicate, 8080)
+            .expect_err("multiple forwards must fail closed");
+        parse_inrou_qmp_usernet_forward(
+            "TCP[HOST_FORWARD] 13 0.0.0.0 41231 10.0.2.15 8080 0 0\n",
+            8080,
+        )
+        .expect_err("a non-loopback forward must fail closed");
+        parse_inrou_qmp_usernet_forward(valid, 8081)
+            .expect_err("a forward to the wrong guest port must fail closed");
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_qemu_proc_status_requires_exact_sandboxed_identity() -> Result<()> {
+        let identity = PortableVmChildIdentity {
+            uid: 60_001,
+            gid: 60_002,
+            supplementary_gids: vec![108, 109],
+        };
+        let valid = concat!(
+            "Name:\tqemu-system-x86\n",
+            "Uid:\t60001\t60001\t60001\t60001\n",
+            "Gid:\t60002\t60002\t60002\t60002\n",
+            "Groups:\t108 109\n",
+            "CapInh:\t0000000000000000\n",
+            "CapPrm:\t0000000000000000\n",
+            "CapEff:\t0000000000000000\n",
+            "CapBnd:\t0000000000000000\n",
+            "CapAmb:\t0000000000000000\n",
+            "NoNewPrivs:\t1\n",
+            "Seccomp:\t2\n",
+        );
+        assert!(inrou_proc_status_matches_identity(valid, &identity)?);
+        assert!(inrou_proc_status_matches_identity(
+            valid,
+            &PortableVmChildIdentity {
+                uid: 70_001,
+                gid: identity.gid,
+                supplementary_gids: Vec::new(),
+            },
+        )?);
+        assert!(inrou_proc_status_matches_identity(
+            valid,
+            &PortableVmChildIdentity {
+                uid: 70_001,
+                gid: 109,
+                supplementary_gids: Vec::new(),
+            },
+        )?);
+        assert!(!inrou_proc_status_matches_identity(
+            valid,
+            &PortableVmChildIdentity {
+                uid: 70_001,
+                gid: 70_002,
+                supplementary_gids: Vec::new(),
+            },
+        )?);
+        validate_inrou_qemu_proc_status(valid, &identity)?;
+        validate_inrou_qemu_proc_status(
+            &valid.replace("CapBnd:\t0000000000000000", "CapBnd:\t1"),
+            &identity,
+        )
+        .expect_err("a retained bounding capability must fail closed");
+        validate_inrou_qemu_proc_status(
+            &valid.replace("Groups:\t108 109", "Groups:\t108 110"),
+            &identity,
+        )
+        .expect_err("supplementary group drift must fail closed");
+        validate_inrou_qemu_proc_status(&valid.replace("Seccomp:\t2", "Seccomp:\t0"), &identity)
+            .expect_err("QEMU must enter seccomp filter mode before QMP is trusted");
+        Ok(())
+    }
+    #[test]
+    fn portable_vm_loopback_proxy_forwards_through_supervisor_listener() -> Result<()> {
+        let backend = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let backend_address = backend.local_addr()?;
+        let backend_worker = thread::spawn(move || -> io::Result<()> {
+            let (mut stream, _) = backend.accept()?;
+            let mut request = [0_u8; 4];
+            stream.read_exact(&mut request)?;
+            if request != *b"ping" {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "proxy changed the request",
+                ));
+            }
+            stream.write_all(b"pong")
+        });
+        let public = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let public_address = public.local_addr()?;
+        let mut proxy = PortableVmLoopbackProxy::start_with_attestor(
+            public,
+            backend_address,
+            Arc::new(|_, _| true),
+        )?;
+        let mut client = TcpStream::connect(public_address)?;
+        client.set_read_timeout(Some(Duration::from_secs(2)))?;
+        client.write_all(b"ping")?;
+        let mut response = [0_u8; 4];
+        client.read_exact(&mut response)?;
+        assert_eq!(&response, b"pong");
+        drop(client);
+        proxy.stop();
+        backend_worker.join().expect("backend worker")?;
+        Ok(())
+    }
+    #[test]
+    fn portable_vm_loopback_proxy_sends_no_bytes_when_backend_attestation_fails() -> Result<()> {
+        let backend = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let backend_address = backend.local_addr()?;
+        let backend_worker = thread::spawn(move || -> io::Result<Vec<u8>> {
+            let (mut stream, _) = backend.accept()?;
+            stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+            let mut observed = Vec::new();
+            match stream.read_to_end(&mut observed) {
+                Ok(_) => Ok(observed),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    Ok(observed)
+                }
+                Err(error) => Err(error),
+            }
+        });
+        let public = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let public_address = public.local_addr()?;
+        let mut proxy = PortableVmLoopbackProxy::start_with_attestor(
+            public,
+            backend_address,
+            Arc::new(|_, _| false),
+        )?;
+        let mut client = TcpStream::connect(public_address)?;
+        client.write_all(b"must-not-reach-rebound-backend")?;
+        let _ = client.shutdown(Shutdown::Both);
+        drop(client);
+        let observed = backend_worker.join().expect("backend worker")?;
+        proxy.stop();
+        assert!(
+            observed.is_empty(),
+            "proxy must attest the live QEMU forward before copying client bytes"
         );
         Ok(())
     }
     #[test]
-    fn build_portable_vm_allowlist_hosts_overlay_skips_ip_literals() {
-        let overlay = build_portable_vm_allowlist_hosts_overlay(&[
-            ("ton.example".to_owned(), "127.0.0.1".parse().expect("IPv4")),
-            ("127.0.0.1".to_owned(), "127.0.0.1".parse().expect("IPv4")),
-        ])
-        .expect("overlay should be generated");
-        assert!(overlay.contains("127.0.0.1 ton.example"));
-        assert!(!overlay.contains("127.0.0.1 127.0.0.1"));
+    fn portable_vm_loopback_proxy_stop_is_bounded_with_a_nonreading_backend() -> Result<()> {
+        let backend = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let backend_address = backend.local_addr()?;
+        let (accepted_tx, accepted_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let backend_worker = thread::spawn(move || -> io::Result<()> {
+            let (stream, _) = backend.accept()?;
+            accepted_tx
+                .send(())
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            drop(stream);
+            Ok(())
+        });
+        let public = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let public_address = public.local_addr()?;
+        let mut proxy = PortableVmLoopbackProxy::start_with_attestor(
+            public,
+            backend_address,
+            Arc::new(|_, _| true),
+        )?;
+        let mut client = TcpStream::connect(public_address)?;
+        let client_writer = thread::spawn(move || {
+            let payload = [0x5a_u8; 64 * 1024];
+            while client.write_all(&payload).is_ok() {}
+        });
+        accepted_rx.recv_timeout(Duration::from_secs(2))?;
+        thread::sleep(Duration::from_millis(100));
+
+        let (stopped_tx, stopped_rx) = mpsc::sync_channel(1);
+        let stop_worker = thread::spawn(move || {
+            let started_at = std::time::Instant::now();
+            proxy.stop();
+            let _ = stopped_tx.send(started_at.elapsed());
+        });
+        let stopped = stopped_rx.recv_timeout(Duration::from_secs(2));
+        let _ = release_tx.send(());
+        let _ = stop_worker.join();
+        let _ = client_writer.join();
+        backend_worker.join().expect("backend worker")?;
+        let elapsed = stopped.expect("proxy stop must not wait on a non-reading backend");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "proxy stop exceeded its absolute teardown bound: {elapsed:?}"
+        );
+        Ok(())
     }
+    #[cfg(target_os = "linux")]
     #[test]
-    #[serial]
-    fn portable_vm_accel_accepts_explicit_override() -> Result<()> {
-        let result = portable_vm_accel_from(Some("tcg"));
-        assert_eq!(result?, "tcg");
+    fn portable_vm_loopback_proxy_stop_cancels_stalled_qmp_attestation() -> Result<()> {
+        let backend = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let backend_address = backend.local_addr()?;
+        let (backend_release_tx, backend_release_rx) = mpsc::sync_channel(1);
+        let backend_worker = thread::spawn(move || -> io::Result<()> {
+            let (stream, _) = backend.accept()?;
+            let _ = backend_release_rx.recv_timeout(Duration::from_secs(5));
+            drop(stream);
+            Ok(())
+        });
+        let (supervisor_qmp, mut stalled_qmp) = UnixStream::pair()?;
+        let (qmp_started_tx, qmp_started_rx) = mpsc::sync_channel(1);
+        let (qmp_release_tx, qmp_release_rx) = mpsc::sync_channel(1);
+        let qmp_worker = thread::spawn(move || -> io::Result<()> {
+            stalled_qmp.set_read_timeout(Some(Duration::from_secs(2)))?;
+            let mut request = [0_u8; 256];
+            let read = stalled_qmp.read(&mut request)?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "proxy closed QMP before issuing attestation",
+                ));
+            }
+            qmp_started_tx
+                .send(())
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            let _ = qmp_release_rx.recv_timeout(Duration::from_secs(5));
+            Ok(())
+        });
+        let qmp_control = Arc::new(Mutex::new(PortableVmQmpControl {
+            reader: io::BufReader::new(supervisor_qmp),
+        }));
+        let public = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let public_address = public.local_addr()?;
+        let mut proxy = PortableVmLoopbackProxy::start(public, backend_address, qmp_control, 8080)?;
+        let client = TcpStream::connect(public_address)?;
+        qmp_started_rx.recv_timeout(Duration::from_secs(2))?;
+
+        let started_at = std::time::Instant::now();
+        proxy.stop();
+        let elapsed = started_at.elapsed();
+        let _ = client.shutdown(Shutdown::Both);
+        let _ = backend_release_tx.send(());
+        let _ = qmp_release_tx.send(());
+        backend_worker.join().expect("backend worker")?;
+        qmp_worker.join().expect("QMP worker")?;
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "proxy stop waited on the stalled QMP command: {elapsed:?}"
+        );
         Ok(())
     }
     #[test]
-    #[serial]
-    fn portable_vm_accel_rejects_unknown_override() {
-        let result = portable_vm_accel_from(Some("nope"));
-        assert!(result.is_err());
+    fn hosted_http_probe_without_healthcheck_requires_a_live_listener() -> Result<()> {
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let base_url = format!("http://{}", listener.local_addr()?);
+        probe_hosted_http_health(&base_url, None)?;
+        drop(listener);
+        probe_hosted_http_health(&base_url, None)
+            .expect_err("a missing listener must not be reported as healthy");
+        probe_hosted_http_health(&format!("{base_url}/unexpected"), None)
+            .expect_err("listener probes must reject URLs outside the exact origin");
+        Ok(())
+    }
+    #[test]
+    fn hosted_http_health_probe_rejects_redirects_and_non_loopback_origins() -> Result<()> {
+        probe_hosted_http_health("http://192.0.2.1:8080", Some("/health"))
+            .expect_err("health probes must remain on the explicit loopback origin");
+
+        let redirect_target = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        redirect_target.set_nonblocking(true)?;
+        let redirect_target_address = redirect_target.local_addr()?;
+        let target = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_millis(500);
+            while std::time::Instant::now() < deadline {
+                match redirect_target.accept() {
+                    Ok((_stream, _address)) => return true,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => return true,
+                }
+            }
+            false
+        });
+        let redirect_source = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let source_address = redirect_source.local_addr()?;
+        let source = std::thread::spawn(move || {
+            if let Ok((mut stream, _address)) = redirect_source.accept() {
+                let mut request = [0_u8; 1024];
+                let _ = stream.read(&mut request);
+                let response = format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://{redirect_target_address}/metadata\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        probe_hosted_http_health(&format!("http://{source_address}"), Some("/health"))
+            .expect_err("a redirect must not satisfy the health probe");
+        source.join().expect("redirect source thread");
+        assert!(
+            !target.join().expect("redirect target thread"),
+            "the host health client must not follow a guest-controlled redirect"
+        );
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn inrou_executable_resolution_requires_absolute_non_writable_custody() -> Result<()> {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("inrou-executable-")
+            .tempdir_in(env!("CARGO_MANIFEST_DIR"))?;
+        let bin_dir = temp_dir.path().join("bin");
+        fs::create_dir(&bin_dir)?;
+        fs::set_permissions(&bin_dir, fs::Permissions::from_mode(0o700))?;
+        let executable = bin_dir.join("inrou-test-helper");
+        fs::write(&executable, b"#!/bin/sh\nexit 0\n")?;
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))?;
+
+        let expected = fs::canonicalize(&executable)?;
+        assert_eq!(
+            resolve_executable_in_directories("inrou-test-helper", std::slice::from_ref(&bin_dir)),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            resolve_executable_on_path(expected.to_str().expect("UTF-8 test path")),
+            Some(expected)
+        );
+        assert!(
+            resolve_executable_in_directories(
+                "inrou-test-helper",
+                &[PathBuf::from("relative-bin")],
+            )
+            .is_none()
+        );
+
+        fs::set_permissions(&bin_dir, fs::Permissions::from_mode(0o777))?;
+        assert!(
+            resolve_executable_in_directories("inrou-test-helper", &[bin_dir]).is_none(),
+            "helpers below group/other-writable directories must be rejected"
+        );
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    #[test]
+    fn inrou_host_command_runner_clears_caller_environment() -> Result<()> {
+        if std::env::var_os("HOME").is_none() {
+            return Ok(());
+        }
+        let temp_dir = tempfile::tempdir()?;
+        let helper = temp_dir.path().join("inrou-sanitized-command");
+        fs::write(
+            &helper,
+            "#!/bin/sh\nif [ \"${HOME+x}\" = x ]; then exit 91; fi\n[ \"$PATH\" = /usr/bin:/bin:/usr/sbin:/sbin ]\n",
+        )?;
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700))?;
+
+        run_host_command(&helper, &[])?;
+        Ok(())
+    }
+    #[test]
+    fn portable_vm_kvm_identity_allows_only_the_derived_device_group() -> Result<()> {
+        let mut identity = PortableVmChildIdentity {
+            uid: 70_000,
+            gid: 70_001,
+            supplementary_gids: vec![108],
+        };
+        let kvm_device = PortableVmKvmDeviceAccess {
+            uid: 0,
+            gid: 108,
+            mode: 0o660,
+            hard_links: 1,
+            rdev: SORACLOUD_INROU_KVM_DEVICE_RDEV,
+            is_character_device: true,
+        };
+        validate_portable_vm_kvm_identity(&identity, kvm_device)?;
+        identity.supplementary_gids.push(999);
+        validate_portable_vm_kvm_identity(&identity, kvm_device)
+            .expect_err("KVM must reject unrelated supplementary groups");
+        identity.gid = 108;
+        identity.supplementary_gids.clear();
+        validate_portable_vm_kvm_identity(&identity, kvm_device)
+            .expect_err("the shared KVM group must not protect tenant disks");
+        Ok(())
+    }
+    #[test]
+    fn portable_vm_identity_requires_the_fixed_primary_id_corridor() -> Result<()> {
+        let accepted = PortableVmChildIdentity {
+            uid: SORACLOUD_INROU_PRIMARY_ID_MIN,
+            gid: SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE - 1,
+            supplementary_gids: vec![108],
+        };
+        validate_portable_vm_child_identity_values(&accepted)?;
+        for id in [0, 60_001, 65_535, 524_288, 1_879_048_191, u32::MAX] {
+            for rejected in [
+                PortableVmChildIdentity {
+                    uid: id,
+                    ..accepted.clone()
+                },
+                PortableVmChildIdentity {
+                    gid: id,
+                    ..accepted.clone()
+                },
+            ] {
+                validate_portable_vm_child_identity_values(&rejected)
+                    .expect_err("primary ids outside the fixed corridor must fail closed");
+            }
+        }
+        for gid in [60_001, 65_534, 524_288, 2_147_483_648, u32::MAX] {
+            let rejected = PortableVmChildIdentity {
+                supplementary_gids: vec![gid],
+                ..accepted.clone()
+            };
+            validate_portable_vm_child_identity_values(&rejected)
+                .expect_err("Linux host-reserved supplementary gids must fail closed");
+        }
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_local_identity_reservation_requires_a_locked_service_account() -> Result<()> {
+        let identity = PortableVmChildIdentity {
+            uid: 70_000,
+            gid: 70_000,
+            supplementary_gids: vec![108],
+        };
+        validate_inrou_local_nsswitch("passwd: files\ngroup: files\nhosts: files dns\n")?;
+        validate_inrou_local_nsswitch("passwd: files\ngroup: files\nSuBiD: files\n")?;
+        for invalid in [
+            "passwd: files sss\ngroup: files\n",
+            "passwd: files\ngroup: compat\n",
+            "passwd: files\n",
+            "passwd: files\npasswd: files\ngroup: files\n",
+            "passwd: files\ngroup: files\nSUBID: sss\n",
+        ] {
+            validate_inrou_local_nsswitch(invalid)
+                .expect_err("remote, missing, or ambiguous NSS identity sources must fail closed");
+        }
+
+        let passwd = "root:x:0:0:root:/root:/bin/sh\niroha-inrou:x:70000:70000::/nonexistent:/usr/sbin/nologin\n";
+        assert_eq!(
+            validate_inrou_reserved_passwd(passwd, &identity)?,
+            PathBuf::from("/usr/sbin/nologin")
+        );
+        for invalid in [
+            "root:x:0:0:root:/root:/bin/sh\nother:x:70000:70000::/nonexistent:/usr/sbin/nologin\n",
+            "root:x:0:0:root:/root:/bin/sh\n70000:x:70000:70000::/nonexistent:/usr/sbin/nologin\n",
+            "root:x:0:0:root:/root:/bin/sh\niroha-inrou:x:70000:70001::/nonexistent:/usr/sbin/nologin\n",
+            "root:x:0:0:root:/root:/bin/sh\niroha-inrou:x:70000:70000::/tmp/inrou:/usr/sbin/nologin\n",
+            "root:x:0:0:root:/root:/bin/sh\niroha-inrou:x:70000:70000::/nonexistent:/bin/sh\n",
+            "other:x:1234:70000::/nonexistent:/usr/sbin/nologin\niroha-inrou:x:70000:70000::/nonexistent:/usr/sbin/nologin\n",
+        ] {
+            validate_inrou_reserved_passwd(invalid, &identity)
+                .expect_err("an ambiguous or login-capable service passwd row must fail closed");
+        }
+
+        let group = "root:x:0:\nkvm:x:108:\niroha-inrou:x:70000:\n";
+        validate_inrou_reserved_group(group, &identity)?;
+        for invalid in [
+            "root:x:0:\nkvm:x:108:\nother:x:70000:\n",
+            "root:x:0:\n108:x:108:\niroha-inrou:x:70000:\n",
+            "root:x:0:\ndocker:x:999:iroha-inrou\niroha-inrou:x:70000:\n",
+            "root:x:0:\niroha-inrou:x:70000:iroha-inrou\n",
+        ] {
+            validate_inrou_reserved_group(invalid, &identity)
+                .expect_err("ambiguous identity groups or memberships must fail closed");
+        }
+        validate_inrou_reserved_shadow("iroha-inrou:!:20000:0:99999:7:::\n")?;
+        validate_inrou_reserved_shadow("iroha-inrou:$6$hash:20000:0:99999:7:::\n")
+            .expect_err("an unlocked password must fail closed");
+        validate_inrou_reserved_gshadow("iroha-inrou:!::\n")?;
+        for invalid in [
+            "iroha-inrou:!:root:iroha-inrou\n",
+            "docker:!:iroha-inrou:\niroha-inrou:!::\n",
+        ] {
+            validate_inrou_reserved_gshadow(invalid)
+                .expect_err("gshadow administrators or members must fail closed");
+        }
+
+        validate_inrou_subordinate_id_unmapped("alice:100000:65536\n", "subuid", 99_999)?;
+        validate_inrou_subordinate_id_unmapped("alice:100000:65536\n", "subuid", 165_536)?;
+        for covered in [100_000, 165_535] {
+            validate_inrou_subordinate_id_unmapped("alice:100000:65536\n", "subuid", covered)
+                .expect_err("both subordinate-range boundaries must reserve the child id");
+        }
+        validate_inrou_subordinate_id_unmapped("alice:4294967294:1\n", "subuid", u32::MAX - 1)
+            .expect_err("the highest valid subordinate id range must be enforced");
+        for forbidden_owner in ["iroha-inrou:200000:1\n", "70000:200000:1\n"] {
+            validate_inrou_subordinate_id_unmapped(forbidden_owner, "subuid", 70_000)
+                .expect_err("service and numeric identity owners must not receive subids");
+        }
+        for malformed in [
+            "alice:100000:0\n",
+            "alice:4294967295:2\n",
+            "alice:not-a-number:1\n",
+            "alice:100000\n",
+        ] {
+            validate_inrou_subordinate_id_unmapped(malformed, "subgid", 70_000)
+                .expect_err("malformed, empty, or overflowing subordinate ranges must fail closed");
+        }
+        Ok(())
+    }
+    #[test]
+    fn portable_vm_kvm_device_custody_fails_closed() {
+        let identity = PortableVmChildIdentity {
+            uid: 70_000,
+            gid: 70_001,
+            supplementary_gids: vec![108],
+        };
+        let secure = PortableVmKvmDeviceAccess {
+            uid: 0,
+            gid: 108,
+            mode: 0o660,
+            hard_links: 1,
+            rdev: SORACLOUD_INROU_KVM_DEVICE_RDEV,
+            is_character_device: true,
+        };
+        for insecure in [
+            PortableVmKvmDeviceAccess { uid: 1, ..secure },
+            PortableVmKvmDeviceAccess {
+                mode: 0o666,
+                ..secure
+            },
+            PortableVmKvmDeviceAccess {
+                mode: 0o640,
+                ..secure
+            },
+            PortableVmKvmDeviceAccess {
+                hard_links: 2,
+                ..secure
+            },
+            PortableVmKvmDeviceAccess {
+                rdev: SORACLOUD_INROU_KVM_DEVICE_RDEV + 1,
+                ..secure
+            },
+            PortableVmKvmDeviceAccess {
+                is_character_device: false,
+                ..secure
+            },
+        ] {
+            validate_portable_vm_kvm_identity(&identity, insecure)
+                .expect_err("insecure `/dev/kvm` custody must fail closed");
+        }
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_portable_vm_command_drops_identity_and_enforces_qemu_policy() -> Result<()> {
+        let identity = PortableVmChildIdentity {
+            uid: 60_001,
+            gid: 60_002,
+            supplementary_gids: vec![108, 109],
+        };
+        let args = inrou_setpriv_qemu_arguments(
+            Path::new("/bin/sh"),
+            Path::new("/usr/bin/qemu-system-test"),
+            &identity,
+        )?;
+        assert_eq!(
+            args,
+            [
+                "--reuid",
+                "60001",
+                "--regid",
+                "60002",
+                "--groups",
+                "108,109",
+                "--securebits=+noroot,+noroot_locked,+no_setuid_fixup,+no_setuid_fixup_locked",
+                "--bounding-set=-all",
+                "--inh-caps=-all",
+                "--ambient-caps=-all",
+                "--no-new-privs",
+                "--",
+                "/bin/sh",
+                "-c",
+                SORACLOUD_INROU_CLOSE_FDS_SCRIPT,
+                "inrou-close-fds",
+                "60001",
+                "60002",
+                "108 109",
+                "/usr/bin/qemu-system-test",
+                "-no-user-config",
+                "-sandbox",
+                SORACLOUD_INROU_QEMU_SANDBOX_POLICY,
+                "-run-with",
+                "exit-with-parent=on",
+            ]
+        );
+        let launch = build_inrou_portable_vm_command(
+            Path::new("/usr/bin/setpriv"),
+            Path::new("/bin/sh"),
+            Path::new("/usr/bin/qemu-system-test"),
+            &identity,
+        )?;
+        assert_eq!(launch.get_current_dir(), Some(Path::new("/")));
+        let mut command = Command::new("unused-qemu-test-command");
+        let _supervisor_qmp = configure_inrou_qmp_stdio(&mut command)?;
+        let qmp_args = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            qmp_args,
+            [
+                "-qmp",
+                "stdio",
+                "-chardev",
+                "ringbuf,id=inrou-serial,size=8388608",
+                "-serial",
+                "chardev:inrou-serial",
+            ]
+        );
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_descriptor_cleanup_shell_closes_an_inherited_fd() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let status_path = temp_dir.path().join("status");
+        fs::write(
+            &status_path,
+            concat!(
+                "Uid:\t60001\t60001\t60001\t60001\n",
+                "Gid:\t60002\t60002\t60002\t60002\n",
+                "Groups:\t108 109\n",
+                "CapInh:\t0000000000000000\n",
+                "CapPrm:\t0000000000000000\n",
+                "CapEff:\t0000000000000000\n",
+                "CapBnd:\t0000000000000000\n",
+                "CapAmb:\t0000000000000000\n",
+                "NoNewPrivs:\t1\n",
+            ),
+        )?;
+        let test_script =
+            SORACLOUD_INROU_CLOSE_FDS_SCRIPT.replacen("/proc/self/status", "/dev/fd/8", 1);
+        let status = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exec 8<\"$1\"; shift; exec 9</dev/null; exec \"$@\"")
+            .arg("inrou-test-parent")
+            .arg(&status_path)
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg(&test_script)
+            .arg("inrou-close-fds")
+            .arg("60001")
+            .arg("60002")
+            .arg("108 109")
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg("test ! -e /proc/self/fd/8 && test ! -e /proc/self/fd/9")
+            .status()?;
+        assert!(
+            status.success(),
+            "the descriptor-cleanup shell must close every inherited fd above stderr"
+        );
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_identity_gate_rejects_mismatches_before_exec() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let valid_status = concat!(
+            "Uid:\t60001\t60001\t60001\t60001\n",
+            "Gid:\t60002\t60002\t60002\t60002\n",
+            "Groups:\t108 109\n",
+            "CapInh:\t0000000000000000\n",
+            "CapPrm:\t0000000000000000\n",
+            "CapEff:\t0000000000000000\n",
+            "CapBnd:\t0000000000000000\n",
+            "CapAmb:\t0000000000000000\n",
+            "NoNewPrivs:\t1\n",
+        );
+        let cases = [
+            ("wrong-uid", "60003", "60002", "108 109", valid_status),
+            ("wrong-gid", "60001", "60003", "108 109", valid_status),
+            ("wrong-groups", "60001", "60002", "108 110", valid_status),
+            (
+                "sentinel-uid",
+                "4294967295",
+                "60002",
+                "108 109",
+                valid_status,
+            ),
+            (
+                "retained-capability",
+                "60001",
+                "60002",
+                "108 109",
+                concat!(
+                    "Uid:\t60001\t60001\t60001\t60001\n",
+                    "Gid:\t60002\t60002\t60002\t60002\n",
+                    "Groups:\t108 109\n",
+                    "CapInh:\t0000000000000000\n",
+                    "CapPrm:\t0000000000000000\n",
+                    "CapEff:\t0000000000000001\n",
+                    "CapBnd:\t0000000000000000\n",
+                    "CapAmb:\t0000000000000000\n",
+                    "NoNewPrivs:\t1\n",
+                ),
+            ),
+            (
+                "missing-no-new-privs",
+                "60001",
+                "60002",
+                "108 109",
+                concat!(
+                    "Uid:\t60001\t60001\t60001\t60001\n",
+                    "Gid:\t60002\t60002\t60002\t60002\n",
+                    "Groups:\t108 109\n",
+                    "CapInh:\t0000000000000000\n",
+                    "CapPrm:\t0000000000000000\n",
+                    "CapEff:\t0000000000000000\n",
+                    "CapBnd:\t0000000000000000\n",
+                    "CapAmb:\t0000000000000000\n",
+                ),
+            ),
+        ];
+        for (name, uid, gid, groups, proc_status) in cases {
+            let status_path = temp_dir.path().join(format!("{name}.status"));
+            let marker_path = temp_dir.path().join(format!("{name}.executed"));
+            fs::write(&status_path, proc_status)?;
+            let test_script =
+                SORACLOUD_INROU_CLOSE_FDS_SCRIPT.replacen("/proc/self/status", "/dev/fd/8", 1);
+            let status = Command::new("/bin/sh")
+                .arg("-c")
+                .arg("exec 8<\"$1\"; shift; exec \"$@\"")
+                .arg("inrou-gate-parent")
+                .arg(&status_path)
+                .arg("/bin/sh")
+                .arg("-c")
+                .arg(&test_script)
+                .arg("inrou-close-fds")
+                .arg(uid)
+                .arg(gid)
+                .arg(groups)
+                .arg("/bin/sh")
+                .arg("-c")
+                .arg("printf executed > \"$1\"")
+                .arg("inrou-target")
+                .arg(&marker_path)
+                .status()?;
+            assert_eq!(status.code(), Some(126), "gate case {name}");
+            assert!(
+                !marker_path.exists(),
+                "gate case {name} executed its target"
+            );
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    #[test]
+    fn inrou_child_termination_kills_and_reaps_without_blocking() -> Result<()> {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "while :; do :; done"])
+            .spawn()?;
+        let started_at = std::time::Instant::now();
+        let status = terminate_inrou_child_bounded(&mut child)?;
+        assert!(!status.success());
+        assert!(started_at.elapsed() < SORACLOUD_INROU_CHILD_STOP_TIMEOUT);
+        assert!(
+            child.try_wait()?.is_some(),
+            "the killed child must be reaped"
+        );
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    #[test]
+    fn inrou_host_command_runner_enforces_deadline() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let helper = temp_dir.path().join("inrou-never-finishes");
+        fs::write(&helper, "#!/bin/sh\nwhile :; do :; done\n")?;
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700))?;
+
+        let error = run_host_command_with_timeout(&helper, &[], Duration::from_millis(50))
+            .expect_err("a stuck host command must be terminated at its deadline");
+        assert!(error.to_string().contains("execution deadline"));
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    #[test]
+    fn inrou_host_command_capture_caps_output_and_enforces_deadline() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let oversized = temp_dir.path().join("inrou-oversized-output");
+        fs::write(
+            &oversized,
+            "#!/bin/sh\ni=0\nwhile [ \"$i\" -lt 70000 ]; do printf x; i=$((i + 1)); done\n",
+        )?;
+        fs::set_permissions(&oversized, fs::Permissions::from_mode(0o700))?;
+        let error = run_host_command_capture_stdout_bounded(
+            &oversized,
+            &[],
+            Duration::from_secs(5),
+            64 * 1024,
+        )
+        .expect_err("oversized host-command output must be rejected");
+        assert!(error.to_string().contains("stdout limit"));
+
+        let stalled = temp_dir.path().join("inrou-stalled-output");
+        fs::write(&stalled, "#!/bin/sh\nwhile :; do :; done\n")?;
+        fs::set_permissions(&stalled, fs::Permissions::from_mode(0o700))?;
+        let error =
+            run_host_command_capture_stdout_bounded(&stalled, &[], Duration::from_millis(50), 64)
+                .expect_err("stalled host-command output must be terminated");
+        assert!(error.to_string().contains("execution deadline"));
+        Ok(())
+    }
+    #[test]
+    fn inrou_runtime_log_drain_caps_output_and_marks_truncation() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let log_path = temp_dir.path().join("bounded.log");
+        let log = open_inrou_runtime_log(&log_path, "test Inrou log")?;
+        let oversized = vec![b'x'; SORACLOUD_INROU_LOG_MAX_BYTES as usize + 1_024];
+
+        drain_inrou_runtime_log_bounded(io::Cursor::new(oversized), log)?;
+
+        let contents = fs::read(&log_path)?;
+        assert_eq!(contents.len() as u64, SORACLOUD_INROU_LOG_MAX_BYTES);
+        assert!(contents.ends_with(SORACLOUD_INROU_LOG_TRUNCATION_MARKER));
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn inrou_runtime_logs_reject_links_and_unsafe_permissions() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let target = temp_dir.path().join("target.log");
+        fs::write(&target, b"retain-me")?;
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600))?;
+
+        let symbolic = temp_dir.path().join("symbolic.log");
+        std::os::unix::fs::symlink(&target, &symbolic)?;
+        open_inrou_runtime_log(&symbolic, "test Inrou log")
+            .expect_err("a runtime log must not follow a symbolic link");
+
+        let hard = temp_dir.path().join("hard.log");
+        fs::hard_link(&target, &hard)?;
+        open_inrou_runtime_log(&target, "test Inrou log")
+            .expect_err("a multiply linked runtime log must fail before truncation");
+        assert_eq!(fs::read(&target)?, b"retain-me");
+        fs::remove_file(hard)?;
+
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644))?;
+        open_inrou_runtime_log(&target, "test Inrou log")
+            .expect_err("a runtime log readable by other users must fail closed");
+        assert_eq!(fs::read(&target)?, b"retain-me");
+        Ok(())
+    }
+    #[test]
+    fn inrou_disk_install_never_replaces_existing_state() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let staged = temp_dir.path().join("staged.raw");
+        let installed = temp_dir.path().join("installed.raw");
+        fs::write(&staged, b"new!")?;
+        fs::write(&installed, b"old!")?;
+        #[cfg(unix)]
+        {
+            fs::set_permissions(&staged, fs::Permissions::from_mode(0o600))?;
+            fs::set_permissions(&installed, fs::Permissions::from_mode(0o600))?;
+        }
+
+        install_staged_inrou_disk(&staged, &installed, Some(4))
+            .expect_err("installing a staged disk must never replace existing lease state");
+        assert_eq!(fs::read(&installed)?, b"old!");
+        assert_eq!(fs::read(&staged)?, b"new!");
+        Ok(())
     }
     #[test]
     fn build_inrou_portable_network_config_matches_predictable_interface_names() {
@@ -26523,7 +32590,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay() -> Result<()> {
+    fn build_inrou_user_data_projects_isolated_portable_block_mounts() -> Result<()> {
         let bundle = sample_inrou_test_bundle()?;
         let (_temp_dir, replica_plan, cache_key) =
             materialize_inrou_replica_plan_for_tests(&bundle)?;
@@ -26533,6 +32600,7 @@ mod tests {
                 device_serial: "sora-index_state".to_owned(),
                 filesystem_type: "ext4".to_owned(),
                 mount_options: "rw,nofail".to_owned(),
+                initialize_filesystem: true,
             },
         }];
         let user_data = build_inrou_user_data(
@@ -26547,7 +32615,7 @@ mod tests {
                 .get(),
             &shared_mounts,
             Some("package_update: true\npackages:\n  - python3-minimal\n"),
-            Some("127.0.0.1 api.sora.internal\n10.0.0.5 rpc.sora.internal\n"),
+            None,
             Some(PortableVmBundleBinding {
                 expected_hash: bundle.container.bundle_hash,
                 exact_bytes: 21,
@@ -26576,23 +32644,62 @@ mod tests {
         assert!(user_data.contains(
             "chown -R inrou:inrou /var/lib/soracloud/service /var/lib/soracloud/materialization"
         ));
-        assert!(user_data.contains("/etc/soracloud/allowlist-hosts"));
-        assert!(user_data.contains("if [ -f /etc/soracloud/allowlist-hosts ]; then"));
-        assert!(user_data.contains(
-            "grep -qxF \"$line\" /tmp/soracloud-hosts || echo \"$line\" >> /tmp/soracloud-hosts"
-        ));
+        assert!(!user_data.contains("/etc/soracloud/allowlist-hosts"));
         assert!(user_data.contains("/dev/disk/by-id/virtio-sora-index_state"));
         assert!(
+            user_data.contains("Inrou volume mount path is unhealthy; failing closed: $mount_path")
+        );
+        assert_eq!(
+            user_data.matches("mkfs.ext4 -F \"$device_path\"").count(),
+            1,
+            "only an explicitly new volume may be formatted, exactly once"
+        );
+        assert!(
             user_data.contains(
-                "Inrou PortableVm volume mount path is unhealthy; unmounting $mount_path"
+                "new Inrou PortableVm volume unexpectedly contains a filesystem signature"
             )
         );
-        assert!(user_data.contains("mkfs.ext4 -F \"$device_path\""));
+        assert!(user_data.contains("volume mount failed; refusing to modify $device_path"));
+        assert!(!user_data.contains("reformat"));
         assert!(user_data.contains("mount -t 'ext4' -o 'rw,nofail' \"$device_path\""));
         assert!(user_data.contains("chown inrou:inrou '/var/lib/ton-indexer'"));
         assert!(user_data.contains("StandardOutput=journal+console"));
         assert!(!user_data.contains("mount.nfs"));
         assert!(!user_data.contains("virtiofs"));
+        Ok(())
+    }
+    #[test]
+    fn build_inrou_user_data_never_formats_existing_portable_block_mounts() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let (_temp_dir, replica_plan, cache_key) =
+            materialize_inrou_replica_plan_for_tests(&bundle)?;
+        let shared_mounts = vec![InrouSharedFilesystemMount {
+            mount_path: "/var/lib/ton-indexer".to_owned(),
+            kind: InrouSharedFilesystemMountKind::BlockDevice {
+                device_serial: "sora-index_state".to_owned(),
+                filesystem_type: "ext4".to_owned(),
+                mount_options: "rw,nofail".to_owned(),
+                initialize_filesystem: false,
+            },
+        }];
+
+        let user_data = build_inrou_user_data(
+            &replica_plan,
+            &cache_key,
+            8080,
+            &shared_mounts,
+            None,
+            None,
+            None,
+        )?;
+
+        assert!(!user_data.contains("mkfs.ext4"));
+        assert!(!user_data.contains("reformat"));
+        assert!(user_data.contains(
+            "actual_filesystem=$(blkid -s TYPE -o value \"$device_path\" 2>/dev/null || true)"
+        ));
+        assert!(user_data.contains("volume mount failed; refusing to modify $device_path"));
+        assert!(user_data.contains("filesystem check failed; refusing to modify $device_path"));
         Ok(())
     }
     #[test]
@@ -26685,101 +32792,6 @@ mod tests {
     }
     #[cfg(target_os = "linux")]
     #[test]
-    fn write_inrou_firecracker_config_serializes_boot_source_drives_and_network() -> Result<()> {
-        let bundle = sample_inrou_test_bundle()?;
-        let temp_dir = tempfile::tempdir()?;
-        let kernel_image_path = temp_dir.path().join("vmlinux");
-        let initrd_image_path = temp_dir.path().join("initrd.img");
-        let root_disk_path = temp_dir.path().join("rootfs.ext4");
-        let seed_image_path = temp_dir.path().join("seed.ext4");
-        fs::write(&kernel_image_path, b"kernel")?;
-        fs::write(&initrd_image_path, b"initrd")?;
-        fs::write(&root_disk_path, b"rootfs")?;
-        fs::write(&seed_image_path, b"seed")?;
-        let config_path = write_inrou_firecracker_config(
-            temp_dir.path(),
-            &kernel_image_path,
-            Some(&initrd_image_path),
-            &root_disk_path,
-            &seed_image_path,
-            &InrouTapNetworkAttachment {
-                ip_binary: PathBuf::from("/sbin/ip"),
-                iptables_binary: PathBuf::from("/sbin/iptables"),
-                exportfs_binary: None,
-                tap_name: "irtest0".to_owned(),
-                host_ip: "172.31.10.1".to_owned(),
-                guest_ip: "172.31.10.2".to_owned(),
-                guest_mac: "06:fc:01:02:03:04".to_owned(),
-                firewall_plan: InrouTapFirewallPlan::Open,
-                installed_firewall_rules: Vec::new(),
-                installed_nfs_exports: Vec::new(),
-            },
-            bundle.container.resources,
-        )?;
-        let config: norito::json::Value = norito::json::from_slice(&fs::read(&config_path)?)?;
-        let boot_source = config
-            .get("boot-source")
-            .and_then(norito::json::Value::as_object)
-            .expect("boot source object");
-        let drives = config
-            .get("drives")
-            .and_then(norito::json::Value::as_array)
-            .expect("drive array");
-        let machine_config = config
-            .get("machine-config")
-            .and_then(norito::json::Value::as_object)
-            .expect("machine config object");
-        let network_interfaces = config
-            .get("network-interfaces")
-            .and_then(norito::json::Value::as_array)
-            .expect("network interfaces");
-        let kernel_image_path_string = kernel_image_path.display().to_string();
-        let initrd_image_path_string = initrd_image_path.display().to_string();
-        assert_eq!(
-            boot_source
-                .get("kernel_image_path")
-                .and_then(norito::json::Value::as_str),
-            Some(kernel_image_path_string.as_str())
-        );
-        assert_eq!(
-            boot_source
-                .get("initrd_path")
-                .and_then(norito::json::Value::as_str),
-            Some(initrd_image_path_string.as_str())
-        );
-        assert_eq!(drives.len(), 2);
-        assert_eq!(
-            machine_config
-                .get("vcpu_count")
-                .and_then(norito::json::Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            machine_config
-                .get("mem_size_mib")
-                .and_then(norito::json::Value::as_u64),
-            Some(512)
-        );
-        assert_eq!(
-            network_interfaces
-                .first()
-                .and_then(norito::json::Value::as_object)
-                .and_then(|iface| iface.get("host_dev_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("irtest0")
-        );
-        assert_eq!(
-            network_interfaces
-                .first()
-                .and_then(norito::json::Value::as_object)
-                .and_then(|iface| iface.get("guest_mac"))
-                .and_then(norito::json::Value::as_str),
-            Some("06:fc:01:02:03:04")
-        );
-        Ok(())
-    }
-    #[cfg(target_os = "linux")]
-    #[test]
     fn ensure_inrou_root_disk_copies_once_and_reuses_existing_rootfs() -> Result<()> {
         let bundle = sample_inrou_test_bundle()?;
         let (temp_dir, replica_plan, _cache_key) =
@@ -26791,12 +32803,165 @@ mod tests {
             .iter()
             .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
             .expect("root volume");
-        let first_root_disk = ensure_inrou_root_disk(&base_rootfs_image_path, root_volume)?;
+        let base_binding = Hash::new(b"authenticated-base-rootfs-v1");
+        let first_root_disk =
+            ensure_inrou_root_disk(&base_rootfs_image_path, root_volume, base_binding)?;
         assert_eq!(fs::read(&first_root_disk)?, b"base-rootfs-v1");
         fs::write(&base_rootfs_image_path, b"base-rootfs-v2")?;
-        let second_root_disk = ensure_inrou_root_disk(&base_rootfs_image_path, root_volume)?;
+        let second_root_disk =
+            ensure_inrou_root_disk(&base_rootfs_image_path, root_volume, base_binding)?;
         assert_eq!(first_root_disk, second_root_disk);
         assert_eq!(fs::read(&second_root_disk)?, b"base-rootfs-v1");
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn reusable_inrou_disks_reject_links_and_unsafe_permissions() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let disk = temp_dir.path().join("disk.raw");
+        fs::write(&disk, b"disk")?;
+        fs::set_permissions(&disk, fs::Permissions::from_mode(0o600))?;
+        validate_reusable_inrou_disk(&disk, Some(4))?;
+        validate_reusable_inrou_disk(&disk, Some(5))
+            .expect_err("a reusable raw disk must retain its configured length");
+
+        let symbolic = temp_dir.path().join("symbolic.raw");
+        std::os::unix::fs::symlink(&disk, &symbolic)?;
+        validate_reusable_inrou_disk(&symbolic, None)
+            .expect_err("a reusable disk must not follow symbolic links");
+
+        let hard = temp_dir.path().join("hard.raw");
+        fs::hard_link(&disk, &hard)?;
+        validate_reusable_inrou_disk(&disk, None)
+            .expect_err("a multiply linked reusable disk must fail closed");
+        fs::remove_file(hard)?;
+
+        fs::set_permissions(&disk, fs::Permissions::from_mode(0o622))?;
+        validate_reusable_inrou_disk(&disk, None)
+            .expect_err("a disk writable by other users must fail closed");
+        fs::set_permissions(&disk, fs::Permissions::from_mode(0o400))?;
+        validate_reusable_inrou_disk(&disk, None)
+            .expect_err("a reusable disk must remain writable by its owner");
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reclaimed_inrou_disk_skips_only_its_exact_custody_descriptor() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let disk = fs::File::create(temp_dir.path().join("disk.raw"))?;
+        let metadata = disk.metadata()?;
+        let pid = std::process::id();
+        ensure_no_process_open_file(&metadata, pid, disk.as_raw_fd())?;
+
+        let transferred = disk.try_clone()?;
+        let error = ensure_no_process_open_file(&metadata, pid, disk.as_raw_fd())
+            .expect_err("every additional descriptor must block custody reuse");
+        assert!(
+            error
+                .to_string()
+                .contains("still has the reclaimed QEMU disk open")
+        );
+        drop(transferred);
+
+        acquire_inrou_write_lease(&disk)?.release()?;
+        let separately_opened = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(temp_dir.path().join("disk.raw"))?;
+        assert!(
+            acquire_inrou_write_lease(&disk).is_err(),
+            "a separately opened file description must block the write lease"
+        );
+        drop(separately_opened);
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn portable_vm_identity_barrier_rejects_an_active_uid_or_gid() {
+        let identity = PortableVmChildIdentity {
+            uid: rustix::process::geteuid().as_raw(),
+            gid: rustix::process::getegid().as_raw(),
+            supplementary_gids: Vec::new(),
+        };
+        let error = ensure_no_process_with_inrou_identity(&identity)
+            .expect_err("the current test process proves this uid/gid is already active");
+        assert!(error.to_string().contains("is already active in process"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn inrou_disk_directory_rejects_replaceable_or_linked_custody() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let secure = temp_dir.path().join("secure-volume");
+        assert_eq!(
+            ensure_secure_inrou_disk_directory(&secure)?,
+            fs::canonicalize(&secure)?
+        );
+        assert_eq!(fs::metadata(&secure)?.permissions().mode() & 0o777, 0o700);
+
+        fs::set_permissions(&secure, fs::Permissions::from_mode(0o770))?;
+        ensure_secure_inrou_disk_directory(&secure)
+            .expect_err("a group-writable disk directory must fail closed");
+
+        let linked = temp_dir.path().join("linked-volume");
+        std::os::unix::fs::symlink(temp_dir.path(), &linked)?;
+        ensure_secure_inrou_disk_directory(&linked)
+            .expect_err("a disk-directory symbolic link must fail closed");
+
+        let real_parent = temp_dir.path().join("real-parent");
+        fs::create_dir(&real_parent)?;
+        let linked_parent = temp_dir.path().join("linked-parent");
+        std::os::unix::fs::symlink(&real_parent, &linked_parent)?;
+        ensure_secure_inrou_disk_directory(&linked_parent.join("nested-volume"))
+            .expect_err("a symbolic-link ancestor must fail before disk creation or delegation");
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_shared_export_directory_uses_stable_guest_custody() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let volume = temp_dir.path().join("shared-volume");
+        let uid = rustix::process::geteuid().as_raw();
+        let gid = rustix::process::getegid().as_raw();
+
+        let prepared = prepare_inrou_shared_export_directory(&volume, uid, gid)?;
+        assert_eq!(prepared, fs::canonicalize(&volume)?);
+        let metadata = fs::symlink_metadata(&prepared)?;
+        assert_eq!(metadata.uid(), uid);
+        assert_eq!(metadata.gid(), gid);
+        assert_eq!(metadata.mode() & 0o7777, 0o770);
+        assert_eq!(
+            prepare_inrou_shared_export_directory(&volume, uid, gid)?,
+            prepared,
+            "preparing an already secured export must be idempotent"
+        );
+
+        let linked = temp_dir.path().join("linked-shared-volume");
+        std::os::unix::fs::symlink(&prepared, &linked)?;
+        prepare_inrou_shared_export_directory(&linked, uid, gid)
+            .expect_err("a shared export must not follow a symbolic link");
+
+        let replaceable_parent = temp_dir.path().join("replaceable-parent");
+        fs::create_dir(&replaceable_parent)?;
+        fs::set_permissions(&replaceable_parent, fs::Permissions::from_mode(0o777))?;
+        prepare_inrou_shared_export_directory(&replaceable_parent.join("shared-volume"), uid, gid)
+            .expect_err("an export below a replaceable parent must fail closed");
+        Ok(())
+    }
+    #[test]
+    fn inrou_rootfs_base_binding_covers_signed_bundle_identity_and_selected_image() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let selected_guest_isa = current_host_inrou_guest_isa();
+        let plan = sample_inrou_runtime_plan(&bundle, selected_guest_isa);
+        let original = inrou_rootfs_base_binding(&bundle, &plan)?;
+
+        let mut replacement = bundle.clone();
+        replacement.container.bundle_hash = Hash::new(b"replacement-signed-bundle");
+        assert_ne!(original, inrou_rootfs_base_binding(&replacement, &plan)?);
+
+        let mut mismatched_plan = plan;
+        mismatched_plan.rootfs_image_path = "/inrou/other-rootfs.ext4".to_owned();
+        inrou_rootfs_base_binding(&bundle, &mismatched_plan)
+            .expect_err("an unsigned rootfs plan substitution must fail closed");
         Ok(())
     }
     #[cfg(not(windows))]
@@ -26817,13 +32982,17 @@ mod tests {
         fs::write(
             &qemu_img,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\nprev=\"\"\nout=\"\"\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nif [ -n \"$out\" ]; then : > \"$out\"; fi\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\nprev=\"\"\nout=\"\"\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nif [ -n \"$out\" ]; then printf 'qcow2' > \"$out\"; fi\n",
                 args_log.display()
             ),
         )?;
         fs::set_permissions(&qemu_img, fs::Permissions::from_mode(0o755))?;
-        let root_disk_path =
-            ensure_inrou_portable_root_disk(&qemu_img, &base_rootfs_image_path, root_volume)?;
+        let root_disk_path = ensure_inrou_portable_root_disk(
+            &qemu_img,
+            &base_rootfs_image_path,
+            root_volume,
+            Hash::new(b"authenticated-base-rootfs-v1"),
+        )?;
         assert_eq!(
             root_disk_path.file_name().and_then(|name| name.to_str()),
             Some("rootfs.qcow2")
@@ -26835,12 +33004,16 @@ mod tests {
         assert!(args.contains("-F"));
         assert!(args.contains("raw"));
         assert!(args.contains(base_rootfs_image_path.display().to_string().as_str()));
-        assert!(args.contains(root_disk_path.display().to_string().as_str()));
+        assert!(args.contains(".rootfs.qcow2.inrou-stage-"));
+        assert!(!args.lines().any(|argument| {
+            argument == root_disk_path.to_str().expect("UTF-8 root-disk path")
+        }));
+        assert!(inrou_root_disk_binding_path(&root_disk_path)?.is_file());
         Ok(())
     }
     #[cfg(not(windows))]
     #[test]
-    fn ensure_inrou_portable_root_disk_reuses_existing_overlay_without_qemu_img() -> Result<()> {
+    fn ensure_inrou_portable_root_disk_reuse_requires_matching_authenticated_base() -> Result<()> {
         let bundle = sample_inrou_test_bundle()?;
         let (temp_dir, replica_plan, _cache_key) =
             materialize_inrou_replica_plan_for_tests(&bundle)?;
@@ -26853,13 +33026,30 @@ mod tests {
             PathBuf::from(&root_volume.local_materialization_dir).join("rootfs.qcow2");
         fs::create_dir_all(root_disk_path.parent().expect("root disk parent"))?;
         fs::write(&root_disk_path, b"existing-overlay")?;
+        fs::set_permissions(&root_disk_path, fs::Permissions::from_mode(0o600))?;
         let qemu_img = temp_dir.path().join("qemu-img");
         fs::write(&qemu_img, "#!/bin/sh\nexit 99\n")?;
         fs::set_permissions(&qemu_img, fs::Permissions::from_mode(0o755))?;
-        let missing_base_rootfs = temp_dir.path().join("missing-base-rootfs.ext4");
-        let reused = ensure_inrou_portable_root_disk(&qemu_img, &missing_base_rootfs, root_volume)?;
+        let base_rootfs = temp_dir.path().join("base-rootfs.ext4");
+        fs::write(&base_rootfs, b"authenticated-base-rootfs")?;
+        let base_binding = Hash::new(b"authenticated-base-rootfs-v1");
+        write_inrou_root_disk_binding(&root_disk_path, base_binding)?;
+        let reused =
+            ensure_inrou_portable_root_disk(&qemu_img, &base_rootfs, root_volume, base_binding)?;
         assert_eq!(reused, root_disk_path);
         assert_eq!(fs::read(&reused)?, b"existing-overlay");
+        let error = ensure_inrou_portable_root_disk(
+            &qemu_img,
+            &base_rootfs,
+            root_volume,
+            Hash::new(b"authenticated-base-rootfs-v2"),
+        )
+        .expect_err("an overlay from another authenticated base must not be reused");
+        assert!(
+            error
+                .to_string()
+                .contains("different authenticated base image")
+        );
         Ok(())
     }
     #[cfg(not(windows))]
@@ -26878,9 +33068,13 @@ mod tests {
             .clone();
         root_volume.max_total_bytes = 4;
         let qemu_img = temp_dir.path().join("missing-qemu-img");
-        let error =
-            ensure_inrou_portable_root_disk(&qemu_img, &base_rootfs_image_path, &root_volume)
-                .expect_err("oversized base rootfs should fail before qemu-img runs");
+        let error = ensure_inrou_portable_root_disk(
+            &qemu_img,
+            &base_rootfs_image_path,
+            &root_volume,
+            Hash::new(b"authenticated-oversized-base-rootfs"),
+        )
+        .expect_err("oversized base rootfs should fail before qemu-img runs");
         let message = error.to_string();
         assert!(message.contains("exceeds root lease budget"));
         assert!(message.contains(root_volume.volume_name.as_str()));
@@ -26894,6 +33088,63 @@ mod tests {
     }
     #[cfg(not(windows))]
     #[test]
+    fn portable_disk_command_failures_remove_exclusive_staging_files() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let (temp_dir, replica_plan, _cache_key) =
+            materialize_inrou_replica_plan_for_tests(&bundle)?;
+        let qemu_img = temp_dir.path().join("failing-qemu-img");
+        fs::write(
+            &qemu_img,
+            "#!/bin/sh\nprev=''\ntarget=''\nfor arg in \"$@\"; do target=\"$prev\"; prev=\"$arg\"; done\nprintf 'partial' >\"$target\"\nexit 19\n",
+        )?;
+        fs::set_permissions(&qemu_img, fs::Permissions::from_mode(0o755))?;
+
+        let root_volume = replica_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .expect("root volume");
+        let base_rootfs = temp_dir.path().join("base-rootfs.ext4");
+        fs::write(&base_rootfs, b"authenticated-base")?;
+        ensure_inrou_portable_root_disk(
+            &qemu_img,
+            &base_rootfs,
+            root_volume,
+            Hash::new(b"authenticated-base"),
+        )
+        .expect_err("qemu-img failure must fail root-disk creation");
+        let root_dir = PathBuf::from(&root_volume.local_materialization_dir);
+        let root_disk = root_dir.join("rootfs.qcow2");
+        assert!(!root_disk.exists());
+        assert!(!inrou_root_disk_binding_path(&root_disk)?.exists());
+        assert!(fs::read_dir(&root_dir)?.all(|entry| {
+            !entry
+                .expect("directory entry")
+                .file_name()
+                .to_string_lossy()
+                .contains(".inrou-stage-")
+        }));
+
+        ensure_inrou_portable_lease_disks(&qemu_img, &replica_plan)
+            .expect_err("qemu-img failure must fail lease-disk creation");
+        let lease_volume = replica_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind != SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .expect("shared lease volume");
+        let lease_dir = PathBuf::from(&lease_volume.local_materialization_dir);
+        assert!(!lease_dir.join("lease.raw").exists());
+        assert!(fs::read_dir(&lease_dir)?.all(|entry| {
+            !entry
+                .expect("directory entry")
+                .file_name()
+                .to_string_lossy()
+                .contains(".inrou-stage-")
+        }));
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    #[test]
     fn ensure_inrou_portable_lease_disks_create_reusable_raw_images() -> Result<()> {
         let bundle = sample_inrou_test_bundle()?;
         let (temp_dir, replica_plan, _cache_key) =
@@ -26903,7 +33154,7 @@ mod tests {
         fs::write(
             &qemu_img,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> {}\nprev=\"\"\nout=\"\"\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nif [ -n \"$out\" ]; then : > \"$out\"; fi\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> {}\nprev=\"\"\nout=\"\"\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nif [ -n \"$out\" ]; then dd if=/dev/zero of=\"$out\" bs=1 count=0 seek=\"$prev\" 2>/dev/null; fi\n",
                 args_log.display()
             ),
         )?;
@@ -26918,14 +33169,25 @@ mod tests {
             Some("lease.raw")
         );
         assert_eq!(disks[0].device_serial, "sora-index_state");
+        assert!(
+            disks[0].initialize_filesystem,
+            "only the atomically installed new raw disk may request guest formatting"
+        );
         let first_args = fs::read_to_string(&args_log)?;
         assert!(first_args.contains("create"));
         assert!(first_args.contains("-f"));
         assert!(first_args.contains("raw"));
-        assert!(first_args.contains(disks[0].image_path.display().to_string().as_str()));
+        assert!(first_args.contains(".lease.raw.inrou-stage-"));
+        assert!(!first_args.lines().any(|argument| {
+            argument == disks[0].image_path.to_str().expect("UTF-8 lease-disk path")
+        }));
         fs::write(&args_log, "")?;
         let second_disks = ensure_inrou_portable_lease_disks(&qemu_img, &replica_plan)?;
         assert_eq!(second_disks[0].image_path, disks[0].image_path);
+        assert!(
+            !second_disks[0].initialize_filesystem,
+            "an existing persistent disk must never request guest formatting"
+        );
         assert!(fs::read_to_string(&args_log)?.is_empty());
         Ok(())
     }
@@ -26955,33 +33217,13 @@ mod tests {
                 initrd_image.display()
             );
         }
-        let python_http_server = r#"cat >/tmp/inrou-health.py <<'PY'
-import os
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path != "/healthz":
-            self.send_response(404)
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-            return
-        body = b"ok\n"
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, *_args):
-        pass
-
-HTTPServer(("0.0.0.0", int(os.environ["PORT"])), Handler).serve_forever()
-PY
+        let python_http_server = format!(
+            "cat >/tmp/inrou-health.py <<'PY'\n{INROU_HEALTH_SERVER_PY}PY\n\
 mkdir -p /var/lib/ton-indexer
 printf 'booted\n' >/var/lib/ton-indexer/boot-marker
 exec python3 /tmp/inrou-health.py
-"#;
+"
+        );
         let bootstrap_overlay = "package_update: true\npackages:\n  - python3-minimal\n";
         let temp_dir = tempfile::tempdir()?;
         let bundle_bytes = create_inrou_bundle_archive_for_linux_test(
@@ -26992,7 +33234,7 @@ exec python3 /tmp/inrou-health.py
             bootstrap_overlay,
         )?;
         let mut bundle = sample_inrou_test_bundle()?;
-        bundle.container.args = vec!["-lc".to_owned(), python_http_server.to_owned()];
+        bundle.container.args = vec!["-lc".to_owned(), python_http_server];
         bundle.container.bundle_path = "/bundles/inrou-portable-smoke.tgz".to_owned();
         bundle.container.bundle_hash = Hash::new(&bundle_bytes);
         bundle
@@ -27037,10 +33279,8 @@ exec python3 /tmp/inrou-health.py
         let service_dir = temp_dir
             .path()
             .join("services")
-            .join(sanitize_path_component(
-                bundle.service.service_name.as_ref(),
-            ))
-            .join(sanitize_path_component(&bundle.service.service_version));
+            .join(storage_path_component(bundle.service.service_name.as_ref()))
+            .join(storage_path_component(&bundle.service.service_version));
         let runtime_state = wait_for_hosted_http_runtime_state_to_be_healthy(
             &manager,
             &service_dir,
@@ -27058,16 +33298,29 @@ exec python3 /tmp/inrou-health.py
                 .exists()
         );
         assert!(
-            temp_dir
-                .path()
-                .join("service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0001/root_disk/rootfs.qcow2")
-                .exists()
+            hosted_http_per_replica_volume_materialization_dir(
+                &build_hosted_http_service_volume_dir(
+                    temp_dir.path(),
+                    "web_portal",
+                    "2026.02.0",
+                    SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+                    "root_disk",
+                ),
+                1,
+            )
+            .join("rootfs.qcow2")
+            .exists()
         );
         assert!(
-            temp_dir
-                .path()
-                .join("service_data/web_portal/revisions/2026.02.0/volumes/shared/index_state/lease.raw")
-                .exists()
+            build_hosted_http_service_volume_dir(
+                temp_dir.path(),
+                "web_portal",
+                "2026.02.0",
+                SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+                "index_state",
+            )
+            .join("lease.raw")
+            .exists()
         );
         probe_hosted_http_health(
             replica

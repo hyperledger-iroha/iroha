@@ -8,12 +8,17 @@ use iroha_data_model::soranet::privacy_metrics::{
     SoranetPrivacyPrioShareV1, SoranetPrivacySuppressionReasonV1, SoranetPrivacyThrottleScopeV1,
 };
 use iroha_telemetry::privacy::{
-    HandshakeFailure, PrivacyBucketConfig, PrivacyThrottleScope, SoranetSecureAggregator,
+    HandshakeFailure, MAX_PRIVACY_BUCKET_BACKLOG_V1, MAX_PRIVACY_BUCKET_WINDOW_V1,
+    MAX_PRIVACY_COLLECTOR_SHARES_V1, PrivacyBucketConfig, PrivacyEventError, PrivacyShareError,
+    PrivacyThrottleScope, SoranetSecureAggregator,
 };
 use norito::json;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 fn ts(seconds: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(seconds)
+}
+fn collector_id(value: u8) -> [u8; 32] {
+    [value; 32]
 }
 #[test]
 fn emits_bucket_once_min_contributors_met() {
@@ -216,7 +221,12 @@ fn record_event_api_routes_to_expected_counters() {
     };
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Middle;
-    aggregator.record_event(&SoranetPrivacyEventV1 {
+    let record = |event| {
+        aggregator
+            .record_historical_event(&event)
+            .expect("historical event ingested");
+    };
+    record(SoranetPrivacyEventV1 {
         timestamp_unix: 60,
         mode,
         kind: SoranetPrivacyEventKindV1::HandshakeSuccess(SoranetPrivacyEventHandshakeSuccessV1 {
@@ -224,48 +234,48 @@ fn record_event_api_routes_to_expected_counters() {
             active_circuits_after: Some(5),
         }),
     });
-    aggregator.record_event(&SoranetPrivacyEventV1 {
+    record(SoranetPrivacyEventV1 {
         timestamp_unix: 65,
         mode,
         kind: SoranetPrivacyEventKindV1::HandshakeFailure(SoranetPrivacyEventHandshakeFailureV1 {
             reason: SoranetPrivacyHandshakeFailureV1::Pow,
-            detail: None,
+            pow_reason: Some(SoranetPowFailureReasonV1::InvalidSolution),
             rtt_ms: Some(110),
         }),
     });
-    aggregator.record_event(&SoranetPrivacyEventV1 {
+    record(SoranetPrivacyEventV1 {
         timestamp_unix: 66,
         mode,
         kind: SoranetPrivacyEventKindV1::Throttle(SoranetPrivacyEventThrottleV1 {
             scope: SoranetPrivacyThrottleScopeV1::RemoteQuota,
         }),
     });
-    aggregator.record_event(&SoranetPrivacyEventV1 {
+    record(SoranetPrivacyEventV1 {
         timestamp_unix: 68,
         mode,
         kind: SoranetPrivacyEventKindV1::Throttle(SoranetPrivacyEventThrottleV1 {
             scope: SoranetPrivacyThrottleScopeV1::Emergency,
         }),
     });
-    aggregator.record_event(&SoranetPrivacyEventV1 {
+    record(SoranetPrivacyEventV1 {
         timestamp_unix: 70,
         mode,
         kind: SoranetPrivacyEventKindV1::ActiveSample(SoranetPrivacyEventActiveSampleV1 {
             active_circuits: 7,
         }),
     });
-    aggregator.record_event(&SoranetPrivacyEventV1 {
+    record(SoranetPrivacyEventV1 {
         timestamp_unix: 72,
         mode,
         kind: SoranetPrivacyEventKindV1::VerifiedBytes(SoranetPrivacyEventVerifiedBytesV1 {
             bytes: 2_048,
         }),
     });
-    aggregator.record_event(&SoranetPrivacyEventV1 {
+    record(SoranetPrivacyEventV1 {
         timestamp_unix: 75,
         mode,
         kind: SoranetPrivacyEventKindV1::GarAbuseCategory(SoranetPrivacyEventGarAbuseCategoryV1 {
-            label: "Policy::Spam".to_string(),
+            category_hash: [0xA5; 8],
         }),
     });
     let buckets = aggregator.drain_ready(ts(120));
@@ -325,7 +335,7 @@ fn ndjson_feed_rehydrates_events() {
             kind: SoranetPrivacyEventKindV1::HandshakeFailure(
                 SoranetPrivacyEventHandshakeFailureV1 {
                     reason: SoranetPrivacyHandshakeFailureV1::Pow,
-                    detail: None,
+                    pow_reason: Some(SoranetPowFailureReasonV1::InvalidSolution),
                     rtt_ms: Some(150),
                 },
             ),
@@ -356,7 +366,7 @@ fn ndjson_feed_rehydrates_events() {
             mode,
             kind: SoranetPrivacyEventKindV1::GarAbuseCategory(
                 SoranetPrivacyEventGarAbuseCategoryV1 {
-                    label: "Policy::Spam".to_string(),
+                    category_hash: [0xA5; 8],
                 },
             ),
         },
@@ -370,7 +380,7 @@ fn ndjson_feed_rehydrates_events() {
         .collect::<Vec<_>>()
         .join("\n");
     let ingested = aggregator
-        .ingest_ndjson(&ndjson)
+        .ingest_historical_ndjson(&ndjson)
         .expect("ingest ndjson payload");
     assert_eq!(ingested, events.len());
     let buckets = aggregator.drain_ready(ts(240));
@@ -399,6 +409,47 @@ fn ndjson_feed_rehydrates_events() {
     assert_eq!(bucket.gar_abuse_counts.len(), 1);
     assert_eq!(bucket.gar_abuse_counts[0].count, 1);
 }
+
+#[test]
+fn event_ingress_rejects_noncanonical_typed_pow_reasons_without_opening_bucket() {
+    let config = PrivacyBucketConfig {
+        bucket_secs: 60,
+        min_contributors: 1,
+        flush_delay_buckets: 1,
+        force_flush_buckets: 1,
+        max_completed_buckets: 8,
+        expected_shares: 1,
+        max_share_lag_buckets: 12,
+    };
+    let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
+    let invalid = [
+        SoranetPrivacyEventHandshakeFailureV1 {
+            reason: SoranetPrivacyHandshakeFailureV1::Pow,
+            pow_reason: None,
+            rtt_ms: None,
+        },
+        SoranetPrivacyEventHandshakeFailureV1 {
+            reason: SoranetPrivacyHandshakeFailureV1::Timeout,
+            pow_reason: Some(SoranetPowFailureReasonV1::ClockError),
+            rtt_ms: None,
+        },
+    ];
+    for payload in invalid {
+        let event = SoranetPrivacyEventV1 {
+            timestamp_unix: 60,
+            mode: SoranetPrivacyModeV1::Entry,
+            kind: SoranetPrivacyEventKindV1::HandshakeFailure(payload),
+        };
+        assert!(matches!(
+            aggregator.record_historical_event(&event),
+            Err(PrivacyEventError::InvalidHandshakeFailureReason)
+        ));
+    }
+    assert!(
+        aggregator.drain_ready(ts(180)).is_empty(),
+        "rejected events must not create an empty bucket"
+    );
+}
 #[test]
 fn prio_shares_combine_into_bucket() {
     let config = PrivacyBucketConfig {
@@ -412,7 +463,7 @@ fn prio_shares_combine_into_bucket() {
     };
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Middle;
-    let mut share1 = SoranetPrivacyPrioShareV1::new(1, 120, 60);
+    let mut share1 = SoranetPrivacyPrioShareV1::new(collector_id(1), 120, 60);
     share1.mode = mode;
     share1.handshake_accept_share = 2;
     share1.handshake_pow_reject_share = 1;
@@ -423,10 +474,10 @@ fn prio_shares_combine_into_bucket() {
     share1.rtt_bucket_shares = vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     share1.gar_abuse_shares = vec![SoranetGarAbuseShareV1::new([1u8; 8], 1)];
     aggregator
-        .ingest_prio_share(share1)
+        .ingest_historical_prio_share(share1)
         .expect("share ingested");
     assert!(aggregator.drain_ready(ts(180)).is_empty());
-    let mut share2 = SoranetPrivacyPrioShareV1::new(2, 120, 60);
+    let mut share2 = SoranetPrivacyPrioShareV1::new(collector_id(2), 120, 60);
     share2.mode = mode;
     share2.handshake_accept_share = 1;
     share2.handshake_downgrade_share = 1;
@@ -444,7 +495,7 @@ fn prio_shares_combine_into_bucket() {
         SoranetGarAbuseShareV1::new([2u8; 8], 1),
     ];
     aggregator
-        .ingest_prio_share(share2)
+        .ingest_historical_prio_share(share2)
         .expect("share ingested");
     let buckets = aggregator.drain_ready(ts(240));
     assert_eq!(buckets.len(), 1);
@@ -497,26 +548,26 @@ fn prio_shares_active_average_saturates() {
     };
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Middle;
-    let mut share1 = SoranetPrivacyPrioShareV1::new(1, 120, 60);
+    let mut share1 = SoranetPrivacyPrioShareV1::new(collector_id(1), 120, 60);
     share1.mode = mode;
     share1.handshake_accept_share = 1;
     share1.active_circuits_sum_share = i64::MAX;
     share1.active_circuits_sample_share = 1;
     share1.active_circuits_max_observed = Some(u64::MAX);
     let mut share2 = share1.clone();
-    share2.collector_id = 2;
+    share2.collector_id = collector_id(2);
     share2.active_circuits_sample_share = 0;
     let mut share3 = share1.clone();
-    share3.collector_id = 3;
+    share3.collector_id = collector_id(3);
     share3.active_circuits_sample_share = 0;
     aggregator
-        .ingest_prio_share(share1)
+        .ingest_historical_prio_share(share1)
         .expect("share ingested");
     aggregator
-        .ingest_prio_share(share2)
+        .ingest_historical_prio_share(share2)
         .expect("share ingested");
     aggregator
-        .ingest_prio_share(share3)
+        .ingest_historical_prio_share(share3)
         .expect("share ingested");
     let buckets = aggregator.drain_ready(ts(240));
     assert_eq!(buckets.len(), 1);
@@ -548,14 +599,14 @@ fn prio_shares_respect_min_contributors() {
     };
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Middle;
-    let mut share1 = SoranetPrivacyPrioShareV1::new(1, 60, 60);
+    let mut share1 = SoranetPrivacyPrioShareV1::new(collector_id(1), 60, 60);
     share1.mode = mode;
     share1.handshake_accept_share = 2;
     share1.active_circuits_sum_share = 20;
     share1.active_circuits_sample_share = 2;
     share1.verified_bytes_share = 512;
     share1.rtt_bucket_shares = vec![0; 16];
-    let mut share2 = SoranetPrivacyPrioShareV1::new(2, 60, 60);
+    let mut share2 = SoranetPrivacyPrioShareV1::new(collector_id(2), 60, 60);
     share2.mode = mode;
     share2.handshake_accept_share = 1;
     share2.handshake_pow_reject_share = 1;
@@ -564,10 +615,10 @@ fn prio_shares_respect_min_contributors() {
     share2.verified_bytes_share = 256;
     share2.rtt_bucket_shares = vec![0; 16];
     aggregator
-        .ingest_prio_share(share1)
+        .ingest_historical_prio_share(share1)
         .expect("share ingested");
     aggregator
-        .ingest_prio_share(share2)
+        .ingest_historical_prio_share(share2)
         .expect("share ingested");
     let buckets = aggregator.drain_ready(ts(180));
     assert_eq!(buckets.len(), 1);
@@ -597,19 +648,19 @@ fn prio_shares_surface_collector_suppression_reason() {
     };
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Entry;
-    let mut share1 = SoranetPrivacyPrioShareV1::new(1, 60, 60);
+    let mut share1 = SoranetPrivacyPrioShareV1::new(collector_id(1), 60, 60);
     share1.mode = mode;
     share1.handshake_accept_share = 3;
     share1.suppressed = true;
-    let mut share2 = SoranetPrivacyPrioShareV1::new(2, 60, 60);
+    let mut share2 = SoranetPrivacyPrioShareV1::new(collector_id(2), 60, 60);
     share2.mode = mode;
     share2.handshake_accept_share = 2;
     share2.suppressed = true;
     aggregator
-        .ingest_prio_share(share1)
+        .ingest_historical_prio_share(share1)
         .expect("share ingested");
     aggregator
-        .ingest_prio_share(share2)
+        .ingest_historical_prio_share(share2)
         .expect("share ingested");
     let buckets = aggregator.drain_ready(ts(120));
     assert_eq!(buckets.len(), 1);
@@ -633,10 +684,12 @@ fn stale_collector_shares_emit_suppressed_bucket() {
     };
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Exit;
-    let mut share = SoranetPrivacyPrioShareV1::new(1, 60, 60);
+    let mut share = SoranetPrivacyPrioShareV1::new(collector_id(1), 60, 60);
     share.mode = mode;
     share.handshake_accept_share = 1;
-    aggregator.ingest_prio_share(share).expect("share ingested");
+    aggregator
+        .ingest_historical_prio_share(share)
+        .expect("share ingested");
     let buckets = aggregator.drain_ready(ts(180));
     assert_eq!(buckets.len(), 1);
     let bucket = &buckets[0];
@@ -647,4 +700,267 @@ fn stale_collector_shares_emit_suppressed_bucket() {
     );
     assert_eq!(bucket.mode, mode);
     assert_eq!(bucket.bucket_start_unix, 60);
+}
+
+#[test]
+fn live_event_ingress_rejects_future_stale_and_excess_buckets() {
+    let config = PrivacyBucketConfig {
+        bucket_secs: 60,
+        min_contributors: 1,
+        flush_delay_buckets: 1,
+        force_flush_buckets: 3,
+        max_completed_buckets: 1,
+        expected_shares: 2,
+        max_share_lag_buckets: 3,
+    };
+    let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
+    let event = |timestamp_unix, mode| SoranetPrivacyEventV1 {
+        timestamp_unix,
+        mode,
+        kind: SoranetPrivacyEventKindV1::HandshakeSuccess(SoranetPrivacyEventHandshakeSuccessV1 {
+            rtt_ms: None,
+            active_circuits_after: None,
+        }),
+    };
+
+    assert!(matches!(
+        aggregator.record_event_at(&event(660, SoranetPrivacyModeV1::Entry), ts(600)),
+        Err(PrivacyEventError::FutureBucket { .. })
+    ));
+    assert!(matches!(
+        aggregator.record_event_at(&event(420, SoranetPrivacyModeV1::Entry), ts(600)),
+        Err(PrivacyEventError::StaleBucket { .. })
+    ));
+    aggregator
+        .record_event_at(&event(600, SoranetPrivacyModeV1::Entry), ts(600))
+        .expect("current event accepted");
+    let share = SoranetPrivacyPrioShareV1::new(collector_id(1), 600, 60);
+    assert!(matches!(
+        aggregator.ingest_prio_share_at(share, ts(600)),
+        Err(PrivacyShareError::EventInputConflict { .. })
+    ));
+    assert!(matches!(
+        aggregator.record_event_at(&event(600, SoranetPrivacyModeV1::Exit), ts(600)),
+        Err(PrivacyEventError::EventBacklogFull { capacity: 1 })
+    ));
+}
+
+#[test]
+fn live_event_ingress_flushes_ready_state_before_enforcing_backlog() {
+    let config = PrivacyBucketConfig {
+        bucket_secs: 60,
+        min_contributors: 1,
+        flush_delay_buckets: 1,
+        force_flush_buckets: 3,
+        max_completed_buckets: 1,
+        expected_shares: 2,
+        max_share_lag_buckets: 3,
+    };
+    let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
+    let event = |timestamp_unix| SoranetPrivacyEventV1 {
+        timestamp_unix,
+        mode: SoranetPrivacyModeV1::Entry,
+        kind: SoranetPrivacyEventKindV1::HandshakeSuccess(SoranetPrivacyEventHandshakeSuccessV1 {
+            rtt_ms: None,
+            active_circuits_after: None,
+        }),
+    };
+
+    aggregator
+        .record_event_at(&event(540), ts(540))
+        .expect("first bucket accepted");
+    aggregator
+        .record_event_at(&event(600), ts(600))
+        .expect("ready first bucket must not keep the live backlog full");
+    let drained = aggregator.drain_ready(ts(600));
+    assert_eq!(drained.len(), 1);
+    assert_eq!(drained[0].bucket_start_unix, 540);
+}
+
+#[test]
+fn finalized_event_bucket_cannot_be_reopened() {
+    let config = PrivacyBucketConfig {
+        bucket_secs: 60,
+        min_contributors: 1,
+        flush_delay_buckets: 1,
+        force_flush_buckets: 3,
+        max_completed_buckets: 4,
+        expected_shares: 2,
+        max_share_lag_buckets: 3,
+    };
+    let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
+    let event = SoranetPrivacyEventV1 {
+        timestamp_unix: 540,
+        mode: SoranetPrivacyModeV1::Entry,
+        kind: SoranetPrivacyEventKindV1::HandshakeSuccess(SoranetPrivacyEventHandshakeSuccessV1 {
+            rtt_ms: None,
+            active_circuits_after: None,
+        }),
+    };
+    aggregator
+        .record_event_at(&event, ts(600))
+        .expect("previous bucket accepted before finalization");
+    assert_eq!(aggregator.drain_ready(ts(600)).len(), 1);
+    assert!(matches!(
+        aggregator.record_event_at(&event, ts(600)),
+        Err(PrivacyEventError::BucketAlreadyFinalized { .. })
+    ));
+}
+
+#[test]
+fn live_share_ingress_is_time_bounded_and_finalization_is_replay_safe() {
+    let config = PrivacyBucketConfig {
+        bucket_secs: 60,
+        min_contributors: 1,
+        flush_delay_buckets: 1,
+        force_flush_buckets: 3,
+        max_completed_buckets: 4,
+        expected_shares: 1,
+        max_share_lag_buckets: 3,
+    };
+    let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
+    let mut share = SoranetPrivacyPrioShareV1::new(collector_id(1), 600, 60);
+    share.handshake_accept_share = 1;
+
+    let mut future = share.clone();
+    future.bucket_start_unix = 660;
+    assert!(matches!(
+        aggregator.ingest_prio_share_at(future, ts(600)),
+        Err(PrivacyShareError::FutureBucket { .. })
+    ));
+    let mut stale = share.clone();
+    stale.bucket_start_unix = 420;
+    assert!(matches!(
+        aggregator.ingest_prio_share_at(stale, ts(600)),
+        Err(PrivacyShareError::StaleBucket { .. })
+    ));
+
+    aggregator
+        .ingest_prio_share_at(share.clone(), ts(600))
+        .expect("current share accepted");
+    assert!(matches!(
+        aggregator.ingest_prio_share_at(share, ts(600)),
+        Err(PrivacyShareError::BucketAlreadyFinalized { .. })
+    ));
+    assert_eq!(aggregator.drain_ready(ts(600)).len(), 1);
+}
+
+#[test]
+fn collector_backlog_and_replacement_are_bounded() {
+    let config = PrivacyBucketConfig {
+        bucket_secs: 60,
+        min_contributors: 1,
+        flush_delay_buckets: 1,
+        force_flush_buckets: 3,
+        max_completed_buckets: 1,
+        expected_shares: 2,
+        max_share_lag_buckets: 3,
+    };
+    let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
+    let mut oversized = SoranetPrivacyPrioShareV1::new(collector_id(6), 600, 60);
+    oversized.gar_abuse_shares = vec![SoranetGarAbuseShareV1::new([0; 8], 0); 257];
+    assert!(matches!(
+        aggregator.ingest_prio_share_at(oversized, ts(600)),
+        Err(PrivacyShareError::TooManyGarCategories {
+            maximum: 256,
+            received: 257
+        })
+    ));
+    let mut first = SoranetPrivacyPrioShareV1::new(collector_id(7), 600, 60);
+    first.handshake_accept_share = 1;
+    aggregator
+        .ingest_prio_share_at(first.clone(), ts(600))
+        .expect("first collector share accepted");
+    aggregator
+        .ingest_prio_share_at(first.clone(), ts(600))
+        .expect("exact retry is idempotent");
+    let event = SoranetPrivacyEventV1 {
+        timestamp_unix: 600,
+        mode: SoranetPrivacyModeV1::Entry,
+        kind: SoranetPrivacyEventKindV1::HandshakeSuccess(SoranetPrivacyEventHandshakeSuccessV1 {
+            rtt_ms: None,
+            active_circuits_after: None,
+        }),
+    };
+    assert!(matches!(
+        aggregator.record_event_at(&event, ts(600)),
+        Err(PrivacyEventError::CollectorInputConflict { .. })
+    ));
+
+    let mut conflicting = first;
+    conflicting.handshake_accept_share = 2;
+    assert!(matches!(
+        aggregator.ingest_prio_share_at(conflicting, ts(600)),
+        Err(PrivacyShareError::ConflictingCollectorShare { collector_id: id })
+            if id == collector_id(7)
+    ));
+
+    let mut other_bucket = SoranetPrivacyPrioShareV1::new(collector_id(8), 600, 60);
+    other_bucket.mode = SoranetPrivacyModeV1::Exit;
+    assert!(matches!(
+        aggregator.ingest_prio_share_at(other_bucket, ts(600)),
+        Err(PrivacyShareError::CollectorBacklogFull { capacity: 1 })
+    ));
+}
+
+#[test]
+fn privacy_config_and_event_category_cardinality_are_bounded() {
+    for invalid in [
+        PrivacyBucketConfig {
+            max_completed_buckets: MAX_PRIVACY_BUCKET_BACKLOG_V1 + 1,
+            ..PrivacyBucketConfig::default()
+        },
+        PrivacyBucketConfig {
+            force_flush_buckets: MAX_PRIVACY_BUCKET_WINDOW_V1 + 1,
+            ..PrivacyBucketConfig::default()
+        },
+        PrivacyBucketConfig {
+            flush_delay_buckets: 0,
+            force_flush_buckets: 0,
+            ..PrivacyBucketConfig::default()
+        },
+        PrivacyBucketConfig {
+            max_share_lag_buckets: MAX_PRIVACY_BUCKET_WINDOW_V1 + 1,
+            ..PrivacyBucketConfig::default()
+        },
+        PrivacyBucketConfig {
+            expected_shares: MAX_PRIVACY_COLLECTOR_SHARES_V1 + 1,
+            ..PrivacyBucketConfig::default()
+        },
+    ] {
+        assert!(
+            SoranetSecureAggregator::new(invalid).is_err(),
+            "unbounded privacy configuration must fail closed"
+        );
+    }
+
+    let aggregator = SoranetSecureAggregator::new(PrivacyBucketConfig::default())
+        .expect("default config is bounded");
+    for index in 0..256 {
+        let event = SoranetPrivacyEventV1 {
+            timestamp_unix: 600,
+            mode: SoranetPrivacyModeV1::Entry,
+            kind: SoranetPrivacyEventKindV1::GarAbuseCategory(
+                SoranetPrivacyEventGarAbuseCategoryV1 {
+                    category_hash: u64::try_from(index)
+                        .expect("bounded index fits u64")
+                        .to_le_bytes(),
+                },
+            ),
+        };
+        aggregator
+            .record_event_at(&event, ts(600))
+            .expect("category within bound");
+    }
+    let excess = SoranetPrivacyEventV1 {
+        timestamp_unix: 600,
+        mode: SoranetPrivacyModeV1::Entry,
+        kind: SoranetPrivacyEventKindV1::GarAbuseCategory(SoranetPrivacyEventGarAbuseCategoryV1 {
+            category_hash: u64::MAX.to_le_bytes(),
+        }),
+    };
+    assert!(matches!(
+        aggregator.record_event_at(&excess, ts(600)),
+        Err(PrivacyEventError::TooManyGarCategories { maximum: 256 })
+    ));
 }

@@ -59,6 +59,12 @@ def _benchmark_memory_enforcement_mode(platform: str | None = None) -> str:
     return resource_guard.MEMORY_ENFORCEMENT_PROCESS_TREE_RSS
 
 
+def _benchmark_child_environment(scratch_path: Path) -> dict[str, str]:
+    """Build the complete, deterministic environment admitted to the benchmark."""
+
+    return candidate_guard._candidate_child_environment(scratch_path)
+
+
 @dataclass(frozen=True)
 class ScratchDirectory:
     """One owner-private, disk-backed directory used as the child TMPDIR."""
@@ -427,10 +433,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             BENCHMARK_EXECUTABLE,
                         )
                     command[0] = executable_snapshot.execution_path()
-                    child_environment = os.environ.copy()
-                    for variable in ("TMPDIR", "TMP", "TEMP"):
-                        child_environment.pop(variable, None)
-                    child_environment["TMPDIR"] = str(scratch.path)
+                    child_environment = _benchmark_child_environment(scratch.path)
                     return candidate_guard._run_guarded_with_pinned_executable(
                         command,
                         executable_snapshot,

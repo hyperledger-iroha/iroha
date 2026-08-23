@@ -68,6 +68,7 @@ struct TestSnapshot {
     context: u16,
     next_record: usize,
     next_main_block: usize,
+    reads: u64,
     fault: SnapshotFault,
 }
 
@@ -82,6 +83,7 @@ impl TestSnapshot {
             context,
             next_record: 0,
             next_main_block: 0,
+            reads: 0,
             fault,
         }
     }
@@ -178,6 +180,7 @@ impl ZkAmsMkheRnsNativeSourceSnapshotV1 for TestSnapshot {
         {
             bytes.pop();
         }
+        self.reads += 1;
         Ok(TestChunk {
             arena: returned_arena,
             bytes,
@@ -932,6 +935,96 @@ fn source_snapshot_guards_fail_closed_before_construction_state() {
             validated.public_key_digest,
         ),
         Err(RnsNativeRlweSourceStatementErrorV1::InvalidNonce)
+    );
+}
+
+#[test]
+fn pretranscript_facts_are_exact_mutation_closed_and_expose_one_pass_blocker() {
+    let fixture = Fixture::new(16);
+    let mut snapshot = TestSnapshot::new(fixture.layout, fixture.context, SnapshotFault::None);
+    let (mut records, public_key_digest, mut public_bundle_digest) =
+        derive_rns_native_pre_transcript_record_facts_v1(
+            &mut snapshot,
+            fixture.layout,
+            fixture.epoch,
+            fixture.roster_digest,
+            &fixture.public_a,
+            &fixture.public_b,
+            &fixture.ciphertext_c0,
+            &fixture.ciphertext_c1,
+        )
+        .expect("pre-transcript facts");
+
+    assert_eq!(snapshot.reads, RNS_NATIVE_PRETRANSCRIPT_SOURCE_READS_V1);
+    assert_eq!(snapshot.next_record, OPENING_COUNT_V1);
+    assert_eq!(snapshot.next_main_block, 0);
+    assert_eq!(
+        public_key_digest,
+        public_key_digest_v1(
+            fixture.layout,
+            fixture.epoch,
+            fixture.roster_digest,
+            &fixture.public_a,
+            &fixture.public_b,
+        )
+        .expect("public key digest")
+    );
+    assert_eq!(records.as_slice(), fixture.records.as_slice());
+    assert_eq!(public_bundle_digest, fixture.public_bundle_digest);
+
+    let validate = |records: &[RnsNativePublicRecordMetadataV1], bundle| {
+        validate_rns_native_pre_transcript_public_facts_v1(
+            fixture.layout,
+            fixture.epoch,
+            fixture.roster_digest,
+            &fixture.public_a,
+            &fixture.public_b,
+            &fixture.ciphertext_c0,
+            &fixture.ciphertext_c1,
+            records,
+            public_key_digest,
+            bundle,
+        )
+    };
+
+    let original_nonce = records[0].nonce_binding_digest;
+    records[0].nonce_binding_digest[0] ^= 1;
+    assert_eq!(
+        validate(&records, public_bundle_digest),
+        Err(RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact)
+    );
+    records[0].nonce_binding_digest = original_nonce;
+
+    records.swap(0, 1);
+    assert_eq!(
+        validate(&records, public_bundle_digest),
+        Err(RnsNativeRlweSourceStatementErrorV1::InvalidSourceOrder)
+    );
+    records.swap(0, 1);
+
+    let original_record = records[0].record_digest;
+    records[0].record_digest[0] ^= 1;
+    assert_eq!(
+        validate(&records, public_bundle_digest),
+        Err(RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact)
+    );
+    records[0].record_digest = original_record;
+
+    public_bundle_digest[0] ^= 1;
+    assert_eq!(
+        validate(&records, public_bundle_digest),
+        Err(RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact)
+    );
+    public_bundle_digest[0] ^= 1;
+    validate(&records, public_bundle_digest).expect("restored public facts");
+
+    // This legacy fixture deliberately models a single canonical scan and
+    // therefore cannot implement the distinct repeatable-source capability.
+    assert_eq!(
+        snapshot
+            .read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Main, 0)
+            .map(|_| ()),
+        Err(ZkAmsMkheRnsNativeSourceErrorV1::UnexpectedWrite)
     );
 }
 

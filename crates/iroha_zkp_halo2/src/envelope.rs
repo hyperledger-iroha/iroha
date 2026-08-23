@@ -17,6 +17,8 @@ pub const PCS_IPA: u8 = 0x01;
 pub const TRANSCRIPT_BLAKE2B: u8 = 0x01;
 /// Flag bit indicating that lookup tables are enabled in the circuit.
 pub const FLAG_LOOKUPS: u8 = 0x01;
+/// Mask of every flag bit defined by envelope version 1.
+const SUPPORTED_FLAGS: u8 = FLAG_LOOKUPS;
 /// Size of the header prefix before public inputs (`version`..`pi_len`).
 const HEADER_PREFIX_LEN: usize = 8  // version..flags
     + size_of::<u16>()              // n_pi
@@ -46,6 +48,9 @@ pub enum EnvelopeError {
     /// Unsupported transcript identifier (only Blake2b is recognised).
     #[error("unsupported transcript identifier {0:#04x}")]
     UnsupportedTranscript(u8),
+    /// Unsupported circuit flags were set.
+    #[error("unsupported envelope flags {0:#04x}")]
+    UnsupportedFlags(u8),
     /// Public input byte length was not a multiple of 32.
     #[error("public inputs length {declared} is not a multiple of {stride}")]
     PublicInputAlignment {
@@ -160,6 +165,9 @@ impl Halo2ProofEnvelopeHeader {
         n_pi: u16,
         pi_len: u32,
     ) -> Result<Self, EnvelopeError> {
+        if flags & !SUPPORTED_FLAGS != 0 {
+            return Err(EnvelopeError::UnsupportedFlags(flags));
+        }
         if !pi_len.is_multiple_of(PUBLIC_INPUT_STRIDE as u32) {
             return Err(EnvelopeError::PublicInputAlignment {
                 declared: pi_len,
@@ -503,6 +511,22 @@ mod tests {
         bytes[3] = 0xFF;
         let err = Halo2ProofEnvelope::from_bytes(&bytes).unwrap_err();
         assert!(matches!(err, EnvelopeError::UnsupportedTranscript(0xFF)));
+    }
+    #[test]
+    fn rejects_unknown_flag_bits() {
+        let input = hex_array("7f19b2a9c5b8f1d3c4e2aa1100ddc3f0e1d2c3b4a5968776655443322110aa55");
+        let inputs = vec![input; usize::from(Halo2ProofEnvelopeHeader::expected_pi_count(0, 0))];
+        let err = Halo2ProofEnvelope::new(20, 0, 0, 0x80, inputs.clone(), vec![])
+            .expect_err("builders must reject undefined flag bits");
+        assert_eq!(err, EnvelopeError::UnsupportedFlags(0x80));
+
+        let env = Halo2ProofEnvelope::new(20, 0, 0, FLAG_LOOKUPS, inputs, vec![0xAA])
+            .expect("known lookup flag");
+        let mut bytes = env.to_bytes();
+        bytes[7] |= 0x80;
+        let err = Halo2ProofEnvelope::from_bytes(&bytes)
+            .expect_err("decoders must reject undefined flag bits");
+        assert_eq!(err, EnvelopeError::UnsupportedFlags(FLAG_LOOKUPS | 0x80));
     }
     #[test]
     fn parse_rejects_undersized_public_input_length_for_count() {

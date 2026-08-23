@@ -330,7 +330,7 @@ fn kura_replica_advert_error_classification_retires_only_invalid_remote_claims()
     ));
 }
 #[test]
-fn drain_decided_lane_recovery_ingress_retains_current_serve_for_lifecycle() {
+fn drain_decided_lane_recovery_ingress_authorizes_terminal_current_serve() {
     let (context, keys) = context();
     let round = wire::ConsensusRound {
         context_id: context.id(),
@@ -342,15 +342,94 @@ fn drain_decided_lane_recovery_ingress_retains_current_serve_for_lifecycle() {
     let inbound = admitted_decided_recovery_request(&context, &request);
     assert!(matches!(
         prepare_decided_lane_recovery_ingress(&inbound, context.height),
-        DecidedLaneRecoveryIngressPreparation::CurrentServeRetain
+        DecidedLaneRecoveryIngressPreparation::CurrentServe
     ));
     assert!(matches!(
         authorize_decided_lane_recovery_drain(
-            DecidedLaneRecoveryIngressPreparation::CurrentServeRetain
+            DecidedLaneRecoveryIngressPreparation::CurrentServe
         ),
-        DecidedLaneRecoveryDrainDecision::Retain
+        DecidedLaneRecoveryDrainAuthorization::CurrentServe
+    ));
+    assert!(DecidedLaneRecoveryServeScope::Current
+        .permits_height(context.height, context.height));
+    assert!(!DecidedLaneRecoveryServeScope::Current
+        .permits_height(context.height.saturating_sub(1), context.height));
+    assert!(!DecidedLaneRecoveryServeScope::Current
+        .permits_height(context.height.saturating_add(1), context.height));
+    assert!(DecidedLaneRecoveryServeScope::Historical
+        .permits_height(context.height.saturating_sub(1), context.height));
+    assert!(!DecidedLaneRecoveryServeScope::Historical
+        .permits_height(context.height, context.height));
+    assert!(DecidedLaneRecoveryServeScope::Current.permits_subject(subject, subject));
+    assert!(!DecidedLaneRecoveryServeScope::Current
+        .permits_subject(proposal_subject(b"losing decided recovery subject"), subject));
+    assert!(DecidedLaneRecoveryServeScope::Historical
+        .permits_subject(proposal_subject(b"historical recovery subject"), subject));
+
+    let future_round = wire::ConsensusRound {
+        height: context.height.saturating_add(1),
+        ..round
+    };
+    let future = decided_recovery_certified_request(&context, &keys[1], future_round, subject);
+    let future = InboundBlockMessage::from_authenticated_peer(
+        BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(future),
+        )),
+        PeerId::new(keys[1].public_key().clone()),
+    );
+    assert!(matches!(
+        prepare_decided_lane_recovery_ingress(&future, context.height),
+        DecidedLaneRecoveryIngressPreparation::LeaderWireRetire
     ));
 }
+
+#[test]
+fn terminal_current_serve_binds_leader_wire_before_guarded_service() {
+    #[derive(Default)]
+    struct CommitProbe(Vec<&'static str>);
+
+    impl DecidedLaneRecoveryDrainCommitter for CommitProbe {
+        fn commit_lane_local(&mut self) -> Result<(), V2RunnerError> {
+            self.0.push("lane");
+            Ok(())
+        }
+
+        fn commit_kura_replica_advert(&mut self) -> Result<(), V2RunnerError> {
+            self.0.push("advert");
+            Ok(())
+        }
+
+        fn bind_leader_wire(&mut self) -> Result<(), V2RunnerError> {
+            self.0.push("bind");
+            Ok(())
+        }
+
+        fn commit_current_serve(&mut self) -> Result<(), V2RunnerError> {
+            self.0.push("current");
+            Ok(())
+        }
+
+        fn commit_historical_serve(&mut self) -> Result<(), V2RunnerError> {
+            self.0.push("historical");
+            Ok(())
+        }
+
+        fn commit_leader_wire_volatile(&mut self) -> Result<(), V2RunnerError> {
+            self.0.push("volatile");
+            Ok(())
+        }
+    }
+
+    let mut probe = CommitProbe::default();
+    let outcome = commit_decided_lane_recovery_drain(
+        DecidedLaneRecoveryDrainAuthorization::CurrentServe,
+        &mut probe,
+    )
+    .expect("terminal current Serve follows the checked commit corridor");
+    assert_eq!(outcome, DecidedLaneRecoveryDrainCommitOutcome::CurrentServe);
+    assert_eq!(probe.0, ["bind", "current"]);
+}
+
 #[test]
 fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traffic() {
     let (context, keys) = context();
@@ -409,9 +488,7 @@ fn drain_decided_lane_recovery_ingress_authorizes_lane_local_qc() {
             &inbound,
             context.height,
         )),
-        DecidedLaneRecoveryDrainDecision::Authorized(
-            DecidedLaneRecoveryDrainAuthorization::LaneLocal
-        )
+        DecidedLaneRecoveryDrainAuthorization::LaneLocal
     ));
 }
 fn leader_wire_runtime_ingress_fixture() -> (

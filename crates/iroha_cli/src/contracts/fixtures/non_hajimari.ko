@@ -1,4 +1,3 @@
-
-                seiyaku Greeter {
-                    kotoage fn run() authorize("Run") {}
-                }
+seiyaku Greeter {
+    kotoage fn run() authorize("Run") {}
+}

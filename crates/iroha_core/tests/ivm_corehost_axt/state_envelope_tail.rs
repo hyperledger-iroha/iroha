@@ -197,10 +197,6 @@ fn core_host_exports_axt_envelopes_to_state_block() {
         &Quantity::from(5_u64),
     );
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
-        .expect("proof");
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
@@ -263,24 +259,10 @@ fn core_host_exports_axt_envelopes_to_state_block() {
 fn core_host_rejects_cached_proof_after_manifest_rotation() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(55);
-    let entries_current = vec![AxtPolicyBinding {
-        dsid,
-        policy: AxtPolicyEntry {
-            manifest_root: [0x11; 32],
-            target_lane: LaneId::new(1),
-            active_handle_era: 1,
-            next_handle_counter: 1,
-            current_slot: 7,
-        },
-    }];
-    let snapshot_current = AxtPolicySnapshot {
-        version: AxtPolicySnapshot::compute_version(&entries_current),
-        entries: entries_current,
-    };
-    let mut host = CoreHost::new(authority.clone())
-        .with_axt_policy_snapshot(&snapshot_current)
-        .expect("current AXT policy snapshot should be canonical");
-    let mut vm = IVM::new(1_000_000);
+    let current_root = [0x11; 32];
+    let rotated_root = [0x22; 32];
+    let lane = LaneId::new(1);
+    let mut host = host_with_policy(authority.clone(), dsid, current_root, lane, 7);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -289,31 +271,33 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
             write: vec!["ledger/cache".into()],
         }],
     };
-    let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
-    vm.set_register(10, desc_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
-        .expect("begin");
-    let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
-    let manifest = TouchManifest {
-        read: vec!["orders/cache".into()],
-        write: vec!["ledger/cache".into()],
-    };
-    let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, manifest_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
-        .expect("touch");
-    let proof_current = proof_blob_for(dsid, [0x11; 32], b"manifest-v1".to_vec(), 20);
-    let proof_v1_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof_current);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_v1_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
-        .expect("proof matches manifest v1");
+    let binding = axt::compute_binding(&descriptor).expect("binding");
+    let (handle, intent, amount) = single_remote_spend(
+        &authority,
+        binding,
+        dsid,
+        current_root,
+        lane,
+        1,
+        Some(dsid),
+        FIXTURE_MERCHANT_ACCOUNT_LITERAL,
+    );
+    let proof_current = proof_blob_for_remote_spend(
+        dsid,
+        current_root,
+        b"manifest-v1".to_vec(),
+        20,
+        &handle,
+        &intent,
+        &amount,
+    );
+    use_single_handle_envelope(&mut host, &descriptor, &proof_current, &handle, &intent)
+        .expect("issuer-authenticated proof matches manifest v1");
     let entries_v2 = vec![AxtPolicyBinding {
         dsid,
         policy: AxtPolicyEntry {
-            manifest_root: [0x22; 32],
-            target_lane: LaneId::new(1),
+            manifest_root: rotated_root,
+            target_lane: lane,
             active_handle_era: 1,
             next_handle_counter: 1,
             current_slot: 7,
@@ -334,13 +318,9 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
             actual,
         }) if expected == expected_v2 && actual == advertised_v2
     ));
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_v1_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
-        .expect("rejected refresh must preserve the current policy and proof cache");
     assert!(
         host.axt_recorded_proof_payload(dsid).is_some(),
-        "rejected refresh must preserve the active envelope"
+        "rejected refresh must preserve the authenticated proof and active envelope"
     );
     host.refresh_axt_policy_snapshot(&snapshot_v2)
         .expect("rotated AXT policy snapshot should be canonical");
@@ -352,41 +332,47 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
         host.axt_cached_proof_status(dsid).is_none(),
         "successful refresh must clear proofs cached under the prior policy"
     );
+    let mut vm = IVM::new(1_000_000);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
         Err(VMError::PermissionDenied),
         "an envelope accepted under the prior policy must not commit"
     );
-    vm.set_register(10, desc_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
-        .expect("restart envelope after policy refresh");
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, manifest_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
-        .expect("touch after policy refresh");
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_v1_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Err(VMError::PermissionDenied)
+    configure_axt_test_host(&mut host, [(dsid, rotated_root)]);
+    let (rotated_handle, rotated_intent, rotated_amount) = single_remote_spend(
+        &authority,
+        binding,
+        dsid,
+        rotated_root,
+        lane,
+        1,
+        Some(dsid),
+        FIXTURE_MERCHANT_ACCOUNT_LITERAL,
     );
-    let proof_v2 = proof_blob_for(dsid, [0x22; 32], b"manifest-v2".to_vec(), 20);
-    let proof_v2_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof_v2);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_v2_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm));
+    let proof_v2 = proof_blob_for_remote_spend(
+        dsid,
+        rotated_root,
+        b"manifest-v2".to_vec(),
+        20,
+        &rotated_handle,
+        &rotated_intent,
+        &rotated_amount,
+    );
+    assert_ok_gas!(commit_single_handle_envelope(
+        &mut host,
+        &descriptor,
+        &proof_v2,
+        &rotated_handle,
+        &rotated_intent,
+    ));
 }
 #[test]
 fn core_host_timing_change_aborts_active_envelope() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(56);
     let manifest_root = [0x33; 32];
-    let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(1), 1, 1, 7);
-    let mut host = CoreHost::new(authority)
-        .with_axt_policy_snapshot(&snapshot)
-        .expect("AXT policy snapshot should be canonical");
-    let mut vm = IVM::new(1_000_000);
+    let lane = LaneId::new(1);
+    let mut host = host_with_policy(authority.clone(), dsid, manifest_root, lane, 7);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -395,26 +381,28 @@ fn core_host_timing_change_aborts_active_envelope() {
             write: vec!["ledger/timing".into()],
         }],
     };
-    let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
-    vm.set_register(10, desc_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
-        .expect("begin");
-    let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
-    let manifest = TouchManifest {
-        read: vec!["orders/timing".into()],
-        write: vec!["ledger/timing".into()],
-    };
-    let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, manifest_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
-        .expect("touch");
-    let proof = proof_blob_for(dsid, manifest_root, b"timing-change".to_vec(), 20);
-    let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
-        .expect("proof matches current timing");
+    let binding = axt::compute_binding(&descriptor).expect("binding");
+    let (handle, intent, amount) = single_remote_spend(
+        &authority,
+        binding,
+        dsid,
+        manifest_root,
+        lane,
+        1,
+        Some(dsid),
+        FIXTURE_MERCHANT_ACCOUNT_LITERAL,
+    );
+    let proof = proof_blob_for_remote_spend(
+        dsid,
+        manifest_root,
+        b"timing-change".to_vec(),
+        20,
+        &handle,
+        &intent,
+        &amount,
+    );
+    use_single_handle_envelope(&mut host, &descriptor, &proof, &handle, &intent)
+        .expect("issuer-authenticated proof matches current timing");
     assert!(host.axt_recorded_proof_payload(dsid).is_some());
     let timing = ActualAxtTiming {
         slot_length_ms: NonZeroU64::new(2).expect("slot length"),
@@ -432,22 +420,19 @@ fn core_host_timing_change_aborts_active_envelope() {
         host.axt_cached_proof_status(dsid).is_none(),
         "timing replacement must clear proofs cached under the prior timing"
     );
+    let mut vm = IVM::new(1_000_000);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
         Err(VMError::PermissionDenied),
         "an envelope accepted under the prior timing must not commit"
     );
-    vm.set_register(10, desc_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
-        .expect("restart envelope after timing replacement");
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, manifest_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
-        .expect("touch after timing replacement");
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm));
+    assert_ok_gas!(commit_single_handle_envelope(
+        &mut host,
+        &descriptor,
+        &proof,
+        &handle,
+        &intent,
+    ));
 }
 #[cfg(feature = "app_api")]
 #[test]
@@ -628,14 +613,6 @@ fn core_host_records_multi_dataspace_envelope() {
     );
     let proof_a_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof_a);
     let proof_b_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof_b);
-    vm.set_register(10, ds_a_ptr);
-    vm.set_register(11, proof_a_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
-        .expect("proof a");
-    vm.set_register(10, ds_b_ptr);
-    vm.set_register(11, proof_b_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
-        .expect("proof b");
     let handle_a_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle_a);
     let intent_a_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent_a);
     vm.set_register(10, handle_a_ptr);

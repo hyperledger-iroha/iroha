@@ -2730,25 +2730,25 @@ impl Supervisor {
     }
     fn run_compatibility_checks(&mut self) -> Result<()> {
         let versions = self.binaries.probe_versions()?;
-        if self.genesis.profile.is_some() {
-            if let Some(report) = &self.genesis.verify_report {
-                if let Some(chain_id) = &report.chain_id
-                    && chain_id != &self.chain_id
-                {
-                    return Err(SupervisorError::KagamiVerify(format!(
-                        "kagami verify reported chain `{chain_id}` but supervisor is configured for `{}`",
-                        self.chain_id
-                    )));
-                }
-                if let Some(expected_seed) = &self.genesis.vrf_seed_hex
-                    && let Some(observed_seed) = &report.vrf_seed_hex
-                    && observed_seed != expected_seed
-                {
-                    return Err(SupervisorError::KagamiVerify(format!(
-                        "kagami verify reported vrf seed `{observed_seed}` but `{expected}` was configured",
-                        expected = expected_seed
-                    )));
-                }
+        if self.genesis.profile.is_some()
+            && let Some(report) = &self.genesis.verify_report
+        {
+            if let Some(chain_id) = &report.chain_id
+                && chain_id != &self.chain_id
+            {
+                return Err(SupervisorError::KagamiVerify(format!(
+                    "kagami verify reported chain `{chain_id}` but supervisor is configured for `{}`",
+                    self.chain_id
+                )));
+            }
+            if let Some(expected_seed) = &self.genesis.vrf_seed_hex
+                && let Some(observed_seed) = &report.vrf_seed_hex
+                && observed_seed != expected_seed
+            {
+                return Err(SupervisorError::KagamiVerify(format!(
+                    "kagami verify reported vrf seed `{observed_seed}` but `{expected}` was configured",
+                    expected = expected_seed
+                )));
             }
         }
         self.compatibility = Some(CompatibilityReport {

@@ -14,10 +14,11 @@ where
     } else {
         offset as usize
     };
-    let limit_usize = limit
-        .filter(|&lim| lim > 0)
-        .map(|lim| cap.map_or(lim, |c| lim.min(c)))
-        .map(|lim| lim.min(usize::MAX as u64) as usize);
+    let effective_limit = match limit {
+        Some(limit) => Some(cap.map_or(limit, |cap| limit.min(cap))),
+        None => cap,
+    };
+    let limit_usize = effective_limit.map(|lim| lim.min(usize::MAX as u64) as usize);
     let page_cap = limit_usize.map(|lim| offset_usize.saturating_add(lim));
     let mut matched: usize = 0;
     let mut seq: usize = 0;

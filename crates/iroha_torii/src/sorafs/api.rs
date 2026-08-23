@@ -270,7 +270,10 @@ use crate::{
             normalize_host_header, path_components_for_request,
         },
     },
-    utils::extractors::{ExtractAccept, JsonOnly, JsonOrNoritoVersioned, NoritoJson},
+    utils::{
+        extractors::{ExtractAccept, JsonOnly, JsonOrNoritoVersioned, NoritoJson},
+        if_none_match_matches,
+    },
 };
 use sorafs_orchestrator::appeals::{
     AppealClass, AppealDecision, AppealDisbursementInput, AppealDisbursementPlan,
@@ -605,6 +608,17 @@ fn iroha_network_time_now_ms() -> u64 {
         .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or_default()
 }
+fn single_header_value<'a>(
+    headers: &'a HeaderMap,
+    name: &'static str,
+) -> Result<Option<&'a HeaderValue>, ()> {
+    let mut values = headers.get_all(name).iter();
+    let value = values.next();
+    if values.next().is_some() {
+        return Err(());
+    }
+    Ok(value)
+}
 #[derive(Debug, Clone)]
 struct PotrProbeParams {
     deadline_ms: u32,
@@ -633,8 +647,15 @@ fn begin_potr_probe(
     }))
 }
 fn parse_potr_request_header(headers: &HeaderMap) -> Result<Option<PotrProbeParams>, Response> {
-    let Some(raw_value) = headers.get(HEADER_SORA_POTR_REQUEST) else {
-        return Ok(None);
+    let raw_value = match single_header_value(headers, HEADER_SORA_POTR_REQUEST) {
+        Ok(Some(value)) => value,
+        Ok(None) => return Ok(None),
+        Err(()) => {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "sora-potr-request header must occur at most once",
+            ));
+        }
     };
     let value_str = raw_value.to_str().map_err(|_| {
         json_error(
@@ -1692,6 +1713,23 @@ mod cache_tests {
         assert_eq!(parse_cache_control_max_age("public, s-maxage=30"), None);
     }
     #[test]
+    fn cache_ttl_rejects_duplicate_custom_or_conflicting_standard_values() {
+        let mut custom = HeaderMap::new();
+        custom.append(HEADER_SORA_CACHE_TTL, HeaderValue::from_static("30"));
+        custom.append(HEADER_SORA_CACHE_TTL, HeaderValue::from_static("60"));
+        assert_eq!(parse_cache_ttl(&custom), None);
+
+        let mut standard = HeaderMap::new();
+        standard.append(
+            CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=30"),
+        );
+        standard.append(CACHE_CONTROL, HeaderValue::from_static("MAX-AGE=30"));
+        assert_eq!(parse_cache_ttl(&standard), Some(30));
+        standard.append(CACHE_CONTROL, HeaderValue::from_static("max-age=60"));
+        assert_eq!(parse_cache_ttl(&standard), None);
+    }
+    #[test]
     fn gateway_region_requires_trusted_proxy_and_canonicalizes_country_code() {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1718,6 +1756,14 @@ mod cache_tests {
         assert_eq!(
             parse_trusted_gateway_region(&headers, remote, &trusted),
             None
+        );
+        headers.clear();
+        headers.append(HEADER_SORA_REGION, HeaderValue::from_static("US"));
+        headers.append(HEADER_SORA_REGION, HeaderValue::from_static("JP"));
+        assert_eq!(
+            parse_trusted_gateway_region(&headers, remote, &trusted),
+            None,
+            "trusted proxies must not supply ambiguous region identity",
         );
     }
     #[test]
@@ -22952,41 +22998,54 @@ fn reputation_not_modified_response(headers: &HeaderMap, etag: &str) -> Option<R
     }
     Some(response)
 }
-fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
-    let Some(expected) = http_entity_tag_opaque(etag) else {
-        return false;
-    };
-    let mut token_count = 0_usize;
-    let mut wildcard = false;
-    let mut matched = false;
-    for value in headers.get_all(IF_NONE_MATCH).iter() {
-        let Ok(raw) = value.to_str() else {
-            return false;
-        };
-        for token in raw.split(',').map(str::trim) {
-            token_count = match token_count.checked_add(1) {
-                Some(count) => count,
-                None => return false,
-            };
-            if token == "*" {
-                wildcard = true;
-                continue;
-            }
-            let Some(candidate) = http_entity_tag_opaque(token) else {
-                return false;
-            };
-            matched |= candidate == expected;
-        }
-    }
-    token_count != 0 && if wildcard { token_count == 1 } else { matched }
+
+#[cfg(test)]
+#[test]
+fn public_conditional_etag_accepts_quoted_comma_validator() {
+    let etag = "\"proof,abc\"";
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        IF_NONE_MATCH,
+        HeaderValue::from_static("\"stale\", W/\"proof,abc\""),
+    );
+
+    let response = reputation_not_modified_response(&headers, etag)
+        .expect("quoted comma validator must match");
+
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
 }
-fn http_entity_tag_opaque(tag: &str) -> Option<&str> {
-    let tag = tag.strip_prefix("W/").unwrap_or(tag);
-    let opaque = tag.strip_prefix('"')?.strip_suffix('"')?;
-    opaque
-        .bytes()
-        .all(|byte| byte == 0x21 || (0x23..=0x7e).contains(&byte))
-        .then_some(opaque)
+
+#[cfg(test)]
+#[test]
+fn public_conditional_etag_checks_validator_after_quoted_comma() {
+    let etag = "\"proof:abc\"";
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        IF_NONE_MATCH,
+        HeaderValue::from_static("\"stale,opaque\", \"proof:abc\""),
+    );
+
+    let response = reputation_not_modified_response(&headers, etag)
+        .expect("later matching validator must be checked");
+
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+}
+
+#[cfg(test)]
+#[test]
+fn public_conditional_etag_accepts_obs_text_before_matching_validator() {
+    let etag = "\"proof:abc\"";
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        IF_NONE_MATCH,
+        HeaderValue::from_bytes(b"\"\x80\", \"proof:abc\"")
+            .expect("obs-text is valid in an entity-tag"),
+    );
+
+    let response = reputation_not_modified_response(&headers, etag)
+        .expect("obs-text validator must not hide a later match");
+
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
 }
 fn authenticated_reputation_json_response(value: Value, etag: &str) -> Response {
     let mut response = JsonBody(value).into_response();
@@ -25070,30 +25129,39 @@ fn parse_site_response_range(
     headers: &HeaderMap,
     file_size: u64,
 ) -> Result<SiteResponseRange, Response> {
-    let Some(raw) = headers.get(header::RANGE) else {
-        if file_size > MAX_SITE_RESPONSE_BYTES {
-            let mut response = json_error(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                format!(
-                    "site file exceeds {MAX_SITE_RESPONSE_BYTES} bytes; request one bounded byte range"
-                ),
-            );
-            response
-                .headers_mut()
-                .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-            return Err(response);
+    let raw = match single_header_value(headers, "range") {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            if file_size > MAX_SITE_RESPONSE_BYTES {
+                let mut response = json_error(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    format!(
+                        "site file exceeds {MAX_SITE_RESPONSE_BYTES} bytes; request one bounded byte range"
+                    ),
+                );
+                response
+                    .headers_mut()
+                    .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+                return Err(response);
+            }
+            let length = usize::try_from(file_size).map_err(|_| {
+                json_error(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "site file exceeds supported response size",
+                )
+            })?;
+            return Ok(SiteResponseRange {
+                offset: 0,
+                length,
+                partial: false,
+            });
         }
-        let length = usize::try_from(file_size).map_err(|_| {
-            json_error(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "site file exceeds supported response size",
-            )
-        })?;
-        return Ok(SiteResponseRange {
-            offset: 0,
-            length,
-            partial: false,
-        });
+        Err(()) => {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "duplicate Range header",
+            ));
+        }
     };
     let raw = raw
         .to_str()
@@ -25531,21 +25599,28 @@ fn required_canonical_stream_header(
     display_name: &'static str,
     maximum_bytes: usize,
 ) -> Result<String, Response> {
-    let value = headers
-        .get(name)
-        .ok_or_else(|| {
-            json_error(
+    let value = match single_header_value(headers, name) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return Err(json_error(
                 StatusCode::BAD_REQUEST,
                 format!("missing {display_name} header"),
-            )
-        })?
-        .to_str()
-        .map_err(|_| {
-            json_error(
+            ));
+        }
+        Err(()) => {
+            return Err(json_error(
                 StatusCode::BAD_REQUEST,
-                format!("{display_name} header must contain valid ASCII"),
-            )
-        })?;
+                format!("{display_name} header must occur exactly once"),
+            ));
+        }
+    }
+    .to_str()
+    .map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{display_name} header must contain valid ASCII"),
+        )
+    })?;
     if value.is_empty()
         || value.len() > maximum_bytes
         || !value.bytes().all(|b| b.is_ascii_graphic())
@@ -25879,9 +25954,13 @@ fn round_clamped_u64(value: f64) -> u64 {
     }
 }
 fn manifest_envelope_valid(headers: &HeaderMap, record: Option<&PinManifestRecord>) -> bool {
-    let Some(envelope_b64) = headers
-        .get(HEADER_SORA_MANIFEST_ENVELOPE)
-        .and_then(|value| value.to_str().ok())
+    let Ok(Some(envelope_header)) = single_header_value(headers, HEADER_SORA_MANIFEST_ENVELOPE)
+    else {
+        return false;
+    };
+    let Some(envelope_b64) = envelope_header
+        .to_str()
+        .ok()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
@@ -25968,24 +26047,37 @@ fn validate_manifest_envelope_signature(entry: &Value, message: &[u8]) -> bool {
 }
 fn parse_cache_control_max_age(value: &str) -> Option<u64> {
     value.split(',').find_map(|directive| {
-        let trimmed = directive.trim();
-        let rest = trimmed.strip_prefix("max-age=")?;
-        rest.trim().parse::<u64>().ok()
+        let (name, raw) = directive.trim().split_once('=')?;
+        if !name.trim().eq_ignore_ascii_case("max-age") {
+            return None;
+        }
+        raw.trim().trim_matches('"').parse::<u64>().ok()
     })
 }
 fn parse_cache_ttl(headers: &HeaderMap) -> Option<u64> {
-    if let Some(raw) = headers
-        .get(HEADER_SORA_CACHE_TTL)
-        .and_then(|value| value.to_str().ok())
-    {
-        if let Ok(ttl) = raw.trim().parse::<u64>() {
-            return Some(ttl);
+    match single_header_value(headers, HEADER_SORA_CACHE_TTL) {
+        Ok(Some(raw)) => return raw.to_str().ok()?.trim().parse::<u64>().ok(),
+        Ok(None) => {}
+        Err(()) => return None,
+    }
+    let mut ttl = None;
+    for value in headers.get_all(CACHE_CONTROL).iter() {
+        let value = value.to_str().ok()?;
+        for directive in value.split(',') {
+            let Some((name, _)) = directive.trim().split_once('=') else {
+                continue;
+            };
+            if !name.trim().eq_ignore_ascii_case("max-age") {
+                continue;
+            }
+            let parsed = parse_cache_control_max_age(directive)?;
+            if ttl.is_some_and(|existing| existing != parsed) {
+                return None;
+            }
+            ttl = Some(parsed);
         }
     }
-    headers
-        .get(CACHE_CONTROL)
-        .and_then(|value| value.to_str().ok())
-        .and_then(parse_cache_control_max_age)
+    ttl
 }
 fn parse_trusted_gateway_region(
     headers: &HeaderMap,
@@ -25995,8 +26087,9 @@ fn parse_trusted_gateway_region(
     if !crate::limits::cidr_contains(trusted_proxies, remote.ip()) {
         return None;
     }
-    headers
-        .get(HEADER_SORA_REGION)
+    single_header_value(headers, HEADER_SORA_REGION)
+        .ok()
+        .flatten()
         .and_then(|value| value.to_str().ok())
         .and_then(RegionCode::parse)
 }
@@ -26010,11 +26103,20 @@ fn resolve_manifest_request(
     manifest_param: &str,
     headers: &HeaderMap,
 ) -> Result<ManifestResolution, Response> {
-    let Some(raw_blinded) = headers.get(HEADER_SORA_REQ_BLINDED_CID) else {
-        return Ok(ManifestResolution {
-            manifest_id: manifest_param.to_owned(),
-            blinded_b64: None,
-        });
+    let raw_blinded = match single_header_value(headers, HEADER_SORA_REQ_BLINDED_CID) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return Ok(ManifestResolution {
+                manifest_id: manifest_param.to_owned(),
+                blinded_b64: None,
+            });
+        }
+        Err(()) => {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "Sora-Req-Blinded-CID header must occur at most once",
+            ));
+        }
     };
     let blinded_str = raw_blinded.to_str().map_err(|_| {
         json_error(
@@ -26045,7 +26147,13 @@ fn resolve_manifest_request(
         .as_slice()
         .try_into()
         .expect("length checked above; qed");
-    if let Some(nonce_header) = headers.get(HEADER_SORA_REQ_NONCE) {
+    let nonce_header = single_header_value(headers, HEADER_SORA_REQ_NONCE).map_err(|()| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "Sora-Req-Nonce header must occur at most once",
+        )
+    })?;
+    if let Some(nonce_header) = nonce_header {
         nonce_header.to_str().map_err(|_| {
             json_error(
                 StatusCode::BAD_REQUEST,
@@ -26053,12 +26161,21 @@ fn resolve_manifest_request(
             )
         })?;
     }
-    let epoch_header = headers.get(HEADER_SORA_REQ_SALT_EPOCH).ok_or_else(|| {
-        json_error(
-            StatusCode::PRECONDITION_REQUIRED,
-            "Sora-Req-Salt-Epoch header is required when requesting by blinded CID",
-        )
-    })?;
+    let epoch_header = match single_header_value(headers, HEADER_SORA_REQ_SALT_EPOCH) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return Err(json_error(
+                StatusCode::PRECONDITION_REQUIRED,
+                "Sora-Req-Salt-Epoch header is required when requesting by blinded CID",
+            ));
+        }
+        Err(()) => {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "Sora-Req-Salt-Epoch header must occur exactly once",
+            ));
+        }
+    };
     let epoch_str = epoch_header.to_str().map_err(|_| {
         json_error(
             StatusCode::BAD_REQUEST,
@@ -27010,6 +27127,14 @@ mod gateway_policy_violation_tests {
             manifest_envelope_valid(&headers, Some(&record)),
             "valid signed envelope metadata should satisfy the adapter"
         );
+        headers.append(
+            header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
+            header_value(&encoded_b64, HEADER_SORA_MANIFEST_ENVELOPE),
+        );
+        assert!(
+            !manifest_envelope_valid(&headers, Some(&record)),
+            "duplicate signed envelope headers must fail closed"
+        );
     }
     #[test]
     fn manifest_envelope_rejects_stale_registry_metadata_after_rotation() {
@@ -27126,9 +27251,10 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         Ok(probe) => probe,
         Err(response) => return response,
     };
-    let range_header = match headers.get(header::RANGE) {
-        Some(value) => value,
-        None => return json_error(StatusCode::BAD_REQUEST, "missing Range header"),
+    let range_header = match single_header_value(&headers, "range") {
+        Ok(Some(value)) => value,
+        Ok(None) => return json_error(StatusCode::BAD_REQUEST, "missing Range header"),
+        Err(()) => return json_error(StatusCode::BAD_REQUEST, "duplicate Range header"),
     };
     let range_str = match range_header.to_str() {
         Ok(value) => value,
@@ -27146,7 +27272,16 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         return response;
     }
     let manifest_profile = manifest.chunk_profile_handle().to_string();
-    if let Some(value) = headers.get(HEADER_DAG_SCOPE) {
+    let dag_scope = match single_header_value(&headers, HEADER_DAG_SCOPE) {
+        Ok(value) => value,
+        Err(()) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "dag-scope header must occur exactly once",
+            );
+        }
+    };
+    if let Some(value) = dag_scope {
         match value.to_str() {
             Ok(scope) if scope.eq_ignore_ascii_case("block") => {}
             Ok(received) => {
@@ -27193,9 +27328,15 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
             [("header", Value::from("Sora-Dag-Scope"))],
         );
     }
-    let nonce_header = match headers.get(HEADER_SORA_NONCE) {
-        Some(value) => value.clone(),
-        None => return json_error(StatusCode::BAD_REQUEST, "missing X-SoraFS-Nonce header"),
+    let nonce_header = match single_header_value(&headers, HEADER_SORA_NONCE) {
+        Ok(Some(value)) => value.clone(),
+        Ok(None) => return json_error(StatusCode::BAD_REQUEST, "missing X-SoraFS-Nonce header"),
+        Err(()) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "X-SoraFS-Nonce header must occur exactly once",
+            );
+        }
     };
     let request_nonce = match nonce_header.to_str() {
         Ok(value) => value,
@@ -27206,8 +27347,8 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
             );
         }
     };
-    let chunker_header = match headers.get(HEADER_SORA_CHUNKER) {
-        Some(value) => match value.to_str() {
+    let chunker_header = match single_header_value(&headers, HEADER_SORA_CHUNKER) {
+        Ok(Some(value)) => match value.to_str() {
             Ok(chunker) => chunker.trim(),
             Err(_) => {
                 return json_error(
@@ -27216,7 +27357,13 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
                 );
             }
         },
-        None => return json_error(StatusCode::BAD_REQUEST, "missing X-SoraFS-Chunker header"),
+        Ok(None) => return json_error(StatusCode::BAD_REQUEST, "missing X-SoraFS-Chunker header"),
+        Err(()) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "X-SoraFS-Chunker header must occur exactly once",
+            );
+        }
     };
     let manifest = match state.sorafs_node.manifest_metadata(&storage_manifest_id) {
         Ok(manifest) => manifest,
@@ -27245,30 +27392,40 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
             ],
         );
     }
-    if let Some(value) = headers.get(header::ACCEPT_ENCODING) {
-        if let Ok(raw_encodings) = value.to_str() {
-            let gzip_requested = raw_encodings
-                .split(',')
-                .any(|encoding| encoding.trim().eq_ignore_ascii_case("gzip"));
-            if gzip_requested {
-                return gateway_refusal_response(
-                    &state,
-                    StatusCode::NOT_ACCEPTABLE,
-                    "unsupported_encoding",
-                    format!("gzip compression is not allowed for {}", manifest_profile),
-                    Some(&manifest_profile),
-                    None,
-                    TELEMETRY_ENDPOINT_CAR_RANGE,
-                    [("encoding", Value::from("gzip"))],
-                );
-            }
-        }
+    let gzip_requested = headers
+        .get_all(header::ACCEPT_ENCODING)
+        .iter()
+        .any(|value| {
+            value.to_str().is_ok_and(|raw_encodings| {
+                raw_encodings
+                    .split(',')
+                    .any(|encoding| encoding.trim().eq_ignore_ascii_case("gzip"))
+            })
+        });
+    if gzip_requested {
+        return gateway_refusal_response(
+            &state,
+            StatusCode::NOT_ACCEPTABLE,
+            "unsupported_encoding",
+            format!("gzip compression is not allowed for {}", manifest_profile),
+            Some(&manifest_profile),
+            None,
+            TELEMETRY_ENDPOINT_CAR_RANGE,
+            [("encoding", Value::from("gzip"))],
+        );
     }
-    let alias_header = headers
-        .get(HEADER_SORA_NAME)
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let alias_header = match single_header_value(&headers, HEADER_SORA_NAME) {
+        Ok(value) => value
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        Err(()) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "Sora-Name header must occur at most once",
+            );
+        }
+    };
     let total_length = manifest.content_length();
     if total_length == 0 {
         return json_error(
@@ -27767,9 +27924,15 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
         Ok(probe) => probe,
         Err(response) => return response,
     };
-    let nonce_header = match headers.get(HEADER_SORA_NONCE) {
-        Some(value) => value.clone(),
-        None => return json_error(StatusCode::BAD_REQUEST, "missing X-SoraFS-Nonce header"),
+    let nonce_header = match single_header_value(&headers, HEADER_SORA_NONCE) {
+        Ok(Some(value)) => value.clone(),
+        Ok(None) => return json_error(StatusCode::BAD_REQUEST, "missing X-SoraFS-Nonce header"),
+        Err(()) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "X-SoraFS-Nonce header must occur exactly once",
+            );
+        }
     };
     let request_nonce = match nonce_header.to_str() {
         Ok(value) => value,
@@ -27785,7 +27948,16 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
         Err(err) => return node_storage_error_response(err),
     };
     let manifest_profile = manifest.chunk_profile_handle().to_string();
-    if let Some(chunker_header) = headers.get(HEADER_SORA_CHUNKER) {
+    let chunker_header = match single_header_value(&headers, HEADER_SORA_CHUNKER) {
+        Ok(value) => value,
+        Err(()) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "X-SoraFS-Chunker header must occur at most once",
+            );
+        }
+    };
+    if let Some(chunker_header) = chunker_header {
         match chunker_header.to_str() {
             Ok(chunker)
                 if chunker
@@ -29796,6 +29968,44 @@ mod app_api_tests {
             err,
             RangeParseError::Invalid(message) if message.contains("Multiple ranges")
         ));
+    }
+    #[test]
+    fn duplicate_range_header_lines_are_rejected_before_parsing() {
+        let mut headers = HeaderMap::new();
+        headers.append(header::RANGE, HeaderValue::from_static("bytes=0-1"));
+        headers.append(header::RANGE, HeaderValue::from_static("bytes=2-3"));
+
+        let response = parse_site_response_range(&headers, 10)
+            .expect_err("duplicate Range header lines must fail closed");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    #[test]
+    fn duplicate_potr_request_header_lines_are_rejected() {
+        let mut headers = HeaderMap::new();
+        let value = HeaderValue::from_static(
+            "deadline=1000;tier=hot;request-id=00000000000000000000000000000001",
+        );
+        headers.append(HEADER_SORA_POTR_REQUEST, value.clone());
+        headers.append(HEADER_SORA_POTR_REQUEST, value);
+
+        let response = parse_potr_request_header(&headers)
+            .expect_err("duplicate PoTR request headers must fail closed");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    #[test]
+    fn canonical_stream_identity_headers_reject_duplicates() {
+        let mut headers = HeaderMap::new();
+        headers.append(HEADER_SORA_CLIENT, HeaderValue::from_static("client-a"));
+        headers.append(HEADER_SORA_CLIENT, HeaderValue::from_static("client-b"));
+
+        let response = required_canonical_stream_header(
+            &headers,
+            HEADER_SORA_CLIENT,
+            "X-SoraFS-Client",
+            MAX_CLIENT_ID_BYTES,
+        )
+        .expect_err("duplicate stream identity headers must fail closed");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
     #[test]
     fn parse_range_header_rejects_unsatisfiable_range() {

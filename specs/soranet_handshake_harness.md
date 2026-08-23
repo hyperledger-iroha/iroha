@@ -3,7 +3,8 @@
 This note tracks the `soranet-handshake-harness` crate used to validate the
 handshake RFC (SNNet-1e deliverable). The harness now ships TLV parsing,
 transcript hashing, deterministic Noise XX simulation (ML-KEM material +
-dual-signature frames), salt/telemetry helpers (including SoraNetTelemetryV1 builders),
+directory-bound Ed25519 relay authentication), salt/telemetry helpers (including
+dual-signed SoraNetTelemetryV1 builders),
 and CLI entry points wired into `cargo xtask soranet-fixtures`.
 
 ## Objectives
@@ -20,7 +21,7 @@ and CLI entry points wired into `cargo xtask soranet-fixtures`.
 
 1. **Harness binary** (`soranet-handshake-harness`): orchestrates capability TLV
    parsing, transcript hashing, deterministic Noise XX frame synthesis (with
-   ML-KEM shares, Ed25519/Dilithium signatures, and 1024-byte padding), telemetry
+   ML-KEM shares, Ed25519 relay authentication, and 1024-byte padding), telemetry
    scaffolding, and fixture regeneration plus JSON export helpers (`--json-out`,
    `--telemetry-out`). The crate lives under
    `tools/soranet-handshake-harness`; the current CLI (`inspect`, `summary`,
@@ -83,7 +84,7 @@ The harness binary can also be executed directly:
   missing required capabilities.
 - `summary` — render structured TLV breakdown (required flags, GREASE, etc.).
 - `salt` — emit `SaltAnnouncementV1` payloads for recovery drills.
-- `telemetry` — render `SoraNetTelemetryV1` payloads for telemetry regression tests. Pass `--signature`/`--witness-signature` to supply precomputed envelopes or `--relay-static-sk-hex` to derive deterministic Dilithium3 + Ed25519 signatures.
+- `telemetry` — render `SoraNetTelemetryV1` payloads for telemetry regression tests. Pass `--signature`/`--witness-signature` to supply precomputed envelopes or `--relay-static-sk-file` to derive deterministic Dilithium3 + Ed25519 signatures. Secret inputs are bounded and accepted only from owner-private, direct, single-link files (opened without following the final symlink) or from standard input via `-`; the same rule applies to `simulate` static keys and `kem-validate --secret-file`.
 - `fixtures` — regenerate or verify the reference fixture bundle.
   Current bundle includes `snnet-cap-006-constant-rate` so SDKs can assert the
   expected downgrade warning/telemetry slug when relays omit the constant-rate
@@ -95,5 +96,8 @@ The harness binary can also be executed directly:
   emit a structured report (stdout when `-`), `--frames-out <dir>` to persist
   the binary frames (`client_hello.bin`, etc.), `--telemetry-out <path>` to write
   the first telemetry payload with deterministic Dilithium3 + Ed25519 signatures,
-  `--show-steps` to print the generated handshake timeline, and `--only-capability <type>` (repeatable) to filter warnings/output to specific capability IDs.
+  `--show-steps` to print the generated handshake timeline, and
+  `--only-capability <type>` (repeatable) to filter warnings/output to specific
+  capability IDs. The Dilithium3 telemetry envelope is not an online handshake
+  signature slot.
 - `cargo fuzz run handshake_state_machine` — exercises the relay-side parser and Noise XX state machine against adversarial payloads with deterministic RNG seeding.

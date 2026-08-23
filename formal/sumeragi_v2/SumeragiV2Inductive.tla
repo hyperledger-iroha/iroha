@@ -248,14 +248,6 @@ SameRoundLockAndCommitAuthorizationInvariant ==
         /\ commitVote.view <= timeoutVote.view)
          => TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote)
 
-\* Compatibility aliases retain parser stability for the older proof module;
-\* both now denote the exact same-round invariant above.
-HistoricalLockedCommitAuthorizationInvariant ==
-  SameRoundLockAndCommitAuthorizationInvariant
-
-HistoricalTcLockedCommitAuthorizationInvariant ==
-  SameRoundLockAndCommitAuthorizationInvariant
-
 (***************************************************************************
 This authorization invariant is a derived consequence of
 PendingVoteWritesAuthorized and DurableTimeoutsProtectCommits.  It is kept as

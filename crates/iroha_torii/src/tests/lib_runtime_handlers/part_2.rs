@@ -811,6 +811,15 @@ fn signed_query_scope_uses_escrow_party_discriminants() {
         selector_bytes: Vec::new(),
         params: QueryParams::default(),
     };
+    let scope_limits = super::QueryScopeMemoryLimits {
+        decode_allocated_bytes: 64 * 1024,
+        canonical_encoded_bytes: 64 * 1024,
+    };
+    assert_eq!(
+        super::target_account_iterable_query_bounded(&seller_query, scope_limits)
+            .expect("bounded seller query classification"),
+        Some(target.clone())
+    );
     assert_eq!(
         super::signed_query_scope(&request_for_test(
             &authority,
@@ -828,6 +837,11 @@ fn signed_query_scope_uses_escrow_party_discriminants() {
         selector_bytes: Vec::new(),
         params: QueryParams::default(),
     };
+    assert_eq!(
+        super::target_account_iterable_query_bounded(&buyer_query, scope_limits)
+            .expect("bounded buyer query classification"),
+        Some(target.clone())
+    );
     assert_eq!(
         super::signed_query_scope(&request_for_test(
             &authority,
@@ -1655,7 +1669,8 @@ fn run_account_route_matrix_case(case: AccountRouteMatrixCase) {
                 .expect("public visibility routes should resolve")
         }
         AccountRouteMatrixCase::AccountAssets => {
-            super::torii_account_assets_read_routes(app.as_ref())
+            super::torii_account_assets_read_routes(app.as_ref(), &authority, None, false)
+                .expect("public account-assets routes should resolve")
         }
         AccountRouteMatrixCase::PermissionsSigned => super::torii_account_permissions_read_routes(
             app.as_ref(),
@@ -1685,7 +1700,9 @@ fn run_account_route_matrix_case(case: AccountRouteMatrixCase) {
         .map(|route| route.dataspace_id)
         .collect::<std::collections::BTreeSet<_>>();
     let expected = match case {
-        AccountRouteMatrixCase::AccountUnsigned | AccountRouteMatrixCase::PermissionsUnsigned => {
+        AccountRouteMatrixCase::AccountUnsigned
+        | AccountRouteMatrixCase::AccountAssets
+        | AccountRouteMatrixCase::PermissionsUnsigned => {
             std::collections::BTreeSet::from([DataSpaceId::UNIVERSAL, governance_dataspace])
         }
         _ => std::collections::BTreeSet::from([
@@ -1702,7 +1719,7 @@ fn run_account_route_matrix_case(case: AccountRouteMatrixCase) {
             "unsigned public reads should stay on caller/public visibility routes"
         }
         AccountRouteMatrixCase::AccountAssets => {
-            "account asset reads must fan out like asset-holder reads so dataspace-scoped balances are visible"
+            "unsigned account asset reads must stay on public visibility routes"
         }
         AccountRouteMatrixCase::PermissionsSigned => {
             "signed/internal permissions reads must fan out across all configured dataspaces to include dataspace-scoped grants"
@@ -1760,8 +1777,68 @@ async fn torii_account_read_routes_keep_unsigned_public_reads_on_visible_routes(
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn torii_account_assets_read_routes_fan_out_across_all_dataspaces() {
+async fn torii_account_assets_read_routes_keep_unsigned_reads_public() {
     run_account_route_matrix_case(AccountRouteMatrixCase::AccountAssets);
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn signed_foreign_account_reads_do_not_gain_target_routes_without_a_grant() {
+    let target = checked_torii_test_account_id(0xd8, "derive app-read target fixture key");
+    let caller = checked_torii_test_account_id(0xd9, "derive app-read caller fixture key");
+    let restricted_dataspace = DataSpaceId::new(10);
+    let mut app =
+        mk_app_state_for_tests_with_world(world_with_target_and_caller_bound_to_dataspace(
+            &target,
+            &caller,
+            UniversalAccountId::from_hash(Hash::new(b"torii::app-read-target")),
+            restricted_dataspace,
+        ));
+    configure_private_ingress_routes_for_test(&mut app);
+
+    assert!(!super::torii_should_use_target_account_routes(
+        app.as_ref(),
+        &target,
+        Some(&caller),
+        false,
+    ));
+    let routes =
+        super::torii_account_assets_read_routes(app.as_ref(), &target, Some(&caller), false)
+            .expect("visible account routes");
+    assert!(
+        routes
+            .iter()
+            .all(|route| route.dataspace_id != restricted_dataspace),
+        "a valid foreign signature is not a restricted-dataspace grant"
+    );
+
+    grant_account_permission_for_test(
+        &app,
+        &caller,
+        CanReadRestrictedDataspace {
+            dataspace: restricted_dataspace,
+        }
+        .into(),
+    );
+    let granted =
+        super::torii_account_assets_read_routes(app.as_ref(), &target, Some(&caller), false)
+            .expect("granted visible routes");
+    assert!(
+        granted
+            .iter()
+            .any(|route| route.dataspace_id == restricted_dataspace)
+    );
+    assert!(super::torii_should_use_target_account_routes(
+        app.as_ref(),
+        &target,
+        Some(&target),
+        false,
+    ));
+    assert!(super::torii_should_use_target_account_routes(
+        app.as_ref(),
+        &target,
+        Some(&caller),
+        true,
+    ));
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -2168,6 +2245,154 @@ async fn public_dataspace_upstream_serves_routed_account_assets() {
     );
     upstream_task.abort();
 }
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn public_dataspace_upstream_preserves_valid_reject_classification() {
+    let upstream = Router::new().route(
+        "/v1/accounts/{account_id}/assets",
+        get(|| async {
+            Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header("x-iroha-reject-code", "route_unavailable")
+                .body(Body::from("temporarily unavailable"))
+                .expect("upstream response")
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind upstream listener");
+    let addr = listener.local_addr().expect("upstream addr");
+    let upstream_task = tokio::spawn(async move {
+        axum::serve(listener, upstream.into_make_service())
+            .await
+            .expect("serve upstream");
+    });
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let request = torii_read_request(
+        ToriiReadEndpointV1::AccountAssetsGet,
+        route,
+        vec![
+            checked_torii_test_account_id(
+                0xf6,
+                "derive rejected public upstream account fixture key",
+            )
+            .to_string(),
+        ],
+        None,
+        Vec::new(),
+    );
+    let response = execute_torii_read_via_public_dataspace_upstream(
+        format!("http://{addr}"),
+        route,
+        request,
+        1_024,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-iroha-reject-code")
+            .and_then(|value| value.to_str().ok()),
+        Some("route_unavailable")
+    );
+    upstream_task.abort();
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn public_dataspace_upstream_drops_ambiguous_reject_classification() {
+    let upstream = Router::new().route(
+        "/v1/accounts/{account_id}/assets",
+        get(|| async {
+            Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header("x-iroha-reject-code", "route_unavailable")
+                .header("x-iroha-reject-code", "query_failed")
+                .body(Body::from("temporarily unavailable"))
+                .expect("upstream response")
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind upstream listener");
+    let addr = listener.local_addr().expect("upstream addr");
+    let upstream_task = tokio::spawn(async move {
+        axum::serve(listener, upstream.into_make_service())
+            .await
+            .expect("serve upstream");
+    });
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let request = torii_read_request(
+        ToriiReadEndpointV1::AccountAssetsGet,
+        route,
+        vec![
+            checked_torii_test_account_id(
+                0xf7,
+                "derive ambiguous public upstream account fixture key",
+            )
+            .to_string(),
+        ],
+        None,
+        Vec::new(),
+    );
+    let response = execute_torii_read_via_public_dataspace_upstream(
+        format!("http://{addr}"),
+        route,
+        request,
+        1_024,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!response.headers().contains_key("x-iroha-reject-code"));
+    upstream_task.abort();
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn public_dataspace_upstream_drops_reject_classification_on_success() {
+    let upstream = Router::new().route(
+        "/v1/accounts/{account_id}/assets",
+        get(|| async {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("x-iroha-reject-code", "route_unavailable")
+                .body(Body::from("success"))
+                .expect("upstream response")
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind upstream listener");
+    let addr = listener.local_addr().expect("upstream addr");
+    let upstream_task = tokio::spawn(async move {
+        axum::serve(listener, upstream.into_make_service())
+            .await
+            .expect("serve upstream");
+    });
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let request = torii_read_request(
+        ToriiReadEndpointV1::AccountAssetsGet,
+        route,
+        vec![
+            checked_torii_test_account_id(
+                0xf5,
+                "derive successful public upstream account fixture key",
+            )
+            .to_string(),
+        ],
+        None,
+        Vec::new(),
+    );
+    let response = execute_torii_read_via_public_dataspace_upstream(
+        format!("http://{addr}"),
+        route,
+        request,
+        1_024,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!response.headers().contains_key("x-iroha-reject-code"));
+    upstream_task.abort();
+}
 #[tokio::test]
 async fn handler_account_get_fan_outs_across_global_dataspaces() {
     let authority = checked_torii_test_account_id(
@@ -2316,6 +2541,91 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
         0,
         "uncataloged/unbound dataspaces should report empty account bindings",
     );
+}
+#[cfg(feature = "app_api")]
+#[test]
+fn space_directory_manifest_fanout_query_preserves_coordinator_window_and_filters() {
+    let query = routing::SpaceDirectoryManifestQuery {
+        dataspace: Some(10),
+        status: Some("Active".to_owned()),
+        limit: Some(5),
+        offset: Some(7),
+        count_mode: Some("exact".to_owned()),
+    };
+
+    let fanout_query = super::space_directory_manifest_fanout_query(&query, 12);
+
+    // This is the coordinator envelope. The routed collector subsequently binds each request to
+    // its route's dataspace and rewrites it to a terminal, bounded one-row page.
+    assert_eq!(fanout_query.dataspace, query.dataspace);
+    assert_eq!(fanout_query.status, query.status);
+    assert_eq!(fanout_query.limit, Some(12));
+    assert_eq!(fanout_query.offset, Some(0));
+    assert_eq!(fanout_query.count_mode, query.count_mode);
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn routed_uaid_handlers_reject_invalid_inputs_before_routing() {
+    let app = mk_app_state_for_tests();
+    let invalid_portfolio = match super::handler_accounts_portfolio(
+        State(app.clone()),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        AxPath("uaid:1234".to_owned()),
+        AxQuery(super::AccountsPortfolioQuery { asset_id: None }),
+    )
+    .await
+    {
+        Ok(_) => panic!("an invalid portfolio UAID must fail before fanout"),
+        Err(error) => error.into_response(),
+    };
+    assert_eq!(invalid_portfolio.status(), StatusCode::BAD_REQUEST);
+
+    let invalid_binding = match super::handler_space_directory_bindings(
+        State(app.clone()),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        AxPath("uaid:1234".to_owned()),
+        AxQuery(routing::SpaceDirectoryBindingsQuery::default()),
+    )
+    .await
+    {
+        Ok(_) => panic!("an invalid binding UAID must fail before fanout"),
+        Err(error) => error.into_response(),
+    };
+    assert_eq!(invalid_binding.status(), StatusCode::BAD_REQUEST);
+
+    let invalid_uaid = match super::handler_space_directory_manifests(
+        State(app.clone()),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        AxPath("uaid:1234".to_owned()),
+        AxQuery(routing::SpaceDirectoryManifestQuery::default()),
+    )
+    .await
+    {
+        Ok(_) => panic!("an invalid UAID must fail before fanout"),
+        Err(error) => error.into_response(),
+    };
+    assert_eq!(invalid_uaid.status(), StatusCode::BAD_REQUEST);
+
+    let uaid = UniversalAccountId::from_hash(Hash::new(b"manifest-preflight"));
+    let invalid_status = match super::handler_space_directory_manifests(
+        State(app),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        AxPath(uaid.to_string()),
+        AxQuery(routing::SpaceDirectoryManifestQuery {
+            status: Some("DefinitelyNotAStatus".to_owned()),
+            ..routing::SpaceDirectoryManifestQuery::default()
+        }),
+    )
+    .await
+    {
+        Ok(_) => panic!("an invalid status must fail before fanout"),
+        Err(error) => error.into_response(),
+    };
+    assert_eq!(invalid_status.status(), StatusCode::BAD_REQUEST);
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]

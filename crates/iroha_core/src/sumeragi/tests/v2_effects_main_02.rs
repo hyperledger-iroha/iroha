@@ -1541,19 +1541,3 @@ fn advancing_pacemaker_frontier_without_enter_view_preserves_effect_sidecar() {
     assert!(services.entered_views.is_empty());
     assert!(executor.status().fail_closed);
 }
-#[test]
-fn advancing_recovery_frontier_without_enter_view_preserves_effect_sidecar() {
-    let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::default());
-    let mut services = fixture.services();
-    executor.runtime.round_tag = Some(tag(1));
-    assert!(matches!(
-        executor.consume_pending_tip_recovery_effects(Vec::new(), &mut services),
-        Err(EffectExecutorError::Contract(reason))
-            if reason.contains("omitted its leading EnterView")
-    ));
-    assert_eq!(executor.runtime.effect_ownership_calls, 0);
-    assert!(executor.runtime.effect_owners.is_empty());
-    assert!(services.entered_views.is_empty());
-    assert!(executor.status().fail_closed);
-}

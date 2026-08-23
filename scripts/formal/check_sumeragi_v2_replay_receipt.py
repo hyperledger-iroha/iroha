@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Independently verify one Sumeragi V2 replay V1 receipt.
 
-The checker executes no collected tool. It rehashes every source, tool, and
-artifact; reconstructs exact invocations and descriptor contracts; derives the
-event graph from the collector source with ``ast.literal_eval``; and checks the
-normalized bytes against the tracked fixture. V1 is diagnostic-only because
-the existing project SSH Git verifier does not sign replay receipts;
-``--require-release`` therefore fails closed.
+The checker rehashes every source, tool, and artifact; reconstructs exact
+invocations and descriptor contracts; derives the event graph from the
+collector source with ``ast.literal_eval``; checks normalized bytes against the
+tracked fixture; and executes a checksum-pinned ssh-keygen to verify one
+external SSHSIG over the exact canonical ``receipt.json`` bytes. There is no
+non-release checker mode.
 """
 
 from __future__ import annotations
@@ -21,6 +21,16 @@ import re
 import stat
 import sys
 from typing import Any, Iterable, Union
+
+from sumeragi_v2_replay_signing import (
+    MAX_RECEIPT_BYTES,
+    SignatureInputs,
+    SigningError,
+    read_snapshot as read_signing_snapshot,
+    require_unchanged,
+    validate_signing_contract,
+    verify_external_signature,
+)
 
 
 SCHEMA_NAME = "iroha-sumeragi-v2-replay-receipt-v1"
@@ -49,9 +59,12 @@ BASE_SOURCE_PATHS = {
     "scripts/formal/check_sumeragi_v2_replay_receipt.py",
     "scripts/formal/check_sumeragi_v2_replay_trace.sh",
     "scripts/formal/collect_sumeragi_v2_replay_receipt.py",
+    "scripts/formal/finalize_sumeragi_v2_replay_receipt.py",
     "scripts/formal/resolve_java.sh",
     "scripts/formal/sumeragi_v2_replay_receipt_v1.schema.json",
+    "scripts/formal/sumeragi_v2_replay_signing.py",
     "scripts/formal/sumeragi_v2_tlc_result_contract.sh",
+    "scripts/formal/verify_sumeragi_v2_replay_release.py",
 }
 TOP_KEYS = {
     "schema", "schema_version", "evidence_class", "mode", "runner", "invocation",
@@ -436,22 +449,11 @@ def _validate_event(
             raise ReceiptError(f"{name} separate stderr is not empty")
 
 
-def _validate_signing(
-    receipt: dict[str, Any], require_release: bool
-) -> None:
-    expected = {
-        "status": "unsigned-diagnostic",
-        "provider": None,
-        "release_evidence": False,
-        "attestation": None,
-    }
-    if receipt["signing"] != expected:
-        raise ReceiptError("diagnostic signing record differs")
-    if require_release:
-        raise ReceiptError(
-            "V1 has no project signature over the canonical replay receipt; "
-            "diagnostic data is not release evidence"
-        )
+def _validate_signing_contract(receipt: dict[str, Any]) -> None:
+    try:
+        validate_signing_contract(receipt["signing"])
+    except SigningError as error:
+        raise ReceiptError(str(error)) from error
 
 
 def _validate_artifact_tree(receipt: dict[str, Any], output_root: Path) -> None:
@@ -502,7 +504,7 @@ def _validate_artifact_tree(receipt: dict[str, Any], output_root: Path) -> None:
             raise ReceiptError(f"artifact identity differs for {record['path']}")
 
 
-def check(receipt_path: Path, require_release: bool = False) -> dict[str, Any]:
+def _check_structure(receipt_path: Path) -> dict[str, Any]:
     receipt_path = _absolute(receipt_path)
     receipt_file, receipt_bytes = _read_file_record(
         receipt_path, "receipt.json", single_link=True
@@ -520,7 +522,7 @@ def check(receipt_path: Path, require_release: bool = False) -> dict[str, Any]:
         raise ReceiptError("receipt schema differs")
     if receipt["mode"] != "formal-only":
         raise ReceiptError("receipt mode differs")
-    if receipt["evidence_class"] != "diagnostic":
+    if receipt["evidence_class"] != "release-receipt":
         raise ReceiptError("receipt evidence class differs")
     output_root = receipt_path.parent
     root = _absolute(Path(receipt["source_identity"]["root"]))
@@ -665,14 +667,14 @@ def check(receipt_path: Path, require_release: bool = False) -> dict[str, Any]:
     result = _require_keys(
         receipt["result"],
         {
-            "accepted", "sany_status", "tlc_status", "normalizer_status",
+            "execution_validated", "sany_status", "tlc_status", "normalizer_status",
             "tool_states", "actions", "separate_stderr_empty", "normalized_fixture",
             "normalized_sha256", "normalized_matches_fixture",
         },
         "result",
     )
     expected_result = {
-        "accepted": True,
+        "execution_validated": True,
         "sany_status": 0,
         "tlc_status": 12,
         "normalizer_status": 0,
@@ -698,28 +700,79 @@ def check(receipt_path: Path, require_release: bool = False) -> dict[str, Any]:
         "partial": False,
     }:
         raise ReceiptError("publication contract differs")
-    _validate_signing(receipt, require_release)
+    _validate_signing_contract(receipt)
     _validate_artifact_tree(receipt, output_root)
+    return receipt
+
+
+def check_release(
+    receipt_path: Path, signature_inputs: SignatureInputs
+) -> dict[str, Any]:
+    """Validate the receipt and its detached external release SSHSIG."""
+
+    snapshot = read_signing_snapshot(
+        _absolute(receipt_path),
+        "canonical receipt",
+        maximum_bytes=MAX_RECEIPT_BYTES,
+    )
+    if snapshot.mode != 0o600:
+        raise ReceiptError("receipt.json mode must be 0600")
+    receipt = _check_structure(receipt_path)
+    require_unchanged(
+        snapshot,
+        "canonical receipt",
+        maximum_bytes=MAX_RECEIPT_BYTES,
+    )
+    if snapshot.data != canonical_json(receipt):
+        raise ReceiptError("checked receipt differs from the signed canonical bytes")
+    verify_external_signature(snapshot, signature_inputs)
     return receipt
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("receipt", type=Path)
-    parser.add_argument("--require-release", action="store_true")
+    parser.add_argument("--signature", type=Path)
+    parser.add_argument("--expected-signature-sha256")
+    parser.add_argument("--ssh-keygen-bin", type=Path)
+    parser.add_argument("--expected-ssh-keygen-sha256")
+    parser.add_argument("--allowed-signers", type=Path)
+    parser.add_argument("--expected-allowed-signers-sha256")
+    parser.add_argument("--revocation-file", type=Path)
+    parser.add_argument("--expected-revocation-sha256")
+    parser.add_argument("--principal")
+    parser.add_argument("--expected-signer-fingerprint")
     return parser
+
+
+def _release_inputs(args: argparse.Namespace) -> SignatureInputs:
+    values = {
+        "signature": args.signature,
+        "expected_signature_sha256": args.expected_signature_sha256,
+        "ssh_keygen": args.ssh_keygen_bin,
+        "expected_ssh_keygen_sha256": args.expected_ssh_keygen_sha256,
+        "allowed_signers": args.allowed_signers,
+        "expected_allowed_signers_sha256": args.expected_allowed_signers_sha256,
+        "revocation_file": args.revocation_file,
+        "expected_revocation_sha256": args.expected_revocation_sha256,
+        "principal": args.principal,
+        "expected_signer_fingerprint": args.expected_signer_fingerprint,
+    }
+    if any(value is None for value in values.values()):
+        raise ReceiptError("release verification requires every detached SSHSIG input")
+    return SignatureInputs(**values)
 
 
 def main() -> int:
     args = _parser().parse_args()
     try:
-        receipt = check(args.receipt, args.require_release)
-    except (OSError, UnicodeError, ValueError, ReceiptError) as error:
+        receipt = check_release(args.receipt, _release_inputs(args))
+    except (OSError, UnicodeError, ValueError, ReceiptError, SigningError) as error:
         print(f"Sumeragi V2 replay receipt verification failed: {error}", file=sys.stderr)
         return 2
     print(
         f"verified {receipt['result']['tool_states']} tool states and "
-        f"{receipt['result']['actions']} replay actions ({receipt['evidence_class']})"
+        f"{receipt['result']['actions']} replay actions (release SSHSIG verified)"
     )
     return 0
 

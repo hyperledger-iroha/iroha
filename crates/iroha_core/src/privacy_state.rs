@@ -9251,7 +9251,7 @@ mod tests {
         (
             $factory:expr, $variant:path;
             $(
-                $fixture:ident, prepare [$($prepare:stmt)*],
+                $fixture:ident, prepare [$($prepare:tt)*],
                 $key:ident = $key_expression:expr,
                 $record_label:literal, $field:ident mutate $mutation:block,
                 $mismatch:literal, $rejection:literal, $needle:literal;
@@ -9282,7 +9282,7 @@ mod tests {
         (
             $loader:expr, $key:expr;
             $(
-                $storage:ident { $($prepare:stmt)* } => $record:expr;
+                $storage:ident { $($prepare:tt)* } => $record:expr;
                 reject $rejection:literal, $needle:literal $(, $message:literal)?;
             )+
         ) => {
@@ -12288,7 +12288,7 @@ mod tests {
                     0xB2,
                     1,
                     BootleLanternIssuerPolicyLifecycleV1::Active,
-                );
+                )
             } => PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(
                 mismatched_policy,
                 7,
@@ -12296,9 +12296,9 @@ mod tests {
             reject "key/record identity mismatch must reject", "does not match";
 
             corrupted {
-                let mut corrupted_policy = policy.clone();
+                let mut corrupted_policy = policy.clone()
                 corrupted_policy.record_digest =
-                    PrivacyBootleLanternIssuerPolicyDigestV1::new(nonzero(0xB5));
+                    PrivacyBootleLanternIssuerPolicyDigestV1::new(nonzero(0xB5))
             } => PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance {
                 policy: corrupted_policy,
                 admitted_at_height: 7,
@@ -12307,14 +12307,14 @@ mod tests {
                 "unexpected record digest validation error";
 
             corrupted_parameter {
-                let mut wrong_parameter_digest = policy.clone();
+                let mut wrong_parameter_digest = policy.clone()
                 wrong_parameter_digest.issuer_parameter_digest =
-                    PrivacyParameterDigestV1::new(nonzero(0xB6));
+                    PrivacyParameterDigestV1::new(nonzero(0xB6))
                 wrong_parameter_digest.record_digest =
-                    PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+                    PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32])
                 wrong_parameter_digest.record_digest = wrong_parameter_digest
                     .computed_record_digest()
-                    .expect("recompute outer record digest");
+                    .expect("recompute outer record digest")
             } => PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance {
                 policy: wrong_parameter_digest,
                 admitted_at_height: 7,
@@ -12537,14 +12537,14 @@ mod tests {
                     1,
                     None,
                     PrivacyVegaIssuerRecordLifecycleV1::Active,
-                );
+                )
             } => PrivacyStateItemRecordV1::vega_issuer_governance(mismatched, 7)
                 .expect("intrinsically valid mismatched issuer");
             reject "key/record mismatch must reject", "differs from its record";
 
             corrupted {
-                let mut corrupt_digest = record;
-                corrupt_digest.record_digest.0[0] ^= 1;
+                let mut corrupt_digest = record
+                corrupt_digest.record_digest.0[0] ^= 1
             } => PrivacyStateItemRecordV1::VegaIssuerGovernance {
                 record: corrupt_digest,
                 admitted_at_height: 7,
@@ -12552,8 +12552,8 @@ mod tests {
             reject "self-digest corruption must reject", "is invalid";
 
             corrupted_key {
-                let mut invalid_key_bytes = [u8::MAX; 33];
-                invalid_key_bytes[0] = 0x02;
+                let mut invalid_key_bytes = [u8::MAX; 33]
+                invalid_key_bytes[0] = 0x02
                 let off_curve = PrivacyVegaIssuerRecordV1::new(
                     issuer_id,
                     1,
@@ -12566,7 +12566,7 @@ mod tests {
                     None,
                     PrivacyVegaIssuerRecordLifecycleV1::Active,
                 )
-                .expect("wire-level compressed shape is valid");
+                .expect("wire-level compressed shape is valid")
             } => PrivacyStateItemRecordV1::VegaIssuerGovernance {
                 record: off_curve,
                 admitted_at_height: 7,
@@ -13321,17 +13321,17 @@ mod tests {
         assert_fixture_record_field_corruptions! {
             proof_managed_persisted_fixture(),
             PrivacyStateItemRecordV1::ProofManagedPoolVerifiedCommitment;
-            duplicate_position, prepare [duplicate_position.advance(&outputs);],
+            duplicate_position, prepare [duplicate_position.advance(&outputs)],
                 key = output_key(&duplicate_position, 1),
                 "second output", append_position mutate { *append_position = 2; },
                 "output must carry commitment provenance",
                 "duplicate append position must reject", "duplicate position";
-            duplicate_output_index, prepare [duplicate_output_index.advance(&outputs);],
+            duplicate_output_index, prepare [duplicate_output_index.advance(&outputs)],
                 key = output_key(&duplicate_output_index, 1),
                 "second output", output_index mutate { *output_index = 0; },
                 "output must carry commitment provenance",
                 "duplicate output index must reject", "statement order";
-            future_epoch, prepare [future_epoch.advance(&outputs);],
+            future_epoch, prepare [future_epoch.advance(&outputs)],
                 key = output_key(&future_epoch, 0),
                 "first output", successor_epoch mutate { *successor_epoch = 3; },
                 "output must carry commitment provenance",
@@ -13698,7 +13698,7 @@ mod tests {
             fcmp_persisted_fixture(), PrivacyStateItemRecordV1::FcmpBootstrapOutput;
             substituted_tuple, prepare [
                 let original = substituted_tuple.bootstrap.initial_fcmp_outputs()
-                    .expect("genesis outputs")[0];
+                    .expect("genesis outputs")[0]
             ],
                 key = PrivacyCommitmentKeyV1::fcmp_output(
                     substituted_tuple.namespace,
@@ -13712,7 +13712,7 @@ mod tests {
                 "tuple substitution under an old id must reject", "complete tuple";
             reordered, prepare [
                 let second = reordered.bootstrap.initial_fcmp_outputs()
-                    .expect("genesis outputs")[1];
+                    .expect("genesis outputs")[1]
             ],
                 key = PrivacyCommitmentKeyV1::fcmp_output(
                     reordered.namespace,
@@ -13796,7 +13796,7 @@ mod tests {
         assert_fixture_record_field_corruptions! {
             fcmp_persisted_fixture(),
             PrivacyStateItemRecordV1::FcmpVerifiedOutput;
-            duplicate_position, prepare [duplicate_position.advance(&outputs);],
+            duplicate_position, prepare [duplicate_position.advance(&outputs)],
                 second_key = PrivacyCommitmentKeyV1::fcmp_output(
                 duplicate_position.namespace,
                 outputs[1].output_id(),
@@ -13804,7 +13804,7 @@ mod tests {
                 "second verified output", append_position mutate { *append_position = 2; },
                 "verified FCMP++ provenance",
                 "duplicate verified append position must reject", "duplicate position";
-            duplicate_output_index, prepare [duplicate_output_index.advance(&outputs);],
+            duplicate_output_index, prepare [duplicate_output_index.advance(&outputs)],
                 second_key = PrivacyCommitmentKeyV1::fcmp_output(
                 duplicate_output_index.namespace,
                 outputs[1].output_id(),
@@ -13812,7 +13812,7 @@ mod tests {
                 "second verified output", output_index mutate { *output_index = 0; },
                 "verified FCMP++ provenance",
                 "duplicate statement output index must reject", "statement order";
-            substituted_output, prepare [substituted_output.advance(&outputs);],
+            substituted_output, prepare [substituted_output.advance(&outputs)],
                 first_key = PrivacyCommitmentKeyV1::fcmp_output(
                 substituted_output.namespace,
                 outputs[0].output_id(),
@@ -14091,7 +14091,7 @@ mod tests {
             reject "wrong-role value must reject", "wrong-role";
 
             mismatched {
-                let mismatched_policy_id = zk_ace_policy_id(2);
+                let mismatched_policy_id = zk_ace_policy_id(2)
             } => PrivacyStateItemRecordV1::zk_ace_policy_governance(
                 zk_ace_policy_record(mismatched_policy_id),
                 7,
@@ -14099,9 +14099,9 @@ mod tests {
             reject "key/payload mismatch must reject", "does not match";
 
             corrupted {
-                let mut corrupted_policy = zk_ace_policy_record(policy_id);
+                let mut corrupted_policy = zk_ace_policy_record(policy_id)
                 corrupted_policy.record_digest =
-                    PrivacyZkAcePolicyRecordDigestV1::new(nonzero(25));
+                    PrivacyZkAcePolicyRecordDigestV1::new(nonzero(25))
             } => PrivacyStateItemRecordV1::ZkAcePolicyGovernance {
                 policy: corrupted_policy,
                 admitted_at_height: 7,

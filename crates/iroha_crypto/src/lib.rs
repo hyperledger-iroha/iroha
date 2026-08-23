@@ -305,7 +305,6 @@ fn reserve_public_key_validation_for_decode(
     norito::core::reserve_decode_allocation(bytes)
 }
 /// Key pair generation option. Passed to a specific algorithm.
-#[derive(Debug)]
 pub enum KeyGenOption<K> {
     /// Use random number generator
     #[cfg(feature = "rand")]
@@ -318,6 +317,19 @@ pub enum KeyGenOption<K> {
     UseSeed(Vec<u8>),
     /// Derive from a private key
     FromPrivateKey(K),
+}
+impl<K> fmt::Debug for KeyGenOption<K> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            #[cfg(feature = "rand")]
+            Self::Random => formatter.write_str("Random"),
+            Self::UseSeed(seed) => formatter
+                .debug_struct("UseSeed")
+                .field("len", &seed.len())
+                .finish(),
+            Self::FromPrivateKey(_) => formatter.write_str("FromPrivateKey([REDACTED])"),
+        }
+    }
 }
 ffi::ffi_item! {
     /// Pair of Public and Private keys.

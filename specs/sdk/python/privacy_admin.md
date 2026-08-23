@@ -62,6 +62,10 @@ bucket, or forward the events as required by SNNet-8. When integrating with the
 secure aggregator, pair this helper with the Torii ingestion endpoints described
 in `specs/soranet/privacy_metrics_pipeline.md`.
 
+GAR events expose only `PrivacyEventGarAbuseCategory.category_hash`, an exact
+eight-byte value decoded from the JSON byte array. Raw category labels never
+cross the relay admin feed.
+
 ## CLI helper
 
 For quick audits or evidence collection you can run the bundled CLI:

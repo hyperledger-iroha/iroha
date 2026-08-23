@@ -274,8 +274,9 @@ int32_t connect_norito_kagemusha_topup_finality_verify_v4(
 // every framed header binds its domain-separated digest. These entrypoints
 // never accept or consume ABI19/V3 sessions. Begin/finalize authenticate one
 // framed artifact; install consumes all eight finalized handles atomically
-// after authenticating the release policy, signed attestation, device evidence,
-// crypto review, and canonical candidate-bound promotion record.
+// after authenticating the release policy, signed attestation, exact runner-signed
+// internal-validation receipt, device evidence, crypto review, and canonical
+// candidate-bound promotion record.
 // Caller handle order is ignored; native retains the canonical role order.
 int32_t connect_norito_kagemusha_recursive_spend_artifact_begin_v4(
     const uint8_t* manifest_norito_ptr,
@@ -300,6 +301,8 @@ int32_t connect_norito_kagemusha_recursive_spend_artifact_set_install_v4(
     unsigned long trusted_policy_norito_len,
     const uint8_t* release_attestation_norito_ptr,
     unsigned long release_attestation_norito_len,
+    const uint8_t* internal_validation_receipt_norito_ptr,
+    unsigned long internal_validation_receipt_norito_len,
     const uint8_t* benchmark_evidence_ptr,
     unsigned long benchmark_evidence_len,
     const uint8_t* cryptographic_review_ptr,

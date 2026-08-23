@@ -70,6 +70,145 @@ fn fq_from_canonical_rejects_out_of_range() {
     assert!(Fq::from_canonical_u64(MOD_P_U64).is_none());
 }
 #[test]
+fn constant_zero_merkle_root_matches_allocated_builder() {
+    for hash_fn in [STARK_HASH_SHA256_V1, STARK_HASH_POSEIDON2_V1] {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn,
+            domain_tag: "iroha:test:constant-zero-root-equivalence".to_owned(),
+        };
+        for domain in [1, 2, 16] {
+            assert_eq!(
+                stark_constant_field_merkle_root_v1(&params, Fq::zero(), domain),
+                stark_merkle_root_from_field_values_v1(&params, &vec![0; domain]),
+                "constant-tree derivation must match the ordinary Merkle builder for hash {hash_fn} and domain {domain}"
+            );
+        }
+        assert!(stark_constant_field_merkle_root_v1(&params, Fq::zero(), 0).is_none());
+        assert!(stark_constant_field_merkle_root_v1(&params, Fq::zero(), 3).is_none());
+    }
+}
+#[test]
+fn fri_pair_domain_uses_bit_reversed_layer_order() {
+    let layer_domain = 8_usize;
+    let subgroup_root = Fq::new(GOLDILOCKS_GENERATOR)
+        .pow((MOD_P - 1) / u128::try_from(layer_domain).expect("domain fits u128"));
+    // In a three-bit bit-reversed layer, pair j=1 occupies the evaluations at exponents 2 and 6:
+    // `(f(omega^2), f(-omega^2))`. The old `omega^j` calculation incorrectly used `omega`.
+    let polynomial_x = subgroup_root.pow(2);
+    let y0 = polynomial_x;
+    let y1 = Fq::zero().sub(polynomial_x);
+    let beta = Fq::from_canonical_u64(2).expect("canonical beta");
+    let pair_x = domain_x_for_pair(layer_domain, 1).expect("derive bit-reversed pair point");
+    assert_eq!(pair_x, polynomial_x);
+    assert_eq!(
+        fri_fold_pair(y0, y1, beta, pair_x),
+        Some(beta),
+        "folding f(X)=X at (x, -x) must produce the challenge beta"
+    );
+
+    let legacy_pair_x = subgroup_root;
+    assert_ne!(
+        fri_fold_pair(y0, y1, beta, legacy_pair_x),
+        Some(beta),
+        "the former non-bit-reversed exponent must not satisfy the polynomial fold"
+    );
+}
+#[test]
+fn fri_challenges_bind_the_exact_round() {
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: 4,
+        blowup_log2: 2,
+        fold_arity: 2,
+        queries: 2,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_SHA256_V1,
+        domain_tag: "iroha:test:fri-round-binding".to_owned(),
+    };
+    let root = [0x42; 32];
+    let first = fri_round_challenge(&params, "IROHA-TEST-FRI-ROUND-BINDING", 0, &root)
+        .expect("derive first-round challenge");
+    let second = fri_round_challenge(&params, "IROHA-TEST-FRI-ROUND-BINDING", 1, &root)
+        .expect("derive second-round challenge");
+    assert_ne!(
+        first, second,
+        "equal roots at different depths must not reuse a FRI challenge"
+    );
+}
+#[test]
+fn poseidon_value_merkle_path_rejects_noncanonical_field_sibling() {
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: 1,
+        blowup_log2: 1,
+        fold_arity: 2,
+        queries: 1,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_POSEIDON2_V1,
+        domain_tag: "iroha:test:poseidon-value-path-canonicality".to_owned(),
+    };
+    let leaf = Fq::from_canonical_u64(7).expect("canonical leaf");
+    let zero_sibling = u64_to_digest_le(0);
+    let root = merkle_node_hash(&params, &poseidon_leaf_hash(leaf), &zero_sibling)
+        .expect("derive Poseidon value root");
+    let canonical_path = MerklePath {
+        dirs: vec![0],
+        siblings: vec![zero_sibling],
+    };
+    assert!(merkle_verify(&params, &root, leaf, &canonical_path));
+    assert!(digest_le_to_u64(&root).is_some());
+
+    let mut noncanonical_path = canonical_path;
+    noncanonical_path.siblings[0] = u64_to_digest_le(MOD_P_U64);
+    assert!(digest_le_to_u64(&noncanonical_path.siblings[0]).is_none());
+    assert!(
+        !merkle_verify(&params, &root, leaf, &noncanonical_path),
+        "a proof-carried Poseidon sibling must use the unique canonical field encoding"
+    );
+}
+#[test]
+fn poseidon_air_trace_merkle_path_rejects_noncanonical_field_sibling() {
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: 1,
+        blowup_log2: 1,
+        fold_arity: 2,
+        queries: 1,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_POSEIDON2_V1,
+        domain_tag: "iroha:test:poseidon-air-path-canonicality".to_owned(),
+    };
+    let public_digest = [0x41; 32];
+    let row = stark_air_row(0, &public_digest).expect("build canonical AIR row");
+    let row_leaf = stark_air_trace_leaf_hash(&params, &row).expect("hash AIR row");
+    let zero_sibling = u64_to_digest_le(0);
+    let root = merkle_node_hash(&params, &row_leaf, &zero_sibling)
+        .expect("derive Poseidon AIR trace root");
+    let canonical_path = MerklePath {
+        dirs: vec![0],
+        siblings: vec![zero_sibling],
+    };
+    assert!(merkle_verify_hash(
+        &params,
+        &root,
+        &row_leaf,
+        &canonical_path,
+    ));
+
+    let mut noncanonical_path = canonical_path;
+    noncanonical_path.siblings[0] = u64_to_digest_le(MOD_P_U64);
+    assert!(
+        !merkle_verify_hash(&params, &root, &row_leaf, &noncanonical_path),
+        "AIR trace paths must reject a Poseidon sibling equal to the field modulus"
+    );
+}
+#[test]
 fn stark_fri_canonical_verifying_key_payload_validation_fails_closed() {
     const CIRCUIT_ID: &str = "soracloud:test-canonical-circuit";
     let valid = StarkFriVerifyingKeyV1 {
@@ -86,8 +225,13 @@ fn stark_fri_canonical_verifying_key_payload_validation_fails_closed() {
         .expect("canonical STARK/FRI payload is accepted");
     let mut poseidon = valid.clone();
     poseidon.hash_fn = STARK_HASH_POSEIDON2_V1;
-    validate_stark_fri_canonical_verifying_key_payload(&poseidon, CIRCUIT_ID, "test")
-        .expect("Poseidon2 STARK/FRI payload is accepted");
+    let poseidon_error =
+        validate_stark_fri_canonical_verifying_key_payload(&poseidon, CIRCUIT_ID, "test")
+            .expect_err("single-field Poseidon2 commitments must not pass production admission");
+    assert!(
+        poseidon_error.contains("single-Goldilocks-field Poseidon2 root lacks ledger-grade"),
+        "unexpected Poseidon2 admission error: {poseidon_error}"
+    );
     let mutations: [(&str, fn(&mut StarkFriVerifyingKeyV1)); 11] = [
         ("version", |payload: &mut StarkFriVerifyingKeyV1| {
             payload.version = 2
@@ -148,6 +292,26 @@ fn stark_fri_canonical_verifying_key_payload_validation_fails_closed() {
             "matching noncanonical circuit id {circuit_id:?} must fail closed"
         );
     }
+}
+#[test]
+fn generic_binding_verifying_key_rejects_domain_above_exact_root_cap() {
+    let circuit_id = "stark/fri/sha256-goldilocks:binding-root-cap-test";
+    let payload = StarkFriVerifyingKeyV1 {
+        version: 1,
+        circuit_id: circuit_id.to_owned(),
+        n_log2: MAX_BINDING_AIR_DOMAIN_LOG2 + 1,
+        blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+        fold_arity: 2,
+        queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_SHA256_V1,
+    };
+    let error = validate_stark_fri_canonical_verifying_key_payload(&payload, circuit_id, "test")
+        .expect_err("oversized generic Binding verifier key must fail admission");
+    assert!(
+        error.contains("exact trace-root reconstruction limit"),
+        "unexpected generic Binding verifier-key error: {error}"
+    );
 }
 #[test]
 fn stark_verifier_limits_cannot_relax_canonical_structure_caps() {
@@ -254,6 +418,402 @@ fn synthesized_envelope_verifies_sha256() {
     )
     .expect("ok");
     assert!(verify_stark_fri_envelope(&bytes));
+}
+#[test]
+fn binding_air_rejects_fixed_coefficient_cancellation_rows() {
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: 4,
+        blowup_log2: 2,
+        fold_arity: 2,
+        queries: 2,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_SHA256_V1,
+        domain_tag: "iroha:test:binding-air-fixed-coefficient-cancellation".to_owned(),
+    };
+    let domain = 1_usize << usize::from(params.n_log2);
+    let public_digest = [0x61; 32];
+    let one = Fq::one();
+    let two = Fq::from_canonical_u64(2).expect("canonical two");
+    let rows = (0..domain)
+        .map(|index| {
+            let expected = stark_air_row(index, &public_digest).expect("build binding AIR row");
+            let mut forged = expected.clone();
+            forged[0] = Fq::from_canonical_u64(forged[0])
+                .expect("canonical row coordinate")
+                .add(one)
+                .0;
+            forged[1] = Fq::from_canonical_u64(forged[1])
+                .expect("canonical row coordinate")
+                .sub(two)
+                .0;
+            forged[2] = Fq::from_canonical_u64(forged[2])
+                .expect("canonical row coordinate")
+                .add(one)
+                .0;
+            assert_ne!(forged, expected);
+            forged
+        })
+        .collect::<Vec<_>>();
+
+    // The former fixed coefficients accepted this non-zero residue vector:
+    // 3 * 1 + 5 * (-2) + 7 * 1 = 0 in the proof field.
+    let legacy_collision = Fq::from_canonical_u64(3)
+        .expect("canonical three")
+        .sub(Fq::from_canonical_u64(5).expect("canonical five").mul(two))
+        .add(Fq::from_canonical_u64(7).expect("canonical seven"));
+    assert_eq!(legacy_collision, Fq::zero());
+    assert_eq!(
+        stark_air_composition_value(0, domain, &public_digest, &rows[0], &rows[1]),
+        None,
+        "a sampled forged row must fail the verifier-owned coordinate check"
+    );
+
+    let bytes = prove_stark_fri_zero_composition_air_envelope_bytes(
+        params,
+        "IROHA-TEST-BINDING-AIR-FIXED-COEFFICIENT-CANCELLATION".to_owned(),
+        "stark/fri/custom-binding-air-fixed-coefficient-cancellation:test".to_owned(),
+        public_digest,
+        rows,
+    )
+    .expect("explicit-row prover constructs the forged cancellation envelope");
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "generic binding AIR verifier must reject every sampled forged row"
+    );
+}
+#[test]
+fn binding_air_rejects_unsampled_row_via_exact_trace_root() {
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: 4,
+        blowup_log2: 2,
+        fold_arity: 2,
+        queries: 2,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_SHA256_V1,
+        domain_tag: "iroha:test:binding-air-unsampled-row".to_owned(),
+    };
+    let domain = 1_usize << usize::from(params.n_log2);
+    let public_digest = [0x62; 32];
+    let circuit_id = "stark/fri/custom-binding-air-unsampled-row:test";
+    let canonical_rows = (0..domain)
+        .map(|index| stark_air_row(index, &public_digest).expect("build canonical Binding AIR row"))
+        .collect::<Vec<_>>();
+    let expected_root = stark_binding_air_trace_root(&params, &public_digest, domain)
+        .expect("reconstruct canonical Binding AIR trace root");
+    assert_eq!(
+        stark_air_trace_root_from_rows_v1(&params, &canonical_rows),
+        Some(expected_root),
+        "streaming reconstruction must match the ordinary Merkle builder"
+    );
+
+    for bad_index in 0..domain {
+        let mut forged_rows = canonical_rows.clone();
+        forged_rows[bad_index][0] = Fq::from_canonical_u64(forged_rows[bad_index][0])
+            .expect("canonical Binding row index")
+            .add(Fq::one())
+            .0;
+        let bytes = prove_stark_fri_zero_composition_air_envelope_bytes(
+            params.clone(),
+            "IROHA-TEST-BINDING-AIR-UNSAMPLED-ROW".to_owned(),
+            circuit_id.to_owned(),
+            public_digest,
+            forged_rows.clone(),
+        )
+        .expect("explicit-row prover constructs the sparse forged envelope");
+        let envelope: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode sparse forged envelope");
+        let air = envelope.proof.air.as_ref().expect("AIR section");
+        let bad_row_is_opened = air.openings.iter().any(|opening| {
+            let index = usize::try_from(opening.index).expect("opening index fits usize");
+            index == bad_index || (index + 1) % domain == bad_index
+        });
+        if bad_row_is_opened {
+            continue;
+        }
+
+        assert_ne!(air.trace_root, expected_root);
+        assert!(air.openings.iter().all(|opening| {
+            let index = usize::try_from(opening.index).expect("opening index fits usize");
+            stark_air_composition_value(
+                index,
+                domain,
+                &public_digest,
+                &opening.row,
+                &opening.next_row,
+            ) == Some(Fq::zero())
+        }));
+        let composition_values = vec![0; domain];
+        assert!(
+            verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                &bytes,
+                circuit_id,
+                &public_digest,
+                &forged_rows,
+                &composition_values,
+            ),
+            "all commitments, FRI folds, and sampled explicit rows remain valid"
+        );
+        assert!(
+            !verify_stark_fri_envelope(&bytes),
+            "generic Binding must reject the unsampled row through exact trace-root equality"
+        );
+        return;
+    }
+    panic!("failed to place the forged row outside every sampled row and successor");
+}
+#[test]
+fn binding_air_rejects_sparse_composition_layer_substitution_via_exact_zero_root() {
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: 4,
+        blowup_log2: 2,
+        fold_arity: 2,
+        queries: 2,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_SHA256_V1,
+        domain_tag: "iroha:test:binding-air-sparse-composition".to_owned(),
+    };
+    let domain = 1_usize << usize::from(params.n_log2);
+    let public_digest = [0x65; 32];
+    let circuit_id = "stark/fri/custom-binding-air-sparse-composition:test";
+    let rows = (0..domain)
+        .map(|index| stark_air_row(index, &public_digest).expect("build canonical Binding AIR row"))
+        .collect::<Vec<_>>();
+    let trace_leaves = rows
+        .iter()
+        .map(|row| stark_air_trace_leaf_hash(&params, row).expect("hash canonical Binding AIR row"))
+        .collect::<Vec<_>>();
+    let trace_levels =
+        merkle_levels_from_hashes(&params, trace_leaves).expect("build Binding trace tree");
+    let trace_root = merkle_root_from_levels(&trace_levels).expect("derive Binding trace root");
+    let zero_composition_root = stark_constant_field_merkle_root_v1(&params, Fq::zero(), domain)
+        .expect("derive exact zero-composition root");
+
+    for attempt in 0..64_u32 {
+        let transcript_label = format!("IROHA-TEST-BINDING-AIR-SPARSE-COMPOSITION:{attempt}");
+        for bad_pair in 0..domain / 2 {
+            let mut base_values = vec![Fq::zero(); domain];
+            base_values[bad_pair * 2] = Fq::one();
+            let mut layer_values = vec![base_values];
+            while layer_values.last().is_some_and(|layer| layer.len() > 1) {
+                let next_len = layer_values.last().expect("FRI layer").len() / 2;
+                layer_values.push(vec![Fq::zero(); next_len]);
+            }
+            let layer_merkle = layer_values
+                .iter()
+                .map(|values| {
+                    merkle_levels_from_values(&params, values).expect("build sparse FRI layer tree")
+                })
+                .collect::<Vec<_>>();
+            let roots = layer_merkle
+                .iter()
+                .map(|levels| merkle_root_from_levels(levels).expect("derive sparse FRI root"))
+                .collect::<Vec<_>>();
+            let composition_root = roots[0];
+            let extra_query_roots = [trace_root, composition_root, public_digest];
+            let mut query_roots = roots.clone();
+            query_roots.extend_from_slice(&extra_query_roots);
+            let base_indices = derive_query_indices_without_replacement(
+                &transcript_label,
+                &params,
+                &query_roots,
+                usize::from(params.queries),
+                domain,
+            )
+            .expect("derive sparse-composition query schedule");
+            if base_indices.iter().any(|index| index / 2 == bad_pair) {
+                continue;
+            }
+            let beta = fri_round_challenge(&params, &transcript_label, 0, &composition_root)
+                .expect("derive first FRI challenge");
+            let x = domain_x_for_pair(domain, bad_pair).expect("derive sparse-pair point");
+            if fri_fold_pair(Fq::one(), Fq::zero(), beta, x) == Some(Fq::zero()) {
+                continue;
+            }
+
+            let queries = base_indices
+                .iter()
+                .copied()
+                .map(|mut index| {
+                    let mut chain = Vec::with_capacity(usize::from(params.n_log2));
+                    for round in 0..usize::from(params.n_log2) {
+                        let j = index / 2;
+                        let y0_index = j * 2;
+                        let y1_index = y0_index + 1;
+                        chain.push(FoldDecommitV1 {
+                            j: u32::try_from(j).expect("fold index fits u32"),
+                            y0: layer_values[round][y0_index].0,
+                            y1: layer_values[round][y1_index].0,
+                            path_y0: merkle_path_from_levels(y0_index, &layer_merkle[round])
+                                .expect("open sparse FRI y0"),
+                            path_y1: merkle_path_from_levels(y1_index, &layer_merkle[round])
+                                .expect("open sparse FRI y1"),
+                            z: layer_values[round + 1][j].0,
+                            path_z: merkle_path_from_levels(j, &layer_merkle[round + 1])
+                                .expect("open sparse FRI z"),
+                        });
+                        index = j;
+                    }
+                    chain
+                })
+                .collect::<Vec<_>>();
+            let openings = base_indices
+                .iter()
+                .copied()
+                .map(|index| {
+                    let next_index = (index + 1) % domain;
+                    StarkAirOpeningV1 {
+                        index: u32::try_from(index).expect("opening index fits u32"),
+                        row: rows[index].clone(),
+                        next_row: rows[next_index].clone(),
+                        row_path: merkle_path_from_levels(index, &trace_levels)
+                            .expect("open canonical Binding row"),
+                        next_row_path: merkle_path_from_levels(next_index, &trace_levels)
+                            .expect("open next canonical Binding row"),
+                        composition_value: 0,
+                        composition_path: merkle_path_from_levels(index, &layer_merkle[0])
+                            .expect("open sampled zero composition"),
+                    }
+                })
+                .collect::<Vec<_>>();
+            let envelope = StarkVerifyEnvelopeV1 {
+                params: params.clone(),
+                proof: StarkProofV1 {
+                    version: 1,
+                    commits: StarkCommitmentsV1 {
+                        version: 1,
+                        roots,
+                        comp_root: None,
+                    },
+                    queries,
+                    comp_values: None,
+                    air: Some(StarkAirProofV1 {
+                        version: 1,
+                        circuit_id: circuit_id.to_owned(),
+                        public_digest,
+                        trace_root,
+                        composition_root,
+                        trace_width: STARK_BINDING_AIR_TRACE_WIDTH_V1,
+                        openings,
+                    }),
+                },
+                transcript_label,
+            };
+            let air = envelope.proof.air.as_ref().expect("AIR section");
+            assert_ne!(air.composition_root, zero_composition_root);
+            assert_eq!(
+                envelope.proof.commits.roots.first(),
+                Some(&air.composition_root)
+            );
+            assert!(
+                validate_stark_fri_query_shape_and_indices_v1(
+                    &envelope.params,
+                    &envelope.transcript_label,
+                    &envelope.proof.commits.roots,
+                    &extra_query_roots,
+                    &envelope.proof.queries,
+                )
+                .is_ok(),
+                "sampled Merkle openings and fold chains deliberately avoid the substituted pair"
+            );
+            let bytes = ivm::codec::encode_canonical_norito(&envelope)
+                .expect("encode sparse-composition envelope");
+            let mut sparse_composition = vec![0; domain];
+            sparse_composition[bad_pair * 2] = 1;
+            assert!(
+                verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                    &bytes,
+                    circuit_id,
+                    &public_digest,
+                    &rows,
+                    &sparse_composition,
+                ),
+                "sampled FRI replay alone accepts the unqueried first-layer substitution"
+            );
+            assert!(
+                !verify_stark_fri_envelope(&bytes),
+                "generic Binding must require the exact all-zero base-composition commitment"
+            );
+            return;
+        }
+    }
+    panic!("failed to derive a query schedule outside the sparse substituted pair");
+}
+#[test]
+fn generic_binding_provers_reject_domain_above_exact_root_cap() {
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: MAX_BINDING_AIR_DOMAIN_LOG2 + 1,
+        blowup_log2: 3,
+        fold_arity: 2,
+        queries: 2,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_SHA256_V1,
+        domain_tag: "iroha:test:binding-air-prover-root-cap".to_owned(),
+    };
+    let circuit_id = "stark/fri/custom-binding-air-prover-root-cap:test";
+    let public_digest = [0x63; 32];
+    let error = prove_stark_fri_air_envelope_bytes(
+        params.clone(),
+        "IROHA-TEST-BINDING-AIR-PROVER-ROOT-CAP".to_owned(),
+        circuit_id.to_owned(),
+        public_digest,
+    )
+    .expect_err("canonical generic Binding prover must reject an oversized domain");
+    assert!(error.contains("exact trace-root reconstruction limit"));
+    let error = prove_stark_fri_zero_composition_air_envelope_bytes(
+        params,
+        "IROHA-TEST-BINDING-AIR-PROVER-ROOT-CAP".to_owned(),
+        circuit_id.to_owned(),
+        public_digest,
+        Vec::new(),
+    )
+    .expect_err("explicit-row generic Binding prover must reject an oversized domain");
+    assert!(error.contains("exact trace-root reconstruction limit"));
+}
+#[test]
+fn generic_binding_verifier_rejects_domain_above_exact_root_cap() {
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: MAX_BINDING_AIR_DOMAIN_LOG2 + 1,
+        blowup_log2: 3,
+        fold_arity: 2,
+        queries: 2,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_SHA256_V1,
+        domain_tag: "iroha:test:binding-air-verifier-root-cap".to_owned(),
+    };
+    let domain = 1_usize << usize::from(params.n_log2);
+    let public_digest = [0x64; 32];
+    let circuit_id = "stark/fri/custom-binding-air-verifier-root-cap:test";
+    let rows = (0..domain)
+        .map(|index| stark_air_row(index, &public_digest).expect("build canonical Binding AIR row"))
+        .collect::<Vec<_>>();
+    let composition_values = vec![0; domain];
+    let bytes = prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
+        params,
+        "IROHA-TEST-BINDING-AIR-VERIFIER-ROOT-CAP".to_owned(),
+        circuit_id.to_owned(),
+        public_digest,
+        rows.clone(),
+        composition_values.clone(),
+    )
+    .expect("Explicit context retains the native domain limit");
+    assert!(
+        verify_stark_fri_air_envelope_from_rows_and_composition_values(
+            &bytes,
+            circuit_id,
+            &public_digest,
+            &rows,
+            &composition_values,
+        )
+    );
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "generic Binding verification must reject before oversized root reconstruction"
+    );
 }
 #[test]
 fn public_generic_air_provers_reject_bfv_full_bootstrap_circuit_aliases() {

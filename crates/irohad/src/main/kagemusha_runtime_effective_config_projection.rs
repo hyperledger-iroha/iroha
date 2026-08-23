@@ -6,7 +6,7 @@ use iroha_core::{
 use iroha_genesis::GenesisBlock;
 
 /// Derive release-critical evidence from final config and frozen genesis.
-pub(super) fn build_kagemusha_runtime_effective_config_projection_v1(
+pub fn build_kagemusha_runtime_effective_config_projection_v1(
     config: &Config,
     genesis: &GenesisBlock,
     bootstrap: &GenesisV2Bootstrap,

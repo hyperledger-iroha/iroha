@@ -86,3 +86,12 @@ invalid signatures, weak attestation, copied device bindings, unsafe paths,
 artifact mutation, noncanonical values, or incomplete lifecycle evidence. Lab
 private keys are runtime-only inputs and must never appear in metadata, logs,
 or summaries.
+
+Production-bound validation also supplies the complete digest-pinned authority
+set described in
+[`kagemusha_candidate_lab_staging.md`](./kagemusha_candidate_lab_staging.md):
+the exact Google status response and its fresh header-bound capture receipt,
+alongside the tool and root pins. The signed slot binds the derived snapshot
+projection; a later controller/governance signature, not an unsigned HTTPS
+capture, is the consensus authentication boundary. Validators never fetch the
+status endpoint.

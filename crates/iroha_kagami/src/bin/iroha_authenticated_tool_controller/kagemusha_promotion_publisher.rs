@@ -1,6 +1,9 @@
 //! Exact native publisher for one authenticated Kagemusha V4 promotion record.
 
 use super::{ControllerError, FileIdentity, Result};
+use iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1;
+#[cfg(test)]
+use iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
@@ -15,8 +18,8 @@ use super::{
 };
 #[cfg(target_os = "macos")]
 use iroha_data_model::offline::{
-    KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendQualificationReceiptV4,
-    KagemushaRecursiveSpendReleaseAttestationV4,
+    KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendInternalValidationReceiptV1,
+    KagemushaRecursiveSpendQualificationReceiptV4, KagemushaRecursiveSpendReleaseAttestationV4,
 };
 #[cfg(target_os = "macos")]
 use std::{
@@ -80,7 +83,7 @@ impl CandidateFileSpec {
     }
 }
 
-const CANDIDATE_FILES: [CandidateFileSpec; 16] = [
+const CANDIDATE_FILES: [CandidateFileSpec; 17] = [
     CandidateFileSpec {
         name: "step-eq.params-ipa.krv4",
         maximum: MAX_ARTIFACT_BYTES,
@@ -161,6 +164,11 @@ const CANDIDATE_FILES: [CandidateFileSpec; 16] = [
         maximum: 2 * 384 * 1024 + 16 * 1024,
         exact_size: None,
     },
+    CandidateFileSpec {
+        name: KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+        maximum: 1024 * 1024,
+        exact_size: None,
+    },
 ];
 
 #[cfg(any(target_os = "macos", test))]
@@ -202,6 +210,7 @@ struct CanonicalReportV4 {
     candidate_sha256: String,
     qualification_receipt_sha256: String,
     qualified_candidate_sha256: String,
+    internal_validation_receipt_sha256: String,
     promotion_record_sha256: String,
     release_policy_sha256: String,
     authenticated_source_seal_projection_sha256: String,
@@ -369,6 +378,12 @@ fn stable_identity(left: &FileIdentity, right: &FileIdentity) -> bool {
         && left.modified_nanoseconds == right.modified_nanoseconds
 }
 
+fn stable_candidate_identity(name: &str, left: &FileIdentity, right: &FileIdentity) -> bool {
+    stable_identity(left, right)
+        && (name != KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1
+            || left.sha256 == right.sha256)
+}
+
 fn stable_directory_identity(left: &FileIdentity, right: &FileIdentity) -> bool {
     left.device == right.device
         && left.inode == right.inode
@@ -470,14 +485,14 @@ fn classify_inventory(
 ) -> Result<PublicationPhase> {
     if initial.len() != CANDIDATE_FILES.len() {
         return Err(ControllerError::policy(
-            "promotion candidate snapshot does not contain exactly sixteen files",
+            "promotion candidate snapshot does not contain exactly seventeen files",
         ));
     }
     for (name, expected) in initial {
         let observed = current.get(name).ok_or_else(|| {
             ControllerError::policy(format!("promotion candidate entry disappeared: {name}"))
         })?;
-        if !stable_identity(expected, observed) {
+        if !stable_candidate_identity(name, expected, observed) {
             return Err(ControllerError::policy(format!(
                 "promotion candidate entry changed: {name}"
             )));
@@ -872,7 +887,7 @@ impl CandidateSnapshot {
             .collect::<BTreeSet<_>>();
         if inventory_names(&directory)? != expected {
             return Err(ControllerError::policy(
-                "promotion requires the exact sixteen-file candidate inventory and absent final leaf",
+                "promotion requires the exact seventeen-file candidate inventory and absent final leaf",
             ));
         }
         let mut files = BTreeMap::new();
@@ -1032,6 +1047,58 @@ impl CandidateSnapshot {
             ));
         }
 
+        let internal_validation_bytes =
+            self.read_held(KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1)?;
+        let internal_validation_receipt =
+            KagemushaRecursiveSpendInternalValidationReceiptV1::decode_canonical(
+                &internal_validation_bytes,
+            )
+            .map_err(|_| {
+                ControllerError::policy(
+                    "internal-validation receipt is not exact, canonical, and runner-signed",
+                )
+            })?;
+        let internal_validation_sha256 =
+            internal_validation_receipt
+                .canonical_sha256()
+                .map_err(|_| {
+                    ControllerError::policy("internal-validation receipt digest derivation failed")
+                })?;
+        require_candidate_binding(
+            &identities,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+            None,
+            internal_validation_sha256,
+        )?;
+        let internal = &internal_validation_receipt.body;
+        if internal_validation_sha256 != manifest.internal_validation_receipt_sha256
+            || internal.candidate_sha256 != candidate_sha256
+            || internal.qualification_receipt_sha256 != qualification_sha256
+            || internal.qualified_candidate_sha256 != qualified_candidate_sha256
+            || internal.source_commit != manifest.source_commit
+            || internal.source_tree_sha256 != manifest.source_tree_sha256
+            || internal.source_repo_dirty != manifest.source_repo_dirty
+            || internal.tracked_cargo_lock.sha256
+                != manifest.reviewed_source_closure.ignored_cargo_lock_sha256
+            || internal.tracked_cargo_lock.size_bytes
+                != manifest
+                    .reviewed_source_closure
+                    .ignored_cargo_lock_size_bytes
+            || internal.reviewed_source_closure_descriptor_sha256
+                != manifest.reviewed_source_closure_descriptor_sha256
+            || internal.authenticated_source_seal_projection_sha256
+                != manifest.authenticated_source_seal_projection_sha256
+            || internal.reviewed_cargo_binary_sha256 != manifest.reviewed_cargo_binary_sha256
+            || internal.reviewed_rustc_binary_sha256 != manifest.reviewed_rustc_binary_sha256
+            || internal.generator_binary_sha256 != manifest.generator_binary_sha256
+            || internal.sealed_candidate_build_report_sha256
+                != manifest.sealed_candidate_build_report_sha256
+        {
+            return Err(ControllerError::policy(
+                "internal-validation receipt differs from the exact finalized candidate",
+            ));
+        }
+
         require_candidate_binding(
             &identities,
             BENCHMARK_NAME,
@@ -1123,6 +1190,7 @@ impl CandidateSnapshot {
             candidate_sha256: hex(&candidate_sha256),
             qualification_receipt_sha256: hex(&qualification_sha256),
             qualified_candidate_sha256: hex(&qualified_candidate_sha256),
+            internal_validation_receipt_sha256: hex(&internal_validation_sha256),
             promotion_record_sha256: hex(&promotion_sha256),
             release_policy_sha256: hex(&policy_sha256),
             authenticated_source_seal_projection_sha256: hex(
@@ -1155,7 +1223,9 @@ impl CandidateSnapshot {
         let mut current = BTreeMap::new();
         for name in names {
             let bounds = inventoried_member_bounds(&name)?;
-            let (_, identity) = open_member(&self.directory, &name, bounds, false)?;
+            let hash_contents =
+                name == KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1;
+            let (_, identity) = open_member(&self.directory, &name, bounds, hash_contents)?;
             current.insert(name, identity);
         }
         Ok(current)
@@ -1194,7 +1264,7 @@ impl CandidateSnapshot {
     fn verify_committed(&mut self) -> Result<FileIdentity> {
         if self.phase()? != PublicationPhase::Committed {
             return Err(ControllerError::policy(
-                "promotion did not produce the exact seventeen-file post-state",
+                "promotion did not produce the exact eighteen-file post-state",
             ));
         }
         for (name, (held, expected)) in &mut self.files {

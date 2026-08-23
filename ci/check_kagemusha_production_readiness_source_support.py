@@ -1,12 +1,9 @@
-"""Authenticated source inventory for Kagemusha production readiness."""
-
 import ast
+import re
 
 if globals().get("_KAGEMUSHA_READINESS_SOURCE_SUPPORT_CONTEXT_V1") is not True:
     raise RuntimeError("readiness source-support provider must run inside the authenticated gate")
-_readiness_source_support_source = globals().get(
-    "_KAGEMUSHA_READINESS_SOURCE_SUPPORT_SOURCE_V1"
-)
+_readiness_source_support_source = globals().get("_KAGEMUSHA_READINESS_SOURCE_SUPPORT_SOURCE_V1")
 if not isinstance(_readiness_source_support_source, str) or not _readiness_source_support_source:
     raise RuntimeError("readiness source-support provider requires its exact loaded bytes")
 
@@ -15,18 +12,22 @@ MODEL_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_model.rs"
 MODEL_INCLUDE = 'include!("kagemusha_model.rs");'
 MODEL_VERIFIER_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_release_verifier.rs"
 MODEL_VERIFIER_MODULE = "mod kagemusha_release_verifier;"
-MODEL_PROMOTION_RECEIPT_COMPONENT = (
-    "crates/iroha_data_model/src/offline/kagemusha_promotion_receipt.rs"
-)
+MODEL_PROMOTION_RECEIPT_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_promotion_receipt.rs"
 MODEL_PROMOTION_RECEIPT_MODULE = "mod kagemusha_promotion_receipt;"
-MODEL_CANARY_EVIDENCE_COMPONENT = (
-    "crates/iroha_data_model/src/offline/kagemusha_canary_evidence.rs"
+MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT = (
+    "crates/iroha_data_model/src/offline/kagemusha_internal_validation_receipt.rs"
 )
+MODEL_INTERNAL_VALIDATION_RECEIPT_MODULE = (
+    "mod kagemusha_internal_validation_receipt;"
+)
+MODEL_CANARY_EVIDENCE_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_canary_evidence.rs"
 MODEL_CANARY_EVIDENCE_MODULE = "mod kagemusha_canary_evidence;"
-MODEL_CANARY_LIVENESS_COMPONENT = (
-    "crates/iroha_data_model/src/offline/kagemusha_post_canary_validator_liveness.rs"
-)
+MODEL_CANARY_LIVENESS_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_post_canary_validator_liveness.rs"
 MODEL_CANARY_LIVENESS_MODULE = "mod kagemusha_post_canary_validator_liveness;"
+MODEL_DEVICE_ATTESTATION_CONSTANTS_COMPONENT = "crates/iroha_data_model/src/offline/device_attestation_constants.rs"
+MODEL_DEVICE_ATTESTATION_CONSTANTS_INCLUDE = 'include!("device_attestation_constants.rs");'
+MODEL_DEVICE_ATTESTATION_POLICY_COMPONENT = "crates/iroha_data_model/src/offline/device_attestation_policy.rs"
+MODEL_DEVICE_ATTESTATION_POLICY_INCLUDE = 'include!("device_attestation_policy.rs");'
 MODEL_ISI_OFFLINE = "crates/iroha_data_model/src/isi/offline.rs"
 MODEL_ISI_MOD = "crates/iroha_data_model/src/isi/mod.rs"
 PRIVACY = "crates/iroha_data_model/src/privacy.rs"
@@ -36,49 +37,44 @@ HEADER = "crates/connect_norito_bridge/include/connect_norito_bridge.h"
 CATALOG = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_registry_v4.rs"
 CATALOG_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_registry_v4_release_catalog_impl.rs"
 CATALOG_INCLUDE = 'include!("kagemusha_terminal_registry_v4_release_catalog_impl.rs");\n'
-CATALOG_VALIDATOR_QUALIFICATION_COMPONENT = (
-    "crates/iroha_core/src/smartcontracts/isi/offline/"
-    "kagemusha_terminal_registry_v4_validator_qualification.rs"
-)
-CATALOG_VALIDATOR_QUALIFICATION_INCLUDE = (
-    'include!("kagemusha_terminal_registry_v4_validator_qualification.rs");\n'
-)
+CATALOG_VALIDATOR_QUALIFICATION_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_registry_v4_validator_qualification.rs"
+CATALOG_VALIDATOR_QUALIFICATION_INCLUDE = 'include!("kagemusha_terminal_registry_v4_validator_qualification.rs");\n'
+QUAL_TESTS = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_registry_v4/validator_qualification_tests.rs"
+QUAL_TESTS_INCLUDE = 'include!("kagemusha_terminal_registry_v4/validator_qualification_tests.rs");'
 CORE = "crates/iroha_core/src/smartcontracts/isi/offline.rs"
-CORE_RUNTIME_EFFECTIVE_CONFIG_COMPONENT = (
-    "crates/iroha_core/src/smartcontracts/isi/offline/"
-    "kagemusha_runtime_effective_config.rs"
-)
+CORE_RUNTIME_EFFECTIVE_CONFIG_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_runtime_effective_config.rs"
 CORE_RUNTIME_EFFECTIVE_CONFIG_MODULE = "mod kagemusha_runtime_effective_config;"
-CORE_KAGEMUSHA_ACTIVATION_COMPONENT = (
-    "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_activation.rs"
-)
+CORE_KAGEMUSHA_ACTIVATION_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_activation.rs"
 CORE_KAGEMUSHA_ACTIVATION_INCLUDE = 'include!("offline/kagemusha_activation.rs");'
-CORE_KAGEMUSHA_CANARY_COMPONENT = (
-    "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_taira_canary.rs"
-)
+CORE_KAGEMUSHA_CANARY_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_taira_canary.rs"
 CORE_KAGEMUSHA_CANARY_INCLUDE = 'include!("offline/kagemusha_taira_canary.rs");'
+CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/attestation_certificate_validation.rs"
+CORE_ATTESTATION_CERTIFICATE_VALIDATION_INCLUDE = 'include!("offline/attestation_certificate_validation.rs");'
+CORE_DEVICE_ATTESTATION_ROOTS_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/device_attestation_roots.rs"
+CORE_DEVICE_ATTESTATION_ROOTS_INCLUDE = 'include!("offline/device_attestation_roots.rs");'
+CORE_ATTESTATION_POLICY_VALIDATION_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/attestation_policy_validation.rs"
+CORE_ATTESTATION_POLICY_VALIDATION_INCLUDE = 'include!("offline/attestation_policy_validation.rs");'
+CORE_ATTESTATION_CERTIFICATE_DER_PROFILE_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/attestation_certificate_der_profile.rs"
+CORE_ATTESTATION_CERTIFICATE_DER_PROFILE_INCLUDE = 'include!("offline/attestation_certificate_der_profile.rs");'
+CORE_DEVICE_ATTESTATION_REGISTRATION_VALIDATION_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/device_attestation_registration_validation.rs"
+CORE_DEVICE_ATTESTATION_REGISTRATION_VALIDATION_INCLUDE = 'include!("offline/device_attestation_registration_validation.rs");'
+ANDROID_AUTH = "crates/iroha_core/src/smartcontracts/isi/offline/android_attestation_authorization_validation.rs"
+ANDROID_AUTH_INCLUDE = 'include!("offline/android_attestation_authorization_validation.rs");'
 CORE_ISI_TESTS = "crates/iroha_core/src/smartcontracts/isi/offline/isi_tests.rs"
-CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS = (
-    "crates/iroha_core/src/smartcontracts/isi/offline/"
-    "isi_kagemusha_taira_canary_context_tests.rs"
-)
-CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS_INCLUDE = (
-    'include!("isi_kagemusha_taira_canary_context_tests.rs");'
-)
+CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS = "crates/iroha_core/src/smartcontracts/isi/offline/isi_kagemusha_taira_canary_context_tests.rs"
+CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS_INCLUDE = 'include!("isi_kagemusha_taira_canary_context_tests.rs");'
+POLICY_TESTS = "crates/iroha_core/src/smartcontracts/isi/offline/isi_attestation_policy_release_tests.rs"
+POLICY_TESTS_INCLUDE = 'include!("isi_attestation_policy_release_tests.rs");'
+CORE_ISI_TESTS_PARENT_INCLUDE = 'include!("offline/isi_tests.rs");'
 CORE_ISI_MOD = "crates/iroha_core/src/smartcontracts/isi/mod.rs"
+CORE_TX = "crates/iroha_core/src/tx.rs"
 CORE_STATE = "crates/iroha_core/src/state.rs"
-CORE_COMMITTED_TX_CONTEXT = (
-    "crates/iroha_core/src/state/committed_transaction_context.rs"
-)
-CORE_AUTONOMOUS_MERGE_TESTS = (
-    "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs"
-)
-CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS = (
-    "crates/iroha_core/src/state/autonomous_merge_admission_intent_tests.rs"
-)
-CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS_INCLUDE = (
-    'include!("autonomous_merge_admission_intent_tests.rs");'
-)
+CORE_STATE_TESTS = "crates/iroha_core/src/state/tests.rs"
+CORE_COMMITTED_TX_CONTEXT = "crates/iroha_core/src/state/committed_transaction_context.rs"
+CORE_AUTONOMOUS_MERGE_TESTS = "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs"
+CORE_AUTONOMOUS_MERGE_TESTS_PARENT_INCLUDE = 'include!("autonomous_merge_and_queue_plan_tests.rs");'
+CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS = "crates/iroha_core/src/state/autonomous_merge_admission_intent_tests.rs"
+CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS_INCLUDE = 'include!("autonomous_merge_admission_intent_tests.rs");'
 CORE_BLOCK = "crates/iroha_core/src/block.rs"
 CORE_EXECUTOR = "crates/iroha_core/src/executor.rs"
 STEP_TRANSITION = "crates/iroha_core/src/zk/kagemusha_step_transition.rs"
@@ -88,78 +84,125 @@ VALUE_CONTRACT = "crates/iroha_data_model/tests/kagemusha_value_contract.rs"
 SCHEMA_GOLDEN = "crates/iroha_data_model/tests/offline_public_schema_golden.rs"
 CONFIG = "crates/iroha_config/src/parameters/user.rs"
 NODE = "crates/irohad/src/main.rs"
-NODE_VALIDATOR_QUALIFICATION_COMPONENT = (
-    "crates/irohad/src/main/kagemusha_validator_qualification.rs"
-)
-NODE_VALIDATOR_QUALIFICATION_MODULE = (
-    '#[path = "main/kagemusha_validator_qualification.rs"]\n'
-    "mod kagemusha_validator_qualification;"
-)
-NODE_RUNTIME_EFFECTIVE_CONFIG_PROJECTION_COMPONENT = (
-    "crates/irohad/src/main/kagemusha_runtime_effective_config_projection.rs"
-)
-NODE_RUNTIME_EFFECTIVE_CONFIG_PROJECTION_MODULE = (
-    '#[path = "main/kagemusha_runtime_effective_config_projection.rs"]\n'
-    "mod kagemusha_runtime_effective_config_projection;"
-)
-NODE_VALIDATOR_QUALIFICATION_COMMAND_COMPONENT = (
-    "crates/irohad/src/main/kagemusha_validator_qualification_command.rs"
-)
-NODE_VALIDATOR_QUALIFICATION_COMMAND_MODULE = (
-    '#[path = "main/kagemusha_validator_qualification_command.rs"]\n'
-    "mod kagemusha_validator_qualification_command;"
-)
-NODE_ROOT_OWNED_PUBLICATION_COMPONENT = (
-    "crates/irohad/src/main/root_owned_artifact_publication.rs"
-)
-NODE_ROOT_OWNED_PUBLICATION_MODULE = (
-    '#[path = "main/root_owned_artifact_publication.rs"]\n'
-    "mod root_owned_artifact_publication;"
-)
+NODE_VALIDATOR_QUALIFICATION_COMPONENT = "crates/irohad/src/main/kagemusha_validator_qualification.rs"
+NODE_VALIDATOR_QUALIFICATION_MODULE = '#[path = "main/kagemusha_validator_qualification.rs"]\nmod kagemusha_validator_qualification;'
+NODE_RUNTIME_EFFECTIVE_CONFIG_PROJECTION_COMPONENT = "crates/irohad/src/main/kagemusha_runtime_effective_config_projection.rs"
+NODE_RUNTIME_EFFECTIVE_CONFIG_PROJECTION_MODULE = '#[path = "main/kagemusha_runtime_effective_config_projection.rs"]\nmod kagemusha_runtime_effective_config_projection;'
+NODE_VALIDATOR_QUALIFICATION_COMMAND_COMPONENT = "crates/irohad/src/main/kagemusha_validator_qualification_command.rs"
+NODE_VALIDATOR_QUALIFICATION_COMMAND_MODULE = '#[path = "main/kagemusha_validator_qualification_command.rs"]\nmod kagemusha_validator_qualification_command;'
+NODE_ROOT_OWNED_PUBLICATION_COMPONENT = "crates/irohad/src/main/root_owned_artifact_publication.rs"
+NODE_ROOT_OWNED_PUBLICATION_MODULE = '#[path = "main/root_owned_artifact_publication.rs"]\nmod root_owned_artifact_publication;'
 KAGAMI = "crates/iroha_kagami/src/kagemusha.rs"
-AUTHENTICATED_TOOL_CONTROLLER = (
-    "crates/iroha_kagami/src/bin/iroha_authenticated_tool_controller.rs"
-)
-KAGEMUSHA_PROMOTION_PUBLISHER_COMPONENT = (
-    "crates/iroha_kagami/src/bin/iroha_authenticated_tool_controller/"
-    "kagemusha_promotion_publisher.rs"
-)
-KAGEMUSHA_PROMOTION_PUBLISHER_MODULE = (
-    '#[path = "iroha_authenticated_tool_controller/'
-    'kagemusha_promotion_publisher.rs"]\n'
-    "mod kagemusha_promotion_publisher;"
-)
-KAGEMUSHA_PYTHON_LAUNCHER_COMPONENT = (
-    "crates/iroha_kagami/src/bin/iroha_authenticated_tool_controller/"
-    "kagemusha_python_launcher.rs"
-)
-KAGEMUSHA_PYTHON_LAUNCHER_MODULE = (
-    '#[path = "iroha_authenticated_tool_controller/kagemusha_python_launcher.rs"]\n'
-    "mod kagemusha_python_launcher;"
-)
+AUTHENTICATED_TOOL_CONTROLLER = "crates/iroha_kagami/src/bin/iroha_authenticated_tool_controller.rs"
+KAGEMUSHA_PROMOTION_PUBLISHER_COMPONENT = "crates/iroha_kagami/src/bin/iroha_authenticated_tool_controller/kagemusha_promotion_publisher.rs"
+KAGEMUSHA_PROMOTION_PUBLISHER_MODULE = '#[path = "iroha_authenticated_tool_controller/kagemusha_promotion_publisher.rs"]\nmod kagemusha_promotion_publisher;'
+KAGEMUSHA_PYTHON_LAUNCHER_COMPONENT = "crates/iroha_kagami/src/bin/iroha_authenticated_tool_controller/kagemusha_python_launcher.rs"
+KAGEMUSHA_PYTHON_LAUNCHER_MODULE = '#[path = "iroha_authenticated_tool_controller/kagemusha_python_launcher.rs"]\nmod kagemusha_python_launcher;'
 OFFLINE_CLI = "crates/iroha_cli/src/offline.rs"
 KAGEMUSHA_ROLLOUT_COMPONENT = "crates/iroha_cli/src/offline/kagemusha_rollout.rs"
 KAGEMUSHA_ROLLOUT_MODULE = "mod kagemusha_rollout;"
-KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT = (
-    "crates/iroha_cli/src/offline/kagemusha_rollout/liveness.rs"
-)
+KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT = "crates/iroha_cli/src/offline/kagemusha_rollout/liveness.rs"
 KAGEMUSHA_ROLLOUT_LIVENESS_MODULE = "mod liveness;"
+STATUS_CAPTURE = "scripts/capture_android_attestation_status.py"
+STATUS_CAPTURE_TEST = "scripts/tests/capture_android_attestation_status_test.py"
+ANDROID_CERT = "scripts/android_attestation_certificate_profile.py"
+ANDROID_CERT_FIX = "scripts/tests/android_attestation_certificate_profile_fixtures.py"
+ANDROID_CERT_TEST = "scripts/tests/android_attestation_certificate_profile_test.py"
+ANDROID_DEVICE_LAB_SLOT = "scripts/check_android_device_lab_slot.py"
+ANDROID_DEVICE_LAB_RUNNER = "scripts/run_kagemusha_candidate_android_lab.sh"
+DEVICE_ATTESTATION_SOURCE_PATHS = (
+    MODEL_DEVICE_ATTESTATION_CONSTANTS_COMPONENT, MODEL_DEVICE_ATTESTATION_POLICY_COMPONENT,
+    CORE_DEVICE_ATTESTATION_ROOTS_COMPONENT, CORE_ATTESTATION_POLICY_VALIDATION_COMPONENT,
+    CORE_ATTESTATION_CERTIFICATE_DER_PROFILE_COMPONENT, CORE_DEVICE_ATTESTATION_REGISTRATION_VALIDATION_COMPONENT, ANDROID_AUTH,
+    POLICY_TESTS, QUAL_TESTS, STATUS_CAPTURE, STATUS_CAPTURE_TEST,
+    ANDROID_CERT, ANDROID_CERT_FIX, ANDROID_CERT_TEST,
+    ANDROID_DEVICE_LAB_SLOT, ANDROID_DEVICE_LAB_RUNNER,
+)
 KAGEMUSHA_RELEASE_RUST_TEST_FILTERS = (
+    "cargo test -p iroha_data_model --lib --features transparent_api kagemusha_v4 -- --nocapture",
     "cargo test -p iroha_data_model --test iroha_data_model_group_02 offline_public_schema_golden -- --nocapture",
     "cargo test -p iroha_data_model --lib --features transparent_api canary_ -- --nocapture",
     "cargo test -p iroha_data_model --lib --features transparent_api post_canary_liveness_rejects_receipt_and_transaction_wire_anchor_splices -- --nocapture",
     "cargo test -p iroha_data_model --lib --features transparent_api kagemusha_post_canary_validator_liveness -- --nocapture",
+    "cargo test -p iroha_core direct_ordinary_multisig_cancel_executes_exact_staged_transition --lib -- --nocapture",
+    "cargo test -p iroha_core direct_ordinary_multisig_deactivate_executes_exact_enabled_transition --lib -- --nocapture",
+    "cargo test -p iroha_core production_proposal_validation_enforces_kagemusha_runtime_projection --lib -- --nocapture",
+    "cargo test -p iroha_core production_commit_apply_enforces_kagemusha_runtime_projection --lib -- --nocapture",
+    "cargo test -p iroha_core production_vote_worker_rejects_missing_and_mismatched_kagemusha_projection --lib -- --nocapture",
+    "cargo test -p iroha_core production_vote_worker_signs_prepare_and_commit_for_exact_kagemusha_projection --lib -- --nocapture",
+    "cargo test -p irohad --bin iroha3d authenticated_snapshot_ -- --nocapture",
+    "cargo test -p iroha_kagami --bin kagami lifecycle_ -- --nocapture",
     "cargo test -p iroha_core --lib taira_canary -- --nocapture",
     "cargo test -p iroha_core --lib autonomous_merge_admission_intent_ -- --nocapture",
+    "cargo test -p iroha_core --lib attestation_certificate_validation_tests -- --nocapture",
     "cargo test -p iroha_torii --lib bridge_finality_attestation_route_tests -- --nocapture",
     "cargo test -p iroha_cli --bin iroha kagemusha_rollout -- --nocapture",
 )
+KAGEMUSHA_RELEASE_PYTHON_TEST_PATHS = (
+    "scripts/tests/build_kagemusha_v4_candidate_bundle_test.py",
+    "scripts/tests/build_kagemusha_production_ios_policy_test.py",
+    "scripts/tests/check_kagemusha_candidate_ios_evidence_test.py",
+    "scripts/tests/kagemusha_candidate_ios_lab_source_test.py",
+    "scripts/tests/kagemusha_app_attest_freshness_authority_test.py",
+    "scripts/tests/kagemusha_production_app_attest_lab_source_test.py",
+    "scripts/tests/measure_kagemusha_production_app_attest_bundle_test.py",
+    "scripts/tests/sign_kagemusha_production_ios_evidence_test.py",
+    "scripts/tests/kagemusha_source_tree_seal_test.py",
+    "scripts/tests/produce_kagemusha_v4_source_seal_projection_test.py",
+    "scripts/tests/kagemusha_staged_resource_guard_test.py",
+    "scripts/tests/stage_kagemusha_candidate_android_artifacts_test.py",
+    "scripts/tests/stage_kagemusha_candidate_android_lab_test.py",
+    STATUS_CAPTURE_TEST, ANDROID_CERT_TEST,
+    "pytests/scripts/run_kagemusha_v4_generation_test.py",
+    "pytests/scripts/run_kagemusha_v4_generation_benchmark_test.py",
+)
+
+D_RECORD_CANARY = ('Record canary',)
+D_WIRE_BOUNDARY = ('signed canary wire',)
+D_CANARY_MARKER = ('activation-bound exact reservation',)
+D_CANARY_EXEC = ('one-shot canary execution',)
+D_BLOCK_PROOF = ('full canary wire block proof',)
+D_EXPECTATIONS = ('expectations provenance',)
+D_ROLLOUT_PHASES = ('eight phase rollout',)
+D_FINAL_RECEIPT = ('no-replace final receipt',)
+D_EXACT_PERMIT = ('fresh exact permit Record',)
+D_POST_RECEIPT = ('post-receipt promotion',)
+D_STRUCTURAL = ('expired-journal reconciliation',)
+D_CANARY_JOURNAL = ('private canary journal',)
+D_VALIDATOR_TIPS = ('shared canary-rooted finality',)
+D_ROOT_TCB = ('root-TCB pinned',)
+D_RESERVATION = ('exact-call reservation',)
+D_ROSTER = ('four-unit runtime roster',)
+D_KAGAMI_EXEC = ('Kagami verifier execution',)
+D_PRECOMMIT = ('controller-signed permit',)
+D_PROOF_CHAIN = ('contiguous post-receipt finality',)
+D_ROOT_PUBLISH = ('root-owned no-replace',)
+D_SAFE_RESUME = ('matching-journal safe-resume',)
+D_CATALOG_HISTORY = ('catalog validator boundary',)
+D_VALIDATION_SIGN = ('validation before signing',)
+D_ROLLOUT_CLI = ('rollout-v4 offline CLI',)
+D_PROMOTION_PUBLISH = ('promotion-record publication',)
+D_STATUS_IDENTITY = ('status identity uncertainty',)
+D_RECEIPT_PATH = ('fixed receipt path',)
+D_FINAL_RECHECK = ('final signing recheck',)
+D_WRITE_AUTH = ('explicit write authorization',)
+D_SUBMIT_UNCERTAIN = ('submission uncertainty',)
+D_EXPECTATIONS_JOURNAL = ('signed expectations journal',)
+D_FINALITY_CORRIDOR = ('four-validator DA Nexus',)
+D_DEFERRED_EXPECTATIONS = ('deferred signing',)
+D_CATALOG_SIGNATURE = ('catalog authority signature',)
+D_BOUNDED_DESCRIPTOR = ('descriptor validation',)
+D_ROOT_READ = ('no-follow root-owned read',)
+D_BLOCK_ENTRYPOINT = ('block entrypoint proof',)
+D_ANDROID_STATUS = ('Android status freshness',)
+D_STRICT_X509 = ('strict raw X.509 DER',)
+D_ANDROID_CHAIN = ('Factory/RKP time profiles',)
+D_ANDROID_CAPTURE = ('status capture',)
 
 
 def runtime_projection_source_errors(
     core_projection: str, wrapper: str, node: str, catalog: str, model: str
 ) -> list[str]:
-    """Check Core-only projection derivation and verified-value signing."""
     errors: list[str] = []
     validator_check = node.split("fn validate_config_for_check_mode(", 1)[-1].split(
         "fn continue_after_full_kagemusha_check", 1
@@ -167,7 +210,7 @@ def runtime_projection_source_errors(
     require(model, MODEL, errors, "pub const KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT: usize = 4;")
     require_pattern(
         wrapper, NODE_RUNTIME_EFFECTIVE_CONFIG_PROJECTION_COMPONENT, errors,
-        (r"pub\(super\) fn build_kagemusha_runtime_effective_config_projection_v1\(\s*"
+        (r"pub fn build_kagemusha_runtime_effective_config_projection_v1\(\s*"
          r"config: &Config,\s*genesis: &GenesisBlock,\s*bootstrap: &GenesisV2Bootstrap,\s*"
          r"\) -> Result<VerifiedKagemushaV4RuntimeEffectiveConfigV1, String> \{\s*"
          r"VerifiedKagemushaV4RuntimeEffectiveConfigV1::derive\(config, genesis, bootstrap\)\s*\}"),
@@ -188,34 +231,35 @@ def runtime_projection_source_errors(
          r"let staged_pops = bootstrap\.proofs_of_possession\(\);"),
         "opaque Core runtime-effective projection derivation",
     )
-    require_pattern(
+    require(
         core_projection, CORE_RUNTIME_EFFECTIVE_CONFIG_COMPONENT, errors,
-        (r"config\.sumeragi\.role != NodeRole::Validator.*?"
-         r"metadata\.mode != SumeragiConsensusMode::Permissioned.*?"
-         r"context\.mode != ConsensusMode::Permissioned.*?"
-         r"metadata\.sumeragi_v2 != staged_parameters.*?"
-         r"context\.roster\.len\(\) != KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT.*?"
-         r"staged_pops\.len\(\) != context\.roster\.len\(\).*?"
-         r"context\.roster\.iter\(\)\.any\(\|member\| member\.power != 1\)"),
-        "permissioned four-unit runtime roster",
+        "metadata.mode != SumeragiConsensusMode::Permissioned",
+        "context.mode != ConsensusMode::Permissioned",
+        "metadata.sumeragi_v2 != staged_parameters",
+        "context.roster.len() != KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT",
+        "staged_pops.len() != context.roster.len()",
+        "context.roster.iter().any(|member| member.power != 1)",
+        "config.sumeragi.role != NodeRole::Validator",
+        "validator_pops.len() != KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT",
     )
-    require_pattern(
+    require(
         core_projection, CORE_RUNTIME_EFFECTIVE_CONFIG_COMPONENT, errors,
-        (r"let signed = signed_genesis_validator_pops\(genesis\).*?"
-         r"signed\.len\(\) == staged_pops\.len\(\).*?"
-         r"signed\.len\(\) == trusted\.pops\.len\(\).*?"
-         r"trusted\.pops\.get\(signed_id\.public_key\(\)\) == Some\(signed_pop\).*?"
-         r"configured_validators != context_validators.*?!exact_pops"),
-        "exact signed/staged/configured PoP map",
+        "signed.len() == staged_pops.len()",
+        "signed_id == staged_id && signed_pop == staged_pop",
+        "trusted.pops.len() == validator_pops.len()",
+        "trusted.pops.get(validator_id.public_key()) == Some(pop)",
+        "bls_normal_pop_verify(validator_id.public_key(), pop).is_ok()",
+        "configured_validators != validator_ids",
+        "|| !exact_pops",
     )
-    require_pattern(
+    require(
         core_projection, CORE_RUNTIME_EFFECTIVE_CONFIG_COMPONENT, errors,
-        (r"if validator_id == local_id \{\s*"
-         r"config\.network\.public_address\.value\(\)\.clone\(\).*?"
-         r"Duration::from_millis\(metadata\.block_cadence_ms\.get\(\)\),\s*context\.mode,.*?"
-         r"projection\.validate\(\)\.map_err\(\|error\| error\.to_string\(\)\)\?;\s*"
-         r"Ok\(Self \{ projection \}\)"),
-        "advertised endpoint, signed cadence, and validated projection",
+        "Duration::from_millis(metadata.block_cadence_ms.get())",
+        "if validator_id == local_id {",
+        "config.network.public_address.value().clone()",
+        ".v2_config(block_cadence, mode)",
+        "projection.validate().map_err(|error| error.to_string())?;",
+        "Ok(Self { projection })",
     )
     require_pattern(
         core_projection, CORE_RUNTIME_EFFECTIVE_CONFIG_COMPONENT, errors,
@@ -269,6 +313,545 @@ def runtime_projection_source_errors(
     return errors
 
 
+def attestation_certificate_source_errors(attestation: str, core: str) -> list[str]:
+    errors: list[str] = []
+    require(core, CORE, errors, CORE_ATTESTATION_CERTIFICATE_VALIDATION_INCLUDE)
+    forbid(
+        attestation, CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT, errors, "#[ignore]"
+    )
+    require_pattern(
+        attestation, CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT, errors,
+        (r"fn parse_x509_certificate_der\(.*?"
+         r"OFFLINE_ATTESTATION_MAX_X509_CERTIFICATE_BYTES.*?"
+         r"X509Certificate::from_der.*?!remaining\.is_empty\(\).*?"
+         r"validate_x509_certificate_signature_algorithm\(&certificate\)\?"),
+        "bounded DER parsing with strict signature algorithm validation",
+    )
+    require_pattern(
+        attestation, CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT, errors,
+        (r"fn validate_x509_certificate_signature_algorithm\(.*?"
+         r"tbs_certificate\.signature != certificate\.signature_algorithm.*?"
+         r"x509_certificate_signature_oid_is_weak.*?prohibited weak signature algorithm.*?"
+         r"1\.2\.840\.113549\.1\.1\.10.*?"
+         r"validate_x509_rsa_pss_signature_algorithm\(signature_algorithm\)\?;"),
+        "strict certificate signature algorithm profile",
+    )
+    require(
+        attestation, CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT, errors,
+        "1.2.840.113549.1.1.2", "1.2.840.113549.1.1.4", "1.2.840.113549.1.1.5",
+        "1.2.840.10040.4.3", "1.2.840.10045.4.1",
+    )
+    require_pattern(
+        attestation, CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT, errors,
+        (r"fn validate_x509_rsa_pss_signature_algorithm\(.*?"
+         r"for expected_tag in \[0, 1, 2\].*?"
+         r"RsaSsaPssParams::try_from.*?hash_algorithm_oid.*?"
+         r"mask_gen_algorithm_raw.*?1\.2\.840\.113549\.1\.1\.8.*?"
+         r"mask_hash_oid\.to_string\(\) != hash_oid.*?"
+         r"salt_length\(\) != expected_salt_length.*?trailer_field\(\) != 1"),
+        "strict RSA-PSS verifier parameter profile",
+    )
+    require_pattern(
+        attestation, CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT, errors,
+        (r"fn validate_x509_certificate_signature_algorithm\(.*?"
+         r"1\.2\.840\.113549\.1\.1\.10.*?"
+         r"validate_x509_rsa_pss_signature_algorithm\(signature_algorithm\)\?;"),
+        "strict RSA-PSS verifier parameter profile",
+    )
+    require_pattern(
+        attestation, CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT, errors,
+        (r"fn validate_x509_certificate_critical_extensions\(.*?"
+         r"seen_extension_oids\.insert\(extension_oid\.clone\(\)\).*?"
+         r"2\.5\.29\.30.*?2\.5\.29\.32.*?2\.5\.29\.33.*?2\.5\.29\.36.*?2\.5\.29\.54.*?"
+         r"extension\.critical.*?ParsedExtension::BasicConstraints.*?"
+         r"ParsedExtension::KeyUsage"),
+        "strict certificate extension processing",
+    )
+    require_pattern(
+        attestation, CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT, errors,
+        (r"fn validate_x509_leaf_certificate_profile\(.*?"
+         r"basic_constraints\.value\.ca.*?path_len_constraint\.is_some.*?"
+         r"!key_usage\.critical.*?!key_usage\.value\.digital_signature\(\).*?"
+         r"key_usage\.value\.key_cert_sign\(\)"),
+        "explicit end-entity certificate profile",
+    )
+    require_pattern(
+        attestation, CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT, errors,
+        (r"fn validate_attestation_certificate_chain\(.*?"
+         r"certificate_chain\.len\(\) > OFFLINE_ATTESTATION_MAX_X509_CHAIN_CERTIFICATES.*?"
+         r"for root_der in trusted_roots_der \{.*?tail_der != root_der.*?return Ok\(\(\)\);.*?"
+         r"for root_der in trusted_roots_der \{.*?tail\.issuer\(\) != root\.subject\(\).*?"
+         r"if let Err\(error\) = verify_x509_certificate_signature\(tail, &root\).*?continue;.*?"
+         r"if let Err\(error\) = validate_x509_ca_path_len_constraint.*?continue;.*?return Ok"),
+        "order-independent exact-pinned trust-anchor validation",
+    )
+    require_pattern(
+        attestation, CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT, errors,
+        (r"fn x509_root_nearest_unique_extension_value\(.*?"
+         r"certificate_chain\.iter\(\)\.enumerate\(\)\.rev\(\).*?"
+         r"fn android_keymint_leaf_attestation_extension\(.*?"
+         r"OFFLINE_ATTESTATION_ANDROID_KEY_OID.*?certificate_index != 0"),
+        "root-nearest Android KeyMint extension selection",
+    )
+    require_pattern(
+        core, CORE, errors,
+        (r"OFFLINE_ATTESTATION_MAX_X509_CERTIFICATE_BYTES: usize = 16 \* 1024.*?"
+         r"OFFLINE_ATTESTATION_MAX_X509_CHAIN_CERTIFICATES: usize = 8.*?"
+         r"OFFLINE_ATTESTATION_MAX_IOS_X509_CHAIN_CERTIFICATES: usize = 4.*?"
+         r"android_keymint_leaf_attestation_extension\(&report\.certificates\)"),
+        "bounded Apple and Android certificate inputs",
+    )
+    for test_name in (
+        "same_subject_trust_anchor_rollover_is_order_independent",
+        "parsed_critical_and_path_processing_extensions_fail_closed",
+        "android_keymint_uses_only_a_directly_attested_leaf_extension",
+        "certificate_signature_algorithm_identifiers_must_match_exactly",
+        "weak_certificate_signature_algorithm_oids_are_rejected",
+        "rsa_pss_signature_parameters_must_match_verifier_profile",
+        "certificate_validity_preserves_exact_millisecond_boundaries",
+        "android_factory_validity_rejects_first_millisecond_after_not_after",
+    ):
+        require_pattern(
+            attestation, CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT, errors,
+            rf"#\[test\]\s*fn {test_name}\(\)", f"active {test_name} regression",
+        )
+    return errors
+
+
+def device_attestation_governance_source_errors(texts: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    model = texts[MODEL]
+    core = texts[CORE]
+    constants = texts[MODEL_DEVICE_ATTESTATION_CONSTANTS_COMPONENT]
+    policy_model = texts[MODEL_DEVICE_ATTESTATION_POLICY_COMPONENT]
+    roots = texts[CORE_DEVICE_ATTESTATION_ROOTS_COMPONENT]
+    policy = texts[CORE_ATTESTATION_POLICY_VALIDATION_COMPONENT]
+    strict_der = texts[CORE_ATTESTATION_CERTIFICATE_DER_PROFILE_COMPONENT]
+    attestation = texts[CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT]
+    android_auth = texts[ANDROID_AUTH]
+    registration = texts[CORE_DEVICE_ATTESTATION_REGISTRATION_VALIDATION_COMPONENT]
+    activation = texts[CORE_KAGEMUSHA_ACTIVATION_COMPONENT]
+    qualification = texts[CATALOG]
+    qual_tests = texts[QUAL_TESTS]
+    policy_tests = texts[POLICY_TESTS]
+    capture = texts[STATUS_CAPTURE]
+    cert_profile = texts[ANDROID_CERT]
+    cert_fixtures = texts[ANDROID_CERT_FIX]
+    cert_tests = texts[ANDROID_CERT_TEST]
+    android_lab = texts[ANDROID_DEVICE_LAB_SLOT]
+    runner = texts[ANDROID_DEVICE_LAB_RUNNER]
+
+    for parent, parent_path, marker, component_path in (
+        (model, MODEL, MODEL_DEVICE_ATTESTATION_CONSTANTS_INCLUDE,
+         MODEL_DEVICE_ATTESTATION_CONSTANTS_COMPONENT),
+        (model, MODEL, MODEL_DEVICE_ATTESTATION_POLICY_INCLUDE,
+         MODEL_DEVICE_ATTESTATION_POLICY_COMPONENT),
+        (core, CORE, CORE_DEVICE_ATTESTATION_ROOTS_INCLUDE,
+         CORE_DEVICE_ATTESTATION_ROOTS_COMPONENT),
+        (core, CORE, CORE_ATTESTATION_POLICY_VALIDATION_INCLUDE,
+         CORE_ATTESTATION_POLICY_VALIDATION_COMPONENT),
+        (core, CORE, CORE_ATTESTATION_CERTIFICATE_DER_PROFILE_INCLUDE,
+         CORE_ATTESTATION_CERTIFICATE_DER_PROFILE_COMPONENT),
+        (core, CORE, CORE_ATTESTATION_CERTIFICATE_VALIDATION_INCLUDE,
+         CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT),
+        (core, CORE, CORE_DEVICE_ATTESTATION_REGISTRATION_VALIDATION_INCLUDE,
+         CORE_DEVICE_ATTESTATION_REGISTRATION_VALIDATION_COMPONENT),
+        (core, CORE, ANDROID_AUTH_INCLUDE, ANDROID_AUTH),
+    ):
+        if parent.count(marker) != 1:
+            errors.append(
+                f"{parent_path}: expected exactly one authenticated {component_path} include"
+            )
+    if qualification.count(QUAL_TESTS_INCLUDE) != 1:
+        errors.append(
+            f"{CATALOG}: expected exactly one authenticated "
+            f"{QUAL_TESTS} include"
+        )
+
+    require_pattern(
+        policy_tests, POLICY_TESTS, errors,
+        (r"#\[test\]\s*fn release_activation_device_policy_is_production_and_fail_closed\(\).*?"
+         r"expect_err\(\"activation must pin the exact Apple App Attest root\"\).*?"
+         r"for platform in \[.*?IOS_APP_ATTEST.*?ANDROID_KEYMINT.*?\].*?"
+         r"activation must require every exact production root to be governance-active.*?"
+         r"#\[test\]\s*fn production_device_policy_constructor_binds_explicit_apps_and_builtin_roots\(\).*?"
+         r"assert_eq!\(policy\.trusted_roots\.len\(\), 3\)"),
+        "active exact built-in release-root policy regressions",
+    )
+    require_pattern(
+        qual_tests, QUAL_TESTS, errors,
+        (r"#\[test\]\s*fn validator_qualification_freshness_is_bounded_at_the_signing_clock\(\).*?"
+         r"cache_max_age_seconds.*?expires - 1.*?inclusive millisecond before expiry.*?"
+         r"boundary_policy,.*?expires,.*?\.is_err\(\).*?"
+         r"first stale status millisecond must fail closed"),
+        "active qualification Android-status +1ms freshness boundary regression",
+    )
+    forbid(
+        policy_tests + cert_tests,
+        "device attestation release regressions", errors, "#[ignore]", "#[cfg",
+    )
+
+    require(
+        constants, MODEL_DEVICE_ATTESTATION_CONSTANTS_COMPONENT, errors,
+        '"https://android.googleapis.com/attestation/status"',
+        "OFFLINE_ANDROID_ATTESTATION_STATUS_SNAPSHOT_VERSION_V1: u16 = 1",
+        "OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_NON_VALID_SERIALS_V1: usize = 4_096",
+        "OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_SERIAL_HEX_BYTES_V1: usize = 40",
+        "OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_CACHE_AGE_SECONDS_V1: u32 = 86_400",
+        "OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024",
+    )
+    require_pattern(
+        policy_model, MODEL_DEVICE_ATTESTATION_POLICY_COMPONENT, errors,
+        (r"pub struct OfflineAndroidAttestationStatusSnapshotV1\s*\{.*?"
+         r"version: u16.*?payload_sha256: \[u8; 32\].*?response_date_ms: u64.*?"
+         r"last_modified_ms: Option<u64>.*?cache_max_age_seconds: u32.*?"
+         r"non_valid_serials: Vec<String>.*?pub struct OfflineDeviceAttestationPolicy\s*\{.*?"
+         r"revoked_certificate_tbs_sha256: Vec<Vec<u8>>.*?"
+         r"android_status_snapshot: Option<OfflineAndroidAttestationStatusSnapshotV1>"),
+        "governed Android status snapshot and TBSCertificate revocation model",
+    )
+    require(
+        roots, CORE_DEVICE_ATTESTATION_ROOTS_COMPONENT, errors,
+        "APPLE_APP_ATTESTATION_ROOT_CA_DER_B64",
+        "ANDROID_KEY_ATTESTATION_ROOT_CA_DER_B64",
+        "ANDROID_KEY_ATTESTATION_CA_DER_B64",
+    )
+    require_pattern(
+        policy, CORE_ATTESTATION_POLICY_VALIDATION_COMPONENT, errors,
+        (r"if let Some\(snapshot\) = &policy\.android_status_snapshot.*?"
+         r"snapshot\.non_valid_serials\.len\(\).*?"
+         r"OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_NON_VALID_SERIALS_V1.*?"
+         r"serial\.len\(\).*?OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_SERIAL_HEX_BYTES_V1"),
+        "bounded governed Android status snapshot",
+    )
+    require_pattern(
+        policy, CORE_ATTESTATION_POLICY_VALIDATION_COMPONENT, errors,
+        (r"fn android_attestation_status_snapshot_fresh_until_ms\(.*?"
+         r"snapshot\.version.*?OFFLINE_ANDROID_ATTESTATION_STATUS_SNAPSHOT_VERSION_V1.*?"
+         r"snapshot\.payload_sha256 == \[0; 32\].*?snapshot\.response_date_ms == 0.*?"
+         r"response_date_ms\.is_multiple_of\(1_000\).*?cache_max_age_seconds == 0.*?"
+         r"OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_CACHE_AGE_SECONDS_V1.*?"
+         r"last_modified_ms == 0.*?last_modified_ms\.is_multiple_of\(1_000\).*?"
+         r"last_modified_ms > snapshot\.response_date_ms.*?"
+         r"previous_serial: Option<&str>.*?serial\.is_empty\(\).*?"
+         r"byte\.is_ascii_digit\(\).*?matches!\(byte, b'a'\.\.=b'f'\).*?"
+         r"serial\.starts_with\('0'\).*?previous >= serial\.as_str\(\).*?"
+         r"response_date_ms\s*\.checked_add\(u64::from\(snapshot\.cache_max_age_seconds\) \* 1_000\)"),
+        "canonical governed Android status metadata and serial set",
+    )
+    require_pattern(
+        policy, CORE_ATTESTATION_POLICY_VALIDATION_COMPONENT, errors,
+        (r"fn validate_android_attestation_status_snapshot_at\(.*?"
+         r"evaluation_time_ms < snapshot\.response_date_ms \|\| evaluation_time_ms >= fresh_until_ms.*?"
+         r"fn validate_android_attestation_status_transition\(.*?"
+         r"\(Some\(_\), None\) => \{\s*return Err\(.*?anti-rollback state cannot be removed.*?"
+         r"previous == candidate.*?candidate\.response_date_ms <= previous\.response_date_ms.*?"
+         r"candidate < previous.*?previous\.last_modified_ms\.is_some\(\)"
+         r" && candidate\.last_modified_ms\.is_none\(\).*?"
+         r"candidate\.last_modified_ms == previous\.last_modified_ms.*?"
+         r"candidate\.payload_sha256 != previous\.payload_sha256.*?"
+         r"candidate\.non_valid_serials != previous\.non_valid_serials"),
+        D_ANDROID_STATUS[0],
+    )
+    require_pattern(
+        policy, CORE_ATTESTATION_POLICY_VALIDATION_COMPONENT, errors,
+        (r"fn validate_offline_attestation_policy_transition_from_state\(.*?"
+         r"OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY.*?"
+         r"decode_canonical::<OfflineDeviceAttestationPolicy>.*?"
+         r"validate_offline_attestation_policy_transition\(&previous, candidate\).*?"
+         r"fn validate_offline_attestation_policy_status_coverage\(.*?"
+         r"policy\.require_android_app_policy.*?android_status_snapshot\.as_ref\(\).*?"
+         r"exclusive_end_ms > fresh_until_ms"),
+        "state-authenticated Android status transition and validity coverage",
+    )
+    require_pattern(
+        policy, CORE_ATTESTATION_POLICY_VALIDATION_COMPONENT, errors,
+        (r"let ios_roots = policy.*?APPLE_APP_ATTESTATION_ROOT_CA_DER_B64.*?"
+         r"if ios_roots != expected_ios_roots.*?let mut android_roots = policy.*?"
+         r"OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT.*?root\.der\.clone\(\).*?"
+         r"android_roots\.sort_unstable\(\).*?"
+         r"ANDROID_KEY_ATTESTATION_ROOT_CA_DER_B64.*?"
+         r"ANDROID_KEY_ATTESTATION_CA_DER_B64.*?"
+         r"expected_android_roots\.sort_unstable\(\).*?"
+         r"if android_roots != expected_android_roots.*?"
+         r"any\(\|root\| !trusted_root_is_active\(root, block_unix_timestamp_ms\)\)"),
+        D_ANDROID_STATUS[0],
+    )
+    require_pattern(
+        core, CORE, errors,
+        (r"fn validate_android_keymint_report\(.*?android_status_snapshot\.as_ref\(\).*?"
+         r"non_valid_serials\s*\.iter\(\)\s*\.cloned\(\).*?"
+         r"x509_evaluation_time\(\s*registration.*?expires_at_ms.*?checked_sub\(1\).*?"
+         r"validate_android_key_attestation_certificate_chain\(.*?"
+         r"&non_valid_certificate_serials.*?registration_last_valid_time"),
+        "state-governed Android status consumption",
+    )
+    require_pattern(
+        core, CORE, errors,
+        (r"impl Execute for SetOfflineDeviceAttestationPolicy.*?"
+         r"validate_offline_attestation_policy_transition_from_state\(&policy, state_transaction\)"),
+        "state-governed Android status transition",
+    )
+    require(
+        activation, CORE_KAGEMUSHA_ACTIVATION_COMPONENT, errors,
+        "validate_offline_attestation_policy_transition_from_state(&policy, state_transaction)?;",
+    )
+    require_pattern(
+        registration, CORE_DEVICE_ATTESTATION_REGISTRATION_VALIDATION_COMPONENT, errors,
+        (r"validate_offline_attestation_policy_status_coverage\(\s*"
+         r"&lifetime_policy,\s*registration\.expires_at_ms,\s*\)\?;.*?"
+         r"let last_valid_ms = registration\.expires_at_ms\.saturating_sub\(1\)"),
+        "Android status coverage through registration expiry",
+    )
+    require_pattern(
+        qualification, CATALOG_VALIDATOR_QUALIFICATION_COMPONENT, errors,
+        (r"let status_coverage_exclusive_end_ms = validator_qualification_expires_at_unix_ms\s*"
+         r"\.checked_add\(1\).*?validate_offline_attestation_policy_status_coverage\(\s*"
+         r"&device_attestation_policy,\s*status_coverage_exclusive_end_ms,\s*\)"),
+        "Android status coverage through validator qualification expiry",
+    )
+
+    require_pattern(
+        android_auth, ANDROID_AUTH, errors,
+        (r"packages\.len\(\) != 1.*?signature_digests\.len\(\) != 1.*?"
+         r"verified_boot_key\.is_empty\(\).*?!device_locked.*?VERIFIED.*?"
+         r"verified_boot_hash\.len\(\) != 32.*?seen_tags.*?"
+         r"!seen_tags\.insert\(tag\.number\).*?!hardware_enforced.*?"
+         r"validate_android_root_of_trust\(value\)"),
+        "strict Android application, boot, and authorization identity",
+    )
+    require_pattern(
+        strict_der, CORE_ATTESTATION_CERTIFICATE_DER_PROFILE_COMPONENT, errors,
+        (r"fn parse_strict_x509_algorithm_identifier\(.*?"
+         r"DerReader::sequence\(encoded\).*?read_expected\(0x06\).*?"
+         r"read_tlv_full_with_raw\(\).*?sequence\.has_remaining\(\).*?"
+         r"fn strict_x509_algorithm_parameters_are_absent_or_null\(.*?"
+         r"tag\.first_byte == 0x05.*?value\.is_empty\(\).*?raw == \[0x05, 0x00\]"),
+        "strict raw AlgorithmIdentifier parsing",
+    )
+    require_pattern(
+        strict_der, CORE_ATTESTATION_CERTIFICATE_DER_PROFILE_COMPONENT, errors,
+        (r"fn validate_strict_x509_rsa_pss_parameters\(.*?"
+         r"read_expected\(0xa0\).*?read_expected\(0xa1\).*?read_expected\(0xa2\).*?"
+         r"parameters\.has_remaining\(\).*?strict_single_der_tlv\(hash_field, 0x30\).*?"
+         r"MGF1_OID.*?strict_single_der_tlv\(mask_parameters_raw, 0x30\).*?"
+         r"mask_hash_oid != hash_oid \|\| mask_digest_bytes != digest_bytes.*?"
+         r"salt_length != digest_bytes"),
+        "strict explicit SHA-2 RSA-PSS byte profile",
+    )
+    require(
+        core, CORE, errors, ".checked_mul(128)",
+        ".and_then(|number| number.checked_add(u32::from(byte & 0x7F)))",
+    )
+    require(
+        strict_der, CORE_ATTESTATION_CERTIFICATE_DER_PROFILE_COMPONENT, errors,
+        "fn der_high_tag_number_overflow_cannot_alias_a_known_tag()",
+    )
+    require_pattern(
+        strict_der, CORE_ATTESTATION_CERTIFICATE_DER_PROFILE_COMPONENT, errors,
+        (r"fn strict_x509_tbs_certificate_der\(.*?DerReader::sequence\(certificate_der\).*?"
+         r"read_tlv_full_with_raw\(\).*?signature_value\[0\] != 0.*?"
+         r"certificate\.has_remaining\(\).*?first_tag\.first_byte != 0xa0.*?"
+         r"version != 2.*?validate_strict_x509_positive_serial.*?"
+         r"inner_algorithm_raw != outer_algorithm_raw.*?"
+         r"validate_strict_x509_signature_algorithm\(inner_algorithm_raw\).*?Ok\(tbs_raw\)"),
+        D_STRICT_X509[0],
+    )
+    require_pattern(
+        attestation, CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT, errors,
+        (r"fn parse_x509_certificate_der\(.*?"
+         r"let strict_tbs_der = strict_x509_tbs_certificate_der\(certificate_der\)\?;.*?"
+         r"X509Certificate::from_der\(certificate_der\).*?"
+         r"strict_tbs_der != certificate\.tbs_certificate\.as_ref\(\)"),
+        D_STRICT_X509[0],
+    )
+    require_pattern(
+        attestation, CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT, errors,
+        (r"fn policy_revoked_certificate_tbs_hashes\(.*?"
+         r"policy\.revoked_certificate_tbs_sha256.*?"
+         r"sha256_bytes\(certificate\.tbs_certificate\.as_ref\(\)\)"),
+        D_STRICT_X509[0],
+    )
+    if attestation.count(
+        "sha256_bytes(certificate.tbs_certificate.as_ref())"
+    ) < 2 or "sha256_bytes(certificate_der)" in attestation:
+        errors.append(
+            f"{CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT}: {D_STRICT_X509[0]}"
+        )
+
+    require_pattern(
+        attestation, CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT, errors,
+        (r"enum AndroidKeyAttestationCertificateChainKind\s*\{\s*Factory,\s*RemoteKeyProvisioning.*?"
+         r"fn classify_android_key_attestation_certificate_chain\(.*?2\.5\.4\.5.*?"
+         r'"Droid CA2".*?"Google LLC".*?subject\.iter_attributes\(\)\.count\(\) == 2.*?'
+         r"classification is ambiguous.*?classification is unknown"),
+        "exact fail-closed Android Factory/RKP classifier",
+    )
+    require_pattern(
+        attestation, CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT, errors,
+        (r"struct X509EvaluationTime.*?subsecond_millis.*?"
+         r"unix_timestamp_seconds == boundary\.timestamp\(\) && self\.subsecond_millis != 0.*?"
+         r"subsecond_millis: block_unix_timestamp_ms % 1_000.*?"
+         r"fn validate_android_key_attestation_certificate_chain_time_profile\(.*?"
+         r"registration_expiry_time < evaluation_time.*?"
+         r"ANDROID_KEY_ATTESTATION_ROOT_CA_DER_B64.*?anchor_der == legacy_google_root\.as_slice\(\).*?"
+         r"evaluation_time\.is_before\(certificate\.validity\(\)\.not_before\).*?"
+         r"Factory.*?!factory_may_ignore_expiration.*?evaluation_time\.is_after\(certificate\.validity\(\)\.not_after\).*?"
+         r"RemoteKeyProvisioning.*?validate_x509_certificate_time\(certificate, evaluation_time\)\.is_err\(\).*?"
+         r"validate_x509_certificate_time\(certificate, registration_expiry_time\)\.is_err\(\).*?"
+         r"parsed_chain\.iter\(\)\.skip\(1\)"),
+        D_ANDROID_CHAIN[0],
+    )
+    require_pattern(
+        attestation, CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT, errors,
+        (r"fn validate_android_key_attestation_certificate_chain\(.*?"
+         r"for certificate_der in certificate_chain \{.*?"
+         r"x509_certificate_canonical_serial_hex\(&certificate\).*?"
+         r"non_valid_certificate_serials.*?"
+         r"for root_der in trusted_roots_der.*?"
+         r"non_valid_certificate_serials\s*\.contains\(&x509_certificate_canonical_serial_hex\(&root\)\)"),
+        D_ANDROID_CHAIN[0],
+    )
+    forbid(
+        strict_der + attestation + policy,
+        "device attestation admission regressions", errors, "#[ignore]",
+    )
+
+    require(
+        capture, STATUS_CAPTURE, errors,
+        'STATUS_HOST = "android.googleapis.com"',
+        'STATUS_PATH = "/attestation/status"',
+        'NON_VALID_STATUSES = frozenset(("REVOKED", "SUSPENDED"))',
+        "MAX_PAYLOAD_BYTES = 256 * 1024",
+        "MAX_NON_VALID_SERIALS = 4_096",
+        "MAX_SERIAL_HEX_BYTES = 40",
+        "MAX_CACHE_AGE_SECONDS = 86_400",
+    )
+    require_pattern(
+        capture, STATUS_CAPTURE, errors,
+        (r"def _strict_json_object\(.*?object_pairs_hook=reject_duplicates.*?"
+         r"parse_constant=.*?CaptureError.*?def _canonical_non_valid_serials\(.*?"
+         r"set\(status\) != \{\"entries\"\}.*?len\(entries\) > MAX_NON_VALID_SERIALS.*?"
+         r"SERIAL_RE\.fullmatch\(serial\).*?record\.get\(\"status\"\) not in NON_VALID_STATUSES.*?"
+         r"return sorted\(serials\)"),
+        "strict canonical Android non-valid status payload",
+    )
+    require_pattern(
+        capture, STATUS_CAPTURE, errors,
+        (r"def build_capture\(.*?1 <= len\(payload\) <= MAX_PAYLOAD_BYTES.*?"
+         r'_one_header\(header_list, "Date"\).*?_one_header\(header_list, "Age"\).*?'
+         r'_one_header\(header_list, "Cache-Control"\).*?_one_header\(header_list, "Expires"\).*?'
+         r'Content-Encoding.*?casefold\(\) != "identity".*?age_seconds >= cache_max_age_seconds.*?'
+         r"abs\(captured_at_ms - expected_capture_ms\) > HTTP_CLOCK_TOLERANCE_MS.*?"
+         r"captured_at_ms < response_date_ms or captured_at_ms >= fresh_until_ms.*?"
+         r"payload_sha256 = hashlib\.sha256\(payload\)\.digest\(\).*?"
+         r'"source_url": STATUS_URL.*?"response_headers".*?"snapshot": snapshot'),
+        D_ANDROID_CAPTURE[0],
+    )
+    require_pattern(
+        capture, STATUS_CAPTURE, errors,
+        (r"def fetch_status\(.*?http\.client\.HTTPSConnection\(\s*STATUS_HOST,\s*port=443.*?"
+         r"ssl\.create_default_context\(\).*?connection\.request\(\s*\"GET\",\s*STATUS_PATH.*?"
+         r'"Accept-Encoding": "identity".*?response\.status != 200.*?'
+         r"response\.read\(MAX_PAYLOAD_BYTES \+ 1\).*?"
+         r"def _write_new_private\(.*?os\.O_EXCL.*?0o600.*?os\.fsync.*?"
+         r"def _fsync_directory\(.*?O_DIRECTORY.*?os\.fsync.*?"
+         r"def publish_capture\(.*?target\.mkdir\(mode=0o700\).*?"
+         r"_fsync_directory\(target\).*?_fsync_directory\(parent\)"),
+        "fixed HTTPS and owner-only no-replace Android status capture",
+    )
+    require_pattern(
+        android_lab, ANDROID_DEVICE_LAB_SLOT, errors,
+        (r"from scripts import android_attestation_certificate_profile as _android_x509.*?"
+         r"import android_attestation_certificate_profile as _android_x509.*?"
+         r"_decode_attestation_certificate_chain = _android_x509\._decode_attestation_certificate_chain.*?"
+         r"_classify_android_attestation_certificate_chain = \(\s*"
+         r"_android_x509\._classify_android_attestation_certificate_chain\s*\).*?"
+         r"_validate_android_attestation_certificate_time_profile = \(\s*"
+         r"_android_x509\._validate_android_attestation_certificate_time_profile\s*\)"),
+        "exact Android certificate-profile module delegation",
+    )
+    require_pattern(
+        cert_profile, ANDROID_CERT, errors,
+        (r"def _x509_certificate_validity_and_subject\(.*?"
+         r"return \(not_before \* 1_000, not_after \* 1_000\), subject.*?"
+         r"def _classify_android_attestation_certificate_chain\(.*?"
+         r"X509_SERIAL_NUMBER_OID_DER_VALUE.*?len\(attributes\) == 2.*?"
+         r'"Droid CA2".*?"Google LLC".*?classification is ambiguous.*?classification is unknown.*?'
+         r"def _validate_android_attestation_certificate_time_profile\(.*?"
+         r"evaluation_time_ms: int.*?"
+         r"certificates\[-2\].*?ANDROID_LEGACY_GOOGLE_ATTESTATION_ROOT_SHA256.*?"
+         r"for certificate in certificates\[1:\].*?evaluation_time_ms < not_before.*?"
+         r'chain_kind == "factory".*?not legacy_factory_root.*?evaluation_time_ms > not_after.*?'
+         r"elif evaluation_time_ms > not_after"),
+        D_ANDROID_CHAIN[0],
+    )
+    require_pattern(
+        cert_profile, ANDROID_CERT, errors,
+        (r"class _StrictDerReader:.*?DER high tag number is non-minimal.*?"
+         r"DER length is non-minimal.*?explicitly use X\.509 version 3.*?"
+         r"len\(serial_value\) > 20.*?inner and outer signature algorithms must match exactly.*?"
+         r"duplicate or empty extension OIDs.*?def _decode_attestation_certificate_chain\(.*?"
+         r"len\(certificates\) > 8.*?repeats a certificate.*?"
+         r"def _x509_certificate_serial_and_attestation_extension\(.*?"
+         r"_x509_extensions\(extension_payload\)\.get\(oid_value\)"),
+        "strict bounded Android certificate DER and serial parsing",
+    )
+    require(
+        android_lab, ANDROID_DEVICE_LAB_SLOT, errors,
+        "evaluation_time_ms=time.time_ns() // 1_000_000,",
+    )
+    require_pattern(
+        cert_fixtures,
+        ANDROID_CERT_FIX,
+        errors,
+        (r"def bind_device_lab\(module: Any\).*?def test_android_attestation_chain\(.*?"
+         r'chain_kind: str = "factory".*?leaf_days: int = 3650.*?'
+         r'chain_kind == "rkp".*?chain_kind == "unknown".*?'
+         r"test_android_attestation_chain\.__test__ = False"),
+        "bound Factory/RKP Android certificate fixtures",
+    )
+    require(
+        cert_tests, ANDROID_CERT_TEST, errors,
+        *(f"def {name}(self)" for name in (
+            "test_android_factory_profile_ignores_only_target_leaf_expiration",
+            "test_android_factory_profile_rejects_not_yet_valid_non_target",
+            "test_android_factory_expiration_exception_is_exactly_legacy_root",
+            "test_android_rkp_profile_is_valid_at_the_evidence_validation_horizon",
+            "test_android_rkp_profile_rejects_expired_non_target",
+            "test_android_unknown_chain_profile_is_rejected",
+            "test_android_path_verification_uses_manual_time_profile",
+        )),
+        'self.assertIn("-no_check_time", call.args[0])',
+    )
+    require_pattern(
+        android_lab, ANDROID_DEVICE_LAB_SLOT, errors,
+        (r"capture_android_attestation_status as android_status_capture.*?"
+         r"MAX_ANDROID_ATTESTATION_STATUS_CAPTURE_RECEIPT_BYTES = 256 \* 1024.*?"
+         r"def configure_android_evidence_authority\(.*?attestation_status_capture_receipt.*?"
+         r"_read_pinned_authority_file\(\s*attestation_status_capture_receipt.*?"
+         r"android_status_capture\.build_capture\(\s*status_bytes,\s*headers,.*?"
+         r"if capture_receipt != rebuilt_receipt.*?evaluated_at_ms >= fresh_until_ms.*?"
+         r'"attestation_status_capture_receipt_sha256".*?"android_status_snapshot".*?'
+         r'"payload_sha256".*?"non_valid_serial_count"'),
+        D_ANDROID_CAPTURE[0],
+    )
+    require_pattern(
+        runner, ANDROID_DEVICE_LAB_RUNNER, errors,
+        (r"the full run requires a pinned Android attestation status capture receipt.*?"
+         r"verify_pinned_file\s*\\?\s*\"\$AUTHORITY_STATUS_CAPTURE_RECEIPT\".*?"
+         r"\"\$AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256\".*?"
+         r"AUTHORITY_VALIDATOR_ARGS=\(.*?"
+         r"--android-attestation-status-capture-receipt \"\$AUTHORITY_STATUS_CAPTURE_RECEIPT\".*?"
+         r"--android-attestation-status-capture-receipt-sha256 \"\$AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256\".*?"
+         r'"attestation_status_capture_receipt_sha256".*?"android_status_snapshot".*?'
+         r"write_run_receipt.*?\"\$AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256\".*?"
+         r"\"\$ANDROID_STATUS_NON_VALID_SERIAL_COUNT\""),
+        D_ANDROID_CAPTURE[0],
+    )
+    return errors
+
+
 def canary_source_errors(
     canary: str,
     liveness: str,
@@ -277,15 +860,19 @@ def canary_source_errors(
     promotion_receipt: str,
     model_isi_offline: str,
     model_isi_mod: str,
+    core: str,
     core_canary: str,
+    core_attestation_certificate_validation: str,
     core_isi_mod: str,
+    core_tx: str,
     core_state: str,
     core_committed_transaction_context: str,
     core_block: str,
     core_executor: str,
 ) -> list[str]:
-    """Check the post-receipt canary, reservation, and four-validator liveness chain."""
-    errors: list[str] = []
+    errors = attestation_certificate_source_errors(
+        core_attestation_certificate_validation, core
+    )
     corridor = promotion_receipt.split(
         "pub(super) fn validate_finality_corridor_context(", 1
     )[-1].split("fn enforce_activation_receipt_frame_size", 1)[0]
@@ -430,8 +1017,10 @@ def canary_source_errors(
         (r"norito::encode_canonical\(self\).*?!= exact_evidence_bytes.*?"
          r"verify_evidence_signature\(&self\.signature, &self\.body\.issuer, "
          r"self\.body\.signing_hash\(\)\).*?"
-         r"verify_evidence_body\(\s*&self\.body,\s*authorization,\s*"
-         r"exact_authorization_bytes,\s*expectations,\s*receipt,\s*exact_receipt_bytes,"),
+         r"let verified = verify_evidence_body\(\s*&self\.body,\s*"
+         r"EvidenceVerificationInputs \{\s*authorization,\s*"
+         r"exact_authorization_bytes,\s*expectations,\s*receipt,\s*"
+         r"exact_receipt_bytes,\s*\},\s*\)\?;\s*Ok\(verified\)"),
         "exact issuer-signed canary evidence entrypoint",
     )
     require_pattern(
@@ -449,13 +1038,24 @@ def canary_source_errors(
     )[0]
     require_pattern(
         evidence_body, MODEL_CANARY_EVIDENCE_COMPONENT, errors,
-        (r"decode_exact_finalized_block\(body\.finalized_block_wire\.as_bytes\(\).*?"
+        (r"let verified = verify_evidence_prerequisites\(body, &inputs\)\?;.*?"
+         r"verify_evidence_block_binding\(body, &verified\)\?;.*?"
+         r"let authorized_wire = verify_committed_canary\(body, &verified\)\?;.*?"
+         r"verify_evidence_finality\(\s*body,\s*inputs\.receipt,\s*"
+         r"inputs\.expectations,\s*&verified,\s*&authorized_wire,\s*\)\?;.*?"
+         r"fn verify_evidence_prerequisites\(.*?"
+         r"decode_exact_finalized_block\(body\.finalized_block_wire\.as_bytes\(\).*?"
          r"authorization\.verify_exact\(.*?block_time_unix_ms.*?"
          r"body\.canary_authorization != authorization_identity.*?"
-         r"body\.canary_transaction_intent != verified_authorization\.canary_transaction_intent\(\).*?"
-         r"body\.canary_transaction_wire != verified_authorization\.canary_transaction_wire\(\).*?"
-         r"body\.finalized_height >= verified_authorization\.expires_at_height\(\)\.get\(\).*?"
-         r"committed\.verify_inclusion_in_block\(&block\).*?committed_wire != authorized_wire.*?"
+         r"body\.canary_transaction_intent != authorization\.canary_transaction_intent\(\).*?"
+         r"body\.canary_transaction_wire != authorization\.canary_transaction_wire\(\).*?"
+         r"fn verify_evidence_block_binding\(.*?"
+         r"body\.finalized_height >= verified\.authorization\.expires_at_height\(\)\.get\(\).*?"
+         r"fn verify_committed_canary\(.*?"
+         r"committed\.verify_inclusion_in_block\(&verified\.block\).*?"
+         r"committed_wire != authorized_wire.*?"
+         r"body\.canary_transaction_wire\.matches_bytes\(&committed_wire\).*?"
+         r"fn verify_evidence_finality\(.*?"
          r"finality_proof_chain\s*\.first\(\).*?checked_add\(1\).*?"
          r"checked_add\(proof_count\).*?Some\(body\.finalized_height\).*?"
          r"BridgeFinalityVerifier::with_context\(.*?"
@@ -504,12 +1104,21 @@ def canary_source_errors(
         (r"pub\(crate\) fn signed_kagemusha_taira_canary_wire_identity_v1\(.*?"
          r"transaction: &SignedTransaction,.*?"
          r"Result<Option<KagemushaExactBytesDigestV1>.*?"
+         r"transaction\.admission_intent\(\) != TransactionAdmissionIntent::Ordinary.*?"
+         r"return Ok\(None\);.*?"
          r"Executable::Instructions\(instructions\) = transaction\.instructions\(\).*?"
          r"let \[instruction\] = instructions\.as_ref\(\).*?"
          r"downcast_ref::<RecordKagemushaTairaCanaryV4>\(\).*?"
          r"transaction\.encode_wire_v1\(\).*?KagemushaExactBytesDigestV1::from_bytes\(&wire\)"
          r".*?\.map\(Some\)"),
         wire_boundary,
+    )
+    require_pattern(
+        core_tx, CORE_TX, errors,
+        (r"fn validate_transaction\(.*?"
+         r"kagemusha_taira_canary_external_entrypoint\s*=\s*"
+         r"matches!\(tx\.entrypoint\(\), TransactionEntrypoint::External\(_\)\)"),
+        "External-only live transaction canary provenance",
     )
     require_pattern(
         core_state, CORE_STATE, errors,
@@ -578,6 +1187,14 @@ def canary_source_errors(
          r"state_tx\.kagemusha_taira_canary_wire_identity\s*=\s*canary_wire_identity;.*?"
          r"StateBlock::validate_stateful_admission\(tx, state_tx, Some\(routing\)\)"),
         wire_boundary,
+    )
+    require_pattern(
+        core_block, CORE_BLOCK, errors,
+        (r"fn sequential_entrypoints_for_live_execution\(.*?"
+         r"entrypoints\s*\.iter\(\)\s*\.any\(\|entrypoint\|\s*"
+         r"!matches!\(entrypoint, TransactionEntrypoint::External\(_\)\)\).*?"
+         r"needs_sequential\.then\(\|\| entrypoints\.to_vec\(\)\)"),
+        "non-External live block sequential-execution selector",
     )
     require_pattern(
         core_executor, CORE_EXECUTOR, errors,
@@ -1109,7 +1726,6 @@ def canary_source_errors(
 def release_closure_source_errors(
     core: str, schema: str, workflow: str, overrides: dict[str, str]
 ) -> list[str]:
-    """Reject release-source gaps that focused filters or compilation would expose."""
     errors: list[str] = []
     isi_tests = (
         overrides[CORE_ISI_TESTS]
@@ -1131,6 +1747,11 @@ def release_closure_source_errors(
         if CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS in overrides
         else read(CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS, errors)
     )
+    state_tests = (
+        overrides[CORE_STATE_TESTS]
+        if CORE_STATE_TESTS in overrides
+        else read(CORE_STATE_TESTS, errors)
+    )
     forbid_merge_conflict_markers(isi_tests, CORE_ISI_TESTS, errors)
     forbid_merge_conflict_markers(
         context_tests, CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS, errors
@@ -1139,17 +1760,46 @@ def release_closure_source_errors(
     forbid_merge_conflict_markers(
         merge_intent_tests, CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS, errors
     )
+    forbid_merge_conflict_markers(state_tests, CORE_STATE_TESTS, errors)
+    forbid(
+        context_tests, CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS, errors,
+        "#[ignore]", "#[cfg",
+    )
+    forbid(
+        merge_intent_tests, CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS, errors,
+        "#[ignore]", "#[cfg",
+    )
     require(
         core,
         CORE,
         errors,
         "pub(crate) use isi::signed_kagemusha_taira_canary_wire_identity_v1;",
+        CORE_ISI_TESTS_PARENT_INCLUDE,
+    )
+    require(
+        state_tests,
+        CORE_STATE_TESTS,
+        errors,
+        CORE_AUTONOMOUS_MERGE_TESTS_PARENT_INCLUDE,
     )
     require(
         isi_tests,
         CORE_ISI_TESTS,
         errors,
         CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS_INCLUDE,
+    )
+    if isi_tests.count(POLICY_TESTS_INCLUDE) != 1:
+        errors.append(
+            f"{CORE_ISI_TESTS}: expected exactly one authenticated "
+            f"{POLICY_TESTS} include"
+        )
+    require_pattern(
+        isi_tests, CORE_ISI_TESTS, errors,
+        (r"#\[test\]\s*fn kagemusha_v4_activation_validates_identity_and_policy_before_state_mutation\(\).*?"
+         r"#\[test\]\s*fn android_root_of_trust_must_be_hardware_verified_and_complete\(\).*?"
+         r"#\[test\]\s*fn android_authorization_list_rejects_duplicate_unknown_tags\(\).*?"
+         r"#\[test\]\s*fn android_application_id_must_bind_one_exact_package_and_signer\(\)"),
+        "active Android authorization and activation regressions",
     )
     require(
         merge_tests,
@@ -1161,7 +1811,8 @@ def release_closure_source_errors(
         merge_intent_tests,
         CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS,
         errors,
-        (r"fn autonomous_merge_admission_intent_producer_rejects_ordinary_external_before_effects\(\).*?"
+        (r"#\[test\]\s*"
+         r"fn autonomous_merge_admission_intent_producer_rejects_ordinary_external_before_effects\(\).*?"
          r"TransactionAdmissionIntent::Ordinary.*?preexecute_merge_execution_sources_into.*?"
          r"expect_err\(.*?assert_merge_queue_plan_synced_intent_error.*?"
          r"direct_committed_entrypoints\.is_empty\(\).*?external_event_buf\.is_empty\(\)"),
@@ -1171,7 +1822,8 @@ def release_closure_source_errors(
         merge_intent_tests,
         CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS,
         errors,
-        (r"fn autonomous_merge_admission_intent_follower_and_historical_reject_ordinary_external\(\).*?"
+        (r"#\[test\]\s*"
+         r"fn autonomous_merge_admission_intent_follower_and_historical_reject_ordinary_external\(\).*?"
          r"TransactionAdmissionIntent::QueuePlanSynced.*?"
          r"for validate_live_authority in \[true, false\].*?"
          r"QueuePlanSynced merge content remains valid.*?"
@@ -1184,12 +1836,16 @@ def release_closure_source_errors(
         context_tests,
         CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS,
         errors,
-        (r"fn taira_canary_committed_replay_seeds_only_one_direct_wire\(\).*?"
+        (r"#\[test\]\s*fn taira_canary_committed_replay_seeds_only_one_direct_wire\(\).*?"
          r"TransactionEntrypoint::External\(first\.canary_transaction\.clone\(\)\).*?"
          r"Some\(first_wire\).*?"
          r"TransactionEntrypoint::External\(second\.canary_transaction\.clone\(\)\).*?"
          r"Some\(second_wire\).*?"
          r"TransactionEntrypoint::External\(multi\).*?"
+         r"kagemusha_taira_canary_wire_identity, None.*?"
+         r"TransactionAdmissionIntent::QueuePlanSynced.*?"
+         r"identity\(&queue_plan\).*?None.*?"
+         r"TransactionEntrypoint::External\(queue_plan\).*?"
          r"kagemusha_taira_canary_wire_identity, None.*?"
          r"TransactionEntrypoint::External\(batch\).*?"
          r"kagemusha_taira_canary_wire_identity, None.*?"
@@ -1202,7 +1858,7 @@ def release_closure_source_errors(
         context_tests,
         CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS,
         errors,
-        (r"fn taira_canary_sealed_reveal_validation_cannot_gain_external_provenance\(\).*?"
+        (r"#\[test\]\s*fn taira_canary_sealed_reveal_validation_cannot_gain_external_provenance\(\).*?"
          r"TransactionEntrypoint::SealedCommitment\(.*?"
          r"TransactionEntrypoint::SealedReveal\(.*?"
          r"validate_transaction\(.*?expect_err\(.*?"
@@ -1214,7 +1870,7 @@ def release_closure_source_errors(
         context_tests,
         CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS,
         errors,
-        (r"fn taira_canary_executor_enforces_exact_wire_shape_and_proof\(\).*?"
+        (r"#\[test\]\s*fn taira_canary_executor_enforces_exact_wire_shape_and_proof\(\).*?"
          r"signed canary without External entrypoint provenance must fail.*?"
          r"canary_external_entrypoint_required.*?"
          r"kagemusha_taira_canary_external_entrypoint = true.*?"
@@ -1229,7 +1885,7 @@ def release_closure_source_errors(
         context_tests,
         CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS,
         errors,
-        (r"fn taira_canary_nested_trigger_cannot_inherit_outer_wire\(\).*?"
+        (r"#\[test\]\s*fn taira_canary_nested_trigger_cannot_inherit_outer_wire\(\).*?"
          r"ExecuteTriggerEventFilter::new\(\)\.for_trigger\(trigger_id\.clone\(\)\).*?"
          r"RecordKagemushaTairaCanaryV4::new\(outer\.permit\).*?"
          r"kagemusha_taira_canary_wire_identity, None.*?"
@@ -1239,12 +1895,34 @@ def release_closure_source_errors(
     )
     if '"pending-' in schema:
         errors.append(f"{SCHEMA_GOLDEN}: public schema golden contains pending placeholder")
-    require(workflow, WORKFLOW, errors, *KAGEMUSHA_RELEASE_RUST_TEST_FILTERS)
+    suite_match = re.search(
+        r"(?m)^\s*-\s+name:\s+Run Kagemusha release-tool regression suites\s*$\n"
+        r"^\s+run:\s+>-\s*$\n(?P<body>(?:^\s{10,}\S.*(?:\n|$))+)",
+        workflow,
+    )
+    if suite_match is None:
+        errors.append(f"{WORKFLOW}: missing active Kagemusha release-tool regression suite")
+    else:
+        suite = suite_match.group("body")
+        require_pattern(
+            suite, WORKFLOW, errors, r"(?m)^\s+python -m pytest -q\s*$",
+            "active Kagemusha release pytest invocation",
+        )
+        for path in KAGEMUSHA_RELEASE_PYTHON_TEST_PATHS:
+            require_pattern(
+                suite, WORKFLOW, errors, rf"(?m)^\s+{re.escape(path)}\s*$",
+                f"active Kagemusha release Python test {path}",
+            )
+    for command in KAGEMUSHA_RELEASE_RUST_TEST_FILTERS:
+        require_pattern(
+            workflow, WORKFLOW, errors,
+            rf"(?m)^\s*-\s+run:\s+{re.escape(command)}\s*$",
+            f"active Kagemusha release Rust filter {command}",
+        )
     return errors
 
 
 def source_provider_pipeline_errors(readiness: str) -> list[str]:
-    """Validate authentication and byte-only dispatch for every source provider."""
     errors: list[str] = []
     require_pattern(
         readiness,
@@ -1252,7 +1930,8 @@ def source_provider_pipeline_errors(readiness: str) -> list[str]:
         errors,
         (
             r"READINESS_SOURCE_PROVIDERS = \(\s*READINESS_SOURCE_SUPPORT,\s*"
-            r"READINESS_RECURSION_SOURCE_CONTRACT,\s*READINESS_SOURCE_CONTRACT,\s*\)"
+            r"READINESS_RECURSION_SOURCE_CONTRACT,\s*"
+            r"READINESS_LIFECYCLE_SOURCE_CONTRACT,\s*READINESS_SOURCE_CONTRACT,\s*\)"
         ),
         "exact authenticated source-provider set",
     )
@@ -1281,6 +1960,7 @@ def source_provider_pipeline_errors(readiness: str) -> list[str]:
         expected_names = (
             "READINESS_SOURCE_SUPPORT",
             "READINESS_RECURSION_SOURCE_CONTRACT",
+            "READINESS_LIFECYCLE_SOURCE_CONTRACT",
             "READINESS_SOURCE_CONTRACT",
         )
         exact_provider_tuple = (
@@ -1383,14 +2063,20 @@ def source_provider_pipeline_errors(readiness: str) -> list[str]:
             r"_KAGEMUSHA_RECURSION_SOURCE_CONTRACT_SOURCE_V1.*?"
             r"compile\(recursion_bytes, READINESS_RECURSION_SOURCE_CONTRACT, \"exec\"\).*?"
             r"recursion_context\.get\(\"recursion_source_contract_errors\"\).*?"
+            r"lifecycle_bytes = source_contract_bytes\.get\("
+            r"READINESS_LIFECYCLE_SOURCE_CONTRACT\).*?"
+            r"_KAGEMUSHA_LIFECYCLE_SOURCE_CONTRACT_SOURCE_V1.*?"
+            r"compile\(\s*lifecycle_bytes, READINESS_LIFECYCLE_SOURCE_CONTRACT, \"exec\"\s*\).*?"
+            r"lifecycle_context\.get\(\"lifecycle_source_contract_errors\"\).*?"
             r"primary_bytes = source_contract_bytes\.get\(READINESS_SOURCE_CONTRACT\).*?"
             r"_KAGEMUSHA_RECURSION_SOURCE_CONTRACT_EVALUATOR_V1.*?"
+            r"_KAGEMUSHA_LIFECYCLE_SOURCE_CONTRACT_EVALUATOR_V1.*?"
             r"compile\(\s*primary_bytes,\s*READINESS_SOURCE_CONTRACT,\s*\"exec\",?\s*\).*?"
             r"source_contract_context\.get\(\"static_errors\"\).*?"
             r"callable\(source_contract_evaluator\).*?"
             r"source_contract_errors\.extend\(source_contract_evaluator\(\)\)"
         ),
-        "authenticated byte-only support, recursion, and readiness source-contract dispatch",
+        "authenticated byte-only support, recursion, lifecycle, and readiness source-contract dispatch",
     )
     require(
         source_dispatch,
@@ -1405,7 +2091,11 @@ def source_provider_pipeline_errors(readiness: str) -> list[str]:
         "if recursion_bytes is None:",
         '"recursion source-contract provider bytes are unavailable"',
         '"recursion source-contract provider evaluator is unavailable"',
+        "if lifecycle_bytes is None:",
+        '"lifecycle source-contract provider bytes are unavailable"',
+        '"lifecycle source-contract provider evaluator is unavailable"',
         'source_contract_context = dict(support_context)',
+        "source_contract_context.update(lifecycle_context)",
         "if primary_bytes is None:",
         '"readiness source-contract provider bytes are unavailable"',
         '"readiness source-contract provider evaluator is unavailable"',
@@ -1435,6 +2125,7 @@ def source_provider_pipeline_errors(readiness: str) -> list[str]:
         for target, provider in (
             ("support_bytes", "READINESS_SOURCE_SUPPORT"),
             ("recursion_bytes", "READINESS_RECURSION_SOURCE_CONTRACT"),
+            ("lifecycle_bytes", "READINESS_LIFECYCLE_SOURCE_CONTRACT"),
             ("primary_bytes", "READINESS_SOURCE_CONTRACT"),
         ):
             stores = [

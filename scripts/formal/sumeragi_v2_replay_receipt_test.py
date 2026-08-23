@@ -9,13 +9,20 @@ Run with the supported Xcode interpreter:
 from __future__ import annotations
 
 import argparse
+import base64
+import contextlib
 import copy
 import dataclasses
+import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
+import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -35,13 +42,29 @@ def load_module(name: str, path: Path):
     return module
 
 
+SIGNING = load_module(
+    "sumeragi_v2_replay_signing",
+    FORMAL / "sumeragi_v2_replay_signing.py",
+)
 COLLECTOR = load_module(
     "sumeragi_v2_replay_collector",
     FORMAL / "collect_sumeragi_v2_replay_receipt.py",
 )
 CHECKER = load_module(
-    "sumeragi_v2_replay_checker",
+    "check_sumeragi_v2_replay_receipt",
     FORMAL / "check_sumeragi_v2_replay_receipt.py",
+)
+FINALIZER = load_module(
+    "finalize_sumeragi_v2_replay_receipt",
+    FORMAL / "finalize_sumeragi_v2_replay_receipt.py",
+)
+RELEASE_VERIFIER = load_module(
+    "verify_sumeragi_v2_replay_release",
+    FORMAL / "verify_sumeragi_v2_replay_release.py",
+)
+RECEIPT_WRITER = load_module(
+    "write_sumeragi_v2_release_receipt",
+    ROOT / "scripts/write_sumeragi_v2_release_receipt.py",
 )
 
 
@@ -82,7 +105,7 @@ def canonical_tlc_log() -> str:
         message(2220, 0, "Starting SANY..."),
     ]
     items.extend(f"Parsing file /sealed/{module}.tla" for module in (
-        "SumeragiV2TraceWitness", "SumeragiV2", "SumeragiV2Inductive",
+        "SumeragiV2TraceWitness", "SumeragiV2Inductive",
         "SumeragiV2Reconfiguration", "SumeragiV2SafetyDefinitions",
         "SumeragiV2CrashRecovery", "SumeragiV2Core", "SumeragiV2Availability",
         "Sequences", "SumeragiV2Quorums", "Naturals", "Integers", "FiniteSets",
@@ -91,7 +114,7 @@ def canonical_tlc_log() -> str:
         "Naturals", "Integers", "Sequences", "FiniteSets", "SumeragiV2Quorums",
         "SumeragiV2Availability", "SumeragiV2Core", "SumeragiV2CrashRecovery",
         "SumeragiV2Reconfiguration", "SumeragiV2SafetyDefinitions",
-        "SumeragiV2Inductive", "SumeragiV2", "SumeragiV2TraceWitness",
+        "SumeragiV2Inductive", "SumeragiV2TraceWitness",
     ))
     items.extend(
         (
@@ -227,6 +250,92 @@ class ReplayReceiptTest(unittest.TestCase):
         cls.receipt_bytes = cls.receipt_path.read_bytes()
         cls.receipt = json.loads(cls.receipt_bytes.decode("utf-8"))
 
+        cls.principal = "sumeragi-release@test.invalid"
+        cls.signing_key = cls.work / "release-signing-key"
+        subprocess.run(
+            [
+                "/usr/bin/ssh-keygen",
+                "-q",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-f",
+                str(cls.signing_key),
+            ],
+            check=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        public_fields = Path(str(cls.signing_key) + ".pub").read_text(
+            encoding="ascii"
+        ).split()
+        cls.allowed_signers = cls.work / "allowed_signers"
+        cls.allowed_signers.write_text(
+            f"{cls.principal} ssh-ed25519 {public_fields[1]}\n",
+            encoding="ascii",
+        )
+        cls.allowed_signers.chmod(0o400)
+        cls.revocation = cls.work / "revocation.krl"
+        cls.revocation.write_bytes(b"")
+        cls.revocation.chmod(0o400)
+        subprocess.run(
+            [
+                "/usr/bin/ssh-keygen",
+                "-Y",
+                "sign",
+                "-f",
+                str(cls.signing_key),
+                "-n",
+                SIGNING.SSHSIG_NAMESPACE,
+                str(cls.receipt_path),
+            ],
+            check=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        generated_signature = Path(str(cls.receipt_path) + ".sig")
+        cls.signature = cls.work / "receipt.release.sig"
+        generated_signature.replace(cls.signature)
+        cls.signature.chmod(0o400)
+        cls.ssh_keygen = cls.work / "ssh-keygen.release-tool"
+        cls.ssh_keygen.write_text(
+            "#!/bin/sh\nexec /usr/bin/ssh-keygen \"$@\"\n",
+            encoding="ascii",
+        )
+        cls.ssh_keygen.chmod(0o500)
+        fingerprint_fields = subprocess.run(
+            [
+                "/usr/bin/ssh-keygen",
+                "-lf",
+                str(cls.signing_key) + ".pub",
+                "-E",
+                "sha256",
+            ],
+            check=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        ).stdout.split()
+        cls.fingerprint = next(
+            value for value in fingerprint_fields if value.startswith("SHA256:")
+        )
+        cls.protected_bytes = {
+            cls.signature: cls.signature.read_bytes(),
+            cls.ssh_keygen: cls.ssh_keygen.read_bytes(),
+            cls.allowed_signers: cls.allowed_signers.read_bytes(),
+            cls.revocation: cls.revocation.read_bytes(),
+        }
+        cls.protected_modes = {
+            cls.signature: 0o400,
+            cls.ssh_keygen: 0o500,
+            cls.allowed_signers: 0o400,
+            cls.revocation: 0o400,
+        }
+
     @classmethod
     def tearDownClass(cls) -> None:
         COLLECTOR.TLA2TOOLS_SHA256 = cls.original_collector_jar
@@ -238,50 +347,574 @@ class ReplayReceiptTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.receipt_path.write_bytes(self.receipt_bytes)
         self.receipt_path.chmod(0o600)
+        for path, data in self.protected_bytes.items():
+            path.chmod(0o600)
+            path.write_bytes(data)
+            path.chmod(self.protected_modes[path])
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def _signature_inputs(self, **overrides):
+        values = {
+            "signature": self.signature,
+            "expected_signature_sha256": self._sha256(self.signature),
+            "ssh_keygen": self.ssh_keygen,
+            "expected_ssh_keygen_sha256": self._sha256(self.ssh_keygen),
+            "allowed_signers": self.allowed_signers,
+            "expected_allowed_signers_sha256": self._sha256(
+                self.allowed_signers
+            ),
+            "revocation_file": self.revocation,
+            "expected_revocation_sha256": self._sha256(self.revocation),
+            "principal": self.principal,
+            "expected_signer_fingerprint": self.fingerprint,
+        }
+        values.update(overrides)
+        return SIGNING.SignatureInputs(**values)
+
+    def _finalizer_args(self, output_root: Path) -> argparse.Namespace:
+        inputs = self._signature_inputs()
+        return argparse.Namespace(
+            receipt=self.receipt_path,
+            signature=inputs.signature,
+            expected_signature_sha256=inputs.expected_signature_sha256,
+            ssh_keygen_bin=inputs.ssh_keygen,
+            expected_ssh_keygen_sha256=inputs.expected_ssh_keygen_sha256,
+            allowed_signers=inputs.allowed_signers,
+            expected_allowed_signers_sha256=inputs.expected_allowed_signers_sha256,
+            revocation_file=inputs.revocation_file,
+            expected_revocation_sha256=inputs.expected_revocation_sha256,
+            principal=inputs.principal,
+            expected_signer_fingerprint=inputs.expected_signer_fingerprint,
+            output_root=output_root,
+        )
+
+    def _release_verifier_args(self, output_root: Path) -> argparse.Namespace:
+        inputs = self._signature_inputs()
+        return argparse.Namespace(
+            source_receipt=self.receipt_path,
+            release_root=output_root,
+            expected_signature_sha256=inputs.expected_signature_sha256,
+            expected_ssh_keygen_sha256=inputs.expected_ssh_keygen_sha256,
+            expected_allowed_signers_sha256=inputs.expected_allowed_signers_sha256,
+            expected_revocation_sha256=inputs.expected_revocation_sha256,
+            principal=inputs.principal,
+            expected_signer_fingerprint=inputs.expected_signer_fingerprint,
+        )
 
     def _reject_mutation(self, mutate) -> None:
         value = copy.deepcopy(self.receipt)
         mutate(value)
         self.receipt_path.write_bytes(CHECKER.canonical_json(value))
         with self.assertRaises(CHECKER.ReceiptError):
-            CHECKER.check(self.receipt_path)
+            CHECKER._check_structure(self.receipt_path)
 
-    def test_fake_process_receipt_passes_and_unsigned_is_not_release(self) -> None:
-        checked = CHECKER.check(self.receipt_path)
-        self.assertEqual(checked["result"]["tool_states"], 101)
-        self.assertEqual(checked["result"]["actions"], 100)
-        with self.assertRaisesRegex(CHECKER.ReceiptError, "not release evidence"):
-            CHECKER.check(self.receipt_path, require_release=True)
+    def test_signing_request_cannot_succeed_in_release_checker(self) -> None:
+        original_argv = sys.argv
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        sys.argv = [
+            str(FORMAL / "check_sumeragi_v2_replay_receipt.py"),
+            str(self.receipt_path),
+        ]
+        try:
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(
+                stderr
+            ):
+                status = CHECKER.main()
+        finally:
+            sys.argv = original_argv
+        self.assertEqual(status, 2)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(
+            stderr.getvalue(),
+            "Sumeragi V2 replay receipt verification failed: release verification "
+            "requires every detached SSHSIG input\n",
+        )
 
-    def test_schema_and_collector_contract_are_diagnostic_only(self) -> None:
+    def test_schema_and_collector_expose_one_release_contract(self) -> None:
         schema = json.loads(
             (FORMAL / "sumeragi_v2_replay_receipt_v1.schema.json").read_text(
                 encoding="utf-8"
             )
         )
         properties = schema["properties"]
-        self.assertEqual(properties["evidence_class"], {"const": "diagnostic"})
+        self.assertEqual(properties["evidence_class"], {"const": "release-receipt"})
         self.assertEqual(properties["mode"], {"const": "formal-only"})
         self.assertEqual(
             set(properties["result"]["required"]), set(self.receipt["result"])
         )
+        self.assertEqual(self.receipt["signing"], SIGNING.SIGNING_CONTRACT)
         self.assertEqual(set(COLLECTOR.EVENT_TEMPLATES), {"formal-only"})
         self.assertEqual(self.receipt["runner"]["event_graph"]["nodes"], [
             "standalone_sany", "raw_tlc", "normalizer"
         ])
 
-    def test_forged_source_attestation_cannot_promote_receipt(self) -> None:
+    def test_release_signature_checker_and_finalizer_pass(self) -> None:
+        checked = CHECKER.check_release(
+            self.receipt_path, self._signature_inputs()
+        )
+        self.assertTrue(checked["result"]["execution_validated"])
+        with tempfile.TemporaryDirectory(
+            prefix="finalized-parent.", dir=self.work
+        ) as raw_parent:
+            parent = Path(raw_parent).resolve()
+            output_root = parent / "release"
+            marker = FINALIZER.finalize(self._finalizer_args(output_root))
+            self.assertEqual(marker, output_root / "release-attestation.json")
+            attestation = RELEASE_VERIFIER.verify_release(
+                self._release_verifier_args(output_root)
+            )
+            self.assertEqual(
+                attestation["schema"],
+                "iroha-sumeragi-v2-replay-release-attestation-v1",
+            )
+            self.assertEqual(
+                attestation["signature"]["scheme"], "detached-ssh"
+            )
+            self.assertEqual(set(item.name for item in output_root.iterdir()), {
+                "receipt.json",
+                "receipt.json.sig",
+                "ssh-keygen.release-tool",
+                "allowed_signers",
+                "revocation.krl",
+                "release-attestation.json",
+            })
+
+    def test_release_checker_binds_structure_to_the_signed_snapshot(self) -> None:
+        replacement = self.work / "receipt.structure-snapshot-replacement.json"
+        held = self.work / "receipt.structure-snapshot-original.json"
+        replacement.write_bytes(self.receipt_path.read_bytes())
+        replacement.chmod(0o600)
+        original_check_structure = CHECKER._check_structure
+
+        def swap_after_structure(path):
+            receipt = original_check_structure(path)
+            path.rename(held)
+            replacement.rename(path)
+            return receipt
+
+        CHECKER._check_structure = swap_after_structure
+        try:
+            with self.assertRaisesRegex(SIGNING.SigningError, "changed"):
+                CHECKER.check_release(
+                    self.receipt_path, self._signature_inputs()
+                )
+        finally:
+            CHECKER._check_structure = original_check_structure
+            if held.exists():
+                if self.receipt_path.exists():
+                    self.receipt_path.unlink()
+                held.rename(self.receipt_path)
+            if replacement.exists():
+                replacement.unlink()
+            self.receipt_path.chmod(0o600)
+
+    def test_aggregate_writer_rejects_release_root_swap_at_verifier_return(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="aggregate-swap-parent.", dir=self.work
+        ) as raw_parent:
+            parent = Path(raw_parent).resolve()
+            output_root = parent / "release"
+            FINALIZER.finalize(self._finalizer_args(output_root))
+            alternate = parent / "alternate"
+            shutil.copytree(output_root, alternate, copy_function=shutil.copy2)
+            alternate.chmod(0o700)
+            held = parent / "held"
+            inputs = self._signature_inputs()
+            original_runner = RECEIPT_WRITER._run_bounded_python_validator
+
+            def swap_after_verifier(
+                _checker, _arguments, *, watched_contracts=(), **_kwargs
+            ):
+                watched_paths = {item.path for item in watched_contracts}
+                self.assertIn(self.receipt_path, watched_paths)
+                self.assertTrue(
+                    {
+                        output_root / "receipt.json",
+                        output_root / "receipt.json.sig",
+                        output_root / "ssh-keygen.release-tool",
+                        output_root / "allowed_signers",
+                        output_root / "revocation.krl",
+                        output_root / "release-attestation.json",
+                    }.issubset(watched_paths)
+                )
+                output_root.rename(held)
+                alternate.rename(output_root)
+                return (
+                    0,
+                    (
+                        "verified finalized Sumeragi V2 replay release for "
+                        f"{self.fingerprint}\n"
+                    ).encode("utf-8"),
+                    b"",
+                )
+
+            RECEIPT_WRITER._run_bounded_python_validator = swap_after_verifier
+            try:
+                with self.assertRaisesRegex(
+                    RECEIPT_WRITER.ReceiptError,
+                    "directories changed during verification",
+                ):
+                    RECEIPT_WRITER._formal_replay_release(
+                        source_receipt_path=self.receipt_path,
+                        release_root_path=output_root,
+                        expected_signature_sha256=(
+                            inputs.expected_signature_sha256
+                        ),
+                        expected_ssh_keygen_sha256=(
+                            inputs.expected_ssh_keygen_sha256
+                        ),
+                        expected_allowed_signers_sha256=(
+                            inputs.expected_allowed_signers_sha256
+                        ),
+                        expected_revocation_sha256=(
+                            inputs.expected_revocation_sha256
+                        ),
+                        principal=self.principal,
+                        expected_signer_fingerprint=self.fingerprint,
+                        checker_environment={
+                            "LANG": "C",
+                            "LC_ALL": "C",
+                            "PATH": os.defpath,
+                            "TZ": "UTC",
+                        },
+                        repo_root=ROOT,
+                    )
+            finally:
+                RECEIPT_WRITER._run_bounded_python_validator = original_runner
+                if held.exists():
+                    if output_root.exists():
+                        output_root.rename(alternate)
+                    held.rename(output_root)
+
+    def test_signature_receipt_tool_policy_and_revocation_tampering_fail(self) -> None:
+        original_signature = self.signature.read_text(encoding="ascii").splitlines()
+        encoded = list(original_signature[1])
+        encoded[8] = "A" if encoded[8] != "A" else "B"
+        original_signature[1] = "".join(encoded)
+        self.signature.chmod(0o600)
+        self.signature.write_text("\n".join(original_signature) + "\n", encoding="ascii")
+        self.signature.chmod(0o400)
+        with self.assertRaises(SIGNING.SigningError):
+            CHECKER.check_release(self.receipt_path, self._signature_inputs())
+
+        self.signature.chmod(0o600)
+        self.signature.write_bytes(self.protected_bytes[self.signature])
+        self.signature.chmod(0o400)
         value = copy.deepcopy(self.receipt)
-        value["evidence_class"] = "release"
+        value["events"][0]["duration_monotonic_ns"] += 1
+        self.receipt_path.write_bytes(CHECKER.canonical_json(value))
+        self.receipt_path.chmod(0o600)
+        with self.assertRaises(SIGNING.SigningError):
+            CHECKER.check_release(self.receipt_path, self._signature_inputs())
+
+        self.receipt_path.write_bytes(self.receipt_bytes)
+        self.receipt_path.chmod(0o600)
+        protected_inputs = self._signature_inputs()
+        self.ssh_keygen.chmod(0o700)
+        self.ssh_keygen.write_bytes(self.protected_bytes[self.ssh_keygen] + b"#")
+        self.ssh_keygen.chmod(0o500)
+        with self.assertRaisesRegex(SIGNING.SigningError, "protected SHA-256"):
+            CHECKER.check_release(self.receipt_path, protected_inputs)
+
+        self.ssh_keygen.chmod(0o700)
+        self.ssh_keygen.write_bytes(self.protected_bytes[self.ssh_keygen])
+        self.ssh_keygen.chmod(0o500)
+        self.allowed_signers.chmod(0o600)
+        self.allowed_signers.write_bytes(
+            self.protected_bytes[self.allowed_signers]
+            + self.protected_bytes[self.allowed_signers]
+        )
+        self.allowed_signers.chmod(0o400)
+        with self.assertRaisesRegex(SIGNING.SigningError, "exactly one"):
+            CHECKER.check_release(self.receipt_path, self._signature_inputs())
+
+        policy_fields = self.protected_bytes[self.allowed_signers].decode(
+            "ascii"
+        ).split()
+        malformed_wire = base64.b64encode(
+            base64.b64decode(policy_fields[2]) + b"\x00"
+        ).decode("ascii")
+        self.allowed_signers.chmod(0o600)
+        self.allowed_signers.write_text(
+            f"{self.principal} ssh-ed25519 {malformed_wire}\n",
+            encoding="ascii",
+        )
+        self.allowed_signers.chmod(0o400)
+        with self.assertRaisesRegex(SIGNING.SigningError, "key is malformed"):
+            CHECKER.check_release(self.receipt_path, self._signature_inputs())
+
+        self.allowed_signers.chmod(0o600)
+        self.allowed_signers.write_bytes(self.protected_bytes[self.allowed_signers])
+        self.allowed_signers.chmod(0o400)
+        revoked = self.work / "revoked.krl"
+        subprocess.run(
+            [
+                "/usr/bin/ssh-keygen",
+                "-q",
+                "-k",
+                "-f",
+                str(revoked),
+                str(self.signing_key) + ".pub",
+            ],
+            check=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        revoked.chmod(0o400)
+        with self.assertRaisesRegex(SIGNING.SigningError, "verification failed"):
+            CHECKER.check_release(
+                self.receipt_path,
+                self._signature_inputs(
+                    revocation_file=revoked,
+                    expected_revocation_sha256=self._sha256(revoked),
+                ),
+            )
+
+    def test_wrong_sshsig_namespace_fails(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="wrong-namespace.", dir=self.work) as raw:
+            temporary = Path(raw)
+            payload = temporary / "receipt.json"
+            payload.write_bytes(self.receipt_bytes)
+            subprocess.run(
+                [
+                    "/usr/bin/ssh-keygen",
+                    "-Y",
+                    "sign",
+                    "-f",
+                    str(self.signing_key),
+                    "-n",
+                    "wrong-sumeragi-replay-namespace",
+                    str(payload),
+                ],
+                check=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            wrong_signature = Path(str(payload) + ".sig")
+            wrong_signature.chmod(0o400)
+            with self.assertRaisesRegex(SIGNING.SigningError, "verification failed"):
+                CHECKER.check_release(
+                    self.receipt_path,
+                    self._signature_inputs(
+                        signature=wrong_signature,
+                        expected_signature_sha256=self._sha256(wrong_signature),
+                    ),
+                )
+
+    def test_replace_restore_path_races_fail_closed(self) -> None:
+        for target in (self.receipt_path, self.signature, self.ssh_keygen):
+            with self.subTest(target=target.name):
+                data = target.read_bytes()
+                mode = stat.S_IMODE(target.stat().st_mode)
+                backup = target.with_name(target.name + ".race-backup")
+                original_run = SIGNING._run_verifier
+
+                def raced_run(*args, **kwargs):
+                    target.rename(backup)
+                    target.write_bytes(data)
+                    target.chmod(mode)
+                    try:
+                        return original_run(*args, **kwargs)
+                    finally:
+                        target.unlink()
+                        backup.rename(target)
+
+                SIGNING._run_verifier = raced_run
+                try:
+                    with self.assertRaisesRegex(SIGNING.SigningError, "changed"):
+                        CHECKER.check_release(
+                            self.receipt_path, self._signature_inputs()
+                        )
+                finally:
+                    SIGNING._run_verifier = original_run
+                    if backup.exists() and not target.exists():
+                        backup.rename(target)
+                    elif backup.exists():
+                        backup.unlink()
+                    target.chmod(mode)
+
+    def test_staging_cleanup_refuses_rename_replacement(self) -> None:
+        original_run = SIGNING._run_verifier
+        paths: dict[str, Path] = {}
+
+        def replaced_root(*args, **kwargs):
+            result = original_run(*args, **kwargs)
+            root = Path(kwargs["cwd"])
+            moved = root.with_name("evidence-moved")
+            root.rename(moved)
+            root.mkdir(mode=0o700)
+            victim = root / "must-survive"
+            victim.write_bytes(b"replacement\n")
+            victim.chmod(0o600)
+            paths.update(root=root, moved=moved, victim=victim)
+            return result
+
+        SIGNING._run_verifier = replaced_root
+        try:
+            with self.assertRaisesRegex(
+                SIGNING.SigningError, "cleanup refused changed ownership"
+            ):
+                CHECKER.check_release(
+                    self.receipt_path, self._signature_inputs()
+                )
+            self.assertEqual(paths["victim"].read_bytes(), b"replacement\n")
+            self.assertEqual(os.listdir(paths["moved"]), [])
+        finally:
+            SIGNING._run_verifier = original_run
+            if paths:
+                if paths["victim"].exists():
+                    paths["victim"].unlink()
+                if paths["root"].exists():
+                    paths["root"].rmdir()
+                if paths["moved"].exists():
+                    paths["moved"].rmdir()
+                paths["root"].parent.rmdir()
+
+    def test_finalizer_rejects_unsafe_output_roots(self) -> None:
+        with self.assertRaisesRegex(FINALIZER.FinalizationError, "absolute"):
+            FINALIZER.finalize(self._finalizer_args(Path("relative-release")))
+        with self.assertRaisesRegex(FINALIZER.FinalizationError, "outside"):
+            FINALIZER.finalize(
+                self._finalizer_args(ROOT / ".formal-release-must-not-exist")
+            )
+        with tempfile.TemporaryDirectory(
+            prefix="public-parent.", dir=self.work
+        ) as raw_parent:
+            parent = Path(raw_parent).resolve()
+            parent.chmod(0o755)
+            try:
+                with self.assertRaisesRegex(FINALIZER.FinalizationError, "0700"):
+                    FINALIZER.finalize(
+                        self._finalizer_args(parent / "release")
+                    )
+            finally:
+                parent.chmod(0o700)
+
+    def test_finalizer_detects_alternate_bundle_swap_restore(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="finalizer-swap-parent.", dir=self.work
+        ) as raw_parent:
+            parent = Path(raw_parent).resolve()
+            output_root = parent / "release"
+            alternate = parent / "alternate"
+            alternate.mkdir(mode=0o700)
+            for name, source, mode in (
+                ("receipt.json", self.receipt_path, 0o400),
+                ("receipt.json.sig", self.signature, 0o400),
+                ("ssh-keygen.release-tool", self.ssh_keygen, 0o500),
+                ("allowed_signers", self.allowed_signers, 0o400),
+                ("revocation.krl", self.revocation, 0o400),
+            ):
+                target = alternate / name
+                target.write_bytes(source.read_bytes())
+                target.chmod(mode)
+
+            original_run = SIGNING._run_verifier
+            calls = 0
+
+            def swap_restore(*args, **kwargs):
+                nonlocal calls
+                result = original_run(*args, **kwargs)
+                calls += 1
+                if calls == 2:
+                    moved = parent / "release-original"
+                    output_root.rename(moved)
+                    alternate.rename(output_root)
+                    output_root.rename(alternate)
+                    moved.rename(output_root)
+                return result
+
+            SIGNING._run_verifier = swap_restore
+            try:
+                with self.assertRaisesRegex(
+                    FINALIZER.FinalizationError, "parent.*changed|renamed"
+                ):
+                    FINALIZER.finalize(self._finalizer_args(output_root))
+            finally:
+                SIGNING._run_verifier = original_run
+            self.assertEqual(
+                (alternate / "receipt.json").read_bytes(), self.receipt_bytes
+            )
+            self.assertFalse(output_root.exists())
+
+    def test_release_verifier_detects_alternate_bundle_swap_restore(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="verifier-swap-parent.", dir=self.work
+        ) as raw_parent:
+            parent = Path(raw_parent).resolve()
+            output_root = parent / "release"
+            FINALIZER.finalize(self._finalizer_args(output_root))
+            alternate = parent / "alternate"
+            alternate.mkdir(mode=0o700)
+            for name, mode in RELEASE_VERIFIER.FILE_MODES.items():
+                target = alternate / name
+                target.write_bytes((output_root / name).read_bytes())
+                target.chmod(mode)
+
+            original_run = SIGNING._run_verifier
+
+            def swap_restore(*args, **kwargs):
+                result = original_run(*args, **kwargs)
+                moved = parent / "release-original"
+                output_root.rename(moved)
+                alternate.rename(output_root)
+                output_root.rename(alternate)
+                moved.rename(output_root)
+                return result
+
+            SIGNING._run_verifier = swap_restore
+            try:
+                with self.assertRaisesRegex(
+                    RELEASE_VERIFIER.ReleaseVerificationError,
+                    "renamed|identity",
+                ):
+                    RELEASE_VERIFIER.verify_release(
+                        self._release_verifier_args(output_root)
+                    )
+            finally:
+                SIGNING._run_verifier = original_run
+            self.assertEqual(
+                (alternate / "receipt.json").read_bytes(), self.receipt_bytes
+            )
+
+    def test_release_attestation_tampering_is_rederived_and_rejected(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="attestation-parent.", dir=self.work
+        ) as raw_parent:
+            output_root = Path(raw_parent).resolve() / "release"
+            marker = FINALIZER.finalize(self._finalizer_args(output_root))
+            value = json.loads(marker.read_text(encoding="ascii"))
+            value["signature"]["namespace"] = "wrong-namespace"
+            marker.chmod(0o600)
+            marker.write_bytes(FINALIZER.canonical_json(value))
+            marker.chmod(0o400)
+            with self.assertRaisesRegex(
+                RELEASE_VERIFIER.ReleaseVerificationError,
+                "independently derived",
+            ):
+                RELEASE_VERIFIER.verify_release(
+                    self._release_verifier_args(output_root)
+                )
+
+    def test_non_v1_signing_contract_substitution_is_rejected(self) -> None:
+        value = copy.deepcopy(self.receipt)
         value["signing"] = {
-            "status": "verified-project-ssh-git-identity",
-            "provider": "scripts/verify_sumeragi_v2_release_identity.py",
-            "release_evidence": True,
-            "attestation": "signing/attestation.json",
+            "scheme": "embedded",
+            "provider": "custom",
+            "namespace": "wrong-namespace",
+            "payload": "receipt.json",
+            "artifact": "receipt.json.sig",
+            "policy": {},
         }
         self.receipt_path.write_bytes(CHECKER.canonical_json(value))
-        with self.assertRaisesRegex(CHECKER.ReceiptError, "evidence class"):
-            CHECKER.check(self.receipt_path)
+        with self.assertRaisesRegex(CHECKER.ReceiptError, "contract"):
+            CHECKER._check_structure(self.receipt_path)
 
     def test_persisted_file_identity_is_filesystem_location_independent(self) -> None:
         snapshot = COLLECTOR._read_snapshot(self.fake_jar, "tool/tla2tools.jar")
@@ -323,13 +956,13 @@ class ReplayReceiptTest(unittest.TestCase):
         original = artifact.read_bytes()
         artifact.write_bytes(original + b"tamper\n")
         with self.assertRaises(CHECKER.ReceiptError):
-            CHECKER.check(self.receipt_path)
+            CHECKER._check_structure(self.receipt_path)
         artifact.write_bytes(original)
         unexpected = self.output / "unexpected"
         unexpected.write_bytes(b"unexpected\n")
         unexpected.chmod(0o600)
         with self.assertRaisesRegex(CHECKER.ReceiptError, "file set differs"):
-            CHECKER.check(self.receipt_path)
+            CHECKER._check_structure(self.receipt_path)
         unexpected.unlink()
 
         extra = self.output / "events/extra.stdout"
@@ -344,14 +977,14 @@ class ReplayReceiptTest(unittest.TestCase):
         with self.assertRaisesRegex(
             CHECKER.ReceiptError, "does not match exact event outputs"
         ):
-            CHECKER.check(self.receipt_path)
+            CHECKER._check_structure(self.receipt_path)
         extra.unlink()
         self.receipt_path.write_bytes(self.receipt_bytes)
 
         empty = self.output / "empty"
         empty.mkdir(mode=0o700)
         with self.assertRaisesRegex(CHECKER.ReceiptError, "directory set differs"):
-            CHECKER.check(self.receipt_path)
+            CHECKER._check_structure(self.receipt_path)
         empty.rmdir()
 
     def test_timeout_terminates_process_group_and_records_cleanup(self) -> None:

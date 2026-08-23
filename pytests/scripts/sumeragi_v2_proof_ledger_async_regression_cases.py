@@ -1461,10 +1461,11 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
 
     effects_path.write_text(
         mutate_effect_item(
-            "consume_effects",
+            "consume_effects_with_runner_decision_cleanup",
             "        if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {\n"
             "            return Err(self.close(error, services));\n"
             "        }\n"
+            "        self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;\n"
             "        if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {\n"
             "            return Err(self.close_after_transferring_runtime_terminals(error, services));\n"
             "        }",
@@ -1473,13 +1474,14 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
             "        }\n"
             "        if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {\n"
             "            return Err(self.close(error, services));\n"
-            "        }",
+            "        }\n"
+            "        self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;",
         ),
         encoding="utf-8",
     )
     errors = module._async_source_fidelity_errors(formal_dir)
     assert any(
-        "consume_effects must snapshot, retain, and commit the reducer frontier before transferring terminals and draining"
+        "executor must acquire one frontier, preflight and take ownership"
         in error
         for error in errors
     ), errors
@@ -1585,24 +1587,7 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
 
     effects_path.write_text(
         mutate_effect_item(
-            "step_pending_tip_recovery",
-            "        if let Err(reason) = self.runtime.take_scheduler_ownership() {\n",
-            "        if false {\n",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._async_source_fidelity_errors(formal_dir)
-    assert any(
-        "step_pending_tip_recovery must consume the exact scheduler owner immediately "
-        "after the runtime step" in error
-        or "retained effect FIFO step_pending_tip_recovery declaration and complete "
-        "control flow must match" in error
-        for error in errors
-    ), errors
-
-    effects_path.write_text(
-        mutate_effect_item(
-            "consume_pacemaker_effects",
+            "consume_pacemaker_effects_with_runner_decision_cleanup",
             "evidence.owner().causal_origin().root_class != SERVICE_CLASS_PROGRESS",
             "evidence.owner().causal_origin().root_class == SERVICE_CLASS_PROGRESS",
         ),
@@ -1617,7 +1602,7 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
 
     effects_path.write_text(
         mutate_effect_item(
-            "consume_pacemaker_effects",
+            "consume_pacemaker_effects_with_runner_decision_cleanup",
             "        if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {\n",
             "        if false && let Err(error) = self.commit_reconciliation_frontier(frontier, services) {\n",
         ),
@@ -1723,6 +1708,137 @@ def test_runtime_step_reconciliation_survives_effect_item_reseal(
         in error
         for error in errors
     ), errors
+
+
+def test_decision_apply_runner_cleanup_semantics_survive_effect_item_reseal(
+    tmp_path: Path,
+) -> None:
+    """A refreshed item digest cannot erase the Decision-to-Apply cleanup gate."""
+
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path, module, "SumeragiV2AsyncNetwork.tla"
+    )
+    effects_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_effects.rs"
+    canonical_source = effects_path.read_text(encoding="utf-8")
+    canonical_digests = dict(module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256)
+    canonical_ready_digest = module._REMOTE_PROPOSAL_REPLAY_ITEM_SHA256[
+        "executor_ready"
+    ]
+    mutations = (
+        (
+            "consume_effects_with_runner_decision_cleanup",
+            "self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;",
+            "let _ = pending_runner_decision_cleanup;",
+            "ordinary first-Decision effects must arm runner cleanup before retained Apply dispatch",
+        ),
+        (
+            "new_decision_batch_has_only_exact_apply",
+            "|| Some(*tag) != authoritative_tag",
+            "|| Some(*tag) == authoritative_tag",
+            "at most one exact authoritative Commit Apply",
+        ),
+        (
+            "acknowledge_runner_decision_cleanup",
+            "self.pending_runner_decision_cleanup = None;",
+            "let _ = decision;",
+            "before clearing the fence",
+        ),
+        (
+            "drain_retained_effect_batch",
+            "self.pending_runner_decision_cleanup.is_some()\n"
+            "                    || !self.pending_durable_validate_admissions.is_empty()",
+            "false\n"
+            "                    || !self.pending_durable_validate_admissions.is_empty()",
+            "stop at the runner-cleanup fence before consume_one",
+        ),
+        (
+            "plan_runner_decision_cleanup",
+            "let (None, Some(decision)) = (before, after)",
+            "let (Some(_), Some(decision)) = (before, after)",
+            "only the first Decision transition may mint cleanup debt",
+        ),
+        (
+            "step",
+            "if self.pending_runner_decision_cleanup.is_some()\n"
+            "            && self.retained_effect_batch.is_none()",
+            "if false\n"
+            "            && self.retained_effect_batch.is_none()",
+            "hold a split or retained Apply at the runner-cleanup fence",
+        ),
+        (
+            "step",
+            "self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;",
+            "let _ = pending_runner_decision_cleanup;",
+            "a first ordinary Decision with no emitted effects must still install runner cleanup debt",
+        ),
+        (
+            "step",
+            "self.consume_effects_with_runner_decision_cleanup(",
+            "self.consume_effects(",
+            "the first ordinary Decision, including a split zero-Apply batch",
+        ),
+        (
+            "consume_pacemaker_effects_with_runner_decision_cleanup",
+            "self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;",
+            "let _ = pending_runner_decision_cleanup;",
+            "arm runner cleanup and commit even an empty reducer frontier",
+        ),
+        (
+            "step_pacemaker_once",
+            "self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;",
+            "let _ = pending_runner_decision_cleanup;",
+            "a first pacemaker Decision with no emitted effects must still install runner cleanup debt",
+        ),
+        (
+            "step_pacemaker_once",
+            "self.consume_pacemaker_effects_with_runner_decision_cleanup(",
+            "self.consume_pacemaker_effects(",
+            "the first pacemaker Decision must arm runner cleanup",
+        ),
+        (
+            "step_pacemaker_once",
+            "if self.pending_runner_decision_cleanup.is_some() {",
+            "if false {",
+            "pending runner cleanup must stop pacemaker runtime admission",
+        ),
+        (
+            "ready_to_finish",
+            "&& self.pending_runner_decision_cleanup.is_none()",
+            "&& true",
+            "ready_to_finish must retain the runner Decision-cleanup fence",
+        ),
+    )
+
+    for item_name, old, new, diagnostic in mutations:
+        item, = module.rust_items(canonical_source, item_name)
+        assert item.source.count(old) == 1, (item_name, old)
+        mutated_source = canonical_source.replace(
+            item.source,
+            item.source.replace(old, new, 1),
+            1,
+        )
+        effects_path.write_text(mutated_source, encoding="utf-8")
+        mutated_item, = module.rust_items(mutated_source, item_name)
+        if item_name == "ready_to_finish":
+            module._REMOTE_PROPOSAL_REPLAY_ITEM_SHA256["executor_ready"] = (
+                module._rust_item_token_sha256(mutated_item)
+            )
+        else:
+            module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256[item_name] = (
+                module._rust_item_token_sha256(mutated_item)
+            )
+
+        errors = module._async_source_fidelity_errors(formal_dir)
+
+        assert any(diagnostic in error for error in errors), (diagnostic, errors)
+        module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256.clear()
+        module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256.update(canonical_digests)
+        module._REMOTE_PROPOSAL_REPLAY_ITEM_SHA256["executor_ready"] = (
+            canonical_ready_digest
+        )
+
+    effects_path.write_text(canonical_source, encoding="utf-8")
 
 
 def test_rust_item_scanner_masks_noncode_and_records_fail_closed_context() -> None:

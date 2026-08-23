@@ -23,7 +23,6 @@ pub(crate) struct PendingKuraRecoveredAdapterStartupV1 {
     startup: RecoveredAdapterStartup,
     expected: crate::sumeragi::v2_recovery::PendingKuraApply,
 }
-
 /// Exact interrupted-tip replay authority after the Decision WAL frontier is authenticated.
 ///
 /// The ordinary recovered Decision-Fetch branch remains in the embedded

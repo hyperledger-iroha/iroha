@@ -204,6 +204,8 @@ fixtures/sccp/release_evidence_v1/artifacts/phases/*
 .clean_copy/*
 clean_copy/*
 test_*
+# Keep the extracted Kotodama session test helper fixture tracked.
+!crates/kotodama_lang/src/session/fixtures/test_helper.ko
 # Keep the source-level typed-matrix residual guard tracked.
 !scripts/tests/test_typed_matrix_residual_source.py
 # Keep Kotodama test-source fixtures referenced by `include_str!` tracked.
@@ -278,6 +280,7 @@ _apalache-out*
 /bench_trace.json
 /fastpq_*.json
 /libtest.rlib
+/librust_out.rlib
 /libverus_macro_*.rlib
 /clippy_errors.txt
 /.playwright-cli*
@@ -353,3 +356,6 @@ artifacts/*.json
 
 # Runtime output from the interactive setup wizard (may contain private keys).
 /wizard-output/
+
+# Relay tests and local runs create tempfile-backed replay stores and links here.
+tools/soranet-relay/.tmp*

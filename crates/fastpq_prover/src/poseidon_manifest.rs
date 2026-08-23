@@ -1,5 +1,6 @@
 use fastpq_isi::poseidon::{
-    FIELD_MODULUS, MDS as CPU_MDS, RATE, ROUND_CONSTANTS as CPU_ROUND_CONSTANTS, STATE_WIDTH,
+    FIELD_MODULUS, MDS as CPU_MDS, PERMUTATION_PROFILE_ID, RATE,
+    ROUND_CONSTANTS as CPU_ROUND_CONSTANTS, SBOX_EXPONENT, STATE_WIDTH,
 };
 use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
@@ -9,6 +10,9 @@ const SNAPSHOT_BYTES: &[u8] = include_bytes!(concat!(
     "/../../artifacts/poseidon/constants.ron"
 ));
 const EXPECTED_SHA256: &str = "99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21";
+const EXPECTED_PROFILE_SHA256: &str =
+    "874028de6098d274b42a1dc5034b9d27892a6e3913f7ccdf0060d57fe2db4bbb";
+const PROFILE_DIGEST_DOMAIN: &[u8] = b"fastpq:poseidon-permutation-profile:v1";
 static POSEIDON_MANIFEST: OnceLock<PoseidonManifest> = OnceLock::new();
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ManifestSection {
@@ -20,6 +24,7 @@ enum ManifestSection {
 #[derive(Clone)]
 pub struct PoseidonManifest {
     sha256_hex: String,
+    profile_sha256_hex: String,
     round_constants: [[u64; STATE_WIDTH]; TOTAL_ROUNDS],
     mds: [[u64; STATE_WIDTH]; STATE_WIDTH],
 }
@@ -28,6 +33,12 @@ impl PoseidonManifest {
     #[must_use]
     pub fn sha256_hex(&self) -> &str {
         &self.sha256_hex
+    }
+    /// Returns the SHA-256 of the construction identifier, S-box exponent, and
+    /// constants manifest digest.
+    #[must_use]
+    pub fn profile_sha256_hex(&self) -> &str {
+        &self.profile_sha256_hex
     }
     /// Returns the Poseidon round constants parsed from the manifest.
     #[must_use]
@@ -50,6 +61,32 @@ pub fn poseidon_manifest() -> &'static PoseidonManifest {
 pub fn poseidon_manifest_sha256() -> &'static str {
     poseidon_manifest().sha256_hex()
 }
+/// Returns the stable identifier for the exact permutation construction.
+#[must_use]
+pub const fn poseidon_profile_id() -> &'static str {
+    PERMUTATION_PROFILE_ID
+}
+/// Returns the SHA-256 digest that binds construction, exponent, and constants.
+#[must_use]
+pub fn poseidon_profile_sha256() -> &'static str {
+    poseidon_manifest().profile_sha256_hex()
+}
+fn append_profile_field(hasher: &mut Sha256, field: &[u8]) {
+    hasher.update(
+        u64::try_from(field.len())
+            .expect("fixed Poseidon profile field length fits u64")
+            .to_be_bytes(),
+    );
+    hasher.update(field);
+}
+fn profile_sha256_hex(constants_sha256_hex: &str) -> String {
+    let mut hasher = Sha256::new();
+    append_profile_field(&mut hasher, PROFILE_DIGEST_DOMAIN);
+    append_profile_field(&mut hasher, PERMUTATION_PROFILE_ID.as_bytes());
+    append_profile_field(&mut hasher, &SBOX_EXPONENT.to_be_bytes());
+    append_profile_field(&mut hasher, constants_sha256_hex.as_bytes());
+    hex_encode(&hasher.finalize())
+}
 #[allow(clippy::too_many_lines)]
 fn load_manifest() -> Result<PoseidonManifest, String> {
     let sha256 = Sha256::digest(SNAPSHOT_BYTES);
@@ -57,6 +94,12 @@ fn load_manifest() -> Result<PoseidonManifest, String> {
     if sha256_hex != EXPECTED_SHA256 {
         return Err(format!(
             "Poseidon manifest hash mismatch: expected {EXPECTED_SHA256}, got {sha256_hex}"
+        ));
+    }
+    let profile_sha256_hex = profile_sha256_hex(&sha256_hex);
+    if profile_sha256_hex != EXPECTED_PROFILE_SHA256 {
+        return Err(format!(
+            "Poseidon profile hash mismatch: expected {EXPECTED_PROFILE_SHA256}, got {profile_sha256_hex}"
         ));
     }
     let text = std::str::from_utf8(SNAPSHOT_BYTES)
@@ -169,6 +212,7 @@ fn load_manifest() -> Result<PoseidonManifest, String> {
         .try_into()
         .map_err(|_| "MDS size mismatch".to_owned())?;
     Ok(PoseidonManifest {
+        profile_sha256_hex,
         sha256_hex,
         round_constants: round_constants_array,
         mds: mds_array,

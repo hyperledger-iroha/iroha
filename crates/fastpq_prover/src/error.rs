@@ -129,6 +129,34 @@ pub enum Error {
         /// Round exhibiting the mismatch.
         round: usize,
     },
+    /// The configured reduction limit cannot expose a complete terminal FRI layer.
+    #[error(
+        "FRI reduction limit {max_reductions} leaves {remaining} values; terminal layer must contain at most {arity}"
+    )]
+    FriReductionLimit {
+        /// Maximum reductions admitted by the parameter set.
+        max_reductions: u32,
+        /// Values remaining after exhausting the reduction limit.
+        remaining: usize,
+        /// Maximum complete terminal layer size.
+        arity: usize,
+    },
+    /// The claimed terminal degree bound is not smaller than its evaluation domain.
+    #[error(
+        "FRI terminal degree bound {degree_bound} is not smaller than terminal domain length {domain_len}"
+    )]
+    FriTerminalDegreeBound {
+        /// Exclusive polynomial degree bound after all reductions.
+        degree_bound: usize,
+        /// Number of terminal-domain evaluations.
+        domain_len: usize,
+    },
+    /// Authenticated terminal evaluations do not satisfy the claimed degree bound.
+    #[error("FRI terminal polynomial is not below exclusive degree bound {degree_bound}")]
+    FriTerminalDegreeMismatch {
+        /// Exclusive polynomial degree bound after all reductions.
+        degree_bound: usize,
+    },
     /// Query count mismatch between proof and verifier transcript.
     #[error("query count mismatch: expected {expected}, got {actual}")]
     QueryCountMismatch {
@@ -148,6 +176,14 @@ pub enum Error {
     QueryMerklePathMismatch {
         /// Position of the failing query.
         index: usize,
+    },
+    /// A proof-carried Goldilocks element did not use its unique canonical representation.
+    #[error("non-canonical Goldilocks field element in `{context}` at nested indices {indices:?}")]
+    NonCanonicalGoldilocksElement {
+        /// Stable proof-field name identifying the rejected value.
+        context: &'static str,
+        /// Outer-to-inner vector indices locating the rejected value within that field.
+        indices: Vec<usize>,
     },
     /// FASTPQ verifier input exceeded a configured limit.
     #[error("FASTPQ verifier limit `{limit}` exceeded: {actual} > {max}")]
@@ -191,6 +227,14 @@ pub enum Error {
     /// Unsupported FRI arity advertised by the parameter set.
     #[error("unsupported FRI arity {0}; expected 8 or 16")]
     FriArity(u32),
+    /// A FRI layer cannot be partitioned into complete multiplicative cosets.
+    #[error("FRI layer length {length} is not compatible with effective arity {arity}")]
+    FriDomainSize {
+        /// Number of evaluations in the malformed layer.
+        length: usize,
+        /// Effective arity required for this reduction.
+        arity: usize,
+    },
     /// Value exceeds the supported width for the stage 1 trace encoding.
     #[error("value limb width `{length}` exceeds 64-bit limit")]
     ValueWidth {

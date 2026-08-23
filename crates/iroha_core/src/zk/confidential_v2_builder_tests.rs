@@ -98,6 +98,17 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
         crate::zk::verify_backend(crate::zk::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
         "generated confidential unshield v2 proof should verify against the cached canonical VK"
     );
+    #[cfg(feature = "zk-halo2-ipa")]
+    {
+        const EXACT_BACKEND: &str =
+            "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3";
+        let (exact_proof, exact_vk) =
+            crate::zk::relabel_halo2_ipa_open_verify_fixture(&proof.proof, &vk_box, EXACT_BACKEND);
+        assert!(
+            crate::zk::verify_backend(EXACT_BACKEND, &exact_proof, Some(&exact_vk)),
+            "exact full-unshield registry label should reach the full-unshield verifier"
+        );
+    }
     let input_path = super::compute_confidential_merkle_path_v2(&tree_commitments, 0)
         .expect("input membership path");
     let dummy_path =
@@ -396,4 +407,15 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         crate::zk::verify_backend(crate::zk::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
         "generated confidential unshield v3 proof should verify against the cached canonical VK"
     );
+    #[cfg(feature = "zk-halo2-ipa")]
+    {
+        const EXACT_BACKEND: &str =
+            "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4";
+        let (exact_proof, exact_vk) =
+            crate::zk::relabel_halo2_ipa_open_verify_fixture(&proof.proof, &vk_box, EXACT_BACKEND);
+        assert!(
+            crate::zk::verify_backend(EXACT_BACKEND, &exact_proof, Some(&exact_vk)),
+            "exact change-unshield registry label should reach the change-unshield verifier"
+        );
+    }
 }

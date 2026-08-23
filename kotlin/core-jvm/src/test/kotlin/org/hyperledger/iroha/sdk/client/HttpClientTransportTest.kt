@@ -2163,7 +2163,7 @@ class HttpClientTransportTest {
 
         assertEquals(sessionId, session.sessionId)
         assertEquals(vpnHelperTicketHex(), session.helperTicketHex)
-        assertEquals(1_328, session.helperTicketHex.length)
+        assertEquals(1_392, session.helperTicketHex.length)
         assertTrue(fetched.isPresent)
         assertEquals(sessionId, fetched.get().quoteId)
         assertTrue(deleted.isPresent)
@@ -3513,7 +3513,7 @@ class HttpClientTransportTest {
             }
         """.trimIndent()
 
-    private fun vpnHelperTicketHex(): String = "5356504e48543100" + "00".repeat(656)
+    private fun vpnHelperTicketHex(): String = "5356504e48543100" + "00".repeat(688)
 
     private fun vpnSessionJson(sessionId: String, paymentTxHash: String): String =
         """

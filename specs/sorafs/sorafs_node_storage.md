@@ -339,16 +339,25 @@ outputs with the Torii HTTP surface.【crates/sorafs_node/src/bin/sorafs-node.rs
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
   --data-dir ./storage/sorafs \
+  --max-capacity-bytes=10737418240 \
   --manifest ./fixtures/manifest.to \
   --payload ./fixtures/payload.bin \
   --plan-json-out ./plan.json
 ```
 
-- `ingest` expects a Norito-encoded manifest `.to` file plus the matching payload
-  bytes. It reconstructs the chunk plan from the manifest’s chunking profile,
-  enforces digest parity, persists chunk files, and optionally emits a
-  strict `sorafs.chunk_fetch_plan.v1` JSON object so downstream tooling can
-  verify both the whole-payload BLAKE3 binding and the chunk layout.
+- `ingest` requires the same nonzero byte ceiling configured for the daemon's
+  `sorafs.storage.max_capacity_bytes`, plus a Norito-encoded manifest `.to` file
+  and the matching payload bytes. It reconstructs the chunk plan from the
+  manifest’s chunking profile, enforces digest parity, persists chunk files,
+  and optionally emits a strict `sorafs.chunk_fetch_plan.v1` JSON object so
+  downstream tooling can verify both the whole-payload BLAKE3 binding and the
+  chunk layout. File payloads are opened once as direct, one-link regular files
+  with no-follow semantics, checked against the manifest length and explicit
+  capacity before reading, and streamed through planning and ingest without a
+  whole-payload allocation. Directory payloads use deterministic per-directory
+  ordering and are limited to 4,096 total entries (files plus directories), 64
+  path components, and 16 GiB. The total-entry limit is enforced before a
+  sorting buffer can grow past that bound.
 - `export` accepts a manifest ID and writes the stored manifest/payload to disk
   (with optional plan JSON) so fixtures remain reproducible across environments.
 

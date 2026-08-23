@@ -1,5 +1,7 @@
+seiyaku Greeter {
+    hajimari(int value) {}
 
-                seiyaku Greeter {
-                    hajimari(int value) {}
-                    view fn status() -> int { return 7; }
-                }
+    view fn status() -> int {
+        return 7;
+    }
+}

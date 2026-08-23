@@ -536,7 +536,7 @@ impl KagemushaV4PromotionBindingV1 {
         if !matches!(
             self.promotion_controller.try_algorithm(),
             Ok(Algorithm::Ed25519)
-        ) || required_digests.iter().any(|digest| *digest == [0; 32])
+        ) || required_digests.contains(&[0; 32])
             || self.network_id.as_bytes().iter().all(|byte| *byte == 0)
             || self.execution_policy_hash == Hash::prehashed([0; Hash::LENGTH])
         {
@@ -833,6 +833,13 @@ impl KagemushaV4ActivationReceiptExpectationsBodyV1 {
         }
         let activation = direct_activation_instruction(&self.activation_transaction)?;
         validate_activation_binding(activation, &self.binding)?;
+        if activation.runtime_effective_config_sha256()
+            != &validator_bodies[0]
+                .runtime_effective_config
+                .consensus_sha256()?
+        {
+            return Err(KagemushaPromotionReceiptValidationError::ActivationPayload);
+        }
 
         verify_bridge_finality_proof(&self.trusted_finality_anchor, &self.binding.network_id)
             .map_err(|_| KagemushaPromotionReceiptValidationError::Finality)?;
@@ -1171,6 +1178,11 @@ impl KagemushaV4ActivationFinalityProofChainV1 {
         &self.0
     }
 
+    /// Iterate over the ordered immediate-successor proofs.
+    pub fn iter(&self) -> std::slice::Iter<'_, BridgeFinalityProof> {
+        self.0.iter()
+    }
+
     /// Return the number of retained successor proofs.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -1224,7 +1236,7 @@ impl<'a> IntoIterator for &'a KagemushaV4ActivationFinalityProofChainV1 {
     type IntoIter = std::slice::Iter<'a, BridgeFinalityProof>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+        self.iter()
     }
 }
 
@@ -1803,6 +1815,178 @@ impl KagemushaV4VerifiedActivationReceiptV1 {
 }
 
 impl KagemushaV4ActivationFinalityReceiptV1 {
+    fn verify_envelope_and_expectations(
+        &self,
+        expectations: &KagemushaV4ActivationReceiptExpectationsV1,
+    ) -> Result<(), KagemushaPromotionReceiptValidationError> {
+        if self.schema != KAGEMUSHA_V4_ACTIVATION_FINALITY_RECEIPT_SCHEMA
+            || self.version != KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION
+        {
+            return Err(KagemushaPromotionReceiptValidationError::InvalidField(
+                "activation_receipt",
+            ));
+        }
+        expectations.validate()?;
+        self.body.validate_structure()?;
+        if self.body.promotion_reservation != expectations.promotion_reservation
+            || self.body.activation_expectations_artifact
+                != expectations.activation_expectations_artifact
+            || self.body.binding != expectations.binding
+            || self.body.issuer != expectations.receipt_issuer
+            || self.body.governance_authority != expectations.governance_authority
+            || self.body.validator_seals != expectations.validator_seals
+            || self.body.activation_transaction_intent != expectations.activation_transaction_intent
+            || self.body.activation_transaction_wire != expectations.activation_transaction_wire
+        {
+            return Err(KagemushaPromotionReceiptValidationError::ExpectationMismatch);
+        }
+        enforce_activation_receipt_frame_size(self)?;
+        verify_typed_signature_hash(
+            &self.signature,
+            &self.body.issuer,
+            self.body.signing_hash(),
+            "activation_receipt",
+        )?;
+        verify_kagemusha_v4_validator_qualification_seals(
+            &self.body.validator_seals,
+            &expectations.validator_bodies,
+            &expectations.binding,
+        )?;
+        Ok(())
+    }
+
+    fn verify_committed_activation(
+        &self,
+        expectations: &KagemushaV4ActivationReceiptExpectationsV1,
+    ) -> Result<(SignedBlock, &SignedTransaction, Vec<u8>), KagemushaPromotionReceiptValidationError>
+    {
+        let block = decode_exact_finalized_block(self.body.finalized_block_wire.as_bytes())?;
+        let committed = &self.body.committed_transaction;
+        if committed.merge_inclusion.is_some()
+            || !committed.verify_inclusion_in_block(&block)
+            || committed.result.0.is_err()
+            || block
+                .entrypoint_hashes()
+                .filter(|entry_hash| entry_hash == &committed.entrypoint_hash)
+                .count()
+                != 1
+        {
+            return Err(KagemushaPromotionReceiptValidationError::CommittedTransaction);
+        }
+        let TransactionEntrypoint::External(transaction) = &committed.entrypoint else {
+            return Err(KagemushaPromotionReceiptValidationError::ActivationTransaction);
+        };
+        transaction
+            .verify_signature()
+            .map_err(|_| KagemushaPromotionReceiptValidationError::ActivationTransaction)?;
+        let transaction_policy = validate_governance_multisig_policy(transaction.authority())?;
+        if transaction_policy != &expectations.governance_multisig_policy
+            || transaction.multisig_signatures().is_none_or(|bundle| {
+                bundle.signatures.len() < KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS
+            })
+        {
+            return Err(KagemushaPromotionReceiptValidationError::GovernanceAuthority);
+        }
+        if transaction.authority() != &expectations.governance_authority
+            || transaction.network_id() != Some(&expectations.binding.network_id)
+            || transaction.hash() != expectations.activation_transaction_intent
+        {
+            return Err(KagemushaPromotionReceiptValidationError::ActivationTransaction);
+        }
+        let transaction_wire = transaction
+            .encode_wire_v1()
+            .map_err(|_| KagemushaPromotionReceiptValidationError::ActivationTransaction)?;
+        if !expectations
+            .activation_transaction_wire
+            .matches_bytes(&transaction_wire)
+        {
+            return Err(KagemushaPromotionReceiptValidationError::ActivationTransaction);
+        }
+        let activation = direct_activation_instruction(transaction)?;
+        validate_activation_binding(activation, &expectations.binding)?;
+        Ok((block, transaction, transaction_wire))
+    }
+
+    fn verify_finality_and_authorization(
+        &self,
+        expectations: &KagemushaV4ActivationReceiptExpectationsV1,
+        block: &SignedBlock,
+        transaction: &SignedTransaction,
+        transaction_wire: &[u8],
+    ) -> Result<(), KagemushaPromotionReceiptValidationError> {
+        let finality_proof = self
+            .body
+            .finality_proof_chain
+            .last()
+            .ok_or(KagemushaPromotionReceiptValidationError::FinalityChain)?;
+        let artifact = &finality_proof.finality_artifact;
+        let anchor_height = expectations
+            .trusted_finality_anchor
+            .finality_artifact
+            .height;
+        let proof_count = u64::try_from(self.body.finality_proof_chain.len())
+            .map_err(|_| KagemushaPromotionReceiptValidationError::FinalityChain)?;
+        if anchor_height.checked_add(proof_count) != Some(artifact.height) {
+            return Err(KagemushaPromotionReceiptValidationError::FinalityChain);
+        }
+        let expiry = transaction
+            .expires_at_height()
+            .map_err(|_| KagemushaPromotionReceiptValidationError::ActivationExpiry)?
+            .ok_or(KagemushaPromotionReceiptValidationError::ActivationExpiry)?;
+        let maximum_expiry = anchor_height
+            .checked_add(
+                u64::try_from(KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1)
+                    .expect("proof-count bound fits u64"),
+            )
+            .and_then(|height| height.checked_add(1))
+            .ok_or(KagemushaPromotionReceiptValidationError::ActivationExpiry)?;
+        if artifact.height >= expiry || expiry > maximum_expiry {
+            return Err(KagemushaPromotionReceiptValidationError::ActivationExpiry);
+        }
+        let mut finality_verifier = BridgeFinalityVerifier::with_context(
+            expectations.binding.network_id,
+            expectations
+                .trusted_finality_anchor
+                .finality_artifact
+                .context_id(),
+        );
+        finality_verifier
+            .verify(&expectations.trusted_finality_anchor)
+            .map_err(|_| KagemushaPromotionReceiptValidationError::Finality)?;
+        for proof in &self.body.finality_proof_chain {
+            validate_finality_corridor_context(
+                proof,
+                &expectations.binding,
+                &expectations.validator_bodies,
+            )?;
+            finality_verifier
+                .verify(proof)
+                .map_err(|_| KagemushaPromotionReceiptValidationError::Finality)?;
+        }
+        let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+            block,
+            artifact,
+            &self.body.committed_transaction.entrypoint_hash,
+        )
+        .map_err(|_| KagemushaPromotionReceiptValidationError::FinalityBlockBinding)?;
+        let entry_index = usize::try_from(anchor.entry_index())
+            .map_err(|_| KagemushaPromotionReceiptValidationError::FinalityBlockBinding)?;
+        let block_entrypoint = block
+            .entrypoints_cloned()
+            .nth(entry_index)
+            .ok_or(KagemushaPromotionReceiptValidationError::FinalityBlockBinding)?;
+        let TransactionEntrypoint::External(block_transaction) = block_entrypoint else {
+            return Err(KagemushaPromotionReceiptValidationError::ActivationAuthorizationWire);
+        };
+        let block_transaction_wire = block_transaction
+            .encode_wire_v1()
+            .map_err(|_| KagemushaPromotionReceiptValidationError::ActivationAuthorizationWire)?;
+        if block_transaction_wire != transaction_wire {
+            return Err(KagemushaPromotionReceiptValidationError::ActivationAuthorizationWire);
+        }
+        Ok(())
+    }
+
     /// Sign a structurally valid body with its declared receipt-issuer key.
     ///
     /// # Errors
@@ -1896,159 +2080,24 @@ impl KagemushaV4ActivationFinalityReceiptV1 {
     ///
     /// Returns [`KagemushaPromotionReceiptValidationError`] on the first
     /// schema, expectation, seal, transaction, block, or finality mismatch.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the activation verifier keeps every external identity and finality binding in one auditable path"
+    )]
     pub fn verify(
         &self,
         expectations: &KagemushaV4ActivationReceiptExpectationsV1,
     ) -> Result<KagemushaV4VerifiedActivationReceiptV1, KagemushaPromotionReceiptValidationError>
     {
-        if self.schema != KAGEMUSHA_V4_ACTIVATION_FINALITY_RECEIPT_SCHEMA
-            || self.version != KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION
-        {
-            return Err(KagemushaPromotionReceiptValidationError::InvalidField(
-                "activation_receipt",
-            ));
-        }
-        expectations.validate()?;
-        self.body.validate_structure()?;
-        if self.body.promotion_reservation != expectations.promotion_reservation
-            || self.body.activation_expectations_artifact
-                != expectations.activation_expectations_artifact
-            || self.body.binding != expectations.binding
-            || self.body.issuer != expectations.receipt_issuer
-            || self.body.governance_authority != expectations.governance_authority
-            || self.body.validator_seals != expectations.validator_seals
-            || self.body.activation_transaction_intent != expectations.activation_transaction_intent
-            || self.body.activation_transaction_wire != expectations.activation_transaction_wire
-        {
-            return Err(KagemushaPromotionReceiptValidationError::ExpectationMismatch);
-        }
-        enforce_activation_receipt_frame_size(self)?;
-        verify_typed_signature_hash(
-            &self.signature,
-            &self.body.issuer,
-            self.body.signing_hash(),
-            "activation_receipt",
-        )?;
-        verify_kagemusha_v4_validator_qualification_seals(
-            &self.body.validator_seals,
-            &expectations.validator_bodies,
-            &expectations.binding,
-        )?;
-
-        let block = decode_exact_finalized_block(self.body.finalized_block_wire.as_bytes())?;
-        let committed = &self.body.committed_transaction;
-        if committed.merge_inclusion.is_some()
-            || !committed.verify_inclusion_in_block(&block)
-            || committed.result.0.is_err()
-            || block
-                .entrypoint_hashes()
-                .filter(|entry_hash| entry_hash == &committed.entrypoint_hash)
-                .count()
-                != 1
-        {
-            return Err(KagemushaPromotionReceiptValidationError::CommittedTransaction);
-        }
-        let TransactionEntrypoint::External(transaction) = &committed.entrypoint else {
-            return Err(KagemushaPromotionReceiptValidationError::ActivationTransaction);
-        };
-        transaction
-            .verify_signature()
-            .map_err(|_| KagemushaPromotionReceiptValidationError::ActivationTransaction)?;
-        let transaction_policy = validate_governance_multisig_policy(transaction.authority())?;
-        if transaction_policy != &expectations.governance_multisig_policy
-            || transaction.multisig_signatures().is_none_or(|bundle| {
-                bundle.signatures.len() < KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS
-            })
-        {
-            return Err(KagemushaPromotionReceiptValidationError::GovernanceAuthority);
-        }
-        if transaction.authority() != &expectations.governance_authority
-            || transaction.network_id() != Some(&expectations.binding.network_id)
-            || transaction.hash() != expectations.activation_transaction_intent
-        {
-            return Err(KagemushaPromotionReceiptValidationError::ActivationTransaction);
-        }
-        let transaction_wire = transaction
-            .encode_wire_v1()
-            .map_err(|_| KagemushaPromotionReceiptValidationError::ActivationTransaction)?;
-        if !expectations
-            .activation_transaction_wire
-            .matches_bytes(&transaction_wire)
-        {
-            return Err(KagemushaPromotionReceiptValidationError::ActivationTransaction);
-        }
-        let activation = direct_activation_instruction(transaction)?;
-        validate_activation_binding(activation, &expectations.binding)?;
-        let finality_proof = self
-            .body
-            .finality_proof_chain
-            .last()
-            .ok_or(KagemushaPromotionReceiptValidationError::FinalityChain)?;
-        let artifact = &finality_proof.finality_artifact;
-        let anchor_height = expectations
-            .trusted_finality_anchor
-            .finality_artifact
-            .height;
-        let proof_count = u64::try_from(self.body.finality_proof_chain.len())
-            .map_err(|_| KagemushaPromotionReceiptValidationError::FinalityChain)?;
-        if anchor_height.checked_add(proof_count) != Some(artifact.height) {
-            return Err(KagemushaPromotionReceiptValidationError::FinalityChain);
-        }
-        let expiry = transaction
-            .expires_at_height()
-            .map_err(|_| KagemushaPromotionReceiptValidationError::ActivationExpiry)?
-            .ok_or(KagemushaPromotionReceiptValidationError::ActivationExpiry)?;
-        let maximum_expiry = anchor_height
-            .checked_add(
-                u64::try_from(KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1)
-                    .expect("proof-count bound fits u64"),
-            )
-            .and_then(|height| height.checked_add(1))
-            .ok_or(KagemushaPromotionReceiptValidationError::ActivationExpiry)?;
-        if artifact.height >= expiry || expiry > maximum_expiry {
-            return Err(KagemushaPromotionReceiptValidationError::ActivationExpiry);
-        }
-        let mut finality_verifier = BridgeFinalityVerifier::with_context(
-            expectations.binding.network_id,
-            expectations
-                .trusted_finality_anchor
-                .finality_artifact
-                .context_id(),
-        );
-        finality_verifier
-            .verify(&expectations.trusted_finality_anchor)
-            .map_err(|_| KagemushaPromotionReceiptValidationError::Finality)?;
-        for proof in &self.body.finality_proof_chain {
-            validate_finality_corridor_context(
-                proof,
-                &expectations.binding,
-                &expectations.validator_bodies,
-            )?;
-            finality_verifier
-                .verify(proof)
-                .map_err(|_| KagemushaPromotionReceiptValidationError::Finality)?;
-        }
-        let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+        self.verify_envelope_and_expectations(expectations)?;
+        let (block, transaction, transaction_wire) =
+            self.verify_committed_activation(expectations)?;
+        self.verify_finality_and_authorization(
+            expectations,
             &block,
-            artifact,
-            &committed.entrypoint_hash,
-        )
-        .map_err(|_| KagemushaPromotionReceiptValidationError::FinalityBlockBinding)?;
-        let entry_index = usize::try_from(anchor.entry_index())
-            .map_err(|_| KagemushaPromotionReceiptValidationError::FinalityBlockBinding)?;
-        let block_entrypoint = block
-            .entrypoints_cloned()
-            .nth(entry_index)
-            .ok_or(KagemushaPromotionReceiptValidationError::FinalityBlockBinding)?;
-        let TransactionEntrypoint::External(block_transaction) = block_entrypoint else {
-            return Err(KagemushaPromotionReceiptValidationError::ActivationAuthorizationWire);
-        };
-        let block_transaction_wire = block_transaction
-            .encode_wire_v1()
-            .map_err(|_| KagemushaPromotionReceiptValidationError::ActivationAuthorizationWire)?;
-        if block_transaction_wire != transaction_wire {
-            return Err(KagemushaPromotionReceiptValidationError::ActivationAuthorizationWire);
-        }
+            transaction,
+            &transaction_wire,
+        )?;
 
         Ok(KagemushaV4VerifiedActivationReceiptV1 {
             finalized_height: block.header().height().get(),
@@ -2064,12 +2113,22 @@ fn validate_governance_multisig_policy(
     let Some(policy) = authority.controller().multisig_policy() else {
         return Err(KagemushaPromotionReceiptValidationError::GovernanceAuthority);
     };
-    if usize::from(policy.threshold()) < KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS
-        || policy.members().len() < KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS
-    {
+    if !kagemusha_v4_governance_policy_requires_distinct_signers(policy) {
         return Err(KagemushaPromotionReceiptValidationError::GovernanceAuthority);
     }
     Ok(policy)
+}
+
+/// Return whether a governance policy necessarily requires the documented distinct-signer floor.
+pub(super) fn kagemusha_v4_governance_policy_requires_distinct_signers(
+    policy: &MultisigPolicy,
+) -> bool {
+    usize::from(policy.threshold()) >= KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS
+        && policy.members().len() >= KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS
+        && policy
+            .members()
+            .iter()
+            .all(|member| member.weight() < policy.threshold())
 }
 
 fn validate_receipt_issuer_role_separation(
@@ -2793,6 +2852,70 @@ mod tests {
     }
 
     #[test]
+    fn runtime_effective_config_consensus_digest_is_domain_separated_and_complete() {
+        let (_, bodies, _, _) = qualification_fixture();
+        let projection = &bodies[0].runtime_effective_config;
+        let digest = projection
+            .consensus_sha256()
+            .expect("valid runtime projection digest");
+        let undomained_digest: [u8; 32] =
+            Sha256::digest(norito::encode_canonical(projection).expect("canonical projection"))
+                .into();
+        assert_ne!(digest, [0; 32]);
+        assert_ne!(
+            digest, undomained_digest,
+            "the consensus identity must include its explicit domain",
+        );
+        let mut changed = projection.clone();
+        changed.kagemusha_max_decoded_bytes += 1;
+        assert_ne!(
+            changed
+                .consensus_sha256()
+                .expect("changed projection remains valid"),
+            digest,
+        );
+    }
+
+    #[test]
+    fn governance_policy_requires_two_distinct_signers_not_only_threshold_weight() {
+        let keys =
+            [0x2a_u8, 0x2b].map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519));
+        let weighted_policy = MultisigPolicy::new(
+            2,
+            vec![
+                MultisigMember::new(keys[0].public_key().clone(), 2)
+                    .expect("valid weight-two governance member"),
+                MultisigMember::new(keys[1].public_key().clone(), 1)
+                    .expect("valid weight-one governance member"),
+            ],
+        )
+        .expect("structurally valid weighted governance policy");
+        assert!(
+            !kagemusha_v4_governance_policy_requires_distinct_signers(&weighted_policy),
+            "one threshold-weight member cannot satisfy the distinct-governor contract"
+        );
+        let weighted_authority = AccountId::new_multisig(weighted_policy);
+        assert_eq!(
+            validate_governance_multisig_policy(&weighted_authority),
+            Err(KagemushaPromotionReceiptValidationError::GovernanceAuthority),
+        );
+
+        let distinct_policy = MultisigPolicy::new(
+            2,
+            keys.iter()
+                .map(|key| {
+                    MultisigMember::new(key.public_key().clone(), 1)
+                        .expect("valid unit-weight governance member")
+                })
+                .collect(),
+        )
+        .expect("valid two-distinct-signer governance policy");
+        assert!(kagemusha_v4_governance_policy_requires_distinct_signers(
+            &distinct_policy
+        ));
+    }
+
+    #[test]
     fn four_host_seals_accept_per_host_bytes_and_roundtrip_canonically() {
         let (binding, bodies, seals, _) = qualification_fixture();
         verify_kagemusha_v4_validator_qualification_seals(&seals, &bodies, &binding)
@@ -2864,6 +2987,10 @@ mod tests {
         );
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the receipt fixture assembles the complete signed governance, validator, transaction, and finality chain"
+    )]
     fn roundtrip_receipt() -> KagemushaV4ActivationFinalityReceiptV1 {
         let (binding, bodies, seals, _) = qualification_fixture();
         let runtime = &bodies[0].runtime_effective_config;
@@ -3098,6 +3225,20 @@ mod tests {
             error.to_string().contains("outside 1..=4096"),
             "expected intrinsic proof-count preflight, got {error}"
         );
+    }
+
+    #[test]
+    fn finality_chain_iter_borrows_proofs_in_order() {
+        let receipt = roundtrip_receipt();
+        let chain = &receipt.body.finality_proof_chain;
+        let mut proofs = chain.iter();
+
+        assert_eq!(proofs.len(), chain.len());
+        assert!(core::ptr::eq(
+            proofs.next().expect("non-empty chain"),
+            chain.first().expect("non-empty chain"),
+        ));
+        assert_eq!(proofs.next(), None);
     }
 
     #[cfg(feature = "json")]

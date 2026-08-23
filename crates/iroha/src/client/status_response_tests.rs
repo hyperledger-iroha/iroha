@@ -36,7 +36,10 @@ fn get_status_bounds_preferred_and_json_fallback_responses() {
     };
     let decoded = with_mock_http(responder, || client_with_base_url(base_url()).get_status())
         .expect("JSON fallback status response");
-    assert_eq!(decoded, expected);
+    assert_eq!(
+        norito::json::to_value(&decoded).expect("serialize decoded status"),
+        norito::json::to_value(&expected).expect("serialize expected status")
+    );
     let snapshots = snapshots.lock().expect("snapshot lock");
     assert_eq!(snapshots.len(), 2);
     for snapshot in snapshots.iter() {

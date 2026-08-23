@@ -117,14 +117,11 @@ fn axt_replay_ledger_survives_state_restart() {
     vm.set_register(11, manifest_ptr);
     IVMHost::syscall(&mut host, syscalls::SYSCALL_AXT_TOUCH, &mut vm).expect("touch");
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &ivm_proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_ptr);
-    IVMHost::syscall(&mut host, syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm).expect("verify proof");
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &ivm_handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &ivm_intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
-    vm.set_register(12, 0);
+    vm.set_register(12, proof_ptr);
     let_row! { err = IVMHost::syscall(&mut host, syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm) .expect_err("the permanent counter must reject the already-used nonce after restart") };
     let_row! { reject = host .take_axt_reject_for_tests() .expect("reject context recorded") };
     assert!(matches!(err, ivm::VMError::PermissionDenied));
@@ -284,14 +281,11 @@ fn axt_replay_ledger_prunes_after_retention_window() {
     vm.set_register(11, manifest_ptr);
     IVMHost::syscall(&mut host, syscalls::SYSCALL_AXT_TOUCH, &mut vm).expect("touch");
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &ivm_proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_ptr);
-    IVMHost::syscall(&mut host, syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm).expect("verify proof");
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &ivm_handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &ivm_intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
-    vm.set_register(12, 0);
+    vm.set_register(12, proof_ptr);
     let err = IVMHost::syscall(&mut host, syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
         .expect_err("replay pruning must not revive a stale sub-nonce");
     assert!(matches!(err, ivm::VMError::PermissionDenied));

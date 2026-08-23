@@ -1,8 +1,11 @@
 //! Sealed production authentication for lifecycle planner inputs.
+#[cfg(test)]
+use super::work_registry::ReadyLifecycleBroadcastCarrierV1;
 use super::{
     CapacityClass, LifecycleCoordinator, LifecycleState, LifecycleWorkClass,
     LifecycleWorkRegistryHolder, PreparedLifecycleIngressSelector, ProductionLifecycleOwnerV1,
     concrete_admission::ProductionCertifiedFetchAdmissionSettlementV1,
+    open::ReadyRecoveredLifecycleBroadcastAttestationV1,
     schema::{AttestedReadyValidateDemand, SchedulerInputs, SchedulerReadyInputs},
     selector::{
         PreparedCertifiedServeExactDequeueV1,
@@ -11,9 +14,9 @@ use super::{
     work_registry::{
         ClaimedCertifiedServeDispatchErrorV1, ClaimedCertifiedServeDispatchV1,
         ClaimedProducerTurnErrorV1, ClaimedProducerTurnV1, ConcreteLifecycleWorkRegistry,
-        ReadyCertifiedServeAttestationV1, ReadyLifecycleBroadcastCarrierV1,
-        ReadyProducerTurnCensusAttestationErrorV1, ReadyRecoveredDecisionApplyDemand,
-        ReadyRetainedDirectBroadcastAttestationV1,
+        ReadyCertifiedServeAttestationV1, ReadyLifecycleDecisionApplyDemandV1,
+        ReadyProducerTurnCensusAttestationErrorV1, RegistryError,
+        SchedulableLifecycleBroadcastCarrierV1, SchedulableRetainedDirectBroadcastAttestationV1,
     },
 };
 #[cfg(test)]
@@ -28,9 +31,9 @@ use crate::sumeragi::{
     v2_runner::{LifecycleCurrentRunnerTurn, LifecycleRunnerRankTarget},
     v2_runtime::SerializedV2Runtime,
     v2_worker::{
-        AuthenticatedLifecycleIoCapacity, LifecycleIoCapacityCaptureFailure,
-        LifecycleIoCapacityReservation, LifecycleIoCapacityWait, LifecycleIoCapacityWaitStatus,
-        ProductionV2Services, RecoveredCompletionCapacityProbeV1,
+        AuthenticatedLifecycleIoCapacity, LifecycleCompletionCapacityProbeV1,
+        LifecycleIoCapacityCaptureFailure, LifecycleIoCapacityReservation, LifecycleIoCapacityWait,
+        LifecycleIoCapacityWaitStatus, ProductionV2Services,
         RecoveredLifecycleSignBroadcastOutputCaptureV1,
         RecoveredLifecycleSignCapacityCaptureErrorV1, RecoveredLifecycleSignCapacityCaptureV1,
     },
@@ -70,8 +73,8 @@ fn authenticated_ready_row(
     factory: &AuthenticatedSchedulerInputsFactory,
     record: &super::LifecycleRecord,
     validate_attestation: Option<AttestedReadyValidateDemand>,
-    recovered_apply_attestation: Option<
-        super::work_registry::ReadyRecoveredDecisionApplyAttestation,
+    lifecycle_decision_apply_attestation: Option<
+        super::work_registry::ReadyLifecycleDecisionApplyAttestationV1,
     >,
     recovered_sign_attestation: Option<
         super::work_registry::ReadyRecoveredLifecycleSignAttestationV1,
@@ -85,7 +88,7 @@ fn authenticated_ready_row(
         factory,
         record,
         validate_attestation,
-        recovered_apply_attestation,
+        lifecycle_decision_apply_attestation,
         recovered_sign_attestation,
         recovered_fetch_attestation,
         live_debts,
@@ -146,8 +149,8 @@ fn authenticated_ready_row_with_physical_capacity(
     factory: &AuthenticatedSchedulerInputsFactory,
     record: &super::LifecycleRecord,
     validate_attestation: Option<AttestedReadyValidateDemand>,
-    recovered_apply_attestation: Option<
-        super::work_registry::ReadyRecoveredDecisionApplyAttestation,
+    lifecycle_decision_apply_attestation: Option<
+        super::work_registry::ReadyLifecycleDecisionApplyAttestationV1,
     >,
     recovered_sign_attestation: Option<
         super::work_registry::ReadyRecoveredLifecycleSignAttestationV1,
@@ -162,17 +165,30 @@ fn authenticated_ready_row_with_physical_capacity(
         factory,
         record,
         validate_attestation,
-        recovered_apply_attestation,
+        lifecycle_decision_apply_attestation,
         recovered_sign_attestation,
         recovered_fetch_attestation,
         physical_capacity_available,
         live_debts,
     )
 }
-fn authenticated_retained_direct_broadcast_ready_row(
+fn authenticated_schedulable_retained_direct_broadcast_row(
     factory: &AuthenticatedSchedulerInputsFactory,
     record: &super::LifecycleRecord,
-    attestation: ReadyRetainedDirectBroadcastAttestationV1,
+    attestation: SchedulableRetainedDirectBroadcastAttestationV1,
+    live_debts: [u64; 6],
+) -> Option<SchedulerReadyInputs> {
+    attestation
+        .matches_schedulable_record(record)
+        .then_some(())?;
+    authenticated_ready_row_with_physical_capacity(
+        factory, record, None, None, None, None, false, live_debts,
+    )
+}
+fn authenticated_ready_recovered_lifecycle_broadcast_row(
+    factory: &AuthenticatedSchedulerInputsFactory,
+    record: &super::LifecycleRecord,
+    attestation: ReadyRecoveredLifecycleBroadcastAttestationV1,
     live_debts: [u64; 6],
 ) -> Option<SchedulerReadyInputs> {
     attestation.matches_ready_record(record).then_some(())?;
@@ -529,8 +545,8 @@ pub(crate) enum ProductionSchedulerInputsError {
         /// Exact logical ordinal whose concrete carrier failed validation.
         ordinal: u128,
     },
-    /// The exact recovered Decision Apply carrier could not be bound to this row.
-    InvalidRecoveredDecisionApplyCarrier {
+    /// The exact lifecycle Decision Apply carrier could not be bound to this row.
+    InvalidLifecycleDecisionApplyCarrier {
         /// Exact logical ordinal whose closed Apply carrier failed validation.
         ordinal: u128,
     },
@@ -624,13 +640,17 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignedBroadcastRefanout
 #[must_use = "the composite lifecycle Completion dispatch result must be observed"]
 pub(in crate::sumeragi) enum ProductionCompletionDispatchV1 {
     /// No physically available row was claimed; every Ready carrier remains unchanged.
-    CapacityUnavailable,
+    CapacityUnavailable {
+        /// Exact live Apply child whose executor barrier was installed before
+        /// the joint capacity census, if this census contained one.
+        protected_live_apply_ordinal: Option<u128>,
+    },
     /// The selected lifecycle Validate now owns one exact durable worker command.
     ValidateQueued {
         /// Exact selected lifecycle ordinal.
         ordinal: u128,
     },
-    /// The selected recovered Apply now owns one dedicated worker command.
+    /// The selected lifecycle Decision Apply now owns one dedicated worker command.
     ApplyQueued {
         /// Exact selected lifecycle ordinal.
         ordinal: u128,
@@ -650,6 +670,8 @@ pub(in crate::sumeragi) enum ProductionCompletionDispatchV1 {
     BodyStageAdvanced {
         /// Exact terminalized parent ordinal.
         parent_ordinal: u128,
+        /// Exact actor-global ordinal of the newly Ready child.
+        child_ordinal: u128,
         /// Newly Ready child class.
         child: LifecycleWorkClass,
     },
@@ -657,11 +679,29 @@ pub(in crate::sumeragi) enum ProductionCompletionDispatchV1 {
     ReducerFenceWait {
         /// Exact waiting parent ordinal.
         ordinal: u128,
+        /// Exact reducer-fence generation which must advance before retry.
+        wait: super::WaitToken,
     },
     /// One Validate completion durably advanced without creating a child.
     ValidateNoSuccessor {
         /// Exact terminalized Validate ordinal.
         ordinal: u128,
+    },
+}
+
+/// Move-only result of resolving one retained Ready Validate successor.
+#[must_use = "the exact Validate successor must resolve or remain retained"]
+pub(in crate::sumeragi) enum ReadyValidateSuccessorDispatchV1 {
+    /// The exact successor completed its synchronous or bounded-I/O dispatch.
+    Resolved(ProductionCompletionDispatchV1),
+    /// Physical capacity was unavailable; the unchanged token must be reparked.
+    CapacityUnavailable(super::ReadyValidateSuccessorV1),
+    /// The exact row is parked on its reducer fence and retains the same token.
+    ReducerFencePending {
+        /// Exact move-only successor identity.
+        successor: super::ReadyValidateSuccessorV1,
+        /// Exact reducer fence wait installed on the row.
+        wait: super::WaitToken,
     },
 }
 
@@ -682,6 +722,8 @@ pub(in crate::sumeragi) enum ProductionCompletionDispatchErrorV1 {
     Service(String),
     /// A Fetch executor owner conflicted with the exact request catalogs.
     Executor(RecoveredDecisionFetchRequestRegistrationErrorV1),
+    /// A Ready live Apply could not retire its exact competing executor work.
+    LiveApplyReconciliation(EffectExecutorError),
     /// The Apply executor was closed or retained an active mutation owner.
     ApplyExecutor(EffectExecutorError),
     /// Planning selected no authenticated physical row or another work class.
@@ -708,13 +750,20 @@ pub(crate) enum ProductionCompletionReadyWorkV1 {
     /// Coordinator state is not safe to classify without restart.
     Invalid,
 }
-enum AuthenticatedRecoveredCompletionReadyV1 {
+enum AuthenticatedLifecycleCompletionReadyV1 {
     Validate(AttestedReadyValidateDemand),
-    Apply(super::work_registry::ReadyRecoveredDecisionApplyAttestation),
+    Apply(super::work_registry::ReadyLifecycleDecisionApplyAttestationV1),
     Sign(super::work_registry::ReadyRecoveredLifecycleSignAttestationV1),
     Fetch(super::work_registry::ReadyRecoveredDecisionFetchAttestationV1),
     CertifiedBody(super::work_registry::ReadyCertifiedBodyPipelineAttestationV1),
-    RetainedDirectBroadcast(ReadyRetainedDirectBroadcastAttestationV1),
+    RetainedDirectBroadcast(SchedulableRetainedDirectBroadcastAttestationV1),
+    RetainedRecoveredBroadcast(ReadyRecoveredLifecycleBroadcastAttestationV1),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SchedulableCompletionBroadcastCarrierV1 {
+    RetainedDirectOutput(SchedulableRetainedDirectBroadcastAttestationV1),
+    RetainedRecoveredOutput(ReadyRecoveredLifecycleBroadcastAttestationV1),
+    RecoveredRefanout,
 }
 
 fn classify_completion_ready_classes(
@@ -1023,7 +1072,7 @@ impl ProductionIngressSchedulerInputsError {
 /// the concrete registry.
 ///
 /// The current sound subset consists of closed Validate completion carriers and
-/// the exact recovered Decision Apply carrier. I/O-bearing Validate and Apply
+/// the exact lifecycle Decision Apply carrier. I/O-bearing Validate and Apply
 /// rows are classified here but rejected before planning because their capacity
 /// and outer-runner reach still need a service-minted joint observation. Other
 /// work classes remain closed until their concrete carrier classifier exists.
@@ -1080,13 +1129,13 @@ fn direct_registry_scheduler_inputs(
             }
             LifecycleWorkClass::Apply => {
                 let attestation = registry
-                    .attest_ready_recovered_decision_apply(coordinator, *ordinal)
+                    .attest_ready_lifecycle_decision_apply(coordinator, *ordinal)
                     .map_err(|_| {
-                        ProductionSchedulerInputsError::InvalidRecoveredDecisionApplyCarrier {
+                        ProductionSchedulerInputsError::InvalidLifecycleDecisionApplyCarrier {
                             ordinal: *ordinal,
                         }
                     })?;
-                let ReadyRecoveredDecisionApplyDemand::BoundedIo = attestation.demand();
+                let ReadyLifecycleDecisionApplyDemandV1::BoundedIo = attestation.demand();
                 return Err(
                     ProductionSchedulerInputsError::IoCapacityObservationRequired {
                         ordinal: *ordinal,
@@ -1197,9 +1246,36 @@ impl ProductionLifecycleOwnerV1 {
         )
     }
 
-    fn classify_schedulable_completion_work(
+    fn attest_schedulable_completion_broadcast_carrier(
+        &self,
+        ordinal: u128,
+        fence: Option<crate::sumeragi::v2::LifecycleReducerFenceObservationV1>,
+    ) -> Result<SchedulableCompletionBroadcastCarrierV1, RegistryError> {
+        let retained_recovered = self.attest_ready_recovered_lifecycle_broadcast(ordinal);
+        let registered = self
+            .registry
+            .registry()
+            .attest_schedulable_lifecycle_broadcast_carrier(&self.coordinator, ordinal, fence);
+        match (retained_recovered, registered) {
+            (Some(attestation), Err(RegistryError::Missing)) => {
+                Ok(SchedulableCompletionBroadcastCarrierV1::RetainedRecoveredOutput(attestation))
+            }
+            (
+                None,
+                Ok(SchedulableLifecycleBroadcastCarrierV1::RetainedDirectOutput(attestation)),
+            ) => Ok(SchedulableCompletionBroadcastCarrierV1::RetainedDirectOutput(attestation)),
+            (None, Ok(SchedulableLifecycleBroadcastCarrierV1::RecoveredRefanout)) => {
+                Ok(SchedulableCompletionBroadcastCarrierV1::RecoveredRefanout)
+            }
+            (None, Err(error)) => Err(error),
+            (Some(_), Ok(_) | Err(_)) => Err(RegistryError::CorruptWork),
+        }
+    }
+
+    pub(super) fn classify_schedulable_completion_work(
         &self,
         schedulable: &BTreeSet<u128>,
+        fence: Option<crate::sumeragi::v2::LifecycleReducerFenceObservationV1>,
     ) -> ProductionCompletionReadyWorkV1 {
         let mut retained_direct_outputs = BTreeSet::new();
         let mut classes = Vec::with_capacity(schedulable.len());
@@ -1211,17 +1287,16 @@ impl ProductionLifecycleOwnerV1 {
                 classes.push(record.work_class);
                 continue;
             }
-            match self
-                .registry
-                .registry()
-                .attest_ready_lifecycle_broadcast_carrier(&self.coordinator, *ordinal)
-            {
-                Ok(ReadyLifecycleBroadcastCarrierV1::RetainedDirectOutput(_)) => {
+            match self.attest_schedulable_completion_broadcast_carrier(*ordinal, fence) {
+                Ok(
+                    SchedulableCompletionBroadcastCarrierV1::RetainedDirectOutput(_)
+                    | SchedulableCompletionBroadcastCarrierV1::RetainedRecoveredOutput(_),
+                ) => {
                     if !retained_direct_outputs.insert(*ordinal) {
                         return ProductionCompletionReadyWorkV1::Invalid;
                     }
                 }
-                Ok(ReadyLifecycleBroadcastCarrierV1::RecoveredRefanout) => {
+                Ok(SchedulableCompletionBroadcastCarrierV1::RecoveredRefanout) => {
                     classes.push(record.work_class);
                 }
                 Err(_) => return ProductionCompletionReadyWorkV1::Invalid,
@@ -1239,7 +1314,7 @@ impl ProductionLifecycleOwnerV1 {
 
     /// Classify Ready work without claiming a lease or reserving capacity.
     ///
-    /// Broadcast refanout and recovered Apply/Sign/Fetch each authenticate their
+    /// Broadcast refanout and lifecycle Decision Apply/Sign/Fetch each authenticate their
     /// complete supported census. Stateful Serve/Producer and other ordinary
     /// rows pass through rather than turning legal coexistence into corruption.
     pub(in crate::sumeragi) fn classify_completion_ready_work(
@@ -1278,7 +1353,7 @@ impl ProductionLifecycleOwnerV1 {
                     .then_some(*ordinal)
                 }),
         );
-        self.classify_schedulable_completion_work(&schedulable)
+        self.classify_schedulable_completion_work(&schedulable, Some(fence))
     }
 
     /// Plan one turn from the complete directly-owned production Ready census.
@@ -1294,6 +1369,7 @@ impl ProductionLifecycleOwnerV1 {
     }
     fn publish_ready_validate_outcome(
         &mut self,
+        services: &mut ProductionV2Services,
         executor: &mut V2EffectExecutor<SerializedV2Runtime>,
         lease: super::TurnLease,
     ) -> Result<ProductionCompletionDispatchV1, ProductionCompletionDispatchErrorV1> {
@@ -1349,7 +1425,7 @@ impl ProductionLifecycleOwnerV1 {
                 if !self.coordinator.park_validate_on_reducer_fence(lease, wait) {
                     return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
                 }
-                Ok(ProductionCompletionDispatchV1::ReducerFenceWait { ordinal })
+                Ok(ProductionCompletionDispatchV1::ReducerFenceWait { ordinal, wait })
             }
             Kind::ValidatedInactive
             | Kind::ValidatedNoEffect
@@ -1377,6 +1453,9 @@ impl ProductionLifecycleOwnerV1 {
                     );
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
+                executor
+                    .release_live_lifecycle_validate_successor(ordinal)
+                    .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                 Ok(ProductionCompletionDispatchV1::ValidateNoSuccessor { ordinal })
             }
             Kind::ValidatedPersist => {
@@ -1405,6 +1484,7 @@ impl ProductionLifecycleOwnerV1 {
                         return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                     }
                 };
+                let child_ordinal = transition.child_ordinal();
                 if transition.persist_and_publish().is_err() {
                     iroha_logger::error!(
                         ordinal,
@@ -1412,8 +1492,12 @@ impl ProductionLifecycleOwnerV1 {
                     );
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
+                executor
+                    .release_live_lifecycle_validate_successor(ordinal)
+                    .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                 Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
                     parent_ordinal: ordinal,
+                    child_ordinal,
                     child: LifecycleWorkClass::SignVote,
                 })
             }
@@ -1446,6 +1530,7 @@ impl ProductionLifecycleOwnerV1 {
                         return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                     }
                 };
+                let child_ordinal = transition.child_ordinal();
                 if transition.persist_and_publish().is_err() {
                     iroha_logger::error!(
                         ordinal,
@@ -1453,8 +1538,12 @@ impl ProductionLifecycleOwnerV1 {
                     );
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
+                executor
+                    .release_live_lifecycle_validate_successor(ordinal)
+                    .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                 Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
                     parent_ordinal: ordinal,
+                    child_ordinal,
                     child: LifecycleWorkClass::InvalidBodyReport,
                 })
             }
@@ -1484,6 +1573,7 @@ impl ProductionLifecycleOwnerV1 {
                         return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                     }
                 };
+                let child_ordinal = transition.child_ordinal();
                 if transition.persist_and_publish().is_err() {
                     iroha_logger::error!(
                         ordinal,
@@ -1491,8 +1581,28 @@ impl ProductionLifecycleOwnerV1 {
                     );
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
+                let authority = self
+                    .registry
+                    .prepare_ready_live_decision_apply_reconciliation(
+                        &self.coordinator,
+                        child_ordinal,
+                    )
+                    .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?
+                    .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+                if authority.dispatch_key().lifecycle_ordinal() != child_ordinal {
+                    return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+                }
+                if let Err(error) =
+                    executor.reconcile_live_lifecycle_decision_apply(authority, services)
+                {
+                    self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                    return Err(
+                        ProductionCompletionDispatchErrorV1::LiveApplyReconciliation(error),
+                    );
+                }
                 Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
                     parent_ordinal: ordinal,
+                    child_ordinal,
                     child: LifecycleWorkClass::Apply,
                 })
             }
@@ -1566,7 +1676,7 @@ impl ProductionLifecycleOwnerV1 {
                 {
                     return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
                 }
-                return Ok(ProductionCompletionDispatchV1::ReducerFenceWait { ordinal });
+                return Ok(ProductionCompletionDispatchV1::ReducerFenceWait { ordinal, wait });
             }
             Ok(crate::sumeragi::v2::CertifiedFetchStoreAdapterPreparationV1::Inactive) => {
                 iroha_logger::error!(ordinal, "certified Fetch adapter projection was inactive");
@@ -1613,6 +1723,7 @@ impl ProductionLifecycleOwnerV1 {
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
             }
         };
+        let child_ordinal = transition.child_ordinal();
         let output_guard = services.lifecycle_output_guard();
         let Some(operation) = output_guard.begin_fail_stop_operation() else {
             drop(transition);
@@ -1631,6 +1742,7 @@ impl ProductionLifecycleOwnerV1 {
         operation.complete();
         Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
             parent_ordinal: ordinal,
+            child_ordinal,
             child: LifecycleWorkClass::Store,
         })
     }
@@ -1710,7 +1822,7 @@ impl ProductionLifecycleOwnerV1 {
                 {
                     return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
                 }
-                return Ok(ProductionCompletionDispatchV1::ReducerFenceWait { ordinal });
+                return Ok(ProductionCompletionDispatchV1::ReducerFenceWait { ordinal, wait });
             }
             Ok(crate::sumeragi::v2::DurableStoreValidateAdapterPreparationV1::Inactive) => {
                 iroha_logger::error!(
@@ -1772,6 +1884,7 @@ impl ProductionLifecycleOwnerV1 {
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
             }
         };
+        let child_ordinal = transition.child_ordinal();
         let output_guard = services.lifecycle_output_guard();
         let Some(operation) = output_guard.begin_fail_stop_operation() else {
             drop(transition);
@@ -1796,6 +1909,7 @@ impl ProductionLifecycleOwnerV1 {
         operation.complete();
         Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
             parent_ordinal: ordinal,
+            child_ordinal,
             child: LifecycleWorkClass::Validate,
         })
     }
@@ -1807,9 +1921,41 @@ impl ProductionLifecycleOwnerV1 {
     /// can probe a wrong class or reobserve capacity after selection.
     pub(super) fn dispatch_completion_with_runner_debt(
         &mut self,
-        services: &ProductionV2Services,
+        services: &mut ProductionV2Services,
         executor: &mut V2EffectExecutor<SerializedV2Runtime>,
         runner_debt: u64,
+    ) -> Result<ProductionCompletionDispatchV1, ProductionCompletionDispatchErrorV1> {
+        self.dispatch_completion_with_runner_debt_and_required_ordinal(
+            services,
+            executor,
+            runner_debt,
+            None,
+        )
+    }
+
+    /// Run the same complete authenticated census while requiring its natural
+    /// scheduler winner to be one exact retained Ready ordinal.
+    pub(super) fn dispatch_completion_requiring_ready_ordinal(
+        &mut self,
+        services: &mut ProductionV2Services,
+        executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+        runner_debt: u64,
+        required_ordinal: u128,
+    ) -> Result<ProductionCompletionDispatchV1, ProductionCompletionDispatchErrorV1> {
+        self.dispatch_completion_with_runner_debt_and_required_ordinal(
+            services,
+            executor,
+            runner_debt,
+            Some(required_ordinal),
+        )
+    }
+
+    fn dispatch_completion_with_runner_debt_and_required_ordinal(
+        &mut self,
+        services: &mut ProductionV2Services,
+        executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+        runner_debt: u64,
+        required_ordinal: Option<u128>,
     ) -> Result<ProductionCompletionDispatchV1, ProductionCompletionDispatchErrorV1> {
         if let Some(fault) = self.coordinator.fault {
             return Err(ProductionCompletionDispatchErrorV1::CoordinatorFaulted(
@@ -1848,6 +1994,38 @@ impl ProductionLifecycleOwnerV1 {
         if mode.height() != context.height || mode.context_id() != context.id() {
             return Err(ProductionCompletionDispatchErrorV1::ForeignServiceOwner);
         }
+        // Live Validate-to-Apply publication installs its exact executor owner
+        // before exposing the Ready child. Classification remains read-only:
+        // crash-open work is recovered-lineage, and a live child without its
+        // already-installed owner is corrupt.
+        let live_apply_ordinals = current_ready
+            .iter()
+            .copied()
+            .filter(|ordinal| {
+                self.coordinator
+                    .records
+                    .get(ordinal)
+                    .is_some_and(|record| record.work_class == LifecycleWorkClass::Apply)
+            })
+            .collect::<Vec<_>>();
+        let mut protected_live_apply_ordinal = None;
+        for ordinal in live_apply_ordinals {
+            let authority = self
+                .registry
+                .prepare_ready_live_decision_apply_reconciliation(&self.coordinator, ordinal)
+                .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+            if let Some(authority) = authority {
+                let protected_ordinal = authority.dispatch_key().lifecycle_ordinal();
+                if protected_ordinal != ordinal
+                    || protected_live_apply_ordinal
+                        .replace(protected_ordinal)
+                        .is_some()
+                    || !executor.exactly_owns_live_lifecycle_decision_apply(&authority)
+                {
+                    return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+                }
+            }
+        }
         let fence = executor.lifecycle_reducer_fence_observation();
         let mut exact_ready = current_ready;
         let reducer_fence_wakes = self
@@ -1885,7 +2063,7 @@ impl ProductionLifecycleOwnerV1 {
                         .attest_ready_validate_demand(&self.registry, *ordinal)
                         .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
                     let probe = attestation.requires_io_dispatch().then_some(
-                        RecoveredCompletionCapacityProbeV1::Validate {
+                        LifecycleCompletionCapacityProbeV1::Validate {
                             ordinal: *ordinal,
                             key: attestation.dispatch_key(),
                         },
@@ -1894,27 +2072,27 @@ impl ProductionLifecycleOwnerV1 {
                         validate_io.insert(*ordinal);
                     }
                     (
-                        AuthenticatedRecoveredCompletionReadyV1::Validate(attestation),
+                        AuthenticatedLifecycleCompletionReadyV1::Validate(attestation),
                         probe,
                     )
                 }
                 LifecycleWorkClass::Apply => {
                     let attestation = self
                         .registry
-                        .attest_ready_recovered_decision_apply(&self.coordinator, *ordinal)
+                        .attest_ready_lifecycle_decision_apply(&self.coordinator, *ordinal)
                         .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
-                    if attestation.demand() != ReadyRecoveredDecisionApplyDemand::BoundedIo
+                    if attestation.demand() != ReadyLifecycleDecisionApplyDemandV1::BoundedIo
                         || !attestation.dispatch_key().matches_height_context(context)
                     {
                         return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
                     }
                     let key = attestation.dispatch_key();
                     let executor_available = executor
-                        .recovered_decision_apply_dispatch_available()
+                        .lifecycle_decision_apply_dispatch_available()
                         .map_err(ProductionCompletionDispatchErrorV1::ApplyExecutor)?;
                     (
-                        AuthenticatedRecoveredCompletionReadyV1::Apply(attestation),
-                        Some(RecoveredCompletionCapacityProbeV1::Apply {
+                        AuthenticatedLifecycleCompletionReadyV1::Apply(attestation),
+                        Some(LifecycleCompletionCapacityProbeV1::Apply {
                             ordinal: *ordinal,
                             key,
                             executor_available,
@@ -1936,8 +2114,8 @@ impl ProductionLifecycleOwnerV1 {
                     }
                     let key = attestation.dispatch_key();
                     (
-                        AuthenticatedRecoveredCompletionReadyV1::Sign(attestation),
-                        Some(RecoveredCompletionCapacityProbeV1::Sign {
+                        AuthenticatedLifecycleCompletionReadyV1::Sign(attestation),
+                        Some(LifecycleCompletionCapacityProbeV1::Sign {
                             ordinal: *ordinal,
                             key,
                         }),
@@ -1954,7 +2132,7 @@ impl ProductionLifecycleOwnerV1 {
                         )
                     {
                         (
-                            AuthenticatedRecoveredCompletionReadyV1::CertifiedBody(attestation),
+                            AuthenticatedLifecycleCompletionReadyV1::CertifiedBody(attestation),
                             None,
                         )
                     } else {
@@ -1984,8 +2162,8 @@ impl ProductionLifecycleOwnerV1 {
                             .recovered_decision_fetch_registration_available(&owner)
                             .map_err(ProductionCompletionDispatchErrorV1::Executor)?;
                         (
-                            AuthenticatedRecoveredCompletionReadyV1::Fetch(attestation),
-                            Some(RecoveredCompletionCapacityProbeV1::Fetch {
+                            AuthenticatedLifecycleCompletionReadyV1::Fetch(attestation),
+                            Some(LifecycleCompletionCapacityProbeV1::Fetch {
                                 ordinal: *ordinal,
                                 owner,
                                 executor_available,
@@ -2004,30 +2182,30 @@ impl ProductionLifecycleOwnerV1 {
                         )
                         .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
                     (
-                        AuthenticatedRecoveredCompletionReadyV1::CertifiedBody(attestation),
+                        AuthenticatedLifecycleCompletionReadyV1::CertifiedBody(attestation),
                         None,
                     )
                 }
                 LifecycleWorkClass::Broadcast => {
-                    let attestation = match self
-                        .registry
-                        .registry()
-                        .attest_ready_lifecycle_broadcast_carrier(&self.coordinator, *ordinal)
+                    let ready = match self
+                        .attest_schedulable_completion_broadcast_carrier(*ordinal, Some(fence))
                         .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?
                     {
-                        ReadyLifecycleBroadcastCarrierV1::RetainedDirectOutput(attestation) => {
-                            attestation
-                        }
-                        ReadyLifecycleBroadcastCarrierV1::RecoveredRefanout => {
+                        SchedulableCompletionBroadcastCarrierV1::RetainedDirectOutput(
+                            attestation,
+                        ) => AuthenticatedLifecycleCompletionReadyV1::RetainedDirectBroadcast(
+                            attestation,
+                        ),
+                        SchedulableCompletionBroadcastCarrierV1::RetainedRecoveredOutput(
+                            attestation,
+                        ) => AuthenticatedLifecycleCompletionReadyV1::RetainedRecoveredBroadcast(
+                            attestation,
+                        ),
+                        SchedulableCompletionBroadcastCarrierV1::RecoveredRefanout => {
                             return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
                         }
                     };
-                    (
-                        AuthenticatedRecoveredCompletionReadyV1::RetainedDirectBroadcast(
-                            attestation,
-                        ),
-                        None,
-                    )
+                    (ready, None)
                 }
                 LifecycleWorkClass::EnterView
                 | LifecycleWorkClass::EquivocationReport
@@ -2046,8 +2224,8 @@ impl ProductionLifecycleOwnerV1 {
                 probes.push(probe);
             }
         }
-        let census = (!probes.is_empty())
-            .then(|| services.capture_recovered_completion_capacity_census(probes))
+        let mut census = (!probes.is_empty())
+            .then(|| services.capture_lifecycle_completion_capacity_census(probes))
             .transpose()
             .map_err(ProductionCompletionDispatchErrorV1::Service)?;
         let ordinary_body = authenticated
@@ -2055,7 +2233,7 @@ impl ProductionLifecycleOwnerV1 {
             .filter_map(|(ordinal, ready)| {
                 matches!(
                     ready,
-                    AuthenticatedRecoveredCompletionReadyV1::CertifiedBody(_)
+                    AuthenticatedLifecycleCompletionReadyV1::CertifiedBody(_)
                 )
                 .then_some(*ordinal)
             })
@@ -2070,15 +2248,16 @@ impl ProductionLifecycleOwnerV1 {
                 .ok_or(ProductionCompletionDispatchErrorV1::InvalidReadyCensus)?;
             let direct_physical = matches!(
                 &ready,
-                AuthenticatedRecoveredCompletionReadyV1::CertifiedBody(_)
+                AuthenticatedLifecycleCompletionReadyV1::CertifiedBody(_)
             ) || matches!(
                 &ready,
-                AuthenticatedRecoveredCompletionReadyV1::Validate(attestation)
+                AuthenticatedLifecycleCompletionReadyV1::Validate(attestation)
                     if !attestation.requires_io_dispatch()
             );
             let retained_direct_output = matches!(
                 &ready,
-                AuthenticatedRecoveredCompletionReadyV1::RetainedDirectBroadcast(_)
+                AuthenticatedLifecycleCompletionReadyV1::RetainedDirectBroadcast(_)
+                    | AuthenticatedLifecycleCompletionReadyV1::RetainedRecoveredBroadcast(_)
             );
             let (physical_available, predecessor_debt) = if retained_direct_output {
                 (false, 0)
@@ -2092,7 +2271,7 @@ impl ProductionLifecycleOwnerV1 {
             };
             let live_debts = [mode.debt(), predecessor_debt, 0, 0, 0, runner_debt];
             let row = match ready {
-                AuthenticatedRecoveredCompletionReadyV1::Validate(attestation) => {
+                AuthenticatedLifecycleCompletionReadyV1::Validate(attestation) => {
                     authenticated_ready_row_with_physical_capacity(
                         &factory,
                         record,
@@ -2104,7 +2283,7 @@ impl ProductionLifecycleOwnerV1 {
                         live_debts,
                     )
                 }
-                AuthenticatedRecoveredCompletionReadyV1::Apply(attestation) => {
+                AuthenticatedLifecycleCompletionReadyV1::Apply(attestation) => {
                     authenticated_ready_row_with_physical_capacity(
                         &factory,
                         record,
@@ -2116,7 +2295,7 @@ impl ProductionLifecycleOwnerV1 {
                         live_debts,
                     )
                 }
-                AuthenticatedRecoveredCompletionReadyV1::Sign(attestation) => {
+                AuthenticatedLifecycleCompletionReadyV1::Sign(attestation) => {
                     authenticated_ready_row_with_physical_capacity(
                         &factory,
                         record,
@@ -2128,7 +2307,7 @@ impl ProductionLifecycleOwnerV1 {
                         live_debts,
                     )
                 }
-                AuthenticatedRecoveredCompletionReadyV1::Fetch(attestation) => {
+                AuthenticatedLifecycleCompletionReadyV1::Fetch(attestation) => {
                     authenticated_ready_row_with_physical_capacity(
                         &factory,
                         record,
@@ -2140,7 +2319,7 @@ impl ProductionLifecycleOwnerV1 {
                         live_debts,
                     )
                 }
-                AuthenticatedRecoveredCompletionReadyV1::CertifiedBody(attestation) => {
+                AuthenticatedLifecycleCompletionReadyV1::CertifiedBody(attestation) => {
                     authenticated_certified_body_pipeline_ready_row(
                         &factory,
                         record,
@@ -2148,14 +2327,22 @@ impl ProductionLifecycleOwnerV1 {
                         live_debts,
                     )
                 }
-                AuthenticatedRecoveredCompletionReadyV1::RetainedDirectBroadcast(attestation) => {
-                    authenticated_retained_direct_broadcast_ready_row(
+                AuthenticatedLifecycleCompletionReadyV1::RetainedDirectBroadcast(attestation) => {
+                    authenticated_schedulable_retained_direct_broadcast_row(
                         &factory,
                         record,
                         attestation,
                         live_debts,
                     )
                 }
+                AuthenticatedLifecycleCompletionReadyV1::RetainedRecoveredBroadcast(
+                    attestation,
+                ) => authenticated_ready_recovered_lifecycle_broadcast_row(
+                    &factory,
+                    record,
+                    attestation,
+                    live_debts,
+                ),
             }
             .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
             if ready_rows.insert(ordinal, row).is_some() {
@@ -2168,13 +2355,21 @@ impl ProductionLifecycleOwnerV1 {
             BTreeMap::from([(fence.source(), fence.generation())])
         };
         let inputs = authenticated_scheduler_inputs(factory, generations, ready_rows);
-        let lease = match self.coordinator.plan_turn(inputs) {
+        let plan = match required_ordinal {
+            Some(ordinal) => self
+                .coordinator
+                .plan_turn_requiring_ordinal(inputs, ordinal),
+            None => self.coordinator.plan_turn(inputs),
+        };
+        let lease = match plan {
             super::TurnPlan::Execute(lease) => lease,
             super::TurnPlan::Waiting(_) | super::TurnPlan::Idle => {
                 if let Some(census) = census {
                     census.complete_without_selection();
                 }
-                return Ok(ProductionCompletionDispatchV1::CapacityUnavailable);
+                return Ok(ProductionCompletionDispatchV1::CapacityUnavailable {
+                    protected_live_apply_ordinal,
+                });
             }
             super::TurnPlan::FailClosed(_) => {
                 return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
@@ -2190,10 +2385,12 @@ impl ProductionLifecycleOwnerV1 {
         match expected_class {
             LifecycleWorkClass::Validate => {
                 if !validate_io.contains(&ordinal) {
-                    if let Some(census) = census {
-                        census.complete_without_selection();
+                    match census.take() {
+                        Some(census) => census.complete_without_selection(),
+                        None => {}
                     }
-                    return self.publish_ready_validate_outcome(executor, lease);
+                    drop(census);
+                    return self.publish_ready_validate_outcome(services, executor, lease);
                 }
                 let census = census.ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
                 let reservation = census
@@ -2216,13 +2413,13 @@ impl ProductionLifecycleOwnerV1 {
                     .map_err(|_| ProductionCompletionDispatchErrorV1::ReservedOwnerMismatch)?;
                 let prepared = self
                     .registry
-                    .prepare_recovered_decision_apply_dispatch(&self.coordinator, &lease)
+                    .prepare_lifecycle_decision_apply_dispatch(&self.coordinator, &lease)
                     .map_err(|_| ProductionCompletionDispatchErrorV1::DispatchProjection)?;
                 if !reservation.preflight(&prepared) {
                     return Err(ProductionCompletionDispatchErrorV1::ReservedOwnerMismatch);
                 }
                 let executor_dispatch = executor
-                    .prepare_recovered_decision_apply_executor_dispatch(&prepared)
+                    .prepare_lifecycle_decision_apply_executor_dispatch(&prepared)
                     .map_err(ProductionCompletionDispatchErrorV1::ApplyExecutor)?;
                 reservation.commit(prepared, executor_dispatch);
                 Ok(ProductionCompletionDispatchV1::ApplyQueued { ordinal })
@@ -2359,6 +2556,143 @@ impl ProductionLifecycleOwnerV1 {
                 Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan)
             }
         }
+    }
+
+    /// Resolve one exact same-address Ready Validate successor ahead of
+    /// physical completion classification.
+    ///
+    /// The retained publication token must still name the global Ready minimum
+    /// and its complete registry coordinate. This path never observes or
+    /// acknowledges the worker completion FIFO. A live Apply successor also
+    /// installs its full executor retransmit owner before this method returns.
+    pub(super) fn dispatch_ready_validate_successor(
+        &mut self,
+        services: &mut ProductionV2Services,
+        executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+        successor: super::ReadyValidateSuccessorV1,
+        runner_debt: u64,
+    ) -> Result<ReadyValidateSuccessorDispatchV1, ProductionCompletionDispatchErrorV1> {
+        let ordinal = successor.lifecycle_ordinal();
+        let Some(record) = self.coordinator.records.get(&ordinal) else {
+            return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+        };
+        match successor.reducer_fence_wait() {
+            Some(wait)
+                if record.state == LifecycleState::Waiting(wait)
+                    && !self.coordinator.ready_index.contains(&ordinal)
+                    && wait.source()
+                        == super::projection::reducer_fence_wait_source(
+                            self.coordinator.active_context,
+                        ) => {}
+            None if record.state == LifecycleState::Ready
+                && self.coordinator.ready_index.contains(&ordinal) => {}
+            Some(_) | None => {
+                return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+            }
+        }
+        let attestation = self
+            .coordinator
+            .attest_ready_validate_demand(&self.registry, ordinal)
+            .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+        if !successor.exactly_matches_ready_attestation(attestation) {
+            return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+        }
+        if let Some(wait) = successor.reducer_fence_wait() {
+            let fence = executor.lifecycle_reducer_fence_observation();
+            if fence.source() != wait.source() {
+                return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+            }
+            if fence.generation() <= wait.observed_generation() {
+                return Ok(ReadyValidateSuccessorDispatchV1::ReducerFencePending {
+                    successor,
+                    wait,
+                });
+            }
+        }
+        let selected = self.dispatch_completion_requiring_ready_ordinal(
+            services,
+            executor,
+            runner_debt,
+            ordinal,
+        )?;
+        if matches!(
+            selected,
+            ProductionCompletionDispatchV1::CapacityUnavailable { .. }
+        ) {
+            let (dispatch_key, round, subject, apply_is_authorized) = successor
+                .preliminary_retransmit_identity(attestation)
+                .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+            executor
+                .arm_live_lifecycle_validate_successor(
+                    dispatch_key,
+                    round,
+                    subject,
+                    apply_is_authorized,
+                )
+                .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
+            return Ok(ReadyValidateSuccessorDispatchV1::CapacityUnavailable(
+                successor,
+            ));
+        }
+        if let ProductionCompletionDispatchV1::ReducerFenceWait {
+            ordinal: selected_ordinal,
+            wait,
+        } = &selected
+        {
+            if *selected_ordinal != ordinal {
+                return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
+            }
+            let (dispatch_key, round, subject, apply_is_authorized) = successor
+                .preliminary_retransmit_identity(attestation)
+                .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+            executor
+                .arm_live_lifecycle_validate_successor(
+                    dispatch_key,
+                    round,
+                    subject,
+                    apply_is_authorized,
+                )
+                .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
+            let successor = successor
+                .retain_on_reducer_fence(*wait)
+                .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+            return Ok(ReadyValidateSuccessorDispatchV1::ReducerFencePending {
+                successor,
+                wait: *wait,
+            });
+        }
+        let exact = match &selected {
+            ProductionCompletionDispatchV1::BodyStageAdvanced { parent_ordinal, .. } => {
+                !successor.requires_io_dispatch() && *parent_ordinal == ordinal
+            }
+            ProductionCompletionDispatchV1::ValidateQueued {
+                ordinal: selected_ordinal,
+            } => successor.requires_io_dispatch() && *selected_ordinal == ordinal,
+            ProductionCompletionDispatchV1::ValidateNoSuccessor {
+                ordinal: selected_ordinal,
+            } => *selected_ordinal == ordinal,
+            _ => false,
+        };
+        if !exact {
+            return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
+        }
+        if matches!(
+            selected,
+            ProductionCompletionDispatchV1::ValidateQueued { .. }
+        ) {
+            let (dispatch_key, round, subject, apply_is_authorized) = successor
+                .preliminary_retransmit_identity(attestation)
+                .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+            executor
+                .arm_live_lifecycle_validate_successor(
+                    dispatch_key,
+                    round,
+                    subject,
+                    apply_is_authorized,
+                )
+                .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
+        }
+        Ok(ReadyValidateSuccessorDispatchV1::Resolved(selected))
     }
     /// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.
     ///
@@ -2622,9 +2956,7 @@ impl ProductionLifecycleOwnerV1 {
                 continue;
             }
             let carrier = self
-                .registry
-                .registry()
-                .attest_ready_lifecycle_broadcast_carrier(&self.coordinator, *ready_ordinal)
+                .attest_schedulable_completion_broadcast_carrier(*ready_ordinal, None)
                 .map_err(|_| {
                     ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier
                 })?;
@@ -2635,8 +2967,11 @@ impl ProductionLifecycleOwnerV1 {
             }
         }
         let Some(ordinal) = broadcast_carriers.iter().find_map(|(ordinal, carrier)| {
-            matches!(carrier, ReadyLifecycleBroadcastCarrierV1::RecoveredRefanout)
-                .then_some(*ordinal)
+            matches!(
+                carrier,
+                SchedulableCompletionBroadcastCarrierV1::RecoveredRefanout
+            )
+            .then_some(*ordinal)
         }) else {
             if exact_ready.is_empty() {
                 return Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::None);
@@ -2695,15 +3030,23 @@ impl ProductionLifecycleOwnerV1 {
                         ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidReadyCensus,
                     )?
                 {
-                    ReadyLifecycleBroadcastCarrierV1::RetainedDirectOutput(attestation) => {
-                        authenticated_retained_direct_broadcast_ready_row(
+                    SchedulableCompletionBroadcastCarrierV1::RetainedDirectOutput(attestation) => {
+                        authenticated_schedulable_retained_direct_broadcast_row(
                             &factory,
                             ready_record,
                             attestation,
                             live_debts,
                         )
                     }
-                    ReadyLifecycleBroadcastCarrierV1::RecoveredRefanout => {
+                    SchedulableCompletionBroadcastCarrierV1::RetainedRecoveredOutput(
+                        attestation,
+                    ) => authenticated_ready_recovered_lifecycle_broadcast_row(
+                        &factory,
+                        ready_record,
+                        attestation,
+                        live_debts,
+                    ),
+                    SchedulableCompletionBroadcastCarrierV1::RecoveredRefanout => {
                         self.registry
                             .attest_ready_recovered_lifecycle_signed_broadcast(
                                 &self.coordinator,
@@ -2757,7 +3100,7 @@ impl ProductionLifecycleOwnerV1 {
                 LifecycleWorkClass::Apply => {
                     let attestation = self
                         .registry
-                        .attest_ready_recovered_decision_apply(
+                        .attest_ready_lifecycle_decision_apply(
                             &self.coordinator,
                             *ready_ordinal,
                         )
@@ -3532,13 +3875,13 @@ mod recovered_sign_capacity_tests {
             crate::sumeragi::v2_core::Generation::new(1),
             [0xC7; 32],
             crate::sumeragi::v2::AdapterFingerprints {
-                node: Hash::new(b"recovered completion node"),
-                build: Hash::new(b"recovered completion build"),
-                config: Hash::new(b"recovered completion config"),
+                node: Hash::new(b"lifecycle completion node"),
+                build: Hash::new(b"lifecycle completion build"),
+                config: Hash::new(b"lifecycle completion config"),
             },
             crate::sumeragi::v2::DeferredAdmissionOrdinalSource::new(0),
         )
-        .expect("open recovered Completion runtime");
+        .expect("open lifecycle Completion runtime");
         assert!(startup.is_empty());
         crate::sumeragi::v2_runtime::SerializedV2Runtime::new(
             adapter,
@@ -3547,7 +3890,7 @@ mod recovered_sign_capacity_tests {
             Duration::from_secs(10),
             crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
         )
-        .expect("wrap recovered Completion adapter")
+        .expect("wrap lifecycle Completion adapter")
         .0
     }
     #[test]
@@ -3613,6 +3956,128 @@ mod recovered_sign_capacity_tests {
     }
 
     #[test]
+    fn standalone_recovered_sign_binds_broadcast_after_actor_global_ordinal_skew() {
+        let (_services, keys) = crate::sumeragi::v2_worker::tests::fixture();
+        let context = worker_context(&keys);
+        let proofs = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("ordinal-skew validator proof of possession")
+            })
+            .collect::<Vec<_>>();
+        let verified = crate::sumeragi::v2::VerifiedHeightContext::genesis(context, proofs)
+            .expect("verified ordinal-skew context");
+        let mut coordinator = crate::sumeragi::v2_lifecycle_coordinator::LifecycleCoordinator::new(
+            super::super::projection::lifecycle_context(verified.context()),
+            10,
+            super::super::schema::CapacityGeometry::new(
+                CapacityClass::ALL.into_iter().map(|class| (class, 8)),
+            ),
+        );
+        let mut registry =
+            crate::sumeragi::v2_lifecycle_coordinator::LifecycleWorkRegistryHolder::empty();
+        let parent_ordinal = registry
+            .add_recovered_next_vote_scheduler_fixture_for_test(&mut coordinator, &verified, 0x45)
+            .expect("install exact standalone recovered Sign");
+        assert_eq!(parent_ordinal, 11);
+        let (projection, mut vote) =
+            super::super::work_registry::recovered_next_vote_projection_for_scheduler_fixture(
+                &verified, 0x45,
+            );
+        vote.signature = iroha_crypto::Signature::new(
+            keys[0].private_key(),
+            &crate::sumeragi::v2::SignRequest::Vote(vote.clone()).signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let broadcast = super::super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1::from_next_wal_vote_for_scheduler_fixture(
+            &projection,
+            &verified,
+            crate::sumeragi::v2::AdapterEffect::Broadcast(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote)),
+            ),
+        )
+        .expect("project exact standalone signed Broadcast");
+        let record = &coordinator.records[&parent_ordinal];
+        let ready = super::super::SchedulerReadyInputs::new(record, None, [0; 6]);
+        let inputs = super::super::SchedulerInputs::new([], [(parent_ordinal, ready)])
+            .expect("unique standalone Sign scheduler census");
+        let super::super::TurnPlan::Execute(mut lease) = coordinator.plan_turn(inputs) else {
+            panic!("claim the standalone recovered Sign")
+        };
+        lease.output_reservation = Some(super::super::schema::LeaseCapacityReservation::new(
+            CapacityClass::Consensus,
+            coordinator.capacity_generation[&CapacityClass::Consensus],
+        ));
+        coordinator.active_lease = Some(lease.clone());
+        let (&parent_slot, _) = lease
+            .physical_slots()
+            .first_key_value()
+            .expect("standalone Sign has one slot");
+        let sign_address = super::super::work_registry::ConcreteWorkAddress::new(
+            lease.owner(),
+            parent_ordinal,
+            parent_slot,
+        )
+        .expect("exact standalone Sign address");
+        let local_prediction = coordinator
+            .high_water
+            .checked_add(1)
+            .expect("local successor ordinal");
+        assert_eq!(local_prediction, 12);
+        let (runtime_ordinals, coordinator_ordinals) =
+            super::super::authority::lifecycle_ordinal_authorities_after_high_watermark(
+                coordinator.high_water,
+            );
+        coordinator.lifecycle_ordinal_authority = Some(coordinator_ordinals);
+        let runtime_ordinals =
+            crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::from_authority(
+                runtime_ordinals,
+            );
+        runtime_ordinals
+            .advance_past(12)
+            .expect("advance actor-global ordinals past the local prediction");
+        let (staged, ordinal_reservation, child_ordinal, child_slot, child_digest) =
+            super::super::body_pipeline_transition::stage_recovered_lifecycle_sign_broadcast_for_test(
+                &coordinator,
+                &lease,
+                broadcast.candidate().clone(),
+            )
+            .expect("stage Broadcast at the actor-global reserved ordinal");
+        assert_eq!(child_ordinal, 13);
+        assert_ne!(child_ordinal, local_prediction);
+        let bound =
+            super::super::work_registry::exact_staged_recovered_lifecycle_broadcast_address(
+                registry.registry_for_test(),
+                sign_address,
+                &broadcast,
+                &verified,
+                &staged,
+                child_ordinal,
+                child_slot,
+                child_digest,
+            )
+            .expect("bind registry successor to the exact staged Broadcast row");
+        assert_eq!(bound.ordinal, 13);
+        assert!(
+            super::super::work_registry::exact_staged_recovered_lifecycle_broadcast_address(
+                registry.registry_for_test(),
+                sign_address,
+                &broadcast,
+                &verified,
+                &staged,
+                local_prediction,
+                child_slot,
+                child_digest,
+            )
+            .is_err(),
+            "the stale coordinator-local prediction must not name a registry child"
+        );
+        drop(ordinal_reservation);
+    }
+
+    #[test]
     fn composite_recovered_completion_dispatches_one_ranked_sign_and_preserves_the_other() {
         let (mut services, keys) = crate::sumeragi::v2_worker::tests::fixture();
         let context = worker_context(&keys);
@@ -3635,7 +4100,7 @@ mod recovered_sign_capacity_tests {
             );
         assert!(owner.retire_ready_work_for_completion_test(broadcast));
         let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-        let (mut executor, planner_io) = owner.bind_body_store_to_recovered_completion_io_for_test(
+        let (mut executor, planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
             &mut services,
             runtime,
             Arc::clone(&output_guard),
@@ -3645,7 +4110,7 @@ mod recovered_sign_capacity_tests {
 
         assert_eq!(
             owner
-                .dispatch_completion_with_runner_debt(&services, &mut executor, 0,)
+                .dispatch_completion_with_runner_debt(&mut services, &mut executor, 0,)
                 .expect("the joint physical census dispatches one exact Sign"),
             ProductionCompletionDispatchV1::SignQueued { ordinal: paired }
         );
@@ -3695,7 +4160,7 @@ mod recovered_sign_capacity_tests {
             );
             let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
             let (mut executor, planner_io) = owner
-                .bind_body_store_to_recovered_completion_io_for_test(
+                .bind_body_store_to_lifecycle_completion_io_for_test(
                     &mut services,
                     runtime,
                     Arc::clone(&output_guard),
@@ -3705,7 +4170,7 @@ mod recovered_sign_capacity_tests {
 
             assert_eq!(
                 owner
-                    .dispatch_completion_with_runner_debt(&services, &mut executor, 0)
+                    .dispatch_completion_with_runner_debt(&mut services, &mut executor, 0)
                     .expect("the exact completion census retains direct output passively"),
                 ProductionCompletionDispatchV1::SignQueued { ordinal: paired }
             );
@@ -3719,6 +4184,114 @@ mod recovered_sign_capacity_tests {
             assert!(state.ready_index.contains(&direct));
             assert!(state.active_lease.is_some());
             assert!(state.fault.is_none());
+            assert!(!output_guard.restart_required());
+            planner_io.detach(&mut services);
+        }
+    );
+
+    sumeragi_stack_test!(
+        prospectively_woken_direct_broadcast_is_authenticated_and_sign_is_selected,
+        {
+            let (mut services, keys) = crate::sumeragi::v2_worker::tests::fixture();
+            let context = worker_context(&keys);
+            let proofs = keys
+                .iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("prospective Broadcast proof of possession")
+                })
+                .collect::<Vec<_>>();
+            let verified = crate::sumeragi::v2::VerifiedHeightContext::genesis(context, proofs)
+                .expect("verified prospective Broadcast context");
+            let directory =
+                tempfile::TempDir::new().expect("temporary prospective Broadcast store");
+            let runtime = recovered_completion_runtime(verified.clone(), directory.path());
+            let (mut owner, broadcast, paired, unrelated) =
+                ProductionLifecycleOwnerV1::recovered_broadcast_pair_scheduler_fixture_for_test(
+                    verified,
+                    &keys[0],
+                    directory.path(),
+                );
+            let (direct, _direct_pending) = owner
+                .defer_direct_timeout_broadcast_for_test(0x71)
+                .expect("defer one exact direct Broadcast behind completion work");
+            assert!(owner.retire_ready_work_for_completion_test(broadcast));
+            let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+            let (mut executor, planner_io) = owner
+                .bind_body_store_to_lifecycle_completion_io_for_test(
+                    &mut services,
+                    runtime,
+                    Arc::clone(&output_guard),
+                    2,
+                );
+            let fence = executor.lifecycle_reducer_fence_observation();
+            assert!(owner.park_direct_broadcast_before_fence_for_test(direct, fence));
+            assert_eq!(
+                owner.classify_completion_ready_work(fence),
+                ProductionCompletionReadyWorkV1::CompletionIo,
+                "the exact prospective direct output remains passive beside recovered Sign work"
+            );
+
+            assert_eq!(
+                owner
+                    .dispatch_completion_with_runner_debt(&mut services, &mut executor, 0)
+                    .expect("the fence-aware census dispatches the oldest recovered Sign"),
+                ProductionCompletionDispatchV1::SignQueued { ordinal: paired }
+            );
+            let state = owner.recovered_broadcast_scheduler_state_for_test(broadcast);
+            assert!(matches!(
+                state.records[&paired].state,
+                LifecycleState::Claimed(_)
+            ));
+            assert_eq!(state.records[&unrelated].state, LifecycleState::Ready);
+            assert_eq!(state.records[&direct].state, LifecycleState::Ready);
+            assert!(state.ready_index.contains(&direct));
+            assert!(state.fault.is_none());
+            assert!(!output_guard.restart_required());
+            planner_io.detach(&mut services);
+        }
+    );
+
+    sumeragi_stack_test!(
+        prospectively_woken_direct_broadcast_rejects_a_mismatched_carrier,
+        {
+            let (mut services, keys) = crate::sumeragi::v2_worker::tests::fixture();
+            let context = worker_context(&keys);
+            let proofs = keys
+                .iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("mismatched prospective Broadcast proof of possession")
+                })
+                .collect::<Vec<_>>();
+            let verified = crate::sumeragi::v2::VerifiedHeightContext::genesis(context, proofs)
+                .expect("verified mismatched prospective Broadcast context");
+            let directory = tempfile::TempDir::new().expect("temporary mismatched Broadcast store");
+            let runtime = recovered_completion_runtime(verified.clone(), directory.path());
+            let (mut owner, _broadcast, _paired, _unrelated) =
+                ProductionLifecycleOwnerV1::recovered_broadcast_pair_scheduler_fixture_for_test(
+                    verified,
+                    &keys[0],
+                    directory.path(),
+                );
+            let (direct, _direct_pending) = owner
+                .defer_direct_timeout_broadcast_for_test(0x73)
+                .expect("defer one exact direct Broadcast before corruption");
+            let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+            let (executor, planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
+                &mut services,
+                runtime,
+                Arc::clone(&output_guard),
+                2,
+            );
+            let fence = executor.lifecycle_reducer_fence_observation();
+            assert!(owner.park_direct_broadcast_before_fence_for_test(direct, fence));
+            assert!(owner.corrupt_ready_digest_for_test(direct));
+            assert_eq!(
+                owner.classify_completion_ready_work(fence),
+                ProductionCompletionReadyWorkV1::Invalid,
+                "a fence wake cannot bypass exact direct-output carrier authentication"
+            );
             assert!(!output_guard.restart_required());
             planner_io.detach(&mut services);
         }
@@ -3747,7 +4320,7 @@ mod recovered_sign_capacity_tests {
             );
         assert!(owner.retire_ready_work_for_completion_test(broadcast));
         let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-        let (mut executor, planner_io) = owner.bind_body_store_to_recovered_completion_io_for_test(
+        let (mut executor, planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
             &mut services,
             runtime,
             Arc::clone(&output_guard),
@@ -3759,9 +4332,11 @@ mod recovered_sign_capacity_tests {
 
         assert_eq!(
             owner
-                .dispatch_completion_with_runner_debt(&services, &mut executor, 0,)
+                .dispatch_completion_with_runner_debt(&mut services, &mut executor, 0,)
                 .expect("a saturated joint census is a typed unavailable turn"),
-            ProductionCompletionDispatchV1::CapacityUnavailable
+            ProductionCompletionDispatchV1::CapacityUnavailable {
+                protected_live_apply_ordinal: None,
+            }
         );
         assert_eq!(
             owner.recovered_broadcast_scheduler_state_for_test(broadcast),
@@ -4142,7 +4717,7 @@ impl ProductionLifecycleOwnerV1 {
     }
 
     /// Recheck one selected and one preserved row without exposing owner parts.
-    pub(in crate::sumeragi) fn recovered_completion_selection_is_exact_for_test(
+    pub(in crate::sumeragi) fn lifecycle_completion_selection_is_exact_for_test(
         &self,
         selected: u128,
         preserved: u128,
@@ -4190,6 +4765,16 @@ impl ProductionLifecycleOwnerV1 {
                 &verified,
                 local_signer,
             );
+        coordinator
+            .attach_empty_test_ledger(&root.join("ledger"))
+            .expect("persist the recovered scheduler fixture ledger");
+        let (_runtime_ordinal_authority, coordinator_ordinal_authority) =
+            super::authority::lifecycle_ordinal_authorities_after_high_watermark(
+                coordinator.high_water(),
+            );
+        coordinator
+            .bind_live_lifecycle_ordinal_authority(coordinator_ordinal_authority)
+            .expect("bind the recovered scheduler fixture ordinal authority");
         let body_store = crate::sumeragi::v2_body_store::V2BodyStore::open(
             root.join("body"),
             verified.context().clone(),
@@ -4400,6 +4985,60 @@ impl ProductionLifecycleOwnerV1 {
             .then(|| (expected_ordinal, Box::new(pending)))
     }
 
+    /// Project one exact direct Broadcast into the volatile reducer-fence wait
+    /// that production scheduling must authenticate before waking it.
+    fn park_direct_broadcast_before_fence_for_test(
+        &mut self,
+        ordinal: u128,
+        fence: crate::sumeragi::v2::LifecycleReducerFenceObservationV1,
+    ) -> bool {
+        let Some(observed_generation) = fence.generation().checked_sub(1) else {
+            return false;
+        };
+        if !matches!(
+            self.registry
+                .registry()
+                .attest_ready_lifecycle_broadcast_carrier(&self.coordinator, ordinal),
+            Ok(ReadyLifecycleBroadcastCarrierV1::RetainedDirectOutput(_))
+        ) {
+            return false;
+        }
+        let wait = super::WaitToken::new(fence.source(), observed_generation);
+        let mut next = self.coordinator.stage_durable_transaction();
+        if next
+            .observed_generation
+            .get(&fence.source())
+            .is_some_and(|known| *known > observed_generation)
+            || !next.ready_index.remove(&ordinal)
+        {
+            return false;
+        }
+        next.observed_generation
+            .insert(fence.source(), observed_generation);
+        {
+            let Some(record) = next.records.get_mut(&ordinal) else {
+                return false;
+            };
+            record.state = LifecycleState::Waiting(wait);
+        }
+        let Ok(SchedulableLifecycleBroadcastCarrierV1::RetainedDirectOutput(attestation)) = self
+            .registry
+            .registry()
+            .attest_schedulable_lifecycle_broadcast_carrier(&next, ordinal, Some(fence))
+        else {
+            return false;
+        };
+        if !next
+            .records
+            .get(&ordinal)
+            .is_some_and(|record| attestation.matches_schedulable_record(record))
+        {
+            return false;
+        }
+        self.coordinator = next;
+        true
+    }
+
     /// Classify the exact current Ready census without constructing a reducer
     /// fence; scheduler fixtures contain no prospectively-woken rows.
     pub(in crate::sumeragi) fn exact_ready_completion_classification_for_test(
@@ -4416,7 +5055,7 @@ impl ProductionLifecycleOwnerV1 {
         if exact_ready != self.coordinator.ready_index {
             return ProductionCompletionReadyWorkV1::Invalid;
         }
-        self.classify_schedulable_completion_work(&exact_ready)
+        self.classify_schedulable_completion_work(&exact_ready, None)
     }
 
     /// Drift only one Ready row's physical digest away from its concrete
@@ -4509,7 +5148,7 @@ impl ProductionLifecycleOwnerV1 {
 
     /// Open one clean production executor before moving this owner's body
     /// store into the matching bounded service worker.
-    pub(in crate::sumeragi) fn bind_body_store_to_recovered_completion_io_for_test(
+    pub(in crate::sumeragi) fn bind_body_store_to_lifecycle_completion_io_for_test(
         &mut self,
         services: &mut ProductionV2Services,
         runtime: crate::sumeragi::v2_runtime::SerializedV2Runtime,
@@ -4528,33 +5167,26 @@ impl ProductionLifecycleOwnerV1 {
             .expect("the startup owner transfers its body store exactly once");
         let identity = body_store.instance_identity();
         let context = self.verified.context().clone();
-        let local_validator_index = usize::try_from(local_validator)
-            .expect("the test validator index remains representable");
-        let requester = context.roster[local_validator_index].validator.clone();
-        let (mut executor, body_store) =
+        let requester = context.roster[0].validator.clone();
+        let replayed_decision = runtime
+            .replayed_decision_key()
+            .expect("read the clean recovered runtime Decision");
+        let recovered_validate_retry_census = self
+            .registry
+            .project_recovered_durable_validate_retry_census(&self.coordinator, replayed_decision)
+            .expect("project the clean recovered Validate retry census");
+        let (executor, body_store) =
             crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store(
                 runtime,
                 body_store,
+                recovered_validate_retry_census,
                 context.clone(),
                 requester,
                 Some(local_validator),
                 std::sync::Arc::clone(&output_guard),
                 crate::sumeragi::v2_effects::EffectQueueConfig::default(),
             )
-            .expect("open the clean recovered Completion executor");
-        for (effect, pending, durable_receipt) in self
-            .registry
-            .registry()
-            .recovered_published_validate_retry_markers()
-        {
-            executor
-                .install_recovered_published_lifecycle_validate_retry_marker(
-                    effect,
-                    pending,
-                    durable_receipt,
-                )
-                .expect("reinstall the recovered lifecycle Validate retry marker");
-        }
+            .expect("open the clean lifecycle Completion executor");
         let fixture = crate::sumeragi::v2_worker::tests::install_lifecycle_planner_io_for_test(
             services,
             context,
@@ -4567,11 +5199,41 @@ impl ProductionLifecycleOwnerV1 {
         (executor, fixture)
     }
 
+    /// Consume the genuine recovered Apply adapter startup and bind its body
+    /// store to one executor used only for live/recovered authority tests.
+    pub(in crate::sumeragi) fn bind_recovered_apply_executor_for_lineage_test(
+        &mut self,
+        services: &mut ProductionV2Services,
+        output_guard: std::sync::Arc<crate::sumeragi::output_guard::ConsensusOutputGuard>,
+        class_capacity: usize,
+    ) -> (
+        crate::sumeragi::v2_effects::V2EffectExecutor<
+            crate::sumeragi::v2_runtime::SerializedV2Runtime,
+        >,
+        crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture,
+    ) {
+        let startup = self
+            .adapter_startup
+            .take()
+            .expect("recovered lineage fixture retains its exact adapter startup");
+        let lifecycle_ordinals =
+            crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(
+                self.coordinator.high_water(),
+            );
+        let runtime = startup.into_lifecycle_apply_runtime_for_lineage_test(lifecycle_ordinals);
+        self.bind_body_store_to_lifecycle_completion_io_for_test(
+            services,
+            runtime,
+            output_guard,
+            class_capacity,
+        )
+    }
+
     /// Exercise the production all-row Completion transaction without a
     /// forgeable runner snapshot.
     pub(in crate::sumeragi) fn dispatch_completion_for_test(
         &mut self,
-        services: &ProductionV2Services,
+        services: &mut ProductionV2Services,
         executor: &mut crate::sumeragi::v2_effects::V2EffectExecutor<
             crate::sumeragi::v2_runtime::SerializedV2Runtime,
         >,
@@ -4601,9 +5263,52 @@ impl ProductionLifecycleOwnerV1 {
             0,
             CapacityGeometry::new(CapacityClass::ALL.into_iter().map(|class| (class, 8))),
         );
+        let mut registry = LifecycleWorkRegistryHolder::empty();
+        let candidate = super::replay_authority::exact_pending_certified_fetch_candidate_fixture(
+            &verified, &effect, &pending,
+        )
+        .expect("the verified selected Fetch must derive exact replay authority");
+        assert_eq!(candidate.key, expected_key);
+        assert_eq!(candidate.causal_root, expected_root);
+        assert_eq!(candidate.work_class, LifecycleWorkClass::Fetch);
+        let replay_authority = candidate.replay_authority.clone();
+        let work =
+            ConcreteLifecycleWork::from_candidate_for_test(effect, pending, replay_authority)
+                .unwrap_or_else(|(error, _, _)| {
+                    panic!("the selected Fetch carrier is invalid: {error:?}")
+                });
+        let work_digest = work.digest();
+        let AdmissionDecision::Admitted {
+            owner,
+            ordinal,
+            producer_turn_ordinal: None,
+        } = coordinator.admit(AdmissionRequest::Candidate(candidate))
+        else {
+            panic!("the exact selected Fetch candidate must enter the coordinator")
+        };
+        let slot = super::PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
+        let address = ConcreteWorkAddress::new(owner, ordinal, slot)
+            .expect("the admitted Fetch owns one exact concrete address");
+        registry
+            .registry_mut()
+            .install(address, work_digest, work)
+            .unwrap_or_else(|(error, _)| {
+                panic!("the exact selected Fetch must enter the concrete registry: {error:?}")
+            });
+        let record = coordinator
+            .records
+            .get_mut(&ordinal)
+            .expect("admitted Fetch owns its logical record");
+        assert_eq!(record.key, expected_key);
+        assert_eq!(record.owner.causal_root(), expected_root);
+        assert_eq!(record.work_class, LifecycleWorkClass::Fetch);
+        assert_eq!(record.physical_slots.get(&slot), Some(&work_digest));
+        assert!(coordinator.ready_index.remove(&ordinal));
+        record.state = LifecycleState::Waiting(WaitToken::new(source, 0));
+        assert!(coordinator.observed_generation.insert(source, 0).is_none());
         coordinator
             .attach_empty_test_ledger(&root.join("ledger"))
-            .expect("attach the empty ingress lifecycle ledger");
+            .expect("attach the exact waiting-Fetch lifecycle ledger");
         let body_store = crate::sumeragi::v2_body_store::V2BodyStore::open(
             root.join("body"),
             verified.context().clone(),
@@ -4697,16 +5402,9 @@ impl ProductionLifecycleOwnerV1 {
             self.coordinator.active_lease.is_some(),
         )
     }
-    /// Return the logical, durable, concrete, and ordinal admission census.
-    pub(in crate::sumeragi) fn ingress_admission_census_for_test(
-        &self,
-    ) -> (usize, usize, usize, u128) {
-        (
-            self.coordinator.records.len(),
-            self.coordinator.durable_records.len(),
-            self.registry.registry_for_test().len(),
-            self.coordinator.high_water,
-        )
+    /// Opaque byte-stable view of the exact concrete registry for mutation checks.
+    pub(in crate::sumeragi) fn fetch_registry_snapshot_for_test(&self) -> String {
+        format!("{:?}", self.registry.registry_for_test())
     }
     /// Rejoin the sole executor owner, exact external wait, and recovered WAL
     /// registry carrier after the production request publication cut.

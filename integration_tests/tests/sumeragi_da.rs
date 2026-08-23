@@ -787,33 +787,20 @@ fn try_read_exact_held_da_body(
     }
     Ok(matched)
 }
-fn wait_for_exact_held_da_body(
-    store_dir: &Path,
-    expected_height: u64,
-    expected_view: u64,
-    held_manifest_hash: HashOf<PayloadManifest>,
-    submitted_hash: HashOf<SignedTransaction>,
-    timeout: Duration,
-) -> Result<HeldDaBodyEvidence> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(evidence) = try_read_exact_held_da_body(
-            store_dir,
-            expected_height,
-            expected_view,
-            held_manifest_hash,
-            submitted_hash,
-        )? {
-            return Ok(evidence);
-        }
-        ensure!(
-            Instant::now() < deadline,
-            "held authenticated h{expected_height}/v{expected_view} manifest has no exact validated durable body frame within {timeout:?}"
-        );
-        std::thread::sleep(
-            Duration::from_millis(20).min(deadline.saturating_duration_since(Instant::now())),
-        );
-    }
+fn has_four_peer_held_durable_quorum_intersection(
+    held_receivers: &[bool],
+    durable_receivers: &[bool],
+) -> bool {
+    held_receivers.len() == 4
+        && durable_receivers.len() == 4
+        && held_receivers.iter().filter(|held| **held).count() >= 3
+        && durable_receivers.iter().filter(|durable| **durable).count() >= 3
+        && held_receivers
+            .iter()
+            .zip(durable_receivers)
+            .filter(|(held, durable)| **held && **durable)
+            .count()
+            >= 2
 }
 fn validate_held_final_manifest_relation(
     held_view: u64,
@@ -1843,43 +1830,82 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
 
         // The finality fence keeps the height-three body-store namespace alive
         // while the released chunks reconstruct and validate the exact held
-        // manifest. Capture the checksummed frame and marker on its matched
-        // receiver quorum before any Commit traffic is healed.
-        let captured = try_join_all(
-            (0..peers.len())
-                .filter(|peer_index| matched_receivers[*peer_index])
-                .map(|peer_index| {
-                    let store_dir = peers[peer_index].kura_store_dir();
-                    async move {
-                        let evidence = tokio::task::spawn_blocking(move || {
-                            wait_for_exact_held_da_body(
-                                &store_dir,
-                                expected_height,
-                                held_proposal_view,
-                                held_manifest_hash,
-                                submitted_hash,
-                                PACKET_LOSS_CONTROL_TIMEOUT,
-                            )
-                        })
-                        .await
-                        .wrap_err("join held DA body evidence capture")??;
-                        Ok::<_, eyre::Report>((peer_index, Arc::new(evidence)))
-                    }
-                }),
-        )
-        .await?;
+        // manifest. A receiver may accept or coalesce a released chunk after a
+        // newer certified view has legitimately retired its unprotected stale
+        // body pipeline, so controller delivery does not require every matched
+        // receiver to mint a duplicate old-view marker. Instead, capture an
+        // exact held-round durable quorum before healing Commit traffic. In a
+        // four-validator committee it intersects the held receiver quorum in
+        // at least two peers; prior-round markers never count as authority for
+        // this check.
+        let store_dirs = peers
+            .iter()
+            .map(|peer| peer.kura_store_dir())
+            .collect::<Vec<_>>();
         let mut held_evidence_by_peer = vec![None; peers.len()];
-        for (peer_index, evidence) in captured {
-            held_evidence_by_peer[peer_index] = Some(evidence);
+        let evidence_deadline = Instant::now() + PACKET_LOSS_CONTROL_TIMEOUT;
+        loop {
+            let captured = try_join_all(
+                store_dirs
+                    .iter()
+                    .enumerate()
+                    .filter(|(peer_index, _)| held_evidence_by_peer[*peer_index].is_none())
+                    .map(|(peer_index, store_dir)| {
+                        let store_dir = store_dir.clone();
+                        async move {
+                            let evidence = tokio::task::spawn_blocking(move || {
+                                try_read_exact_held_da_body(
+                                    &store_dir,
+                                    expected_height,
+                                    held_proposal_view,
+                                    held_manifest_hash,
+                                    submitted_hash,
+                                )
+                            })
+                            .await
+                            .wrap_err("join held DA body evidence probe")??;
+                            Ok::<_, eyre::Report>((peer_index, evidence.map(Arc::new)))
+                        }
+                    }),
+            )
+            .await?;
+            for (peer_index, evidence) in captured {
+                if let Some(evidence) = evidence {
+                    held_evidence_by_peer[peer_index] = Some(evidence);
+                }
+            }
+            if held_evidence_by_peer.iter().flatten().count() >= 3 {
+                break;
+            }
+            let durable_receivers = held_evidence_by_peer
+                .iter()
+                .map(Option::is_some)
+                .collect::<Vec<_>>();
+            ensure!(
+                Instant::now() < evidence_deadline,
+                "held authenticated h{expected_height}/v{held_proposal_view} manifest has no exact validated durable quorum within {PACKET_LOSS_CONTROL_TIMEOUT:?}: held_receivers={matched_receivers:?}, durable_receivers={durable_receivers:?}"
+            );
+            tokio::time::sleep(
+                Duration::from_millis(20)
+                    .min(evidence_deadline.saturating_duration_since(Instant::now())),
+            )
+            .await;
         }
         let held_evidence = held_evidence_by_peer
             .iter()
             .flatten()
             .next()
             .cloned()
-            .ok_or_else(|| eyre!("matched receiver quorum produced no durable held body evidence"))?;
+            .ok_or_else(|| eyre!("held-round durable quorum produced no body evidence"))?;
+        let durable_receivers = held_evidence_by_peer
+            .iter()
+            .map(Option::is_some)
+            .collect::<Vec<_>>();
         ensure!(
-            held_evidence_by_peer.iter().flatten().count() >= 3
+            has_four_peer_held_durable_quorum_intersection(
+                &matched_receivers,
+                &durable_receivers,
+            )
                 && held_evidence_by_peer.iter().flatten().all(|evidence| {
                     evidence.manifest == held_evidence.manifest
                         && evidence.subject == held_evidence.subject
@@ -1888,7 +1914,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
                         && HashOf::<PayloadManifest>::new(&evidence.manifest)
                             == held_manifest_hash
                 }),
-            "matched receivers did not persist one byte-identical validated held DA body"
+            "held receiver and exact durable quorums did not intersect in two peers with one byte-identical validated held-round body: held_receivers={matched_receivers:?}, durable_receivers={durable_receivers:?}"
         );
         for peer in &peers {
             ensure!(
@@ -2033,6 +2059,25 @@ fn checked_v2_body_frame_rejects_length_and_checksum_drift() {
     let mut bad_checksum = frame;
     *bad_checksum.last_mut().expect("fixture has checksum") ^= 1;
     assert!(decode_checked_v2_body_frame(&bad_checksum, V2_BODY_STORE_MAGIC).is_err());
+}
+#[test]
+fn four_peer_held_and_durable_quorums_intersect_in_two_receivers() {
+    assert!(has_four_peer_held_durable_quorum_intersection(
+        &[true, true, true, false],
+        &[true, false, true, true],
+    ));
+    assert!(!has_four_peer_held_durable_quorum_intersection(
+        &[true, true, true, false],
+        &[true, false, true, false],
+    ));
+    assert!(!has_four_peer_held_durable_quorum_intersection(
+        &[true, true, false, false],
+        &[true, true, true, false],
+    ));
+    assert!(!has_four_peer_held_durable_quorum_intersection(
+        &[true, true, true, false, false],
+        &[true, true, true, false, false],
+    ));
 }
 #[test]
 fn held_final_manifest_relation_covers_same_and_later_view_carriers() {

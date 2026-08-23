@@ -6,7 +6,8 @@ use super::super::{
 use super::*;
 use crate::sumeragi::v2_lifecycle_coordinator::{
     AdmissionDecision, CertifiedServeSchedulerObservationV1, LifecycleIngressSelectorError,
-    LifecycleLedgerV1, LifecycleValidateSidecarDriveV1, claim_certified_serve_turn_v1,
+    LifecycleLedgerV1, LifecycleValidateSidecarDriveV1, ReadyValidateSuccessorDispatchV1,
+    SelectedCertifiedResponsePriorityV1, WaitToken, claim_certified_serve_turn_v1,
 };
 #[cfg(test)]
 pub(in crate::sumeragi) use crate::sumeragi::v2_runner::ordinary_ingress_consumer::ProductionPreparedCertifiedServeTestSettlementV1;
@@ -84,30 +85,46 @@ enum ParkedRecoveredLifecycleSignCompletionClassV1 {
 #[must_use = "the lifecycle-selected Completion result must be observed"]
 pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
     /// One executed lifecycle Validate published its exact Ready replacement.
-    LifecycleValidatePublished,
-    /// A prepublication Validate failure retained the exact guarded owner for retry.
-    LifecycleValidatePublicationRetry,
+    LifecycleValidatePublished {
+        /// Exact lifecycle ordinal whose executed Validate carrier became Ready.
+        ordinal: u128,
+    },
     /// A missing-sidecar Validate remains parked under its immutable registration owner.
     LifecycleValidateDeferred,
     /// A registered sidecar wait is externally parked and ordinary ingress may resume.
     LifecycleValidateSidecarWaiting,
     /// The exact sidecar became durable and woke the same Validate row without a new ordinal.
-    LifecycleValidateSidecarWoken,
+    LifecycleValidateSidecarWoken {
+        /// Exact lifecycle ordinal of the same sidecar-backed Ready row.
+        ordinal: u128,
+    },
+    /// The exact retained Validate successor could not reserve worker/output capacity.
+    LifecycleValidateSuccessorCapacityPending {
+        /// Exact unchanged successor ordinal.
+        ordinal: u128,
+    },
+    /// The exact retained Validate successor remains parked on its reducer fence.
+    LifecycleValidateSuccessorFencePending {
+        /// Exact waiting successor ordinal.
+        ordinal: u128,
+        /// Exact reducer-fence generation which still owns the retry.
+        wait: WaitToken,
+    },
     /// The exact missing-sidecar Apply owner remains parked for another turn.
-    RecoveredDecisionApplyDeferred,
+    LifecycleDecisionApplyDeferred,
     /// The unchanged deferred Apply command re-entered its dedicated FIFO.
-    RecoveredDecisionApplyRequeued,
+    LifecycleDecisionApplyRequeued,
     /// Deferred Apply ownership changed and process restart is required.
-    RecoveredDecisionApplyRestartRequired,
-    /// One recovered Apply worker result was durably settled.
-    RecoveredDecisionApplyApplied,
-    /// One recovered Apply worker result became the retained sidecar owner.
-    RecoveredDecisionApplyCompletionDeferred,
-    /// Recovered Apply settlement requires cold restart.
-    RecoveredDecisionApplyCompletionRestartRequired,
+    LifecycleDecisionApplyRestartRequired,
+    /// One lifecycle Decision Apply worker result was durably settled.
+    LifecycleDecisionApplyApplied,
+    /// One lifecycle Decision Apply worker result became the retained sidecar owner.
+    LifecycleDecisionApplyCompletionDeferred,
+    /// Lifecycle Decision Apply settlement requires cold restart.
+    LifecycleDecisionApplyCompletionRestartRequired,
     /// One parked recovered Sign used exactly one successor-family settler.
     RecoveredLifecycleSignCompletion(ProductionRecoveredLifecycleSignCompletionSelectionV1),
-    /// One complete recovered Apply/Sign/Fetch census used a joint physical cut.
+    /// One complete lifecycle Apply/recovered Sign/Fetch census used a joint physical cut.
     CompletionIoDispatch(
         Result<ProductionCompletionDispatchV1, ProductionCompletionDispatchErrorV1>,
     ),
@@ -138,8 +155,8 @@ impl ProductionLifecycleCompletionSelectionV1 {
     /// Return whether the consumed Completion turn requires a cold restart.
     pub(in crate::sumeragi) fn restart_required(&self) -> bool {
         match self {
-            Self::RecoveredDecisionApplyRestartRequired
-            | Self::RecoveredDecisionApplyCompletionRestartRequired
+            Self::LifecycleDecisionApplyRestartRequired
+            | Self::LifecycleDecisionApplyCompletionRestartRequired
             | Self::CertifiedFetchBodyPersistenceRestartRequired
             | Self::RestartRequired => true,
             Self::RecoveredLifecycleSignCompletion(selection) => selection.restart_required(),
@@ -153,15 +170,16 @@ impl ProductionLifecycleCompletionSelectionV1 {
                 result,
                 Err(_) | Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::RestartRequired)
             ),
-            Self::RecoveredDecisionApplyDeferred
-            | Self::RecoveredDecisionApplyRequeued
-            | Self::RecoveredDecisionApplyApplied
-            | Self::RecoveredDecisionApplyCompletionDeferred
-            | Self::LifecycleValidatePublished
-            | Self::LifecycleValidatePublicationRetry
+            Self::LifecycleDecisionApplyDeferred
+            | Self::LifecycleDecisionApplyRequeued
+            | Self::LifecycleDecisionApplyApplied
+            | Self::LifecycleDecisionApplyCompletionDeferred
+            | Self::LifecycleValidatePublished { .. }
             | Self::LifecycleValidateDeferred
             | Self::LifecycleValidateSidecarWaiting
-            | Self::LifecycleValidateSidecarWoken
+            | Self::LifecycleValidateSidecarWoken { .. }
+            | Self::LifecycleValidateSuccessorCapacityPending { .. }
+            | Self::LifecycleValidateSuccessorFencePending { .. }
             | Self::CertifiedFetchBodyPersisted
             | Self::CertifiedFetchBodyPersistenceRetry
             | Self::CertifiedServeClaimedCompleted
@@ -216,7 +234,7 @@ pub(in crate::sumeragi) enum ProductionLifecycleIngressSelectionV1 {
     CertifiedFetchCapacityPending,
     /// Ordinary certified-Fetch Phase A queued one durable body persistence command.
     CertifiedFetchQueued,
-    /// Ordinary certified-Fetch Phase A retained the queue occurrence for retry.
+    /// Certified-response classification or Phase A retained the queue occurrence for retry.
     CertifiedFetchRetry,
     /// Existing Ready lifecycle work retained priority over ordinary Fetch Phase A.
     CertifiedFetchCompetingReady,
@@ -900,8 +918,13 @@ impl LaunchedProductionLifecycleV1 {
                 );
                 ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWaiting
             }
-            LifecycleValidateSidecarDriveV1::Woken => {
-                ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWoken
+            LifecycleValidateSidecarDriveV1::Woken(successor) => {
+                let ordinal = successor.lifecycle_ordinal();
+                assert!(self.pending_lifecycle_completion.is_none());
+                self.pending_lifecycle_completion = Some(
+                    PendingLifecycleCompletionV1::ReadyValidateSuccessor(successor),
+                );
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWoken { ordinal }
             }
             LifecycleValidateSidecarDriveV1::RestartRequired(error) => {
                 iroha_logger::error!(
@@ -960,16 +983,31 @@ impl LaunchedProductionLifecycleV1 {
             &mut owner.registry,
             dispatch,
         ) {
-            Ok(
-                crate::sumeragi::v2_lifecycle_coordinator::DurableValidateCompletionPublication::PublishedValidated(
-                    _,
-                )
-                | crate::sumeragi::v2_lifecycle_coordinator::DurableValidateCompletionPublication::PublishedRejected(
-                    _,
-                ),
-            ) => {
+            Ok(crate::sumeragi::v2_lifecycle_coordinator::DurableValidateCompletionPublication::PublishedValidated(
+                published,
+            )) => {
+                let ordinal = published.lifecycle_ordinal();
+                assert!(pending_lifecycle_completion.is_none());
+                *pending_lifecycle_completion = Some(
+                    PendingLifecycleCompletionV1::ReadyValidateSuccessor(
+                        ReadyValidateSuccessorV1::from_validated(published),
+                    ),
+                );
                 ack.acknowledge_after_publication();
-                ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished { ordinal }
+            }
+            Ok(crate::sumeragi::v2_lifecycle_coordinator::DurableValidateCompletionPublication::PublishedRejected(
+                published,
+            )) => {
+                let ordinal = published.lifecycle_ordinal();
+                assert!(pending_lifecycle_completion.is_none());
+                *pending_lifecycle_completion = Some(
+                    PendingLifecycleCompletionV1::ReadyValidateSuccessor(
+                        ReadyValidateSuccessorV1::from_rejected(published),
+                    ),
+                );
+                ack.acknowledge_after_publication();
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished { ordinal }
             }
             Ok(
                 crate::sumeragi::v2_lifecycle_coordinator::DurableValidateCompletionPublication::DeferredMergeSidecar(
@@ -983,22 +1021,62 @@ impl LaunchedProductionLifecycleV1 {
                 ProductionLifecycleCompletionSelectionV1::LifecycleValidateDeferred
             }
             Err((error, dispatch)) => {
-                iroha_logger::debug!(
+                iroha_logger::error!(
                     ?error,
-                    "lifecycle Validate publication retained its exact guarded owner"
+                    "lifecycle Validate publication invariant failed closed"
                 );
-                let Some(completion) =
-                    PreparedLifecycleValidateCompletionV1::from_publication_parts(dispatch, ack)
-                else {
-                    services
-                        .lifecycle_output_guard()
-                        .close_admission_for_restart();
-                    return ProductionLifecycleCompletionSelectionV1::RestartRequired;
-                };
-                assert!(pending_lifecycle_completion.is_none());
-                *pending_lifecycle_completion =
-                    Some(PendingLifecycleCompletionV1::Validate(completion));
-                ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublicationRetry
+                drop((dispatch, ack));
+                services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
+                ProductionLifecycleCompletionSelectionV1::RestartRequired
+            }
+        }
+    }
+
+    fn settle_ready_validate_successor(
+        &mut self,
+        successor: ReadyValidateSuccessorV1,
+        runner_debt: u64,
+    ) -> ProductionLifecycleCompletionSelectionV1 {
+        let ordinal = successor.lifecycle_ordinal();
+        let result = self.owner.dispatch_ready_validate_successor(
+            &mut self.services,
+            &mut self.executor,
+            successor,
+            runner_debt,
+        );
+        match result {
+            Ok(ReadyValidateSuccessorDispatchV1::Resolved(dispatch)) => {
+                ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(Ok(dispatch))
+            }
+            Ok(ReadyValidateSuccessorDispatchV1::CapacityUnavailable(successor)) => {
+                assert!(self.pending_lifecycle_completion.is_none());
+                self.pending_lifecycle_completion = Some(
+                    PendingLifecycleCompletionV1::ReadyValidateSuccessor(successor),
+                );
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateSuccessorCapacityPending {
+                    ordinal,
+                }
+            }
+            Ok(ReadyValidateSuccessorDispatchV1::ReducerFencePending { successor, wait }) => {
+                assert!(self.pending_lifecycle_completion.is_none());
+                self.pending_lifecycle_completion = Some(
+                    PendingLifecycleCompletionV1::ReadyValidateSuccessor(successor),
+                );
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateSuccessorFencePending {
+                    ordinal,
+                    wait,
+                }
+            }
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal,
+                    "Ready Validate successor failed closed before physical Completion"
+                );
+                self.close_output_for_restart();
+                ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(Err(error))
             }
         }
     }
@@ -1042,6 +1120,21 @@ impl LaunchedProductionLifecycleV1 {
                 ));
                 ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRetry
             }
+            Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(
+                error,
+            )) => {
+                iroha_logger::error!(
+                    reason = error.reason(),
+                    detail = error.detail(),
+                    work_id = error.work_id().get(),
+                    "ordinary certified-Fetch Phase B found invalid productive ingress"
+                );
+                services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
+                drop(error);
+                ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRestartRequired
+            }
             Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequired(error)) => {
                 iroha_logger::error!(
                     reason = error.reason(),
@@ -1054,6 +1147,18 @@ impl LaunchedProductionLifecycleV1 {
                     .lifecycle_output_guard()
                     .close_admission_for_restart();
                 drop(error);
+                ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRestartRequired
+            }
+            Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(
+                error,
+            )) => {
+                iroha_logger::error!(
+                    %error,
+                    "ordinary certified-Fetch queue handoff requires cold restart"
+                );
+                services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
                 ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRestartRequired
             }
             Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(
@@ -1091,22 +1196,22 @@ impl LaunchedProductionLifecycleV1 {
 
         if let Some(pending) = self.pending_lifecycle_completion.take() {
             let selected = match pending {
-                PendingLifecycleCompletionV1::RecoveredDecisionApplyDeferred(deferred) => {
-                    match self.drive_recovered_decision_apply_deferred(deferred, lane_work) {
-                        ProductionRecoveredDecisionApplyRetryV1::Requeued => {
-                            ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyRequeued
+                PendingLifecycleCompletionV1::LifecycleDecisionApplyDeferred(deferred) => {
+                    match self.drive_lifecycle_decision_apply_deferred(deferred, lane_work) {
+                        ProductionLifecycleDecisionApplyRetryV1::Requeued => {
+                            ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyRequeued
                         }
-                        ProductionRecoveredDecisionApplyRetryV1::Unavailable(deferred) => {
+                        ProductionLifecycleDecisionApplyRetryV1::Unavailable(deferred) => {
                             assert!(self.pending_lifecycle_completion.is_none());
                             self.pending_lifecycle_completion = Some(
-                                PendingLifecycleCompletionV1::RecoveredDecisionApplyDeferred(
+                                PendingLifecycleCompletionV1::LifecycleDecisionApplyDeferred(
                                     deferred,
                                 ),
                             );
-                            ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyDeferred
+                            ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyDeferred
                         }
-                        ProductionRecoveredDecisionApplyRetryV1::RestartRequired => {
-                            ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyRestartRequired
+                        ProductionLifecycleDecisionApplyRetryV1::RestartRequired => {
+                            ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyRestartRequired
                         }
                     }
                 }
@@ -1135,6 +1240,8 @@ impl LaunchedProductionLifecycleV1 {
                         Some(PendingLifecycleCompletionV1::Validate(completion));
                     self.settle_parked_lifecycle_validate_completion()
                 }
+                PendingLifecycleCompletionV1::ReadyValidateSuccessor(published) => self
+                    .settle_ready_validate_successor(published, runner.debt()),
                 PendingLifecycleCompletionV1::DeferredValidate(deferred) => {
                     self.register_and_drive_lifecycle_validate_sidecar(deferred, lane_work)
                 }
@@ -1158,25 +1265,25 @@ impl LaunchedProductionLifecycleV1 {
             }
             Ok(LifecycleCompletionTakeV1::Apply(completion)) => {
                 let selected = match self
-                    .settle_recovered_decision_apply_completion_owner(completion, lane_work)
+                    .settle_lifecycle_decision_apply_completion_owner(completion, lane_work)
                 {
-                    Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied) => {
-                        ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied
+                    Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied) => {
+                        ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied
                     }
-                    Ok(ProductionRecoveredDecisionApplyCompletionV1::Deferred(deferred)) => {
+                    Ok(ProductionLifecycleDecisionApplyCompletionV1::Deferred(deferred)) => {
                         assert!(self.pending_lifecycle_completion.is_none());
                         self.pending_lifecycle_completion = Some(
-                            PendingLifecycleCompletionV1::RecoveredDecisionApplyDeferred(deferred),
+                            PendingLifecycleCompletionV1::LifecycleDecisionApplyDeferred(deferred),
                         );
-                        ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyCompletionDeferred
+                        ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyCompletionDeferred
                     }
                     Err(reason) => {
                         iroha_logger::error!(
                             %reason,
-                            "recovered Decision Apply completion settlement failed closed"
+                            "lifecycle Decision Apply completion settlement failed closed"
                         );
                         self.close_output_for_restart();
-                        ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyCompletionRestartRequired
+                        ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyCompletionRestartRequired
                     }
                 };
                 return ProductionLifecycleCompletionPreGateV1::Selected(selected);
@@ -1255,6 +1362,24 @@ impl LaunchedProductionLifecycleV1 {
         &mut self,
         ready: ProductionLifecycleReadyCompletionTurnV1<'cursor>,
     ) -> ProductionLifecycleCompletionTurnV1<'cursor> {
+        self.drive_ready_completion_turn_with_required_ordinal(ready, None)
+    }
+
+    /// Dispatch only when the complete authenticated census naturally selects
+    /// the exact live Apply child retained by the runner claim state.
+    pub(in crate::sumeragi) fn drive_ready_completion_turn_requiring_ordinal<'cursor>(
+        &mut self,
+        ready: ProductionLifecycleReadyCompletionTurnV1<'cursor>,
+        required_ordinal: u128,
+    ) -> ProductionLifecycleCompletionTurnV1<'cursor> {
+        self.drive_ready_completion_turn_with_required_ordinal(ready, Some(required_ordinal))
+    }
+
+    fn drive_ready_completion_turn_with_required_ordinal<'cursor>(
+        &mut self,
+        ready: ProductionLifecycleReadyCompletionTurnV1<'cursor>,
+        required_ordinal: Option<u128>,
+    ) -> ProductionLifecycleCompletionTurnV1<'cursor> {
         let ProductionLifecycleReadyCompletionTurnV1 { runner } = ready;
         let fence = self.executor.lifecycle_reducer_fence_observation();
         let selected = match self.owner.classify_completion_ready_work(fence) {
@@ -1275,7 +1400,19 @@ impl LaunchedProductionLifecycleV1 {
                         services,
                         ..
                     } = self;
-                    owner.dispatch_completion_with_runner_debt(services, executor, runner.debt())
+                    match required_ordinal {
+                        Some(ordinal) => owner.dispatch_completion_requiring_ready_ordinal(
+                            services,
+                            executor,
+                            runner.debt(),
+                            ordinal,
+                        ),
+                        None => owner.dispatch_completion_with_runner_debt(
+                            services,
+                            executor,
+                            runner.debt(),
+                        ),
+                    }
                 };
                 if let Err(error) = &result {
                     iroha_logger::error!(
@@ -1518,7 +1655,21 @@ impl LaunchedProductionLifecycleV1 {
         let expected_context = lifecycle_context_for_ingress(self.executor.context());
         let contextual = match cut.narrow_to_lifecycle(expected_context) {
             Ok(contextual) => contextual,
-            Err((_error, retained)) => {
+            Err((FairIngressQueueCutError::QueueCutChanged, retained)) => {
+                iroha_logger::debug!(
+                    "certified-response fair-ingress ownership changed during narrowing; retrying"
+                );
+                drop(retained);
+                drop(runner);
+                return ProductionLifecycleIngressTurnV1::Selected(
+                    ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry,
+                );
+            }
+            Err((error, retained)) => {
+                iroha_logger::error!(
+                    ?error,
+                    "certified-response fair-ingress cut failed structural narrowing"
+                );
                 self.close_output_for_restart();
                 drop(retained);
                 drop(runner);
@@ -1537,16 +1688,16 @@ impl LaunchedProductionLifecycleV1 {
                 &self.services,
             ),
             FairIngressTurnContextCut::Lifecycle(cut) => {
-                let response_owner = match self
+                let selected_priority = match self
                     .executor
-                    .classify_selected_certified_body_response_owner(&cut)
+                    .classify_selected_certified_response_priority(&cut)
                 {
-                    Ok(owner) => owner,
+                    Ok(selected_priority) => selected_priority,
                     Err(error) => {
                         let reason = error.detail();
                         iroha_logger::error!(
                             %reason,
-                            "Sumeragi v2 certified response ownership classification failed closed"
+                            "Sumeragi v2 certified-response priority classification failed closed"
                         );
                         self.close_output_for_restart();
                         drop(cut);
@@ -1556,8 +1707,8 @@ impl LaunchedProductionLifecycleV1 {
                         );
                     }
                 };
-                match response_owner {
-                    SelectedCertifiedBodyResponseOwnerV1::NonPriority => {
+                match selected_priority {
+                    SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority => {
                         dequeue_prepared_ordinary_ingress(
                             &ingress,
                             cut.into_ordinary_turn_cut(),
@@ -1567,7 +1718,7 @@ impl LaunchedProductionLifecycleV1 {
                             &self.services,
                         )
                     }
-                    SelectedCertifiedBodyResponseOwnerV1::OrdinaryWinner => {
+                    SelectedCertifiedResponsePriorityV1::OrdinaryClaimed => {
                         let selector = match self.executor.capture_lifecycle_ingress_selector(cut) {
                             Ok(selector) => selector,
                             Err(error) => {
@@ -1585,7 +1736,7 @@ impl LaunchedProductionLifecycleV1 {
                         };
                         self.drive_certified_fetch_ingress_selector(selector, runner)
                     }
-                    SelectedCertifiedBodyResponseOwnerV1::RecoveredWinner => {
+                    SelectedCertifiedResponsePriorityV1::RecoveredClaimed => {
                         let selector = match self
                             .executor
                             .prepare_recovered_decision_fetch_from_selected_cut(cut)
@@ -1963,6 +2114,17 @@ impl ActivatedProductionLifecycleV1 {
         ready: ProductionLifecycleReadyCompletionTurnV1<'cursor>,
     ) -> ProductionLifecycleCompletionTurnV1<'cursor> {
         self.launched.drive_ready_completion_turn(ready)
+    }
+
+    /// Consume a physically empty Completion cursor only when the full
+    /// schedulable census naturally selects the retained live Apply child.
+    pub(in crate::sumeragi) fn drive_ready_completion_turn_requiring_ordinal<'cursor>(
+        &mut self,
+        ready: ProductionLifecycleReadyCompletionTurnV1<'cursor>,
+        required_ordinal: u128,
+    ) -> ProductionLifecycleCompletionTurnV1<'cursor> {
+        self.launched
+            .drive_ready_completion_turn_requiring_ordinal(ready, required_ordinal)
     }
 
     /// Forward one Ingress turn without exposing the launched stack.

@@ -463,6 +463,31 @@ class AppAttestFreshnessAuthorityTest(unittest.TestCase):
                 )
             self.assertEqual(output.read_bytes(), expected)
 
+    def test_authority_output_zero_length_write_fails_and_removes_partial_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            root.chmod(0o700)
+            output = root / "authority-output.json"
+            with (
+                mock.patch.object(authority.os, "write", return_value=0),
+                self.assertRaisesRegex(authority.AuthorityError, "written durably"),
+            ):
+                authority._write_new_private_json(
+                    output,
+                    {"schema": "test"},
+                    "authority output",
+                )
+            self.assertFalse(output.exists())
+
+    def test_cms_staging_zero_length_write_fails_closed(self) -> None:
+        writer = mock.Mock(side_effect=[0, OSError("write loop continued")])
+        with (
+            mock.patch.object(authority.os, "write", writer),
+            self.assertRaisesRegex(OSError, "short CMS receipt write"),
+        ):
+            authority._write_all(123, b"signed CMS receipt", "CMS receipt")
+        self.assertEqual(writer.call_count, 1)
+
     def test_schema_v2_catalog_rows_migrate_to_active_terminal_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state_dir = Path(temporary) / "state"

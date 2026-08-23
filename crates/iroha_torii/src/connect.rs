@@ -24,11 +24,11 @@ use std::{
     net::IpAddr,
     sync::{
         Arc,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::{Mutex, RwLock, mpsc};
+use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 // no direct HTTP responses here
 use crate::json_macros::JsonSerialize;
 /// Length in bytes of a Connect session identifier.
@@ -49,6 +49,11 @@ pub(crate) const CLOSE_REASON_OPEN_IDENTITY_MISMATCH: &str = "connect_open_ident
 pub(crate) const CLOSE_REASON_OPEN_REPLAY: &str = "connect_open_replayed";
 pub(crate) const CLOSE_REASON_APPROVAL_INVALID: &str = "connect_wallet_approval_invalid";
 pub(crate) const CLOSE_REASON_APPROVAL_REPLAY: &str = "connect_wallet_approval_replayed";
+pub(crate) const CLOSE_REASON_BUFFER_OVERFLOW: &str = "connect_buffer_overflow";
+pub(crate) const CLOSE_REASON_REJECTED: &str = "connect_rejected";
+pub(crate) const CLOSE_REASON_CLOSED: &str = "connect_closed";
+pub(crate) const CLOSE_REASON_DELIVERY_TIMEOUT: &str = "connect_delivery_timeout";
+pub(crate) const CLOSE_REASON_TRANSPORT_CLOSED: &str = "connect_transport_closed";
 fn spawn_background_task<F>(task: F)
 where
     F: Future<Output = ()> + Send + 'static,
@@ -100,13 +105,198 @@ pub(crate) struct WsPermit {
     ip: IpAddr,
     released: bool,
 }
-impl WsPermit {
-    pub(crate) async fn release(&mut self) {
+
+/// Reservation for a one-time Connect role token.
+///
+/// Dropping an uncommitted reservation makes the token available again. The
+/// token itself is consumed only when the WebSocket endpoint is attached.
+pub(crate) struct RoleTokenReservation {
+    bus: Bus,
+    session: Arc<Session>,
+    sid: Sid,
+    role: proto::Role,
+    finished: bool,
+}
+
+struct EndpointLease {
+    bus: Bus,
+    session: Arc<Session>,
+    sid: Sid,
+    role: proto::Role,
+    sender: mpsc::Sender<proto::ConnectFrameV1>,
+    released: bool,
+}
+
+impl EndpointLease {
+    fn release_in_background(&mut self) -> Option<oneshot::Receiver<()>> {
         if self.released {
-            return;
+            return None;
         }
         self.released = true;
-        self.bus.session_closed(self.ip).await;
+        let bus = self.bus.clone();
+        let session = self.session.clone();
+        let sid = self.sid;
+        let role = self.role;
+        let sender = self.sender.clone();
+        let (finished_tx, finished_rx) = oneshot::channel();
+        spawn_background_task(async move {
+            bus.release_endpoint(session, sid, role, &sender).await;
+            let _ = finished_tx.send(());
+        });
+        Some(finished_rx)
+    }
+
+    async fn release(&mut self) {
+        if let Some(finished) = self.release_in_background() {
+            let _ = finished.await;
+        }
+    }
+}
+
+impl Drop for EndpointLease {
+    fn drop(&mut self) {
+        let _ = self.release_in_background();
+    }
+}
+
+impl RoleTokenReservation {
+    fn identity(&self) -> (Sid, proto::Role) {
+        (self.sid, self.role)
+    }
+
+    async fn commit_and_attach(&mut self) -> Result<(ConnectInbox, EndpointLease), String> {
+        let sessions = self.bus.inner.read().await;
+        let Some(current) = sessions.get(&self.sid.to_vec()) else {
+            return Err("connect session ended before websocket attachment".to_owned());
+        };
+        if !Arc::ptr_eq(current, &self.session) {
+            return Err("connect session changed before websocket attachment".to_owned());
+        }
+
+        // Acquire every fallible async guard before changing token, endpoint,
+        // or buffer state. Cancellation before this point simply drops this
+        // reservation and leaves the one-time token available for retry.
+        let mut buffer = self.session.buffer.lock().await;
+        let mut buffer_bytes = self.session.buffer_bytes.lock().await;
+        let mut endpoint = match self.role {
+            proto::Role::App => self.session.app_tx.lock().await,
+            proto::Role::Wallet => self.session.wallet_tx.lock().await,
+        };
+        let mut token_hash = match self.role {
+            proto::Role::App => self.session.app_token_hash.lock().await,
+            proto::Role::Wallet => self.session.wallet_token_hash.lock().await,
+        };
+        let mut last_activity = self.session.last_activity.lock().await;
+        if self.session.peer_claim_expired_at(unix_time_ms()) {
+            return Err(
+                "connect peer session claim expired before websocket attachment".to_owned(),
+            );
+        }
+        if endpoint.is_some() {
+            return Err("connect role is already attached".to_owned());
+        }
+        if token_hash.is_none() {
+            return Err("connect role token was consumed before attachment".to_owned());
+        }
+
+        let (tx, rx) = mpsc::channel::<proto::ConnectFrameV1>(64);
+        let mut buffered = VecDeque::new();
+        let mut kept = VecDeque::new();
+        while let Some((frame, len)) = buffer.pop_front() {
+            let target = match frame.dir {
+                proto::Dir::AppToWallet => proto::Role::Wallet,
+                proto::Dir::WalletToApp => proto::Role::App,
+            };
+            if target == self.role {
+                buffered.push_back(frame);
+                *buffer_bytes = buffer_bytes.saturating_sub(len);
+            } else {
+                kept.push_back((frame, len));
+            }
+        }
+        *buffer = kept;
+        *endpoint = Some(tx.clone());
+        *token_hash = None;
+        *last_activity = Instant::now();
+        self.finished = true;
+        self.reservation_flag().store(false, Ordering::Release);
+        drop(last_activity);
+        drop(token_hash);
+        drop(endpoint);
+        drop(buffer_bytes);
+        drop(buffer);
+        drop(sessions);
+
+        let bus = self.bus.clone();
+        let sid = self.sid;
+        let role = self.role;
+        // Once local attachment and consumption commit, cancellation of the
+        // upgrade callback must not suppress cross-peer consumption gossip.
+        spawn_background_task(async move {
+            bus.broadcast_p2p_message(proto::ConnectP2pMessageV1::RoleConsumed(
+                proto::ConnectSessionRoleConsumedV1 { sid, role },
+            ))
+            .await;
+        });
+        Ok((
+            ConnectInbox { buffered, live: rx },
+            EndpointLease {
+                bus: self.bus.clone(),
+                session: self.session.clone(),
+                sid: self.sid,
+                role: self.role,
+                sender: tx,
+                released: false,
+            },
+        ))
+    }
+
+    fn reservation_flag(&self) -> &AtomicBool {
+        match self.role {
+            proto::Role::App => &self.session.app_token_reserved,
+            proto::Role::Wallet => &self.session.wallet_token_reserved,
+        }
+    }
+}
+
+impl Drop for RoleTokenReservation {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.reservation_flag().store(false, Ordering::Release);
+        }
+    }
+}
+impl WsPermit {
+    fn release_in_background(&mut self) -> Option<oneshot::Receiver<()>> {
+        if self.released {
+            return None;
+        }
+        self.released = true;
+        let bus = self.bus.clone();
+        let ip = self.ip;
+        let (finished_tx, finished_rx) = oneshot::channel();
+        spawn_background_task(async move {
+            bus.session_closed(ip).await;
+            let _ = finished_tx.send(());
+        });
+        Some(finished_rx)
+    }
+
+    pub(crate) async fn release(&mut self) {
+        if let Some(finished) = self.release_in_background() {
+            // The cleanup task owns the actual release. If this future is
+            // cancelled while waiting, the task still completes and cannot
+            // leak the global or per-IP reservation.
+            let _ = finished.await;
+        }
+    }
+}
+impl Drop for WsPermit {
+    fn drop(&mut self) {
+        // WebSocket upgrade callbacks are cancellation points. Release the
+        // reservation even when the callback never starts or its task is
+        // aborted before it can run the explicit async cleanup.
+        let _ = self.release_in_background();
     }
 }
 #[derive(Default)]
@@ -180,6 +370,8 @@ struct Session {
     // One-time token hashes per role; consumed on first successful WS attach.
     app_token_hash: Mutex<Option<[u8; 32]>>,
     wallet_token_hash: Mutex<Option<[u8; 32]>>,
+    app_token_reserved: AtomicBool,
+    wallet_token_reserved: AtomicBool,
     // Stable bearer token hash for session management operations.
     management_token_hash: Mutex<Option<[u8; 32]>>,
     // Relay MAC key derived from the session relay token.
@@ -190,6 +382,10 @@ struct Session {
     expected_app_pk: Mutex<Option<[u8; 32]>>,
     // Whether this session was created locally or learned from P2P.
     origin: SessionOrigin,
+    // Absolute validity ceiling advertised by the peer session claim. Local
+    // sessions continue to use the configured idle TTL; a peer shadow must
+    // never outlive the claim which authorized its installation.
+    peer_claim_expires_at_ms: Option<u64>,
     // Requested/accepted permissions for diagnostics
     req_perms: Mutex<Option<proto::PermissionsV1>>,
     acc_perms: Mutex<Option<proto::PermissionsV1>>,
@@ -206,6 +402,24 @@ struct Session {
     // Outstanding ping expectations per role
     heartbeat_app: Mutex<HeartbeatQueue>,
     heartbeat_wallet: Mutex<HeartbeatQueue>,
+}
+struct ConnectInbox {
+    buffered: VecDeque<proto::ConnectFrameV1>,
+    live: mpsc::Receiver<proto::ConnectFrameV1>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalDelivery {
+    Delivered,
+    Offline,
+    StaleSession,
+}
+impl ConnectInbox {
+    async fn recv(&mut self) -> Option<proto::ConnectFrameV1> {
+        if let Some(frame) = self.buffered.pop_front() {
+            return Some(frame);
+        }
+        self.live.recv().await
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SessionOrigin {
@@ -245,11 +459,14 @@ impl Default for Session {
             buffer_bytes: Mutex::new(0),
             app_token_hash: Mutex::new(None),
             wallet_token_hash: Mutex::new(None),
+            app_token_reserved: AtomicBool::new(false),
+            wallet_token_reserved: AtomicBool::new(false),
             management_token_hash: Mutex::new(None),
             relay_key: Mutex::new(None),
             relay_auth_hash: Mutex::new(None),
             expected_app_pk: Mutex::new(None),
             origin: SessionOrigin::Local,
+            peer_claim_expires_at_ms: None,
             req_perms: Mutex::new(None),
             acc_perms: Mutex::new(None),
             open_binding: Mutex::new(None),
@@ -264,11 +481,17 @@ impl Default for Session {
     }
 }
 impl Session {
-    fn new(origin: SessionOrigin) -> Self {
+    fn new(origin: SessionOrigin, peer_claim_expires_at_ms: Option<u64>) -> Self {
         Self {
             origin,
+            peer_claim_expires_at_ms,
             ..Self::default()
         }
+    }
+
+    fn peer_claim_expired_at(&self, now_ms: u64) -> bool {
+        self.peer_claim_expires_at_ms
+            .is_some_and(|expires_at_ms| expires_at_ms <= now_ms)
     }
 }
 #[derive(Clone, Copy, Debug)]
@@ -400,53 +623,111 @@ impl Bus {
         buckets.retain(|_, bucket| now.saturating_duration_since(bucket.last_refill) <= ttl);
         before.saturating_sub(buckets.len())
     }
+    #[cfg(test)]
     async fn session_expired(&self, sid: &Sid, now: Instant) -> bool {
+        self.session_expired_at(sid, None, now, unix_time_ms())
+            .await
+    }
+    async fn session_expired_for(&self, sid: &Sid, expected: &Arc<Session>, now: Instant) -> bool {
+        self.session_expired_at(sid, Some(expected), now, unix_time_ms())
+            .await
+    }
+    async fn session_expired_at(
+        &self,
+        sid: &Sid,
+        expected: Option<&Arc<Session>>,
+        now: Instant,
+        now_ms: u64,
+    ) -> bool {
         let map_read = self.inner.read().await;
         let Some(sess) = map_read.get(&sid.to_vec()) else {
             return true;
         };
+        if expected.is_some_and(|expected| !Arc::ptr_eq(sess, expected)) {
+            return true;
+        }
+        if sess.peer_claim_expired_at(now_ms) {
+            return true;
+        }
         let last = *sess.last_activity.lock().await;
         now.saturating_duration_since(last) > self.policy.session_ttl
     }
     async fn prune_expired_sessions(&self, now: Instant) -> usize {
+        self.prune_expired_sessions_at(now, unix_time_ms()).await
+    }
+    async fn prune_expired_sessions_at(&self, now: Instant, now_ms: u64) -> usize {
         let ttl = self.policy.session_ttl;
-        let mut remove_keys = Vec::new();
+        let mut candidates = Vec::new();
         {
             let map_read = self.inner.read().await;
             for (k, sess) in map_read.iter() {
                 let ts = *sess.last_activity.lock().await;
-                if now.saturating_duration_since(ts) > ttl {
+                let claim_expired = sess.peer_claim_expired_at(now_ms);
+                if claim_expired || now.saturating_duration_since(ts) > ttl {
                     let app_active = sess.app_tx.lock().await.is_some();
                     let wallet_active = sess.wallet_tx.lock().await.is_some();
-                    if !app_active && !wallet_active {
-                        remove_keys.push(k.clone());
+                    if claim_expired || (!app_active && !wallet_active) {
+                        candidates.push((k.clone(), sess.clone()));
                     }
                 }
             }
         }
-        if !remove_keys.is_empty() {
-            let mut map_write = self.inner.write().await;
-            for k in &remove_keys {
-                map_write.remove(k);
+        self.remove_expired_candidates_at(now, now_ms, ttl, candidates)
+            .await
+    }
+    #[cfg(test)]
+    async fn remove_expired_candidates(
+        &self,
+        now: Instant,
+        ttl: Duration,
+        candidates: Vec<(Vec<u8>, Arc<Session>)>,
+    ) -> usize {
+        self.remove_expired_candidates_at(now, unix_time_ms(), ttl, candidates)
+            .await
+    }
+    async fn remove_expired_candidates_at(
+        &self,
+        now: Instant,
+        now_ms: u64,
+        ttl: Duration,
+        candidates: Vec<(Vec<u8>, Arc<Session>)>,
+    ) -> usize {
+        let mut removed = 0usize;
+        let mut map_write = self.inner.write().await;
+        for (key, candidate) in candidates {
+            let should_remove = if let Some(current) = map_write.get(&key) {
+                if !Arc::ptr_eq(current, &candidate) {
+                    false
+                } else {
+                    let last = *current.last_activity.lock().await;
+                    let app_active = current.app_tx.lock().await.is_some();
+                    let wallet_active = current.wallet_tx.lock().await.is_some();
+                    current.peer_claim_expired_at(now_ms)
+                        || (now.saturating_duration_since(last) > ttl
+                            && !app_active
+                            && !wallet_active)
+                }
+            } else {
+                false
+            };
+            if should_remove {
+                map_write.remove(&key);
+                removed = removed.saturating_add(1);
             }
         }
-        remove_keys.len()
+        removed
     }
     /// Pre-handshake gate: enforce global/per-IP session caps and handshake rate.
     pub async fn pre_ws_handshake(
         &self,
         ip: IpAddr,
     ) -> Result<WsPermit, (axum::http::StatusCode, String)> {
-        self.reserve_ws_slot(ip).await?;
+        let mut permit = self.reserve_ws_slot(ip).await?;
         if let Err(err) = self.consume_handshake_token(ip).await {
-            self.session_closed(ip).await;
+            permit.release().await;
             return Err(err);
         }
-        Ok(WsPermit {
-            bus: self.clone(),
-            ip,
-            released: false,
-        })
+        Ok(permit)
     }
     /// Pre-creation gate for REST session provisioning.
     pub async fn pre_session_create(
@@ -457,36 +738,38 @@ impl Bus {
         self.consume_handshake_token(ip).await?;
         Ok(())
     }
-    async fn reserve_ws_slot(&self, ip: IpAddr) -> Result<(), (axum::http::StatusCode, String)> {
+    async fn reserve_ws_slot(
+        &self,
+        ip: IpAddr,
+    ) -> Result<WsPermit, (axum::http::StatusCode, String)> {
         if self.policy.ws_max_sessions == 0 {
             return Err((
                 axum::http::StatusCode::TOO_MANY_REQUESTS,
                 "connect: global session cap".into(),
             ));
         }
-        let prev = self.shared.sessions_total.fetch_add(1, Ordering::AcqRel);
-        if prev >= self.policy.ws_max_sessions {
-            self.shared.sessions_total.fetch_sub(1, Ordering::AcqRel);
+        let mut counts = self.per_ip_counts.lock().await;
+        if self.shared.sessions_total.load(Ordering::Acquire) >= self.policy.ws_max_sessions {
             return Err((
                 axum::http::StatusCode::TOO_MANY_REQUESTS,
                 "connect: global session cap".into(),
             ));
         }
-        let mut counts = self.per_ip_counts.lock().await;
         let entry = counts.entry(ip).or_insert(0);
-        *entry += 1;
-        if self.policy.ws_per_ip_max_sessions > 0 && *entry > self.policy.ws_per_ip_max_sessions {
-            *entry -= 1;
-            if *entry == 0 {
-                counts.remove(&ip);
-            }
-            self.shared.sessions_total.fetch_sub(1, Ordering::AcqRel);
+        if self.policy.ws_per_ip_max_sessions > 0 && *entry >= self.policy.ws_per_ip_max_sessions {
             return Err((
                 axum::http::StatusCode::TOO_MANY_REQUESTS,
                 "connect: per-ip session cap".into(),
             ));
         }
-        Ok(())
+        *entry = entry.saturating_add(1);
+        self.shared.sessions_total.fetch_add(1, Ordering::Release);
+        drop(counts);
+        Ok(WsPermit {
+            bus: self.clone(),
+            ip,
+            released: false,
+        })
     }
     async fn check_creation_cap(&self) -> Result<(), (axum::http::StatusCode, String)> {
         // Use inner map length to count provisioned sessions; this is stricter than active WS.
@@ -522,17 +805,22 @@ impl Bus {
     }
     /// Record a newly opened WS session.
     pub async fn session_opened(&self, ip: IpAddr) {
-        self.shared.sessions_total.fetch_add(1, Ordering::Relaxed);
         let mut counts = self.per_ip_counts.lock().await;
-        *counts.entry(ip).or_insert(0) += 1;
+        let count = counts.entry(ip).or_insert(0);
+        *count = count.saturating_add(1);
+        self.shared.sessions_total.fetch_add(1, Ordering::Release);
     }
     /// Record a closed WS session.
     pub async fn session_closed(&self, ip: IpAddr) {
-        self.shared.sessions_total.fetch_sub(1, Ordering::Relaxed);
         let mut counts = self.per_ip_counts.lock().await;
         if let Some(v) = counts.get_mut(&ip) {
             if *v > 0 {
                 *v -= 1;
+                let _ = self.shared.sessions_total.fetch_update(
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                    |total| total.checked_sub(1),
+                );
             }
             if *v == 0 {
                 counts.remove(&ip);
@@ -540,6 +828,7 @@ impl Bus {
         }
     }
     // Use derived Clone
+    #[cfg(test)]
     async fn get_or_create(&self, sid: &Sid) -> Arc<Session> {
         let key = sid.to_vec();
         if let Some(sess) = self.inner.read().await.get(&key) {
@@ -586,7 +875,7 @@ impl Bus {
             relay_auth_hash,
             expires_at_ms: expires_at_ms(self.policy.session_ttl),
         };
-        let sess = Arc::new(Session::new(SessionOrigin::Local));
+        let sess = Arc::new(Session::new(SessionOrigin::Local, None));
         *sess.app_token_hash.lock().await = Some(app_hash);
         *sess.wallet_token_hash.lock().await = Some(wallet_hash);
         *sess.management_token_hash.lock().await = Some(management_hash);
@@ -607,64 +896,77 @@ impl Bus {
             .await;
         Ok(())
     }
-    /// Authorize WS attach by consuming a one-time token for the given role.
-    pub async fn authorize_token(
+    /// Reserve a one-time role token until its WebSocket endpoint is attached.
+    pub(crate) async fn reserve_token(
         &self,
         sid: Sid,
         role: proto::Role,
         token: &str,
-    ) -> Result<(), (axum::http::StatusCode, String)> {
+    ) -> Result<RoleTokenReservation, (axum::http::StatusCode, String)> {
         let Some(sess) = self.inner.read().await.get(&sid.to_vec()).cloned() else {
             iroha_logger::debug!(
                 sid = %hex::encode(sid),
-                "connect: authorize_token rejected unknown sid"
+                "connect: reserve_token rejected unknown sid"
             );
             return Err((
                 axum::http::StatusCode::UNAUTHORIZED,
                 "connect: unknown sid".into(),
             ));
         };
-        let ok = match role {
-            proto::Role::App => {
-                let mut t = sess.app_token_hash.lock().await;
-                let supplied = connect_sdk::token_auth_hash(token_kind_for_role(role), &sid, token);
-                t.as_ref()
-                    .is_some_and(|stored| connect_sdk::constant_time_eq(stored, &supplied))
-                    .then(|| *t = None)
-                    .is_some()
-            }
-            proto::Role::Wallet => {
-                let mut t = sess.wallet_token_hash.lock().await;
-                let supplied = connect_sdk::token_auth_hash(token_kind_for_role(role), &sid, token);
-                t.as_ref()
-                    .is_some_and(|stored| connect_sdk::constant_time_eq(stored, &supplied))
-                    .then(|| *t = None)
-                    .is_some()
-            }
+        if sess.peer_claim_expired_at(unix_time_ms()) {
+            iroha_logger::debug!(
+                sid = %hex::encode(sid),
+                "connect: reserve_token rejected expired peer session claim"
+            );
+            return Err((
+                axum::http::StatusCode::UNAUTHORIZED,
+                "connect: expired session".into(),
+            ));
+        }
+        let token_hash = match role {
+            proto::Role::App => sess.app_token_hash.lock().await,
+            proto::Role::Wallet => sess.wallet_token_hash.lock().await,
         };
-        if ok {
-            self.broadcast_p2p_message(proto::ConnectP2pMessageV1::RoleConsumed(
-                proto::ConnectSessionRoleConsumedV1 { sid, role },
-            ))
-            .await;
-            Ok(())
-        } else {
+        let supplied = connect_sdk::token_auth_hash(token_kind_for_role(role), &sid, token);
+        let valid = token_hash
+            .as_ref()
+            .is_some_and(|stored| connect_sdk::constant_time_eq(stored, &supplied));
+        let reservation_flag = match role {
+            proto::Role::App => &sess.app_token_reserved,
+            proto::Role::Wallet => &sess.wallet_token_reserved,
+        };
+        let reserved = valid
+            && reservation_flag
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok();
+        drop(token_hash);
+        if !reserved {
             iroha_logger::debug!(
                 sid = %hex::encode(sid),
                 role = ?role,
-                "connect: authorize_token rejected bad token"
+                "connect: reserve_token rejected unavailable token"
             );
-            Err((
+            return Err((
                 axum::http::StatusCode::UNAUTHORIZED,
                 "connect: bad token".into(),
-            ))
+            ));
         }
+        Ok(RoleTokenReservation {
+            bus: self.clone(),
+            session: sess,
+            sid,
+            role,
+            finished: false,
+        })
     }
     /// Validate a stable session management token.
     pub async fn authorize_management_token(&self, sid: Sid, token: &str) -> bool {
         let Some(sess) = self.inner.read().await.get(&sid.to_vec()).cloned() else {
             return false;
         };
+        if sess.peer_claim_expired_at(unix_time_ms()) {
+            return false;
+        }
         let supplied =
             connect_sdk::token_auth_hash(connect_sdk::TokenKind::Management, &sid, token);
         sess.management_token_hash
@@ -676,6 +978,9 @@ impl Bus {
     /// Return token-gated status for a single Connect session.
     pub async fn session_status(&self, sid: Sid, token: &str) -> Option<ConnectSessionStatus> {
         let sess = self.inner.read().await.get(&sid.to_vec()).cloned()?;
+        if sess.peer_claim_expired_at(unix_time_ms()) {
+            return None;
+        }
         let supplied =
             connect_sdk::token_auth_hash(connect_sdk::TokenKind::Management, &sid, token);
         let authorized = sess
@@ -705,13 +1010,51 @@ impl Bus {
         if let Some(sess) = w.get(&key) {
             let app_empty = sess.app_tx.lock().await.is_none();
             let wallet_empty = sess.wallet_tx.lock().await.is_none();
-            if app_empty && wallet_empty {
+            let provisioned = sess.management_token_hash.lock().await.is_some();
+            if app_empty && wallet_empty && !provisioned {
                 w.remove(&key);
             }
         }
     }
-    async fn attach(&self, sid: Sid, role: proto::Role) -> mpsc::Receiver<proto::ConnectFrameV1> {
-        let sess = self.get_or_create(&sid).await;
+    async fn release_endpoint(
+        &self,
+        session: Arc<Session>,
+        sid: Sid,
+        role: proto::Role,
+        sender: &mpsc::Sender<proto::ConnectFrameV1>,
+    ) {
+        let removed = {
+            let mut sessions = self.inner.write().await;
+            let Some(current) = sessions.get(&sid.to_vec()) else {
+                return;
+            };
+            if !Arc::ptr_eq(current, &session) {
+                return;
+            }
+            let mut endpoint = match role {
+                proto::Role::App => current.app_tx.lock().await,
+                proto::Role::Wallet => current.wallet_tx.lock().await,
+            };
+            if !endpoint
+                .as_ref()
+                .is_some_and(|current| current.same_channel(sender))
+            {
+                return;
+            }
+            // Do not try to send the terminal control back through the endpoint
+            // whose transport is already gone. The surviving role remains
+            // published long enough for `finish_terminated_session` to notify it.
+            *endpoint = None;
+            drop(endpoint);
+            sessions.remove(&sid.to_vec())
+        };
+        if let Some(removed) = removed {
+            self.finish_terminated_session(removed, sid, CLOSE_REASON_TRANSPORT_CLOSED, true)
+                .await;
+        }
+    }
+    #[cfg(test)]
+    async fn attach_session(sess: Arc<Session>, role: proto::Role) -> ConnectInbox {
         let (tx, rx) = mpsc::channel::<proto::ConnectFrameV1>(64);
         match role {
             proto::Role::App => {
@@ -721,9 +1064,18 @@ impl Bus {
                 *sess.wallet_tx.lock().await = Some(tx);
             }
         }
-        // Drain any buffered frames targeted to this role upon attach
-        Self::drain_for_role(sess.clone(), role).await;
-        rx
+        // Move pre-attach frames into a receiver-owned prefix instead of
+        // sending them into the bounded live channel before its receiver is
+        // returned. The latter deadlocks as soon as more than 64 frames were
+        // buffered. New frames enter `live` only after the prefix is fixed, so
+        // `ConnectInbox::recv` preserves their order.
+        let buffered = Self::take_buffered_for_role(sess, role).await;
+        ConnectInbox { buffered, live: rx }
+    }
+    #[cfg(test)]
+    async fn attach(&self, sid: Sid, role: proto::Role) -> ConnectInbox {
+        let sess = self.get_or_create(&sid).await;
+        Self::attach_session(sess, role).await
     }
     async fn detach(&self, sid: Sid, role: proto::Role) {
         if let Some(sess) = self.inner.read().await.get(&sid.to_vec()) {
@@ -741,35 +1093,104 @@ impl Bus {
     pub async fn terminate_session(&self, sid: Sid, reason: &str) -> bool {
         self.terminate_session_inner(sid, reason, true).await
     }
+    /// Terminate a session only when the supplied management token belongs to
+    /// the same session incarnation removed by this operation.
+    pub(crate) async fn terminate_session_authorized(
+        &self,
+        sid: Sid,
+        token: &str,
+        reason: &str,
+    ) -> bool {
+        let supplied =
+            connect_sdk::token_auth_hash(connect_sdk::TokenKind::Management, &sid, token);
+        let session = {
+            let mut sessions = self.inner.write().await;
+            let Some(session) = sessions.get(&sid.to_vec()).cloned() else {
+                return false;
+            };
+            let authorized = session
+                .management_token_hash
+                .lock()
+                .await
+                .as_ref()
+                .is_some_and(|stored| connect_sdk::constant_time_eq(stored, &supplied));
+            if !authorized {
+                return false;
+            }
+            sessions.remove(&sid.to_vec())
+        };
+        let Some(session) = session else {
+            return false;
+        };
+        self.finish_terminated_session(session, sid, reason, true)
+            .await;
+        true
+    }
     async fn terminate_session_inner(&self, sid: Sid, reason: &str, broadcast: bool) -> bool {
         let sess = {
             let mut map = self.inner.write().await;
             map.remove(&sid.to_vec())
         };
         if let Some(sess) = sess {
-            // Clear tokens so new WS joins cannot reuse them.
-            *sess.app_token_hash.lock().await = None;
-            *sess.wallet_token_hash.lock().await = None;
-            *sess.management_token_hash.lock().await = None;
-            *sess.relay_key.lock().await = None;
-            *sess.relay_auth_hash.lock().await = None;
-            *sess.expected_app_pk.lock().await = None;
-            *sess.open_binding.lock().await = None;
-            self.notify_close(sess.clone(), sid, proto::Role::Wallet, reason)
+            self.finish_terminated_session(sess, sid, reason, broadcast)
                 .await;
-            self.notify_close(sess, sid, proto::Role::App, reason).await;
-            if broadcast {
-                self.broadcast_p2p_message(proto::ConnectP2pMessageV1::SessionTerminated(
-                    proto::ConnectSessionTerminatedV1 {
-                        sid,
-                        reason: reason.to_owned(),
-                    },
-                ))
-                .await;
-            }
             true
         } else {
             false
+        }
+    }
+    async fn terminate_session_if_current(
+        &self,
+        sid: Sid,
+        expected: &Arc<Session>,
+        reason: &str,
+        broadcast: bool,
+    ) -> bool {
+        let sess = {
+            let mut map = self.inner.write().await;
+            let Some(current) = map.get(&sid.to_vec()) else {
+                return false;
+            };
+            if !Arc::ptr_eq(current, expected) {
+                return false;
+            }
+            map.remove(&sid.to_vec())
+        };
+        let Some(sess) = sess else {
+            return false;
+        };
+        self.finish_terminated_session(sess, sid, reason, broadcast)
+            .await;
+        true
+    }
+    async fn finish_terminated_session(
+        &self,
+        sess: Arc<Session>,
+        sid: Sid,
+        reason: &str,
+        broadcast: bool,
+    ) {
+        // Clear tokens so new WS joins cannot reuse them.
+        *sess.app_token_hash.lock().await = None;
+        *sess.wallet_token_hash.lock().await = None;
+        sess.app_token_reserved.store(false, Ordering::Release);
+        sess.wallet_token_reserved.store(false, Ordering::Release);
+        *sess.management_token_hash.lock().await = None;
+        *sess.relay_key.lock().await = None;
+        *sess.relay_auth_hash.lock().await = None;
+        *sess.expected_app_pk.lock().await = None;
+        *sess.open_binding.lock().await = None;
+        self.notify_close(sess.clone(), sid, proto::Role::Wallet, reason)
+            .await;
+        self.notify_close(sess, sid, proto::Role::App, reason).await;
+        if broadcast {
+            self.broadcast_p2p_message(proto::ConnectP2pMessageV1::SessionTerminated(
+                proto::ConnectSessionTerminatedV1 {
+                    sid,
+                    reason: reason.to_owned(),
+                },
+            ))
+            .await;
         }
     }
     async fn notify_close(&self, sess: Arc<Session>, sid: Sid, target: proto::Role, reason: &str) {
@@ -794,34 +1215,84 @@ impl Bus {
             proto::Role::Wallet => sess.wallet_tx.lock().await.clone(),
         };
         if let Some(tx) = tx_opt {
-            if tx.send(frame).await.is_ok() {
+            if matches!(
+                tokio::time::timeout(self.local_delivery_timeout(), tx.send(frame)).await,
+                Ok(Ok(()))
+            ) {
                 *sess.last_activity.lock().await = Instant::now();
             }
         }
     }
-    async fn deliver_local_only(&self, frame: &proto::ConnectFrameV1) -> bool {
+    fn local_delivery_timeout(&self) -> Duration {
+        self.policy
+            .heartbeat_interval
+            .min(Duration::from_secs(1))
+            .max(Duration::from_millis(10))
+    }
+    async fn deliver_local_only(
+        &self,
+        expected: &Arc<Session>,
+        frame: &proto::ConnectFrameV1,
+    ) -> Result<LocalDelivery, ()> {
         let sid_key = frame.sid.to_vec();
         let target = match frame.dir {
             proto::Dir::AppToWallet => proto::Role::Wallet,
             proto::Dir::WalletToApp => proto::Role::App,
         };
-        if let Some(sess) = self.inner.read().await.get(&sid_key) {
-            let tx_opt = match target {
-                proto::Role::App => sess.app_tx.lock().await.clone(),
-                proto::Role::Wallet => sess.wallet_tx.lock().await.clone(),
-            };
-            if let Some(tx) = tx_opt {
-                let _ = tx.send(frame.clone()).await;
-                return true;
-            }
+        // Resolve only the expected incarnation. The sender below is taken
+        // directly from that session, never from a second SID lookup, so a
+        // concurrent replacement cannot receive the old frame. Release the
+        // global map guard before the bounded send so an unrelated session
+        // update is not serialized behind a full endpoint inbox.
+        let sessions = self.inner.read().await;
+        let Some(current) = sessions.get(&sid_key) else {
+            return Ok(LocalDelivery::StaleSession);
+        };
+        if !Arc::ptr_eq(current, expected) {
+            return Ok(LocalDelivery::StaleSession);
         }
-        false
+        drop(sessions);
+        let tx_opt = match target {
+            proto::Role::App => expected.app_tx.lock().await.clone(),
+            proto::Role::Wallet => expected.wallet_tx.lock().await.clone(),
+        };
+        if let Some(tx) = tx_opt {
+            return match tokio::time::timeout(self.local_delivery_timeout(), tx.send(frame.clone()))
+                .await
+            {
+                Ok(Ok(())) => Ok(LocalDelivery::Delivered),
+                Ok(Err(_)) => Ok(LocalDelivery::Offline),
+                Err(_) => Err(()),
+            };
+        }
+        Ok(LocalDelivery::Offline)
     }
+    #[cfg(test)]
     async fn relay(&self, frame: proto::ConnectFrameV1) {
         self.relay_with_p2p_ttl(frame, self.policy.p2p_ttl_hops)
             .await;
     }
+    #[cfg(test)]
     async fn relay_with_p2p_ttl(&self, frame: proto::ConnectFrameV1, p2p_ttl: u8) {
+        let Some(sess) = self.inner.read().await.get(&frame.sid.to_vec()).cloned() else {
+            debug!(sid = ?hex::encode(frame.sid), "connect: dropping frame for unknown session");
+            return;
+        };
+        self.relay_with_session(frame, p2p_ttl, sess).await;
+    }
+    async fn relay_with_session(
+        &self,
+        frame: proto::ConnectFrameV1,
+        p2p_ttl: u8,
+        sess: Arc<Session>,
+    ) {
+        if !self.session_is_current(&frame.sid, &sess).await {
+            return;
+        }
+        if sess.peer_claim_expired_at(unix_time_ms()) {
+            debug!(sid = ?hex::encode(frame.sid), "connect: dropping frame for expired peer session claim");
+            return;
+        }
         if matches!(
             &frame.kind,
             proto::FrameKind::Ciphertext(ciphertext) if ciphertext.dir != frame.dir
@@ -834,14 +1305,15 @@ impl Bus {
                 frame_dir = ?frame.dir,
                 "connect: closing session on substituted ciphertext direction"
             );
-            self.terminate_session(frame.sid, CLOSE_REASON_ROLE_DIRECTION_MISMATCH)
-                .await;
+            self.terminate_session_if_current(
+                frame.sid,
+                &sess,
+                CLOSE_REASON_ROLE_DIRECTION_MISMATCH,
+                true,
+            )
+            .await;
             return;
         }
-        let Some(sess) = self.inner.read().await.get(&frame.sid.to_vec()).cloned() else {
-            debug!(sid = ?hex::encode(frame.sid), "connect: dropping frame for unknown session");
-            return;
-        };
         let Some(enc_len) = encoded_len(&frame) else {
             warn!(
                 sid = ?hex::encode(frame.sid),
@@ -857,6 +1329,41 @@ impl Bus {
                 "connect: dropping oversized frame"
             );
             return;
+        }
+        let mut terminal_reason = None;
+        if let proto::FrameKind::Control(control) = &frame.kind {
+            let sender = match frame.dir {
+                proto::Dir::AppToWallet => proto::Role::App,
+                proto::Dir::WalletToApp => proto::Role::Wallet,
+            };
+            let valid_owner = match control {
+                proto::ConnectControlV1::Open { .. } => sender == proto::Role::App,
+                proto::ConnectControlV1::Approve { .. }
+                | proto::ConnectControlV1::Reject { .. } => sender == proto::Role::Wallet,
+                proto::ConnectControlV1::Close { who, .. } => *who == sender,
+                proto::ConnectControlV1::Ping { .. } | proto::ConnectControlV1::Pong { .. } => true,
+                // Server events use an independent Torii-owned sequence and
+                // are delivered only by `send_server_event`.
+                proto::ConnectControlV1::ServerEvent { .. } => false,
+            };
+            if !valid_owner {
+                self.shared
+                    .role_direction_mismatch_total
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    sid = ?hex::encode(frame.sid),
+                    frame_dir = ?frame.dir,
+                    "connect: closing session on control-frame owner substitution"
+                );
+                self.terminate_session_if_current(
+                    frame.sid,
+                    &sess,
+                    CLOSE_REASON_ROLE_DIRECTION_MISMATCH,
+                    true,
+                )
+                .await;
+                return;
+            }
         }
         self.shared.frames_in_total.fetch_add(1, Ordering::Relaxed);
         if matches!(frame.kind, proto::FrameKind::Ciphertext(_)) {
@@ -939,8 +1446,13 @@ impl Bus {
                 expected_seq = ?expected_seq,
                 "connect: closing session on non-contiguous seq frame"
             );
-            self.terminate_session(frame.sid, CLOSE_REASON_SEQUENCE_VIOLATION)
-                .await;
+            self.terminate_session_if_current(
+                frame.sid,
+                &sess,
+                CLOSE_REASON_SEQUENCE_VIOLATION,
+                true,
+            )
+            .await;
             return;
         }
         if matches!(frame.kind, proto::FrameKind::Ciphertext(_)) && !*sess.approved.lock().await {
@@ -948,8 +1460,13 @@ impl Bus {
                 sid = ?hex::encode(frame.sid),
                 "connect: rejecting ciphertext before a verified wallet approval"
             );
-            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
-                .await;
+            self.terminate_session_if_current(
+                frame.sid,
+                &sess,
+                CLOSE_REASON_APPROVAL_INVALID,
+                true,
+            )
+            .await;
             return;
         }
         // If control frame, capture permissions for diagnostics
@@ -961,44 +1478,57 @@ impl Bus {
                     permissions,
                     ..
                 } => {
-                    if frame.dir == proto::Dir::AppToWallet {
-                        if constraints.network_id != self.network_id {
-                            warn!(
-                                sid = ?hex::encode(frame.sid),
-                                expected_network_id = %self.network_id,
-                                supplied_network_id = %constraints.network_id,
-                                "connect: rejecting Open for a different network"
-                            );
-                            self.terminate_session(frame.sid, CLOSE_REASON_NETWORK_MISMATCH)
-                                .await;
-                            return;
-                        }
-                        if *sess.expected_app_pk.lock().await != Some(*app_pk) {
-                            warn!(
-                                sid = ?hex::encode(frame.sid),
-                                "connect: rejecting Open whose application key is not bound to the session id"
-                            );
-                            self.terminate_session(frame.sid, CLOSE_REASON_OPEN_IDENTITY_MISMATCH)
-                                .await;
-                            return;
-                        }
-                        let mut open_binding = sess.open_binding.lock().await;
-                        if open_binding.is_some() {
-                            drop(open_binding);
-                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting repeated Open");
-                            self.terminate_session(frame.sid, CLOSE_REASON_OPEN_REPLAY)
-                                .await;
-                            return;
-                        }
-                        *open_binding = Some(OpenBinding {
-                            app_pk: *app_pk,
-                            constraints: constraints.clone(),
-                        });
+                    if constraints.network_id != self.network_id {
+                        warn!(
+                            sid = ?hex::encode(frame.sid),
+                            expected_network_id = %self.network_id,
+                            supplied_network_id = %constraints.network_id,
+                            "connect: rejecting Open for a different network"
+                        );
+                        self.terminate_session_if_current(
+                            frame.sid,
+                            &sess,
+                            CLOSE_REASON_NETWORK_MISMATCH,
+                            true,
+                        )
+                        .await;
+                        return;
+                    }
+                    if *sess.expected_app_pk.lock().await != Some(*app_pk) {
+                        warn!(
+                            sid = ?hex::encode(frame.sid),
+                            "connect: rejecting Open whose application key is not bound to the session id"
+                        );
+                        self.terminate_session_if_current(
+                            frame.sid,
+                            &sess,
+                            CLOSE_REASON_OPEN_IDENTITY_MISMATCH,
+                            true,
+                        )
+                        .await;
+                        return;
+                    }
+                    let mut open_binding = sess.open_binding.lock().await;
+                    if open_binding.is_some() {
                         drop(open_binding);
-                        (*sess.req_perms.lock().await).clone_from(permissions);
-                        if permissions.is_some() {
-                            debug!(sid = ?hex::encode(frame.sid), "connect: Open with permissions requested");
-                        }
+                        warn!(sid = ?hex::encode(frame.sid), "connect: rejecting repeated Open");
+                        self.terminate_session_if_current(
+                            frame.sid,
+                            &sess,
+                            CLOSE_REASON_OPEN_REPLAY,
+                            true,
+                        )
+                        .await;
+                        return;
+                    }
+                    *open_binding = Some(OpenBinding {
+                        app_pk: *app_pk,
+                        constraints: constraints.clone(),
+                    });
+                    drop(open_binding);
+                    (*sess.req_perms.lock().await).clone_from(permissions);
+                    if permissions.is_some() {
+                        debug!(sid = ?hex::encode(frame.sid), "connect: Open with permissions requested");
                     }
                 }
                 proto::ConnectControlV1::Approve {
@@ -1008,91 +1538,122 @@ impl Bus {
                     proof,
                     sig_wallet,
                 } => {
-                    if frame.dir == proto::Dir::WalletToApp {
-                        let mut approved = sess.approved.lock().await;
-                        if *approved {
-                            drop(approved);
-                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting repeated wallet approval");
-                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_REPLAY)
-                                .await;
-                            return;
-                        }
-                        let Some(open_binding) = sess.open_binding.lock().await.clone() else {
-                            drop(approved);
-                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval before Open");
-                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
-                                .await;
-                            return;
-                        };
-                        let Some(relay_auth_hash) = *sess.relay_auth_hash.lock().await else {
-                            drop(approved);
-                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval without relay binding");
-                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
-                                .await;
-                            return;
-                        };
-                        let account = match AccountId::parse_encoded(&account_id) {
-                            Ok(parsed) if parsed.canonical() == account_id => {
-                                parsed.into_account_id()
-                            }
-                            Ok(_) => {
-                                drop(approved);
-                                warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval with noncanonical account id");
-                                self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
-                                    .await;
-                                return;
-                            }
-                            Err(error) => {
-                                drop(approved);
-                                warn!(sid = ?hex::encode(frame.sid), ?error, "connect: rejecting approval with malformed account id");
-                                self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
-                                    .await;
-                                return;
-                            }
-                        };
-                        let Some(signatory) = account.try_signatory() else {
-                            drop(approved);
-                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval for a multisig account without a typed intent");
-                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
-                                .await;
-                            return;
-                        };
-                        if let Err(error) = connect_sdk::verify_wallet_approval_signature(
-                            signatory,
-                            &open_binding.constraints,
-                            &frame.sid,
-                            &open_binding.app_pk,
-                            wallet_pk,
-                            account_id,
-                            permissions.as_ref(),
-                            proof.as_ref(),
-                            &relay_auth_hash,
-                            sig_wallet,
-                        ) {
-                            drop(approved);
-                            warn!(sid = ?hex::encode(frame.sid), error, "connect: rejecting forged or substituted wallet approval");
-                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
-                                .await;
-                            return;
-                        }
-                        (*sess.acc_perms.lock().await).clone_from(permissions);
-                        *approved = true;
+                    let mut approved = sess.approved.lock().await;
+                    if *approved {
                         drop(approved);
-                        if permissions.is_some() {
-                            debug!(sid = ?hex::encode(frame.sid), "connect: Approve with permissions provided");
+                        warn!(sid = ?hex::encode(frame.sid), "connect: rejecting repeated wallet approval");
+                        self.terminate_session_if_current(
+                            frame.sid,
+                            &sess,
+                            CLOSE_REASON_APPROVAL_REPLAY,
+                            true,
+                        )
+                        .await;
+                        return;
+                    }
+                    let Some(open_binding) = sess.open_binding.lock().await.clone() else {
+                        drop(approved);
+                        warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval before Open");
+                        self.terminate_session_if_current(
+                            frame.sid,
+                            &sess,
+                            CLOSE_REASON_APPROVAL_INVALID,
+                            true,
+                        )
+                        .await;
+                        return;
+                    };
+                    let Some(relay_auth_hash) = *sess.relay_auth_hash.lock().await else {
+                        drop(approved);
+                        warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval without relay binding");
+                        self.terminate_session_if_current(
+                            frame.sid,
+                            &sess,
+                            CLOSE_REASON_APPROVAL_INVALID,
+                            true,
+                        )
+                        .await;
+                        return;
+                    };
+                    let account = match AccountId::parse_encoded(&account_id) {
+                        Ok(parsed) if parsed.canonical() == account_id => parsed.into_account_id(),
+                        Ok(_) => {
+                            drop(approved);
+                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval with noncanonical account id");
+                            self.terminate_session_if_current(
+                                frame.sid,
+                                &sess,
+                                CLOSE_REASON_APPROVAL_INVALID,
+                                true,
+                            )
+                            .await;
+                            return;
                         }
-                        // Compare if we have both sides
-                        let req = sess.req_perms.lock().await.clone();
-                        let acc = sess.acc_perms.lock().await.clone();
-                        if let (Some(r), Some(a)) = (req, acc) {
-                            let (extra_m, missing_m) = diff(&r.methods, &a.methods);
-                            let (extra_e, missing_e) = diff(&r.events, &a.events);
-                            if !extra_m.is_empty() || !extra_e.is_empty() {
-                                warn!(sid = ?hex::encode(frame.sid), extra_methods = ?extra_m, extra_events = ?extra_e, "connect: wallet approved permissions not requested by app");
-                            }
-                            if !missing_m.is_empty() || !missing_e.is_empty() {
-                                info!(sid = ?hex::encode(frame.sid), dropped_methods = ?missing_m, dropped_events = ?missing_e, "connect: wallet narrowed requested permissions");
-                            }
+                        Err(error) => {
+                            drop(approved);
+                            warn!(sid = ?hex::encode(frame.sid), ?error, "connect: rejecting approval with malformed account id");
+                            self.terminate_session_if_current(
+                                frame.sid,
+                                &sess,
+                                CLOSE_REASON_APPROVAL_INVALID,
+                                true,
+                            )
+                            .await;
+                            return;
+                        }
+                    };
+                    let Some(signatory) = account.try_signatory() else {
+                        drop(approved);
+                        warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval for a multisig account without a typed intent");
+                        self.terminate_session_if_current(
+                            frame.sid,
+                            &sess,
+                            CLOSE_REASON_APPROVAL_INVALID,
+                            true,
+                        )
+                        .await;
+                        return;
+                    };
+                    if let Err(error) = connect_sdk::verify_wallet_approval_signature(
+                        signatory,
+                        &open_binding.constraints,
+                        &frame.sid,
+                        &open_binding.app_pk,
+                        wallet_pk,
+                        account_id,
+                        permissions.as_ref(),
+                        proof.as_ref(),
+                        &relay_auth_hash,
+                        sig_wallet,
+                    ) {
+                        drop(approved);
+                        warn!(sid = ?hex::encode(frame.sid), error, "connect: rejecting forged or substituted wallet approval");
+                        self.terminate_session_if_current(
+                            frame.sid,
+                            &sess,
+                            CLOSE_REASON_APPROVAL_INVALID,
+                            true,
+                        )
+                        .await;
+                        return;
+                    }
+                    (*sess.acc_perms.lock().await).clone_from(permissions);
+                    *approved = true;
+                    drop(approved);
+                    if permissions.is_some() {
+                        debug!(sid = ?hex::encode(frame.sid), "connect: Approve with permissions provided");
+                    }
+                    // Compare if we have both sides
+                    let req = sess.req_perms.lock().await.clone();
+                    let acc = sess.acc_perms.lock().await.clone();
+                    if let (Some(r), Some(a)) = (req, acc) {
+                        let (extra_m, missing_m) = diff(&r.methods, &a.methods);
+                        let (extra_e, missing_e) = diff(&r.events, &a.events);
+                        if !extra_m.is_empty() || !extra_e.is_empty() {
+                            warn!(sid = ?hex::encode(frame.sid), extra_methods = ?extra_m, extra_events = ?extra_e, "connect: wallet approved permissions not requested by app");
+                        }
+                        if !missing_m.is_empty() || !missing_e.is_empty() {
+                            info!(sid = ?hex::encode(frame.sid), dropped_methods = ?missing_m, dropped_events = ?missing_e, "connect: wallet narrowed requested permissions");
                         }
                     }
                 }
@@ -1104,81 +1665,153 @@ impl Bus {
                         warn!(sid = ?hex::encode(frame.sid), "connect: dropping plaintext Close/Reject after approval");
                         return;
                     }
+                    terminal_reason = Some(match ctrl {
+                        proto::ConnectControlV1::Reject { .. } => CLOSE_REASON_REJECTED,
+                        proto::ConnectControlV1::Close { .. } => CLOSE_REASON_CLOSED,
+                        _ => unreachable!("matched terminal control"),
+                    });
                 }
                 _ => {}
             }
         }
         // Deliver locally (best effort)
-        let delivered = self.deliver_local_only(&frame).await;
-        if delivered {
-            self.shared.frames_out_total.fetch_add(1, Ordering::Relaxed);
-        } else {
+        let mut delivered = match self.deliver_local_only(&sess, &frame).await {
+            Ok(LocalDelivery::Delivered) => true,
+            Ok(LocalDelivery::Offline) => false,
+            Ok(LocalDelivery::StaleSession) => return,
+            Err(()) => {
+                warn!(
+                    sid = ?hex::encode(frame.sid),
+                    "connect: terminating session after bounded local delivery timed out"
+                );
+                self.terminate_session_if_current(
+                    frame.sid,
+                    &sess,
+                    CLOSE_REASON_DELIVERY_TIMEOUT,
+                    true,
+                )
+                .await;
+                return;
+            }
+        };
+        let mut buffer_overflow = false;
+        let mut delivery_timed_out = false;
+        if !delivered {
             // Buffer frame for the session if target is offline
             let cap = self.policy.session_buffer_max_bytes;
             {
+                // Keep this incarnation current through the buffer-or-deliver
+                // transition. A concurrent delete can proceed afterwards, but
+                // the frame can never leak into a replacement with the same SID.
+                let sessions = self.inner.read().await;
+                let Some(current) = sessions.get(&frame.sid.to_vec()) else {
+                    return;
+                };
+                if !Arc::ptr_eq(current, &sess) {
+                    return;
+                }
                 let mut buf = sess.buffer.lock().await;
                 let mut bytes = sess.buffer_bytes.lock().await;
-                let mut evicted = 0u64;
-                // Evict oldest until it fits under cap
-                while *bytes + enc_len > cap {
-                    if let Some((_old, old_len)) = buf.pop_front() {
-                        *bytes = bytes.saturating_sub(old_len);
-                        evicted += 1;
-                    } else {
-                        break;
+                // `attach` publishes its sender before taking this buffer lock.
+                // Re-check under the lock so a frame which raced that publish
+                // cannot be stranded in the offline buffer until a later reconnect.
+                let tx_opt = match frame.dir {
+                    proto::Dir::AppToWallet => sess.wallet_tx.lock().await.clone(),
+                    proto::Dir::WalletToApp => sess.app_tx.lock().await.clone(),
+                };
+                if let Some(tx) = tx_opt {
+                    match tokio::time::timeout(
+                        self.local_delivery_timeout(),
+                        tx.send(frame.clone()),
+                    )
+                    .await
+                    {
+                        Ok(result) => delivered = result.is_ok(),
+                        Err(_) => delivery_timed_out = true,
                     }
                 }
-                if evicted > 0 {
-                    self.shared
-                        .buffer_drops_total
-                        .fetch_add(evicted, Ordering::Relaxed);
+                if !delivered && !delivery_timed_out {
+                    if bytes.saturating_add(enc_len) > cap {
+                        self.shared
+                            .buffer_drops_total
+                            .fetch_add(1, Ordering::Relaxed);
+                        buffer_overflow = true;
+                    } else {
+                        buf.push_back((frame.clone(), enc_len));
+                        *bytes = bytes.saturating_add(enc_len);
+                    }
                 }
-                if *bytes + enc_len <= cap {
-                    buf.push_back((frame.clone(), enc_len));
-                    *bytes += enc_len;
-                }
+            }
+            if buffer_overflow || delivery_timed_out {
+                warn!(
+                    sid = ?hex::encode(frame.sid),
+                    cap,
+                    "connect: terminating session instead of creating a delivery gap"
+                );
+                let reason = if delivery_timed_out {
+                    CLOSE_REASON_DELIVERY_TIMEOUT
+                } else {
+                    CLOSE_REASON_BUFFER_OVERFLOW
+                };
+                self.terminate_session_if_current(frame.sid, &sess, reason, true)
+                    .await;
+                return;
             }
             *sess.last_activity.lock().await = Instant::now();
         }
+        if delivered {
+            self.shared.frames_out_total.fetch_add(1, Ordering::Relaxed);
+        }
         // Re-broadcast authenticated envelopes to peers (best effort).
-        if self.policy.relay_enabled && self.policy.relay_strategy == RelayStrategy::Broadcast {
+        let sessions = self.inner.read().await;
+        let session_is_current = sessions
+            .get(&frame.sid.to_vec())
+            .is_some_and(|current| Arc::ptr_eq(current, &sess));
+        if session_is_current
+            && self.policy.relay_enabled
+            && self.policy.relay_strategy == RelayStrategy::Broadcast
+        {
             if p2p_ttl == 0 {
                 self.shared
                     .p2p_ttl_drops_total
                     .fetch_add(1, Ordering::Relaxed);
             } else if let Some(net) = self.p2p.read().await.as_ref() {
-                let Some(relay_key) = *sess.relay_key.lock().await else {
-                    self.shared
-                        .p2p_rebroadcast_skipped_total
-                        .fetch_add(1, Ordering::Relaxed);
-                    return;
-                };
-                let envelope =
+                if let Some(relay_key) = *sess.relay_key.lock().await {
                     match connect_sdk::seal_relay_envelope(&relay_key, frame.clone(), p2p_ttl) {
-                        Ok(envelope) => envelope,
+                        Ok(envelope) => {
+                            self.shared
+                                .p2p_rebroadcasts_total
+                                .fetch_add(1, Ordering::Relaxed);
+                            net.broadcast(iroha_p2p::Broadcast {
+                                data: corelib::NetworkMessage::Connect(Box::new(
+                                    proto::ConnectP2pMessageV1::RelayEnvelope(envelope),
+                                )),
+                                priority: iroha_p2p::Priority::Low,
+                            });
+                        }
                         Err(err) => {
                             warn!(
                                 sid = ?hex::encode(frame.sid),
                                 ?err,
                                 "connect: failed to authenticate P2P relay envelope"
                             );
-                            return;
                         }
-                    };
-                self.shared
-                    .p2p_rebroadcasts_total
-                    .fetch_add(1, Ordering::Relaxed);
-                net.broadcast(iroha_p2p::Broadcast {
-                    data: corelib::NetworkMessage::Connect(Box::new(
-                        proto::ConnectP2pMessageV1::RelayEnvelope(envelope),
-                    )),
-                    priority: iroha_p2p::Priority::Low,
-                });
+                    }
+                } else {
+                    self.shared
+                        .p2p_rebroadcast_skipped_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
             } else {
                 self.shared
                     .p2p_rebroadcast_skipped_total
                     .fetch_add(1, Ordering::Relaxed);
             }
+        }
+        drop(sessions);
+        if let Some(reason) = terminal_reason {
+            self.terminate_session_if_current(frame.sid, &sess, reason, true)
+                .await;
         }
     }
     async fn broadcast_p2p_message(&self, message: proto::ConnectP2pMessageV1) {
@@ -1213,6 +1846,11 @@ impl Bus {
         session: &Session,
         claim: &proto::ConnectSessionClaimV1,
     ) -> bool {
+        if session.origin == SessionOrigin::PeerClaimed
+            && session.peer_claim_expires_at_ms != Some(claim.expires_at_ms)
+        {
+            return false;
+        }
         let relay_key = *session.relay_key.lock().await;
         if relay_key != Some(claim.relay_mac_key) {
             return false;
@@ -1296,7 +1934,10 @@ impl Bus {
                 return;
             }
         }
-        let session = Arc::new(Session::new(SessionOrigin::PeerClaimed));
+        let session = Arc::new(Session::new(
+            SessionOrigin::PeerClaimed,
+            Some(claim.expires_at_ms),
+        ));
         *session.app_token_hash.lock().await = Some(claim.token_app_hash);
         *session.wallet_token_hash.lock().await = Some(claim.token_wallet_hash);
         *session.management_token_hash.lock().await = Some(claim.token_management_hash);
@@ -1377,6 +2018,10 @@ impl Bus {
             debug!(sid = ?hex::encode(sid), "connect: dropping P2P relay for unknown session");
             return;
         };
+        if sess.peer_claim_expired_at(unix_time_ms()) {
+            debug!(sid = ?hex::encode(sid), "connect: dropping P2P relay for expired peer session claim");
+            return;
+        }
         let Some(relay_key) = *sess.relay_key.lock().await else {
             self.shared
                 .p2p_auth_failures_total
@@ -1387,7 +2032,8 @@ impl Bus {
         match connect_sdk::verify_relay_envelope(&relay_key, &envelope) {
             Ok(true) => {
                 let next_ttl = envelope.ttl.saturating_sub(1);
-                self.relay_with_p2p_ttl(envelope.frame, next_ttl).await;
+                self.relay_with_session(envelope.frame, next_ttl, sess)
+                    .await;
             }
             Ok(false) => {
                 self.shared
@@ -1403,7 +2049,15 @@ impl Bus {
             }
         }
     }
-    async fn relay_from_role(&self, role: proto::Role, frame: proto::ConnectFrameV1) -> bool {
+    async fn relay_from_role_for_session(
+        &self,
+        session: &Arc<Session>,
+        role: proto::Role,
+        frame: proto::ConnectFrameV1,
+    ) -> bool {
+        if !self.session_is_current(&frame.sid, session).await {
+            return false;
+        }
         let expected_dir = expected_direction_for_role(role);
         if frame.dir != expected_dir {
             self.shared
@@ -1416,20 +2070,51 @@ impl Bus {
                 expected_dir = ?expected_dir,
                 "connect: closing session on role/direction mismatch"
             );
-            self.terminate_session(frame.sid, CLOSE_REASON_ROLE_DIRECTION_MISMATCH)
-                .await;
+            self.terminate_session_if_current(
+                frame.sid,
+                session,
+                CLOSE_REASON_ROLE_DIRECTION_MISMATCH,
+                true,
+            )
+            .await;
             return false;
         }
-        self.relay(frame).await;
+        self.relay_with_session(frame, self.policy.p2p_ttl_hops, session.clone())
+            .await;
         true
     }
-    async fn touch_session(&self, sid: &Sid) {
-        if let Some(sess) = self.inner.read().await.get(&sid.to_vec()) {
-            *sess.last_activity.lock().await = Instant::now();
-        }
+    #[cfg(test)]
+    async fn relay_from_role(&self, role: proto::Role, frame: proto::ConnectFrameV1) -> bool {
+        let Some(session) = self.inner.read().await.get(&frame.sid.to_vec()).cloned() else {
+            return false;
+        };
+        self.relay_from_role_for_session(&session, role, frame)
+            .await
     }
-    async fn drain_for_role(sess: Arc<Session>, role: proto::Role) {
-        let mut out = Vec::new();
+    async fn session_is_current(&self, sid: &Sid, expected: &Arc<Session>) -> bool {
+        self.inner
+            .read()
+            .await
+            .get(&sid.to_vec())
+            .is_some_and(|current| Arc::ptr_eq(current, expected))
+    }
+    async fn touch_session_if_current(&self, sid: &Sid, expected: &Arc<Session>) -> bool {
+        let sessions = self.inner.read().await;
+        let Some(current) = sessions.get(&sid.to_vec()) else {
+            return false;
+        };
+        if !Arc::ptr_eq(current, expected) || current.peer_claim_expired_at(unix_time_ms()) {
+            return false;
+        }
+        *current.last_activity.lock().await = Instant::now();
+        true
+    }
+    #[cfg(test)]
+    async fn take_buffered_for_role(
+        sess: Arc<Session>,
+        role: proto::Role,
+    ) -> VecDeque<proto::ConnectFrameV1> {
+        let mut out = VecDeque::new();
         {
             let mut buf = sess.buffer.lock().await;
             let mut bytes = sess.buffer_bytes.lock().await;
@@ -1440,7 +2125,7 @@ impl Bus {
                     proto::Dir::WalletToApp => proto::Role::App,
                 };
                 if target == role {
-                    out.push(f);
+                    out.push_back(f);
                     *bytes = bytes.saturating_sub(l);
                 } else {
                     kept.push_back((f, l));
@@ -1448,21 +2133,25 @@ impl Bus {
             }
             *buf = kept;
         }
-        // Deliver drained frames
-        let tx_opt = match role {
-            proto::Role::App => sess.app_tx.lock().await.clone(),
-            proto::Role::Wallet => sess.wallet_tx.lock().await.clone(),
-        };
-        if let Some(tx) = tx_opt {
-            for f in out {
-                let _ = tx.send(f).await;
-            }
+        if !out.is_empty() {
             *sess.last_activity.lock().await = Instant::now();
         }
+        out
     }
+    #[cfg(test)]
     async fn evaluate_heartbeat(
         &self,
         sid: &Sid,
+        role: proto::Role,
+        now: Instant,
+    ) -> Option<HeartbeatFailure> {
+        let session = self.inner.read().await.get(&sid.to_vec()).cloned()?;
+        self.evaluate_heartbeat_for(sid, &session, role, now).await
+    }
+    async fn evaluate_heartbeat_for(
+        &self,
+        sid: &Sid,
+        expected: &Arc<Session>,
         role: proto::Role,
         now: Instant,
     ) -> Option<HeartbeatFailure> {
@@ -1470,12 +2159,12 @@ impl Bus {
         if tolerance == 0 {
             return None;
         }
-        let session = {
-            let map = self.inner.read().await;
-            map.get(&sid.to_vec()).cloned()
-        };
-        let sess = session?;
-        let queue = sess.heartbeat_queue(role).await;
+        let sessions = self.inner.read().await;
+        let current = sessions.get(&sid.to_vec())?;
+        if !Arc::ptr_eq(current, expected) || current.peer_claim_expired_at(unix_time_ms()) {
+            return None;
+        }
+        let queue = current.heartbeat_queue(role).await;
         if queue.pending.is_empty() {
             return None;
         }
@@ -1502,6 +2191,20 @@ impl Bus {
             None
         }
     }
+
+    /// Apply the configured Connect frame ceiling before the WebSocket is upgraded.
+    ///
+    /// The in-session decoder enforces the same limit for binary protocol messages,
+    /// while this transport-level cap prevents oversized binary or text messages from
+    /// being buffered by the WebSocket implementation first.
+    pub(crate) fn configure_websocket(
+        &self,
+        upgrade: axum::extract::WebSocketUpgrade,
+    ) -> axum::extract::WebSocketUpgrade {
+        upgrade
+            .max_message_size(self.policy.frame_max_bytes)
+            .max_frame_size(self.policy.frame_max_bytes)
+    }
 }
 #[cfg(test)]
 fn test_network_id() -> NetworkId {
@@ -1520,25 +2223,23 @@ fn diff(req: &Vec<String>, acc: &Vec<String>) -> (Vec<String>, Vec<String>) {
     (extra, missing)
 }
 /// WS handler: receives frames from the client and forwards via Bus; delivers frames from Bus to WS.
-pub async fn handle_ws(
+pub(crate) async fn handle_ws(
     bus: Bus,
-    q: crate::routing::ConnectWsQuery,
+    mut reservation: RoleTokenReservation,
     ws: WebSocket,
+    send_timeout: Duration,
 ) -> Result<(), String> {
     use tokio::task::JoinSet;
-    let sid = decode_sid(&q.sid).map_err(|e| format!("bad sid: {e}"))?;
-    let role = match q.role.as_str() {
-        "app" | "App" => proto::Role::App,
-        "wallet" | "Wallet" => proto::Role::Wallet,
-        other => return Err(format!("bad role: {other}")),
-    };
-    let mut inbox = bus.attach(sid, role).await;
+    let (sid, role) = reservation.identity();
+    let (mut inbox, mut endpoint_lease) = reservation.commit_and_attach().await?;
+    let bound_session = endpoint_lease.session.clone();
     let mut tasks = JoinSet::new();
     // Split WS into sender and receiver halves
     let (mut ws_sender, mut ws_receiver) = ws.split();
     // Writer: forward frames from Bus to WS
     let sid_for_writer = sid;
     let bus_for_writer = bus.clone();
+    let session_for_writer = bound_session.clone();
     let role_for_writer = role;
     let policy_for_writer = bus.policy;
     let writer = async move {
@@ -1554,15 +2255,40 @@ pub async fn handle_ws(
                 maybe_frame = inbox.recv() => {
                     match maybe_frame {
                         Some(frame) => {
+                            let terminal_control = is_terminal_peer_control(&frame);
+                            if !terminal_control
+                                && !bus_for_writer
+                                    .session_is_current(&sid_for_writer, &session_for_writer)
+                                    .await
+                            {
+                                break;
+                            }
                             match proto::encode_connect_frame_bare(&frame) {
                                 Ok(bytes) => {
-                                    if let Err(e) = ws_sender
-                                        .send(Message::Binary(axum::body::Bytes::from(bytes)))
+                                    match tokio::time::timeout(
+                                        send_timeout,
+                                        ws_sender.send(Message::Binary(axum::body::Bytes::from(bytes))),
+                                    )
+                                    .await
+                                    {
+                                        Ok(Ok(())) => {}
+                                        Ok(Err(error)) => {
+                                            return Err(format!("ws send failed: {error}"));
+                                        }
+                                        Err(_) => return Err("ws send timed out".to_owned()),
+                                    }
+                                    if terminal_control {
+                                        break;
+                                    }
+                                    if !bus_for_writer
+                                        .touch_session_if_current(
+                                            &sid_for_writer,
+                                            &session_for_writer,
+                                        )
                                         .await
                                     {
-                                        return Err(format!("ws send failed: {e}"));
+                                        break;
                                     }
-                                    bus_for_writer.touch_session(&sid_for_writer).await;
                                 }
                                 Err(err) => {
                                     warn!(
@@ -1581,20 +2307,31 @@ pub async fn handle_ws(
                 _ = ticker.tick() => {
                     // TTL check
                     let expired = bus_for_writer
-                        .session_expired(&sid_for_writer, Instant::now())
+                        .session_expired_for(
+                            &sid_for_writer,
+                            &session_for_writer,
+                            Instant::now(),
+                        )
                         .await;
                     if expired {
                         // Best-effort Close
-                        let _ = ws_sender
-                            .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                        let _ = tokio::time::timeout(
+                            send_timeout,
+                            ws_sender.send(Message::Close(Some(axum::extract::ws::CloseFrame {
                                 code: CLOSE_CODE_TTL,
                                 reason: Utf8Bytes::from(CLOSE_REASON_TTL.to_string()),
-                            })))
-                            .await;
+                            }))),
+                        )
+                        .await;
                         break;
                     }
                     if let Some(failure) = bus_for_writer
-                        .evaluate_heartbeat(&sid_for_writer, role_for_writer, Instant::now())
+                        .evaluate_heartbeat_for(
+                            &sid_for_writer,
+                            &session_for_writer,
+                            role_for_writer,
+                            Instant::now(),
+                        )
                         .await
                     {
                         bus_for_writer
@@ -1608,12 +2345,14 @@ pub async fn handle_ws(
                             oldest_ms = failure.oldest_elapsed.as_millis(),
                             "connect: closing websocket after heartbeat timeout"
                         );
-                        let _ = ws_sender
-                            .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                        let _ = tokio::time::timeout(
+                            send_timeout,
+                            ws_sender.send(Message::Close(Some(axum::extract::ws::CloseFrame {
                                 code: CLOSE_CODE_HEARTBEAT,
                                 reason: Utf8Bytes::from(CLOSE_REASON_HEARTBEAT.to_string()),
-                            })))
-                            .await;
+                            }))),
+                        )
+                        .await;
                         break;
                     }
                 }
@@ -1622,56 +2361,85 @@ pub async fn handle_ws(
         Ok::<(), String>(())
     };
     tasks.spawn(writer);
-    // Reader: parse binary frames and forward.
-    while let Some(msg) = ws_receiver.next().await {
-        match msg {
-            Ok(Message::Binary(b)) => {
-                bus.touch_session(&sid).await;
-                if b.len() > bus.policy.frame_max_bytes {
-                    break;
-                }
-                match proto::decode_connect_frame_bare(&b) {
-                    Ok(frame) => {
-                        if frame.sid != sid {
-                            break;
-                        }
-                        if !bus.relay_from_role(role, frame).await {
-                            break;
-                        }
-                    }
-                    Err(err) => {
-                        warn!(
-                            sid = ?hex::encode(sid),
-                            ?role,
-                            len = b.len(),
-                            ?err,
-                            "connect: failed to decode websocket frame"
-                        );
+    // Reader: parse binary frames and forward. Run it in the current task so it can be
+    // cancelled immediately when the writer exits on TTL, heartbeat failure, or send error.
+    let reader = async {
+        while let Some(msg) = ws_receiver.next().await {
+            match msg {
+                Ok(Message::Binary(b)) => {
+                    if !bus.touch_session_if_current(&sid, &bound_session).await {
                         break;
                     }
+                    if b.len() > bus.policy.frame_max_bytes {
+                        break;
+                    }
+                    match proto::decode_connect_frame_bare(&b) {
+                        Ok(frame) => {
+                            if frame.sid != sid {
+                                break;
+                            }
+                            if !bus
+                                .relay_from_role_for_session(&bound_session, role, frame)
+                                .await
+                            {
+                                break;
+                            }
+                        }
+                        Err(err) => {
+                            warn!(
+                                sid = ?hex::encode(sid),
+                                ?role,
+                                len = b.len(),
+                                ?err,
+                                "connect: failed to decode websocket frame"
+                            );
+                            break;
+                        }
+                    }
                 }
+                Ok(Message::Close(_)) => break,
+                Ok(Message::Ping(_)) => { /* ignore ping in reader */ }
+                Ok(Message::Text(_)) => {
+                    // Connect is a binary-only protocol. The upgrade-level cap
+                    // bounds this frame before it reaches the handler; terminate
+                    // rather than letting repeated text traffic occupy a session.
+                    break;
+                }
+                Err(e) => return Err(format!("ws error: {e}")),
+                _ => {}
             }
-            Ok(Message::Close(_)) => break,
-            Ok(Message::Ping(_)) => { /* ignore ping in reader */ }
-            Ok(Message::Text(_)) => {
-                // Ignore text frames
-            }
-            Err(e) => {
-                return Err(format!("ws error: {e}"));
-            }
-            _ => {}
         }
-    }
-    bus.detach(sid, role).await;
-    // Drain writer task
+        Ok(())
+    };
+    tokio::pin!(reader);
+    let result = tokio::select! {
+        result = &mut reader => result,
+        writer = tasks.join_next() => match writer {
+            Some(Ok(result)) => result,
+            Some(Err(error)) => Err(format!("connect writer task failed: {error}")),
+            None => Err("connect writer task ended without a result".to_owned()),
+        },
+    };
+    endpoint_lease.release().await;
+    // Dropping a reader must also stop a writer blocked on its inbox, and vice versa.
+    tasks.abort_all();
     while let Some(_r) = tasks.join_next().await {}
-    Ok(())
+    result
 }
 fn expected_direction_for_role(role: proto::Role) -> proto::Dir {
     match role {
         proto::Role::App => proto::Dir::AppToWallet,
         proto::Role::Wallet => proto::Dir::WalletToApp,
     }
+}
+
+fn is_terminal_peer_control(frame: &proto::ConnectFrameV1) -> bool {
+    matches!(
+        &frame.kind,
+        proto::FrameKind::Control(
+            proto::ConnectControlV1::Close { .. } | proto::ConnectControlV1::Reject { .. }
+        )
+    )
 }
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) fn decode_sid(s: &str) -> Result<Sid, String> {
@@ -1879,16 +2647,359 @@ mod tests {
                 .await
         );
         assert!(!bus.authorize_management_token(sid, "wrong-token").await);
-        bus.authorize_token(sid, proto::Role::App, "app-token")
+        let mut reservation = bus
+            .reserve_token(sid, proto::Role::App, "app-token")
             .await
             .expect("app token accepted");
+        let _app_inbox = reservation
+            .commit_and_attach()
+            .await
+            .expect("app endpoint attaches");
         assert_eq!(*session.app_token_hash.lock().await, None);
         assert!(
-            bus.authorize_token(sid, proto::Role::App, "app-token")
+            bus.reserve_token(sid, proto::Role::App, "app-token")
                 .await
                 .is_err(),
             "role token is one-time"
         );
+    }
+    #[tokio::test]
+    async fn dropped_role_token_reservation_can_be_retried() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0x61);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register session");
+
+        let reservation = bus
+            .reserve_token(sid, proto::Role::App, "app-token")
+            .await
+            .expect("first reservation succeeds");
+        assert!(
+            bus.reserve_token(sid, proto::Role::App, "app-token")
+                .await
+                .is_err(),
+            "a concurrent upgrade must not share a one-time token"
+        );
+        drop(reservation);
+
+        let retry = bus
+            .reserve_token(sid, proto::Role::App, "app-token")
+            .await
+            .expect("dropping an uncommitted upgrade restores availability");
+        drop(retry);
+    }
+    #[tokio::test]
+    async fn remote_role_consumption_wins_over_reservation_rollback() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0x62);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register session");
+        let reservation = bus
+            .reserve_token(sid, proto::Role::App, "app-token")
+            .await
+            .expect("reserve app role");
+        bus.handle_p2p_message(proto::ConnectP2pMessageV1::RoleConsumed(
+            proto::ConnectSessionRoleConsumedV1 {
+                sid,
+                role: proto::Role::App,
+            },
+        ))
+        .await;
+        drop(reservation);
+        assert!(
+            bus.reserve_token(sid, proto::Role::App, "app-token")
+                .await
+                .is_err(),
+            "rolling back a stale local reservation must not resurrect a remotely consumed token"
+        );
+    }
+    #[tokio::test]
+    async fn terminated_reserved_session_cannot_be_reattached_or_replace_retry() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0x63);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "old-app-token".into(),
+            "old-wallet-token".into(),
+            "old-management-token".into(),
+            "old-relay-token".into(),
+        )
+        .await
+        .expect("register old session");
+        let mut stale = bus
+            .reserve_token(sid, proto::Role::App, "old-app-token")
+            .await
+            .expect("reserve old session");
+        assert!(bus.terminate_session(sid, "test termination").await);
+        assert!(stale.commit_and_attach().await.is_err());
+
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "new-app-token".into(),
+            "new-wallet-token".into(),
+            "new-management-token".into(),
+            "new-relay-token".into(),
+        )
+        .await
+        .expect("register replacement session");
+        drop(stale);
+        let retry = bus
+            .reserve_token(sid, proto::Role::App, "new-app-token")
+            .await
+            .expect("stale rollback cannot affect replacement session");
+        drop(retry);
+    }
+    #[tokio::test]
+    async fn stale_management_token_cannot_terminate_replacement_session() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0x69);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "old-app-token".into(),
+            "old-wallet-token".into(),
+            "old-management-token".into(),
+            "old-relay-token".into(),
+        )
+        .await
+        .expect("register old session");
+        assert!(bus.terminate_session(sid, "replace in test").await);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "new-app-token".into(),
+            "new-wallet-token".into(),
+            "new-management-token".into(),
+            "new-relay-token".into(),
+        )
+        .await
+        .expect("register replacement session");
+
+        assert!(
+            !bus.terminate_session_authorized(sid, "old-management-token", "stale delete",)
+                .await
+        );
+        assert!(
+            bus.session_status(sid, "new-management-token")
+                .await
+                .is_some(),
+            "the stale authorized operation must not remove a new SID incarnation"
+        );
+        assert!(
+            bus.terminate_session_authorized(sid, "new-management-token", "current delete",)
+                .await
+        );
+    }
+    #[tokio::test]
+    async fn stale_relay_work_cannot_touch_deliver_to_or_terminate_replacement() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0x6A);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "old-app-token".into(),
+            "old-wallet-token".into(),
+            "old-management-token".into(),
+            "old-relay-token".into(),
+        )
+        .await
+        .expect("register old session");
+        let stale = bus
+            .inner
+            .read()
+            .await
+            .get(&sid.to_vec())
+            .cloned()
+            .expect("old session");
+        assert!(bus.terminate_session(sid, "replace in test").await);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "new-app-token".into(),
+            "new-wallet-token".into(),
+            "new-management-token".into(),
+            "new-relay-token".into(),
+        )
+        .await
+        .expect("register replacement session");
+        let replacement = bus
+            .inner
+            .read()
+            .await
+            .get(&sid.to_vec())
+            .cloned()
+            .expect("replacement session");
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+        let replacement_activity = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .expect("test instant");
+        *replacement.last_activity.lock().await = replacement_activity;
+
+        let frame = proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Ping { nonce: 1 }),
+        };
+        bus.relay_with_session(frame, 0, stale.clone()).await;
+        assert!(
+            timeout(Duration::from_millis(20), wallet_inbox.recv())
+                .await
+                .is_err(),
+            "stale relay work must not deliver into the replacement endpoint"
+        );
+        assert_eq!(*replacement.last_seq_app_to_wallet.lock().await, None);
+        assert_eq!(
+            *replacement.last_activity.lock().await,
+            replacement_activity
+        );
+        assert!(!bus.touch_session_if_current(&sid, &stale).await);
+        assert!(
+            bus.session_expired_for(&sid, &stale, Instant::now()).await,
+            "a replaced incarnation is terminal for its old websocket"
+        );
+        assert!(
+            !bus.terminate_session_if_current(sid, &stale, "stale relay", true)
+                .await
+        );
+        assert!(
+            bus.session_status(sid, "new-management-token")
+                .await
+                .is_some()
+        );
+    }
+    #[tokio::test]
+    async fn committed_attach_drains_more_than_channel_capacity_in_order() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0x64);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register session");
+        for seq in 1..=65 {
+            bus.relay(proto::ConnectFrameV1 {
+                sid,
+                dir: proto::Dir::AppToWallet,
+                seq,
+                kind: proto::FrameKind::Control(proto::ConnectControlV1::Ping { nonce: seq }),
+            })
+            .await;
+        }
+        let mut reservation = bus
+            .reserve_token(sid, proto::Role::Wallet, "wallet-token")
+            .await
+            .expect("reserve wallet role");
+        let (mut inbox, _endpoint_lease) =
+            timeout(Duration::from_millis(100), reservation.commit_and_attach())
+                .await
+                .expect("attach must not block on the 64-frame live channel")
+                .expect("attach succeeds");
+        for seq in 1..=65 {
+            let frame = inbox.recv().await.expect("buffered frame");
+            assert_eq!(frame.seq, seq);
+        }
+    }
+    #[tokio::test]
+    async fn offline_buffer_overflow_terminates_instead_of_creating_sequence_gap() {
+        let (sid, app_pk, nonce) = test_session_identity(0x68);
+        let first = proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Ping { nonce: 1 }),
+        };
+        let second = proto::ConnectFrameV1 {
+            seq: 2,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Ping { nonce: 2 }),
+            ..first.clone()
+        };
+        let cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 16,
+            ws_per_ip_max_sessions: 16,
+            ws_rate_per_ip_per_min: 0,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: encoded_len(&first).expect("encoded frame size"),
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: false,
+            relay_strategy: "broadcast",
+            p2p_ttl_hops: 0,
+        };
+        let bus = Bus::from_config(&cfg, test_network_id());
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register session");
+        let mut app_inbox = bus.attach(sid, proto::Role::App).await;
+        bus.relay(first).await;
+        assert_eq!(
+            bus.session_status(sid, "management-token")
+                .await
+                .expect("session remains after first buffered frame")
+                .buffered_frames,
+            1
+        );
+
+        bus.relay(second).await;
+        assert!(
+            bus.session_status(sid, "management-token").await.is_none(),
+            "overflow must remove the irrecoverably gapped session"
+        );
+        let close = timeout(Duration::from_millis(100), app_inbox.recv())
+            .await
+            .expect("sender receives overflow close")
+            .expect("close frame");
+        assert!(matches!(
+            close.kind,
+            proto::FrameKind::Control(proto::ConnectControlV1::Close { reason, .. })
+                if reason == CLOSE_REASON_BUFFER_OVERFLOW
+        ));
+        assert_eq!(bus.status().await.buffer_drops_total, 1);
     }
     #[tokio::test]
     async fn p2p_session_claim_installs_shadow_session() {
@@ -1909,9 +3020,87 @@ mod tests {
             .expect("management token works on peer-claimed session");
         assert_eq!(status.origin, "peer_claimed");
         assert_eq!(bus.status().await.p2p_session_claims_installed_total, 1);
-        bus.authorize_token(sid, proto::Role::Wallet, "wallet-token")
+        let mut reservation = bus
+            .reserve_token(sid, proto::Role::Wallet, "wallet-token")
             .await
             .expect("wallet can attach through peer-claimed session");
+        let _wallet_inbox = reservation
+            .commit_and_attach()
+            .await
+            .expect("wallet endpoint attaches");
+    }
+    #[tokio::test]
+    async fn peer_claim_absolute_expiry_is_retained_and_pruned() {
+        let bus = Bus::new();
+        let mut claim = test_claim(
+            0x62,
+            "app-token",
+            "wallet-token",
+            "management-token",
+            "relay-token",
+        );
+        claim.expires_at_ms = unix_time_ms().saturating_add(60_000);
+        let sid = claim.sid;
+        let expires_at_ms = claim.expires_at_ms;
+        bus.handle_p2p_message(proto::ConnectP2pMessageV1::SessionClaim(claim))
+            .await;
+        let session = bus
+            .inner
+            .read()
+            .await
+            .get(&sid.to_vec())
+            .cloned()
+            .expect("peer shadow installed");
+        assert_eq!(session.peer_claim_expires_at_ms, Some(expires_at_ms));
+
+        let mut reservation = bus
+            .reserve_token(sid, proto::Role::Wallet, "wallet-token")
+            .await
+            .expect("unexpired peer token reserves");
+        let (_inbox, _lease) = reservation
+            .commit_and_attach()
+            .await
+            .expect("unexpired peer endpoint attaches");
+        assert_eq!(
+            bus.prune_expired_sessions_at(Instant::now(), expires_at_ms)
+                .await,
+            1,
+            "the absolute claim deadline overrides activity and attachment"
+        );
+        assert!(!bus.inner.read().await.contains_key(&sid.to_vec()));
+    }
+    #[tokio::test]
+    async fn expired_peer_claim_rejects_tokens_and_management_reads() {
+        let bus = Bus::new();
+        let claim = test_claim(
+            0x63,
+            "app-token",
+            "wallet-token",
+            "management-token",
+            "relay-token",
+        );
+        let session = Arc::new(Session::new(
+            SessionOrigin::PeerClaimed,
+            Some(unix_time_ms()),
+        ));
+        *session.app_token_hash.lock().await = Some(claim.token_app_hash);
+        *session.management_token_hash.lock().await = Some(claim.token_management_hash);
+        bus.inner.write().await.insert(claim.sid.to_vec(), session);
+
+        assert!(
+            bus.reserve_token(claim.sid, proto::Role::App, "app-token")
+                .await
+                .is_err()
+        );
+        assert!(
+            !bus.authorize_management_token(claim.sid, "management-token")
+                .await
+        );
+        assert!(
+            bus.session_status(claim.sid, "management-token")
+                .await
+                .is_none()
+        );
     }
     #[tokio::test]
     async fn p2p_role_consumed_clears_peer_token_hash() {
@@ -1934,7 +3123,7 @@ mod tests {
         ))
         .await;
         assert!(
-            bus.authorize_token(sid, proto::Role::App, "app-token")
+            bus.reserve_token(sid, proto::Role::App, "app-token")
                 .await
                 .is_err(),
             "consumed role gossip prevents duplicate app attach"
@@ -1992,6 +3181,35 @@ mod tests {
             bus.authorize_management_token(sid, "management-token")
                 .await
         );
+    }
+    #[tokio::test]
+    async fn p2p_matching_claim_cannot_extend_absolute_deadline() {
+        let bus = Bus::new();
+        let claim = test_claim(
+            0x65,
+            "app-token",
+            "wallet-token",
+            "management-token",
+            "relay-token",
+        );
+        let sid = claim.sid;
+        let original_expiry = claim.expires_at_ms;
+        bus.handle_p2p_message(proto::ConnectP2pMessageV1::SessionClaim(claim))
+            .await;
+        let mut extension = claim;
+        extension.expires_at_ms = extension.expires_at_ms.saturating_add(60_000);
+        bus.handle_p2p_message(proto::ConnectP2pMessageV1::SessionClaim(extension))
+            .await;
+
+        let session = bus
+            .inner
+            .read()
+            .await
+            .get(&sid.to_vec())
+            .cloned()
+            .expect("original peer shadow remains");
+        assert_eq!(session.peer_claim_expires_at_ms, Some(original_expiry));
+        assert_eq!(bus.status().await.p2p_session_claim_conflicts_total, 1);
     }
     #[tokio::test]
     async fn p2p_relay_requires_prior_session_claim() {
@@ -2148,6 +3366,149 @@ mod tests {
         third.release().await;
     }
     #[tokio::test]
+    async fn dropped_ws_permit_releases_capacity() {
+        let cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 1,
+            ws_per_ip_max_sessions: 1,
+            ws_rate_per_ip_per_min: 0,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 262_144,
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: true,
+            relay_strategy: "broadcast",
+            p2p_ttl_hops: 0,
+        };
+        let bus = Bus::from_config(&cfg, test_network_id());
+        let ip: IpAddr = "192.0.2.44".parse().expect("test IP");
+        let permit = bus.pre_ws_handshake(ip).await.expect("reserve slot");
+        drop(permit);
+        timeout(Duration::from_millis(100), async {
+            loop {
+                if bus.status().await.sessions_total == 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("drop cleanup releases the slot");
+        let mut retry = bus
+            .pre_ws_handshake(ip)
+            .await
+            .expect("capacity is reusable after cancelled upgrade");
+        retry.release().await;
+    }
+    #[tokio::test]
+    async fn cancelled_ws_reservation_cannot_leak_capacity_at_lock_boundaries() {
+        let cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 1,
+            ws_per_ip_max_sessions: 1,
+            ws_rate_per_ip_per_min: 1,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 262_144,
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: true,
+            relay_strategy: "broadcast",
+            p2p_ttl_hops: 0,
+        };
+        let bus = Bus::from_config(&cfg, test_network_id());
+        let ip: IpAddr = "198.51.100.77".parse().expect("test IP");
+
+        let counts_guard = bus.per_ip_counts.lock().await;
+        let blocked_bus = bus.clone();
+        let blocked = tokio::spawn(async move { blocked_bus.pre_ws_handshake(ip).await });
+        tokio::task::yield_now().await;
+        blocked.abort();
+        drop(counts_guard);
+        assert!(blocked.await.is_err());
+        assert_eq!(bus.status().await.sessions_total, 0);
+
+        let buckets_guard = bus.handshake_buckets.lock().await;
+        let blocked_bus = bus.clone();
+        let blocked = tokio::spawn(async move { blocked_bus.pre_ws_handshake(ip).await });
+        timeout(Duration::from_millis(100), async {
+            while bus.status().await.sessions_total == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("reservation reaches the rate bucket");
+        blocked.abort();
+        drop(buckets_guard);
+        assert!(blocked.await.is_err());
+        timeout(Duration::from_millis(100), async {
+            while bus.status().await.sessions_total != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("permit drop releases cancellation at rate bucket");
+
+        let mut retry = bus
+            .pre_ws_handshake(ip)
+            .await
+            .expect("capacity remains reusable");
+        retry.release().await;
+    }
+    #[tokio::test]
+    async fn blocked_delivery_does_not_hold_global_session_map() {
+        let bus = Bus::new();
+        let sid = [0x65; SID_LEN];
+        let wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+        let frame = proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Ping { nonce: 1 }),
+        };
+        let session = bus.get_or_create(&sid).await;
+        for _ in 0..64 {
+            assert_eq!(
+                bus.deliver_local_only(&session, &frame)
+                    .await
+                    .expect("delivery does not time out before capacity"),
+                LocalDelivery::Delivered
+            );
+        }
+        let blocked_bus = bus.clone();
+        let blocked_session = session.clone();
+        let blocked_frame = frame.clone();
+        let blocked = tokio::spawn(async move {
+            blocked_bus
+                .deliver_local_only(&blocked_session, &blocked_frame)
+                .await
+        });
+        tokio::task::yield_now().await;
+
+        timeout(
+            Duration::from_millis(100),
+            bus.terminate_session([0x66; SID_LEN], "unrelated test session"),
+        )
+        .await
+        .expect("an unrelated map writer must not wait for a full role inbox");
+        drop(wallet_inbox);
+        assert_eq!(
+            timeout(Duration::from_millis(100), blocked)
+                .await
+                .expect("blocked sender observes receiver close")
+                .expect("delivery task completes")
+                .expect("closed receiver is not a delivery timeout"),
+            LocalDelivery::Offline
+        );
+    }
+    #[tokio::test]
     async fn terminate_session_sends_close_frames() {
         let bus = Bus::new();
         let (sid, app_pk, nonce) = test_session_identity(0x42);
@@ -2193,6 +3554,55 @@ mod tests {
             !second,
             "subsequent termination should report session missing"
         );
+    }
+    #[tokio::test]
+    async fn attached_transport_loss_terminates_session_and_notifies_survivor() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0x67);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register session");
+        let mut reservation = bus
+            .reserve_token(sid, proto::Role::App, "app-token")
+            .await
+            .expect("reserve app role");
+        let (app_inbox, app_endpoint_lease) = reservation
+            .commit_and_attach()
+            .await
+            .expect("attach app role");
+        let mut wallet_reservation = bus
+            .reserve_token(sid, proto::Role::Wallet, "wallet-token")
+            .await
+            .expect("reserve wallet role");
+        let (mut wallet_inbox, wallet_endpoint_lease) = wallet_reservation
+            .commit_and_attach()
+            .await
+            .expect("attach wallet role");
+
+        drop(app_inbox);
+        drop(app_endpoint_lease);
+        let close = timeout(Duration::from_millis(100), wallet_inbox.recv())
+            .await
+            .expect("surviving endpoint receives terminal control")
+            .expect("terminal close frame");
+        assert!(matches!(
+            close.kind,
+            proto::FrameKind::Control(proto::ConnectControlV1::Close { reason, .. })
+                if reason == CLOSE_REASON_TRANSPORT_CLOSED
+        ));
+        assert!(
+            bus.session_status(sid, "management-token").await.is_none(),
+            "a consumed role cannot reconnect, so transport loss must discard the SID"
+        );
+        drop(wallet_endpoint_lease);
     }
     #[tokio::test]
     async fn clones_share_session_counters() {
@@ -2258,6 +3668,57 @@ mod tests {
         let removed = bus.prune_expired_sessions(Instant::now()).await;
         assert_eq!(removed, 1);
         assert!(!bus.inner.read().await.contains_key(&sid.to_vec()));
+    }
+    #[tokio::test]
+    async fn expired_candidate_recheck_preserves_attached_or_replaced_session() {
+        let bus = Bus::new();
+        let now = Instant::now();
+        let ttl = Duration::from_secs(1);
+
+        let attached_sid = [0x23u8; SID_LEN];
+        let attached_candidate = bus.get_or_create(&attached_sid).await;
+        *attached_candidate.last_activity.lock().await = now
+            .checked_sub(Duration::from_secs(2))
+            .expect("test instant");
+        let _attached = bus.attach(attached_sid, proto::Role::App).await;
+        assert_eq!(
+            bus.remove_expired_candidates(
+                now,
+                ttl,
+                vec![(attached_sid.to_vec(), attached_candidate)],
+            )
+            .await,
+            0
+        );
+        assert!(bus.inner.read().await.contains_key(&attached_sid.to_vec()));
+
+        let replaced_sid = [0x24u8; SID_LEN];
+        let stale_candidate = bus.get_or_create(&replaced_sid).await;
+        *stale_candidate.last_activity.lock().await = now
+            .checked_sub(Duration::from_secs(2))
+            .expect("test instant");
+        let replacement = Arc::new(Session::default());
+        bus.inner
+            .write()
+            .await
+            .insert(replaced_sid.to_vec(), replacement.clone());
+        assert_eq!(
+            bus.remove_expired_candidates(
+                now,
+                ttl,
+                vec![(replaced_sid.to_vec(), stale_candidate)],
+            )
+            .await,
+            0
+        );
+        let current = bus
+            .inner
+            .read()
+            .await
+            .get(&replaced_sid.to_vec())
+            .cloned()
+            .expect("replacement remains");
+        assert!(Arc::ptr_eq(&current, &replacement));
     }
     #[tokio::test]
     async fn prune_handshake_buckets_removes_idle_entries() {
@@ -2553,6 +4014,69 @@ mod tests {
         ));
         let st = bus.status().await;
         assert!(st.role_direction_mismatch_total >= 1);
+    }
+    #[test]
+    fn websocket_writer_treats_reject_and_close_as_terminal() {
+        let frame = |kind| proto::ConnectFrameV1 {
+            sid: [0x9B; SID_LEN],
+            dir: proto::Dir::WalletToApp,
+            seq: 1,
+            kind: proto::FrameKind::Control(kind),
+        };
+        assert!(is_terminal_peer_control(&frame(
+            proto::ConnectControlV1::Reject {
+                code: 1,
+                code_id: "USER_DENIED".to_owned(),
+                reason: "denied in test".to_owned(),
+            },
+        )));
+        assert!(is_terminal_peer_control(&frame(
+            proto::ConnectControlV1::Close {
+                who: proto::Role::Wallet,
+                code: CLOSE_CODE_PURGED,
+                reason: CLOSE_REASON_PURGED.to_owned(),
+                retryable: false,
+            },
+        )));
+        assert!(!is_terminal_peer_control(&frame(
+            proto::ConnectControlV1::Ping { nonce: 7 },
+        )));
+    }
+    #[tokio::test]
+    async fn preapproval_reject_is_terminal_after_peer_delivery() {
+        let bus = Bus::new();
+        let sid = [0x9Bu8; SID_LEN];
+        let mut app_inbox = bus.attach(sid, proto::Role::App).await;
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+        let reject = proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::WalletToApp,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Reject {
+                code: 1,
+                code_id: "USER_DENIED".to_owned(),
+                reason: "denied in test".to_owned(),
+            }),
+        };
+        assert!(bus.relay_from_role(proto::Role::Wallet, reject).await);
+        let delivered = app_inbox.recv().await.expect("app receives rejection");
+        assert!(matches!(
+            delivered.kind,
+            proto::FrameKind::Control(proto::ConnectControlV1::Reject { .. })
+        ));
+        let close_to_app = app_inbox.recv().await.expect("app receives terminal close");
+        let close_to_wallet = wallet_inbox
+            .recv()
+            .await
+            .expect("wallet receives terminal close");
+        for close in [close_to_app, close_to_wallet] {
+            assert!(matches!(
+                close.kind,
+                proto::FrameKind::Control(proto::ConnectControlV1::Close { ref reason, .. })
+                    if reason == CLOSE_REASON_REJECTED
+            ));
+        }
+        assert!(!bus.inner.read().await.contains_key(&sid.to_vec()));
     }
     #[tokio::test]
     async fn ciphertext_direction_substitution_terminates_session() {
@@ -3519,6 +5043,67 @@ mod tests {
         assert_eq!(got_next.seq, 2);
     }
     #[tokio::test]
+    async fn stalled_server_event_delivery_is_bounded_and_quarantines_exact_session() {
+        let cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 16,
+            ws_per_ip_max_sessions: 16,
+            ws_rate_per_ip_per_min: 0,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 262_144,
+            ping_interval: Duration::from_millis(10),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_millis(10),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: false,
+            relay_strategy: "local_only",
+            p2p_ttl_hops: 0,
+        };
+        let bus = Bus::from_config(&cfg, test_network_id());
+        let sid = [0xAE; SID_LEN];
+        let _stalled_inbox = bus.attach(sid, proto::Role::App).await;
+        let session = bus.get_or_create(&sid).await;
+        let control = proto::ConnectControlV1::ServerEvent {
+            event: proto::ServerEventV1::BlockProofs {
+                height: 1,
+                entry_hash: "00".into(),
+                proofs_json: "{}".into(),
+            },
+        };
+        for _ in 0..64 {
+            bus.send_server_event(
+                &sid,
+                session.clone(),
+                proto::Dir::WalletToApp,
+                &control,
+                proto::Role::App,
+            )
+            .await;
+        }
+        assert_eq!(bus.status().await.frames_out_total, 64);
+
+        timeout(
+            Duration::from_millis(100),
+            bus.send_server_event(
+                &sid,
+                session,
+                proto::Dir::WalletToApp,
+                &control,
+                proto::Role::App,
+            ),
+        )
+        .await
+        .expect("a full local endpoint cannot block server-event fanout");
+        assert!(!bus.inner.read().await.contains_key(&sid.to_vec()));
+        assert_eq!(
+            bus.status().await.frames_out_total,
+            64,
+            "timed-out sends are not counted as delivered"
+        );
+    }
+    #[tokio::test]
     async fn notify_close_updates_activity_without_touching_peer_seq() {
         let bus = Bus::new();
         let sid = [0xADu8; 32];
@@ -3829,11 +5414,23 @@ impl Bus {
         control: &proto::ConnectControlV1,
         target: proto::Role,
     ) {
+        let Ok(sid): Result<Sid, _> = sid.try_into() else {
+            warn!(
+                len = sid.len(),
+                "connect: refusing server event for malformed sid"
+            );
+            return;
+        };
+        let sessions = self.inner.read().await;
+        let Some(current) = sessions.get(&sid.to_vec()) else {
+            return;
+        };
+        if !Arc::ptr_eq(current, &session) || current.peer_claim_expired_at(unix_time_ms()) {
+            return;
+        }
         let seq = session.next_server_seq(dir).await;
         let frame = proto::ConnectFrameV1 {
-            sid: sid
-                .try_into()
-                .unwrap_or_else(|_| panic!("connect sid wrong length: {}", sid.len())),
+            sid,
             dir,
             seq,
             kind: proto::FrameKind::Control(control.clone()),
@@ -3843,10 +5440,24 @@ impl Bus {
             proto::Role::Wallet => session.wallet_tx.lock().await.clone(),
         };
         if let Some(tx) = tx_opt {
-            if tx.send(frame).await.is_ok() {
+            let delivered =
+                tokio::time::timeout(self.local_delivery_timeout(), tx.send(frame)).await;
+            if matches!(&delivered, Ok(Ok(()))) {
                 *session.last_activity.lock().await = Instant::now();
+                self.shared.frames_out_total.fetch_add(1, Ordering::Relaxed);
+                return;
             }
-            self.shared.frames_out_total.fetch_add(1, Ordering::Relaxed);
+            drop(sessions);
+            if delivered.is_err() {
+                warn!(sid = ?hex::encode(sid), ?target, "connect: terminating session after server-event delivery timed out");
+                self.terminate_session_if_current(
+                    sid,
+                    &session,
+                    CLOSE_REASON_DELIVERY_TIMEOUT,
+                    true,
+                )
+                .await;
+            }
         }
     }
 }

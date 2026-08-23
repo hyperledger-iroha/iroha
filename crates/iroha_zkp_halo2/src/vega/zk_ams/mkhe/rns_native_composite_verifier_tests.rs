@@ -450,7 +450,7 @@ fn exact_private_fixture_mints_candidate_only_after_all_stages() {
         fixture.layout,
         fixture.source_receipt,
         fixture.transcript,
-        FirstPartyStageAuthorityV1::ExactFixture(authority),
+        FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
     )
     .expect("all exact fixture stages verify");
     assert_eq!(receipt.statement_digest(), expected_statement);
@@ -481,7 +481,7 @@ fn rejection_at_any_stage_never_yields_a_candidate() {
                 fixture.layout,
                 fixture.source_receipt,
                 fixture.transcript,
-                FirstPartyStageAuthorityV1::ExactFixture(authority),
+                FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
             ),
             Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
                 rejected,
@@ -501,7 +501,7 @@ fn source_and_envelope_context_substitution_is_rejected_before_stages() {
             second.layout,
             second.source_receipt,
             first.transcript,
-            FirstPartyStageAuthorityV1::ExactFixture(authority),
+            FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
         ),
         Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidEnvelopeContext)
     ));
@@ -515,7 +515,7 @@ fn source_and_envelope_context_substitution_is_rejected_before_stages() {
             second.layout,
             first.source_receipt,
             first.transcript,
-            FirstPartyStageAuthorityV1::ExactFixture(authority),
+            FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
         ),
         Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSourceContext)
     ));
@@ -568,7 +568,7 @@ fn transcript_section_and_stage_order_splices_are_rejected() {
             first.layout,
             first.source_receipt,
             second.transcript,
-            FirstPartyStageAuthorityV1::ExactFixture(authority),
+            FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
         ),
         Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript)
     ));
@@ -603,7 +603,7 @@ fn transcript_section_and_stage_order_splices_are_rejected() {
             baseline.layout,
             baseline.source_receipt,
             baseline.transcript,
-            FirstPartyStageAuthorityV1::ExactFixture(authority),
+            FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
         ),
         Err(
             ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSection(
@@ -621,7 +621,7 @@ fn transcript_section_and_stage_order_splices_are_rejected() {
             fixture.layout,
             fixture.source_receipt,
             fixture.transcript,
-            FirstPartyStageAuthorityV1::ExactFixture(authority),
+            FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
         ),
         Err(
             ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(

@@ -811,6 +811,8 @@ pub enum SoracloudRuntimeProvenancePurposeV1 {
     ModelHostHeartbeat = 1,
     /// Sign a canonical Inrou host advertisement.
     InrouHostAdvert = 2,
+    /// Sign a canonical Inrou host withdrawal.
+    InrouHostWithdraw = 3,
 }
 impl SoracloudRuntimeProvenancePurposeV1 {
     /// Return the immutable V1 wire identifier.
@@ -830,6 +832,7 @@ impl SoracloudRuntimeProvenancePurposeV1 {
         match value {
             1 => Ok(Self::ModelHostHeartbeat),
             2 => Ok(Self::InrouHostAdvert),
+            3 => Ok(Self::InrouHostWithdraw),
             _ => Err(SoracloudRuntimeProvenancePurposeErrorV1),
         }
     }
@@ -1731,14 +1734,21 @@ pub fn encode_inrou_host_advertise_provenance_payload(
 }
 /// Encode the canonical provenance signature payload for Inrou host withdrawals.
 ///
-/// The payload layout is the canonical Norito encoding of `validator_account_id`.
+/// The semantic payload is the canonical Norito encoding of
+/// `validator_account_id`. The returned signature preimage wraps those bytes
+/// with [`SoracloudRuntimeProvenancePurposeV1::InrouHostWithdraw`] through
+/// [`encode_soracloud_runtime_provenance_preimage_v1`].
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
 pub fn encode_inrou_host_withdraw_provenance_payload(
     validator_account_id: &AccountId,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::encode_canonical(validator_account_id)
+    let canonical_payload = norito::encode_canonical(validator_account_id)?;
+    encode_soracloud_runtime_provenance_preimage_v1(
+        SoracloudRuntimeProvenancePurposeV1::InrouHostWithdraw,
+        &canonical_payload,
+    )
 }
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct FheJobRunProvenancePayloadV1<'a> {

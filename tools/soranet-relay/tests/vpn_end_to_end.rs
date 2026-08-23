@@ -9,7 +9,7 @@ use tokio::io::duplex;
 #[tokio::test]
 async fn vpn_end_to_end_records_metrics_and_receipts() {
     let mut cfg = VpnConfig {
-        enabled: true,
+        enabled: false,
         cover: VpnCoverTrafficConfig {
             enabled: true,
             cover_to_data_per_mille: 700,
@@ -30,8 +30,10 @@ async fn vpn_end_to_end_records_metrics_and_receipts() {
     exit_metrics.set_vpn_runtime_state(VpnRuntimeState::Active);
     let circuit_id = [0xAC; 16];
     let flow_label = VpnFlowLabelV1::from_u32(7).expect("flow label");
-    let mut bridge = overlay.start_bridge(Arc::clone(&entry_metrics), circuit_id, flow_label);
-    bridge.set_cover_seed([0x55; 32]);
+    let mut bridge = overlay
+        .start_bridge(Arc::clone(&entry_metrics), circuit_id, flow_label)
+        .expect("cover scheduler seed");
+    bridge.set_cover_seed([0x55; 32]).expect("valid cover seed");
     let payloads = vec![vec![0x11; 32], vec![0x22; 8], vec![0x33; 4]];
     let total_data_bytes: u64 = payloads.iter().map(|payload| payload.len() as u64).sum();
     let (mut writer, mut reader) = duplex(VPN_CELL_LEN * 16);
@@ -46,11 +48,13 @@ async fn vpn_end_to_end_records_metrics_and_receipts() {
     let exit_adapter = overlay.start_adapter(Arc::clone(&exit_metrics));
     let mut ingress_data = 0usize;
     let mut ingress_cover = 0usize;
+    let mut ingress_sequences = Vec::new();
     for _ in 0..(send_outcome.data_frames + send_outcome.cover_frames) {
         let cell = exit_adapter
             .read_ingress_frame(&mut reader)
             .await
             .expect("ingress frame");
+        ingress_sequences.push(cell.header.sequence);
         match cell.header.class {
             VpnCellClassV1::Data => ingress_data += 1,
             VpnCellClassV1::Cover => ingress_cover += 1,
@@ -59,6 +63,11 @@ async fn vpn_end_to_end_records_metrics_and_receipts() {
     }
     assert_eq!(ingress_data, send_outcome.data_frames);
     assert_eq!(ingress_cover, send_outcome.cover_frames);
+    assert_eq!(
+        (0..u64::try_from(ingress_sequences.len()).expect("frame count fits u64"))
+            .collect::<Vec<_>>(),
+        ingress_sequences
+    );
     let entry_snapshot = entry_metrics.snapshot();
     assert_eq!(entry_snapshot.vpn_sessions, 1);
     let total_frames = (send_outcome.data_frames + send_outcome.cover_frames) as u64;

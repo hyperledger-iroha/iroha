@@ -1,11 +1,5 @@
 //! Taira public testnet diagnostics and write canaries.
-use std::{
-    fs,
-    io::Read as _,
-    path::{Path, PathBuf},
-    str::FromStr,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
+use crate::{CliOutputFormat, Run, RunContext, quote_and_sign_transaction};
 use eyre::{Context, Result, eyre};
 use iroha::{
     client::{Client as IrohaClient, TransactionWaitOptions, TransactionWaitTerminalStatus},
@@ -27,9 +21,16 @@ use norito::json::{self, Map, Value};
 use reqwest::blocking::Client as HttpClient;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
 use sha2::{Digest, Sha256};
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::Read as _,
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use url::Url;
 use zeroize::Zeroizing;
-use crate::{CliOutputFormat, Run, RunContext, quote_and_sign_transaction};
 const DEFAULT_PUBLIC_ROOT: &str = "https://taira.sora.org";
 const DEFAULT_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const DEFAULT_CHAIN_DISCRIMINANT: u16 = 369;
@@ -110,6 +111,12 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
         "/v1/musubi/queries/ordered-prefix",
         &[401],
     ),
+    (
+        "soracloud_status",
+        RouteCheckMethod::Get,
+        "/v1/soracloud/status",
+        &[200],
+    ),
 ];
 /// Taira public testnet helpers.
 #[derive(clap::Subcommand, Debug)]
@@ -118,12 +125,18 @@ pub enum Command {
     Doctor(Doctor),
     /// Onboard, faucet, submit, wait, and verify a signed ping canary.
     WriteCanary(WriteCanary),
+    /// Build the canonical offline artifact stage that operators preseed into all validators.
+    InrouStage(InrouStage),
+    /// Register an exact preseeded stage, mutate explicitly, and verify the four-replica Inrou canary.
+    InrouCanary(InrouCanary),
 }
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Doctor(cmd) => cmd.run(context),
             Self::WriteCanary(cmd) => cmd.run(context),
+            Self::InrouStage(cmd) => cmd.run(context),
+            Self::InrouCanary(cmd) => cmd.run(context),
         }
     }
 }
@@ -180,6 +193,136 @@ impl Run for WriteCanary {
         ensure_write_canary_succeeded(&receipt)
     }
 }
+/// Explicit mutation mode for the Taira Inrou canary.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InrouCanaryMode {
+    /// Register a new canary service.
+    Deploy,
+    /// Replace an already-deployed canary revision.
+    Upgrade,
+}
+/// Canonical offline Taira Inrou artifact staging.
+#[derive(clap::Args, Debug)]
+pub struct InrouStage {
+    /// Path to the canonical four-replica Inrou container manifest.
+    #[arg(long, value_name = "PATH")]
+    pub container: PathBuf,
+    /// Path to the matching public HttpService manifest.
+    #[arg(long, value_name = "PATH")]
+    pub service: PathBuf,
+    /// Canonical service bundle bytes to preseed.
+    #[arg(long, value_name = "PATH")]
+    pub bundle_file: PathBuf,
+    /// Fresh owner-only directory that will contain exact manifests and payloads.
+    #[arg(long, value_name = "PATH")]
+    pub stage_dir: PathBuf,
+    /// Emit a stable JSON receipt.
+    #[arg(long)]
+    pub json: bool,
+}
+impl Run for InrouStage {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        ensure_canonical_taira_client_identity(context.config())?;
+        let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
+        let receipt = crate::soracloud::stage_taira_inrou_canary_deployment(
+            &self.container,
+            &self.service,
+            &self.bundle_file,
+            &self.stage_dir,
+            &context.config().key_pair,
+        )?;
+        let mut extra = Map::new();
+        extra.insert(
+            "stage_dir".into(),
+            Value::String(self.stage_dir.display().to_string()),
+        );
+        extra.insert("receipt".into(), json::to_value(&receipt)?);
+        let report = report_value(
+            "taira_inrou_stage",
+            "ok",
+            "offline",
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            extra,
+        )?;
+        render_report(context, self.json, &report)
+    }
+}
+/// Canonical Taira Inrou preseed registration and route canary.
+#[derive(clap::Args, Debug)]
+pub struct InrouCanary {
+    /// Public Torii root URL used for mutation, status, and route probes.
+    #[arg(long, default_value = DEFAULT_PUBLIC_ROOT)]
+    pub public_root: String,
+    /// Owner-only stage created by `iroha taira inrou-stage` and preseeded into all validators.
+    #[arg(long, value_name = "PATH")]
+    pub stage_dir: PathBuf,
+    /// Submit an explicit deploy or upgrade mutation; conflicts are never retried as another mode.
+    #[arg(long, value_enum)]
+    pub mode: InrouCanaryMode,
+    /// Maximum convergence time for adverts, placements, runtime health, and all four routes.
+    #[arg(long, value_name = "SECS", default_value_t = 180)]
+    pub timeout_secs: u64,
+    /// Emit a stable redacted JSON receipt.
+    #[arg(long)]
+    pub json: bool,
+}
+impl Run for InrouCanary {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        ensure_canonical_taira_client_identity(context.config())?;
+        let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
+        let public_root = normalize_root_url(&self.public_root)?;
+        preflight_taira_network_identity(&public_root, context.config())?;
+        let deployment = crate::soracloud::run_taira_inrou_canary_deployment(
+            context.config(),
+            context.transaction_fee_payment()?,
+            self.stage_dir,
+            public_root.clone(),
+            None,
+            self.timeout_secs,
+            self.mode == InrouCanaryMode::Upgrade,
+        )?;
+        let receipt = verify_inrou_canary(&public_root, &deployment, self.timeout_secs)?;
+        render_report(context, self.json, &receipt)?;
+        if report_status(&receipt) != Some("ok") {
+            eyre::bail!("Taira Inrou canary found hard failures");
+        }
+        Ok(())
+    }
+}
+fn ensure_canonical_taira_client_identity(config: &Config) -> Result<()> {
+    if config.chain.to_string() != DEFAULT_CHAIN_ID {
+        eyre::bail!(
+            "Taira Inrou canary requires canonical chain `{DEFAULT_CHAIN_ID}`; configured `{}`",
+            config.chain
+        );
+    }
+    if config.account_chain_discriminant != DEFAULT_CHAIN_DISCRIMINANT {
+        eyre::bail!(
+            "Taira Inrou canary requires chain discriminant {DEFAULT_CHAIN_DISCRIMINANT}; configured {}",
+            config.account_chain_discriminant
+        );
+    }
+    Ok(())
+}
+fn preflight_taira_network_identity(public_root: &str, config: &Config) -> Result<()> {
+    let http = http_client()?;
+    let puzzle_url = join_url(public_root, "/v1/accounts/faucet/puzzle")?;
+    let puzzle = http_json(&http, reqwest::Method::GET, puzzle_url.as_str(), None)?;
+    if puzzle.status != 200 {
+        eyre::bail!(
+            "Taira network-identity preflight returned HTTP {} from {}",
+            puzzle.status,
+            puzzle_url
+        );
+    }
+    let body = puzzle
+        .body
+        .as_ref()
+        .ok_or_else(|| eyre!("Taira network-identity preflight returned a non-JSON puzzle"))?;
+    validate_taira_puzzle_identity(body, &config.network_id).map(|_| ())
+}
 #[derive(Debug)]
 struct HttpJson {
     status: u16,
@@ -207,8 +350,12 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         };
         let result = http_json(&http, method, url.as_str(), body)?;
         let status_ok = expected_statuses.contains(&result.status);
-        let semantic_error = if *name == "time_now" && status_ok {
-            validate_time_snapshot(result.body.as_ref()).err()
+        let semantic_error = if status_ok {
+            match *name {
+                "time_now" => validate_time_snapshot(result.body.as_ref()).err(),
+                "soracloud_status" => validate_soracloud_status(result.body.as_ref()).err(),
+                _ => None,
+            }
         } else {
             None
         };
@@ -342,6 +489,323 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         warnings,
         failures,
         Map::new(),
+    )
+}
+fn validate_exact_inrou_canary_status(
+    status: &Value,
+    deployment: &crate::soracloud::TairaInrouCanaryDeployment,
+) -> Result<(u64, u64), String> {
+    let root = status
+        .as_object()
+        .ok_or_else(|| "Soracloud status response is not an object".to_owned())?;
+    if root
+        .get("runtime_manager")
+        .and_then(Value::as_object)
+        .and_then(|runtime| runtime.get("available"))
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("runtime manager is unavailable".to_owned());
+    }
+    let topology = root
+        .get("hosted_http_topology")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "Soracloud status is missing hosted HTTP topology".to_owned())?;
+    let active_adverts = topology
+        .get("active_capability_adverts")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let hosted_replicas = topology
+        .get("hosted_replica_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if active_adverts < 4 || hosted_replicas < 4 {
+        return Err(format!(
+            "waiting for four Inrou hosts and placements (adverts={active_adverts}, replicas={hosted_replicas})"
+        ));
+    }
+    let services = root
+        .get("control_plane")
+        .and_then(Value::as_object)
+        .and_then(|control_plane| control_plane.get("services"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Soracloud status is missing control-plane services".to_owned())?;
+    let service = services
+        .iter()
+        .find(|service| {
+            service.get("service_name").and_then(Value::as_str)
+                == Some(deployment.service_name.as_str())
+        })
+        .ok_or_else(|| {
+            format!(
+                "canary service `{}` is not present in authoritative status",
+                deployment.service_name
+            )
+        })?;
+    if service.get("current_version").and_then(Value::as_str)
+        != Some(deployment.service_version.as_str())
+    {
+        return Err(
+            "authoritative canary version does not match the submitted revision".to_owned(),
+        );
+    }
+    let revision = service
+        .get("latest_revision")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "canary service is missing its latest revision".to_owned())?;
+    let canonical = revision.get("replicas").and_then(Value::as_u64) == Some(4)
+        && revision
+            .get("runtime")
+            .and_then(|runtime| tagged_enum_name(runtime, "runtime"))
+            == Some("Inrou")
+        && revision
+            .get("execution_plane")
+            .and_then(|plane| tagged_enum_name(plane, "execution_plane"))
+            == Some("HttpService")
+        && revision.get("route_host").and_then(Value::as_str)
+            == Some(deployment.route_host.as_str())
+        && revision.get("route_path_prefix").and_then(Value::as_str)
+            == Some(deployment.route_path_prefix.as_str());
+    if !canonical {
+        return Err(
+            "authoritative canary revision differs from the canonical four-replica Inrou route"
+                .to_owned(),
+        );
+    }
+    Ok((active_adverts, hosted_replicas))
+}
+fn inrou_canary_health_path(route_prefix: &str, healthcheck_path: &str) -> String {
+    format!(
+        "{}/{}",
+        route_prefix.trim_end_matches('/'),
+        healthcheck_path.trim_start_matches('/')
+    )
+}
+fn verify_inrou_canary(
+    public_root: &str,
+    deployment: &crate::soracloud::TairaInrouCanaryDeployment,
+    timeout_secs: u64,
+) -> Result<Value> {
+    if timeout_secs == 0 {
+        eyre::bail!("--timeout-secs must be greater than zero");
+    }
+    let http = HttpClient::builder()
+        .timeout(Duration::from_secs(timeout_secs.min(5)))
+        .user_agent("iroha-taira-inrou-canary/1")
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .wrap_err("failed to build Taira Inrou canary HTTP client")?;
+    let status_url = join_url(public_root, "/v1/soracloud/status")?;
+    let health_path =
+        inrou_canary_health_path(&deployment.route_path_prefix, &deployment.healthcheck_path);
+    let health_base = join_url(public_root, &health_path)?;
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    let mut nonce = 0_u64;
+    let mut status_ready = false;
+    let mut active_adverts = 0_u64;
+    let mut hosted_replicas = 0_u64;
+    let mut last_status_code = 0_u16;
+    let mut last_status_error = "status not observed".to_owned();
+    let mut last_route_code = 0_u16;
+    let mut last_route_error = "route not observed".to_owned();
+    let mut identities = BTreeMap::<u64, (String, String)>::new();
+    while Instant::now() < deadline && (!status_ready || identities.len() < 4) {
+        match http_json(&http, reqwest::Method::GET, status_url.as_str(), None) {
+            Ok(response) => {
+                last_status_code = response.status;
+                match response
+                    .body
+                    .as_ref()
+                    .ok_or_else(|| "Soracloud status returned non-JSON".to_owned())
+                    .and_then(|status| validate_exact_inrou_canary_status(status, deployment))
+                {
+                    Ok((adverts, replicas)) if response.status == 200 => {
+                        status_ready = true;
+                        active_adverts = adverts;
+                        hosted_replicas = replicas;
+                        last_status_error.clear();
+                    }
+                    Ok(_) => last_status_error = format!("HTTP {}", response.status),
+                    Err(error) => last_status_error = error,
+                }
+            }
+            Err(error) => last_status_error = format!("{error:#}"),
+        }
+        let mut health_url = health_base.clone();
+        health_url
+            .query_pairs_mut()
+            .append_pair("taira_inrou_probe", &nonce.to_string());
+        nonce = nonce.saturating_add(1);
+        let route_response = http
+            .get(health_url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(reqwest::header::HOST, deployment.route_host.as_str())
+            .send();
+        match route_response {
+            Ok(response) => {
+                last_route_code = response.status().as_u16();
+                let response = match decode_http_json_response(response) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        last_route_error = format!("{error:#}");
+                        if !status_ready || identities.len() < 4 {
+                            std::thread::sleep(Duration::from_millis(200));
+                        }
+                        continue;
+                    }
+                };
+                if response.status != 200 {
+                    last_route_error = format!("HTTP {}", response.status);
+                    if !status_ready || identities.len() < 4 {
+                        std::thread::sleep(Duration::from_millis(200));
+                    }
+                    continue;
+                }
+                let identity = response.body.as_ref().and_then(|body| {
+                    let service = body.get("service").and_then(Value::as_str)?;
+                    let runtime = body.get("runtime").and_then(Value::as_str)?;
+                    let replica_slot = body.get("replica_slot").and_then(Value::as_u64)?;
+                    let identity = body.get("identity").and_then(Value::as_str)?;
+                    let expected_identity =
+                        format!("{}:replica:{replica_slot}", deployment.service_name);
+                    (service == deployment.service_name.as_str()
+                        && runtime == "Inrou"
+                        && (1..=4).contains(&replica_slot)
+                        && identity == expected_identity)
+                        .then(|| {
+                            let encoded = json::to_vec(body).ok()?;
+                            Some((
+                                replica_slot,
+                                identity.to_owned(),
+                                hex::encode(Sha256::digest(encoded)),
+                            ))
+                        })
+                        .flatten()
+                });
+                if let Some((slot, identity, digest)) = identity {
+                    identities.insert(slot, (identity, digest));
+                    last_route_error.clear();
+                } else {
+                    last_route_error =
+                        "health response violated the canary identity contract".to_owned();
+                }
+            }
+            Err(error) => last_route_error = format!("{error:#}"),
+        }
+        if !status_ready || identities.len() < 4 {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+    let mut checks = Vec::new();
+    push_check(
+        &mut checks,
+        "inrou_authoritative_status",
+        last_status_code,
+        status_ready,
+        Some(if status_ready {
+            format!("active_adverts={active_adverts}, hosted_replicas={hosted_replicas}")
+        } else {
+            last_status_error.clone()
+        }),
+    );
+    push_check(
+        &mut checks,
+        "inrou_public_routes",
+        last_route_code,
+        identities.len() == 4,
+        Some(if identities.len() == 4 {
+            "observed deterministic identities for replica slots 1, 2, 3, and 4".to_owned()
+        } else {
+            format!(
+                "observed {}/4 replica identities; {last_route_error}",
+                identities.len()
+            )
+        }),
+    );
+    let mut failures = Vec::new();
+    if !status_ready {
+        failures.push(format!(
+            "authoritative Inrou status did not converge: {last_status_error}"
+        ));
+    }
+    if identities.len() != 4 {
+        failures.push(format!(
+            "public Inrou route did not reach all replicas: {last_route_error}"
+        ));
+    }
+    let mut extra = Map::new();
+    extra.insert(
+        "service_name".to_owned(),
+        Value::from(deployment.service_name.clone()),
+    );
+    extra.insert(
+        "service_version".to_owned(),
+        Value::from(deployment.service_version.clone()),
+    );
+    extra.insert(
+        "mutation_mode".to_owned(),
+        Value::from(deployment.mutation_mode.clone()),
+    );
+    extra.insert(
+        "route_host".to_owned(),
+        Value::from(deployment.route_host.clone()),
+    );
+    extra.insert("route_path".to_owned(), Value::from(health_path));
+    extra.insert(
+        "active_host_adverts".to_owned(),
+        Value::from(active_adverts),
+    );
+    extra.insert(
+        "hosted_replica_count".to_owned(),
+        Value::from(hosted_replicas),
+    );
+    extra.insert(
+        "bundle_hash".to_owned(),
+        Value::from(deployment.bundle_hash.clone()),
+    );
+    extra.insert(
+        "bundle_content_cid".to_owned(),
+        Value::from(deployment.bundle_content_cid.clone()),
+    );
+    extra.insert(
+        "bundle_manifest_digest_hex".to_owned(),
+        Value::from(deployment.bundle_manifest_digest_hex.clone()),
+    );
+    extra.insert(
+        "guest_content_cid".to_owned(),
+        Value::from(deployment.guest_content_cid.clone()),
+    );
+    extra.insert(
+        "guest_manifest_digest_hex".to_owned(),
+        Value::from(deployment.guest_manifest_digest_hex.clone()),
+    );
+    extra.insert(
+        "mutation_response_digest".to_owned(),
+        Value::from(deployment.mutation_response_digest.clone()),
+    );
+    extra.insert(
+        "replica_identities".to_owned(),
+        Value::Array(
+            identities
+                .into_iter()
+                .map(|(slot, (identity, response_sha256))| {
+                    norito::json!({
+                        "replica_slot": slot,
+                        "identity": identity,
+                        "response_sha256": response_sha256
+                    })
+                })
+                .collect(),
+        ),
+    );
+    report_value(
+        "taira_inrou_canary",
+        if failures.is_empty() { "ok" } else { "fail" },
+        public_root,
+        checks,
+        Vec::new(),
+        failures,
+        extra,
     )
 }
 fn run_write_canary(
@@ -1090,6 +1554,102 @@ fn validate_time_snapshot(snapshot: Option<&Value>) -> Result<(), String> {
     }
     Ok(())
 }
+fn tagged_enum_name<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
+    value
+        .as_str()
+        .or_else(|| value.as_object()?.get(field)?.as_str())
+}
+fn validate_soracloud_status(status: Option<&Value>) -> Result<(), String> {
+    let status = status
+        .and_then(Value::as_object)
+        .ok_or_else(|| "/v1/soracloud/status returned a non-object JSON body".to_owned())?;
+    if status.get("schema_version").and_then(Value::as_u64) != Some(1) {
+        return Err("/v1/soracloud/status is not canonical schema version 1".to_owned());
+    }
+    let service_health = status
+        .get("service_health")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "/v1/soracloud/status is missing `service_health`".to_owned())?;
+    match service_health.get("status").and_then(Value::as_str) {
+        Some("healthy" | "idle") => {}
+        Some(other) => {
+            return Err(format!(
+                "/v1/soracloud/status runtime health is `{other}`, expected healthy or idle"
+            ));
+        }
+        None => return Err("/v1/soracloud/status runtime health is missing".to_owned()),
+    }
+    if status
+        .get("runtime_manager")
+        .and_then(Value::as_object)
+        .and_then(|runtime| runtime.get("available"))
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("/v1/soracloud/status reports no runtime manager".to_owned());
+    }
+    let topology = status
+        .get("hosted_http_topology")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "/v1/soracloud/status is missing `hosted_http_topology`".to_owned())?;
+    let active_adverts = topology
+        .get("active_capability_adverts")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if active_adverts < 4 {
+        return Err(format!(
+            "/v1/soracloud/status reports {active_adverts} active Inrou host advert(s); expected at least 4"
+        ));
+    }
+    let hosted_replicas = topology
+        .get("hosted_replica_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if hosted_replicas < 4 {
+        return Err(format!(
+            "/v1/soracloud/status reports {hosted_replicas} hosted Inrou replica placement(s); expected at least 4"
+        ));
+    }
+    let services = status
+        .get("control_plane")
+        .and_then(Value::as_object)
+        .and_then(|control_plane| control_plane.get("services"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| "/v1/soracloud/status is missing control-plane services".to_owned())?;
+    let has_four_replica_public_inrou_route = services.iter().any(|service| {
+        let Some(revision) = service
+            .as_object()
+            .and_then(|service| service.get("latest_revision"))
+            .and_then(Value::as_object)
+        else {
+            return false;
+        };
+        revision.get("replicas").and_then(Value::as_u64) == Some(4)
+            && revision
+                .get("runtime")
+                .and_then(|runtime| tagged_enum_name(runtime, "runtime"))
+                == Some("Inrou")
+            && revision
+                .get("execution_plane")
+                .and_then(|plane| tagged_enum_name(plane, "execution_plane"))
+                == Some("HttpService")
+            && revision
+                .get("route_host")
+                .and_then(Value::as_str)
+                .is_some_and(|host| !host.trim().is_empty())
+            && revision
+                .get("route_path_prefix")
+                .and_then(Value::as_str)
+                .is_some_and(|path| path.starts_with('/'))
+    });
+    if !has_four_replica_public_inrou_route {
+        return Err(
+            "/v1/soracloud/status has no canonical four-replica public HttpService/Inrou route"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
 fn mcp_tool_names(payload: Option<&Value>) -> Vec<String> {
     payload
         .and_then(|value| value_path(value, &["result", "tools"]))
@@ -1471,25 +2031,7 @@ fn solve_faucet_puzzle(
             "unsupported faucet puzzle algorithm `{algorithm}`; expected `{FAUCET_POW_ALGORITHM}`"
         );
     }
-    let network_id_literal = required_str(puzzle, "network_id")?;
-    let network_id = network_id_literal
-        .parse::<NetworkId>()
-        .wrap_err("faucet puzzle network_id is not a canonical NetworkId")?;
-    if network_id.to_string() != network_id_literal {
-        eyre::bail!("faucet puzzle network_id is not canonically encoded");
-    }
-    if &network_id != expected_network_id {
-        eyre::bail!(
-            "faucet puzzle network_id `{network_id}` does not match configured network `{expected_network_id}`"
-        );
-    }
-    let chain_discriminant = u16::try_from(required_u64(puzzle, "chain_discriminant")?)
-        .map_err(|_| eyre!("faucet puzzle chain_discriminant is too large"))?;
-    if chain_discriminant != DEFAULT_CHAIN_DISCRIMINANT {
-        eyre::bail!(
-            "faucet puzzle chain_discriminant `{chain_discriminant}` does not match Taira `{DEFAULT_CHAIN_DISCRIMINANT}`"
-        );
-    }
+    let network_id = validate_taira_puzzle_identity(puzzle, expected_network_id)?;
     let difficulty_bits = required_u64(puzzle, "difficulty_bits")?;
     if difficulty_bits == 0 {
         eyre::bail!("faucet puzzle difficulty_bits must be positive");
@@ -1523,6 +2065,31 @@ fn solve_faucet_puzzle(
     body.insert("pow_anchor_height".into(), Value::from(anchor_height));
     body.insert("pow_nonce_hex".into(), Value::String(hex::encode(nonce)));
     Ok(Value::Object(body))
+}
+fn validate_taira_puzzle_identity(
+    puzzle: &Value,
+    expected_network_id: &NetworkId,
+) -> Result<NetworkId> {
+    let network_id_literal = required_str(puzzle, "network_id")?;
+    let network_id = network_id_literal
+        .parse::<NetworkId>()
+        .wrap_err("faucet puzzle network_id is not a canonical NetworkId")?;
+    if network_id.to_string() != network_id_literal {
+        eyre::bail!("faucet puzzle network_id is not canonically encoded");
+    }
+    if &network_id != expected_network_id {
+        eyre::bail!(
+            "faucet puzzle network_id `{network_id}` does not match configured network `{expected_network_id}`"
+        );
+    }
+    let chain_discriminant = u16::try_from(required_u64(puzzle, "chain_discriminant")?)
+        .map_err(|_| eyre!("faucet puzzle chain_discriminant is too large"))?;
+    if chain_discriminant != DEFAULT_CHAIN_DISCRIMINANT {
+        eyre::bail!(
+            "faucet puzzle chain_discriminant `{chain_discriminant}` does not match Taira `{DEFAULT_CHAIN_DISCRIMINANT}`"
+        );
+    }
+    Ok(network_id)
 }
 fn required_u64(value: &Value, key: &str) -> Result<u64> {
     value
@@ -2029,6 +2596,33 @@ mod tests {
                     "message": "canonical account request authentication is required"
                 }),
             ),
+            ("GET", "/v1/soracloud/status") => MockResponse::json(
+                200,
+                norito::json!({
+                    "schema_version": 1,
+                    "service_health": { "status": "healthy" },
+                    "runtime_manager": { "available": true },
+                    "hosted_http_topology": {
+                        "active_capability_adverts": 4,
+                        "hosted_replica_count": 4
+                    },
+                    "control_plane": {
+                        "services": [{
+                            "service_name": "taira_inrou_canary",
+                            "latest_revision": {
+                                "replicas": 4,
+                                "runtime": { "runtime": "Inrou", "value": null },
+                                "execution_plane": {
+                                    "execution_plane": "HttpService",
+                                    "value": null
+                                },
+                                "route_host": "taira-inrou-canary.sora",
+                                "route_path_prefix": "/health"
+                            }
+                        }]
+                    }
+                }),
+            ),
             ("GET", "/v1/mcp") => MockResponse::json(200, norito::json!({"ok": true})),
             ("POST", "/v1/mcp") if request.body.contains("tools/list") => {
                 let tools: Vec<Value> = REQUIRED_MCP_TOOLS
@@ -2235,7 +2829,7 @@ mod tests {
     }
     #[test]
     fn doctor_mock_healthy_flow_reports_ok() {
-        let server = spawn_mock_http(14, |request| doctor_mock_response(request, None));
+        let server = spawn_mock_http(15, |request| doctor_mock_response(request, None));
         let report = run_doctor(&server.base_url).expect("doctor report");
         let requests = finish_mock(server);
         assert_eq!(report_status(&report), Some("ok"));
@@ -2496,7 +3090,7 @@ mod tests {
     #[test]
     fn doctor_mock_required_tool_missing_reports_failure() {
         let missing_tool = REQUIRED_MCP_TOOLS[0];
-        let server = spawn_mock_http(14, move |request| {
+        let server = spawn_mock_http(15, move |request| {
             doctor_mock_response(request, Some(missing_tool))
         });
         let report = run_doctor(&server.base_url).expect("doctor report");
@@ -2808,6 +3402,39 @@ mod tests {
         assert!(format!("{error:#}").contains("difficulty_bits must be positive"));
     }
     #[test]
+    fn taira_puzzle_identity_requires_the_exact_network_and_discriminant() {
+        let network_id = crate::fallback_config().network_id;
+        let canonical = norito::json!({
+            "network_id": (network_id.to_string()),
+            "chain_discriminant": DEFAULT_CHAIN_DISCRIMINANT,
+        });
+        assert_eq!(
+            validate_taira_puzzle_identity(&canonical, &network_id)
+                .expect("canonical Taira puzzle identity"),
+            network_id
+        );
+
+        let foreign_network =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"foreign-taira-genesis"),
+            ));
+        let foreign = norito::json!({
+            "network_id": (foreign_network.to_string()),
+            "chain_discriminant": DEFAULT_CHAIN_DISCRIMINANT,
+        });
+        let network_error = validate_taira_puzzle_identity(&foreign, &network_id)
+            .expect_err("a foreign network identity must fail before publication");
+        assert!(format!("{network_error:#}").contains("does not match configured network"));
+
+        let wrong_discriminant = norito::json!({
+            "network_id": (network_id.to_string()),
+            "chain_discriminant": DEFAULT_CHAIN_DISCRIMINANT + 1,
+        });
+        let discriminant_error = validate_taira_puzzle_identity(&wrong_discriminant, &network_id)
+            .expect_err("a foreign chain discriminant must fail before publication");
+        assert!(format!("{discriminant_error:#}").contains("does not match Taira"));
+    }
+    #[test]
     fn resolve_canary_signer_derives_account() {
         let key_pair = fixture_key_pair(3);
         let mut config = crate::fallback_config();
@@ -2911,6 +3538,22 @@ mod tests {
         assert!(rendered.contains("private_key = "));
         assert!(rendered.contains("chain_discriminant = 369"));
         assert!(rendered.contains("nonce = false"));
+    }
+    #[test]
+    fn inrou_canary_requires_exact_taira_client_identity_before_publication() {
+        let mut config = crate::fallback_config();
+        config.chain = DEFAULT_CHAIN_ID.into();
+        config.account_chain_discriminant = DEFAULT_CHAIN_DISCRIMINANT;
+        ensure_canonical_taira_client_identity(&config).expect("canonical Taira identity");
+
+        config.chain = "iroha3-taira".into();
+        ensure_canonical_taira_client_identity(&config)
+            .expect_err("retired chain alias must fail before publication");
+
+        config.chain = DEFAULT_CHAIN_ID.into();
+        config.account_chain_discriminant = DEFAULT_CHAIN_DISCRIMINANT + 1;
+        ensure_canonical_taira_client_identity(&config)
+            .expect_err("wrong Taira discriminant must fail before publication");
     }
     #[test]
     fn fixture_key_pair_uses_checked_seed_derivation() {

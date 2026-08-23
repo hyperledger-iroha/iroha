@@ -1391,6 +1391,36 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
             "release receipt component symbols must equal",
         ),
         (
+            Path("scripts/run_sumeragi_v2_release_gates.sh"),
+            "--formal-replay-principal",
+            "--replay-principal",
+            "terminal receipt publication must carry --formal-replay-principal exactly once",
+        ),
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            "bootstrap runner signed formal replay inputs are not the receipt inputs",
+            "bootstrap runner formal inputs were not checked",
+            "aggregate receipt must bind the signed formal replay inputs to the authenticated bootstrap environment",
+        ),
+        (
+            Path("scripts/bootstrap_sumeragi_v2_release.py"),
+            '    "formal_replay_release",\n',
+            "",
+            "terminal release evidence must require the signed formal replay release bundle",
+        ),
+        (
+            Path("scripts/bootstrap_sumeragi_v2_release_receipt_replay.py"),
+            'finalized["receipt"].sha256 != source_receipt.sha256\n',
+            'finalized["receipt"].size != source_receipt.size\n',
+            "bootstrap formal replay integration must retain the source/archive receipt equality gate exactly once",
+        ),
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt_formal_artifacts.py"),
+            '"namespace": "iroha-sumeragi-v2-replay-receipt-v1",\n',
+            '"namespace": "wrong-namespace",\n',
+            "aggregate formal replay evidence must retain the V1 replay SSHSIG namespace exactly once",
+        ),
+        (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
             '("production-v2-core", "sumeragi::v2_core::tests", 38),',
             '("production-v2-core", "sumeragi::v2_core::tests", 39),',

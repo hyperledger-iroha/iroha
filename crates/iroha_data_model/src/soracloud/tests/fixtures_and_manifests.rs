@@ -367,10 +367,7 @@ fn sample_inrou_host_capability_record() -> SoraInrouHostCapabilityRecordV1 {
         schema_version: SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
         validator_account_id: sample_account_id(0xD1),
         peer_id: "12D3KooWInrouHost".to_string(),
-        supported_backends: BTreeSet::from([
-            SoraInrouRuntimeBackendV1::PortableVm,
-            SoraInrouRuntimeBackendV1::FirecrackerKvm,
-        ]),
+        supported_backends: BTreeSet::from([SoraInrouRuntimeBackendV1::PortableVm]),
         supported_guest_isas: BTreeSet::from([
             SoraInrouGuestIsaV1::X8664,
             SoraInrouGuestIsaV1::Aarch64,
@@ -379,7 +376,6 @@ fn sample_inrou_host_capability_record() -> SoraInrouHostCapabilityRecordV1 {
         max_cpu_millis: 4_000,
         max_memory_bytes: 16 * 1024 * 1024 * 1024,
         max_storage_bytes: 64 * 1024 * 1024 * 1024,
-        proxy_only: false,
         geography_tags: BTreeSet::from(["global".to_string(), "ae-dxb".to_string()]),
         observed_latency_ms: Some(24),
         advertised_at_ms: 100_000,
@@ -398,7 +394,7 @@ fn sample_inrou_service_placement_record() -> SoraInrouServicePlacementRecordV1 
                 replica_slot: 1,
                 validator_account_id: sample_account_id(0xD1),
                 peer_id: "12D3KooWInrouPrimary".to_string(),
-                selected_backend: SoraInrouRuntimeBackendV1::FirecrackerKvm,
+                selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
                 selected_guest_isa: SoraInrouGuestIsaV1::X8664,
                 selected_geography_tag: Some("ae-dxb".to_string()),
                 selection_latency_ms: Some(24),
@@ -457,7 +453,7 @@ fn sample_inrou_replica_runtime_state() -> SoraInrouReplicaRuntimeStateV1 {
         replica_slot: 1,
         validator_account_id: sample_account_id(0xD1),
         peer_id: "12D3KooWInrouPrimary".to_string(),
-        selected_backend: SoraInrouRuntimeBackendV1::FirecrackerKvm,
+        selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
         selected_guest_isa: SoraInrouGuestIsaV1::X8664,
         health_status: SoraServiceHealthStatusV1::Healthy,
         load_factor_bps: 375,
@@ -634,6 +630,14 @@ fn sample_model_artifact_audit_event() -> SoraModelArtifactAuditEventV1 {
         consumed_by_version: Some("v2".to_string()),
         signer: sample_signer(),
     }
+}
+#[cfg(feature = "json")]
+#[test]
+fn inrou_v1_backend_json_rejects_retired_firecracker_variant() {
+    norito::json::from_str::<SoraInrouRuntimeBackendV1>(
+        r#"{"backend":"FirecrackerKvm","value":null}"#,
+    )
+    .expect_err("the retired Firecracker variant must not decode into the V1 public schema");
 }
 #[test]
 fn rollback_provenance_payload_encodes_canonical_tuple() {

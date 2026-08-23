@@ -545,12 +545,20 @@ impl MlKemSuite {
     }
 }
 /// Wrapper around an ML-KEM keypair (public + secret).
-#[derive(Debug)]
 pub struct MlKemKeyPair {
     /// Public key bytes.
     pub public_key: Vec<u8>,
     /// Secret key bytes, zeroized on drop.
     pub secret_key: Zeroizing<Vec<u8>>,
+}
+impl fmt::Debug for MlKemKeyPair {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MlKemKeyPair")
+            .field("public_key_len", &self.public_key.len())
+            .field("secret_key", &"[REDACTED]")
+            .finish()
+    }
 }
 impl MlKemKeyPair {
     /// Return the public key as raw bytes.
@@ -582,9 +590,16 @@ impl MlKemCiphertext {
     }
 }
 /// Shared secret output of an ML-KEM operation.
-#[derive(Debug, Clone)]
 pub struct MlKemSharedSecret {
     bytes: Zeroizing<Vec<u8>>,
+}
+impl fmt::Debug for MlKemSharedSecret {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MlKemSharedSecret")
+            .field("bytes", &"[REDACTED]")
+            .finish()
+    }
 }
 impl MlKemSharedSecret {
     fn try_new(suite: MlKemSuite, bytes: Zeroizing<Vec<u8>>) -> Result<Self, MlKemError> {
@@ -1241,6 +1256,27 @@ mod tests {
             MlKemSharedSecret::try_new(MlKemSuite::MlKem768, Zeroizing::new(expected.clone()))
                 .expect("nonzero ML-KEM shared secret should be accepted");
         assert_eq!(secret.as_bytes(), expected.as_slice());
+    }
+    #[test]
+    fn secret_bearing_debug_output_is_redacted() {
+        let keypair = MlKemKeyPair {
+            public_key: vec![0x11; 2],
+            secret_key: Zeroizing::new(vec![0xA5; 3]),
+        };
+        assert_eq!(
+            format!("{keypair:?}"),
+            "MlKemKeyPair { public_key_len: 2, secret_key: \"[REDACTED]\" }"
+        );
+
+        let secret = MlKemSharedSecret::try_new(
+            MlKemSuite::MlKem768,
+            Zeroizing::new(vec![0xA5; MlKemSuite::MlKem768.shared_secret_len()]),
+        )
+        .expect("nonzero shared secret");
+        assert_eq!(
+            format!("{secret:?}"),
+            "MlKemSharedSecret { bytes: \"[REDACTED]\" }"
+        );
     }
     #[test]
     fn shared_secret_constructor_rejects_all_zero_payload() {

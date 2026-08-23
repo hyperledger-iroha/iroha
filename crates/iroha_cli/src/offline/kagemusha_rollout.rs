@@ -392,16 +392,6 @@ fn decide_submission_journal(
     }
 }
 
-fn decide_canary_submission_journal(
-    observation: SubmissionJournalObservation,
-) -> std::result::Result<SubmissionJournalAction, SubmissionJournalDecisionError> {
-    match observation {
-        SubmissionJournalObservation::Absent => Ok(SubmissionJournalAction::Publish),
-        SubmissionJournalObservation::Matching => Ok(SubmissionJournalAction::Resume),
-        SubmissionJournalObservation::Mismatched => Err(SubmissionJournalDecisionError::Mismatch),
-    }
-}
-
 fn require_matching_submission_journal(observation: SubmissionJournalObservation) -> Result<()> {
     match observation {
         SubmissionJournalObservation::Matching => Ok(()),
@@ -2665,8 +2655,6 @@ struct FinalizedActivationEvidence {
     block_bytes: Vec<u8>,
     proofs: Vec<BridgeFinalityProof>,
     carrier_height: NonZeroU64,
-    transaction_details_response_norito: KagemushaExactBytesDigestV1,
-    transaction_details_trigger_completion_count: u32,
 }
 
 struct FinalizedCanaryEvidence {
@@ -2830,10 +2818,6 @@ fn collect_finalized_activation_evidence(
     let details = client
         .get_successful_transaction_details(transaction.hash_as_entrypoint())
         .map_err(|error| eyre!("failed to fetch exact committed activation: {error}"))?;
-    let transaction_details_response_norito = exact_canonical_digest(&details)?;
-    let transaction_details_trigger_completion_count =
-        u32::try_from(details.trigger_completions.len())
-            .wrap_err("transaction-details trigger completion count does not fit u32")?;
     let committed = details.transaction;
     if committed.merge_inclusion.is_some() {
         bail!("activation transaction must be an ordinary block entrypoint");
@@ -2938,8 +2922,6 @@ fn collect_finalized_activation_evidence(
         block_bytes,
         proofs,
         carrier_height,
-        transaction_details_response_norito,
-        transaction_details_trigger_completion_count,
     })
 }
 
@@ -3321,7 +3303,7 @@ fn read_owned_with_policy(
     require_no_macos_acl(&file, label)?;
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(usize::try_from(opened.len())?)?;
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take(u64::try_from(maximum)?.saturating_add(1))
         .read_to_end(&mut bytes)?;
     let after = file.metadata()?;
@@ -3379,7 +3361,7 @@ fn validate_owned_ancestry(
     owner: u32,
     label: &str,
 ) -> Result<Vec<(PathBuf, (u64, u64, u32, u32, u32, u64))>> {
-    use std::path::Component;
+    use std::{os::unix::fs::MetadataExt as _, path::Component};
     if !path.is_absolute() || fs::canonicalize(path)? != path {
         bail!("{label} ancestry must be absolute, canonical, and symlink-free");
     }
@@ -3703,8 +3685,7 @@ fn publish_owned_with(
             .seek(SeekFrom::Start(0))
             .map_err(|error| error.to_string())?;
         let mut readback = Vec::new();
-        staging
-            .by_ref()
+        std::io::Read::by_ref(&mut staging)
             .take(
                 u64::try_from(bytes.len())
                     .unwrap_or(u64::MAX)
@@ -3760,8 +3741,7 @@ fn publish_owned_with(
             .seek(SeekFrom::Start(0))
             .map_err(|error| error.to_string())?;
         let mut readback = Vec::new();
-        staging
-            .by_ref()
+        std::io::Read::by_ref(&mut staging)
             .take(
                 u64::try_from(bytes.len())
                     .unwrap_or(u64::MAX)
@@ -3784,7 +3764,7 @@ fn publish_owned_with(
             || opened.len() != u64::try_from(bytes.len()).map_err(|error| error.to_string())?
             || fs::canonicalize(path).map_err(|error| error.to_string())? != path
             || ancestry
-                != validate_owned_ancestry(parent_path, uid, "published artifact")
+                != validate_owned_ancestry(&parent_path, uid, "published artifact")
                     .map_err(|error| error.to_string())?
         {
             return Err("published pathname, ancestry, or opened identity changed".to_owned());
@@ -3988,18 +3968,6 @@ mod tests {
         assert_eq!(
             decide_submission_journal(SubmissionJournalObservation::Absent, true),
             Err(SubmissionJournalDecisionError::Retrospective)
-        );
-        assert_eq!(
-            decide_canary_submission_journal(SubmissionJournalObservation::Absent),
-            Ok(SubmissionJournalAction::Publish)
-        );
-        assert_eq!(
-            decide_canary_submission_journal(SubmissionJournalObservation::Matching),
-            Ok(SubmissionJournalAction::Resume)
-        );
-        assert_eq!(
-            decide_canary_submission_journal(SubmissionJournalObservation::Mismatched),
-            Err(SubmissionJournalDecisionError::Mismatch)
         );
     }
 

@@ -167,6 +167,7 @@ pub fn scalars_to_canonical(columns: &[Vec<Bn254Scalar>]) -> Vec<Vec<u64>> {
 pub fn cpu_fft(columns: &mut [Vec<Bn254Scalar>], log_size: u32, twiddles: &[Bn254Scalar]) {
     let n = 1usize << log_size;
     for column in columns {
+        bit_reverse(column, log_size);
         for stage in 0..log_size {
             let len = 1usize << (stage + 1);
             let half = len / 2;
@@ -181,6 +182,16 @@ pub fn cpu_fft(columns: &mut [Vec<Bn254Scalar>], log_size: u32, twiddles: &[Bn25
                     column[idx + half] = u.sub(v);
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+fn bit_reverse(values: &mut [Bn254Scalar], log_size: u32) {
+    for index in 1..values.len().saturating_sub(1) {
+        let reversed = index.reverse_bits() >> (usize::BITS - log_size);
+        if index < reversed {
+            values.swap(index, reversed);
         }
     }
 }
@@ -234,6 +245,30 @@ pub fn sample_coset() -> [u64; BN254_LIMBS] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn direct_coset_evaluations(
+        coefficients: &[Bn254Scalar],
+        log_size: u32,
+        coset: Bn254Scalar,
+    ) -> Vec<Bn254Scalar> {
+        let max_log = two_adicity();
+        let exponent = 1u64 << (max_log - log_size);
+        let omega = Bn254Scalar::from(Bn254Fr::ROOT_OF_UNITY).pow_u64(exponent);
+        let mut point = coset;
+        let mut evaluations = Vec::with_capacity(1usize << log_size);
+        for _ in 0..(1usize << log_size) {
+            let value = coefficients
+                .iter()
+                .rev()
+                .fold(Bn254Scalar::zero(), |acc, coefficient| {
+                    acc.mul(point).add(*coefficient)
+                });
+            evaluations.push(value);
+            point = point.mul(omega);
+        }
+        evaluations
+    }
+
     #[test]
     fn roundtrip_canonical_limbs() {
         let value = Bn254Scalar::from(42u64);
@@ -259,5 +294,43 @@ mod tests {
             column_extent(&columns).expect_err("invalid limb count rejected"),
             "BN254 column length must be a multiple of four limbs"
         );
+    }
+
+    #[test]
+    fn cpu_fft_matches_direct_polynomial_evaluation() {
+        let log_size = 2;
+        let coefficients = vec![
+            Bn254Scalar::zero(),
+            Bn254Scalar::one(),
+            Bn254Scalar::zero(),
+            Bn254Scalar::zero(),
+        ];
+        let expected = direct_coset_evaluations(&coefficients, log_size, Bn254Scalar::one());
+        let twiddles = stage_twiddles_scalars(log_size).expect("twiddles");
+        let mut columns = vec![coefficients];
+
+        cpu_fft(&mut columns, log_size, &twiddles);
+
+        assert_eq!(columns[0], expected);
+    }
+
+    #[test]
+    fn cpu_lde_matches_direct_coset_evaluation() {
+        let trace_log = 2;
+        let blowup_log = 1;
+        let eval_log = trace_log + blowup_log;
+        let coset = Bn254Scalar::from(5u64);
+        let coefficients = vec![
+            Bn254Scalar::zero(),
+            Bn254Scalar::one(),
+            Bn254Scalar::zero(),
+            Bn254Scalar::zero(),
+        ];
+        let expected = direct_coset_evaluations(&coefficients, eval_log, coset);
+        let twiddles = stage_twiddles_scalars(eval_log).expect("twiddles");
+
+        let actual = cpu_lde(&[coefficients], trace_log, blowup_log, &twiddles, coset);
+
+        assert_eq!(actual[0], expected);
     }
 }

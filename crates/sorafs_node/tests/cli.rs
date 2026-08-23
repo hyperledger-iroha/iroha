@@ -3,7 +3,8 @@ use assert_cmd::cargo::cargo_bin_cmd;
 use ed25519_dalek::{Signer as _, SigningKey};
 use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3, compute_por_root};
 use sorafs_manifest::{
-    BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy,
+    BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder,
+    PinPolicy, StorageClass,
     por::{
         POR_CHALLENGE_VERSION_V1, POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1,
         PorProofV1, derive_challenge_id, derive_challenge_seed,
@@ -22,7 +23,7 @@ fn build_manifest(
     let stats = CarWriter::new(&plan, payload)?.write_to(io::sink())?;
     let mut car_digest = [0u8; 32];
     car_digest.copy_from_slice(stats.car_archive_digest.as_bytes());
-    let manifest = ManifestBuilder::new()
+    let mut manifest = ManifestBuilder::new()
         .root_cid(stats.root_cids[0].clone())
         .dag_codec(DagCodecId(stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
@@ -31,8 +32,20 @@ fn build_manifest(
         .content_length(plan.content_length)
         .car_digest(car_digest)
         .car_size(stats.car_size)
-        .pin_policy(PinPolicy::default())
+        .pin_policy(PinPolicy {
+            min_replicas: 1,
+            storage_class: StorageClass::Hot,
+            retention_epoch: 1,
+        })
         .build()?;
+    let signing_key = SigningKey::from_bytes(&[0x22; 32]);
+    let digest = manifest.digest()?;
+    manifest.governance = GovernanceProofs {
+        council_signatures: vec![CouncilSignature {
+            signer: signing_key.verifying_key().to_bytes(),
+            signature: signing_key.sign(digest.as_bytes()).to_bytes().to_vec(),
+        }],
+    };
     Ok((plan, manifest))
 }
 #[test]
@@ -42,7 +55,7 @@ fn sorafs_node_cli_help_documents_only_canonical_ingest_spellings()
     let assertion = command.arg("--help").assert().success();
     let stderr = String::from_utf8(assertion.get_output().stderr.clone())?;
     assert!(stderr.contains(
-        "ingest --data-dir=<dir> --manifest=<path> --payload=<path> [--plan-json-out=<path>]"
+        "ingest --data-dir=<dir> --max-capacity-bytes=<bytes> --manifest=<path> (--payload=<path>|--payload-dir=<dir>) [--plan-json-out=<path>]"
     ));
     assert!(stderr.contains(
         "ingest por --data-dir=<dir> --challenge=<path> --proof=<path> [--verdict=<path>] [--manifest-id=<hex>] [--json-out=<path>]"
@@ -56,6 +69,73 @@ fn sorafs_node_cli_rejects_manifest_subcommand_alias() -> Result<(), Box<dyn std
     let assertion = command.arg("ingest").arg("manifest").assert().failure();
     let stderr = String::from_utf8(assertion.get_output().stderr.clone())?;
     assert_eq!(stderr, "error: unknown option: manifest\n");
+    Ok(())
+}
+#[test]
+fn sorafs_node_cli_ingest_requires_canonical_explicit_capacity()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (capacity, expected) in [
+        (None, "missing required option --max-capacity-bytes"),
+        (
+            Some("0"),
+            "--max-capacity-bytes must be a nonzero canonical unsigned decimal",
+        ),
+        (
+            Some("01"),
+            "--max-capacity-bytes must be a nonzero canonical unsigned decimal",
+        ),
+        (
+            Some("18446744073709551616"),
+            "--max-capacity-bytes must fit in an unsigned 64-bit integer",
+        ),
+    ] {
+        let mut command = cargo_bin_cmd!("sorafs-node");
+        command
+            .arg("ingest")
+            .arg("--data-dir=storage")
+            .arg("--manifest=manifest.to")
+            .arg("--payload=payload.bin");
+        if let Some(capacity) = capacity {
+            command.arg(format!("--max-capacity-bytes={capacity}"));
+        }
+        let assertion = command.assert().failure();
+        let stderr = String::from_utf8(assertion.get_output().stderr.clone())?;
+        assert_eq!(stderr, format!("error: {expected}\n"));
+    }
+    Ok(())
+}
+#[test]
+fn sorafs_node_cli_rejects_file_payload_over_explicit_capacity_before_storage_open()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = TempDir::new()?;
+    let temp_path = temp_dir.path().canonicalize()?;
+    let storage_dir = temp_path.join("storage");
+    let payload = b"payload larger than its explicit storage ceiling";
+    let (_plan, manifest) = build_manifest(payload)?;
+    let manifest_path = temp_path.join("manifest.to");
+    fs::write(&manifest_path, norito::to_bytes(&manifest)?)?;
+    let payload_path = temp_path.join("payload.bin");
+    fs::write(&payload_path, payload)?;
+    let capacity = payload.len() as u64 - 1;
+
+    let mut command = cargo_bin_cmd!("sorafs-node");
+    let assertion = command
+        .arg("ingest")
+        .arg(format!("--data-dir={}", storage_dir.display()))
+        .arg(format!("--max-capacity-bytes={capacity}"))
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--payload={}", payload_path.display()))
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(assertion.get_output().stderr.clone())?;
+    assert_eq!(
+        stderr,
+        format!(
+            "error: manifest payload length {} exceeds --max-capacity-bytes={capacity}\n",
+            payload.len()
+        )
+    );
+    assert!(!storage_dir.exists());
     Ok(())
 }
 #[test]
@@ -92,6 +172,7 @@ fn sorafs_node_cli_ingest_and_export_roundtrip() -> Result<(), Box<dyn std::erro
     let ingest_assert = ingest
         .arg("ingest")
         .arg(format!("--data-dir={}", storage_dir.display()))
+        .arg("--max-capacity-bytes=1048576")
         .arg(format!("--manifest={}", manifest_path.display()))
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--plan-json-out={}", ingest_plan_path.display()))
@@ -218,6 +299,7 @@ fn sorafs_node_cli_ingest_por_replays_proof() -> Result<(), Box<dyn std::error::
     let ingest_assert = ingest
         .arg("ingest")
         .arg(format!("--data-dir={}", storage_dir.display()))
+        .arg("--max-capacity-bytes=1048576")
         .arg(format!("--manifest={}", manifest_path.display()))
         .arg(format!("--payload={}", payload_path.display()))
         .assert()

@@ -1,6 +1,9 @@
 // Consensus validation for activation-bound Kagemusha V4 Taira canaries.
 
-use iroha_data_model::{offline::KagemushaExactBytesDigestV1, transaction::Executable};
+use iroha_data_model::{
+    offline::KagemushaExactBytesDigestV1,
+    transaction::{Executable, TransactionAdmissionIntent},
+};
 
 const KAGEMUSHA_V4_PROMOTION_ID_DOMAIN: &str = "kagemusha-v4-promotion-id";
 const KAGEMUSHA_V4_PROMOTION_BINDING_DOMAIN: &str = "kagemusha-v4-promotion-binding";
@@ -21,6 +24,9 @@ const KAGEMUSHA_V4_TAIRA_CANARY_EXACT_RESERVATION_DOMAIN: &str =
 pub(crate) fn signed_kagemusha_taira_canary_wire_identity_v1(
     transaction: &SignedTransaction,
 ) -> Result<Option<KagemushaExactBytesDigestV1>, iroha_data_model::ValidationFail> {
+    if transaction.admission_intent() != TransactionAdmissionIntent::Ordinary {
+        return Ok(None);
+    }
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return Ok(None);
     };
@@ -161,6 +167,26 @@ fn commit_v4_taira_canary(marker: Hash, state_transaction: &mut StateTransaction
         .world
         .kagemusha_replay_keys
         .insert(marker, ());
+}
+
+pub(super) fn require_v4_taira_canary_consumed(
+    promotion_id: [u8; 32],
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), Error> {
+    let marker = kagemusha_v2_marker(KAGEMUSHA_V4_TAIRA_CANARY_DOMAIN, &[&promotion_id]);
+    if state_transaction
+        .world
+        .kagemusha_replay_keys
+        .get(&marker)
+        .is_none()
+    {
+        return Err(labeled_invariant(
+            "canary_missing",
+            "Kagemusha V4 Taira canary has not been consumed for this promotion",
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn v4_taira_canary_authorization_markers(
@@ -351,12 +377,12 @@ fn plan_kagemusha_v4_activation_binding(
                 format!("failed to encode Kagemusha V4 release record: {error}"),
             )
         })?;
+    let release_record_sha256: [u8; 32] = Sha256::digest(&release_record_bytes).into();
     let manifest = &activation.release_record.manifest;
     if promotion_binding.reviewed_source_closure_descriptor_sha256
         != manifest.reviewed_source_closure_descriptor_sha256
         || promotion_binding.manifest_sha256 != release_binding.manifest_sha256
-        || promotion_binding.release_record_sha256
-            != <[u8; 32]>::from(Sha256::digest(&release_record_bytes))
+        || promotion_binding.release_record_sha256 != release_record_sha256
         || promotion_binding.release_policy_source.sha256 != activation.configured_policy_sha256
         || !promotion_binding
             .device_attestation_policy_norito
@@ -394,6 +420,7 @@ impl Execute for RecordKagemushaTairaCanaryV4 {
             })?;
         let binding = &self.permit.body.binding;
         require_v4_promotion_binding(binding, state_transaction)?;
+        kagemusha_release_lifecycle::require_staged(binding, state_transaction)?;
         if !state_transaction.kagemusha_taira_canary_external_entrypoint {
             return Err(labeled_invariant(
                 "canary_external_entrypoint_required",
@@ -449,6 +476,7 @@ impl Execute for AuthorizeKagemushaTairaCanaryV4 {
             })?;
         let binding = &self.reservation.body.permit.body.binding;
         require_v4_promotion_binding(binding, state_transaction)?;
+        kagemusha_release_lifecycle::require_staged(binding, state_transaction)?;
         let exact_call_hash = self.reservation.body.canary_entrypoint_hash;
         let authorization_markers = plan_v4_taira_canary_authorization(
             binding.promotion_id,

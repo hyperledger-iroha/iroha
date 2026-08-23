@@ -794,6 +794,42 @@ fn taira_write_canary_cli_parses_defaults_and_overrides() {
     assert!(cmd.json);
 }
 #[test]
+fn taira_inrou_canary_cli_requires_mode_and_parses_explicit_upgrade() {
+    let args = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "inrou-canary",
+        "--stage-dir",
+        "/tmp/taira-inrou-stage",
+        "--mode",
+        "upgrade",
+        "--timeout-secs",
+        "90",
+        "--json",
+    ])
+    .expect("parse Taira Inrou canary args");
+    let Command::Taira(crate::taira::Command::InrouCanary(cmd)) = args.command else {
+        panic!("expected taira inrou-canary command");
+    };
+    assert_eq!(
+        cmd.stage_dir,
+        std::path::PathBuf::from("/tmp/taira-inrou-stage")
+    );
+    assert_eq!(cmd.mode, crate::taira::InrouCanaryMode::Upgrade);
+    assert_eq!(cmd.timeout_secs, 90);
+    assert!(cmd.json);
+
+    let error = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "inrou-canary",
+        "--stage-dir",
+        "/tmp/taira-inrou-stage",
+    ])
+    .expect_err("Inrou canary must require an explicit mutation mode");
+    assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+}
+#[test]
 fn soracloud_top_level_app_parser_replaces_nested_app_path() {
     Args::try_parse_from([
         "iroha",

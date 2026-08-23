@@ -1,4 +1,6 @@
 #![cfg(feature = "ivm_zk_tests")]
+//! System-instruction circuit regressions.
+
 use ivm::{
     Memory,
     halo2::{AllocCircuit, GetGasCircuit},
@@ -24,6 +26,22 @@ fn test_alloc_circuit_oob() {
         addr: Memory::HEAP_START + Memory::HEAP_MAX_SIZE - 8,
     };
     assert!(c.verify().is_err());
+}
+#[test]
+fn test_alloc_circuit_rejects_alignment_overflow_without_panicking() {
+    let circuit = AllocCircuit {
+        heap_alloc_before: 0,
+        heap_limit_before: Memory::HEAP_MAX_SIZE,
+        size: u64::MAX,
+        heap_alloc_after: 0,
+        addr: Memory::HEAP_START,
+    };
+
+    let result = std::panic::catch_unwind(|| circuit.verify());
+    assert_eq!(
+        result.expect("overflowing allocation verification must not panic"),
+        Err("allocation size overflow")
+    );
 }
 #[test]
 fn test_getgas_circuit() {
