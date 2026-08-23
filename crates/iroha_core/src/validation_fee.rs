@@ -24,8 +24,8 @@ use iroha_data_model::{
     isi::{
         InstructionBox, TransferAssetBatch, TransferBox,
         governance::{
-            ApproveGovernanceProposal, CastParliamentBallot, EnactReferendum, FinalizeReferendum,
-            ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy,
+            ApproveGovernanceProposal, CastParliamentBallot, CastPlainBallot, EnactReferendum,
+            FinalizeReferendum, ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy,
         },
         register::RegisterBox,
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
@@ -885,6 +885,10 @@ fn is_validation_fee_control_plane_transaction(tx: &SignedTransaction) -> bool {
                 .is_some()
             || instruction
                 .as_any()
+                .downcast_ref::<CastPlainBallot>()
+                .is_some()
+            || instruction
+                .as_any()
                 .downcast_ref::<ApproveGovernanceProposal>()
                 .is_some()
             || instruction
@@ -1696,7 +1700,7 @@ fn validate_parliament_authorization(
             "authorized governance proposal has no Parliament snapshot".to_owned(),
         )
     })?;
-    let snapshot_bytes = norito::to_bytes(&snapshot.bodies).map_err(|_| {
+    let snapshot_bytes = norito::encode_canonical(&snapshot.bodies).map_err(|_| {
         ValidationFeeAdmissionError::InvalidPolicyRegistry(
             "Parliament snapshot cannot be encoded".to_owned(),
         )
@@ -3686,8 +3690,8 @@ mod tests {
         }
     }
     fn test_roster_root() -> [u8; 32] {
-        let encoded =
-            norito::to_bytes(&test_parliament_bodies()).expect("encode Parliament bodies");
+        let encoded = norito::encode_canonical(&test_parliament_bodies())
+            .expect("encode canonical Parliament bodies");
         let digest = Blake2b512::digest(encoded);
         let mut root = [0; 32];
         root.copy_from_slice(&digest[..32]);
@@ -4605,6 +4609,116 @@ mod tests {
                 registered_type_name: Some(type_name),
             })
         );
+    }
+    #[test]
+    fn active_policy_exempts_only_plain_ballot_control_transactions() {
+        let deployer_key = key_pair(55);
+        let deployer = AccountId::new(deployer_key.public_key().clone());
+        let state = crate::state::State::new_with_chain_and_network_id_for_testing(
+            validation_fee_payout_world(&deployer),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+            "generic-testnet".parse().expect("chain id"),
+            validation_fee_test_network_id(),
+        );
+        let header = BlockHeader::new(
+            std::num::NonZeroU64::new(TEST_POLICY_EFFECTIVE_HEIGHT)
+                .expect("test policy effective height is non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut state_tx = block.transaction();
+        let policy =
+            install_active_bound_validation_fee_policy(&mut state_tx, &deployer, &deployer_key);
+        assert!(
+            active_policy(&state_tx)
+                .expect("active policy lookup succeeds")
+                .is_some(),
+            "fixture must exercise active-policy admission"
+        );
+
+        let ballot: InstructionBox = CastPlainBallot {
+            referendum_id: "successor-validation-fee-policy".to_owned(),
+            owner: deployer,
+            amount: 150_u64.into(),
+            duration_blocks: 3_600,
+            direction: 0,
+        }
+        .into();
+        let ballot_only = tx(55, vec![ballot.clone()], Metadata::default());
+        assert!(is_validation_fee_control_plane_transaction(&ballot_only));
+        assert_eq!(
+            enforce_validation_fee_admission(&ballot_only, &state_tx)
+                .expect("PLAIN governance must remain live under an active policy"),
+            None
+        );
+
+        let mixed = tx(
+            55,
+            vec![
+                ballot,
+                Log::new(Level::INFO, "non-control instruction".to_owned()).into(),
+            ],
+            metadata_for(&policy),
+        );
+        assert!(
+            !is_validation_fee_control_plane_transaction(&mixed),
+            "a PLAIN ballot must not exempt a mixed transaction"
+        );
+        let error = enforce_validation_fee_admission(&mixed, &state_tx)
+            .expect_err("mixed transactions must remain subject to active-policy admission");
+        assert!(
+            matches!(
+                error,
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(ref message))
+                    if message.contains("CastPlainBallot")
+            ),
+            "unexpected mixed-transaction rejection: {error:?}"
+        );
+    }
+    #[test]
+    fn parliament_authorization_roster_hash_ignores_ambient_norito_layout() {
+        let policy = policy_with_treasury_payout_lifecycle(treasury_payout_binding(
+            test_contract_address(),
+            b"canonical-roster-hash",
+        ));
+        let registry = policy_registry(std::slice::from_ref(&policy));
+        let state = crate::state::State::new_with_chain_and_network_id_for_testing(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+            "generic-testnet".parse().expect("chain id"),
+            validation_fee_test_network_id(),
+        );
+        let header = BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("non-zero test height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut state_tx = block.transaction();
+        install_policy_registry_fixture(&registry, &mut state_tx);
+
+        let bodies = test_parliament_bodies();
+        let canonical =
+            norito::encode_canonical(&bodies).expect("encode canonical Parliament roster fixture");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_ne!(
+            norito::to_bytes(&bodies).expect("encode alternate-layout Parliament roster fixture"),
+            canonical,
+            "fixture must exercise a distinct ambient Norito layout"
+        );
+        validate_registry_entry_governance(&registry.registered_policies[0], &state_tx)
+            .expect("retained Parliament authorization must use the canonical roster commitment");
     }
     #[test]
     fn custom_instruction_without_effect_disposition_fails_closed() {

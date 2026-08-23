@@ -8448,6 +8448,11 @@ pub struct GovernancePipeline {
     /// Ordered stage records.
     #[norito(default)]
     pub stages: Vec<GovernanceStageRecord>,
+    /// Parliament quorum policy pinned when the proposal entered the pipeline.
+    ///
+    /// Ballot execution must not consult mutable live configuration for this value.
+    #[norito(default)]
+    pub parliament_quorum_bps: u16,
 }
 impl GovernancePipeline {
     /// Construct a pipeline seeded with configured stage SLAs.
@@ -8456,7 +8461,10 @@ impl GovernancePipeline {
         referendum: Option<&GovernanceReferendumRecord>,
         cfg: &iroha_config::parameters::actual::Governance,
     ) -> Self {
-        let mut pipeline = Self::default();
+        let mut pipeline = Self {
+            parliament_quorum_bps: cfg.parliament_quorum_bps,
+            ..Self::default()
+        };
         pipeline.ensure_seeded(created_height, referendum, cfg);
         pipeline
     }
@@ -8470,6 +8478,9 @@ impl GovernancePipeline {
         referendum: Option<&GovernanceReferendumRecord>,
         cfg: &iroha_config::parameters::actual::Governance,
     ) {
+        if self.parliament_quorum_bps == 0 {
+            self.parliament_quorum_bps = cfg.parliament_quorum_bps;
+        }
         if !self.stages.is_empty() {
             return;
         }
@@ -26874,6 +26885,22 @@ impl State {
                         slash_receiver_account: rules.slash_receiver_account.clone(),
                     })
                 });
+                // Validation-fee tallying is caller-independent of the execution height and is
+                // always anchored to the inclusive referendum end. Keep its exact retained locks
+                // escrowed if the first post-window finalization block was missed. Once a later
+                // transaction closes the referendum, the next block-start sweep releases these
+                // already-due locks.
+                let retain_open_validation_fee_locks = validation_fee_custody.is_some()
+                    && stx
+                        .world
+                        .governance_referenda
+                        .get(&rid)
+                        .is_some_and(|referendum| {
+                            referendum.status == GovernanceReferendumStatus::Open
+                        });
+                if retain_open_validation_fee_locks {
+                    continue;
+                }
                 if let Some(mut locks) = stx.world.governance_locks.get(&rid).cloned() {
                     let mut to_remove: Vec<iroha_data_model::account::AccountId> = Vec::new();
                     for owner in expired_owners {
@@ -46000,7 +46027,7 @@ impl<'state> StateBlock<'state> {
             &mut self.fastpq_transcripts,
             pending,
         );
-        crate::sumeragi::witness::apply_fastpq_transcript_digests(&self.fastpq_transcripts);
+        crate::sumeragi::witness::synchronize_fastpq_transcripts(&self.fastpq_transcripts);
         mem::take(&mut self.fastpq_transcripts)
     }
     /// Drain the accumulated transfer transcripts recorded while executing this block.
@@ -46008,7 +46035,7 @@ impl<'state> StateBlock<'state> {
         &mut self,
     ) -> BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>> {
         crate::fastpq::finalize_transfer_transcript_digests_in_map(&mut self.fastpq_transcripts);
-        crate::sumeragi::witness::apply_fastpq_transcript_digests(&self.fastpq_transcripts);
+        crate::sumeragi::witness::synchronize_fastpq_transcripts(&self.fastpq_transcripts);
         mem::take(&mut self.fastpq_transcripts)
     }
     /// Cache the transaction set hash for FASTPQ public inputs.
@@ -46170,7 +46197,6 @@ impl<'state> StateBlock<'state> {
         self.exec_witness.take()
     }
     /// Take the local-only FASTPQ witness context, if one was captured.
-    #[cfg(test)]
     pub(crate) fn take_fastpq_witness_context(
         &mut self,
     ) -> Option<crate::fastpq::FastpqWitnessContext> {

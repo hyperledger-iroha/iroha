@@ -467,9 +467,13 @@ impl V2EffectServices for ProductionV2Services {
             let session = fetch.chunks.as_mut().ok_or_else(|| {
                 "manifest-less certified body fetch cannot accept chunks".to_owned()
             })?;
-            session
+            let admission = session
                 .admit(chunk.chunk())
                 .map_err(|error| error.to_string())?;
+            if admission == crate::sumeragi::v2_chunks::ChunkAdmission::Duplicate {
+                operation.complete();
+                return Ok(AuthenticatedChunkDisposition::Accepted);
+            }
             session.reconstruct()
         };
         let body = match reconstruction {

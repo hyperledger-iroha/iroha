@@ -423,33 +423,15 @@ pub fn record_fastpq_transcript(transcript: &TransferTranscript) {
             .push(transcript.clone());
     });
 }
-/// Copy finalized FASTPQ transcript digests from the block recorder into the execution witness.
-pub(crate) fn apply_fastpq_transcript_digests(finalized: &BTreeMap<Hash, Vec<TransferTranscript>>) {
-    let mut g = lock_slot();
-    for (entry_hash, finalized_transcripts) in finalized {
-        let Some(witness_transcripts) = g.fastpq_transcripts.get_mut(entry_hash) else {
-            continue;
-        };
-        for (witness, finalized) in witness_transcripts
-            .iter_mut()
-            .zip(finalized_transcripts.iter())
-        {
-            if witness.poseidon_preimage_digest.is_none()
-                && finalized.poseidon_preimage_digest.is_some()
-                && same_transfer_transcript_without_digest(witness, finalized)
-            {
-                witness.poseidon_preimage_digest = finalized.poseidon_preimage_digest;
-            }
-        }
-    }
-}
-fn same_transfer_transcript_without_digest(
-    left: &TransferTranscript,
-    right: &TransferTranscript,
-) -> bool {
-    left.batch_hash == right.batch_hash
-        && left.deltas == right.deltas
-        && left.authority_digest == right.authority_digest
+/// Replace speculative FASTPQ transcripts with the transactionally finalized block set.
+///
+/// Transfer execution records into this process-global witness before the surrounding
+/// [`StateTransaction`](crate::state::StateTransaction) commits. A later instruction can still
+/// reject that transaction, so the global copy is not authoritative. The block-local map is
+/// updated only by `StateTransaction::apply`; copying it wholesale here both installs finalized
+/// digests and removes transcripts from rolled-back transactions.
+pub(crate) fn synchronize_fastpq_transcripts(finalized: &BTreeMap<Hash, Vec<TransferTranscript>>) {
+    with_active_slot(|witness| witness.fastpq_transcripts.clone_from(finalized));
 }
 /// Record a read (pre-value) of asset-definition metadata.
 pub fn record_read_asset_def_kv(
@@ -1474,7 +1456,7 @@ mod tests {
     }
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn fastpq_grouping_and_digest_copy_match_formal_gate() {
+    fn fastpq_grouping_and_finalized_sync_match_formal_gate() {
         let _guard = exec_witness_guard();
         start_block();
         let batch_hash = Hash::prehashed([0x44; Hash::LENGTH]);
@@ -1482,7 +1464,7 @@ mod tests {
         let missing_hash = Hash::prehashed([0x46; Hash::LENGTH]);
         let (first, first_digest) = sample_fastpq_transcript(1, batch_hash);
         let (second, second_digest) = sample_fastpq_transcript(2, batch_hash);
-        let (other, other_digest) = sample_fastpq_transcript(3, other_hash);
+        let (other, _) = sample_fastpq_transcript(3, other_hash);
         record_fastpq_transcript(&first);
         record_fastpq_transcript(&second);
         record_fastpq_transcript(&other);
@@ -1503,35 +1485,16 @@ mod tests {
             grouped.transcripts[1].poseidon_preimage_digest,
             Some(second_digest)
         );
-        let mut reversed = BTreeMap::new();
         let mut finalized_second = second.clone();
         finalized_second.poseidon_preimage_digest = Some(second_digest);
         let mut finalized_first = first.clone();
         finalized_first.poseidon_preimage_digest = Some(first_digest);
-        reversed.insert(
-            batch_hash,
-            vec![finalized_second.clone(), finalized_first.clone()],
-        );
-        apply_fastpq_transcript_digests(&reversed);
-        {
-            let g = lock_slot();
-            let stored = g
-                .fastpq_transcripts
-                .get(&batch_hash)
-                .expect("batch still recorded");
-            assert_eq!(stored[0].poseidon_preimage_digest, None);
-            assert_eq!(stored[1].poseidon_preimage_digest, None);
-        }
         let mut finalized = BTreeMap::new();
         finalized.insert(batch_hash, vec![finalized_first, finalized_second]);
-        let mut finalized_other = other.clone();
-        finalized_other.poseidon_preimage_digest = Some(other_digest);
-        finalized.insert(other_hash, vec![finalized_other]);
-        finalized.insert(
-            missing_hash,
-            vec![sample_fastpq_transcript(4, missing_hash).0],
-        );
-        apply_fastpq_transcript_digests(&finalized);
+        let (mut finalized_missing, missing_digest) = sample_fastpq_transcript(4, missing_hash);
+        finalized_missing.poseidon_preimage_digest = Some(missing_digest);
+        finalized.insert(missing_hash, vec![finalized_missing]);
+        synchronize_fastpq_transcripts(&finalized);
         {
             let g = lock_slot();
             let stored = g
@@ -1541,28 +1504,56 @@ mod tests {
             assert_eq!(stored[0].poseidon_preimage_digest, Some(first_digest));
             assert_eq!(stored[1].poseidon_preimage_digest, Some(second_digest));
             assert!(
-                !g.fastpq_transcripts.contains_key(&missing_hash),
-                "digest copy must not create missing batches"
+                !g.fastpq_transcripts.contains_key(&other_hash),
+                "a speculative transcript absent from finalized state must be removed"
+            );
+            assert_eq!(
+                g.fastpq_transcripts
+                    .get(&missing_hash)
+                    .expect("finalized transcript absent from speculative recorder is installed")
+                    [0]
+                .poseidon_preimage_digest,
+                Some(missing_digest),
             );
         }
-        let replacement = Hash::prehashed([0xEE; Hash::LENGTH]);
-        let mut overwrite = BTreeMap::new();
-        let mut finalized_first = first;
-        finalized_first.poseidon_preimage_digest = Some(replacement);
-        overwrite.insert(batch_hash, vec![finalized_first]);
-        apply_fastpq_transcript_digests(&overwrite);
         let drained = drain_exec_witness();
-        let grouped = drained
-            .fastpq_transcripts
-            .iter()
-            .find(|bundle| bundle.entry_hash == batch_hash)
-            .expect("drained batch present");
-        assert_eq!(
-            grouped.transcripts[0].poseidon_preimage_digest,
-            Some(first_digest),
-            "existing digest must not be overwritten"
-        );
+        assert_eq!(drained.fastpq_transcripts.len(), finalized.len());
         assert!(drained.fastpq_batches.is_empty());
+    }
+    #[test]
+    fn finalized_fastpq_sync_honors_witness_window_and_suppression() {
+        let _guard = exec_witness_guard();
+        start_block();
+        let active_hash = Hash::prehashed([0x47; Hash::LENGTH]);
+        let suppressed_hash = Hash::prehashed([0x48; Hash::LENGTH]);
+        let (active, _) = sample_fastpq_transcript(5, active_hash);
+        let (suppressed, _) = sample_fastpq_transcript(6, suppressed_hash);
+        record_fastpq_transcript(&active);
+        let suppressed_finalized = BTreeMap::from([(suppressed_hash, vec![suppressed])]);
+        {
+            let _suppression = suppress_recording_for_current_thread();
+            synchronize_fastpq_transcripts(&suppressed_finalized);
+        }
+        let drained = drain_exec_witness();
+        assert!(
+            drained
+                .fastpq_transcripts
+                .iter()
+                .any(|bundle| bundle.entry_hash == active_hash),
+            "suppressed execution must not replace another block's active witness"
+        );
+        assert!(
+            drained
+                .fastpq_transcripts
+                .iter()
+                .all(|bundle| bundle.entry_hash != suppressed_hash)
+        );
+
+        synchronize_fastpq_transcripts(&suppressed_finalized);
+        assert!(
+            drain_exec_witness().fastpq_transcripts.is_empty(),
+            "finalized transcripts must not be installed outside an active witness window"
+        );
     }
     #[test]
     fn records_fastpq_transcripts() {
@@ -1613,7 +1604,7 @@ mod tests {
         assert!(witness.writes.is_empty());
     }
     #[test]
-    fn apply_fastpq_transcript_digests_updates_recorded_witness_copy() {
+    fn synchronize_fastpq_transcripts_updates_recorded_witness_copy() {
         use iroha_data_model::{
             asset::id::AssetDefinitionId,
             fastpq::{TransferDeltaTranscript, TransferTranscript},
@@ -1650,7 +1641,7 @@ mod tests {
         let mut finalized_transcript = transcript;
         finalized_transcript.poseidon_preimage_digest = Some(expected_digest);
         finalized.insert(batch_hash, vec![finalized_transcript]);
-        apply_fastpq_transcript_digests(&finalized);
+        synchronize_fastpq_transcripts(&finalized);
         let g = lock_slot();
         let stored = g
             .fastpq_transcripts

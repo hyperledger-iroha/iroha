@@ -8450,17 +8450,17 @@ pub mod isi {
                         .into(),
                 ));
             }
-            if validation_fee_rules.is_some()
-                && now_h
-                    != referendum
-                        .h_end
-                        .checked_add(1)
-                        .ok_or_else(|| Error::from(MathError::Overflow))?
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "validation-fee PLAIN referendum must finalize exactly one block after its inclusive window"
-                        .into(),
-                ));
+            if validation_fee_rules.is_some() {
+                let earliest_finalization_height = referendum
+                    .h_end
+                    .checked_add(1)
+                    .ok_or_else(|| Error::from(MathError::Overflow))?;
+                if now_h < earliest_finalization_height {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "validation-fee PLAIN referendum cannot finalize before the first block after its inclusive window"
+                            .into(),
+                    ));
+                }
             }
             if referendum.mode == crate::state::GovernanceReferendumMode::Zk
                 && (now_h < referendum.h_start || now_h > referendum.h_end)
@@ -8794,55 +8794,35 @@ pub mod isi {
                 "parliament body is not required for this proposal".into(),
             ));
         }
+        let quorum_bps = proposal.pipeline.parliament_quorum_bps;
+        if !(1..=10_000).contains(&quorum_bps) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "proposal parliament quorum snapshot is outside 1..=10,000 basis points".into(),
+            ));
+        }
+        // A proposal-local snapshot is authoritative even if the live governance module changes
+        // later. The module catalog selects the policy at proposal creation; it must not swap the
+        // electorate while ballots are in flight.
         let (bodies, epoch, persist_epoch_bodies) =
-            if resolve_governance_approval_mode(state_transaction)
-                == GovernanceApprovalMode::ParliamentSortitionJit
-            {
-                if let Some(snapshot) = proposal.parliament_snapshot.as_ref() {
-                    if snapshot.bodies.selection_epoch != snapshot.selection_epoch {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "proposal parliament snapshot epoch mismatch".into(),
-                        ));
-                    }
-                    let roster_root = compute_parliament_roster_root(&snapshot.bodies)?;
-                    if roster_root != snapshot.roster_root {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "proposal parliament snapshot commitment mismatch".into(),
-                        ));
-                    }
-                    (snapshot.bodies.clone(), snapshot.selection_epoch, false)
-                } else {
-                    let term_blocks = state_transaction.gov.parliament_term_blocks.max(1);
-                    let fallback_epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
-                    let council = state_transaction
-                        .world
-                        .council
-                        .get(&fallback_epoch)
-                        .cloned()
-                        .ok_or_else(|| {
-                            InstructionExecutionError::InvariantViolation(
-                            "proposal parliament snapshot missing and council roster unavailable"
-                                .into(),
-                        )
-                        })?;
-                    let beacon = derive_epoch_parliament_beacon(fallback_epoch, state_transaction);
-                    let bodies = state_transaction
-                        .world
-                        .parliament_bodies
-                        .get(&fallback_epoch)
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            derive_parliament_bodies(
-                                &state_transaction.gov,
-                                &state_transaction.network_id,
-                                fallback_epoch,
-                                &beacon,
-                                &council,
-                            )
-                        });
-                    (bodies, fallback_epoch, true)
+            if let Some(snapshot) = proposal.parliament_snapshot.as_ref() {
+                if snapshot.bodies.selection_epoch != snapshot.selection_epoch {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "proposal parliament snapshot epoch mismatch".into(),
+                    ));
                 }
+                let roster_root = compute_parliament_roster_root(&snapshot.bodies)?;
+                if roster_root != snapshot.roster_root {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "proposal parliament snapshot commitment mismatch".into(),
+                    ));
+                }
+                (snapshot.bodies.clone(), snapshot.selection_epoch, false)
             } else {
+                if validation_fee_plain_electorate_rules(&proposal.kind).is_some() {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "validation-fee proposal parliament snapshot is missing".into(),
+                    ));
+                }
                 let term_blocks = state_transaction.gov.parliament_term_blocks.max(1);
                 let epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
                 let council = state_transaction
@@ -8851,9 +8831,14 @@ pub mod isi {
                     .get(&epoch)
                     .cloned()
                     .ok_or_else(|| {
-                        InstructionExecutionError::InvariantViolation(
-                            "council roster missing for current epoch".into(),
-                        )
+                        let message = if resolve_governance_approval_mode(state_transaction)
+                            == GovernanceApprovalMode::ParliamentSortitionJit
+                        {
+                            "proposal parliament snapshot missing and council roster unavailable"
+                        } else {
+                            "council roster missing for current epoch"
+                        };
+                        InstructionExecutionError::InvariantViolation(message.into())
                     })?;
                 let beacon = derive_epoch_parliament_beacon(epoch, state_transaction);
                 let bodies = state_transaction
@@ -8907,7 +8892,7 @@ pub mod isi {
             epoch,
             persist_epoch_bodies,
             now_h,
-            quorum_bps: state_transaction.gov.parliament_quorum_bps,
+            quorum_bps,
         })
     }
     fn ensure_parliament_member(
@@ -9138,11 +9123,34 @@ pub mod isi {
             }
             let required_bond =
                 required_citizenship_bond_for_role(&state_transaction.gov, "council");
+            ensure_unique_council_roster(&self.members, &self.alternates)?;
+            if let Some(existing) = state_transaction.world.council.get(&self.epoch) {
+                if existing.epoch != self.epoch {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "persisted council epoch differs from its state key".into(),
+                    ));
+                }
+                if existing.members != self.members || existing.alternates != self.alternates {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "council roster is immutable once persisted for an epoch".into(),
+                    ));
+                }
+                if state_transaction
+                    .world
+                    .parliament_bodies
+                    .get(&self.epoch)
+                    .is_none()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "persisted council is missing its parliament body rosters".into(),
+                    ));
+                }
+                return Ok(());
+            }
             let mut updated_citizens: BTreeMap<AccountId, crate::state::CitizenshipRecord> =
                 BTreeMap::new();
             let citizen_cfg = &state_transaction.gov.citizen_service;
             let current_height = state_transaction._curr_block.height().get();
-            ensure_unique_council_roster(&self.members, &self.alternates)?;
             if !state_transaction.gov.citizenship_bond_amount.is_zero() {
                 process_council_members(
                     &self.members,
@@ -9170,30 +9178,13 @@ pub mod isi {
                     .unwrap_or(u32::MAX);
             // This instruction is the privileged manual-roster path. Derivation metadata is
             // ledger-owned so callers cannot assert that unverified cryptographic work occurred.
-            let mut rec = crate::state::CouncilState {
+            let rec = crate::state::CouncilState {
                 epoch: self.epoch,
                 members: self.members.clone(),
                 alternates: self.alternates.clone(),
                 candidate_count,
                 derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Manual,
             };
-            if let Some(existing) = state_transaction.world.council.get(&self.epoch) {
-                let same_members = existing.members == self.members;
-                let same_alternates = existing.alternates == self.alternates;
-                if same_members && same_alternates {
-                    rec = existing.clone();
-                    let already_recorded = state_transaction
-                        .world
-                        .parliament_bodies
-                        .get(&self.epoch)
-                        .is_some();
-                    if already_recorded {
-                        return Ok(());
-                    }
-                } else {
-                    rec.epoch = existing.epoch; // ensure consistent
-                }
-            }
             state_transaction
                 .world
                 .council
@@ -9322,6 +9313,103 @@ pub mod isi {
             Ok(())
         }
     }
+    fn ensure_citizenship_bond_releasable(
+        owner: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let current_height = state_transaction._curr_block.height().get();
+        let current_epoch = current_height
+            .saturating_sub(1)
+            .saturating_div(state_transaction.gov.parliament_term_blocks.max(1));
+        let has_current_or_scheduled_service = state_transaction
+            .world
+            .council
+            .range(current_epoch..)
+            .any(|(_, council)| {
+                council.members.contains(owner) || council.alternates.contains(owner)
+            })
+            || state_transaction
+                .world
+                .parliament_bodies
+                .range(current_epoch..)
+                .any(|(_, bodies)| {
+                    bodies.rosters.values().any(|roster| {
+                        roster.members.contains(owner) || roster.alternates.contains(owner)
+                    })
+                });
+        if has_current_or_scheduled_service {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "citizenship bond cannot be released during a current or scheduled parliament service epoch"
+                    .into(),
+            ));
+        }
+
+        for (proposal_id, proposal) in state_transaction.world.governance_proposals.iter() {
+            if matches!(
+                proposal.status,
+                crate::state::GovernanceProposalStatus::Rejected
+                    | crate::state::GovernanceProposalStatus::Enacted
+                    | crate::state::GovernanceProposalStatus::Superseded
+            ) {
+                continue;
+            }
+            let referendum_id = hex::encode(proposal_id);
+            let referendum_active = state_transaction
+                .world
+                .governance_referenda
+                .get(&referendum_id)
+                .is_none_or(|referendum| {
+                    referendum.status != crate::state::GovernanceReferendumStatus::Closed
+                });
+            if !referendum_active {
+                continue;
+            }
+            let selected_for_parliament =
+                proposal
+                    .parliament_snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| {
+                        snapshot.bodies.rosters.values().any(|roster| {
+                            roster.members.contains(owner) || roster.alternates.contains(owner)
+                        })
+                    });
+            let frozen_elector = state_transaction
+                .world
+                .governance_stage_approvals
+                .get(&referendum_id)
+                .and_then(|approvals| approvals.validation_fee_plain_electorate_snapshot.as_ref())
+                .is_some_and(|snapshot| snapshot.contains(owner));
+            if selected_for_parliament || frozen_elector {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "citizenship bond cannot be released while retained by an active governance snapshot"
+                        .into(),
+                ));
+            }
+        }
+
+        let has_active_ballot =
+            state_transaction
+                .world
+                .governance_locks
+                .iter()
+                .any(|(referendum_id, locks)| {
+                    locks.locks.contains_key(owner)
+                        && state_transaction
+                            .world
+                            .governance_referenda
+                            .get(referendum_id)
+                            .is_none_or(|referendum| {
+                                referendum.status
+                                    != crate::state::GovernanceReferendumStatus::Closed
+                            })
+                });
+        if has_active_ballot {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "citizenship bond cannot be released while a governance ballot is active".into(),
+            ));
+        }
+        Ok(())
+    }
     impl Execute for gov::UnregisterCitizen {
         fn execute(
             self,
@@ -9338,6 +9426,7 @@ pub mod isi {
                     "citizen not found".into(),
                 ));
             };
+            ensure_citizenship_bond_releasable(&self.owner, state_transaction)?;
             let (owner_asset_id, escrow_asset_id) =
                 citizenship_asset_ids(&state_transaction.gov, &self.owner);
             let spec = state_transaction.numeric_spec_for(owner_asset_id.definition())?;
@@ -16289,6 +16378,15 @@ pub mod isi {
                 )
                 .into());
             }
+            if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof_blob.payload) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "verified lane relay proof payload exceeds the {}-byte decode limit",
+                        fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                    )),
+                )
+                .into());
+            }
             let proof_payload_hash = CryptoHash::new(&proof_blob.payload);
             let Some(fastpq_material) = envelope.fastpq_proof.as_ref() else {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -16639,6 +16737,12 @@ pub mod isi {
                 return Err(invalid_fee_sponsor_program(
                     "verified fee sponsor vault allocation proof payload is empty",
                 ));
+            }
+            if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof_blob.payload) {
+                return Err(invalid_fee_sponsor_program(format!(
+                    "verified fee sponsor vault allocation proof payload exceeds the {}-byte decode limit",
+                    fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                )));
             }
             if let Some(expiry_slot) = proof_blob.expiry_slot
                 && verified_at_height > expiry_slot

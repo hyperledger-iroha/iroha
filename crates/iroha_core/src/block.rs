@@ -4914,6 +4914,19 @@ pub(crate) mod valid {
                                   policy_slot: u64,
                                   min_expiry_slot: Option<u64>|
              -> Result<usize, BlockValidationError> {
+                if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof.payload) {
+                    return Err(make_axt_error_with(
+                        AxtRejectReason::Proof,
+                        &format!(
+                            "proof payload exceeds the {}-byte decode limit",
+                            fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                        ),
+                        Some(dsid),
+                        Some(policy.target_lane),
+                        None,
+                        None,
+                    ));
+                }
                 let cache_key = (proof.expiry_slot, Hash::new(&proof.payload));
                 let cached_index = verified_proof_buckets.get(&cache_key).and_then(|bucket| {
                     bucket

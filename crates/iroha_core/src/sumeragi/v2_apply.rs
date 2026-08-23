@@ -3150,6 +3150,37 @@ impl StateBlockCommitAuthorization for CheckedCarrierApplications {
         .map_err(str::to_owned)
     }
 }
+
+fn submit_fastpq_witness_job(
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    witness: iroha_data_model::block::consensus::ExecWitness,
+    context: crate::fastpq::FastpqWitnessContext,
+    submit: impl FnOnce(crate::fastpq::lane::FastpqWitnessJob) -> bool,
+) {
+    let mut witness = witness;
+    // Commitment validation has already consumed the ordinary execution witness. The prover lane
+    // reads only FASTPQ material, so do not retain whole-block read/write payloads in its queue.
+    witness.reads.clear();
+    witness.writes.clear();
+    let job = crate::fastpq::lane::FastpqWitnessJob {
+        block_hash,
+        height,
+        view,
+        witness,
+        context,
+    };
+    if !submit(job) {
+        iroha_logger::debug!(
+            height,
+            view,
+            block = %block_hash,
+            "fastpq lane: finalized witness was not accepted for background proving"
+        );
+    }
+}
+
 /// Immutable dependencies of the single v2 application service.
 pub(crate) struct V2ApplyService {
     state: Arc<State>,
@@ -4550,6 +4581,7 @@ impl V2ApplyService {
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
+        let fastpq_witness_context = state_block.take_fastpq_witness_context();
         let native_amx_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
             valid_block.as_ref(),
             state_block.staged_merge_entry(),
@@ -4814,6 +4846,18 @@ impl V2ApplyService {
         commit_result.map_err(|error| {
             V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
         })?;
+        // Proof generation is post-finality, local, and best-effort: a stopped or saturated lane
+        // must never turn a successfully committed block into a consensus application failure.
+        if store_block && let Some(fastpq_witness_context) = fastpq_witness_context {
+            submit_fastpq_witness_job(
+                block_hash,
+                context.height,
+                artifact.commit_qc.round.view,
+                witness,
+                fastpq_witness_context,
+                crate::fastpq::lane::try_submit,
+            );
+        }
         if carries_autonomous_execution {
             iroha_logger::debug!(
                 height = context.height,
@@ -4888,6 +4932,73 @@ impl V2ApplyService {
     }
 }
 include!("v2_apply/error_recovery.rs");
+#[cfg(test)]
+mod fastpq_submission_tests {
+    use super::*;
+    use crate::fastpq::{FastpqPublicInputsTemplate, FastpqWitnessContext};
+    use iroha_data_model::block::consensus::{ExecKv, ExecWitness};
+    use std::{cell::RefCell, collections::BTreeMap};
+
+    #[test]
+    fn post_commit_fastpq_submission_preserves_identity_and_is_best_effort() {
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
+        let height = 42;
+        let view = 7;
+        let witness = ExecWitness {
+            reads: vec![ExecKv {
+                key: b"fastpq-test-key".to_vec(),
+                value: b"fastpq-test-value".to_vec(),
+            }],
+            writes: vec![ExecKv {
+                key: b"fastpq-test-write-key".to_vec(),
+                value: b"fastpq-test-write-value".to_vec(),
+            }],
+            ..ExecWitness::default()
+        };
+        let public_inputs = FastpqPublicInputsTemplate {
+            dsid: [0x11; 16],
+            slot: 23,
+            old_root: [0x22; 32],
+            new_root: [0x33; 32],
+            perm_root: [0x44; 32],
+        };
+        let tx_set_hash = [0x55; 32];
+        let entry_hash = Hash::prehashed([0x66; Hash::LENGTH]);
+        let entry_dsid = [0x77; 16];
+        let context = FastpqWitnessContext {
+            public_inputs: Some(public_inputs),
+            tx_set_hash: Some(tx_set_hash),
+            entry_dataspaces: BTreeMap::from([(entry_hash, entry_dsid)]),
+        };
+        let captured = RefCell::new(None);
+
+        submit_fastpq_witness_job(block_hash, height, view, witness.clone(), context, |job| {
+            captured.replace(Some(job));
+            false
+        });
+
+        let job = captured.into_inner().expect("submission captures a job");
+        assert_eq!(job.block_hash, block_hash);
+        assert_eq!(job.height, height);
+        assert_eq!(job.view, view);
+        assert!(job.witness.reads.is_empty());
+        assert!(job.witness.writes.is_empty());
+        assert_eq!(job.witness.fastpq_transcripts, witness.fastpq_transcripts);
+        assert_eq!(job.witness.fastpq_batches, witness.fastpq_batches);
+        let actual_public_inputs = job.context.public_inputs.expect("public inputs");
+        assert_eq!(actual_public_inputs.dsid, public_inputs.dsid);
+        assert_eq!(actual_public_inputs.slot, public_inputs.slot);
+        assert_eq!(actual_public_inputs.old_root, public_inputs.old_root);
+        assert_eq!(actual_public_inputs.new_root, public_inputs.new_root);
+        assert_eq!(actual_public_inputs.perm_root, public_inputs.perm_root);
+        assert_eq!(job.context.tx_set_hash, Some(tx_set_hash));
+        assert_eq!(
+            job.context.entry_dataspaces.get(&entry_hash),
+            Some(&entry_dsid)
+        );
+    }
+}
 #[cfg(test)]
 #[path = "v2_apply_tests.rs"]
 mod tests;

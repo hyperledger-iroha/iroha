@@ -1035,6 +1035,30 @@ fn fastpq_proof_snapshot_rejects_queue_overflow() {
     );
     assert_eq!(kura.fastpq_proof_queue.lock().len(), 1);
 }
+
+#[test]
+fn fastpq_proof_snapshot_rolls_back_when_shutdown_arrives_during_enqueue() {
+    use std::cell::Cell;
+
+    let kura = Kura::blank_kura_for_testing();
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+    let cancellation_checks = Cell::new(0usize);
+
+    let result =
+        kura.enqueue_fastpq_proof_snapshot_unless(sample_fastpq_snapshot(1, block_hash, 8), || {
+            let check = cancellation_checks.get();
+            cancellation_checks.set(check.saturating_add(1));
+            check == 1
+        });
+
+    assert_eq!(result, FastpqProofEnqueueResult::RejectedShutdown);
+    assert_eq!(cancellation_checks.get(), 2);
+    assert!(
+        kura.fastpq_proof_queue.lock().is_empty(),
+        "shutdown observed after insertion must roll the snapshot back"
+    );
+}
+
 #[test]
 fn fastpq_proof_snapshot_rejects_oversized_snapshot() {
     let kura = Kura::blank_kura_for_testing();

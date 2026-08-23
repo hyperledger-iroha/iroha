@@ -6379,6 +6379,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
             return Err(ivm::VMError::NoritoInvalid);
         }
+        if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof.payload) {
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(dsid),
+                Some(policy.target_lane),
+                format!(
+                    "proof payload exceeds the {}-byte decode limit",
+                    fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                ),
+            );
+            return Err(ivm::VMError::NoritoInvalid);
+        }
         if proof.expiry_slot == Some(0) {
             self.record_axt_reject(
                 AxtRejectReason::Proof,
@@ -9631,6 +9643,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         target_lane: LaneId,
         proof: Option<&ProofBlob>,
     ) -> Result<axt::ResolvedHandleAmount, ivm::VMError> {
+        if proof.is_some_and(|proof| {
+            crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof.payload)
+        }) {
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(intent.asset_dsid),
+                Some(target_lane),
+                format!(
+                    "proof payload exceeds the {}-byte decode limit",
+                    fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                ),
+            );
+            return Err(ivm::VMError::NoritoInvalid);
+        }
         axt::resolve_handle_amount(intent, proof).map_err(|err| {
             let (reason, detail) = match err {
                 axt::HandleAmountResolutionError::MissingAmount => (
@@ -9864,6 +9890,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             consumed_by_proof.consume(proof_group_index, commitment);
         }
         for group in consumed_by_proof.into_groups() {
+            if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&group.proof.payload) {
+                self.record_axt_reject(
+                    AxtRejectReason::Proof,
+                    None,
+                    None,
+                    format!(
+                        "final FASTPQ proof exceeds the {}-byte decode limit",
+                        fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                    ),
+                );
+                return Err(ivm::VMError::NoritoInvalid);
+            }
             let envelope = decode_canonical_norito::<ModelAxtProofEnvelope>(&group.proof.payload)
                 .map_err(|_| {
                 self.record_axt_reject(
@@ -13883,6 +13921,30 @@ seiyaku PrivilegedBinding {
                 .detail
                 .contains("authoritative finalized source-state anchor")
         );
+    }
+
+    #[test]
+    fn axt_proof_validation_rejects_oversized_payload_before_decode() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(104);
+        let manifest_root = [0xA4; 32];
+        let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
+        let mut host = CoreHost::new(ALICE_ID.clone())
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
+        let policy = host.policy_entry_for(dsid).expect("policy entry");
+        let proof = ProofBlob {
+            payload: vec![0u8; fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES + 1],
+            expiry_slot: Some(20),
+        };
+
+        assert_eq!(
+            host.validate_axt_proof(dsid, &proof, policy, AxtProofAdmission::AuthenticatedHandle,),
+            Err(VMError::NoritoInvalid)
+        );
+        let reject = host.take_axt_reject_for_tests().expect("reject context");
+        assert_eq!(reject.reason, AxtRejectReason::Proof);
+        assert!(reject.detail.contains("decode limit"));
     }
 
     #[test]

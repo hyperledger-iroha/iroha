@@ -2821,6 +2821,11 @@ impl Kura {
             BLOCKS_IN_MEMORY,
         )
     }
+    /// Return the number of FASTPQ proof snapshots awaiting persistence in tests.
+    #[cfg(test)]
+    pub(crate) fn fastpq_proof_queue_len_for_testing(&self) -> usize {
+        self.fastpq_proof_queue.lock().len()
+    }
     /// Override the shared pending-control byte bound before a test Kura is shared.
     ///
     /// This focused hook drives the exact production candidate-admission field below

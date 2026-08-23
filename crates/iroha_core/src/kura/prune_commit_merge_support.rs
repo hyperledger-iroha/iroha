@@ -275,6 +275,8 @@ pub enum FastpqProofEnqueueResult {
     },
     /// A canonical prune is active or prune recovery requires a process restart.
     RejectedPruneRecovery,
+    /// Shutdown began before the snapshot's queue insertion was committed.
+    RejectedShutdown,
 }
 /// Proof that Kura durably associated a canonical block with a v2 finality artifact.
 ///

@@ -98,7 +98,7 @@ pub struct OfflineAndroidAppAttestationPolicy {
 }
 
 #[cfg(test)]
-mod tests {
+mod device_attestation_policy_tests {
     use super::*;
     use norito::codec::DecodeAll as _;
 

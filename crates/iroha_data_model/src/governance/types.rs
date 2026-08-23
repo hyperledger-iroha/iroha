@@ -96,6 +96,17 @@ fn decode_hex_array<const N: usize>(input: &str) -> Result<[u8; N], HashParseErr
     array.copy_from_slice(&bytes);
     Ok(array)
 }
+fn decode_lowercase_hex_array<const N: usize>(input: &str) -> Result<[u8; N], HashParseError> {
+    if !input
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(HashParseError::InvalidHex {
+            message: "hash must use lowercase hexadecimal without a prefix".to_owned(),
+        });
+    }
+    decode_hex_array(input)
+}
 fn parse_hash_payload<const N: usize>(payload: &[u8]) -> Result<[u8; N], norito::core::Error> {
     if payload.len() == N {
         let mut array = [0u8; N];
@@ -135,7 +146,7 @@ macro_rules! define_hash32_newtype {
             /// # Errors
             /// Returns [`HashParseError`] when the input is not a valid 32-byte hex string.
             pub fn from_hex_str(input: &str) -> Result<Self, HashParseError> {
-                decode_hex_array::<32>(input).map(Self)
+                decode_lowercase_hex_array::<32>(input).map(Self)
             }
             /// Borrow the raw hash bytes.
             pub const fn as_bytes(&self) -> &[u8; 32] {
@@ -400,6 +411,7 @@ pub enum ProposalKind {
 }
 /// Proposal payload for deploying an IVM contract via governance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -419,6 +431,7 @@ pub struct DeployContractProposal {
 }
 /// Proposal payload for scheduling a runtime upgrade through governance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -429,6 +442,7 @@ pub struct RuntimeUpgradeProposal {
 }
 /// Proposal payload for applying one closed SCCP registry action.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -439,6 +453,7 @@ pub struct SccpRouteGovernanceProposal {
 }
 /// Proposal payload for one closed `SoraFS` provider-owner transition.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -449,6 +464,7 @@ pub struct SorafsProviderGovernanceProposal {
 }
 /// Proposal payload for one governed validation-fee policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -463,6 +479,7 @@ pub struct ValidationFeePolicyProposal {
 }
 /// Proposal payload authorizing one exact validation-fee payout lifecycle.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1017,6 +1034,13 @@ mod tests {
         assert_eq!(parsed.to_hex(), raw);
     }
     #[test]
+    fn contract_hash_rejects_uppercase_hex_alias() {
+        let err = ContractCodeHash::from_hex_str(&"AA".repeat(ContractCodeHash::LENGTH))
+            .expect_err("uppercase hash aliases must fail closed");
+        assert!(matches!(err, HashParseError::InvalidHex { .. }));
+        assert!(err.to_string().contains("lowercase hexadecimal"));
+    }
+    #[test]
     fn hash_decode_rejects_non_canonical_vec_layout() {
         let mut non_canonical = Vec::new();
         non_canonical.extend_from_slice(&32u64.to_le_bytes());
@@ -1091,6 +1115,27 @@ mod tests {
                 panic!("unexpected SoraFS provider-governance proposal")
             }
         }
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn deploy_proposal_json_rejects_unknown_payload_fields() {
+        let proposal = ProposalKind::DeployContract(DeployContractProposal {
+            contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                .parse()
+                .expect("contract address"),
+            code_hash_hex: ContractCodeHash::new([0x11; 32]),
+            abi_hash_hex: ContractAbiHash::new([0x22; 32]),
+            abi_version: AbiVersion::new(1),
+            manifest_provenance: None,
+        });
+        let canonical =
+            norito::json::to_json(&proposal).expect("canonical governance proposal JSON encodes");
+        let hostile = canonical.replacen("\"payload\":{", "\"payload\":{\"legacy\":true,", 1);
+        assert_ne!(hostile, canonical);
+        assert!(
+            norito::json::from_json::<ProposalKind>(&hostile).is_err(),
+            "governance proposal JSON must reject unknown payload fields"
+        );
     }
     #[cfg(feature = "json")]
     #[test]
