@@ -953,7 +953,32 @@ enum StrictJSONDuplicateKeyRejector {
 }
 
 extension ToriiClient: ZkAssetMerklePathProvider {
+    public func getMerklePathForCommitment(
+        asset: String,
+        commitment: Data
+    ) async throws -> ZkAssetMerklePath {
+        guard let canonicalRequestAuth else {
+            throw ToriiClientError.invalidPayload(
+                "zk-asset Merkle path queries require ToriiClient.canonicalRequestAuth."
+            )
+        }
+        return try await getMerklePathForCommitment(
+            asset: asset,
+            commitment: commitment,
+            canonicalAuth: canonicalRequestAuth
+        )
+    }
+
     public func getMerklePaths(asset: String, commitments: [Data]) async throws -> [ZkAssetMerklePath] {
-        try await getZkAssetMerklePaths(asset: asset, commitments: commitments)
+        guard let canonicalRequestAuth else {
+            throw ToriiClientError.invalidPayload(
+                "zk-asset Merkle path queries require ToriiClient.canonicalRequestAuth."
+            )
+        }
+        return try await getZkAssetMerklePaths(
+            asset: asset,
+            commitments: commitments,
+            canonicalAuth: canonicalRequestAuth
+        )
     }
 }

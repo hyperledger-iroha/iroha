@@ -761,6 +761,17 @@ public sealed class TransactionBuilderTests
     }
 
     [Fact]
+    public void TransactionEncodingContextEncodesCanonicalSingleKeyController()
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+
+        Assert.Equal(
+            Convert.FromHexString(
+                "000000004A21000000000000000100011F0185017F01E901800152014A012E01E401FE016501E501D3014601F701AA01AD01CB0163016A0164010F011D0119011D011C016E01150186010701BA011E"),
+            context.EncodeAccountController(FixtureAccountId));
+    }
+
+    [Fact]
     public void TransactionBuilderAcceptsCanonicalEmbeddedI105DiscriminantAndVerifiesKeyBytes()
     {
         const ushort embeddedDiscriminant = 369;

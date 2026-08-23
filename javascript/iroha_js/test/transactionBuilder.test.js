@@ -260,7 +260,7 @@ test("buildRegisterDomainTransaction returns canonical hash", () => {
   assert.deepEqual(recomputed, built.hash);
 });
 
-test("hashSignedTransactionPayload returns the detached scaffold preimage", () => {
+test("signed transaction hashes are detached from authorization proof bytes", () => {
   const first = buildSampleRegisterDomain();
   const signatureMutated = mutateFirstSignedTransactionSignatureByte(
     first.signedTransaction,
@@ -276,7 +276,7 @@ test("hashSignedTransactionPayload returns the detached scaffold preimage", () =
 
   assert.equal(firstPayloadHash.length, 32);
   assert.deepEqual(firstPayloadHash, secondPayloadHash);
-  assert.notDeepEqual(
+  assert.deepEqual(
     hashSignedTransaction(first.signedTransaction, { encoding: "buffer" }),
     hashSignedTransaction(signatureMutated, { encoding: "buffer" }),
   );
@@ -2384,12 +2384,54 @@ baseTest("transaction builders reject padded authority and asset definition IDs 
             feePayment: AUTHORITY_FEE_PAYMENT,
             assetDefinition: {
               assetDefinitionId: `${ASSET_DEFINITION_ID} `,
+              name: "Test asset",
+              owningDomain: null,
+              balanceScopePolicy: "Global",
               spec: { scale: 0 },
             },
             privateKey: PRIVATE_KEY,
           }),
         /assetDefinition\.assetDefinitionId must not contain surrounding whitespace/u,
       );
+      assert.throws(
+        () =>
+          buildRegisterAssetDefinitionAndMintTransaction({
+            networkId: NETWORK_ID,
+            authority: AUTHORITY_ID_INPUT,
+            feePayment: AUTHORITY_FEE_PAYMENT,
+            assetDefinition: {
+              assetDefinitionId: ASSET_DEFINITION_ID,
+              owningDomain: null,
+              balanceScopePolicy: "Global",
+            },
+            privateKey: PRIVATE_KEY,
+          }),
+        /assetDefinition\.name is required and must be a string/u,
+      );
+      for (const [name, expectedError] of [
+        ["  ", /assetDefinition\.name must not be blank/u],
+        ["a".repeat(129), /assetDefinition\.name must not exceed 128 UTF-8 bytes/u],
+        ["asset#name", /assetDefinition\.name must not contain '#' or '@'/u],
+        ["asset@name", /assetDefinition\.name must not contain '#' or '@'/u],
+        ["asset\u0000name", /assetDefinition\.name must not contain control characters/u],
+      ]) {
+        assert.throws(
+          () =>
+            buildRegisterAssetDefinitionAndMintTransaction({
+              networkId: NETWORK_ID,
+              authority: AUTHORITY_ID_INPUT,
+              feePayment: AUTHORITY_FEE_PAYMENT,
+              assetDefinition: {
+                assetDefinitionId: ASSET_DEFINITION_ID,
+                name,
+                owningDomain: null,
+                balanceScopePolicy: "Global",
+              },
+              privateKey: PRIVATE_KEY,
+            }),
+          expectedError,
+        );
+      }
     },
   );
   assert.deepEqual(calls, []);
@@ -2621,7 +2663,12 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Test asset",
+          owningDomain: null,
+          balanceScopePolicy: "Global",
+        },
         mints: [
           { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "7" },
           { assetId: SECOND_CANONICAL_ASSET_ID_INPUT, quantity: "2" },
@@ -2640,6 +2687,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   assert.equal(captures.length, 1);
   const [{ instructions }] = captures;
   assert.equal(instructions.length, 5);
+  assert.equal(instructions[0].Register.AssetDefinition.name, "Test asset");
   assert.deepEqual(instructions[1], {
     Mint: {
       Asset: {
@@ -2697,7 +2745,12 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction derives asset ids f
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Test asset",
+          owningDomain: null,
+          balanceScopePolicy: "Global",
+        },
         mints: [
           {
             accountId: AUTHORITY_ID_INPUT,
@@ -2747,7 +2800,12 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction returns canonical h
     networkId: NETWORK_ID,
     authority: AUTHORITY_ID_INPUT,
     feePayment: AUTHORITY_FEE_PAYMENT,
-    assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
+    assetDefinition: {
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      name: "Test asset",
+      owningDomain: null,
+      balanceScopePolicy: "Global",
+    },
     mint: { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "4" },
     transfer: {
       sourceAssetId: CANONICAL_ASSET_ID_INPUT,

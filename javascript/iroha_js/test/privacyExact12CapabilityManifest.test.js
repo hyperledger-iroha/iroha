@@ -13,7 +13,8 @@ import { pathToFileURL } from "node:url";
 
 import * as productionPrivacyCapabilities from "../src/privacyCapabilities.js";
 import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
-import { ToriiClient } from "../src/toriiClient.js";
+import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
+import { NetworkId } from "../src/networkId.js";
 
 const TEST_NATIVE_BINDING = Symbol.for("iroha.test.exact12.native-binding");
 const SUBJECT_ROOT = mkdtempSync(join(tmpdir(), "iroha-exact12-native-authority-"));
@@ -80,6 +81,13 @@ const {
 const ARCHIVE = Uint8Array.from([0x4e, 0x52, 0x54, 0x30, 1, 2, 3, 4]);
 const CATALOG = Uint8Array.from([0x4e, 0x52, 0x54, 0x30, 9, 8, 7, 6]);
 const ACTIVE_PROTOCOL = "anonymous-pgc-k-out-of-n-v1";
+const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
+  NetworkId.fromBytes(Buffer.alloc(32, 0xa5)),
+);
+const CANONICAL_AUTH = Object.freeze({
+  accountId: "privacy-operator@fixture",
+  privateKey: Buffer.alloc(32, 0x31),
+});
 const OPERATION_TUPLES = Object.freeze([
   ["zk_ace_authorization_action_v1", "authorization_action", 0],
   ["anonymous_pgc_payment_action_v1", "payment_action", 6],
@@ -431,6 +439,7 @@ test("N-API Torii fetch requests exact bounded Norito and browser fallback is ab
   await withNative(fakeNative(), async () => {
     const calls = [];
     const node = new ToriiClient("https://privacy.example.test", {
+      localSigningContext: LOCAL_SIGNING_CONTEXT,
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init });
         return new Response(ARCHIVE, {
@@ -439,7 +448,9 @@ test("N-API Torii fetch requests exact bounded Norito and browser fallback is ab
         });
       },
     });
-    const manifest = await getPrivacyExact12CapabilityManifestV1(node);
+    const manifest = await getPrivacyExact12CapabilityManifestV1(node, {
+      canonicalAuth: CANONICAL_AUTH,
+    });
     assert.equal(manifest.committed_height, 42n);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, "https://privacy.example.test/v1/privacy/capabilities");

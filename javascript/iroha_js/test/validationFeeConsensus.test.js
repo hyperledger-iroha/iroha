@@ -458,7 +458,7 @@ test("proof catch-up promotes only consecutive locally verified pages", async ()
     });
   };
 
-  const result = await client.catchUpValidationFeeCurrentPolicyProof(binding);
+  const result = await client.catchUpValidationFeeCurrentPolicyProof(binding, {});
   assert.deepEqual(visited, [100n, 127n]);
   assert.equal(result.pagesVerified, 2);
   assert.equal(result.promotedCheckpoint.height, 190n);
@@ -482,7 +482,7 @@ test("proof catch-up fails closed when a non-final page does not advance", async
     });
 
   await assert.rejects(
-    client.catchUpValidationFeeCurrentPolicyProof(binding),
+    client.catchUpValidationFeeCurrentPolicyProof(binding, {}),
     /did not advance/u,
   );
 });

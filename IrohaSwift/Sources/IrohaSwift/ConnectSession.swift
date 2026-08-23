@@ -299,7 +299,7 @@ public final class ConnectSession: @unchecked Sendable {
                 "Connect Open network_id does not match the launch session."
             )
         }
-        try withLockedState { state in
+        return try withLockedState { state in
             if state.sessionState == .closed {
                 throw ConnectSessionError.sessionClosed
             }

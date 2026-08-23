@@ -94,6 +94,9 @@ const registerMintTransfer = buildRegisterAssetDefinitionMintAndTransferTransact
     feePayment,
     assetDefinition: {
       assetDefinitionId,
+      name: "Sample asset",
+      owningDomain: null,
+      balanceScopePolicy: "Global",
       metadata: { description: "Sample asset" },
     },
     mint: { accountId: authority, quantity: "6" },

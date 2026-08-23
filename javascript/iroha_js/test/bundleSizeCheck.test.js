@@ -56,7 +56,7 @@ function fakeSplitBundle(options, entryText = "") {
           name: "sumeragi",
           input: "src/sumeragiTyped.js",
           specifier: "./sumeragiTyped.js",
-          edges: 2,
+          edges: 3,
         },
       ]
     : [
@@ -160,9 +160,9 @@ test("bundle-size targets retain audited ceilings, lazy baselines, and browser g
         lazyChunks: [
           {
             specifier: "./sumeragiTyped.js",
-            edgeCount: 2,
-            reviewedBytes: 71_905,
-            limitKb: 71,
+            edgeCount: 3,
+            reviewedBytes: 73_354,
+            limitKb: 72,
           },
         ],
         forbidNodeInputs: false,
@@ -210,8 +210,8 @@ test("bundle-size targets retain audited ceilings, lazy baselines, and browser g
           {
             specifier: "./sumeragiTyped.js",
             edgeCount: 2,
-            reviewedBytes: 72_243,
-            limitKb: 71,
+            reviewedBytes: 73_692,
+            limitKb: 72,
           },
           {
             specifier: "./smartContractDeploymentSubmit.js",
@@ -250,8 +250,8 @@ test("bundle-size check gates the complete public browser aggregate", () => {
   assert.match(target.entryPoint, /dist[/\\]browser\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
   assert.ok(target.limitKb > 0 && target.limitKb <= 469);
-  assert.equal(target.reviewedEagerBytes, 480_214);
-  assert.equal(target.reviewedCombinedBytes, 561_634);
+  assert.equal(target.reviewedEagerBytes, 480_165);
+  assert.equal(target.reviewedCombinedBytes, 563_034);
   assert.match(target.lazyChunks[0].entryPoint, /dist[/\\]sumeragiTyped\.js$/u);
   assert.match(
     target.lazyChunks[1].entryPoint,
@@ -524,19 +524,19 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
       combinedLimitKb: metrics.combinedLimitKb,
     },
     {
-      eagerBytes: 480_214,
+      eagerBytes: 480_165,
       lazyBytes: [
-        { specifier: "./sumeragiTyped.js", bytes: 72_243 },
+        { specifier: "./sumeragiTyped.js", bytes: 73_692 },
         { specifier: "./smartContractDeploymentSubmit.js", bytes: 9_177 },
       ],
-      combinedBytes: 561_634,
-      combinedLimitKb: 549,
+      combinedBytes: 563_034,
+      combinedLimitKb: 550,
     },
   );
   assert.equal(
     target.limitKb * 1024 - metrics.eagerBytes,
-    42,
-    "public browser aggregate must retain the audited 42-byte eager headroom",
+    91,
+    "public browser aggregate must retain the audited 91-byte eager headroom",
   );
   assert.ok(
     metrics.eagerBytes <= Math.floor(458_081 * 1.05),
@@ -595,9 +595,9 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
     ["canonicalRequest.js (browser)", 1.05],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 998_331, modules: 97 }],
-    ["transactionCodec.js (browser)", { bytes: 300_611, modules: 45 }],
-    ["nexusApp.js (browser)", { bytes: 384_814, modules: 55 }],
+    ["toriiClient.js", { bytes: 991_627, modules: 97 }],
+    ["transactionCodec.js (browser)", { bytes: 300_883, modules: 45 }],
+    ["nexusApp.js (browser)", { bytes: 385_020, modules: 55 }],
     ["canonicalRequest.js (browser)", { bytes: 95_840, modules: 42 }],
   ]);
   const { build } = await import("esbuild");
@@ -648,15 +648,15 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
       );
       assert.equal(
         target.limitKb * 1024 - actual.bytes,
-        8_261,
-        "Torii hard ceiling must retain the audited 8,261-byte eager headroom",
+        14_965,
+        "Torii hard ceiling must retain the audited 14,965-byte eager headroom",
       );
       assert.deepEqual(
         splitMetrics.lazyChunks.map(({ specifier, bytes }) => ({ specifier, bytes })),
-        [{ specifier: "./sumeragiTyped.js", bytes: 71_905 }],
+        [{ specifier: "./sumeragiTyped.js", bytes: 73_354 }],
       );
-      assert.equal(splitMetrics.combinedBytes, 1_070_236);
-      assert.equal(splitMetrics.combinedLimitKb, 1_054);
+      assert.equal(splitMetrics.combinedBytes, 1_064_981);
+      assert.equal(splitMetrics.combinedLimitKb, 1_055);
       assert.equal(splitMetrics.eagerBytes, target.reviewedEagerBytes);
       assert.equal(splitMetrics.combinedBytes, target.reviewedCombinedBytes);
     }

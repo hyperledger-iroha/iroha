@@ -17,7 +17,6 @@ test("submitTransactionEntrypoint waits through Committed until Applied", async 
     return authoritativePipelineStatus(
       hashHex,
       polled.length > 1 ? "Applied" : "Committed",
-      true,
     );
   };
 
@@ -60,23 +59,12 @@ test("submitTransactionEntrypoint rejects removed scope before submission", asyn
   assert.equal(submissions, 0);
 });
 
-function authoritativePipelineStatus(hashHex, kind, normalized = false) {
+function authoritativePipelineStatus(hashHex, kind) {
   const status = kind === "Applied" ? { kind, block_height: 7 } : { kind };
-  const payload = {
-    kind: "Transaction",
+  return {
     hash: hashHex,
     status,
-    summary: kind,
     scope: "global",
     resolved_from: kind === "Applied" ? "state" : "cache",
   };
-  return normalized
-    ? {
-        ...payload,
-        content: {
-          hash: hashHex,
-          status: { ...status, content: null },
-        },
-      }
-    : payload;
 }

@@ -1667,6 +1667,15 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
         "NORITO_MOBILE_JAVA_HOME or the macOS Java locator must resolve to a "
         "canonical regular JDK directory"
     ) in jni_lane
+    for rust_tool in ("cargo", "rustc", "rustdoc"):
+        assert (
+            '"$RUSTUP_BINARY" which --toolchain "$PINNED_TOOLCHAIN" '
+            f"{rust_tool}"
+        ) in jni_lane
+    assert 'NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$CARGO_TARGET_DIR"' in jni_lane
+    assert 'NORITO_BRIDGE_SEAL_RUSTDOC="$RUSTDOC_BINARY"' in jni_lane
+    assert '"$rustdoc_commit" == "$rustc_commit"' in jni_lane
+    assert '"$RUSTDOC_BINARY:$RUSTDOC_SHA256_START"' in jni_lane
     assert '"$PYTHON_BINARY" -I -S' in jni_lane
     assert '--set "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION=1"' in jni_lane
     assert "--sdk c-jni" in jni_lane

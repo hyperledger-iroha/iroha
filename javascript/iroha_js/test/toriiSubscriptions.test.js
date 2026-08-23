@@ -33,6 +33,18 @@ class ToriiClient extends BaseToriiClient {
 
 function createResponse({ status, jsonData = {}, arrayData, textBody, headers }) {
   const resolvedHeaders = headers ?? { "content-type": "application/json" };
+  const responseText =
+    typeof textBody === "string" ? textBody : JSON.stringify(jsonData ?? {});
+  const bodyBytes =
+    arrayData instanceof ArrayBuffer
+      ? new Uint8Array(arrayData)
+      : ArrayBuffer.isView(arrayData)
+        ? new Uint8Array(
+            arrayData.buffer,
+            arrayData.byteOffset,
+            arrayData.byteLength,
+          )
+        : new TextEncoder().encode(responseText);
   return {
     status,
     json: async () => jsonData,
@@ -46,10 +58,18 @@ function createResponse({ status, jsonData = {}, arrayData, textBody, headers })
           arrayData.byteOffset + arrayData.byteLength,
         );
       }
-      return new TextEncoder().encode(textBody ?? JSON.stringify(jsonData ?? {})).buffer;
+      return bodyBytes.buffer.slice(
+        bodyBytes.byteOffset,
+        bodyBytes.byteOffset + bodyBytes.byteLength,
+      );
     },
-    text: async () =>
-      typeof textBody === "string" ? textBody : JSON.stringify(jsonData ?? {}),
+    text: async () => responseText,
+    body: new ReadableStream({
+      start(controller) {
+        if (bodyBytes.byteLength > 0) controller.enqueue(bodyBytes);
+        controller.close();
+      },
+    }),
     headers: {
       get(name) {
         if (!resolvedHeaders) {

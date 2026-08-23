@@ -67,7 +67,7 @@ test("package browser field maps only the local crypto adapter", () => {
   );
   assert.match(
     canonicalRequest,
-    /import \{ createHash, randomBytes \} from "\.\/cryptoHash\.js";/u,
+    /import \{\s*randomBytes\s*\} from "\.\/cryptoHash\.js";/u,
   );
   const nativeAdapter = readFileSync(
     new URL("../src/cryptoHash.js", import.meta.url),
