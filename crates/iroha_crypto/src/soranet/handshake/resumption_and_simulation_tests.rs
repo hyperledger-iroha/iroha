@@ -114,6 +114,16 @@ fn simulate_handshake_produces_transcript_hash() {
     assert_eq!(result.handshake_steps[0].note, STEP_NOTE_HYBRID_INIT);
     assert_eq!(result.handshake_steps[1].note, STEP_NOTE_HYBRID_RESPONSE);
 }
+fn assert_telemetry_omits_secret_material(payloads: &[Vec<u8>]) {
+    for payload in payloads {
+        let text = std::str::from_utf8(payload).expect("telemetry JSON must be UTF-8");
+        let value: Value = norito::json::from_str(text).expect("telemetry JSON must decode");
+        assert!(
+            value.get("shared_secret_hex").is_none(),
+            "telemetry must never export KEM or session material"
+        );
+    }
+}
 #[test]
 fn simulate_handshake_negotiates_nk2_hybrid_suite() {
     let client_caps = capabilities_with_suites(
@@ -153,6 +163,7 @@ fn simulate_handshake_negotiates_nk2_hybrid_suite() {
     assert_eq!(result.handshake_steps[0].note, STEP_NOTE_HYBRID_INIT);
     assert_eq!(result.handshake_steps[1].note, STEP_NOTE_HYBRID_RESPONSE);
     assert_eq!(result.telemetry_payloads.len(), 1);
+    assert_telemetry_omits_secret_material(&result.telemetry_payloads);
 }
 #[test]
 fn simulate_handshake_negotiates_nk3_forward_secure_suite() {
@@ -199,4 +210,5 @@ fn simulate_handshake_negotiates_nk3_forward_secure_suite() {
     assert_eq!(result.handshake_steps[0].note, STEP_NOTE_PQFS_COMMIT);
     assert_eq!(result.handshake_steps[1].note, STEP_NOTE_PQFS_RESPONSE);
     assert_eq!(result.telemetry_payloads.len(), 1);
+    assert_telemetry_omits_secret_material(&result.telemetry_payloads);
 }

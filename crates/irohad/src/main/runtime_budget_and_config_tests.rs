@@ -302,42 +302,6 @@ fn check_config_and_runtime_enforce_frame_cap_boundary() -> eyre::Result<()> {
     Ok(())
 }
 #[test]
-fn check_config_enforces_embedded_soracloud_runtime_feature() -> eyre::Result<()> {
-    let (config, _dir, _config_path) = load_config_with_overrides(|table, _genesis_key| {
-        iroha_config::base::toml::Writer::new(table)
-            .write(["soracloud_runtime", "production_mode"], true)
-            .write(["soracloud_runtime", "inrou", "enabled"], true)
-            .write(["soracloud_runtime", "inrou", "proxy_only"], false)
-            .write(["soracloud_runtime", "egress", "default_allow"], false)
-            .write(
-                ["soracloud_runtime", "egress", "allowed_hosts"],
-                Vec::<String>::new(),
-            )
-            .write(["soracloud_runtime", "egress", "rate_per_minute"], 60_i64)
-            .write(
-                ["soracloud_runtime", "egress", "max_bytes_per_minute"],
-                1_048_576_i64,
-            )
-            .write(
-                ["soracloud_runtime", "hf", "allow_inference_bridge_fallback"],
-                false,
-            );
-    })?;
-    let result = validate_config_for_check(&config, None, false);
-    #[cfg(feature = "embedded-soracloud-runtime")]
-    result.expect("featured irohad must accept Soracloud production mode");
-    #[cfg(not(feature = "embedded-soracloud-runtime"))]
-    {
-        let report = result
-            .expect_err("--check-config must reject production mode without the embedded runtime");
-        assert_contains!(
-            format!("{report:#}"),
-            "`soracloud_runtime.production_mode = true` requires building irohad with the `embedded-soracloud-runtime` feature"
-        );
-    }
-    Ok(())
-}
-#[test]
 fn validator_requires_confidential_enabled() -> eyre::Result<()> {
     let (config, _dir, _config_path) = load_config_with_overrides(|table, _genesis_key| {
         iroha_config::base::toml::Writer::new(table)

@@ -292,9 +292,13 @@ fn validate_block_transaction_admission(
     let canary_wire_identity =
         crate::smartcontracts::isi::offline::signed_kagemusha_taira_canary_wire_identity_v1(tx)
             .map_err(TransactionRejectionReason::Validation)?;
+    let lifecycle_entrypoint =
+        crate::smartcontracts::isi::offline::signed_lifecycle_entrypoint_context(tx)
+            .map_err(TransactionRejectionReason::Validation)?;
     state_tx.bind_privacy_transaction_intent_v1(privacy_intent_binding);
     state_tx.kagemusha_taira_canary_external_entrypoint = true;
     state_tx.kagemusha_taira_canary_wire_identity = canary_wire_identity;
+    state_tx.kagemusha_release_lifecycle_entrypoint = lifecycle_entrypoint;
     StateBlock::validate_stateful_admission(tx, state_tx, Some(routing))
 }
 fn commit_stateful_admission_sequence(

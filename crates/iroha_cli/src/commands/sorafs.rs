@@ -154,6 +154,7 @@ use std::{
 use time::{Duration as TimeDelta, OffsetDateTime, format_description::well_known::Rfc3339};
 use tiny_keccak::{Hasher as _, Sha3};
 use tokio::runtime::Runtime;
+use zeroize::{Zeroize as _, Zeroizing};
 
 macro_rules! impl_run_with_client_methods {
     ($args:ty, $($method:path),+ $(,)?) => {
@@ -10302,25 +10303,21 @@ pub enum HandshakeTokenCommand {
     Fingerprint(HandshakeTokenFingerprintArgs),
 }
 impl_run_for_subcommand!(HandshakeTokenCommand => Issue, Id, Fingerprint);
+// Four-byte magic, fixed v1 body, u16 signature length, and the largest
+// signature the frame can structurally advertise.
+const HANDSHAKE_TOKEN_FILE_MAX_BYTES_V1: usize = 65_671;
+const HANDSHAKE_MLDSA_PUBLIC_KEY_MAX_BYTES_V1: usize = 2_592;
 #[derive(clap::Args, Debug)]
 pub struct HandshakeTokenIssueArgs {
     /// ML-DSA suite used to sign the token (mldsa44, mldsa65, mldsa87).
     #[arg(long = "suite", value_enum, default_value_t = MlDsaSuiteArg::default())]
     suite: MlDsaSuiteArg,
     /// Path to the issuer ML-DSA secret key (raw bytes).
-    #[arg(
-        long = "issuer-secret-key",
-        value_name = "PATH",
-        conflicts_with = "issuer_secret_hex"
-    )]
-    issuer_secret_key: Option<PathBuf>,
-    /// Hex-encoded issuer ML-DSA secret key.
-    #[arg(
-        long = "issuer-secret-hex",
-        value_name = "HEX",
-        conflicts_with = "issuer_secret_key"
-    )]
-    issuer_secret_hex: Option<String>,
+    ///
+    /// The file must be owner-private, single-link, and opened without following
+    /// symbolic links. Secret key bytes are never accepted directly on argv.
+    #[arg(long = "issuer-secret-key", value_name = "PATH")]
+    issuer_secret_key: PathBuf,
     /// Path to the issuer ML-DSA public key (raw bytes).
     #[arg(
         long = "issuer-public-key",
@@ -10357,14 +10354,16 @@ pub struct HandshakeTokenIssueArgs {
     /// Token flags (reserved; must be 0 for v1 tokens).
     #[arg(long = "flags", value_parser = clap::value_parser!(u8))]
     flags: Option<u8>,
-    /// Optional path to write the encoded token.
+    /// New path to write the encoded token as an owner-private file.
+    ///
+    /// Existing paths are never overwritten, and the bearer token is not
+    /// printed to standard output.
     #[arg(long = "output", value_name = "PATH")]
-    output: Option<PathBuf>,
+    output: PathBuf,
     /// Encoding used when writing the token to --output (base64, hex, binary).
     #[arg(long = "token-encoding", value_enum, default_value_t = TokenOutputFormat::Base64)]
     token_encoding: TokenOutputFormat,
 }
-#[derive(Debug)]
 struct TokenIssueArtifacts {
     token: AdmissionToken,
     token_bytes: Vec<u8>,
@@ -10376,17 +10375,22 @@ struct TokenIssueArtifacts {
     relay_id: [u8; 32],
     transcript_hash: [u8; 32],
 }
+impl TokenIssueArtifacts {
+    fn zeroize_encoded_token(&mut self) {
+        self.token_bytes.zeroize();
+    }
+}
+impl Drop for TokenIssueArtifacts {
+    fn drop(&mut self) {
+        self.zeroize_encoded_token();
+    }
+}
 impl HandshakeTokenIssueArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let mut rng = token_issue_rng()?;
         let now = SystemTime::now();
         let artifacts = self.issue_with_rng(context, &mut rng, now)?;
-        Self::emit(
-            context,
-            &artifacts,
-            self.output.as_deref(),
-            self.token_encoding,
-        )?;
+        Self::emit(context, &artifacts, &self.output, self.token_encoding)?;
         Ok(())
     }
     fn issue_with_rng<C, R>(
@@ -10400,17 +10404,19 @@ impl HandshakeTokenIssueArgs {
         R: RngCore + CryptoRng,
     {
         let suite = self.suite;
-        let secret_key = materialise_key_bytes(
-            self.issuer_secret_key.as_ref(),
-            self.issuer_secret_hex.as_deref(),
+        let secret_key = read_owner_private_handshake_file(
+            &self.issuer_secret_key,
+            suite.as_suite().secret_key_len(),
+            Some(suite.as_suite().secret_key_len()),
             "--issuer-secret-key",
-            "--issuer-secret-hex",
         )?;
         let public_key = materialise_key_bytes(
             self.issuer_public_key.as_ref(),
             self.issuer_public_hex.as_deref(),
             "--issuer-public-key",
             "--issuer-public-hex",
+            suite.as_suite().public_key_len(),
+            Some(suite.as_suite().public_key_len()),
         )?;
         let relay_id = parse_hex_array::<32>(&self.relay_id, "--relay-id")?;
         let transcript_hash = parse_hex_array::<32>(&self.transcript_hash, "--transcript-hash")?;
@@ -10478,14 +10484,10 @@ impl HandshakeTokenIssueArgs {
     fn emit<C: RunContext>(
         context: &mut C,
         artifacts: &TokenIssueArtifacts,
-        output: Option<&Path>,
+        output: &Path,
         format: TokenOutputFormat,
     ) -> Result<()> {
-        if let Some(path) = output {
-            write_token_to_file(path, format, &artifacts.token_bytes)?;
-        }
-        let token_base64 = URL_SAFE_NO_PAD.encode(&artifacts.token_bytes);
-        let token_hex = hex::encode(&artifacts.token_bytes);
+        write_token_to_file(output, format, &artifacts.token_bytes)?;
         let token_id = artifacts.token.token_id();
         let token_id_hex = hex::encode(token_id);
         let token_id_b64 = URL_SAFE_NO_PAD.encode(token_id);
@@ -10503,8 +10505,6 @@ impl HandshakeTokenIssueArgs {
             .map_err(|err| eyre!("failed to format expires_at: {err}"))?;
         let mut obj = Map::new();
         obj.insert("suite".into(), Value::from(artifacts.suite.to_string()));
-        obj.insert("token_base64url".into(), Value::from(token_base64));
-        obj.insert("token_hex".into(), Value::from(token_hex));
         obj.insert(
             "token_length".into(),
             Value::from(artifacts.token_bytes.len() as u64),
@@ -10534,9 +10534,7 @@ impl HandshakeTokenIssueArgs {
         obj.insert("token_encoding".into(), Value::from(format.describe()));
         obj.insert(
             "output_path".into(),
-            output.map_or(Value::Null, |path| {
-                Value::from(path.to_string_lossy().into_owned())
-            }),
+            Value::from(output.to_string_lossy().into_owned()),
         );
         let text = render_token_issue_text(artifacts, &obj, output, format.describe());
         print_with_optional_text(context, Some(text), &Value::Object(obj))
@@ -10553,13 +10551,9 @@ fn token_issue_rng_from_rng<R: TryCryptoRng>(rng: &mut R) -> Result<StdRng> {
 fn render_token_issue_text(
     artifacts: &TokenIssueArtifacts,
     payload: &Map,
-    output: Option<&Path>,
+    output: &Path,
     encoding_label: &str,
 ) -> String {
-    let token_base64 = payload
-        .get("token_base64url")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
     let token_id_hex = payload
         .get("token_id_hex")
         .and_then(Value::as_str)
@@ -10591,7 +10585,6 @@ fn render_token_issue_text(
     let mut out = String::new();
     let _ = writeln!(out, "SoraNet admission token issued");
     let _ = writeln!(out, "suite: {}", artifacts.suite);
-    let _ = writeln!(out, "token_base64url: {token_base64}");
     let _ = writeln!(out, "token_id_hex: {token_id_hex}");
     let _ = writeln!(out, "issuer_fingerprint_hex: {fingerprint_hex}");
     let _ = writeln!(out, "relay_id_hex: {relay_id_hex}");
@@ -10599,44 +10592,25 @@ fn render_token_issue_text(
     let _ = writeln!(out, "issued_at: {issued_at}");
     let _ = writeln!(out, "expires_at: {expires_at}");
     let _ = writeln!(out, "ttl_secs: {ttl_secs}");
-    if let Some(path) = output {
-        let _ = writeln!(out, "output: {} ({encoding_label})", path.display());
-    }
+    let _ = writeln!(out, "output: {} ({encoding_label})", output.display());
     out
 }
 #[derive(clap::Args, Debug)]
 pub struct HandshakeTokenIdArgs {
     /// Path to the admission token frame (binary).
-    #[arg(
-        long = "token",
-        value_name = "PATH",
-        id = "token",
-        conflicts_with_all = ["token_hex", "token_base64"]
-    )]
-    path: Option<PathBuf>,
-    /// Hex-encoded admission token frame.
-    #[arg(
-        long = "token-hex",
-        value_name = "HEX",
-        id = "token_hex",
-        conflicts_with_all = ["token", "token_base64"]
-    )]
-    hex_input: Option<String>,
-    /// Base64url-encoded admission token frame.
-    #[arg(
-        long = "token-base64",
-        value_name = "BASE64",
-        id = "token_base64",
-        conflicts_with_all = ["token", "token_hex"]
-    )]
-    base64_input: Option<String>,
+    ///
+    /// The bearer token must be supplied through an owner-private, single-link
+    /// file and is never accepted directly on argv.
+    #[arg(long = "token", value_name = "PATH")]
+    path: PathBuf,
 }
 impl HandshakeTokenIdArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let bytes = materialise_token_bytes(
-            self.path.as_deref(),
-            self.hex_input.as_deref(),
-            self.base64_input.as_deref(),
+        let bytes = read_owner_private_handshake_file(
+            &self.path,
+            HANDSHAKE_TOKEN_FILE_MAX_BYTES_V1,
+            None,
+            "--token",
         )?;
         let token =
             AdmissionToken::decode(&bytes).map_err(|err| eyre!("failed to decode token: {err}"))?;
@@ -10703,6 +10677,8 @@ impl HandshakeTokenFingerprintArgs {
             self.public_key_hex.as_deref(),
             "--public-key",
             "--public-key-hex",
+            HANDSHAKE_MLDSA_PUBLIC_KEY_MAX_BYTES_V1,
+            None,
         )?;
         let fingerprint = compute_issuer_fingerprint(&public_key);
         let fingerprint_hex = hex::encode(fingerprint);
@@ -10731,68 +10707,317 @@ fn materialise_key_bytes(
     hex: Option<&str>,
     path_flag: &str,
     hex_flag: &str,
+    maximum_bytes: usize,
+    exact_bytes: Option<usize>,
 ) -> Result<Vec<u8>> {
     match (path, hex) {
         (Some(path), None) => {
-            let bytes = fs::read(path)
-                .wrap_err_with(|| format!("failed to read {path_flag} {}", path.display()))?;
-            if bytes.is_empty() {
-                return Err(eyre!("{path_flag} must not be empty"));
-            }
+            read_bounded_direct_handshake_public_file(path, maximum_bytes, exact_bytes, path_flag)
+        }
+        (None, Some(hex)) => {
+            let bytes = decode_hex_string(hex, hex_flag)?;
+            validate_handshake_file_length(
+                bytes.len(),
+                maximum_bytes,
+                exact_bytes,
+                hex_flag,
+                None,
+            )?;
             Ok(bytes)
         }
-        (None, Some(hex)) => decode_hex_string(hex, hex_flag),
         (Some(_), Some(_)) => Err(eyre!(
             "exactly one of {path_flag} or {hex_flag} must be provided"
         )),
         (None, None) => Err(eyre!("either {path_flag} or {hex_flag} must be provided")),
     }
 }
-fn materialise_token_bytes(
+fn validate_handshake_file_length(
+    len: usize,
+    maximum_bytes: usize,
+    exact_bytes: Option<usize>,
+    label: &str,
     path: Option<&Path>,
-    hex: Option<&str>,
-    base64: Option<&str>,
-) -> Result<Vec<u8>> {
-    match (path, hex, base64) {
-        (Some(path), None, None) => {
-            let bytes = fs::read(path)
-                .wrap_err_with(|| format!("failed to read --token {}", path.display()))?;
-            if bytes.is_empty() {
-                return Err(eyre!("--token must not be empty"));
-            }
-            Ok(bytes)
-        }
-        (None, Some(hex), None) => decode_hex_string(hex, "--token-hex"),
-        (None, None, Some(b64)) => decode_base64_string(b64, "--token-base64"),
-        _ => Err(eyre!(
-            "provide exactly one of --token, --token-hex, or --token-base64"
-        )),
+) -> Result<()> {
+    let location = path.map_or_else(String::new, |path| format!(" {}", path.display()));
+    if len == 0 {
+        return Err(eyre!(
+            "{label}{location} must contain between 1 and {maximum_bytes} bytes"
+        ));
     }
-}
-fn write_token_to_file(path: &Path, format: TokenOutputFormat, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
+    if let Some(expected) = exact_bytes
+        && len != expected
     {
-        fs::create_dir_all(parent)
-            .wrap_err_with(|| format!("failed to create {}", parent.display()))?;
+        return Err(eyre!(
+            "{label}{location} must contain exactly {expected} bytes, got {len}"
+        ));
     }
-    match format {
-        TokenOutputFormat::Base64 => {
-            let encoded = URL_SAFE_NO_PAD.encode(bytes);
-            fs::write(path, format!("{encoded}\n"))
-                .wrap_err_with(|| format!("failed to write {}", path.display()))?;
-        }
-        TokenOutputFormat::Hex => {
-            let encoded = hex::encode(bytes);
-            fs::write(path, format!("{encoded}\n"))
-                .wrap_err_with(|| format!("failed to write {}", path.display()))?;
-        }
-        TokenOutputFormat::Binary => {
-            fs::write(path, bytes)
-                .wrap_err_with(|| format!("failed to write {}", path.display()))?;
-        }
+    if len > maximum_bytes {
+        return Err(eyre!(
+            "{label}{location} must contain between 1 and {maximum_bytes} bytes"
+        ));
     }
     Ok(())
+}
+#[cfg(unix)]
+fn read_bounded_direct_handshake_public_file(
+    path: &Path,
+    maximum_bytes: usize,
+    exact_bytes: Option<usize>,
+    label: &str,
+) -> Result<Vec<u8>> {
+    let named_before = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("failed to inspect {label} {}", path.display()))?;
+    if named_before.file_type().is_symlink() || !named_before.is_file() {
+        return Err(eyre!(
+            "{label} {} must be a regular non-symlink file",
+            path.display()
+        ));
+    }
+    let named_len = usize::try_from(named_before.len())
+        .map_err(|_| eyre!("{label} length cannot be represented on this host"))?;
+    validate_handshake_file_length(named_len, maximum_bytes, exact_bytes, label, Some(path))?;
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )
+    .wrap_err_with(|| format!("failed to securely open {label} {}", path.display()))?;
+    let mut file = fs::File::from(descriptor);
+    let opened = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to inspect opened {label} {}", path.display()))?;
+    if !opened.is_file() || !same_direct_handshake_file(&named_before, &opened) {
+        return Err(eyre!(
+            "{label} {} changed between inspection and open",
+            path.display()
+        ));
+    }
+    let expected_len = usize::try_from(opened.len())
+        .map_err(|_| eyre!("{label} length cannot be represented on this host"))?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(expected_len)
+        .map_err(|error| eyre!("failed to reserve {label} buffer: {error}"))?;
+    bytes.resize(expected_len, 0);
+    file.read_exact(&mut bytes)
+        .wrap_err_with(|| format!("failed to read {label} {}", path.display()))?;
+    let mut extra = [0u8; 1];
+    let grew = file
+        .read(&mut extra)
+        .wrap_err_with(|| format!("failed to finish reading {label} {}", path.display()))?
+        != 0;
+    let opened_after = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to re-inspect opened {label} {}", path.display()))?;
+    let named_after = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("failed to re-inspect {label} {}", path.display()))?;
+    if grew
+        || !same_direct_handshake_file(&opened, &opened_after)
+        || !same_direct_handshake_file(&opened, &named_after)
+        || opened_after.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+    {
+        return Err(eyre!(
+            "{label} {} changed while it was read",
+            path.display()
+        ));
+    }
+    Ok(bytes)
+}
+#[cfg(not(unix))]
+fn read_bounded_direct_handshake_public_file(
+    path: &Path,
+    _maximum_bytes: usize,
+    _exact_bytes: Option<usize>,
+    label: &str,
+) -> Result<Vec<u8>> {
+    Err(eyre!(
+        "{label} {} is unsupported because this platform does not expose a direct no-follow file open",
+        path.display()
+    ))
+}
+#[cfg(unix)]
+fn same_direct_handshake_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.uid() == right.uid()
+        && left.mode() == right.mode()
+        && left.nlink() == right.nlink()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+#[cfg(unix)]
+fn read_owner_private_handshake_file(
+    path: &Path,
+    maximum_bytes: usize,
+    exact_bytes: Option<usize>,
+    label: &str,
+) -> Result<Zeroizing<Vec<u8>>> {
+    let named_before = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("failed to inspect {label} {}", path.display()))?;
+    validate_owner_private_handshake_metadata(
+        &named_before,
+        maximum_bytes,
+        exact_bytes,
+        label,
+        path,
+    )?;
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )
+    .wrap_err_with(|| format!("failed to securely open {label} {}", path.display()))?;
+    let mut file = fs::File::from(descriptor);
+    let opened = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to inspect opened {label} {}", path.display()))?;
+    validate_owner_private_handshake_metadata(&opened, maximum_bytes, exact_bytes, label, path)?;
+    if !same_owner_private_handshake_file(&named_before, &opened) {
+        return Err(eyre!(
+            "{label} {} changed between inspection and open",
+            path.display()
+        ));
+    }
+    let expected_len = usize::try_from(opened.len())
+        .map_err(|_| eyre!("{label} length cannot be represented on this host"))?;
+    let mut bytes = Zeroizing::new(Vec::new());
+    bytes
+        .try_reserve_exact(expected_len)
+        .map_err(|error| eyre!("failed to reserve {label} buffer: {error}"))?;
+    bytes.resize(expected_len, 0);
+    file.read_exact(bytes.as_mut_slice())
+        .wrap_err_with(|| format!("failed to read {label} {}", path.display()))?;
+    let mut extra = [0u8; 1];
+    let grew = file
+        .read(&mut extra)
+        .wrap_err_with(|| format!("failed to finish reading {label} {}", path.display()))?
+        != 0;
+    extra.zeroize();
+    let opened_after = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to re-inspect opened {label} {}", path.display()))?;
+    let named_after = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("failed to re-inspect {label} {}", path.display()))?;
+    if grew
+        || !same_owner_private_handshake_file(&opened, &opened_after)
+        || !same_owner_private_handshake_file(&opened, &named_after)
+        || opened_after.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+    {
+        return Err(eyre!(
+            "{label} {} changed while it was read",
+            path.display()
+        ));
+    }
+    Ok(bytes)
+}
+#[cfg(unix)]
+fn validate_owner_private_handshake_metadata(
+    metadata: &fs::Metadata,
+    maximum_bytes: usize,
+    exact_bytes: Option<usize>,
+    label: &str,
+    path: &Path,
+) -> Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o077 != 0
+        || metadata.nlink() != 1
+    {
+        return Err(eyre!(
+            "{label} {} must be an owner-private regular non-symlink file with exactly one link",
+            path.display()
+        ));
+    }
+    let len = usize::try_from(metadata.len())
+        .map_err(|_| eyre!("{label} length cannot be represented on this host"))?;
+    validate_handshake_file_length(len, maximum_bytes, exact_bytes, label, Some(path))
+}
+#[cfg(unix)]
+fn same_owner_private_handshake_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    same_direct_handshake_file(left, right) && left.nlink() == 1 && right.nlink() == 1
+}
+#[cfg(not(unix))]
+fn read_owner_private_handshake_file(
+    path: &Path,
+    _maximum_bytes: usize,
+    _exact_bytes: Option<usize>,
+    label: &str,
+) -> Result<Zeroizing<Vec<u8>>> {
+    Err(eyre!(
+        "{label} {} is unsupported because this platform does not expose the required owner/mode/link custody checks",
+        path.display()
+    ))
+}
+fn write_token_to_file(path: &Path, format: TokenOutputFormat, bytes: &[u8]) -> Result<()> {
+    let mut file = create_owner_private_token_output(path)?;
+    match format {
+        TokenOutputFormat::Base64 => {
+            let encoded = Zeroizing::new(URL_SAFE_NO_PAD.encode(bytes));
+            file.write_all(encoded.as_bytes())?;
+            file.write_all(b"\n")?;
+        }
+        TokenOutputFormat::Hex => {
+            let encoded = Zeroizing::new(hex::encode(bytes));
+            file.write_all(encoded.as_bytes())?;
+            file.write_all(b"\n")?;
+        }
+        TokenOutputFormat::Binary => {
+            file.write_all(bytes)?;
+        }
+    }
+    file.flush()
+        .wrap_err_with(|| format!("failed to flush token output {}", path.display()))?;
+    file.sync_all()
+        .wrap_err_with(|| format!("failed to sync token output {}", path.display()))?;
+    Ok(())
+}
+#[cfg(unix)]
+fn create_owner_private_token_output(path: &Path) -> Result<fs::File> {
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::WRONLY
+            | rustix::fs::OFlags::CREATE
+            | rustix::fs::OFlags::EXCL
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    )
+    .wrap_err_with(|| {
+        format!(
+            "failed to create new owner-private token output {}",
+            path.display()
+        )
+    })?;
+    let file = fs::File::from(descriptor);
+    let metadata = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to inspect token output {}", path.display()))?;
+    use std::os::unix::fs::MetadataExt as _;
+    if !metadata.is_file()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o077 != 0
+        || metadata.nlink() != 1
+    {
+        return Err(eyre!(
+            "token output {} is not an owner-private single-link regular file",
+            path.display()
+        ));
+    }
+    Ok(file)
+}
+#[cfg(not(unix))]
+fn create_owner_private_token_output(path: &Path) -> Result<fs::File> {
+    Err(eyre!(
+        "token output {} is unsupported because this platform does not expose the required owner/mode/link custody checks",
+        path.display()
+    ))
 }
 fn decode_hex_string(value: &str, flag: &str) -> Result<Vec<u8>> {
     let trimmed = value.trim();
@@ -10805,16 +11030,6 @@ fn decode_hex_string(value: &str, flag: &str) -> Result<Vec<u8>> {
         ));
     }
     hex::decode(trimmed).map_err(|err| eyre!("failed to decode {flag}: {err}"))
-}
-fn decode_base64_string(value: &str, flag: &str) -> Result<Vec<u8>> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(eyre!("{flag} must not be empty"));
-    }
-    URL_SAFE_NO_PAD
-        .decode(trimmed.as_bytes())
-        .or_else(|_| STANDARD.decode(trimmed.as_bytes()))
-        .map_err(|err| eyre!("failed to decode {flag}: {err}"))
 }
 fn parse_hex_array<const N: usize>(value: &str, flag: &str) -> Result<[u8; N]> {
     let trimmed = value.trim();
@@ -17570,15 +17785,20 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         save_incentives_state(path, &state).expect("write incentives state");
     }
     test_items! {
+    #[cfg(unix)]
     fn handshake_token_issue_generates_verifiable_token() {
         let mut ctx = TestContext::new();
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keypair");
-        let secret_hex = hex::encode(keypair.secret_key());
+        let mut secret_file = NamedTempFile::new().expect("secret file");
+        secret_file
+            .write_all(keypair.secret_key())
+            .expect("write secret key");
         let public_hex = hex::encode(keypair.public_key());
+        let output_dir = TempDir::new().expect("token output directory");
+        let output_path = output_dir.path().join("admission.token");
         let args = HandshakeTokenIssueArgs {
             suite: MlDsaSuiteArg::MlDsa44,
-            issuer_secret_key: None,
-            issuer_secret_hex: Some(secret_hex),
+            issuer_secret_key: secret_file.path().to_path_buf(),
             issuer_public_key: None,
             issuer_public_hex: Some(public_hex.clone()),
             relay_id: "11".repeat(32),
@@ -17587,12 +17807,12 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             expires_at: None,
             ttl_secs: Some(900),
             flags: Some(0),
-            output: None,
+            output: output_path.clone(),
             token_encoding: TokenOutputFormat::Base64,
         };
         let mut rng = StdRng::seed_from_u64(0x5eed);
         let default_now = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
-        let artifacts = args
+        let mut artifacts = args
             .issue_with_rng(&mut ctx, &mut rng, default_now)
             .expect("issue token");
         let verifier = AdmissionTokenVerifier::new(
@@ -17611,22 +17831,47 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
                 verify_now,
             )
             .expect("token should verify");
-        HandshakeTokenIssueArgs::emit(&mut ctx, &artifacts, None, TokenOutputFormat::Base64)
-            .expect("emit output");
+        HandshakeTokenIssueArgs::emit(
+            &mut ctx,
+            &artifacts,
+            &output_path,
+            TokenOutputFormat::Base64,
+        )
+        .expect("emit output");
         let output = ctx.outputs().last().expect("json output present");
         let json: Value = norito::json::from_str(output).expect("valid json");
         assert_eq!(json["flags"], Value::from(0u64));
         assert_eq_compact! { json["token_id_hex"] => Value::from(hex::encode(artifacts.token.token_id())) };
+        assert!(json.get("token_base64url").is_none());
+        assert!(json.get("token_hex").is_none());
+        use std::os::unix::fs::MetadataExt as _;
+        assert_eq!(
+            fs::metadata(&output_path).expect("token metadata").mode() & 0o077,
+            0
+        );
+        HandshakeTokenIssueArgs::emit(
+            &mut ctx,
+            &artifacts,
+            &output_path,
+            TokenOutputFormat::Base64,
+        )
+        .expect_err("existing bearer output must not be overwritten");
+        artifacts.zeroize_encoded_token();
+        assert!(artifacts.token_bytes.is_empty());
     }
+    #[cfg(unix)]
     fn handshake_token_id_reports_expected_digest() {
         let mut ctx = TestContext::new();
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keypair");
-        let secret_hex = hex::encode(keypair.secret_key());
+        let mut secret_file = NamedTempFile::new().expect("secret file");
+        secret_file
+            .write_all(keypair.secret_key())
+            .expect("write secret key");
         let public_hex = hex::encode(keypair.public_key());
+        let output_dir = TempDir::new().expect("token output directory");
         let args = HandshakeTokenIssueArgs {
             suite: MlDsaSuiteArg::MlDsa44,
-            issuer_secret_key: None,
-            issuer_secret_hex: Some(secret_hex),
+            issuer_secret_key: secret_file.path().to_path_buf(),
             issuer_public_key: None,
             issuer_public_hex: Some(public_hex),
             relay_id: "33".repeat(32),
@@ -17635,7 +17880,7 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             expires_at: None,
             ttl_secs: Some(600),
             flags: None,
-            output: None,
+            output: output_dir.path().join("unused.token"),
             token_encoding: TokenOutputFormat::Base64,
         };
         let mut rng = StdRng::seed_from_u64(0xabad_1dea);
@@ -17646,12 +17891,14 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
                 SystemTime::UNIX_EPOCH + Duration::from_secs(10),
             )
             .expect("issue token");
-        let token_hex = hex::encode(&artifacts.token_bytes);
-        let id_args = HandshakeTokenIdArgs {
-            path: None,
-            hex_input: Some(token_hex),
-            base64_input: None,
-        };
+        let token_path = output_dir.path().join("admission.token");
+        write_token_to_file(
+            &token_path,
+            TokenOutputFormat::Binary,
+            &artifacts.token_bytes,
+        )
+        .expect("write private token file");
+        let id_args = HandshakeTokenIdArgs { path: token_path };
         id_args.run(&mut ctx).expect("compute id");
         let output = ctx.outputs().last().expect("json output");
         let json: Value = norito::json::from_str(output).expect("valid json");
@@ -17670,6 +17917,125 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         let output = ctx.outputs().last().expect("json output");
         let json: Value = norito::json::from_str(output).expect("valid json");
         assert_eq_compact! { json["issuer_fingerprint_hex"] => Value::from(hex::encode(expected)) };
+    }
+    fn handshake_token_cli_rejects_secret_and_bearer_argv_inputs() {
+        use clap::Parser as _;
+        #[derive(clap::Parser, Debug)]
+        struct Parser {
+            #[command(subcommand)]
+            command: HandshakeTokenCommand,
+        }
+        let relay_id = "11".repeat(32);
+        let transcript_hash = "22".repeat(32);
+        let issue_error = Parser::try_parse_from([
+            "token-test",
+            "issue",
+            "--issuer-secret-hex",
+            "00",
+            "--issuer-public-hex",
+            "00",
+            "--relay-id",
+            &relay_id,
+            "--transcript-hash",
+            &transcript_hash,
+            "--output",
+            "token.bin",
+        ])
+        .expect_err("inline issuer secret must be unknown");
+        assert_eq!(issue_error.kind(), clap::error::ErrorKind::UnknownArgument);
+        let id_error = Parser::try_parse_from(["token-test", "id", "--token-hex", "00"])
+            .expect_err("inline bearer token must be unknown");
+        assert_eq!(id_error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+    #[cfg(unix)]
+    fn handshake_token_private_reader_rejects_public_links_and_oversize() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+        let directory = TempDir::new().expect("private input directory");
+        let secret = directory.path().join("secret.key");
+        fs::write(&secret, [0xA5; 32]).expect("write secret");
+        fs::set_permissions(&secret, fs::Permissions::from_mode(0o600))
+            .expect("set private mode");
+        assert_eq!(
+            read_owner_private_handshake_file(&secret, 32, Some(32), "secret")
+                .expect("private secret")
+                .as_slice(),
+            [0xA5; 32]
+        );
+        fs::set_permissions(&secret, fs::Permissions::from_mode(0o640))
+            .expect("set public mode");
+        assert!(
+            read_owner_private_handshake_file(&secret, 32, Some(32), "secret")
+                .expect_err("group-readable secret must fail")
+                .to_string()
+                .contains("owner-private")
+        );
+        fs::set_permissions(&secret, fs::Permissions::from_mode(0o600))
+            .expect("restore private mode");
+        let hard_link = directory.path().join("secret-copy.key");
+        fs::hard_link(&secret, &hard_link).expect("create hard link");
+        assert!(
+            read_owner_private_handshake_file(&secret, 32, Some(32), "secret")
+                .expect_err("multiply linked secret must fail")
+                .to_string()
+                .contains("exactly one link")
+        );
+        let direct = directory.path().join("direct.key");
+        fs::write(&direct, [0xB6; 32]).expect("write direct target");
+        fs::set_permissions(&direct, fs::Permissions::from_mode(0o600))
+            .expect("set target mode");
+        let symbolic = directory.path().join("secret-link.key");
+        symlink(&direct, &symbolic).expect("create symbolic link");
+        assert!(
+            read_owner_private_handshake_file(&symbolic, 32, Some(32), "secret")
+                .expect_err("symbolic link must fail")
+                .to_string()
+                .contains("non-symlink")
+        );
+        let oversized = directory.path().join("oversized.token");
+        let file = fs::File::create(&oversized).expect("create oversized token");
+        file.set_len((HANDSHAKE_TOKEN_FILE_MAX_BYTES_V1 + 1) as u64)
+            .expect("size oversized token");
+        fs::set_permissions(&oversized, fs::Permissions::from_mode(0o600))
+            .expect("set oversized mode");
+        assert!(
+            read_owner_private_handshake_file(
+                &oversized,
+                HANDSHAKE_TOKEN_FILE_MAX_BYTES_V1,
+                None,
+                "token",
+            )
+            .expect_err("oversized token must fail")
+            .to_string()
+            .contains("must contain between")
+        );
+        let public_key = directory.path().join("issuer.pub");
+        fs::write(&public_key, [0xC7; 32]).expect("write public key");
+        assert_eq!(
+            materialise_key_bytes(
+                Some(&public_key),
+                None,
+                "--issuer-public-key",
+                "--issuer-public-hex",
+                32,
+                Some(32),
+            )
+            .expect("exact public key"),
+            [0xC7; 32]
+        );
+        fs::write(&public_key, [0xC7; 33]).expect("grow public key");
+        assert!(
+            materialise_key_bytes(
+                Some(&public_key),
+                None,
+                "--issuer-public-key",
+                "--issuer-public-hex",
+                32,
+                Some(32),
+            )
+            .expect_err("oversized public key must fail")
+            .to_string()
+            .contains("exactly 32 bytes")
+        );
     }
     }
     impl RunContext for TestContext {

@@ -83,13 +83,18 @@ the exact 9+3 invocation inventory without treating the fake tools as execution 
 
 ## Blocked Top-Level Fuzz Targets
 
-`fuzz/Cargo.toml` declares five additional libFuzzer binaries: `da_replay_cache`, `proof_stream_transport`,
-`da_ingest_schema`, `soranet_handshake`, and `lane_relay_envelope`. They are not release-wired and must not be
-reported as executed. The manifest is outside the root workspace member list while inheriting root workspace
-dependencies, is not configured as a standalone cargo-fuzz workspace, and has no settled lockfile policy that can
-preserve the repository's root `Cargo.lock` exactly. A direct manifest invocation currently fails before compiling.
+`fuzz/Cargo.toml` declares seven additional libFuzzer binaries: `da_replay_cache`, `proof_stream_transport`,
+`da_ingest_schema`, `soranet_handshake`, `lane_relay_envelope`, `kagemusha_v4_release_bundle_parser`, and
+`kagemusha_v4_recursive_topology`. They are not release-wired and must not be reported as executed. The manifest is
+outside the root workspace member list, is not configured as a standalone cargo-fuzz workspace, and has no settled
+lockfile policy that can preserve the repository's root `Cargo.lock` exactly. A locked direct-manifest invocation
+currently fails before compiling because Cargo would need to create `fuzz/Cargo.lock`.
 
-This is a source/gate blocker, not an execution-only gap. Before these five targets can enter the release gate, the
+This is a source/gate blocker, not an execution-only gap. Before these seven targets can enter the release gate, the
 repository must define a supported workspace boundary, cargo-fuzz metadata, dependency inheritance, and an explicit
 lockfile strategy; then add pinned strict execution, resource bounds, crash artifact collection, and static target
 inventory tests. Until that work lands, no workflow should simulate or claim these targets.
+
+TODO: settle that workspace and lockfile policy without modifying the repository's existing `Cargo.lock`, then wire
+the two Kagemusha targets into the candidate-bound validation receipt with at least 10,000,000 executions each and
+zero crashes, timeouts, or out-of-memory exits.

@@ -20,6 +20,7 @@ use iroha_data_model::soranet::{
 use iroha_primitives::numeric::Quantity;
 use std::{
     cmp::max,
+    fmt,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -41,12 +42,21 @@ fn unix_now_ms() -> u64 {
     unix_time_ms(SystemTime::now())
 }
 /// Padded cell with the computed payload length retained for accounting.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PaddedCell {
     /// Fully padded fixed-length frame.
     pub frame: VpnPaddedCellV1,
     /// Unpadded payload length carried in the header.
     pub payload_len: u16,
+}
+impl fmt::Debug for PaddedCell {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PaddedCell")
+            .field("frame", &"<redacted>")
+            .field("payload_len", &self.payload_len)
+            .finish()
+    }
 }
 /// Errors surfaced when building frames from runtime configuration.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -57,6 +67,15 @@ pub enum VpnFrameBuildError {
     /// Frame failed validation while being padded.
     #[error(transparent)]
     Cell(#[from] VpnCellError),
+    /// Operating-system randomness was unavailable for cover scheduling.
+    #[error("operating-system randomness is unavailable for VPN cover scheduling")]
+    CoverRandomnessUnavailable,
+    /// A caller attempted to install an inert cover-scheduling seed.
+    #[error("VPN cover-scheduling seed must not be all zero")]
+    InvalidCoverSeed,
+    /// The directional frame sequence cannot advance without wrapping.
+    #[error("VPN frame sequence space is exhausted")]
+    SequenceExhausted,
 }
 /// Errors surfaced while reading or writing VPN frames.
 #[derive(Debug, Error)]
@@ -89,7 +108,7 @@ pub struct CoverFrameMeta {
     pub start_sequence: u64,
 }
 /// Frame scheduled for transmission at `deadline` relative to the start of the pump.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ScheduledFrame {
     /// Deadline relative to the start of the schedule.
     pub deadline: Duration,
@@ -100,14 +119,61 @@ pub struct ScheduledFrame {
     /// Whether the scheduled frame is a cover cell.
     pub is_cover: bool,
 }
+impl fmt::Debug for ScheduledFrame {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ScheduledFrame")
+            .field("deadline", &self.deadline)
+            .field("frame", &"<redacted>")
+            .field("payload_len", &self.payload_len)
+            .field("is_cover", &self.is_cover)
+            .finish()
+    }
+}
 /// Overlay that handles VPN cell framing, validation, and billing metadata.
-#[derive(Debug, Clone)]
 pub struct VpnOverlay {
     config: VpnConfig,
+    helper_ticket_secret: Option<[u8; 32]>,
+    backend_bootstrap_secret: Option<[u8; 32]>,
     exit_class: VpnExitClassV1,
     meter_hash: [u8; 32],
     routes: Vec<VpnRouteV1>,
     dns_overrides: Vec<String>,
+}
+impl std::fmt::Debug for VpnOverlay {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VpnOverlay")
+            .field("config", &"<redacted>")
+            .field("helper_ticket_secret", &"<redacted>")
+            .field("backend_bootstrap_secret", &"<redacted>")
+            .field("exit_class", &self.exit_class)
+            .field("meter_hash", &"<redacted>")
+            .field("route_count", &self.routes.len())
+            .field("dns_override_count", &self.dns_overrides.len())
+            .finish()
+    }
+}
+impl Drop for VpnOverlay {
+    fn drop(&mut self) {
+        clear_vpn_overlay_secrets(
+            &mut self.helper_ticket_secret,
+            &mut self.backend_bootstrap_secret,
+        );
+    }
+}
+fn clear_vpn_overlay_secrets(
+    helper_ticket_secret: &mut Option<[u8; 32]>,
+    backend_bootstrap_secret: &mut Option<[u8; 32]>,
+) {
+    if let Some(secret) = helper_ticket_secret {
+        secret.fill(0);
+        std::hint::black_box(secret);
+    }
+    if let Some(secret) = backend_bootstrap_secret {
+        secret.fill(0);
+        std::hint::black_box(secret);
+    }
 }
 impl VpnOverlay {
     /// Build an overlay from VPN configuration without panicking on malformed fields.
@@ -121,11 +187,13 @@ impl VpnOverlay {
         let meter_hash = config.try_meter_hash_bytes()?;
         let routes = config.parse_route_push()?;
         let dns_overrides = config.parse_dns_overrides()?;
-        let _ = config.try_helper_ticket_secret_bytes()?;
+        let helper_ticket_secret = config.try_helper_ticket_secret_bytes()?;
         let _ = config.try_backend_endpoint()?;
-        let _ = config.try_backend_bootstrap_secret_bytes()?;
+        let backend_bootstrap_secret = config.try_backend_bootstrap_secret_bytes()?;
         Ok(Self {
             config,
+            helper_ticket_secret,
+            backend_bootstrap_secret,
             exit_class,
             meter_hash,
             routes,
@@ -139,6 +207,14 @@ impl VpnOverlay {
     /// Access the raw VPN configuration.
     pub fn config(&self) -> &VpnConfig {
         &self.config
+    }
+    /// Return the startup-loaded helper-ticket authentication secret.
+    pub fn helper_ticket_secret(&self) -> Option<&[u8; 32]> {
+        self.helper_ticket_secret.as_ref()
+    }
+    /// Return the startup-loaded backend bootstrap authentication secret.
+    pub fn backend_bootstrap_secret(&self) -> Option<&[u8; 32]> {
+        self.backend_bootstrap_secret.as_ref()
     }
     /// Return the exit-class label advertised by this overlay.
     pub fn exit_class(&self) -> VpnExitClassV1 {
@@ -309,17 +385,33 @@ impl VpnOverlay {
     /// Start a new VPN session and return an adapter for recording ingress/egress.
     pub fn start_adapter(&self, metrics: Arc<Metrics>) -> VpnAdapter {
         let session = self.start_session(metrics);
-        VpnAdapter::new(session, self.clone())
+        VpnAdapter::new(session, self.framing_only_overlay())
     }
     /// Start a new VPN session and return a bridge bound to the supplied identifiers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VpnFrameBuildError::CoverRandomnessUnavailable`] when the operating
+    /// system cannot provide a fresh, nonzero cover-scheduling seed.
     pub fn start_bridge(
         &self,
         metrics: Arc<Metrics>,
         circuit_id: [u8; 16],
         flow_label: VpnFlowLabelV1,
-    ) -> VpnBridge {
+    ) -> Result<VpnBridge, VpnFrameBuildError> {
         let adapter = self.start_adapter(metrics);
         VpnBridge::new(adapter, circuit_id, flow_label)
+    }
+    fn framing_only_overlay(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            helper_ticket_secret: None,
+            backend_bootstrap_secret: None,
+            exit_class: self.exit_class,
+            meter_hash: self.meter_hash,
+            routes: self.routes.clone(),
+            dns_overrides: self.dns_overrides.clone(),
+        }
     }
     fn ensure_cell_size(&self) -> Result<(), VpnFrameBuildError> {
         let configured = usize::from(self.config.cell_size_bytes);
@@ -423,25 +515,34 @@ fn cover_plan_from_config(
     .plan(seed, frames)
 }
 /// Build a paced schedule that interleaves data frames with cover cells.
+///
+/// Every cell is assigned one contiguous, direction-wide sequence in transmission
+/// order, beginning at [`CoverFrameMeta::start_sequence`]. Incoming data-cell
+/// sequence values are intentionally replaced so cover and data traffic cannot
+/// create overlapping replay windows.
 pub fn schedule_frames(
     overlay: &VpnOverlay,
     data_cells: Vec<VpnCellV1>,
     cover_meta: CoverFrameMeta,
     seed: [u8; 32],
 ) -> Result<Vec<ScheduledFrame>, VpnFrameBuildError> {
-    let mut padded_data = Vec::with_capacity(data_cells.len());
-    for cell in data_cells {
-        padded_data.push(overlay.pad_cell(cell)?);
-    }
-    let mut total_frames = padded_data.len();
+    let mut total_frames = data_cells.len();
     let mut plan = cover_plan_from_config(&overlay.config, total_frames, seed);
-    while plan.iter().filter(|entry| !entry.is_cover).count() < padded_data.len() {
-        total_frames = total_frames.saturating_add(1);
+    while plan.iter().filter(|entry| !entry.is_cover).count() < data_cells.len() {
+        total_frames = total_frames
+            .checked_add(1)
+            .ok_or(VpnFrameBuildError::SequenceExhausted)?;
         plan = cover_plan_from_config(&overlay.config, total_frames, seed);
     }
-    let mut data_iter = padded_data.into_iter();
+    let frame_count =
+        u64::try_from(total_frames).map_err(|_| VpnFrameBuildError::SequenceExhausted)?;
+    cover_meta
+        .start_sequence
+        .checked_add(frame_count)
+        .ok_or(VpnFrameBuildError::SequenceExhausted)?;
+    let mut data_iter = data_cells.into_iter();
     let mut schedule = Vec::with_capacity(total_frames);
-    let mut cover_sequence = cover_meta.start_sequence;
+    let mut sequence = cover_meta.start_sequence;
     let mut last_deadline_ms: u64 = 0;
     for (idx, entry) in plan.into_iter().enumerate() {
         let scheduled_ms = entry.slot_ms;
@@ -454,15 +555,16 @@ pub fn schedule_frames(
             )
         };
         let (prepared, is_cover) = if entry.is_cover {
-            (overlay.cover_frame(&cover_meta, cover_sequence)?, true)
-        } else if let Some(data) = data_iter.next() {
-            (data, false)
+            (overlay.cover_frame(&cover_meta, sequence)?, true)
+        } else if let Some(mut data) = data_iter.next() {
+            data.header.sequence = sequence;
+            (overlay.pad_cell(data)?, false)
         } else {
-            (overlay.cover_frame(&cover_meta, cover_sequence)?, true)
+            (overlay.cover_frame(&cover_meta, sequence)?, true)
         };
-        if is_cover {
-            cover_sequence = cover_sequence.saturating_add(1);
-        }
+        sequence = sequence
+            .checked_add(1)
+            .ok_or(VpnFrameBuildError::SequenceExhausted)?;
         last_deadline_ms = deadline_ms;
         schedule.push(ScheduledFrame {
             deadline: Duration::from_millis(deadline_ms),
@@ -518,8 +620,8 @@ struct VpnSessionState {
     ingress_bytes: AtomicU64,
     egress_bytes: AtomicU64,
     cover_bytes: AtomicU64,
-    last_ingress_sequence: AtomicU64,
-    last_egress_sequence: AtomicU64,
+    last_ingress_sequence: Mutex<Option<u64>>,
+    last_egress_sequence: Mutex<Option<u64>>,
     started_at: Instant,
     started_at_ms: u64,
 }
@@ -533,8 +635,8 @@ impl VpnSession {
                 ingress_bytes: AtomicU64::new(0),
                 egress_bytes: AtomicU64::new(0),
                 cover_bytes: AtomicU64::new(0),
-                last_ingress_sequence: AtomicU64::new(u64::MAX),
-                last_egress_sequence: AtomicU64::new(u64::MAX),
+                last_ingress_sequence: Mutex::new(None),
+                last_egress_sequence: Mutex::new(None),
                 started_at: Instant::now(),
                 started_at_ms: unix_now_ms(),
             }),
@@ -550,16 +652,16 @@ impl VpnSession {
     }
     pub fn record_ingress(&self, bytes: u64, is_cover: bool) {
         self.metrics.record_vpn_ingress(bytes, is_cover);
-        self.state.ingress_bytes.fetch_add(bytes, Ordering::Relaxed);
+        atomic_saturating_add(&self.state.ingress_bytes, bytes);
         if is_cover {
-            self.state.cover_bytes.fetch_add(bytes, Ordering::Relaxed);
+            atomic_saturating_add(&self.state.cover_bytes, bytes);
         }
     }
     pub fn record_egress(&self, bytes: u64, is_cover: bool) {
         self.metrics.record_vpn_egress(bytes, is_cover);
-        self.state.egress_bytes.fetch_add(bytes, Ordering::Relaxed);
+        atomic_saturating_add(&self.state.egress_bytes, bytes);
         if is_cover {
-            self.state.cover_bytes.fetch_add(bytes, Ordering::Relaxed);
+            atomic_saturating_add(&self.state.cover_bytes, bytes);
         }
     }
     pub(crate) fn record_classified_ingress(&self, class: VpnCellClassV1, payload_len: u64) {
@@ -665,25 +767,28 @@ impl VpnSession {
         }
     }
 }
-fn record_monotonic_sequence(last: &AtomicU64, sequence: u64) -> Result<(), VpnCellError> {
-    loop {
-        let previous = last.load(Ordering::Acquire);
-        if previous != u64::MAX && sequence <= previous {
-            return Err(VpnCellError::NonMonotonicSequence {
-                last: previous,
-                actual: sequence,
-            });
-        }
-        if last
-            .compare_exchange(previous, sequence, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            return Ok(());
-        }
+fn atomic_saturating_add(counter: &AtomicU64, value: u64) {
+    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        Some(current.saturating_add(value))
+    });
+}
+fn record_monotonic_sequence(last: &Mutex<Option<u64>>, sequence: u64) -> Result<(), VpnCellError> {
+    let mut guard = last
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(previous) = *guard
+        && sequence <= previous
+    {
+        return Err(VpnCellError::NonMonotonicSequence {
+            last: previous,
+            actual: sequence,
+        });
     }
+    *guard = Some(sequence);
+    Ok(())
 }
 /// Session handle that carries receipt metadata alongside accounting.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct VpnSessionHandle {
     session: VpnSession,
     session_id: [u8; 16],
@@ -695,8 +800,24 @@ pub struct VpnSessionHandle {
     exit_class: VpnExitClassV1,
     meter_hash: [u8; 32],
 }
+impl fmt::Debug for VpnSessionHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VpnSessionHandle")
+            .field("session", &"<redacted>")
+            .field("session_id", &"<redacted>")
+            .field("quote_id", &"<redacted>")
+            .field("account_hash", &"<redacted>")
+            .field("relay_id", &"<redacted>")
+            .field("payment_tx_hash", &"<redacted>")
+            .field("highest_voucher", &"<redacted>")
+            .field("exit_class", &self.exit_class)
+            .field("meter_hash", &"<redacted>")
+            .finish()
+    }
+}
 /// Operator settlement payload emitted when a VPN session has an accepted client voucher.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct VpnSettlementArtifact {
     /// Relay receipt committing to the highest accepted client voucher.
     pub receipt: VpnSessionReceiptV1,
@@ -704,6 +825,16 @@ pub struct VpnSettlementArtifact {
     pub voucher: VpnUsageVoucherV1,
     /// Earned fee carried by the accepted voucher envelope.
     pub earned_fee: Quantity,
+}
+impl fmt::Debug for VpnSettlementArtifact {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VpnSettlementArtifact")
+            .field("receipt", &"<redacted>")
+            .field("voucher", &"<redacted>")
+            .field("earned_fee", &"<redacted>")
+            .finish()
+    }
 }
 impl VpnSessionHandle {
     pub fn new(
@@ -753,7 +884,7 @@ impl VpnSessionHandle {
         let mut highest = self
             .highest_voucher
             .lock()
-            .expect("vpn voucher mutex should not be poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let should_replace = highest
             .as_ref()
             .map(|current| envelope.voucher.body.sequence > current.voucher.body.sequence)
@@ -782,7 +913,7 @@ impl VpnSessionHandle {
         let voucher = self
             .highest_voucher
             .lock()
-            .expect("vpn voucher mutex should not be poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         self.finalize_receipt(voucher.as_ref())
     }
@@ -791,7 +922,7 @@ impl VpnSessionHandle {
         let voucher = self
             .highest_voucher
             .lock()
-            .expect("vpn voucher mutex should not be poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()?;
         Some(VpnSettlementArtifact {
             receipt: self.finalize_receipt(Some(&voucher)),
@@ -808,6 +939,72 @@ mod tests {
         sync::Arc,
         time::{Duration, UNIX_EPOCH},
     };
+    #[test]
+    fn overlay_debug_redacts_and_drop_helper_clears_secrets() {
+        let overlay = VpnOverlay {
+            config: VpnConfig::default(),
+            helper_ticket_secret: Some([0xA5; 32]),
+            backend_bootstrap_secret: Some([0x5A; 32]),
+            exit_class: VpnExitClassV1::Standard,
+            meter_hash: [0; 32],
+            routes: Vec::new(),
+            dns_overrides: Vec::new(),
+        };
+        let rendered = format!("{overlay:?}");
+        assert!(rendered.contains("<redacted>"));
+        assert!(!rendered.contains("165, 165"));
+        assert!(!rendered.contains("90, 90"));
+        let framing = overlay.framing_only_overlay();
+        assert!(framing.helper_ticket_secret().is_none());
+        assert!(framing.backend_bootstrap_secret().is_none());
+        assert_eq!(framing.meter_hash(), overlay.meter_hash());
+
+        let mut helper = Some([0xA5; 32]);
+        let mut backend = Some([0x5A; 32]);
+        clear_vpn_overlay_secrets(&mut helper, &mut backend);
+        assert_eq!(helper, Some([0; 32]));
+        assert_eq!(backend, Some([0; 32]));
+    }
+    #[test]
+    fn vpn_frame_and_session_debug_output_redacts_traffic_identity() {
+        let overlay = VpnOverlay::from_config(VpnConfig::default());
+        let flow_label = VpnFlowLabelV1::from_u32(1).expect("flow label");
+        let padded = overlay
+            .pad_cell(
+                overlay
+                    .data_cell(
+                        [0xA5; 16],
+                        flow_label,
+                        1,
+                        0,
+                        VpnCellFlagsV1::new(false, false, false, false),
+                        vec![0xA5; 4],
+                    )
+                    .expect("data cell"),
+            )
+            .expect("padded cell");
+        let scheduled = ScheduledFrame {
+            deadline: Duration::ZERO,
+            frame: padded.frame.clone(),
+            payload_len: padded.payload_len,
+            is_cover: false,
+        };
+        let metrics = Arc::new(Metrics::new());
+        let handle = VpnSessionHandle::new(
+            VpnSession::from_parts(metrics),
+            [0xA5; 16],
+            VpnExitClassV1::Standard,
+            [0xA5; 32],
+        );
+        for rendered in [
+            format!("{padded:?}"),
+            format!("{scheduled:?}"),
+            format!("{handle:?}"),
+        ] {
+            assert!(rendered.contains("<redacted>"));
+            assert!(!rendered.contains("165, 165"));
+        }
+    }
     #[test]
     fn unix_time_ms_saturates_pre_epoch_clock() {
         assert_eq!(unix_time_ms(UNIX_EPOCH - Duration::from_secs(1)), 0);
@@ -854,5 +1051,28 @@ mod tests {
         assert_eq!(5, receipt.ingress_bytes);
         assert_eq!(7, receipt.egress_bytes);
         assert_eq!(12, receipt.cover_bytes);
+    }
+    #[test]
+    fn session_accounting_saturates_instead_of_wrapping() {
+        let metrics = Arc::new(Metrics::new());
+        let session = VpnSession::from_parts(metrics);
+        session
+            .state
+            .ingress_bytes
+            .store(u64::MAX - 1, Ordering::Relaxed);
+        session
+            .state
+            .egress_bytes
+            .store(u64::MAX - 1, Ordering::Relaxed);
+        session
+            .state
+            .cover_bytes
+            .store(u64::MAX - 1, Ordering::Relaxed);
+        session.record_ingress(2, true);
+        session.record_egress(2, true);
+        let receipt = session.finish_receipt([0; 16], VpnExitClassV1::Standard, [0; 32]);
+        assert_eq!(u64::MAX, receipt.ingress_bytes);
+        assert_eq!(u64::MAX, receipt.egress_bytes);
+        assert_eq!(u64::MAX, receipt.cover_bytes);
     }
 }

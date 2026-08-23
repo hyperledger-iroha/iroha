@@ -17,7 +17,7 @@ rand = { workspace = true }
 soranet-relay = { path = "../soranet-relay" }
 soranet_pq = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "net"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "net", "sync"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
 hex = { workspace = true }

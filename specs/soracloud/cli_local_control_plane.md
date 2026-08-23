@@ -344,162 +344,43 @@ the logical mount path declared in the manifest.
 
 ## Inrou Smoke
 
-Inrou now supports both local backend classes: `FirecrackerKvm` on Linux/KVM
-and `PortableVm` everywhere else. Mixed-host validator fleets still proxy
-hosted HTTP through authoritatively placed healthy replicas, but local
-materialization is no longer restricted to Linux/KVM peers. The repo now ships
-dedicated smoke entrypoints for both local backend classes plus a mixed-host
-orchestrator:
+Inrou V1 has one runtime backend: `PortableVm`. Enabled hosts must configure
+`backends = ["portable_vm"]` plus one explicit `portable_vm_acceleration`.
+The Taira profile uses `hvf`. Retired Firecracker labels are configuration and
+wire-schema errors; no Firecracker or mixed-backend smoke mode is exposed.
 
-```bash
-cargo xtask soracloud-inrou-smoke portable
-sudo --preserve-env=IROHA_INROU_LINUX_KVM_KERNEL_IMAGE,IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE,IROHA_INROU_LINUX_KVM_INITRD_IMAGE \
-  cargo xtask soracloud-inrou-smoke firecracker
-cargo xtask soracloud-inrou-smoke mixed-host --inventory ./fixtures/soracloud/inrou_mixed_host_inventory.example.toml
-```
-
-PortableVm stays unprivileged and requires only native-ISA QEMU, `qemu-img`,
-and `tar`. Shared non-root lease volumes are attached as persistent block
-devices that the guest formats and mounts on first boot; the mutable root disk
-is a `qcow2` overlay over the verified base root image. PortableVm bootstrap
-uses no host metadata listener: QEMU exposes the three NoCloud documents
-(`meta-data`, `network-config`, and `user-data`) through a read-only `cidata`
-VVFAT device, while the application archive is a separate read-only raw virtio
-block device. The host verifies the archive's exact byte length and hash before
-launch, and the guest reads exactly that authenticated length and verifies the
-same hash before extraction. Authoritative `service_secrets` remain in their
-dedicated encrypted/materialized secret boundary and are never projected into
-the NoCloud seed or effective environment.
-
-The Firecracker/KVM path keeps the Linux host prerequisites for tap networking
-and the NFS transport adapter, and installs tap-scoped host-input and forward
-rules so `Isolated` policy fails closed even on permissive hosts:
-
-- host OS is Linux
-- the caller is root
-- `/dev/kvm` exists
-- `/dev/net/tun` exists
-- `/proc/sys/net/ipv4/ip_forward = 1`
-- `firecracker`, `ip`, `iptables`, `tar`, `exportfs`, `rpc.nfsd`, `mount`,
-  `chown`, and `mke2fs` or `mkfs.ext4` are on `PATH`
-
-Portable smoke expects:
-
-- `IROHA_INROU_PORTABLE_KERNEL_IMAGE`
-- `IROHA_INROU_PORTABLE_ROOTFS_IMAGE`
-- optional `IROHA_INROU_PORTABLE_INITRD_IMAGE`
-- optional `IROHA_INROU_PORTABLE_ACCEL` (`auto`, `tcg`, `kvm`, `hvf`, `whpx`)
-
-Prepare a local Debian genericcloud asset set with:
+Prepare verified native-ISA Debian guest assets and run the canonical smoke:
 
 ```bash
 eval "$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --print-env)"
 cargo xtask soracloud-inrou-smoke portable
 ```
 
-The helper downloads the pinned Debian Bookworm genericcloud build, verifies
-signed `SHA512SUMS` with GPG and a Debian archive/cloud-image keyring when a
-detached signature is published, extracts the root ext4 partition, relabels it
-for the native PortableVm guest profile, removes cloud-image fstab entries for
-unattached partitions, and exports the matching kernel/initrd paths. The current
-official pinned cloud directory does not publish `SHA512SUMS.sign`, so the
-helper falls back only to the hard-pinned SHA512 digest for the exact
-`20260413-2447` `amd64` or `arm64` archive. Use `--debian-keyring` or
-`DEBIAN_ARCHIVE_KEYRING` when the keyring is not installed in a standard path,
-`--image-base-url` for an operator mirror, and `--force` to refresh an existing
-cache. Unsigned archives without a pinned digest still fail closed.
+The test-only `IROHA_INROU_PORTABLE_KERNEL_IMAGE`,
+`IROHA_INROU_PORTABLE_ROOTFS_IMAGE`, and optional
+`IROHA_INROU_PORTABLE_INITRD_IMAGE` variables supply local guest assets; they
+do not select production behavior. Production backend and acceleration
+selection comes only from `iroha_config`.
 
-The mixed-host inventory's proxy-only host gate should run the focused
-`proxy_only_inrou_host` runtime tests, proving the host advertises zero hosted
-capacity and does not publish local replica runtime state even if a placement is
-assigned to it.
+PortableVm uses a verified base image with a mutable `qcow2` root overlay.
+Shared lease volumes are exact-size persistent raw block devices. Only a raw
+disk atomically created for the current launch may be formatted; an existing
+disk, filesystem mismatch, mount failure, or post-mount probe failure aborts
+startup without reformatting. The NoCloud seed and application archive remain
+separate read-only devices.
 
-Production readiness also requires an operator observability evidence JSON file.
-Validate the artifact locally before attaching it to a `full` or `load`
-readiness run:
+Inrou V1 rejects unrestricted `Open` egress. `Isolated` is the scaffold
+default; an allowlist must be nonempty and every literal or DNS-resolved IPv4
+endpoint must be publicly routable before QEMU guest forwarding is built.
 
-```bash
-python3 scripts/ci/check_soracloud_observability_evidence.py \
-  --evidence ./fixtures/soracloud/production_observability_evidence.example.json
-```
+Focused validation includes:
 
-Use the example as a schema reference only; production evidence must point to
-the real deployment's metrics, status fields, alerts, runbooks, and dashboards.
-The readiness runner refuses `full` and `load` profiles without
-`--observability-evidence`.
-
-Firecracker smoke expects:
-
-- `IROHA_INROU_LINUX_KVM_KERNEL_IMAGE`
-- `IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE`
-- optional `IROHA_INROU_LINUX_KVM_INITRD_IMAGE`
-
-The example mixed-host inventory preserves those `IROHA_INROU_LINUX_KVM_*`
-variables through `sudo`, since the Firecracker smoke must run as root but still
-needs the operator-selected kernel, rootfs, and optional initrd paths.
-
-Hosted HTTP proxy responses carried over the P2P Torii proxy path are buffered
-up to `torii.soracloud_public_max_response_bytes` before being wrapped for the
-caller. The default is 64 MiB; larger hosted responses fail closed with a
-`502 Bad Gateway` snapshot instead of allocating unbounded memory.
-
-The embedded Hugging Face importer and inference bridge use separate bounded
-response policies. `soracloud_runtime.hf.import_max_files`,
-`import_max_file_bytes`, and `import_max_total_bytes` must be non-zero, must not
-exceed 128 files, 512 MiB per file, and 4 GiB per source respectively, and the
-per-file limit must fit inside the aggregate limit. Both Torii resource-profile
-derivation and the runtime importer cap model metadata with
-`model_info_max_response_bytes` (8 MiB by default, 16 MiB hard maximum);
-`inference_max_response_bytes` caps inference responses at 64 MiB by default and
-at the hard maximum. Oversized or misreported HTTP bodies are rejected before
-decode through a Content-Length preflight and a streamed max-plus-one check.
-Torii also deduplicates selected model-weight paths and rejects metadata whose
-unique weight count exceeds the same `import_max_files` runtime import policy.
-Selected Hub files are streamed into exclusive atomic cache files and hashed
-from disk; their configured 512 MiB ceiling is a disk-transfer limit, not an
-instruction to reserve or retain that much daemon memory. The resident local
-runner also admits only one response frame at a time, bounds the frame to the
-configured inference response limit plus fixed protocol overhead, and closes
-the worker pipe on unsolicited queued output. In the runtime importer,
-model-info tag and sibling lists have fixed count and string-size ceilings
-before they are copied into the local import manifest.
-
-Committed local single-file SoraFS artifacts are resolved only through the
-bounded set of ledger-committed replication sources and copied into the runtime
-cache in 8 MiB chunks; reconciliation no longer clones the node's complete
-manifest catalogue or retains all hydrated payloads through the pass. Canonical
-remote payload verification and multi-file guest-image materialization still
-require one contiguous payload, so those paths have an unconditional 256 MiB
-in-memory admission ceiling. Larger single-file artifacts remain eligible
-through the streaming local-store path.
-
-Persisted runtime snapshots, HF import manifests, hosted-HTTP runtime state,
-apartment autonomy summaries, uploaded-model key material, and Inrou bootstrap
-overlays are opened without following links and checked against fixed byte
-ceilings before decoding or retaining them. Cache pruning similarly refuses to
-materialize more than 65,536 candidates from any one cache directory.
-Separately, startup does not publish a runtime handle when persisted snapshot
-restore or the initial authoritative reconciliation fails.
-
-Focused validation now covers both shared-storage transports:
-
-- `portable_vm_bundle_block_stage_verifies_and_pads_before_replacement`
-- `portable_vm_cloud_init_seed_contains_only_nocloud_documents`
-- `portable_vm_qemu_args_attach_seed_and_bundle_read_only_without_url`
-- `build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay`
+- `enabled_inrou_backend_preflight_rejects_an_empty_allowlist`
+- `inrou_allowlist_accepts_only_public_ipv4_endpoints`
+- `inrou_allowlist_rejects_dns_names_resolving_to_non_public_ipv4`
+- `build_inrou_user_data_never_formats_existing_portable_block_mounts`
 - `ensure_inrou_portable_lease_disks_create_reusable_raw_images`
 - `ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file`
-- `build_inrou_user_data_projects_mounts_overlay_and_replica_env`
-- `write_inrou_firecracker_config_serializes_boot_source_drives_and_network`
-- `ensure_inrou_root_disk_copies_once_and_reuses_existing_rootfs`
-- `planned_inrou_tap_firewall_rules_keep_isolated_policy_private`
-
-The portable path mounts shared lease storage through attached virtio block
-devices. The Firecracker fast path keeps the backend-private NFS adapter, but
-both backends now expose the same guest-visible lease semantics. Mixed-host
-acceptance is expected to cover one Linux/KVM Firecracker validator, one
-non-Linux PortableVm validator, and one proxy-only validator that publishes
-zero hosted capacity.
 
 ## Recommended Hosted-Service Workflow
 

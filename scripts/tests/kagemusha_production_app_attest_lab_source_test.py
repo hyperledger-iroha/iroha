@@ -661,7 +661,7 @@ class ProductionAppAttestLabSourceTest(unittest.TestCase):
                         "sha256": hashlib.sha256(apple_root).hexdigest(),
                     }
                 ],
-                "revoked_certificate_sha256": [],
+                "revoked_certificate_tbs_sha256": [],
                 "x509_validation_profile": production_evidence.X509_VALIDATION_PROFILE,
                 "secure_enclave_key_profile": production_evidence.SECURE_ENCLAVE_KEY_PROFILE,
             }

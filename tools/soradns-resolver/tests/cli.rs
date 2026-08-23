@@ -48,6 +48,8 @@ fn rad_verify_rejects_invalid_entries() {
 #[test]
 fn directory_fetch_downloads_and_verifies_bundle() {
     let temp = TempDir::new().expect("tempdir");
+    let output = temp.path().join("downloaded");
+    let builder_public_key = builder_public_key_arg();
     let (_, directory_bytes, record_bytes) = sample_directory_bundle();
     let record_path = temp.path().join("record.json");
     fs::write(&record_path, &record_bytes).expect("write record");
@@ -61,17 +63,124 @@ fn directory_fetch_downloads_and_verifies_bundle() {
             record_path.to_str().unwrap(),
             "--directory-file",
             directory_path.to_str().unwrap(),
+            "--builder-public-key",
+            builder_public_key.as_str(),
+            "--expected-root",
+            expected_root_arg(),
             "--output",
-            temp.path().to_str().unwrap(),
+            output.to_str().unwrap(),
         ])
         .assert()
         .success();
-    assert!(temp.path().join("record.json").exists());
-    assert!(temp.path().join("directory.json").exists());
+    assert!(output.join("record.json").exists());
+    assert!(output.join("directory.json").exists());
+}
+#[test]
+fn directory_fetch_default_output_is_a_fresh_child_of_working_directory() {
+    let temp = TempDir::new().expect("tempdir");
+    let builder_public_key = builder_public_key_arg();
+    let (_, directory_bytes, record_bytes) = sample_directory_bundle();
+    let record_path = temp.path().join("record-input.json");
+    fs::write(&record_path, record_bytes).expect("write record");
+    let directory_path = temp.path().join("directory-input.json");
+    fs::write(&directory_path, directory_bytes).expect("write directory");
+    Command::new(assert_cmd::cargo::cargo_bin!("soradns-resolver"))
+        .current_dir(temp.path())
+        .args([
+            "directory",
+            "fetch",
+            "--record-file",
+            record_path.to_str().unwrap(),
+            "--directory-file",
+            directory_path.to_str().unwrap(),
+            "--builder-public-key",
+            builder_public_key.as_str(),
+            "--expected-root",
+            expected_root_arg(),
+        ])
+        .assert()
+        .success();
+    assert!(temp.path().join("soradns-directory/record.json").is_file());
+}
+#[cfg(unix)]
+#[test]
+fn directory_fetch_refuses_symlinked_output_directory() {
+    use std::os::unix::fs::symlink;
+    let temp = TempDir::new().expect("tempdir");
+    let victim = temp.path().join("victim");
+    fs::create_dir(&victim).expect("create victim directory");
+    let output = temp.path().join("downloaded");
+    symlink(&victim, &output).expect("plant output symlink");
+    let builder_public_key = builder_public_key_arg();
+    let (_, directory_bytes, record_bytes) = sample_directory_bundle();
+    let record_path = temp.path().join("record-input.json");
+    fs::write(&record_path, record_bytes).expect("write record");
+    let directory_path = temp.path().join("directory-input.json");
+    fs::write(&directory_path, directory_bytes).expect("write directory");
+    Command::new(assert_cmd::cargo::cargo_bin!("soradns-resolver"))
+        .args([
+            "directory",
+            "fetch",
+            "--record-file",
+            record_path.to_str().unwrap(),
+            "--directory-file",
+            directory_path.to_str().unwrap(),
+            "--builder-public-key",
+            builder_public_key.as_str(),
+            "--expected-root",
+            expected_root_arg(),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    assert!(
+        fs::read_dir(&victim)
+            .expect("read victim directory")
+            .next()
+            .is_none(),
+        "symlink target must remain untouched"
+    );
+}
+#[cfg(unix)]
+#[test]
+fn directory_fetch_refuses_writable_output_parent() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let temp = TempDir::new().expect("tempdir");
+    let unsafe_parent = temp.path().join("unsafe-parent");
+    fs::create_dir(&unsafe_parent).expect("create unsafe parent");
+    fs::set_permissions(&unsafe_parent, fs::Permissions::from_mode(0o777))
+        .expect("make output parent writable");
+    let output = unsafe_parent.join("downloaded");
+    let builder_public_key = builder_public_key_arg();
+    let (_, directory_bytes, record_bytes) = sample_directory_bundle();
+    let record_path = temp.path().join("record-input.json");
+    fs::write(&record_path, record_bytes).expect("write record");
+    let directory_path = temp.path().join("directory-input.json");
+    fs::write(&directory_path, directory_bytes).expect("write directory");
+    Command::new(assert_cmd::cargo::cargo_bin!("soradns-resolver"))
+        .args([
+            "directory",
+            "fetch",
+            "--record-file",
+            record_path.to_str().unwrap(),
+            "--directory-file",
+            directory_path.to_str().unwrap(),
+            "--builder-public-key",
+            builder_public_key.as_str(),
+            "--expected-root",
+            expected_root_arg(),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    assert!(!output.exists(), "unsafe output parent must remain unused");
 }
 #[test]
 fn directory_fetch_fails_on_digest_mismatch() {
     let temp = TempDir::new().expect("tempdir");
+    let builder_public_key = builder_public_key_arg();
     let (_, directory_bytes, record_bytes) = sample_directory_bundle();
     let record_path = temp.path().join("record.json");
     fs::write(&record_path, &record_bytes).expect("write record");
@@ -90,6 +199,10 @@ fn directory_fetch_fails_on_digest_mismatch() {
             bad_record_path.to_str().unwrap(),
             "--directory-file",
             directory_path.to_str().unwrap(),
+            "--builder-public-key",
+            builder_public_key.as_str(),
+            "--expected-root",
+            expected_root_arg(),
             "--output",
             temp.path().to_str().unwrap(),
         ])
@@ -97,8 +210,116 @@ fn directory_fetch_fails_on_digest_mismatch() {
         .failure();
 }
 #[test]
+fn directory_fetch_rejects_invalid_builder_signature_before_writing() {
+    let temp = TempDir::new().expect("tempdir");
+    let builder_public_key = builder_public_key_arg();
+    let output = temp.path().join("downloaded");
+    let (_, directory_bytes, record_bytes) = sample_directory_bundle();
+    let mut record: ResolverDirectoryRecordV1 =
+        json::from_slice(&record_bytes).expect("decode directory record");
+    record.builder_signature = Signature::from_bytes(&[0xEE; 64]);
+    let record_path = temp.path().join("record-invalid-signature.json");
+    fs::write(
+        &record_path,
+        json::to_vec(&record).expect("encode invalid record"),
+    )
+    .expect("write invalid record");
+    let directory_path = temp.path().join("directory.json");
+    fs::write(&directory_path, &directory_bytes).expect("write directory");
+    Command::new(assert_cmd::cargo::cargo_bin!("soradns-resolver"))
+        .args([
+            "directory",
+            "fetch",
+            "--record-file",
+            record_path.to_str().unwrap(),
+            "--directory-file",
+            directory_path.to_str().unwrap(),
+            "--builder-public-key",
+            builder_public_key.as_str(),
+            "--expected-root",
+            expected_root_arg(),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    assert!(
+        !output.exists(),
+        "untrusted artifacts must not be persisted"
+    );
+}
+#[test]
+fn directory_fetch_rejects_unpinned_builder_before_writing() {
+    let temp = TempDir::new().expect("tempdir");
+    let output = temp.path().join("downloaded");
+    let (_, directory_bytes, record_bytes) = sample_directory_bundle();
+    let record_path = temp.path().join("record.json");
+    fs::write(&record_path, record_bytes).expect("write record");
+    let directory_path = temp.path().join("directory.json");
+    fs::write(&directory_path, directory_bytes).expect("write directory");
+    let untrusted_key = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
+        .expect("alternate builder key")
+        .public_key()
+        .to_string();
+    Command::new(assert_cmd::cargo::cargo_bin!("soradns-resolver"))
+        .args([
+            "directory",
+            "fetch",
+            "--record-file",
+            record_path.to_str().unwrap(),
+            "--directory-file",
+            directory_path.to_str().unwrap(),
+            "--builder-public-key",
+            untrusted_key.as_str(),
+            "--expected-root",
+            expected_root_arg(),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    assert!(
+        !output.exists(),
+        "untrusted artifacts must not be persisted"
+    );
+}
+#[test]
+fn directory_fetch_rejects_signed_unexpected_root_before_writing() {
+    let temp = TempDir::new().expect("tempdir");
+    let output = temp.path().join("downloaded");
+    let (_, directory_bytes, record_bytes) = sample_directory_bundle();
+    let record_path = temp.path().join("record.json");
+    fs::write(&record_path, record_bytes).expect("write record");
+    let directory_path = temp.path().join("directory.json");
+    fs::write(&directory_path, directory_bytes).expect("write directory");
+    let builder_public_key = builder_public_key_arg();
+    let stale_or_unexpected_root = hex::encode([0x11; 32]);
+    Command::new(assert_cmd::cargo::cargo_bin!("soradns-resolver"))
+        .args([
+            "directory",
+            "fetch",
+            "--record-file",
+            record_path.to_str().unwrap(),
+            "--directory-file",
+            directory_path.to_str().unwrap(),
+            "--builder-public-key",
+            builder_public_key.as_str(),
+            "--expected-root",
+            stale_or_unexpected_root.as_str(),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    assert!(
+        !output.exists(),
+        "a validly signed but unpinned release must not be persisted"
+    );
+}
+#[test]
 fn directory_verify_accepts_valid_bundle() {
     let temp = TempDir::new().expect("tempdir");
+    let builder_public_key = builder_public_key_arg();
     write_sample_bundle(temp.path());
     Command::new(assert_cmd::cargo::cargo_bin!("soradns-resolver"))
         .args([
@@ -106,6 +327,10 @@ fn directory_verify_accepts_valid_bundle() {
             "verify",
             "--bundle",
             temp.path().to_str().unwrap(),
+            "--builder-public-key",
+            builder_public_key.as_str(),
+            "--expected-root",
+            expected_root_arg(),
         ])
         .assert()
         .success();
@@ -113,6 +338,7 @@ fn directory_verify_accepts_valid_bundle() {
 #[test]
 fn directory_verify_detects_missing_rad() {
     let temp = TempDir::new().expect("tempdir");
+    let builder_public_key = builder_public_key_arg();
     let rad_path = write_sample_bundle(temp.path());
     fs::remove_file(&rad_path).expect("remove rad file");
     Command::new(assert_cmd::cargo::cargo_bin!("soradns-resolver"))
@@ -121,6 +347,10 @@ fn directory_verify_detects_missing_rad() {
             "verify",
             "--bundle",
             temp.path().to_str().unwrap(),
+            "--builder-public-key",
+            builder_public_key.as_str(),
+            "--expected-root",
+            expected_root_arg(),
         ])
         .assert()
         .failure();
@@ -173,7 +403,7 @@ fn base_rad() -> ResolverAttestationDocumentV1 {
         valid_from_unix: 1_700_000_000,
         valid_until_unix: 1_700_086_400,
         operator_account,
-        operator_signature: Signature::from_bytes(&[0; 64]),
+        operator_signature: Signature::from_bytes(&[2; 64]),
         governance_signature: Signature::from_bytes(&[1; 64]),
         rotation_policy: RotationPolicyV1 {
             max_lifetime_days: 30,
@@ -186,6 +416,22 @@ fn base_rad() -> ResolverAttestationDocumentV1 {
 fn write_rad_file(path: &Path, rad: ResolverAttestationDocumentV1) {
     let bytes = to_bytes(&vec![rad]).expect("serialize rad");
     fs::write(path, bytes).expect("write rad");
+}
+fn directory_builder_keys() -> KeyPair {
+    KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+        .expect("fixture SoraDNS directory builder key")
+}
+fn builder_public_key_arg() -> String {
+    directory_builder_keys().public_key().to_string()
+}
+fn expected_root_arg() -> &'static str {
+    static EXPECTED_ROOT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    EXPECTED_ROOT.get_or_init(|| {
+        let (_, _, record_bytes) = sample_directory_bundle();
+        let record: ResolverDirectoryRecordV1 =
+            json::from_slice(&record_bytes).expect("decode directory record fixture");
+        hex::encode(record.root_hash)
+    })
 }
 fn sample_directory_bundle() -> (ResolverAttestationDocumentV1, Vec<u8>, Vec<u8>) {
     let rad = base_rad();
@@ -222,8 +468,7 @@ fn sample_directory_bundle() -> (ResolverAttestationDocumentV1, Vec<u8>, Vec<u8>
         canonicalize_json_bytes(&json::to_vec(&directory_json).expect("serialize directory"))
             .expect("canonicalize directory");
     let directory_sha = sha256_digest(&directory_bytes);
-    let builder_keys = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
-        .expect("fixture SoraDNS directory builder key");
+    let builder_keys = directory_builder_keys();
     let mut record = ResolverDirectoryRecordV1 {
         root_hash,
         record_version: 1,

@@ -82,6 +82,12 @@ the same deterministic framing.
 - **Helper tickets:** Helper tickets are fixed 664-byte v1 frames. Each tariff
   component occupies a fixed slot containing a canonical exact `Quantity`
   frame, so no implicit integer nano-XOR unit crosses the helper boundary. The
+  node-side MAC key is configured only through
+  `network.soranet_vpn.helper_ticket_secret_path`; relative paths resolve from
+  the declaring config file. The target must be a single-link, owner-private
+  direct regular file containing exactly 64 lowercase hex bytes (no prefix or
+  newline), and startup pins its identity across a bounded read. Inline secret
+  config is not accepted.
   MAC covers the session, quote, account hash, relay id, payment hash,
   authorized Ed25519 metering public key, full deterministic tariff, and
   expiry. The client helper may structurally decode those fields to construct
@@ -139,12 +145,16 @@ the same deterministic framing.
   metrics and receipts.【tools/soranet-relay/src/runtime.rs:1984】【tools/soranet-relay/src/metrics.rs:744】【tools/soranet-relay/tests/vpn_adapter.rs:1】
 - **Privileged local backend:** Relay backend bridging is configured with
   `vpn.backend_endpoint`, not `vpn.backend_addr`. The default is a permissioned
-  Unix socket (`unix:/tmp/sora-vpn-backend.sock`); TCP remains available as
-  `tcp://host:port` only when both relay and backend configure
-  `vpn.backend_bootstrap_secret_hex` / `SORANET_VPN_BACKEND_BOOTSTRAP_SECRET_HEX`.
+  Unix socket (`unix:/run/sora-vpn-backend.sock`); TCP remains available as
+  `tcp://host:port`. Every Unix and TCP session requires both relay and backend
+  to configure owner-private direct files selected by `vpn.backend_bootstrap_secret_path` /
+  `SORANET_VPN_BACKEND_BOOTSTRAP_SECRET_PATH`.
+  Each file contains exactly 64 lowercase hexadecimal characters, with no
+  whitespace and no all-zero placeholder.
   Bootstrap frames are Norito envelopes with timestamp, nonce, and keyed MAC;
   the backend rejects bad MACs, stale timestamps, and replayed nonces, and Unix
-  endpoints check peer credentials against the configured allowed uid/gid.
+  endpoints additionally check peer credentials against the configured allowed
+  uid/gid; peer identity does not replace the keyed bootstrap authentication.
 - **Local helper secrecy:** Hidden helper workers read their connect payloads
   from stdin instead of argv, and that stdin payload is a magic-prefixed Norito
   frame rather than JSON. The helper's private state file is also a

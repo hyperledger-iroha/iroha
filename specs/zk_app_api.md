@@ -88,15 +88,17 @@ Endpoints:
  - `GET  /v1/zk/attachments/count` — return `{ count }` for the same filter set as the list endpoint.
 - `GET  /v1/zk/proof/{backend}/{hash}` — fetch a proof record by backend and proof hash (64‑hex). Returns JSON `{ backend, proof_hash, status, verified_at_height?, vk_ref?, vk_commitment? }`.
  - `GET  /v1/zk/proofs` — list proof records with optional filters and pagination.
-   - Filters: `backend`, `status=Submitted|Verified|Rejected`, `has_tag=<TAG>` (requires `zk-proof-tags` feature), `verified_from_height`, `verified_until_height`, `limit`, `offset`, `order=asc|desc`, `ids_only=true`.
- - `GET  /v1/zk/proofs/count` — return `{ count }` for the same filter set.
+   - Filters: `backend`, `status=Submitted|Verified|Rejected`, `has_tag=<TAG>` (exactly four ASCII graphic/non-space printable characters; requires `zk-proof-tags` feature), `verified_from_height`, `verified_until_height`, `bridge_only`, `bridge_start_from_height`, and `bridge_end_until_height`.
+   - Pagination and projection: `limit`, `offset`, `order=asc|desc`, and `ids_only=true`.
+   - Unknown status/order values, malformed tags, zero or over-limit pages, and inverted height ranges fail with `400 Bad Request`; they never broaden the query by silently dropping a filter.
+ - `GET  /v1/zk/proofs/count` — return `{ count }` for the same filters. List-only `limit`, `offset`, `order`, and `ids_only` parameters fail with `400 Bad Request`.
 - Proof endpoints enforce Torii’s dedicated guardrails:
   - Body limits: proof submission payloads exceeding `torii.proof_max_body_bytes` are rejected.
   - Rate limit: `torii.proof_rate_per_minute` + `torii.proof_burst` (returns `429` + `Retry-After` using `torii.proof_retry_after_secs` unless `api_rate_limit_bypass_cidrs` bypasses rate limiting only).
-  - Pagination: `torii.proof_max_list_limit` caps `limit`; larger requests fail with `CapacityLimit` (429).
+  - Pagination: `torii.proof_max_list_limit` caps `limit`; zero or larger requests fail with `400 Bad Request`.
   - Timeout: list/count handlers abort after `torii.proof_request_timeout_ms` wall-clock.
   - Egress throttling: proof fetches are shaped by `torii.proof_egress_bytes_per_sec` + `torii.proof_egress_burst_bytes`; throttled responses return `Retry-After` with the proof retry hint.
-  - Caching: `GET /v1/zk/proof/...` emits `Cache-Control: public,max-age=torii.proof_cache_max_age_secs` and `ETag="<proof_hash>"`; `If-None-Match` returns `304 Not Modified` without body.
+  - Caching: `GET /v1/zk/proof/...` emits `Cache-Control: public,max-age=torii.proof_cache_max_age_secs` and `ETag="<proof_hash>"`. `If-None-Match` applies HTTP weak comparison across comma-separated or repeated validators and supports a sole wildcard; opaque tag values remain case-sensitive, and a malformed validator set is non-matching. A match returns `304 Not Modified` without a body. Routed `GET /v1/proofs/{id}` uses the same validator contract.
   - Metrics: `torii_proof_requests_total`, `torii_proof_request_duration_seconds`, `torii_proof_response_bytes_total`, `torii_proof_cache_hits_total`, and `torii_proof_throttled_total` expose outcomes and cache hits per endpoint.
 
 Details:
@@ -381,6 +383,11 @@ transaction through the ordinary transaction pipeline.
 Endpoints:
 - `POST /v1/zk/vk/register` — Prepare `RegisterVerifyingKey` for local signing
 - `POST /v1/zk/vk/update` — Prepare `UpdateVerifyingKey` for local signing (version must increase)
+- `GET  /v1/zk/vk` — List records using optional `backend`, case-sensitive
+  `status=Active|Proposed|Withdrawn`, `name_contains`, `limit`, `offset`,
+  `order=asc|desc`, and `ids_only` parameters. Unknown status/order values,
+  zero or over-cap pages, and pagination windows beyond the configured fetch
+  budget return `400 Bad Request` instead of broadening the query.
 - `GET  /v1/zk/vk/{backend}/{name}` — Get a verifying key record as JSON
 
 Both POST schemas are strict. They accept the public `authority` that will sign the transaction but

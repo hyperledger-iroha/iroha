@@ -214,10 +214,7 @@ impl Rule {
             if self.chunk_index != other.chunk_index {
                 return false;
             }
-            if let (
-                (Some(left_height), Some(left_view)),
-                (Some(right_height), Some(right_view)),
-            ) = (
+            if let ((Some(left_height), Some(left_view)), (Some(right_height), Some(right_view))) = (
                 (self.proposal_height, self.proposal_view),
                 (other.proposal_height, other.proposal_view),
             ) && (left_height, left_view) != (right_height, right_view)

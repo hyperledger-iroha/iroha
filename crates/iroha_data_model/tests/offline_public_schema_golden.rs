@@ -5,7 +5,8 @@ use iroha_data_model::isi::offline::{
 use iroha_data_model::offline::{
     KagemushaExactBytesDigestV1, KagemushaFinalizedBlockWireV1,
     KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendCandidateV4,
-    KagemushaRecursiveSpendCryptographicReviewSubjectV4, KagemushaRecursiveSpendPromotedReleaseV4,
+    KagemushaRecursiveSpendCryptographicReviewSubjectV4,
+    KagemushaRecursiveSpendInternalValidationReceiptV1, KagemushaRecursiveSpendPromotedReleaseV4,
     KagemushaRecursiveSpendQualificationReceiptV4, KagemushaRecursiveSpendRedeemRequestV4,
     KagemushaRecursiveSpendReleaseActivationV4, KagemushaRecursiveSpendReleaseAttestationSubjectV4,
     KagemushaRecursiveSpendReleaseRecordV4, KagemushaRecursiveSpendTopUpRequestV4,
@@ -26,7 +27,8 @@ use iroha_data_model::offline::{
     KagemushaV4TairaCanaryEvidenceV1, KagemushaV4TairaCanaryPermitV1,
     KagemushaV4TairaCanaryQueryObservationV1, KagemushaV4TairaCanaryReservationBodyV1,
     KagemushaV4TairaCanaryReservationV1, KagemushaV4ValidatorQualificationSealBodyV1,
-    KagemushaV4ValidatorQualificationSealV1,
+    KagemushaV4ValidatorQualificationSealV1, OfflineAndroidAttestationStatusSnapshotV1,
+    OfflineDeviceAttestationPolicy,
 };
 use iroha_schema::IntoSchema;
 use sha2::{Digest as _, Sha256};
@@ -65,15 +67,35 @@ fn public_kagemusha_release_provenance_schemas_are_frozen_for_abi21_v4() {
             structural_schema_hash::<KagemushaRecursiveSpendReleaseActivationV4>(),
         ],
         [
-            "fedce8a54075bd46fbf5dd25ec0c3cf6".to_owned(),
-            "51f1626b8d5e90251fee453091531f29".to_owned(),
+            "b63ac509332d9be9711ffe1a3794e844".to_owned(),
+            "6814925c1d576bd936f6077944bf04eb".to_owned(),
             "d3f45905ef4fd933799654aadd00e00e".to_owned(),
             "2e93da6fb419e1dc4fd8e8898f7e48b0".to_owned(),
-            "6940f412f06823c7576db7a713376579".to_owned(),
-            "75d7bc53719e5192e71552e9f9222c7b".to_owned(),
-            "4848db22629f5e157a7f429d7bb529c9".to_owned(),
-            "0398b605fa8a3cc485c8bda702a67983".to_owned(),
+            "2c02da011b36781cb59d258a8d9e3507".to_owned(),
+            "ada8d473d390a8fa9d372bc96b29e6c9".to_owned(),
+            "7d6377a67b0a03974f4e880f1618bf66".to_owned(),
+            "3363e52b0d6ca028f79ca64297a83ee3".to_owned(),
         ]
+    );
+}
+
+#[test]
+fn public_kagemusha_internal_validation_receipt_schema_is_frozen_for_first_release() {
+    assert_eq!(
+        structural_schema_hash::<KagemushaRecursiveSpendInternalValidationReceiptV1>(),
+        "9ad983992795962ef209246008597b53"
+    );
+}
+
+#[test]
+fn public_offline_device_attestation_policy_schemas_are_frozen_for_first_release() {
+    assert_eq!(
+        structural_schema_hash::<OfflineAndroidAttestationStatusSnapshotV1>(),
+        "e35ecec076f7d14680b82c42ef072c87"
+    );
+    assert_eq!(
+        structural_schema_hash::<OfflineDeviceAttestationPolicy>(),
+        "8aee64787ce094a054aac19be8ddd7c6"
     );
 }
 
@@ -118,8 +140,8 @@ fn public_kagemusha_activation_receipt_schemas_are_frozen_for_first_release() {
         [
             "6ac84133729450e2392f324aae6d4e98".to_owned(),
             "2d43287df725fdac1dcaa156c9f419ba".to_owned(),
-            "099e73f65ecc46c943b1a38a4a76ea52".to_owned(),
-            "280cb539eb77f6f4b7754974522f07d7".to_owned(),
+            "c678723f564279fc0e34c511d5949bc6".to_owned(),
+            "bed74c06e3a528ecb21eb074144c11c6".to_owned(),
             "58bf4b648d507ecfaef604cc746b2228".to_owned(),
             "8fd2a3fc47baf857340965468acc6e4e".to_owned(),
             "cf5fad8e8d29bce96025624938b98978".to_owned(),

@@ -4,16 +4,17 @@ use norito::json::{self, Value};
 use rand::{RngCore, SeedableRng, rng, rngs::StdRng};
 use soranet_pq::MlDsaSuite;
 use soranet_relay::token_tool::{
-    MintRequest, REVOCATION_LIST_MAX_ENTRIES_V1, RevocationList, TokenBundle, decode_token_string,
+    MintRequest, REVOCATION_LIST_MAX_ENTRIES_V1, RevocationList, TokenBundle,
     encode_token_base64, encode_token_hex, inspect_token, mint_token, parse_hex_array,
     parse_hex_bytes, parse_rfc3339, read_revocation_file,
 };
 use std::{
+    fmt,
     fs::{self, File, Metadata as FsMetadata, OpenOptions},
-    io::{self, Read as _},
+    io::{self, Read as _, Write as _},
     path::{Path, PathBuf},
     process,
-    time::{Duration, SystemTime},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 const DEFAULT_TTL_SECS: u64 = 900;
 // AdmissionToken v1 encodes a 4-byte magic, fixed body fields, and a u16
@@ -36,6 +37,34 @@ const ML_DSA_KEY_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1: usize = 256;
 const REVOCATION_LIST_CANONICAL_ENTRY_BYTES: usize = 70;
 const REVOCATION_LIST_MAX_CANONICAL_BYTES_V1: usize =
     REVOCATION_LIST_MAX_ENTRIES_V1 * REVOCATION_LIST_CANONICAL_ENTRY_BYTES + 3;
+struct SecretBytes(Vec<u8>);
+impl fmt::Debug for SecretBytes {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("<redacted secret bytes>")
+    }
+}
+impl SecretBytes {
+    fn new(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+    fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn into_vec(mut self) -> Vec<u8> {
+        std::mem::take(&mut self.0)
+    }
+}
+impl Drop for SecretBytes {
+    fn drop(&mut self) {
+        // Best-effort wipe without adding package metadata to this developer
+        // tool. The signing backend also owns internal copies during use.
+        self.0.fill(0);
+        std::hint::black_box(self.0.as_mut_slice());
+    }
+}
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const TOKEN_FILE_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -101,7 +130,11 @@ fn token_file_is_reparse_point(metadata: &FsMetadata) -> bool {
 fn token_file_is_reparse_point(_metadata: &FsMetadata) -> bool {
     false
 }
-fn validate_token_file_metadata(metadata: &FsMetadata, artifact: &str) -> io::Result<()> {
+fn validate_token_file_metadata(
+    metadata: &FsMetadata,
+    artifact: &str,
+    expected_private_owner: Option<u32>,
+) -> io::Result<()> {
     if metadata.file_type().is_symlink()
         || token_file_is_reparse_point(metadata)
         || !metadata.file_type().is_file()
@@ -112,7 +145,25 @@ fn validate_token_file_metadata(metadata: &FsMetadata, artifact: &str) -> io::Re
             format!("{artifact} must be a direct regular file with a stable identity"),
         ));
     }
+    #[cfg(unix)]
+    if let Some(expected_owner) = expected_private_owner {
+        use std::os::unix::fs::MetadataExt as _;
+        if metadata.uid() != expected_owner || metadata.mode() & 0o077 != 0 || metadata.nlink() != 1
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "{artifact} must be owned by the current user, owner-private, and have exactly one link"
+                ),
+            ));
+        }
+    }
     Ok(())
+}
+#[cfg(unix)]
+fn current_process_owner_uid() -> io::Result<u32> {
+    use std::os::unix::fs::MetadataExt as _;
+    Ok(tempfile::tempfile()?.metadata()?.uid())
 }
 #[cfg(unix)]
 fn open_token_file_direct(path: &Path) -> io::Result<File> {
@@ -183,13 +234,94 @@ fn replace_token_file_for_test(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-/// Read one immutable token snapshot at the complete v1 framing ceiling.
-fn read_admission_token_file(path: &Path) -> io::Result<Vec<u8>> {
-    read_bounded_direct_file(path, ADMISSION_TOKEN_V1_MAX_FILE_BYTES, "admission token")
+/// Read one immutable, owner-private token snapshot at the complete v1 framing ceiling.
+fn read_admission_token_file(path: &Path) -> io::Result<SecretBytes> {
+    read_owner_private_bounded_direct_file(
+        path,
+        ADMISSION_TOKEN_V1_MAX_FILE_BYTES,
+        "admission token",
+    )
+    .map(SecretBytes::new)
+}
+fn read_admission_token_source(path: &Path) -> io::Result<SecretBytes> {
+    if path != Path::new("-") {
+        return read_admission_token_file(path);
+    }
+    let stdin = io::stdin();
+    read_bounded_secret_bytes(
+        stdin.lock(),
+        ADMISSION_TOKEN_V1_MAX_FILE_BYTES,
+        "admission token",
+    )
+}
+fn read_bounded_secret_bytes(
+    mut reader: impl io::Read,
+    maximum: usize,
+    artifact: &str,
+) -> io::Result<SecretBytes> {
+    let read_limit = maximum.checked_add(1).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{artifact} read limit overflowed"),
+        )
+    })?;
+    let mut bytes = SecretBytes::new(Vec::new());
+    bytes
+        .0
+        .try_reserve_exact(read_limit)
+        .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;
+    reader
+        .by_ref()
+        .take(u64::try_from(read_limit).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{artifact} read limit is not representable"),
+            )
+        })?)
+        .read_to_end(&mut bytes.0)?;
+    if bytes.len() > maximum {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{artifact} exceeds its {maximum}-byte first-release limit"),
+        ));
+    }
+    Ok(bytes)
 }
 fn read_bounded_direct_file(path: &Path, maximum: usize, artifact: &str) -> io::Result<Vec<u8>> {
+    read_bounded_direct_file_with_owner(path, maximum, artifact, None)
+}
+fn read_owner_private_bounded_direct_file(
+    path: &Path,
+    maximum: usize,
+    artifact: &str,
+) -> io::Result<Vec<u8>> {
+    #[cfg(unix)]
+    {
+        let expected_private_owner = Some(current_process_owner_uid()?);
+        return read_bounded_direct_file_with_owner(
+            path,
+            maximum,
+            artifact,
+            expected_private_owner,
+        );
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, maximum, artifact);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "private key-file ownership checks are unavailable on this platform; use standard input",
+        ))
+    }
+}
+fn read_bounded_direct_file_with_owner(
+    path: &Path,
+    maximum: usize,
+    artifact: &str,
+    expected_private_owner: Option<u32>,
+) -> io::Result<Vec<u8>> {
     let before = fs::symlink_metadata(path)?;
-    validate_token_file_metadata(&before, artifact)?;
+    validate_token_file_metadata(&before, artifact, expected_private_owner)?;
     let maximum_u64 = u64::try_from(maximum).unwrap_or(u64::MAX);
     if before.len() > maximum_u64 {
         return Err(io::Error::new(
@@ -204,7 +336,7 @@ fn read_bounded_direct_file(path: &Path, maximum: usize, artifact: &str) -> io::
     replace_token_file_for_test(path)?;
     let mut file = open_token_file_direct(path)?;
     let opened = file.metadata()?;
-    validate_token_file_metadata(&opened, artifact)?;
+    validate_token_file_metadata(&opened, artifact, expected_private_owner)?;
     if !token_file_metadata_unchanged(&before, &opened) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -217,12 +349,13 @@ fn read_bounded_direct_file(path: &Path, maximum: usize, artifact: &str) -> io::
             format!("{artifact} length is not representable on this host"),
         )
     })?;
-    let mut bytes = Vec::new();
+    let mut bytes = SecretBytes::new(Vec::new());
     bytes
+        .0
         .try_reserve_exact(expected_len)
         .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;
-    bytes.resize(expected_len, 0);
-    file.read_exact(&mut bytes).map_err(|error| {
+    bytes.0.resize(expected_len, 0);
+    file.read_exact(&mut bytes.0).map_err(|error| {
         if error.kind() == io::ErrorKind::UnexpectedEof {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -232,8 +365,8 @@ fn read_bounded_direct_file(path: &Path, maximum: usize, artifact: &str) -> io::
             error
         }
     })?;
-    let mut growth_probe = [0_u8; 1];
-    if file.read(&mut growth_probe)? != 0 {
+    let mut growth_probe = SecretBytes::new(vec![0_u8; 1]);
+    if file.read(&mut growth_probe.0)? != 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("{artifact} grew while being read or exceeds its {maximum}-byte limit"),
@@ -241,8 +374,8 @@ fn read_bounded_direct_file(path: &Path, maximum: usize, artifact: &str) -> io::
     }
     let after_file = file.metadata()?;
     let after_path = fs::symlink_metadata(path)?;
-    validate_token_file_metadata(&after_file, artifact)?;
-    validate_token_file_metadata(&after_path, artifact)?;
+    validate_token_file_metadata(&after_file, artifact, expected_private_owner)?;
+    validate_token_file_metadata(&after_path, artifact, expected_private_owner)?;
     if !token_file_metadata_unchanged(&opened, &after_file)
         || !token_file_metadata_unchanged(&opened, &after_path)
     {
@@ -251,7 +384,7 @@ fn read_bounded_direct_file(path: &Path, maximum: usize, artifact: &str) -> io::
             format!("{artifact} changed while being read"),
         ));
     }
-    Ok(bytes)
+    Ok(bytes.into_vec())
 }
 #[derive(Parser, Debug)]
 #[command(
@@ -280,10 +413,9 @@ struct MintArgs {
     issuer_public_hex: Option<String>,
     #[arg(long)]
     issuer_public_file: Option<PathBuf>,
-    #[arg(long, conflicts_with = "issuer_secret_file")]
-    issuer_secret_hex: Option<String>,
+    /// Owner-private hexadecimal issuer-secret file. Use `-` to read standard input.
     #[arg(long)]
-    issuer_secret_file: Option<PathBuf>,
+    issuer_secret_file: PathBuf,
     #[arg(long)]
     relay_id_hex: String,
     #[arg(long)]
@@ -304,30 +436,21 @@ struct MintArgs {
     suite: SuiteArg,
 }
 #[derive(Args, Debug)]
-#[command(group(
-    ArgGroup::new("inspect_source")
-        .required(true)
-        .args(&["token", "input"])
-))]
 struct InspectArgs {
+    /// Owner-private binary admission-token file. Use `-` for standard input.
     #[arg(long)]
-    token: Option<String>,
-    #[arg(long)]
-    input: Option<PathBuf>,
-    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
-    format: OutputFormat,
+    input: PathBuf,
 }
 #[derive(Args, Debug)]
 #[command(group(
     ArgGroup::new("revoke_source")
         .required(true)
-        .args(&["token", "token_file", "token_id_hex"])
+        .args(&["token_file", "token_id_hex"])
 ))]
 struct RevokeArgs {
     #[arg(long)]
     list: PathBuf,
-    #[arg(long)]
-    token: Option<String>,
+    /// Owner-private binary admission-token file. Use `-` for standard input.
     #[arg(long)]
     token_file: Option<PathBuf>,
     #[arg(long)]
@@ -377,16 +500,8 @@ fn run() -> Result<(), String> {
     }
 }
 fn command_mint(args: MintArgs) -> Result<(), String> {
-    let issuer_public = load_hex_source(
-        args.issuer_public_hex,
-        args.issuer_public_file.as_deref(),
-        "issuer_public_key",
-    )?;
-    let issuer_secret = load_hex_source(
-        args.issuer_secret_hex,
-        args.issuer_secret_file.as_deref(),
-        "issuer_secret_key",
-    )?;
+    let issuer_public =
+        load_public_hex_source(args.issuer_public_hex, args.issuer_public_file.as_deref())?;
     let relay_id =
         parse_hex_array::<32>(&args.relay_id_hex, "relay_id_hex").map_err(|err| err.to_string())?;
     let transcript_hash = parse_hex_array::<32>(&args.transcript_hash_hex, "transcript_hash_hex")
@@ -404,10 +519,11 @@ fn command_mint(args: MintArgs) -> Result<(), String> {
             .ok_or_else(|| "expiry timestamp overflowed SystemTime".to_owned())?
     };
     let suite: MlDsaSuite = args.suite.into();
+    let issuer_secret = load_secret_hex_source(&args.issuer_secret_file)?;
     let request = MintRequest {
         suite,
         issuer_public_key: &issuer_public,
-        issuer_secret_key: &issuer_secret,
+        issuer_secret_key: issuer_secret.as_slice(),
         relay_id,
         transcript_hash,
         issued_at,
@@ -417,34 +533,28 @@ fn command_mint(args: MintArgs) -> Result<(), String> {
     let mut seed = [0u8; 32];
     rng().fill_bytes(&mut seed);
     let mut rng = StdRng::from_seed(seed);
+    seed.fill(0);
+    std::hint::black_box(&seed);
     let bundle = mint_token(&request, &mut rng).map_err(|err| err.to_string())?;
     let output = render_bundle(&bundle, args.format)?;
-    write_output(args.output.as_deref(), &output)
+    write_secret_output(args.output.as_deref(), output.as_slice())
 }
 fn command_inspect(args: InspectArgs) -> Result<(), String> {
-    let bytes = if let Some(token_str) = args.token {
-        decode_token_string(&token_str).map_err(|err| err.to_string())?
-    } else if let Some(path) = args.input {
-        read_admission_token_file(&path).map_err(|err| err.to_string())?
-    } else {
-        unreachable!("clap enforces inspect source group");
-    };
-    let bundle = inspect_token(&bytes).map_err(|err| err.to_string())?;
-    let output = render_bundle(&bundle, args.format)?;
-    write_output(None, &output)
+    let bytes = read_admission_token_source(&args.input).map_err(|err| err.to_string())?;
+    let bundle = inspect_token(bytes.as_slice()).map_err(|err| err.to_string())?;
+    let output = render_token_metadata(&bundle)?;
+    write_public_output(&output)
 }
 fn command_revoke(args: RevokeArgs) -> Result<(), String> {
     let token_id = if let Some(hex) = args.token_id_hex {
         parse_hex_array::<32>(&hex, "token_id_hex").map_err(|err| err.to_string())?
     } else {
-        let bytes = if let Some(token_str) = args.token {
-            decode_token_string(&token_str).map_err(|err| err.to_string())?
-        } else if let Some(path) = args.token_file {
-            read_admission_token_file(&path).map_err(|err| err.to_string())?
+        let bytes = if let Some(path) = args.token_file {
+            read_admission_token_source(&path).map_err(|err| err.to_string())?
         } else {
             unreachable!("clap enforces revoke source group");
         };
-        let bundle = inspect_token(&bytes).map_err(|err| err.to_string())?;
+        let bundle = inspect_token(bytes.as_slice()).map_err(|err| err.to_string())?;
         bundle.metadata.token_id
     };
     let mut list = RevocationList::load_or_default(&args.list)
@@ -465,7 +575,7 @@ fn command_revoke(args: RevokeArgs) -> Result<(), String> {
     let mut text = json::to_string_pretty(&Value::Object(payload))
         .map_err(|err| format!("failed to serialise revoke output: {err}"))?;
     text.push('\n');
-    write_output(None, &text)
+    write_public_output(&text)
 }
 fn command_list(args: ListArgs) -> Result<(), String> {
     let ids = read_revocation_file(&args.list)
@@ -531,27 +641,77 @@ fn token_id_hex_bytes(id: &[u8; 32]) -> [u8; 64] {
     }
     encoded
 }
-fn render_bundle(bundle: &TokenBundle, format: OutputFormat) -> Result<String, String> {
-    match format {
+fn render_bundle(bundle: &TokenBundle, format: OutputFormat) -> Result<SecretBytes, String> {
+    let text = match format {
         OutputFormat::Json => {
             let mut text = json::to_string_pretty(&bundle.to_json())
                 .map_err(|err| format!("failed to serialise JSON: {err}"))?;
             text.push('\n');
-            Ok(text)
+            text
         }
         OutputFormat::Base64 => {
             let mut text = encode_token_base64(&bundle.token);
             text.push('\n');
-            Ok(text)
+            text
         }
         OutputFormat::Hex => {
             let mut text = encode_token_hex(&bundle.token);
             text.push('\n');
-            Ok(text)
+            text
         }
-    }
+    };
+    Ok(SecretBytes::new(text.into_bytes()))
 }
-fn write_output(path: Option<&Path>, data: &str) -> Result<(), String> {
+fn render_token_metadata(bundle: &TokenBundle) -> Result<String, String> {
+    let issued_at = bundle
+        .metadata
+        .issued_at
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "token issued_at predates the Unix epoch".to_owned())?
+        .as_secs();
+    let expires_at = bundle
+        .metadata
+        .expires_at
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "token expires_at predates the Unix epoch".to_owned())?
+        .as_secs();
+    let mut object = json::Map::new();
+    object.insert(
+        "token_id_hex".into(),
+        Value::from(hex::encode(bundle.metadata.token_id)),
+    );
+    object.insert(
+        "issuer_fingerprint_hex".into(),
+        Value::from(hex::encode(bundle.metadata.issuer_fingerprint)),
+    );
+    object.insert(
+        "relay_id_hex".into(),
+        Value::from(hex::encode(bundle.metadata.relay_id)),
+    );
+    object.insert(
+        "transcript_hash_hex".into(),
+        Value::from(hex::encode(bundle.metadata.transcript_hash)),
+    );
+    object.insert("issued_at_unix_secs".into(), Value::from(issued_at));
+    object.insert("expires_at_unix_secs".into(), Value::from(expires_at));
+    object.insert(
+        "ttl_secs".into(),
+        Value::from(bundle.metadata.ttl().as_secs()),
+    );
+    object.insert("flags".into(), Value::from(bundle.metadata.flags));
+    object.insert(
+        "signature_len".into(),
+        Value::from(
+            u64::try_from(bundle.metadata.signature_len)
+                .map_err(|_| "token signature length is not representable".to_owned())?,
+        ),
+    );
+    let mut output = json::to_string_pretty(&Value::Object(object))
+        .map_err(|err| format!("failed to serialise token metadata: {err}"))?;
+    output.push('\n');
+    Ok(output)
+}
+fn write_secret_output(path: Option<&Path>, data: &[u8]) -> Result<(), String> {
     if let Some(path) = path {
         if let Some(dir) = path.parent()
             && !dir.as_os_str().is_empty()
@@ -559,11 +719,55 @@ fn write_output(path: Option<&Path>, data: &str) -> Result<(), String> {
             fs::create_dir_all(dir)
                 .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
         }
-        fs::write(path, data).map_err(|err| format!("failed to write {}: {err}", path.display()))
+        write_owner_private_new_file(path, data)
+            .map_err(|err| format!("failed to write {}: {err}", path.display()))
     } else {
-        print!("{data}");
-        Ok(())
+        let stdout = io::stdout();
+        let mut output = stdout.lock();
+        output
+            .write_all(data)
+            .and_then(|()| output.flush())
+            .map_err(|err| format!("failed to write token to standard output: {err}"))
     }
+}
+fn write_public_output(data: &str) -> Result<(), String> {
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+    output
+        .write_all(data.as_bytes())
+        .and_then(|()| output.flush())
+        .map_err(|err| format!("failed to write command output: {err}"))
+}
+#[cfg(unix)]
+fn write_owner_private_new_file(path: &Path, data: &[u8]) -> io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let owner = current_process_owner_uid()?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(TOKEN_FILE_O_NOFOLLOW_FLAG)
+        .open(path)?;
+    file.write_all(data)?;
+    file.sync_all()?;
+    let opened = file.metadata()?;
+    let path_metadata = fs::symlink_metadata(path)?;
+    validate_token_file_metadata(&opened, "admission-token output", Some(owner))?;
+    validate_token_file_metadata(&path_metadata, "admission-token output", Some(owner))?;
+    if !token_file_metadata_unchanged(&opened, &path_metadata) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "admission-token output path changed while being written",
+        ));
+    }
+    Ok(())
+}
+#[cfg(not(unix))]
+fn write_owner_private_new_file(_path: &Path, _data: &[u8]) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "owner-private admission-token output is unavailable on this platform; use standard output",
+    ))
 }
 #[derive(Clone, Copy)]
 struct KeyFileLimits {
@@ -585,18 +789,117 @@ fn key_file_limits(field: &'static str) -> Result<KeyFileLimits, String> {
         )),
     }
 }
-fn load_hex_key_file(
-    path: &Path,
-    field: &'static str,
-    limits: KeyFileLimits,
-) -> Result<Vec<u8>, String> {
+fn load_public_hex_key_file(path: &Path, limits: KeyFileLimits) -> Result<Vec<u8>, String> {
     let maximum_raw_bytes = limits
         .maximum_hex_bytes
         .checked_add(ML_DSA_KEY_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1)
         .ok_or_else(|| format!("{} byte limit overflowed", limits.artifact))?;
     let bytes = read_bounded_direct_file(path, maximum_raw_bytes, limits.artifact)
         .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
-    let text = std::str::from_utf8(&bytes).map_err(|err| {
+    decode_hex_key_text(&bytes, "issuer_public_key", limits)
+}
+fn load_secret_hex_key_file(
+    path: &Path,
+    field: &'static str,
+    limits: KeyFileLimits,
+) -> Result<SecretBytes, String> {
+    let maximum_raw_bytes = limits
+        .maximum_hex_bytes
+        .checked_add(ML_DSA_KEY_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1)
+        .ok_or_else(|| format!("{} byte limit overflowed", limits.artifact))?;
+    let bytes = SecretBytes::new(
+        read_owner_private_bounded_direct_file(path, maximum_raw_bytes, limits.artifact)
+            .map_err(|err| format!("failed to read {}: {err}", path.display()))?,
+    );
+    decode_secret_hex_key_text(bytes.as_slice(), field, limits)
+}
+fn load_secret_hex_source(path: &Path) -> Result<SecretBytes, String> {
+    let field = "issuer_secret_key";
+    let limits = key_file_limits(field)?;
+    if path != Path::new("-") {
+        return load_secret_hex_key_file(path, field, limits);
+    }
+    let maximum_raw_bytes = limits
+        .maximum_hex_bytes
+        .checked_add(ML_DSA_KEY_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1)
+        .ok_or_else(|| format!("{} byte limit overflowed", limits.artifact))?;
+    let stdin = io::stdin();
+    let mut locked = stdin.lock();
+    read_secret_hex_input(&mut locked, maximum_raw_bytes, field, limits)
+}
+fn read_secret_hex_input(
+    mut reader: impl io::Read,
+    maximum_raw_bytes: usize,
+    field: &'static str,
+    limits: KeyFileLimits,
+) -> Result<SecretBytes, String> {
+    let read_limit = maximum_raw_bytes
+        .checked_add(1)
+        .ok_or_else(|| format!("{} read limit overflowed", limits.artifact))?;
+    let mut bytes = SecretBytes::new(Vec::new());
+    bytes
+        .0
+        .try_reserve_exact(read_limit)
+        .map_err(|_| format!("failed to reserve bounded {} input", limits.artifact))?;
+    let mut bounded = reader.by_ref().take(
+        u64::try_from(read_limit)
+            .map_err(|_| format!("{} read limit is not representable", limits.artifact))?,
+    );
+    bounded.read_to_end(&mut bytes.0).map_err(|error| {
+        format!(
+            "failed to read {} from standard input: {error}",
+            limits.artifact
+        )
+    })?;
+    if bytes.0.len() > maximum_raw_bytes {
+        return Err(format!(
+            "{} from standard input exceeds its {maximum_raw_bytes}-byte first-release limit",
+            limits.artifact
+        ));
+    }
+    decode_secret_hex_key_text(bytes.as_slice(), field, limits)
+}
+fn decode_hex_key_text(
+    bytes: &[u8],
+    field: &'static str,
+    limits: KeyFileLimits,
+) -> Result<Vec<u8>, String> {
+    let trimmed = validate_hex_key_text(bytes, limits)?;
+    parse_hex_bytes(trimmed, field).map_err(|err| err.to_string())
+}
+fn decode_secret_hex_key_text(
+    bytes: &[u8],
+    field: &'static str,
+    limits: KeyFileLimits,
+) -> Result<SecretBytes, String> {
+    let trimmed = validate_hex_key_text(bytes, limits)?;
+    if trimmed.len() % 2 != 0 {
+        return Err(format!(
+            "{field} must contain an even number of hexadecimal characters"
+        ));
+    }
+    let decoded_len = trimmed.len() / 2;
+    let mut decoded = SecretBytes::new(Vec::new());
+    decoded
+        .0
+        .try_reserve_exact(decoded_len)
+        .map_err(|_| format!("failed to reserve bounded {} output", limits.artifact))?;
+    decoded.0.resize(decoded_len, 0);
+    hex::decode_to_slice(trimmed, &mut decoded.0)
+        .map_err(|error| format!("failed to decode {field} as hexadecimal: {error}"))?;
+    if decoded.len() >= 32
+        && decoded
+            .first()
+            .is_some_and(|first| decoded.iter().all(|byte| byte == first))
+    {
+        return Err(format!(
+            "{field} must not be an all-zero or repeated-byte degenerate key"
+        ));
+    }
+    Ok(decoded)
+}
+fn validate_hex_key_text<'a>(bytes: &'a [u8], limits: KeyFileLimits) -> Result<&'a str, String> {
+    let text = std::str::from_utf8(bytes).map_err(|err| {
         format!(
             "{} must contain UTF-8 hexadecimal text: {err}",
             limits.artifact
@@ -618,29 +921,48 @@ fn load_hex_key_file(
             limits.maximum_hex_bytes
         ));
     }
-    parse_hex_bytes(trimmed, field).map_err(|err| err.to_string())
+    Ok(trimmed)
 }
-fn load_hex_source(
-    inline: Option<String>,
-    path: Option<&Path>,
-    field: &'static str,
-) -> Result<Vec<u8>, String> {
+fn load_public_hex_source(inline: Option<String>, path: Option<&Path>) -> Result<Vec<u8>, String> {
+    let field = "issuer_public_key";
     match (inline, path) {
         (Some(value), None) => parse_hex_bytes(value.trim(), field).map_err(|err| err.to_string()),
         (None, Some(path)) => {
             let limits = key_file_limits(field)?;
-            load_hex_key_file(path, field, limits)
+            load_public_hex_key_file(path, limits)
         }
-        (Some(_), Some(_)) => Err(format!(
-            "--{field}-hex and --{field}-file are mutually exclusive"
-        )),
-        (None, None) => Err(format!("--{field}-hex or --{field}-file must be provided")),
+        (Some(_), Some(_)) => {
+            Err("--issuer-public-hex and --issuer-public-file are mutually exclusive".to_owned())
+        }
+        (None, None) => {
+            Err("--issuer-public-hex or --issuer-public-file must be provided".to_owned())
+        }
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+    #[cfg(unix)]
+    fn make_owner_private(path: &Path) {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .expect("make test file owner-private");
+    }
+    fn encoded_token_fixture() -> Vec<u8> {
+        let mut token = b"SNTK".to_vec();
+        token.push(1);
+        token.push(0);
+        token.extend_from_slice(&1_700_000_000_u64.to_be_bytes());
+        token.extend_from_slice(&1_700_000_060_u64.to_be_bytes());
+        token.extend_from_slice(&[0x11; 32]);
+        token.extend_from_slice(&[0x22; 32]);
+        token.extend_from_slice(&[0x33; 16]);
+        token.extend_from_slice(&[0x44; 32]);
+        token.extend_from_slice(&1_u16.to_be_bytes());
+        token.push(0x55);
+        token
+    }
     #[derive(Default)]
     struct CountingWriter {
         bytes: usize,
@@ -686,18 +1008,23 @@ mod tests {
         );
         fs::write(&public_path, public_text).expect("write exact public key file");
         assert_eq!(
-            load_hex_source(None, Some(&public_path), "issuer_public_key")
+            load_public_hex_source(None, Some(&public_path))
                 .expect("exact public key file must load"),
             vec![0xab; ML_DSA_MAX_PUBLIC_KEY_BYTES_V1]
         );
-        let secret_path = dir.path().join("issuer-secret.hex");
-        fs::write(&secret_path, "cd".repeat(ML_DSA_MAX_SECRET_KEY_BYTES_V1))
-            .expect("write exact secret key file");
-        assert_eq!(
-            load_hex_source(None, Some(&secret_path), "issuer_secret_key")
-                .expect("exact secret key file must load"),
-            vec![0xcd; ML_DSA_MAX_SECRET_KEY_BYTES_V1]
-        );
+        #[cfg(unix)]
+        {
+            let secret_path = dir.path().join("issuer-secret.hex");
+            fs::write(&secret_path, "cd".repeat(ML_DSA_MAX_SECRET_KEY_BYTES_V1))
+                .expect("write exact secret key file");
+            make_owner_private(&secret_path);
+            let secret =
+                load_secret_hex_source(&secret_path).expect("exact secret key file must load");
+            assert_eq!(
+                secret.as_slice(),
+                vec![0xcd; ML_DSA_MAX_SECRET_KEY_BYTES_V1]
+            );
+        }
     }
     #[test]
     fn key_files_reject_payload_and_whitespace_plus_one() {
@@ -708,21 +1035,25 @@ mod tests {
             "ab".repeat(ML_DSA_MAX_PUBLIC_KEY_BYTES_V1 + 1),
         )
         .expect("write oversized payload");
-        let error = load_hex_source(None, Some(&oversized_payload), "issuer_public_key")
+        let error = load_public_hex_source(None, Some(&oversized_payload))
             .expect_err("decoded key limit + 1 must fail");
         assert!(error.contains("supported ML-DSA limit"), "{error}");
-        let oversized_whitespace = dir.path().join("oversized-whitespace.hex");
-        let mut text = "cd".repeat(ML_DSA_MAX_SECRET_KEY_BYTES_V1);
-        text.push_str(&" ".repeat(ML_DSA_KEY_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1 + 1));
-        fs::write(&oversized_whitespace, text).expect("write oversized whitespace");
-        let error = load_hex_source(None, Some(&oversized_whitespace), "issuer_secret_key")
-            .expect_err("raw key file limit + 1 must fail");
-        assert!(error.contains("first-release limit"), "{error}");
+        #[cfg(unix)]
+        {
+            let oversized_whitespace = dir.path().join("oversized-whitespace.hex");
+            let mut text = "cd".repeat(ML_DSA_MAX_SECRET_KEY_BYTES_V1);
+            text.push_str(&" ".repeat(ML_DSA_KEY_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1 + 1));
+            fs::write(&oversized_whitespace, text).expect("write oversized whitespace");
+            make_owner_private(&oversized_whitespace);
+            let error = load_secret_hex_source(&oversized_whitespace)
+                .expect_err("raw key file limit + 1 must fail");
+            assert!(error.contains("first-release limit"), "{error}");
+        }
         let excessive_padding = dir.path().join("excessive-padding.hex");
         let mut text = "ef".repeat(MlDsaSuite::MlDsa44.public_key_len());
         text.push_str(&" ".repeat(ML_DSA_KEY_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1 + 1));
         fs::write(&excessive_padding, text).expect("write excessive padding");
-        let error = load_hex_source(None, Some(&excessive_padding), "issuer_public_key")
+        let error = load_public_hex_source(None, Some(&excessive_padding))
             .expect_err("surrounding whitespace limit + 1 must fail");
         assert!(error.contains("surrounding whitespace bytes"), "{error}");
     }
@@ -736,20 +1067,112 @@ mod tests {
         fs::write(&target, "ab".repeat(ML_DSA_MAX_PUBLIC_KEY_BYTES_V1))
             .expect("write public key target");
         symlink(&target, &link).expect("create key symlink");
-        let error = load_hex_source(None, Some(&link), "issuer_public_key")
-            .expect_err("key symlink must fail");
+        let error = load_public_hex_source(None, Some(&link)).expect_err("key symlink must fail");
         assert!(error.contains("direct regular file"), "{error}");
     }
+    #[cfg(unix)]
     #[test]
-    fn inline_hex_source_preserves_prior_argument_length_handling() {
-        let inline = "ab".repeat(ML_DSA_MAX_SECRET_KEY_BYTES_V1 + 1);
-        assert_eq!(
-            load_hex_source(Some(inline), None, "issuer_secret_key")
-                .expect("inline parsing remains delegated to suite validation")
-                .len(),
-            ML_DSA_MAX_SECRET_KEY_BYTES_V1 + 1
-        );
+    fn secret_key_file_requires_private_mode_and_single_link() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempdir().expect("tmp");
+        let path = dir.path().join("issuer-secret.hex");
+        fs::write(&path, b"ab").expect("write secret key");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+            .expect("make secret-key fixture non-private");
+        let error = load_secret_hex_source(&path).expect_err("public mode must fail");
+        assert!(error.contains("owner-private"), "{error}");
+
+        make_owner_private(&path);
+        let secret = load_secret_hex_source(&path).expect("private secret key must load");
+        assert_eq!(secret.as_slice(), [0xab]);
+
+        let second_link = dir.path().join("issuer-secret-copy.hex");
+        fs::hard_link(&path, &second_link).expect("create secret-key hard link");
+        let error = load_secret_hex_source(&path).expect_err("hard-linked secret must fail");
+        assert!(error.contains("exactly one link"), "{error}");
     }
+    #[test]
+    fn secret_standard_input_is_bounded_and_decoded() {
+        let field = "issuer_secret_key";
+        let limits = key_file_limits(field).expect("secret limits");
+        let maximum =
+            limits.maximum_hex_bytes + ML_DSA_KEY_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1;
+        let secret = read_secret_hex_input(io::Cursor::new(b"ab\n"), maximum, field, limits)
+            .expect("bounded secret input must decode");
+        assert_eq!(secret.as_slice(), [0xab]);
+        let error = read_secret_hex_input(io::Cursor::new("00".repeat(32)), maximum, field, limits)
+            .expect_err("degenerate secret input must fail");
+        assert!(error.contains("degenerate key"), "{error}");
+        let oversized = vec![b' '; maximum + 1];
+        let error = read_secret_hex_input(io::Cursor::new(oversized), maximum, field, limits)
+            .expect_err("standard input above its corridor must fail");
+        assert!(error.contains("first-release limit"), "{error}");
+    }
+    #[test]
+    fn mint_cli_rejects_inline_issuer_secret() {
+        let error = Cli::try_parse_from([
+            "soranet-admission-token",
+            "mint",
+            "--issuer-secret-hex",
+            "00",
+        ])
+        .expect_err("issuer secrets must not be accepted on the command line");
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+    #[test]
+    fn cli_rejects_bearer_tokens_in_process_arguments() {
+        for args in [
+            vec![
+                "soranet-admission-token",
+                "inspect",
+                "--token",
+                "secret-token",
+            ],
+            vec![
+                "soranet-admission-token",
+                "revoke",
+                "--list",
+                "revocations.json",
+                "--token",
+                "secret-token",
+            ],
+        ] {
+            let error = Cli::try_parse_from(args)
+                .expect_err("bearer tokens must not be accepted on the command line");
+            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+        }
+    }
+    #[test]
+    fn token_standard_input_is_bounded() {
+        let exact = vec![0xA5; ADMISSION_TOKEN_V1_MAX_FILE_BYTES];
+        let loaded = read_bounded_secret_bytes(
+            io::Cursor::new(exact),
+            ADMISSION_TOKEN_V1_MAX_FILE_BYTES,
+            "admission token",
+        )
+        .expect("exact token input limit must load");
+        assert_eq!(loaded.len(), ADMISSION_TOKEN_V1_MAX_FILE_BYTES);
+        let oversized = vec![0xA5; ADMISSION_TOKEN_V1_MAX_FILE_BYTES + 1];
+        let error = read_bounded_secret_bytes(
+            io::Cursor::new(oversized),
+            ADMISSION_TOKEN_V1_MAX_FILE_BYTES,
+            "admission token",
+        )
+        .expect_err("token input limit + 1 must fail");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn inspect_metadata_omits_bearer_token_encodings() {
+        let encoded = encoded_token_fixture();
+        let bundle = inspect_token(&encoded).expect("inspect fixture token");
+        let output = render_token_metadata(&bundle).expect("render metadata");
+        assert!(output.contains("token_id_hex"));
+        assert!(!output.contains("token_base64"));
+        assert!(!output.contains("token_hex"));
+        assert!(!output.contains(&hex::encode(encoded)));
+    }
+    #[cfg(unix)]
     #[test]
     fn token_file_limit_accepts_exact_and_rejects_plus_one() {
         assert_eq!(ADMISSION_TOKEN_V1_MAX_FILE_BYTES, 65_671);
@@ -762,6 +1185,8 @@ mod tests {
                     .expect("fixed token limit fits u64"),
             )
             .expect("size exact token file");
+        #[cfg(unix)]
+        make_owner_private(&exact);
         assert_eq!(
             read_admission_token_file(&exact)
                 .expect("exact token file limit must load")
@@ -776,6 +1201,8 @@ mod tests {
                     .expect("fixed token limit + 1 fits u64"),
             )
             .expect("size oversized token file");
+        #[cfg(unix)]
+        make_owner_private(&plus_one);
         let error = read_admission_token_file(&plus_one).expect_err("limit + 1 must fail");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
@@ -799,10 +1226,44 @@ mod tests {
         let replacement = dir.path().join("replacement.token");
         fs::write(&configured, b"token").expect("write configured token");
         fs::write(&replacement, b"token").expect("write replacement token");
+        make_owner_private(&configured);
+        make_owner_private(&replacement);
         *TOKEN_FILE_READ_REPLACEMENT.lock().expect("race hook lock") =
             Some((configured.clone(), replacement));
         let error = read_admission_token_file(&configured).expect_err("path replacement must fail");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn token_file_requires_private_mode_and_single_link() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempdir().expect("tmp");
+        let path = dir.path().join("token.bin");
+        fs::write(&path, encoded_token_fixture()).expect("write token");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+            .expect("make token public");
+        let error = read_admission_token_file(&path).expect_err("public token file must fail");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        make_owner_private(&path);
+        let link = dir.path().join("token-copy.bin");
+        fs::hard_link(&path, &link).expect("create token hard link");
+        let error = read_admission_token_file(&path).expect_err("hard-linked token must fail");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn token_output_is_private_and_never_clobbers() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let dir = tempdir().expect("tmp");
+        let path = dir.path().join("minted.token");
+        write_owner_private_new_file(&path, b"first").expect("create private output");
+        let metadata = fs::metadata(&path).expect("output metadata");
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(metadata.nlink(), 1);
+        let error = write_owner_private_new_file(&path, b"second")
+            .expect_err("existing token output must not be overwritten");
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&path).expect("read output"), b"first");
     }
     #[test]
     fn revocation_output_matches_norito_pretty_layout() {

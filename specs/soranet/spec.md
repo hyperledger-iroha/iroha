@@ -43,7 +43,9 @@ This document satisfies **SNNet-1** (handshake, salt rotation, capability TLVs) 
   client and `1` for the QUIC server; stream kind is `0` for bidirectional and
   `1` for unidirectional; and stream index is the QUIC stream number after
   removing the two type bits. The ChaCha20-Poly1305 nonce is four zero bytes
-  followed by the record sequence as `u64be`.
+  followed by the record sequence as `u64be`. Each stream context may be
+  derived only once per session. Implementations retain at most 65,536 used
+  contexts per first-release session and reject reuse or capacity exhaustion.
 - Relays reject TLS 0-RTT and VPN helper clients do not offer it, so relay or
   helper authentication and hybrid key derivation always complete before
   application streams can carry data.
@@ -78,11 +80,15 @@ This document satisfies **SNNet-1** (handshake, salt rotation, capability TLVs) 
   }
   ```
 
-  The relay reconstructs the Argon2id challenge by hashing the descriptor
-  commitment, relay identifier, required admission transcript binding, and
-  client nonce. The binding is carried in the `ClientHello` resume-hash field
-  and must be exactly 32 non-zero bytes. Unbound tickets and client hellos are
-  invalid. The
+  The fixed-width `client_nonce` slot is the domain-separated commitment
+  `BLAKE3("soranet.pow.ticket_binding.v1" || u64be(len(descriptor_commit)) ||
+  descriptor_commit || u64be(len(relay_id)) || relay_id ||
+  u64be(len(transcript_hash)) || transcript_hash)`. The relay recomputes and
+  compares it in constant time before Argon2id, then reconstructs the challenge
+  by hashing the descriptor commitment, relay identifier, required admission
+  transcript binding, exact commitment, and expiry. The transcript binding is
+  carried in the `ClientHello` resume-hash field and must be exactly 32 non-zero
+  bytes. Unbound tickets and client hellos are invalid. The
   resulting digest must contain at least `difficulty` leading zero bits once the
   client-supplied solution is hashed with `Argon2id(memory_kib, time_cost,
   lanes)`. The first-release default is 6 bits and zero is invalid. Tickets

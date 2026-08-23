@@ -99,6 +99,12 @@ a gap. There is no atomic snapshot-to-SSE handoff in `/v1`. Consumers that need
 complete, ordered ledger history must use `/v1/blocks/stream` from a known
 height and derive the relevant committed events.
 
+Explorer block, transaction, and instruction streams suppress repeated or
+stale block heights within one connection, so paired committed/applied
+notifications cannot duplicate a block projection. If their bounded receiver
+lags, they emit a terminal `stream_lagged` event and close instead of silently
+skipping blocks.
+
 ## Norito WebSocket framing
 
 After the `101` response selects `iroha-norito-v1`, the client sends exactly one
@@ -110,9 +116,10 @@ binary, header-bearing Norito message:
 The server then sends only binary, header-bearing Norito `EventMessage` or
 `BlockMessage` values, plus WebSocket ping/close control frames. Text as the
 subscription, malformed Norito, or any second client data frame is a protocol
-error. Ping and pong control frames remain valid. Torii sends an empty ping at
-most every 15 seconds while idle; clients must permit the WebSocket stack to
-answer with pong.
+error. The subscription must arrive before one fixed configured deadline;
+ping and pong control frames remain valid but do not restart that deadline.
+Torii sends an empty ping at most every 15 seconds while idle; clients must
+permit the WebSocket stack to answer with pong.
 
 The event WebSocket preserves receiver order and expands `PipelineBatch` in
 batch order, but it does not impose a new global ledger order across independent

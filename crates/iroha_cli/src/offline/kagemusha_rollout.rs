@@ -3321,7 +3321,7 @@ fn read_owned_with_policy(
     require_no_macos_acl(&file, label)?;
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(usize::try_from(opened.len())?)?;
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take(u64::try_from(maximum)?.saturating_add(1))
         .read_to_end(&mut bytes)?;
     let after = file.metadata()?;
@@ -3379,7 +3379,7 @@ fn validate_owned_ancestry(
     owner: u32,
     label: &str,
 ) -> Result<Vec<(PathBuf, (u64, u64, u32, u32, u32, u64))>> {
-    use std::path::Component;
+    use std::{os::unix::fs::MetadataExt as _, path::Component};
     if !path.is_absolute() || fs::canonicalize(path)? != path {
         bail!("{label} ancestry must be absolute, canonical, and symlink-free");
     }
@@ -3703,8 +3703,7 @@ fn publish_owned_with(
             .seek(SeekFrom::Start(0))
             .map_err(|error| error.to_string())?;
         let mut readback = Vec::new();
-        staging
-            .by_ref()
+        std::io::Read::by_ref(&mut staging)
             .take(
                 u64::try_from(bytes.len())
                     .unwrap_or(u64::MAX)
@@ -3760,8 +3759,7 @@ fn publish_owned_with(
             .seek(SeekFrom::Start(0))
             .map_err(|error| error.to_string())?;
         let mut readback = Vec::new();
-        staging
-            .by_ref()
+        std::io::Read::by_ref(&mut staging)
             .take(
                 u64::try_from(bytes.len())
                     .unwrap_or(u64::MAX)
@@ -3784,7 +3782,7 @@ fn publish_owned_with(
             || opened.len() != u64::try_from(bytes.len()).map_err(|error| error.to_string())?
             || fs::canonicalize(path).map_err(|error| error.to_string())? != path
             || ancestry
-                != validate_owned_ancestry(parent_path, uid, "published artifact")
+                != validate_owned_ancestry(&parent_path, uid, "published artifact")
                     .map_err(|error| error.to_string())?
         {
             return Err("published pathname, ancestry, or opened identity changed".to_owned());

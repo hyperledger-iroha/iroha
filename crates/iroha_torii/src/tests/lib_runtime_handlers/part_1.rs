@@ -853,7 +853,7 @@ fn build_find_active_trigger_ids_query_for_test() -> iroha_data_model::query::Qu
     .execute();
     executor.into_query()
 }
-fn build_find_account_ids_query_for_test() -> iroha_data_model::query::QueryWithParams {
+pub(crate) fn build_find_account_ids_query_for_test() -> iroha_data_model::query::QueryWithParams {
     use iroha_data_model::query::builder::QueryBuilderExt;
     let executor = CapturingIterableQueryExecutor::default();
     let _ = iroha_data_model::query::builder::QueryBuilder::new(

@@ -141,8 +141,12 @@ test("mintPuzzleTicket rejects missing or zero transcript binding", async () => 
 });
 
 test("mintAdmissionToken validates hex + propagates TTL + flags", async () => {
+  let captured;
   const queue = [
     {
+      capture(url, init) {
+        captured = { url, init };
+      },
       response: jsonResponse(200, {
         token_b64: "YmFy",
         token_id_hex: "11".repeat(32),
@@ -161,9 +165,13 @@ test("mintAdmissionToken validates hex + propagates TTL + flags", async () => {
   const token = await client.mintAdmissionToken("44".repeat(32), {
     ttlSecs: 30,
     flags: 2,
-    issuedAtUnix: 5,
   });
   assert.equal(token.tokenB64, "YmFy");
+  assert.deepEqual(JSON.parse(captured.init.body), {
+    transcript_hash_hex: "44".repeat(32),
+    ttl_secs: 30,
+    flags: 2,
+  });
 });
 
 test("request throws SoranetPuzzleError on failure", async () => {

@@ -27,8 +27,8 @@ fn install_capacity_registration(
     expires_at_ms: u64,
 ) -> (StatePath, [Hash; 4]) {
     let registration = capacity_registration(account, index, expires_at_ms);
-    let registration_hash = canonical_registration_hash(&registration)
-        .expect("canonical capacity registration hash");
+    let registration_hash =
+        canonical_registration_hash(&registration).expect("canonical capacity registration hash");
     let replay_keys = kagemusha_registration_replay_keys(&registration, &registration_hash);
     let state_key = install_android_online_registration(state_transaction, registration);
     install_capacity_registration_replay_keys(state_transaction, replay_keys);
@@ -54,8 +54,8 @@ fn install_registration_with_policy_hash_and_replay(
     registration: OfflineDeviceAttestationRegistration,
     admission_policy_hash: [u8; 32],
 ) -> (StatePath, [Hash; 4]) {
-    let registration_hash = canonical_registration_hash(&registration)
-        .expect("canonical capacity registration hash");
+    let registration_hash =
+        canonical_registration_hash(&registration).expect("canonical capacity registration hash");
     let replay_keys = kagemusha_registration_replay_keys(&registration, &registration_hash);
     let state_key = install_android_online_registration_with_policy_hash(
         state_transaction,
@@ -235,12 +235,8 @@ fn kagemusha_online_registration_capacity_rejection_does_not_mutate_state() {
     )
     .expect("capacity fixture policy is valid")
     .1;
-    plan_kagemusha_online_registration_admission_v1(
-        &candidate,
-        policy_hash,
-        &state_transaction,
-    )
-    .expect("the candidate reaching the exact per-account limit must remain valid");
+    plan_kagemusha_online_registration_admission_v1(&candidate, policy_hash, &state_transaction)
+        .expect("the candidate reaching the exact per-account limit must remain valid");
 
     install_capacity_registration(
         &mut state_transaction,
@@ -296,12 +292,8 @@ fn kagemusha_online_registration_capacity_rejection_does_not_mutate_state() {
 #[test]
 fn kagemusha_online_registration_retains_expired_replay_tombstone_until_horizon() {
     offline_test_transaction!(state_transaction);
-    let (expired_state_key, expired_replay_keys) = install_capacity_registration(
-        &mut state_transaction,
-        &ALICE_ID,
-        0,
-        POLICY_TEST_TIME_MS,
-    );
+    let (expired_state_key, expired_replay_keys) =
+        install_capacity_registration(&mut state_transaction, &ALICE_ID, 0, POLICY_TEST_TIME_MS);
     let candidate = capacity_registration(&ALICE_ID, 1, POLICY_TEST_TIME_MS + 60_000);
     let policy_hash = current_offline_device_attestation_policy_from_world(
         &state_transaction.world,
@@ -342,20 +334,14 @@ fn kagemusha_online_registration_rotation_churn_is_bounded_until_replay_horizon(
     {
         offline_test_transaction!(state_transaction);
         for index in 0..KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1 {
-            install_capacity_registration(
-                &mut state_transaction,
-                &ALICE_ID,
-                index,
-                expires_at_ms,
-            );
+            install_capacity_registration(&mut state_transaction, &ALICE_ID, index, expires_at_ms);
         }
-        let (mut policy_b, policy_a_hash) =
-            current_offline_device_attestation_policy_from_world(
-                &state_transaction.world,
-                POLICY_TEST_TIME_MS,
-            )
-            .expect("policy A remains valid at its active account capacity");
-        policy_b.revoked_certificate_sha256.push(vec![0xB4; 32]);
+        let (mut policy_b, policy_a_hash) = current_offline_device_attestation_policy_from_world(
+            &state_transaction.world,
+            POLICY_TEST_TIME_MS,
+        )
+        .expect("policy A remains valid at its active account capacity");
+        policy_b.revoked_certificate_tbs_sha256.push(vec![0xB4; 32]);
         let policy_b_hash = canonical_offline_device_attestation_policy_hash(&policy_b)
             .expect("policy B hashes canonically");
         state_transaction.world.smart_contract_state.insert(
@@ -387,7 +373,7 @@ fn kagemusha_online_registration_rotation_churn_is_bounded_until_replay_horizon(
             );
         }
         let mut policy_c = policy_b.clone();
-        policy_c.revoked_certificate_sha256.push(vec![0xC5; 32]);
+        policy_c.revoked_certificate_tbs_sha256.push(vec![0xC5; 32]);
         let policy_c_hash = canonical_offline_device_attestation_policy_hash(&policy_c)
             .expect("policy C hashes canonically");
         state_transaction.world.smart_contract_state.insert(
@@ -448,9 +434,9 @@ fn kagemusha_online_registration_rotation_churn_is_bounded_until_replay_horizon(
     for height in 0..130_u64 {
         block
             .block_hashes
-            .push(HashOf::<BlockHeader>::from_untyped_unchecked(
-                Hash::new(height.to_le_bytes()),
-            ));
+            .push(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                height.to_le_bytes(),
+            )));
     }
     let mut state_transaction = block.transaction();
     let mut old_state_keys = Vec::new();
@@ -470,7 +456,7 @@ fn kagemusha_online_registration_rotation_churn_is_bounded_until_replay_horizon(
         POLICY_TEST_TIME_MS,
     )
     .expect("policy A is installed");
-    policy_b.revoked_certificate_sha256.push(vec![0xB4; 32]);
+    policy_b.revoked_certificate_tbs_sha256.push(vec![0xB4; 32]);
     let policy_b_hash = canonical_offline_device_attestation_policy_hash(&policy_b)
         .expect("policy B hashes canonically");
     for index in KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1
@@ -486,7 +472,7 @@ fn kagemusha_online_registration_rotation_churn_is_bounded_until_replay_horizon(
         );
     }
     let mut policy_c = policy_b;
-    policy_c.revoked_certificate_sha256.push(vec![0xC5; 32]);
+    policy_c.revoked_certificate_tbs_sha256.push(vec![0xC5; 32]);
     let policy_c_hash = canonical_offline_device_attestation_policy_hash(&policy_c)
         .expect("policy C hashes canonically");
     state_transaction.world.smart_contract_state.insert(

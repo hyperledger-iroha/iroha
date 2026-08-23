@@ -120,6 +120,13 @@ fn valid_release_activation_fixture() -> (
             .manifest
             .qualification_receipt_sha256,
     );
+    activation.release_record.internal_validation_receipt =
+        internal_validation_receipt_bytes(&candidate, &activation.release_record.manifest);
+    activation
+        .release_record
+        .manifest
+        .internal_validation_receipt_sha256 =
+        digest(&activation.release_record.internal_validation_receipt);
     let reviewer = KeyPair::from_seed(vec![0x79; 32], Algorithm::Ed25519);
     activation.release_record.cryptographic_review_summary =
         signed_review_bytes(&candidate, &[&reviewer]);
@@ -150,6 +157,13 @@ fn valid_release_activation_fixture() -> (
         .release_record
         .manifest
         .qualified_candidate_sha256;
+    activation
+        .release_record
+        .promotion_record
+        .internal_validation_receipt_sha256 = activation
+        .release_record
+        .manifest
+        .internal_validation_receipt_sha256;
     activation.release_record.promotion_record.manifest_sha256 = activation
         .release_record
         .manifest

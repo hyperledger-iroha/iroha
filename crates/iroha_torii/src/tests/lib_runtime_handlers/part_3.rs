@@ -35,14 +35,57 @@ async fn torii_proxy_snapshot_roundtrips_status_headers_and_body() {
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn torii_proxy_snapshot_caps_buffered_response_bodies() {
-    let response = Response::new(Body::from("proxied-body"));
-    let snapshot = super::response_to_torii_proxy_snapshot(response, 4).await;
+    for max_body_bytes in [1, 4] {
+        let response = Response::new(Body::from("proxied-body"));
+        let snapshot = super::response_to_torii_proxy_snapshot(response, max_body_bytes).await;
+        assert_eq!(snapshot.status_code, StatusCode::BAD_GATEWAY.as_u16());
+        assert_eq!(snapshot.body.len(), max_body_bytes);
+        super::validate_torii_proxy_snapshot_bounds(&snapshot, max_body_bytes)
+            .expect("bounded body diagnostic must remain a valid proxy snapshot");
+    }
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
+async fn torii_proxy_snapshot_does_not_format_arbitrary_body_errors() {
+    #[derive(Debug)]
+    struct PanicOnDisplay;
+    impl core::fmt::Display for PanicOnDisplay {
+        fn fmt(&self, _formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            panic!("proxy snapshot boundary must not format an arbitrary body error")
+        }
+    }
+    impl std::error::Error for PanicOnDisplay {}
+
+    let stream = futures::stream::once(async {
+        Result::<axum::body::Bytes, PanicOnDisplay>::Err(PanicOnDisplay)
+    });
+    let response = Response::new(Body::from_stream(stream));
+    let snapshot = super::response_to_torii_proxy_snapshot(response, 8).await;
     assert_eq!(snapshot.status_code, StatusCode::BAD_GATEWAY.as_u16());
-    let body = String::from_utf8(snapshot.body).expect("error body is utf8");
-    assert!(
-        body.contains("configured limit of 4 bytes"),
-        "unexpected cap error body: {body}"
-    );
+    assert_eq!(snapshot.body, b"proxied ");
+    super::validate_torii_proxy_snapshot_bounds(&snapshot, 8)
+        .expect("fixed body-error diagnostic must remain bounded");
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
+async fn torii_proxy_snapshot_caps_header_bound_failure_bodies() {
+    for max_body_bytes in [1, 4] {
+        let mut response = Response::new(Body::empty());
+        for index in 0..=super::TORII_PROXY_MAX_HEADERS_V1 {
+            let name =
+                axum::http::HeaderName::from_bytes(format!("x-proxy-bound-{index}").as_bytes())
+                    .expect("valid test header name");
+            response
+                .headers_mut()
+                .insert(name, HeaderValue::from_static("value"));
+        }
+        let snapshot = super::response_to_torii_proxy_snapshot(response, max_body_bytes).await;
+        assert_eq!(snapshot.status_code, StatusCode::BAD_GATEWAY.as_u16());
+        assert!(snapshot.headers.is_empty());
+        assert_eq!(snapshot.body.len(), max_body_bytes);
+        super::validate_torii_proxy_snapshot_bounds(&snapshot, max_body_bytes)
+            .expect("bounded header diagnostic must remain a valid proxy snapshot");
+    }
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]

@@ -5,7 +5,7 @@ mod taira_canary_context_tests {
     use iroha_data_model::{
         events::execute_trigger::ExecuteTriggerEventFilter,
         transaction::{
-            TransactionEntrypoint,
+            TransactionAdmissionIntent, TransactionEntrypoint,
             signed::{
                 SealedTransactionCommitmentPayload, SealedTransactionReveal,
                 SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,
@@ -77,6 +77,25 @@ mod taira_canary_context_tests {
         );
         assert_eq!(transaction.kagemusha_taira_canary_wire_identity, None);
 
+        let queue_plan = TransactionBuilder::new(
+            transaction.network_id().clone(),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([RecordKagemushaTairaCanaryV4::new(first.permit.clone())])
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+        .sign(canary_key.private_key());
+        assert_eq!(
+            identity(&queue_plan).expect("classify QueuePlan canary"),
+            None
+        );
+        crate::state::seed_committed_transaction_context(
+            &mut transaction,
+            &TransactionEntrypoint::External(queue_plan),
+            6,
+        );
+        assert_eq!(transaction.kagemusha_taira_canary_wire_identity, None);
+
         let batch = TransactionBuilder::new(
             transaction.network_id().clone(),
             authority,
@@ -92,7 +111,7 @@ mod taira_canary_context_tests {
         crate::state::seed_committed_transaction_context(
             &mut transaction,
             &TransactionEntrypoint::External(batch),
-            6,
+            7,
         );
         assert_eq!(transaction.kagemusha_taira_canary_wire_identity, None);
 
@@ -101,7 +120,7 @@ mod taira_canary_context_tests {
             first.canary_transaction,
             [0xD8; 32],
         ));
-        crate::state::seed_committed_transaction_context(&mut transaction, &sealed, 7);
+        crate::state::seed_committed_transaction_context(&mut transaction, &sealed, 8);
         assert!(!transaction.kagemusha_taira_canary_external_entrypoint);
         assert_eq!(transaction.kagemusha_taira_canary_wire_identity, None);
     }

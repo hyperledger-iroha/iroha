@@ -253,6 +253,7 @@
             temp.path(),
             1,
             false,
+            false,
             &client_account_literal,
             &fee_asset_definition_id,
         )
@@ -285,7 +286,7 @@
             ["#!/usr/bin/env bash", "set -euo pipefail", "umask 077"],
             "generated startup must keep logs, pidfiles, and runtime directories owner-only",
         );
-        let (debug_path, release_path) = default_irohad_bin_paths();
+        let (debug_path, release_path) = default_irohad_bin_paths(false);
         let expected_debug = format!("DEFAULT_IROHAD_BIN_DEBUG=\"{}\"", debug_path.display());
         let expected_release = format!("DEFAULT_IROHAD_BIN_RELEASE=\"{}\"", release_path.display());
         assert!(
@@ -415,6 +416,7 @@
         write_scripts(
             temp.path(),
             1,
+            false,
             false,
             &localnet_client_account_literal(None),
             &localnet_fee_asset_literal(),

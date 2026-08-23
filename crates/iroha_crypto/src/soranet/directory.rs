@@ -17,7 +17,7 @@ use std::{
     convert::TryFrom,
     fs,
     io::{self, Read as _},
-    path::Path,
+    path::{Component, Path, PathBuf},
 };
 const SRC_V2_ISSUER_FINGERPRINT_DOMAIN: &[u8] = b"soranet.src.v2.issuer";
 const GUARD_DIRECTORY_SNAPSHOT_DIGEST_DOMAIN: &[u8] = b"soranet.guard-directory.snapshot.v2";
@@ -75,23 +75,29 @@ const fn guard_directory_decode_limits_v1() -> DecodeLimits {
 }
 /// Read one guard-directory snapshot from a stable, direct regular file.
 ///
-/// The final path component is opened without following symbolic links or Windows reparse points.
-/// File identity, type, and length must remain stable across a read capped at one byte beyond
-/// [`GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1`].
+/// Parent aliases are resolved once to a custodied canonical directory and pinned by an open
+/// handle. The final path component is opened without following symbolic links or Windows reparse
+/// points. File identity, type, and length must remain stable across a read capped at one byte
+/// beyond [`GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1`].
 ///
 /// # Errors
 /// Returns an I/O error if the path cannot be opened safely, is not a direct
 /// regular file, changes while being read, or exceeds the first-release limit.
 pub fn read_guard_directory_snapshot_file(path: &Path) -> io::Result<Vec<u8>> {
+    read_guard_directory_snapshot_file_with_hook(path, || {})
+}
+fn read_guard_directory_snapshot_file_with_hook(
+    path: &Path,
+    after_pin: impl FnOnce(),
+) -> io::Result<Vec<u8>> {
+    let pinned = PinnedGuardDirectoryPath::new(path)?;
+    after_pin();
+    pinned.verify_parent()?;
+    let path = pinned.path();
     let max_bytes = u64::try_from(GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1)
         .expect("fixed guard-directory snapshot limit fits u64");
     let named_before = fs::symlink_metadata(path)?;
-    if guard_directory_metadata_is_link(&named_before) || !named_before.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "guard directory snapshot must be a direct regular file",
-        ));
-    }
+    pinned.validate_file(&named_before)?;
     if named_before.len() > max_bytes {
         return Err(guard_directory_snapshot_too_large());
     }
@@ -110,9 +116,8 @@ pub fn read_guard_directory_snapshot_file(path: &Path) -> io::Result<Vec<u8>> {
     }
     let mut file = options.open(path)?;
     let opened_before = file.metadata()?;
-    if guard_directory_metadata_is_link(&opened_before)
-        || !opened_before.is_file()
-        || !guard_directory_metadata_identifies_same_file(&named_before, &opened_before)
+    pinned.validate_file(&opened_before)?;
+    if !guard_directory_metadata_identifies_same_file(&named_before, &opened_before)
         || opened_before.len() > max_bytes
     {
         return Err(io::Error::new(
@@ -135,15 +140,15 @@ pub fn read_guard_directory_snapshot_file(path: &Path) -> io::Result<Vec<u8>> {
     }
     let opened_after = file.metadata()?;
     let named_after = fs::symlink_metadata(path)?;
+    pinned.validate_file(&opened_after)?;
+    pinned.validate_file(&named_after)?;
     let observed_bytes = u64::try_from(bytes.len()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             "guard directory snapshot byte count cannot be represented as u64",
         )
     })?;
-    if guard_directory_metadata_is_link(&named_after)
-        || !named_after.is_file()
-        || !guard_directory_metadata_identifies_same_file(&opened_before, &opened_after)
+    if !guard_directory_metadata_identifies_same_file(&opened_before, &opened_after)
         || !guard_directory_metadata_identifies_same_file(&opened_after, &named_after)
         || opened_before.len() != opened_after.len()
         || opened_after.len() != named_after.len()
@@ -154,7 +159,177 @@ pub fn read_guard_directory_snapshot_file(path: &Path) -> io::Result<Vec<u8>> {
             "guard directory snapshot changed while it was being read",
         ));
     }
+    pinned.verify_parent()?;
     Ok(bytes)
+}
+struct PinnedGuardDirectoryPath {
+    path: PathBuf,
+    parent_path: PathBuf,
+    parent: fs::File,
+    #[cfg(unix)]
+    owner_uid: u32,
+}
+impl PinnedGuardDirectoryPath {
+    fn new(path: &Path) -> io::Result<Self> {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+        if absolute
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "guard directory snapshot path must not contain dot components",
+            ));
+        }
+        let file_name = absolute.file_name().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "guard directory snapshot path must name a file",
+            )
+        })?;
+        let parent_path = fs::canonicalize(absolute.parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "guard directory snapshot path must have a parent",
+            )
+        })?)?;
+        #[cfg(unix)]
+        let owner_uid = guard_directory_current_uid()?;
+        #[cfg(unix)]
+        validate_guard_directory_ancestor_chain(&parent_path, owner_uid)?;
+        let named = fs::symlink_metadata(&parent_path)?;
+        if guard_directory_metadata_is_link(&named) || !named.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "guard directory snapshot parent must be a direct directory",
+            ));
+        }
+        let parent = fs::File::open(&parent_path)?;
+        let opened = parent.metadata()?;
+        if !opened.is_dir() || !guard_directory_metadata_identifies_same_file(&named, &opened) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "guard directory snapshot parent changed while opening",
+            ));
+        }
+        let pinned = Self {
+            path: parent_path.join(file_name),
+            parent_path,
+            parent,
+            #[cfg(unix)]
+            owner_uid,
+        };
+        pinned.verify_parent()?;
+        Ok(pinned)
+    }
+    fn path(&self) -> &Path {
+        &self.path
+    }
+    fn verify_parent(&self) -> io::Result<()> {
+        let named = fs::symlink_metadata(&self.parent_path)?;
+        let opened = self.parent.metadata()?;
+        if guard_directory_metadata_is_link(&named)
+            || !named.is_dir()
+            || !opened.is_dir()
+            || !guard_directory_metadata_identifies_same_file(&named, &opened)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "guard directory snapshot parent changed while in use",
+            ));
+        }
+        #[cfg(unix)]
+        validate_guard_directory_ancestor_chain(&self.parent_path, self.owner_uid)?;
+        Ok(())
+    }
+    fn validate_file(&self, metadata: &fs::Metadata) -> io::Result<()> {
+        if guard_directory_metadata_is_link(metadata) || !metadata.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "guard directory snapshot must be a direct regular file",
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            if (metadata.uid() != 0 && metadata.uid() != self.owner_uid)
+                || metadata.mode() & 0o022 != 0
+                || metadata.nlink() != 1
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "guard directory snapshot must be owner-or-root held, non-writable by other principals, and have one link",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+#[cfg(unix)]
+fn guard_directory_current_uid() -> io::Result<u32> {
+    use std::os::unix::fs::MetadataExt as _;
+    Ok(tempfile::tempfile()?.metadata()?.uid())
+}
+#[cfg(unix)]
+fn validate_guard_directory_ancestor_chain(parent: &Path, owner_uid: u32) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    let mut ancestors = Vec::new();
+    let mut cursor = parent;
+    loop {
+        ancestors.push(cursor.to_path_buf());
+        let Some(next) = cursor.parent() else {
+            break;
+        };
+        if next == cursor {
+            break;
+        }
+        cursor = next;
+    }
+    ancestors.reverse();
+    let mut metadata = Vec::with_capacity(ancestors.len());
+    for ancestor in &ancestors {
+        let observed = fs::symlink_metadata(ancestor)?;
+        if guard_directory_metadata_is_link(&observed) || !observed.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "guard directory snapshot ancestor must be a direct directory",
+            ));
+        }
+        if observed.uid() != 0 && observed.uid() != owner_uid {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "guard directory snapshot ancestor {} is not owner-or-root held",
+                    ancestor.display()
+                ),
+            ));
+        }
+        metadata.push(observed);
+    }
+    for (index, observed) in metadata.iter().enumerate() {
+        if observed.mode() & 0o022 == 0 {
+            continue;
+        }
+        let protected_sticky_boundary = observed.uid() == 0
+            && observed.mode() & 0o1000 != 0
+            && metadata
+                .get(index + 1)
+                .is_some_and(|child| child.uid() == owner_uid && child.mode() & 0o022 == 0);
+        if !protected_sticky_boundary {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "guard directory snapshot ancestor {} is replaceable",
+                    ancestors[index].display()
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 fn guard_directory_snapshot_too_large() -> io::Error {
     io::Error::new(
@@ -393,9 +568,9 @@ impl GuardDirectorySnapshotV2 {
                     .to_string(),
             ));
         }
-        if self.published_at_unix > self.valid_until_unix {
+        if self.published_at_unix > self.valid_after_unix {
             return Err(norito::Error::Message(
-                "guard directory snapshot published_at_unix exceeds valid_until_unix".to_string(),
+                "guard directory snapshot published_at_unix exceeds valid_after_unix".to_string(),
             ));
         }
         Ok(validation_phase)
@@ -1005,18 +1180,29 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn snapshot_file_reader_allows_symlinked_parent_path() {
+    fn snapshot_file_reader_pins_symlinked_parent_path() {
         use std::os::unix::fs::symlink;
         let directory = tempfile::tempdir().expect("temporary directory");
         let target_directory = directory.path().join("target");
+        let alternate_directory = directory.path().join("alternate");
         let linked_directory = directory.path().join("linked");
         fs::create_dir(&target_directory).expect("create target directory");
+        fs::create_dir(&alternate_directory).expect("create alternate directory");
         symlink(&target_directory, &linked_directory).expect("link parent directory");
         fs::write(target_directory.join("directory.norito"), b"snapshot")
             .expect("write target snapshot");
+        fs::write(alternate_directory.join("directory.norito"), b"rollback")
+            .expect("write alternate snapshot");
         assert_eq!(
-            read_guard_directory_snapshot_file(&linked_directory.join("directory.norito"))
-                .expect("read through linked parent"),
+            read_guard_directory_snapshot_file_with_hook(
+                &linked_directory.join("directory.norito"),
+                || {
+                    fs::remove_file(&linked_directory).expect("remove parent alias");
+                    symlink(&alternate_directory, &linked_directory)
+                        .expect("redirect parent alias");
+                },
+            )
+            .expect("read pinned parent"),
             b"snapshot"
         );
     }
@@ -1033,6 +1219,36 @@ mod tests {
             .expect_err("symlinked guard directory must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("direct regular file"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_file_reader_rejects_replaceable_ancestor_or_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let replaceable = temporary.path().join("replaceable");
+        fs::create_dir(&replaceable).expect("create replaceable parent");
+        let snapshot = replaceable.join("directory.norito");
+        fs::write(&snapshot, b"snapshot").expect("write snapshot");
+        fs::set_permissions(&replaceable, fs::Permissions::from_mode(0o777))
+            .expect("make parent replaceable");
+        let error = read_guard_directory_snapshot_file(&snapshot)
+            .expect_err("replaceable parent must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        fs::set_permissions(&replaceable, fs::Permissions::from_mode(0o700))
+            .expect("restore parent custody");
+
+        fs::set_permissions(&snapshot, fs::Permissions::from_mode(0o666))
+            .expect("make snapshot replaceable");
+        let error = read_guard_directory_snapshot_file(&snapshot)
+            .expect_err("replaceable snapshot must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        fs::set_permissions(&snapshot, fs::Permissions::from_mode(0o600))
+            .expect("restore snapshot custody");
+        fs::hard_link(&snapshot, replaceable.join("directory-alias.norito"))
+            .expect("create second snapshot link");
+        let error = read_guard_directory_snapshot_file(&snapshot)
+            .expect_err("multiply-linked snapshot must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
     #[test]
     fn snapshot_wire_length_fails_before_decode() {
@@ -1277,6 +1493,44 @@ mod tests {
         snapshot.valid_after_unix = snapshot.valid_until_unix + 1;
         let bytes = snapshot.to_bytes().expect("serialize");
         assert!(GuardDirectorySnapshotV2::inspect_bytes(&bytes).is_err());
+        let mut snapshot = sample_snapshot();
+        snapshot.published_at_unix = snapshot.valid_after_unix + 1;
+        let bytes = snapshot.to_bytes().expect("serialize");
+        let error = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
+            .expect_err("a snapshot cannot be valid before it was published");
+        assert!(error.to_string().contains("valid_after_unix"));
+    }
+    #[test]
+    fn snapshot_rejects_negative_header_timestamps() {
+        let mut published = sample_snapshot();
+        published.published_at_unix = -1;
+        let error = GuardDirectorySnapshotV2::inspect_bytes(
+            &published
+                .to_bytes()
+                .expect("serialize negative publication"),
+        )
+        .expect_err("negative publication time must fail");
+        assert!(error.to_string().contains("non-negative"));
+
+        let mut valid_after = sample_snapshot();
+        valid_after.valid_after_unix = -1;
+        let error = GuardDirectorySnapshotV2::inspect_bytes(
+            &valid_after
+                .to_bytes()
+                .expect("serialize negative valid-after"),
+        )
+        .expect_err("negative valid-after time must fail");
+        assert!(error.to_string().contains("non-negative"));
+
+        let mut valid_until = sample_snapshot();
+        valid_until.valid_until_unix = -1;
+        let error = GuardDirectorySnapshotV2::inspect_bytes(
+            &valid_until
+                .to_bytes()
+                .expect("serialize negative valid-until"),
+        )
+        .expect_err("negative valid-until time must fail");
+        assert!(error.to_string().contains("non-negative"));
     }
     #[test]
     fn snapshot_rejects_issuer_fingerprint_mismatch() {

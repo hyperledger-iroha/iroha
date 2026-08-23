@@ -82,4 +82,8 @@ cbindgen --config crates/soranet_pq/cbindgen.toml \
 ```
 
 The generated header exposes the `soranet_mlkem_*` and `soranet_mldsa_*` entry
-points alongside the shared error codes used throughout the C ABI.
+points alongside the shared error codes used throughout the C ABI. Buffer
+lengths use `size_t` on every platform. Writable buffers and scalar outputs
+must be disjoint from the other live ranges passed to the same call; overlap is
+rejected with `SORANET_PQ_ERR_BUFFER_OVERLAP` before any pointer is
+dereferenced.

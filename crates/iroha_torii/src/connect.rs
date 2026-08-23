@@ -109,6 +109,22 @@ impl WsPermit {
         self.bus.session_closed(self.ip).await;
     }
 }
+impl Drop for WsPermit {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        self.released = true;
+        let bus = self.bus.clone();
+        let ip = self.ip;
+        // WebSocket upgrade callbacks are cancellation points. Release the
+        // reservation even when the callback never starts or its task is
+        // aborted before it can run the explicit async cleanup.
+        spawn_background_task(async move {
+            bus.session_closed(ip).await;
+        });
+    }
+}
 #[derive(Default)]
 #[allow(clippy::struct_field_names)]
 struct BusShared {
@@ -206,6 +222,18 @@ struct Session {
     // Outstanding ping expectations per role
     heartbeat_app: Mutex<HeartbeatQueue>,
     heartbeat_wallet: Mutex<HeartbeatQueue>,
+}
+struct ConnectInbox {
+    buffered: VecDeque<proto::ConnectFrameV1>,
+    live: mpsc::Receiver<proto::ConnectFrameV1>,
+}
+impl ConnectInbox {
+    async fn recv(&mut self) -> Option<proto::ConnectFrameV1> {
+        if let Some(frame) = self.buffered.pop_front() {
+            return Some(frame);
+        }
+        self.live.recv().await
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SessionOrigin {
@@ -540,6 +568,7 @@ impl Bus {
         }
     }
     // Use derived Clone
+    #[cfg(test)]
     async fn get_or_create(&self, sid: &Sid) -> Arc<Session> {
         let key = sid.to_vec();
         if let Some(sess) = self.inner.read().await.get(&key) {
@@ -705,13 +734,13 @@ impl Bus {
         if let Some(sess) = w.get(&key) {
             let app_empty = sess.app_tx.lock().await.is_none();
             let wallet_empty = sess.wallet_tx.lock().await.is_none();
-            if app_empty && wallet_empty {
+            let provisioned = sess.management_token_hash.lock().await.is_some();
+            if app_empty && wallet_empty && !provisioned {
                 w.remove(&key);
             }
         }
     }
-    async fn attach(&self, sid: Sid, role: proto::Role) -> mpsc::Receiver<proto::ConnectFrameV1> {
-        let sess = self.get_or_create(&sid).await;
+    async fn attach_session(sess: Arc<Session>, role: proto::Role) -> ConnectInbox {
         let (tx, rx) = mpsc::channel::<proto::ConnectFrameV1>(64);
         match role {
             proto::Role::App => {
@@ -721,9 +750,25 @@ impl Bus {
                 *sess.wallet_tx.lock().await = Some(tx);
             }
         }
-        // Drain any buffered frames targeted to this role upon attach
-        Self::drain_for_role(sess.clone(), role).await;
-        rx
+        // Move pre-attach frames into a receiver-owned prefix instead of
+        // sending them into the bounded live channel before its receiver is
+        // returned. The latter deadlocks as soon as more than 64 frames were
+        // buffered. New frames enter `live` only after the prefix is fixed, so
+        // `ConnectInbox::recv` preserves their order.
+        let buffered = Self::take_buffered_for_role(sess, role).await;
+        ConnectInbox { buffered, live: rx }
+    }
+    async fn attach_existing(&self, sid: Sid, role: proto::Role) -> Option<ConnectInbox> {
+        let sessions = self.inner.read().await;
+        let sess = sessions.get(&sid.to_vec()).cloned()?;
+        let inbox = Self::attach_session(sess, role).await;
+        drop(sessions);
+        Some(inbox)
+    }
+    #[cfg(test)]
+    async fn attach(&self, sid: Sid, role: proto::Role) -> ConnectInbox {
+        let sess = self.get_or_create(&sid).await;
+        Self::attach_session(sess, role).await
     }
     async fn detach(&self, sid: Sid, role: proto::Role) {
         if let Some(sess) = self.inner.read().await.get(&sid.to_vec()) {
@@ -811,8 +856,7 @@ impl Bus {
                 proto::Role::Wallet => sess.wallet_tx.lock().await.clone(),
             };
             if let Some(tx) = tx_opt {
-                let _ = tx.send(frame.clone()).await;
-                return true;
+                return tx.send(frame.clone()).await.is_ok();
             }
         }
         false
@@ -857,6 +901,35 @@ impl Bus {
                 "connect: dropping oversized frame"
             );
             return;
+        }
+        if let proto::FrameKind::Control(control) = &frame.kind {
+            let sender = match frame.dir {
+                proto::Dir::AppToWallet => proto::Role::App,
+                proto::Dir::WalletToApp => proto::Role::Wallet,
+            };
+            let valid_owner = match control {
+                proto::ConnectControlV1::Open { .. } => sender == proto::Role::App,
+                proto::ConnectControlV1::Approve { .. }
+                | proto::ConnectControlV1::Reject { .. } => sender == proto::Role::Wallet,
+                proto::ConnectControlV1::Close { who, .. } => *who == sender,
+                proto::ConnectControlV1::Ping { .. } | proto::ConnectControlV1::Pong { .. } => true,
+                // Server events use an independent Torii-owned sequence and
+                // are delivered only by `send_server_event`.
+                proto::ConnectControlV1::ServerEvent { .. } => false,
+            };
+            if !valid_owner {
+                self.shared
+                    .role_direction_mismatch_total
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    sid = ?hex::encode(frame.sid),
+                    frame_dir = ?frame.dir,
+                    "connect: closing session on control-frame owner substitution"
+                );
+                self.terminate_session(frame.sid, CLOSE_REASON_ROLE_DIRECTION_MISMATCH)
+                    .await;
+                return;
+            }
         }
         self.shared.frames_in_total.fetch_add(1, Ordering::Relaxed);
         if matches!(frame.kind, proto::FrameKind::Ciphertext(_)) {
@@ -961,44 +1034,42 @@ impl Bus {
                     permissions,
                     ..
                 } => {
-                    if frame.dir == proto::Dir::AppToWallet {
-                        if constraints.network_id != self.network_id {
-                            warn!(
-                                sid = ?hex::encode(frame.sid),
-                                expected_network_id = %self.network_id,
-                                supplied_network_id = %constraints.network_id,
-                                "connect: rejecting Open for a different network"
-                            );
-                            self.terminate_session(frame.sid, CLOSE_REASON_NETWORK_MISMATCH)
-                                .await;
-                            return;
-                        }
-                        if *sess.expected_app_pk.lock().await != Some(*app_pk) {
-                            warn!(
-                                sid = ?hex::encode(frame.sid),
-                                "connect: rejecting Open whose application key is not bound to the session id"
-                            );
-                            self.terminate_session(frame.sid, CLOSE_REASON_OPEN_IDENTITY_MISMATCH)
-                                .await;
-                            return;
-                        }
-                        let mut open_binding = sess.open_binding.lock().await;
-                        if open_binding.is_some() {
-                            drop(open_binding);
-                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting repeated Open");
-                            self.terminate_session(frame.sid, CLOSE_REASON_OPEN_REPLAY)
-                                .await;
-                            return;
-                        }
-                        *open_binding = Some(OpenBinding {
-                            app_pk: *app_pk,
-                            constraints: constraints.clone(),
-                        });
+                    if constraints.network_id != self.network_id {
+                        warn!(
+                            sid = ?hex::encode(frame.sid),
+                            expected_network_id = %self.network_id,
+                            supplied_network_id = %constraints.network_id,
+                            "connect: rejecting Open for a different network"
+                        );
+                        self.terminate_session(frame.sid, CLOSE_REASON_NETWORK_MISMATCH)
+                            .await;
+                        return;
+                    }
+                    if *sess.expected_app_pk.lock().await != Some(*app_pk) {
+                        warn!(
+                            sid = ?hex::encode(frame.sid),
+                            "connect: rejecting Open whose application key is not bound to the session id"
+                        );
+                        self.terminate_session(frame.sid, CLOSE_REASON_OPEN_IDENTITY_MISMATCH)
+                            .await;
+                        return;
+                    }
+                    let mut open_binding = sess.open_binding.lock().await;
+                    if open_binding.is_some() {
                         drop(open_binding);
-                        (*sess.req_perms.lock().await).clone_from(permissions);
-                        if permissions.is_some() {
-                            debug!(sid = ?hex::encode(frame.sid), "connect: Open with permissions requested");
-                        }
+                        warn!(sid = ?hex::encode(frame.sid), "connect: rejecting repeated Open");
+                        self.terminate_session(frame.sid, CLOSE_REASON_OPEN_REPLAY)
+                            .await;
+                        return;
+                    }
+                    *open_binding = Some(OpenBinding {
+                        app_pk: *app_pk,
+                        constraints: constraints.clone(),
+                    });
+                    drop(open_binding);
+                    (*sess.req_perms.lock().await).clone_from(permissions);
+                    if permissions.is_some() {
+                        debug!(sid = ?hex::encode(frame.sid), "connect: Open with permissions requested");
                     }
                 }
                 proto::ConnectControlV1::Approve {
@@ -1008,91 +1079,87 @@ impl Bus {
                     proof,
                     sig_wallet,
                 } => {
-                    if frame.dir == proto::Dir::WalletToApp {
-                        let mut approved = sess.approved.lock().await;
-                        if *approved {
-                            drop(approved);
-                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting repeated wallet approval");
-                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_REPLAY)
-                                .await;
-                            return;
-                        }
-                        let Some(open_binding) = sess.open_binding.lock().await.clone() else {
-                            drop(approved);
-                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval before Open");
-                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
-                                .await;
-                            return;
-                        };
-                        let Some(relay_auth_hash) = *sess.relay_auth_hash.lock().await else {
-                            drop(approved);
-                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval without relay binding");
-                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
-                                .await;
-                            return;
-                        };
-                        let account = match AccountId::parse_encoded(&account_id) {
-                            Ok(parsed) if parsed.canonical() == account_id => {
-                                parsed.into_account_id()
-                            }
-                            Ok(_) => {
-                                drop(approved);
-                                warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval with noncanonical account id");
-                                self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
-                                    .await;
-                                return;
-                            }
-                            Err(error) => {
-                                drop(approved);
-                                warn!(sid = ?hex::encode(frame.sid), ?error, "connect: rejecting approval with malformed account id");
-                                self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
-                                    .await;
-                                return;
-                            }
-                        };
-                        let Some(signatory) = account.try_signatory() else {
-                            drop(approved);
-                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval for a multisig account without a typed intent");
-                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
-                                .await;
-                            return;
-                        };
-                        if let Err(error) = connect_sdk::verify_wallet_approval_signature(
-                            signatory,
-                            &open_binding.constraints,
-                            &frame.sid,
-                            &open_binding.app_pk,
-                            wallet_pk,
-                            account_id,
-                            permissions.as_ref(),
-                            proof.as_ref(),
-                            &relay_auth_hash,
-                            sig_wallet,
-                        ) {
-                            drop(approved);
-                            warn!(sid = ?hex::encode(frame.sid), error, "connect: rejecting forged or substituted wallet approval");
-                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
-                                .await;
-                            return;
-                        }
-                        (*sess.acc_perms.lock().await).clone_from(permissions);
-                        *approved = true;
+                    let mut approved = sess.approved.lock().await;
+                    if *approved {
                         drop(approved);
-                        if permissions.is_some() {
-                            debug!(sid = ?hex::encode(frame.sid), "connect: Approve with permissions provided");
+                        warn!(sid = ?hex::encode(frame.sid), "connect: rejecting repeated wallet approval");
+                        self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_REPLAY)
+                            .await;
+                        return;
+                    }
+                    let Some(open_binding) = sess.open_binding.lock().await.clone() else {
+                        drop(approved);
+                        warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval before Open");
+                        self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
+                            .await;
+                        return;
+                    };
+                    let Some(relay_auth_hash) = *sess.relay_auth_hash.lock().await else {
+                        drop(approved);
+                        warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval without relay binding");
+                        self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
+                            .await;
+                        return;
+                    };
+                    let account = match AccountId::parse_encoded(&account_id) {
+                        Ok(parsed) if parsed.canonical() == account_id => parsed.into_account_id(),
+                        Ok(_) => {
+                            drop(approved);
+                            warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval with noncanonical account id");
+                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
+                                .await;
+                            return;
                         }
-                        // Compare if we have both sides
-                        let req = sess.req_perms.lock().await.clone();
-                        let acc = sess.acc_perms.lock().await.clone();
-                        if let (Some(r), Some(a)) = (req, acc) {
-                            let (extra_m, missing_m) = diff(&r.methods, &a.methods);
-                            let (extra_e, missing_e) = diff(&r.events, &a.events);
-                            if !extra_m.is_empty() || !extra_e.is_empty() {
-                                warn!(sid = ?hex::encode(frame.sid), extra_methods = ?extra_m, extra_events = ?extra_e, "connect: wallet approved permissions not requested by app");
-                            }
-                            if !missing_m.is_empty() || !missing_e.is_empty() {
-                                info!(sid = ?hex::encode(frame.sid), dropped_methods = ?missing_m, dropped_events = ?missing_e, "connect: wallet narrowed requested permissions");
-                            }
+                        Err(error) => {
+                            drop(approved);
+                            warn!(sid = ?hex::encode(frame.sid), ?error, "connect: rejecting approval with malformed account id");
+                            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
+                                .await;
+                            return;
+                        }
+                    };
+                    let Some(signatory) = account.try_signatory() else {
+                        drop(approved);
+                        warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval for a multisig account without a typed intent");
+                        self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
+                            .await;
+                        return;
+                    };
+                    if let Err(error) = connect_sdk::verify_wallet_approval_signature(
+                        signatory,
+                        &open_binding.constraints,
+                        &frame.sid,
+                        &open_binding.app_pk,
+                        wallet_pk,
+                        account_id,
+                        permissions.as_ref(),
+                        proof.as_ref(),
+                        &relay_auth_hash,
+                        sig_wallet,
+                    ) {
+                        drop(approved);
+                        warn!(sid = ?hex::encode(frame.sid), error, "connect: rejecting forged or substituted wallet approval");
+                        self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
+                            .await;
+                        return;
+                    }
+                    (*sess.acc_perms.lock().await).clone_from(permissions);
+                    *approved = true;
+                    drop(approved);
+                    if permissions.is_some() {
+                        debug!(sid = ?hex::encode(frame.sid), "connect: Approve with permissions provided");
+                    }
+                    // Compare if we have both sides
+                    let req = sess.req_perms.lock().await.clone();
+                    let acc = sess.acc_perms.lock().await.clone();
+                    if let (Some(r), Some(a)) = (req, acc) {
+                        let (extra_m, missing_m) = diff(&r.methods, &a.methods);
+                        let (extra_e, missing_e) = diff(&r.events, &a.events);
+                        if !extra_m.is_empty() || !extra_e.is_empty() {
+                            warn!(sid = ?hex::encode(frame.sid), extra_methods = ?extra_m, extra_events = ?extra_e, "connect: wallet approved permissions not requested by app");
+                        }
+                        if !missing_m.is_empty() || !missing_e.is_empty() {
+                            info!(sid = ?hex::encode(frame.sid), dropped_methods = ?missing_m, dropped_events = ?missing_e, "connect: wallet narrowed requested permissions");
                         }
                     }
                 }
@@ -1109,36 +1176,49 @@ impl Bus {
             }
         }
         // Deliver locally (best effort)
-        let delivered = self.deliver_local_only(&frame).await;
-        if delivered {
-            self.shared.frames_out_total.fetch_add(1, Ordering::Relaxed);
-        } else {
+        let mut delivered = self.deliver_local_only(&frame).await;
+        if !delivered {
             // Buffer frame for the session if target is offline
             let cap = self.policy.session_buffer_max_bytes;
             {
                 let mut buf = sess.buffer.lock().await;
                 let mut bytes = sess.buffer_bytes.lock().await;
-                let mut evicted = 0u64;
-                // Evict oldest until it fits under cap
-                while *bytes + enc_len > cap {
-                    if let Some((_old, old_len)) = buf.pop_front() {
-                        *bytes = bytes.saturating_sub(old_len);
-                        evicted += 1;
-                    } else {
-                        break;
+                // `attach` publishes its sender before taking this buffer lock.
+                // Re-check under the lock so a frame which raced that publish
+                // cannot be stranded in the offline buffer until a later reconnect.
+                let tx_opt = match target {
+                    proto::Role::App => sess.app_tx.lock().await.clone(),
+                    proto::Role::Wallet => sess.wallet_tx.lock().await.clone(),
+                };
+                if let Some(tx) = tx_opt {
+                    delivered = tx.send(frame.clone()).await.is_ok();
+                }
+                if !delivered {
+                    let mut evicted = 0u64;
+                    // Evict oldest until it fits under cap
+                    while bytes.saturating_add(enc_len) > cap {
+                        if let Some((_old, old_len)) = buf.pop_front() {
+                            *bytes = bytes.saturating_sub(old_len);
+                            evicted += 1;
+                        } else {
+                            break;
+                        }
                     }
-                }
-                if evicted > 0 {
-                    self.shared
-                        .buffer_drops_total
-                        .fetch_add(evicted, Ordering::Relaxed);
-                }
-                if *bytes + enc_len <= cap {
-                    buf.push_back((frame.clone(), enc_len));
-                    *bytes += enc_len;
+                    if evicted > 0 {
+                        self.shared
+                            .buffer_drops_total
+                            .fetch_add(evicted, Ordering::Relaxed);
+                    }
+                    if bytes.saturating_add(enc_len) <= cap {
+                        buf.push_back((frame.clone(), enc_len));
+                        *bytes = bytes.saturating_add(enc_len);
+                    }
                 }
             }
             *sess.last_activity.lock().await = Instant::now();
+        }
+        if delivered {
+            self.shared.frames_out_total.fetch_add(1, Ordering::Relaxed);
         }
         // Re-broadcast authenticated envelopes to peers (best effort).
         if self.policy.relay_enabled && self.policy.relay_strategy == RelayStrategy::Broadcast {
@@ -1428,8 +1508,11 @@ impl Bus {
             *sess.last_activity.lock().await = Instant::now();
         }
     }
-    async fn drain_for_role(sess: Arc<Session>, role: proto::Role) {
-        let mut out = Vec::new();
+    async fn take_buffered_for_role(
+        sess: Arc<Session>,
+        role: proto::Role,
+    ) -> VecDeque<proto::ConnectFrameV1> {
+        let mut out = VecDeque::new();
         {
             let mut buf = sess.buffer.lock().await;
             let mut bytes = sess.buffer_bytes.lock().await;
@@ -1448,17 +1531,10 @@ impl Bus {
             }
             *buf = kept;
         }
-        // Deliver drained frames
-        let tx_opt = match role {
-            proto::Role::App => sess.app_tx.lock().await.clone(),
-            proto::Role::Wallet => sess.wallet_tx.lock().await.clone(),
-        };
-        if let Some(tx) = tx_opt {
-            for f in out {
-                let _ = tx.send(f).await;
-            }
+        if !out.is_empty() {
             *sess.last_activity.lock().await = Instant::now();
         }
+        out
     }
     async fn evaluate_heartbeat(
         &self,
@@ -1502,6 +1578,20 @@ impl Bus {
             None
         }
     }
+
+    /// Apply the configured Connect frame ceiling before the WebSocket is upgraded.
+    ///
+    /// The in-session decoder enforces the same limit for binary protocol messages,
+    /// while this transport-level cap prevents oversized binary or text messages from
+    /// being buffered by the WebSocket implementation first.
+    pub(crate) fn configure_websocket(
+        &self,
+        upgrade: axum::extract::WebSocketUpgrade,
+    ) -> axum::extract::WebSocketUpgrade {
+        upgrade
+            .max_message_size(self.policy.frame_max_bytes)
+            .max_frame_size(self.policy.frame_max_bytes)
+    }
 }
 #[cfg(test)]
 fn test_network_id() -> NetworkId {
@@ -1532,7 +1622,9 @@ pub async fn handle_ws(
         "wallet" | "Wallet" => proto::Role::Wallet,
         other => return Err(format!("bad role: {other}")),
     };
-    let mut inbox = bus.attach(sid, role).await;
+    let Some(mut inbox) = bus.attach_existing(sid, role).await else {
+        return Err("connect session ended before websocket attachment".to_owned());
+    };
     let mut tasks = JoinSet::new();
     // Split WS into sender and receiver halves
     let (mut ws_sender, mut ws_receiver) = ws.split();
@@ -1622,50 +1714,65 @@ pub async fn handle_ws(
         Ok::<(), String>(())
     };
     tasks.spawn(writer);
-    // Reader: parse binary frames and forward.
-    while let Some(msg) = ws_receiver.next().await {
-        match msg {
-            Ok(Message::Binary(b)) => {
-                bus.touch_session(&sid).await;
-                if b.len() > bus.policy.frame_max_bytes {
-                    break;
-                }
-                match proto::decode_connect_frame_bare(&b) {
-                    Ok(frame) => {
-                        if frame.sid != sid {
-                            break;
-                        }
-                        if !bus.relay_from_role(role, frame).await {
-                            break;
-                        }
-                    }
-                    Err(err) => {
-                        warn!(
-                            sid = ?hex::encode(sid),
-                            ?role,
-                            len = b.len(),
-                            ?err,
-                            "connect: failed to decode websocket frame"
-                        );
+    // Reader: parse binary frames and forward. Run it in the current task so it can be
+    // cancelled immediately when the writer exits on TTL, heartbeat failure, or send error.
+    let reader = async {
+        while let Some(msg) = ws_receiver.next().await {
+            match msg {
+                Ok(Message::Binary(b)) => {
+                    bus.touch_session(&sid).await;
+                    if b.len() > bus.policy.frame_max_bytes {
                         break;
                     }
+                    match proto::decode_connect_frame_bare(&b) {
+                        Ok(frame) => {
+                            if frame.sid != sid {
+                                break;
+                            }
+                            if !bus.relay_from_role(role, frame).await {
+                                break;
+                            }
+                        }
+                        Err(err) => {
+                            warn!(
+                                sid = ?hex::encode(sid),
+                                ?role,
+                                len = b.len(),
+                                ?err,
+                                "connect: failed to decode websocket frame"
+                            );
+                            break;
+                        }
+                    }
                 }
+                Ok(Message::Close(_)) => break,
+                Ok(Message::Ping(_)) => { /* ignore ping in reader */ }
+                Ok(Message::Text(_)) => {
+                    // Connect is a binary-only protocol. The upgrade-level cap
+                    // bounds this frame before it reaches the handler; terminate
+                    // rather than letting repeated text traffic occupy a session.
+                    break;
+                }
+                Err(e) => return Err(format!("ws error: {e}")),
+                _ => {}
             }
-            Ok(Message::Close(_)) => break,
-            Ok(Message::Ping(_)) => { /* ignore ping in reader */ }
-            Ok(Message::Text(_)) => {
-                // Ignore text frames
-            }
-            Err(e) => {
-                return Err(format!("ws error: {e}"));
-            }
-            _ => {}
         }
-    }
+        Ok(())
+    };
+    tokio::pin!(reader);
+    let result = tokio::select! {
+        result = &mut reader => result,
+        writer = tasks.join_next() => match writer {
+            Some(Ok(result)) => result,
+            Some(Err(error)) => Err(format!("connect writer task failed: {error}")),
+            None => Err("connect writer task ended without a result".to_owned()),
+        },
+    };
     bus.detach(sid, role).await;
-    // Drain writer task
+    // Dropping a reader must also stop a writer blocked on its inbox, and vice versa.
+    tasks.abort_all();
     while let Some(_r) = tasks.join_next().await {}
-    Ok(())
+    result
 }
 fn expected_direction_for_role(role: proto::Role) -> proto::Dir {
     match role {

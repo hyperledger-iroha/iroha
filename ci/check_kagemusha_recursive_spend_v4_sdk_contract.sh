@@ -71,6 +71,18 @@ paths = {
         "crates/connect_norito_bridge/tests/fixtures/"
         "offline_recipient_payment_request_v2.hex"
     ),
+    "recipient_receive_offer_vector": Path(
+        "crates/connect_norito_bridge/tests/fixtures/"
+        "offline_recipient_receive_offer_v2.hex"
+    ),
+    "recipient_lineage_vector": Path(
+        "crates/connect_norito_bridge/tests/fixtures/"
+        "offline_recipient_registration_lineage_v2.hex"
+    ),
+    "recipient_checkpoint_vector": Path(
+        "crates/connect_norito_bridge/tests/fixtures/"
+        "offline_recipient_checkpoint_envelope.hex"
+    ),
     "peer_payment_vector": Path(
         "crates/connect_norito_bridge/tests/fixtures/offline_peer_payment_v4.hex"
     ),
@@ -276,29 +288,33 @@ require_regex(
 )
 
 
-recipient_request_vector = canonical_hex_vector("recipient_request_vector")
-peer_payment_vector = canonical_hex_vector("peer_payment_vector")
-if len(recipient_request_vector) != 765:
-    errors.append(
-        f"{paths['recipient_request_vector']}: expected 765 bytes, "
-        f"found {len(recipient_request_vector)}"
-    )
-if hashlib.sha256(recipient_request_vector).hexdigest() != (
-    "899c9b4d44630e6c0c010d04ab4b0c570c2062fba5a54e678d6a0baf0e8b02b0"
+for label, expected_size, expected_sha256 in (
+    ("recipient_request_vector", 753,
+     "d325566b1117fa368703a971367056173f2d8349d2e86101dc06187aaf8fd2b4"),
+    ("recipient_receive_offer_vector", 12_425,
+     "80a240eb19cabc0853a257b90c4e8a53b0ec0641acc9d7cb0080a4d6de77ec93"),
+    ("recipient_lineage_vector", 11_299,
+     "e9c3ab0cdf2781062dfe5539a5ed4e180cd29530e482eefa7693477e88a20f16"),
+    ("recipient_checkpoint_vector", 393,
+     "ed6f4796046ee1d35f844cc862586dbe1d7d0f59db51638c33559052f4196bef"),
+    ("peer_payment_vector", 12_896,
+     "37ee56ad5663ab67b8b5b9a72927f1e0811142122bf04fa28a55634f96b7d3af"),
 ):
-    errors.append(f"{paths['recipient_request_vector']}: canonical SHA-256 mismatch")
-if len(peer_payment_vector) != 11_887:
-    errors.append(
-        f"{paths['peer_payment_vector']}: expected 11887 bytes, "
-        f"found {len(peer_payment_vector)}"
-    )
-if hashlib.sha256(peer_payment_vector).hexdigest() != (
-    "ae20bc0718f3a3ff31e18b6452422549d017b66301cde799d43609614661d019"
-):
-    errors.append(f"{paths['peer_payment_vector']}: canonical SHA-256 mismatch")
+    vector = canonical_hex_vector(label)
+    if len(vector) != expected_size:
+        errors.append(
+            f"{paths[label]}: expected {expected_size} bytes, found {len(vector)}"
+        )
+    if hashlib.sha256(vector).hexdigest() != expected_sha256:
+        errors.append(f"{paths[label]}: canonical SHA-256 mismatch")
 for needle in (
     "--recipient-request-hex",
     "request.digest()",
+    "0_u8..4",
+    "bls_normal_pop_prove",
+    "DualQuorum::from_roster",
+    "complete_context.id()",
+    "signers: vec![0, 1, 2]",
     "norito::to_bytes(&payment)",
 ):
     require("peer_payment_generator", needle)
@@ -307,6 +323,32 @@ require_regex(
     r"payment\s*\.validate_public_binding\(\)",
     "public-binding validation of the emitted peer payment",
 )
+require_regex(
+    "peer_payment_generator",
+    r"let mut validator_keys = \(0_u8\.\.4\).*?"
+    r"validator_keys\.sort_unstable_by_key.*?"
+    r"let validator_set = validator_keys.*?power: 1,.*?"
+    r"let validator_set_pops = validator_keys.*?bls_normal_pop_prove",
+    "ordered four-validator unit-power roster with matching BLS PoPs",
+)
+require_regex(
+    "peer_payment_generator",
+    r"let complete_context = HeightContext \{.*?"
+    r"mode: ConsensusMode::Permissioned,.*?"
+    r"roster: validator_set\.to_vec\(\),.*?"
+    r"quorum: DualQuorum::from_roster\(validator_set\).*?"
+    r"complete_context\s*\.validate\(\).*?"
+    r"let context_id = complete_context\.id\(\);.*?"
+    r"phase: GlobalPhase::Commit,.*?signers: vec!\[0, 1, 2\]",
+    "one validated four-validator context reused by the three-signer Commit QC",
+)
+for needle in (
+    "fixture_uses_a_canonical_four_validator_commit_quorum",
+    "assert_eq!(window.validator_set.len(), 4)",
+    "assert_eq!(window.validator_set_pops.len(), 4)",
+    "assert_eq!(certificate.signers, [0, 1, 2])",
+):
+    require("peer_payment_generator", needle)
 for needle in (
     'rustFixtureData("offline_recipient_payment_request_v2.hex")',
     'rustFixtureData("offline_peer_payment_v4.hex")',
@@ -314,8 +356,8 @@ for needle in (
 ):
     require("swift_peer_fixtures", needle)
 for needle in (
-    '"ae20bc0718f3a3ff31e18b6452422549d017b66301cde799d43609614661d019"',
-    '"e9aa5e352f5e14687adac62b40dbcfba2050463624ce3d21377e83fc3f34de08"',
+    '"37ee56ad5663ab67b8b5b9a72927f1e0811142122bf04fa28a55634f96b7d3af"',
+    '"cb6508a5aa6b56ada90978d4db638b2176f20f154e9de4ed8a450d95a940c71b"',
     ".archiveTooLarge(",
     "maximumTextArchiveBytes",
 ):
@@ -1481,6 +1523,42 @@ if mode == "--self-test":
         "shared peer-payment bytes are digest-bound",
         corrupt_peer_payment_vector,
         "canonical SHA-256 mismatch",
+    )
+    run_negative(
+        "peer-payment fixture requires a four-validator committee and three-signer commit quorum",
+        lambda fixture: replace_once(
+            fixture / paths["peer_payment_generator"],
+            "signers: vec![0, 1, 2]",
+            "signers: vec![0, 1]",
+        ),
+        "missing 'signers: vec![0, 1, 2]'",
+    )
+    run_negative(
+        "peer-payment fixture cannot shrink the validator committee",
+        lambda fixture: replace_once(
+            fixture / paths["peer_payment_generator"],
+            "let mut validator_keys = (0_u8..4)",
+            "let mut validator_keys = (0_u8..3)",
+        ),
+        "ordered four-validator unit-power roster with matching BLS PoPs",
+    )
+    run_negative(
+        "peer-payment fixture cannot detach roster ordering",
+        lambda fixture: replace_once(
+            fixture / paths["peer_payment_generator"],
+            "validator_keys.sort_unstable_by_key",
+            "validator_keys.reverse",
+        ),
+        "ordered four-validator unit-power roster with matching BLS PoPs",
+    )
+    run_negative(
+        "peer-payment fixture context must reuse the qualified roster",
+        lambda fixture: replace_once(
+            fixture / paths["peer_payment_generator"],
+            "roster: validator_set.to_vec(),",
+            "roster: Vec::new(),",
+        ),
+        "one validated four-validator context reused by the three-signer Commit QC",
     )
     run_negative(
         "Swift hardware parity cannot substitute the canonical authority key",

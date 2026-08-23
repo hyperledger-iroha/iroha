@@ -846,7 +846,10 @@ def _inventory_and_callers(texts: dict[str, str], errors: list[str]) -> None:
 
 
 def recursion_source_contract_errors(
-    root: Path, overrides: dict[str, str] | None = None
+    root: Path,
+    overrides: dict[str, str] | None = None,
+    *,
+    require_shipping_backend: bool = False,
 ) -> list[str]:
     """Return deterministic source-contract diagnostics for the reviewed tree."""
     errors: list[str] = []
@@ -898,6 +901,12 @@ def recursion_source_contract_errors(
     _serialized_builder_contracts(texts[BUILDER], texts[ADAPTER], errors)
     _release_contracts(texts[RELEASE], errors)
     _inventory_and_callers(texts, errors)
+    if require_shipping_backend and (
+        "KAGEMUSHA_SERIALIZED_BRIDGE_REVIEWED_V7: bool = true" not in texts[BRIDGE]
+    ):
+        errors.append(
+            f"{BRIDGE}: production promotion requires a reviewed shipping recursion backend"
+        )
     return errors
 
 
@@ -911,6 +920,9 @@ def _main(arguments: list[str]) -> int:
         negative = recursion_source_contract_errors(root, {ADAPTER: hostile})
         if not negative:
             errors.append("self-test failed to reject compact-header length substitution")
+        shipping = recursion_source_contract_errors(root, require_shipping_backend=True)
+        if not any("requires a reviewed shipping recursion backend" in item for item in shipping):
+            errors.append("self-test failed to keep the unreviewed backend promotion-blocking")
     if errors:
         for error in errors:
             print(error, file=sys.stderr)

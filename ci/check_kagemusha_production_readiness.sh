@@ -4955,7 +4955,10 @@ if mode == "candidate":
         "production promotion was not evaluated."
     )
 else:
-    print("Kagemusha ABI-21/V4 (native bridge ABI 22) production promotion corridor passed.")
+    print(
+        "Kagemusha ABI-21/V4 (native bridge ABI 22) production promotion verification "
+        "corridor passed; no publication or activation was performed."
+    )
 PY
 PYTHON_GATE_STATUS=$?
 set -e

@@ -89,9 +89,12 @@ sequence.
    - Operators publish a companion `RelayDescriptorManifestV1` JSON document
      alongside the descriptor. It carries the private Ed25519 identity seed as
      `identity.ed25519_private_key_hex`; relays reference it via
-     `handshake.descriptor_manifest_path` when `identity_private_key_hex` is
-     omitted from the local configuration. Startup fails if the manifest omits
-     the key or provides a value that does not decode to 32 bytes.
+     `handshake.descriptor_manifest_path`. The handshake configuration schema
+     contains no inline identity-private-key field, so private material cannot
+     enter distributed relay configuration. The manifest must
+     be a direct regular file with no group or other Unix permissions. Startup
+     fails if it is unsafe, omits the key, or provides a value that does not
+     decode to 32 bytes.
 2. **ClientHello / Noise Initiate**
    - Client sends a random nonce, supported capability TLVs, and padded
      extensions. If PQ KEM support exists it includes a Kyber public share.
@@ -108,7 +111,9 @@ sequence.
    - QUIC/TLS remains the outer transport, but application bytes after the
      handshake MUST use the `SNR1` ChaCha20-Poly1305 record layer derived from
      `K`. HKDF separates client-to-relay from relay-to-client keys and separates
-     every QUIC stream by initiator, directionality, and stream index.
+     every QUIC stream by initiator, directionality, and stream index. A stream
+     context may be derived only once per session; first-release implementations
+     fail closed after 65,536 distinct contexts so nonce-reuse tracking is bounded.
    - The authenticated 16-byte header is
      `"SNR1" || sequence:u64be || plaintext_len:u32be`. Sequences are contiguous
      from zero, plaintext is limited to 64 KiB per record, and receivers fail
@@ -147,12 +152,23 @@ struct PowTicketV1 {
 }
 ```
 
-Relays derive the challenge from their descriptor commitment and the client
-nonce (`BLAKE3("soranet.pow.challenge.v1" ∥ descriptor_commit ∥ client_nonce ∥
-expires_at)`), then verify the solution hash has the required number of leading
-zero bits. Tickets must not be excessively far in the future and must remain
-valid for the configured TTL window; relays abort with a downgrade alert if the
-ticket is missing or invalid.
+The fixed-width `client_nonce` slot carries an exact binding commitment rather
+than caller-selected randomness:
+
+```text
+BLAKE3("soranet.pow.ticket_binding.v1"
+       || u64be(len(descriptor_commit)) || descriptor_commit
+       || u64be(len(relay_id))          || relay_id
+       || u64be(len(transcript_hash))   || transcript_hash)
+```
+
+Relays compare that commitment in constant time before performing proof work,
+then derive the challenge as
+`BLAKE3("soranet.pow.challenge.v1" ∥ descriptor_commit ∥ relay_id ∥
+transcript_hash ∥ client_nonce ∥ expires_at)`. The solution digest must
+have the required number of leading zero bits. Tickets must not be excessively
+far in the future and must remain valid for the configured TTL window; relays
+abort with a downgrade alert if the ticket is missing or invalid.
 
 Relay admission now layers adaptive defenses on top of the base PoW check:
 
@@ -265,7 +281,10 @@ the Argon2 digest satisfies the advertised difficulty. The sample harness in
 For operators that want external issuance, the `soranet-puzzle-service` binary (under
 `tools/soranet-puzzle-service/`) exposes a minimal HTTP API backed by a relay JSON
 configuration. The service loads `handshake.descriptor_commit_hex` **and** the relay
-identity (from `handshake.identity_private_key_hex` or the descriptor manifest), binding
+identity from the independently verified SRCv2 certificate configured under
+`handshake.certificate`. Startup requires the certificate's descriptor commit
+to match `handshake.descriptor_commit_hex`; the service never receives the
+relay's private descriptor manifest. This binds
 every minted puzzle ticket to the relay identifier plus the mandatory admission
 transcript commitment so tickets cannot be moved to another relay or client
 hello. The commitment is
@@ -274,8 +293,9 @@ clients must build the final client hello before minting and must send those
 exact bytes after the ticket. It derives the puzzle parameters from
 `pow.*`/`pow.puzzle.*` and offers two endpoints:
 
-- `GET /v1/puzzle/config` — returns the active difficulty, timing bounds, and puzzle cost
-  factors so clients can size their workloads.
+- `GET /v1/puzzle/config` — returns the active difficulty, timing bounds, puzzle cost
+  factors, and a public token-policy summary so clients can size their workloads.
+  The public summary never includes active token revocation identifiers.
 - `POST /v1/puzzle/mint` — mints a fresh ticket and returns a base64 payload.
   Callers must supply the 32-byte admission commitment as
   `transcript_hash_hex`; they may also provide `{ "ttl_secs": <override> }`.
@@ -283,10 +303,16 @@ exact bytes after the ticket. It derives the puzzle parameters from
 - `GET /v1/token/config` — surfaces the ML-DSA admission-token policy (suite, TTL bounds,
   issuer fingerprint, relay identifier, and active revocations) when `pow.token.enabled = true`.
 - `POST /v1/token/mint` — returns a base64 admission token bound to the supplied
-  `transcript_hash_hex`. Configure the issuer secret via CLI (`--token-secret-hex` or
-  `--token-secret-path`); operators may optionally point the service at a revocation file
+  `transcript_hash_hex`. The service assigns the issuance time from its own
+  clock. Configure the issuer secret through the private `--token-secret-path`
+  file; operators may optionally point the service at a revocation file
   (`--token-revocation-file`) and control the reload cadence with
   `--token-revocation-refresh-secs`.
+
+The mint endpoints and `/v1/token/config` require an exact bearer credential
+loaded from the mandatory private `--mint-auth-token-path` file. Inline signing
+secrets are not accepted. The plaintext service binds only to loopback; expose
+it remotely only through a local TLS-terminating, authenticated proxy.
 
 The service opens descriptor, secret-key, and revocation files as stable direct
 regular files and rejects symbolic links, replacement/growth races, and bytes
@@ -316,7 +342,7 @@ external revocation list loaded from disk.
   ```bash
   cargo run -p soranet-relay --features dev-tools --bin soranet_admission_token -- mint \
     --issuer-public-hex "$(cat issuer_mldsa_public.hex)" \
-    --issuer-secret-hex "$(cat issuer_mldsa_secret.hex)" \
+    --issuer-secret-file /etc/soranet/issuer_mldsa_secret.hex \
     --relay-id-hex "$RELAY_ID_HEX" \
     --transcript-hash-hex "$ADMISSION_TRANSCRIPT_HEX" \
     --ttl-secs 300 \
@@ -326,7 +352,20 @@ external revocation list loaded from disk.
   The command emits a Norito JSON object with the base64 and hex encodings, token
   identifier, issuer fingerprint, flags, and RFC3339 timestamps. Set `--output`
   to persist the JSON bundle or switch `--format` to `base64`/`hex` to print the
-  raw frame.
+  raw frame. The issuer-secret file must be owned by the invoking user, have no
+  group/other permissions, and have exactly one link. Use
+  `--issuer-secret-file -` for bounded standard-input delivery.
+
+  The general `iroha sorafs handshake token issue` command applies the same
+  non-argv rule: `--issuer-secret-key` names an owner-private, single-link raw
+  key file whose length must exactly match `--suite`; the public-key file is
+  opened without following links and must match that suite's exact public-key
+  width. `--output` is mandatory, creates a new mode-0600 file without
+  clobbering an existing path, and the command reports only token metadata on
+  stdout. `iroha sorafs handshake token id` likewise accepts bearer bytes only
+  from an owner-private bounded binary `--token` file; the retired
+  `--issuer-secret-hex`, `--token-hex`, and `--token-base64` argv forms are not
+  accepted.
 
 - **Inspection.** `soranet_admission_token inspect --token <base64|hex>` (or
   `--input <path>`) decodes a frame, verifies its signature against the issuer

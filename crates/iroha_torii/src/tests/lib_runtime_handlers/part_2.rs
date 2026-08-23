@@ -2168,6 +2168,154 @@ async fn public_dataspace_upstream_serves_routed_account_assets() {
     );
     upstream_task.abort();
 }
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn public_dataspace_upstream_preserves_valid_reject_classification() {
+    let upstream = Router::new().route(
+        "/v1/accounts/{account_id}/assets",
+        get(|| async {
+            Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header("x-iroha-reject-code", "route_unavailable")
+                .body(Body::from("temporarily unavailable"))
+                .expect("upstream response")
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind upstream listener");
+    let addr = listener.local_addr().expect("upstream addr");
+    let upstream_task = tokio::spawn(async move {
+        axum::serve(listener, upstream.into_make_service())
+            .await
+            .expect("serve upstream");
+    });
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let request = torii_read_request(
+        ToriiReadEndpointV1::AccountAssetsGet,
+        route,
+        vec![
+            checked_torii_test_account_id(
+                0xf6,
+                "derive rejected public upstream account fixture key",
+            )
+            .to_string(),
+        ],
+        None,
+        Vec::new(),
+    );
+    let response = execute_torii_read_via_public_dataspace_upstream(
+        format!("http://{addr}"),
+        route,
+        request,
+        1_024,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-iroha-reject-code")
+            .and_then(|value| value.to_str().ok()),
+        Some("route_unavailable")
+    );
+    upstream_task.abort();
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn public_dataspace_upstream_drops_ambiguous_reject_classification() {
+    let upstream = Router::new().route(
+        "/v1/accounts/{account_id}/assets",
+        get(|| async {
+            Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header("x-iroha-reject-code", "route_unavailable")
+                .header("x-iroha-reject-code", "query_failed")
+                .body(Body::from("temporarily unavailable"))
+                .expect("upstream response")
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind upstream listener");
+    let addr = listener.local_addr().expect("upstream addr");
+    let upstream_task = tokio::spawn(async move {
+        axum::serve(listener, upstream.into_make_service())
+            .await
+            .expect("serve upstream");
+    });
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let request = torii_read_request(
+        ToriiReadEndpointV1::AccountAssetsGet,
+        route,
+        vec![
+            checked_torii_test_account_id(
+                0xf7,
+                "derive ambiguous public upstream account fixture key",
+            )
+            .to_string(),
+        ],
+        None,
+        Vec::new(),
+    );
+    let response = execute_torii_read_via_public_dataspace_upstream(
+        format!("http://{addr}"),
+        route,
+        request,
+        1_024,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!response.headers().contains_key("x-iroha-reject-code"));
+    upstream_task.abort();
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn public_dataspace_upstream_drops_reject_classification_on_success() {
+    let upstream = Router::new().route(
+        "/v1/accounts/{account_id}/assets",
+        get(|| async {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("x-iroha-reject-code", "route_unavailable")
+                .body(Body::from("success"))
+                .expect("upstream response")
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind upstream listener");
+    let addr = listener.local_addr().expect("upstream addr");
+    let upstream_task = tokio::spawn(async move {
+        axum::serve(listener, upstream.into_make_service())
+            .await
+            .expect("serve upstream");
+    });
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let request = torii_read_request(
+        ToriiReadEndpointV1::AccountAssetsGet,
+        route,
+        vec![
+            checked_torii_test_account_id(
+                0xf5,
+                "derive successful public upstream account fixture key",
+            )
+            .to_string(),
+        ],
+        None,
+        Vec::new(),
+    );
+    let response = execute_torii_read_via_public_dataspace_upstream(
+        format!("http://{addr}"),
+        route,
+        request,
+        1_024,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!response.headers().contains_key("x-iroha-reject-code"));
+    upstream_task.abort();
+}
 #[tokio::test]
 async fn handler_account_get_fan_outs_across_global_dataspaces() {
     let authority = checked_torii_test_account_id(

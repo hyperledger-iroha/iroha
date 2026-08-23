@@ -765,7 +765,8 @@ kagemusha_sdk_android_forwarders! {
         true;
     nativeArtifactSetInstallV4 {
         manifest_norito bytes, manifest_sha256 bytes, trusted_policy_norito bytes, release_attestation_norito bytes,
-        benchmark_evidence bytes, cryptographic_review bytes, promotion_record_norito bytes, handles longs
+        internal_validation_receipt_norito bytes, benchmark_evidence bytes, cryptographic_review bytes,
+        promotion_record_norito bytes, handles longs
     } -> () = java_native_kagemusha_artifact_set_install_v4;
     nativeArtifactSetIsInstalledV4 { manifest_norito bytes, manifest_sha256 bytes } -> JniBoolean = java_native_kagemusha_artifact_set_is_installed_v4;
     nativeInstalledManifestSha256V4 {  } -> JniByteArray = java_native_kagemusha_installed_manifest_sha256_v4;

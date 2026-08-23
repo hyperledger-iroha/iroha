@@ -2017,10 +2017,7 @@ mod tests {
             } => {
                 assert_eq!(chunk_index, 0);
                 assert_eq!(
-                    providers
-                        .iter()
-                        .map(ProviderId::as_str)
-                        .collect::<Vec<_>>(),
+                    providers.iter().map(ProviderId::as_str).collect::<Vec<_>>(),
                     ["alpha", "beta"]
                 );
             }

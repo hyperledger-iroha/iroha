@@ -113,18 +113,19 @@ fn validate_offline_device_attestation_registration(
         registration.expires_at_ms,
     )?;
     validate_offline_attestation_policy(&lifetime_policy, admitted_at_ms)?;
+    validate_offline_attestation_policy_status_coverage(
+        &lifetime_policy,
+        registration.expires_at_ms,
+    )?;
     validate_offline_attestation_recent_block(registration, state_transaction)?;
     validate_offline_attestation_report(registration, &lifetime_policy, admitted_at_ms)?;
     // Admission must cover the registration's entire lifetime. Certificate
     // validity and governed root activation are continuous time ranges, so
     // validating both endpoints prevents a registration from surviving
     // beyond either bound without repeating X.509 verification on every use.
-    validate_offline_attestation_policy(&lifetime_policy, registration.expires_at_ms)?;
-    validate_offline_attestation_report(
-        registration,
-        &lifetime_policy,
-        registration.expires_at_ms,
-    )?;
+    let last_valid_ms = registration.expires_at_ms.saturating_sub(1);
+    validate_offline_attestation_policy(&lifetime_policy, last_valid_ms)?;
+    validate_offline_attestation_report(registration, &lifetime_policy, last_valid_ms)?;
     let bytes = norito::encode_canonical(registration).map_err(|err| {
         labeled_invariant(
             "invalid_attestation",

@@ -51,6 +51,23 @@ fn proof_app_with_record(backend: &str, proof_hash: [u8; 32]) -> (Router, String
     let uri = format!("/v1/zk/proof/{backend_enc}/{hash_hex}");
     (app, uri, hash_hex)
 }
+async fn conditional_proof_response(
+    app: &Router,
+    uri: &str,
+    validators: &[http::HeaderValue],
+) -> axum::response::Response {
+    let mut request = http::Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(axum::body::Body::empty())
+        .unwrap();
+    for validator in validators {
+        request
+            .headers_mut()
+            .append(http::header::IF_NONE_MATCH, validator.clone());
+    }
+    app.clone().oneshot(request).await.unwrap()
+}
 #[tokio::test]
 async fn zk_proof_get_returns_record() {
     let backend = "halo2/ipa";
@@ -106,12 +123,16 @@ async fn zk_proof_get_returns_record() {
         Some(expected_cache.as_str()),
         "proof responses advertise cache lifetime"
     );
-    let etag_header = parts.headers.get(http::header::ETAG).cloned();
-    assert!(etag_header.is_some(), "proof responses include ETag");
+    let etag_header = parts
+        .headers
+        .get(http::header::ETAG)
+        .cloned()
+        .expect("proof responses include ETag");
+    let etag_text = etag_header.to_str().unwrap();
     let conditional_req = http::Request::builder()
         .method("GET")
         .uri(uri.as_str())
-        .header(http::header::IF_NONE_MATCH, etag_header.unwrap())
+        .header(http::header::IF_NONE_MATCH, etag_header.clone())
         .body(axum::body::Body::empty())
         .unwrap();
     let conditional_resp = app.clone().oneshot(conditional_req).await.unwrap();
@@ -127,6 +148,39 @@ async fn zk_proof_get_returns_record() {
         .unwrap()
         .to_bytes();
     assert!(conditional_body.is_empty(), "304 responses have empty body");
+
+    let listed =
+        http::HeaderValue::from_bytes(format!("\"stale\", {etag_text}").as_bytes()).unwrap();
+    let weak = http::HeaderValue::from_bytes(format!("W/{etag_text}").as_bytes()).unwrap();
+    for validators in [
+        vec![http::HeaderValue::from_static("*")],
+        vec![listed],
+        vec![weak],
+    ] {
+        let response = conditional_proof_response(&app, &uri, &validators).await;
+        assert_eq!(response.status(), http::StatusCode::NOT_MODIFIED);
+    }
+
+    let response = conditional_proof_response(
+        &app,
+        &uri,
+        &[
+            http::HeaderValue::from_static("\"stale\""),
+            etag_header.clone(),
+        ],
+    )
+    .await;
+    assert_eq!(response.status(), http::StatusCode::NOT_MODIFIED);
+
+    for validator in [
+        etag_text.to_ascii_uppercase(),
+        format!("\"{etag_text}\""),
+        format!("*, {etag_text}"),
+    ] {
+        let validator = http::HeaderValue::from_bytes(validator.as_bytes()).unwrap();
+        let response = conditional_proof_response(&app, &uri, &[validator]).await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
 }
 #[tokio::test]
 async fn zk_proof_get_not_found() {

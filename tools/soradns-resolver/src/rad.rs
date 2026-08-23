@@ -233,7 +233,7 @@ pub(crate) fn rad_retained_bytes(
 fn validate_operator_account_bounds(
     rad: &ResolverAttestation,
 ) -> Result<(), ResolverAttestationValidationError> {
-    let controller = &rad.operator_account.controller;
+    let controller = rad.operator_account.controller();
     if let Some(key) = controller.single_signatory() {
         check_len(
             "operator account public key",
@@ -263,7 +263,7 @@ fn charge_operator_account(
     total: &mut usize,
     rad: &ResolverAttestation,
 ) -> Result<(), ResolverAttestationValidationError> {
-    let controller = &rad.operator_account.controller;
+    let controller = rad.operator_account.controller();
     if let Some(key) = controller.single_signatory() {
         return charge(total, public_key_payload_len(key)?);
     }

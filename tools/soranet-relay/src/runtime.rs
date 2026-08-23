@@ -27,7 +27,7 @@ use std::{
     collections::HashSet,
     fmt::{self, Write as _},
     fs,
-    io::{self, Read as _, Write as _},
+    io::{self, Write as _},
     net::SocketAddr,
     path::{Path, PathBuf},
     str::FromStr,
@@ -51,7 +51,7 @@ use crate::{
     compliance::{ComplianceLogger, ThrottleAudit},
     config::{
         self, ConfigError, RelayConfig, RelayMode, VpnBackendEndpoint,
-        read_bounded_direct_regular_file,
+        read_bounded_direct_regular_file, read_bounded_private_regular_file,
     },
     congestion::{CongestionController, CongestionError, CongestionLease},
     constant_rate::ConstantRateProfileSpec,
@@ -115,7 +115,7 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream, UnixStream},
-    sync::{Mutex, Notify},
+    sync::{Mutex, Notify, OwnedSemaphorePermit, Semaphore},
     task::JoinHandle,
     time::{Instant as TokioInstant, MissedTickBehavior, interval, interval_at, sleep, timeout},
 };
@@ -146,69 +146,39 @@ struct AdminResources {
     proxy_policy_events: Arc<ProxyPolicyEventBuffer>,
     performance: Arc<Mutex<RelayPerformanceAccumulator>>,
 }
-#[derive(Clone, Debug)]
 struct AdminAuthorization {
     token_hash: blake3::Hash,
 }
+impl fmt::Debug for AdminAuthorization {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AdminAuthorization")
+            .field("token_hash", &"<redacted>")
+            .finish()
+    }
+}
+impl Drop for AdminAuthorization {
+    fn drop(&mut self) {
+        self.token_hash = blake3::Hash::from([0_u8; 32]);
+        std::hint::black_box(&mut self.token_hash);
+    }
+}
 impl AdminAuthorization {
     fn load(path: &Path) -> Result<Self, ConfigError> {
-        let mut file = fs::File::open(path).map_err(|error| {
+        let mut bytes = read_bounded_private_regular_file(
+            path,
+            258,
+            "SoraNet relay admin authentication token",
+        )
+        .map_err(|error| {
             ConfigError::Admin(format!(
-                "failed to open admin_auth_token_path ({}): {error}",
+                "failed to read admin_auth_token_path ({}): {error}",
                 path.display()
             ))
         })?;
-        let metadata = file.metadata().map_err(|error| {
-            ConfigError::Admin(format!(
-                "failed to inspect admin_auth_token_path ({}): {error}",
-                path.display()
-            ))
-        })?;
-        if !metadata.is_file() {
-            return Err(ConfigError::Admin(format!(
-                "admin_auth_token_path ({}) must be a regular file",
-                path.display()
-            )));
-        }
-        if metadata.len() > 258 {
-            return Err(ConfigError::Admin(
-                "admin authentication token file exceeds 256 bytes plus a line ending".to_string(),
-            ));
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mode = metadata.permissions().mode();
-            if mode & 0o027 != 0 {
-                return Err(ConfigError::Admin(format!(
-                    "admin_auth_token_path ({}) must not be writable by its group or accessible by other users",
-                    path.display()
-                )));
-            }
-        }
-        let capacity = usize::try_from(metadata.len()).map_err(|_| {
-            ConfigError::Admin(
-                "admin authentication token file length is not representable".to_string(),
-            )
-        })?;
-        let mut bytes = Vec::with_capacity(capacity);
-        (&mut file)
-            .take(259)
-            .read_to_end(&mut bytes)
-            .map_err(|error| {
-                ConfigError::Admin(format!(
-                    "failed to read admin_auth_token_path ({}): {error}",
-                    path.display()
-                ))
-            })?;
-        if bytes.len() > 258 {
-            bytes.fill(0);
-            return Err(ConfigError::Admin(
-                "admin authentication token file exceeds 256 bytes plus a line ending".to_string(),
-            ));
-        }
         let token_hash = Self::hash_token(&bytes);
         bytes.fill(0);
+        std::hint::black_box(bytes.as_mut_slice());
         Ok(Self {
             token_hash: token_hash?,
         })
@@ -243,6 +213,10 @@ const PLAIN_TEXT_CONTENT_TYPE: &str = "text/plain; charset=utf-8";
 const SORANET_HANDSHAKE_LOG_TARGET: &str = "soranet.handshake";
 const HANDSHAKE_STREAM_TIMEOUT: Duration = Duration::from_secs(5);
 const HANDSHAKE_PAYLOAD_TIMEOUT: Duration = Duration::from_secs(5);
+const ADMIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const ADMIN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+const ADMIN_MAX_HEADER_BYTES_V1: usize = 16 * 1024;
+const ADMIN_MAX_CONCURRENT_CONNECTIONS_V1: usize = 64;
 const MAX_HANDSHAKE_FRAME_LEN: usize = MAX_CLIENT_HELLO_LEN;
 const _: () = assert!(MAX_HANDSHAKE_FRAME_LEN <= u16::MAX as usize);
 // First-release bounds for the TLS identity artifacts read during relay
@@ -361,7 +335,6 @@ impl ConstantRateLaneManager {
                 saturation = %format!("{saturation_percent:.2}"),
                 active_neighbors,
                 neighbor_count = neighbors.len(),
-                neighbors = ?neighbors,
                 new_cap = reduced,
                 "constant-rate neighbor cap reduced due to saturation"
             );
@@ -378,7 +351,6 @@ impl ConstantRateLaneManager {
                 saturation = %format!("{saturation_percent:.2}"),
                 active_neighbors,
                 neighbor_count = neighbors.len(),
-                neighbors = ?neighbors,
                 new_cap = self.spec.neighbor_cap,
                 "constant-rate neighbor cap restored"
             );
@@ -1011,13 +983,11 @@ fn vpn_backend_bootstrap_mac(
 }
 fn vpn_backend_bootstrap_envelope(
     bootstrap: &VpnBackendBootstrap,
-    secret: Option<&[u8; 32]>,
+    secret: &[u8; 32],
 ) -> VpnBackendBootstrapEnvelope {
     let timestamp_ms = unix_time_ms_for_artifact();
     let nonce = rand::random::<[u8; 16]>();
-    let mac = secret
-        .map(|secret| vpn_backend_bootstrap_mac(secret, bootstrap, timestamp_ms, &nonce))
-        .unwrap_or([0u8; 32]);
+    let mac = vpn_backend_bootstrap_mac(secret, bootstrap, timestamp_ms, &nonce);
     VpnBackendBootstrapEnvelope {
         bootstrap: bootstrap.clone(),
         timestamp_ms,
@@ -1028,7 +998,7 @@ fn vpn_backend_bootstrap_envelope(
 async fn write_vpn_backend_bootstrap<W: AsyncWrite + Unpin>(
     writer: &mut W,
     bootstrap: &VpnBackendBootstrap,
-    secret: Option<&[u8; 32]>,
+    secret: &[u8; 32],
 ) -> Result<(), VpnBackendBridgeError> {
     let payload = vpn_backend_bootstrap_envelope(bootstrap, secret).encode();
     let len = u16::try_from(payload.len()).map_err(|_| {
@@ -1098,7 +1068,7 @@ pub struct RelayRuntime {
     config: RelayConfig,
     server_config: quinn::ServerConfig,
     transport_trust: Option<Arc<RelayTransportTrust>>,
-    admin_authorization: Option<AdminAuthorization>,
+    admin_authorization: Option<Arc<AdminAuthorization>>,
     metrics: Arc<Metrics>,
     privacy: Arc<PrivacyAggregator>,
     privacy_events: Arc<PrivacyEventBuffer>,
@@ -1167,6 +1137,12 @@ struct TicketReplayState {
     pending: HashSet<[u8; 32]>,
     capacity: usize,
 }
+fn absolute_replay_state_path(path: &Path) -> io::Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    Ok(std::env::current_dir()?.join(path))
+}
 impl TicketReplayState {
     fn load(config: &config::PowConfig, now: SystemTime) -> Result<Self, ConfigError> {
         let capacity = usize::try_from(config.revocation_store_capacity).map_err(|_| {
@@ -1180,9 +1156,10 @@ impl TicketReplayState {
             Duration::from_secs(config.revocation_store_ttl_secs),
         )
         .map_err(|error| ConfigError::TicketReplayStore(error.to_string()))?;
-        let persisted =
-            TicketRevocationStore::load(config.revocation_store_path.clone(), limits, now)
-                .map_err(|error| ConfigError::TicketReplayStore(error.to_string()))?;
+        let replay_path = absolute_replay_state_path(&config.revocation_store_path)
+            .map_err(|error| ConfigError::TicketReplayStore(error.to_string()))?;
+        let persisted = TicketRevocationStore::load(replay_path, limits, now)
+            .map_err(|error| ConfigError::TicketReplayStore(error.to_string()))?;
         Ok(Self {
             persisted,
             pending: HashSet::new(),
@@ -1201,12 +1178,18 @@ fn verify_and_consume_ticket(
             .lock()
             .map_err(|_| HandshakeError::ReplayStore("ticket replay lock poisoned".to_owned()))?;
         let now = SystemTime::now();
-        if state.persisted.is_ticket_payload_revoked(ticket, now)
-            || state.pending.contains(&fingerprint)
-        {
+        let persisted_revoked = state
+            .persisted
+            .is_ticket_payload_revoked(ticket, now)
+            .map_err(|error| HandshakeError::ReplayStore(error.to_string()))?;
+        if persisted_revoked || state.pending.contains(&fingerprint) {
             return Err(HandshakeError::Pow(pow::Error::Replay));
         }
-        if state.persisted.len(now).saturating_add(state.pending.len()) >= state.capacity {
+        let persisted_len = state
+            .persisted
+            .len(now)
+            .map_err(|error| HandshakeError::ReplayStore(error.to_string()))?;
+        if persisted_len.saturating_add(state.pending.len()) >= state.capacity {
             return Err(HandshakeError::ReplayStore(
                 "ticket replay store at capacity".to_owned(),
             ));
@@ -1285,16 +1268,12 @@ fn load_vpn_helper_ticket_replay_ledger(
         Vec::with_capacity(VPN_HELPER_TICKET_REPLAY_NAMESPACE.len() + relay_id.len());
     namespace.extend_from_slice(VPN_HELPER_TICKET_REPLAY_NAMESPACE);
     namespace.extend_from_slice(relay_id);
-    PersistentReplayLedger::load(
-        &config.helper_ticket_replay_store_path,
-        &namespace,
-        limits,
-        now_ms,
-    )
-    .map_err(|error| {
+    let replay_path = absolute_replay_state_path(&config.helper_ticket_replay_store_path)
+        .map_err(|error| ConfigError::Vpn(format!("failed to resolve replay path: {error}")))?;
+    PersistentReplayLedger::load(&replay_path, &namespace, limits, now_ms).map_err(|error| {
         ConfigError::Vpn(format!(
             "failed to load VPN helper-ticket replay ledger ({}): {error}",
-            config.helper_ticket_replay_store_path.display()
+            replay_path.display()
         ))
     })
 }
@@ -1403,7 +1382,8 @@ impl RelayRuntime {
         let admin_authorization = config
             .admin_auth_token_path()
             .map(AdminAuthorization::load)
-            .transpose()?;
+            .transpose()?
+            .map(Arc::new);
         let validation_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| {
@@ -1470,8 +1450,22 @@ impl RelayRuntime {
         let manifest_path = policy
             .descriptor_manifest_path()
             .map(|path| path.to_path_buf());
-        let manifest_identity = policy.identity_private_key_from_manifest()?;
-        let ml_kem_public = policy.ml_kem_keys_from_manifest()?.map(|keys| keys.public);
+        let mut manifest_secrets = policy.manifest_secrets()?;
+        let manifest_identity = manifest_secrets
+            .as_ref()
+            .and_then(|secrets| secrets.identity_private_key);
+        let ml_kem_public = manifest_secrets
+            .as_ref()
+            .and_then(|secrets| secrets.ml_kem_public_key.clone());
+        if let Some(secrets) = manifest_secrets.as_mut() {
+            if let Some(identity) = secrets.identity_private_key.as_mut() {
+                identity.fill(0);
+            }
+            if let Some(private) = secrets.ml_kem_private_key.as_mut() {
+                private.fill(0);
+            }
+        }
+        drop(manifest_secrets);
         if let (Some(bundle), Some(public)) = (certificate_bundle.as_ref(), ml_kem_public.as_ref())
             && public.as_slice() != bundle.certificate.pq_kem_public.as_slice()
         {
@@ -1480,9 +1474,7 @@ impl RelayRuntime {
                     .to_string(),
             )));
         }
-        let identity_seed = if let Some(seed) = policy.identity_private_key_bytes()? {
-            seed
-        } else if let Some(seed) = manifest_identity {
+        let mut identity_seed = if let Some(seed) = manifest_identity {
             if let Some(path) = &manifest_path {
                 debug!(
                     manifest = %path.display(),
@@ -1497,14 +1489,15 @@ impl RelayRuntime {
             }));
         } else {
             return Err(RelayError::Config(ConfigError::Handshake(
-                "relay handshake identity key is required; configure handshake.identity_private_key_hex or handshake.descriptor_manifest_path"
+                "relay handshake identity key is required; configure a private handshake.descriptor_manifest_path"
                     .to_string(),
             )));
         };
-        let private_key =
-            PrivateKey::from_bytes(Algorithm::Ed25519, &identity_seed).map_err(|err| {
-                RelayError::Crypto(format!("failed to parse relay identity key: {err}"))
-            })?;
+        let private_key = PrivateKey::from_bytes(Algorithm::Ed25519, &identity_seed);
+        identity_seed.fill(0);
+        let private_key = private_key.map_err(|err| {
+            RelayError::Crypto(format!("failed to parse relay identity key: {err}"))
+        })?;
         let identity_key = KeyPair::from_private_key(private_key).map_err(|err| {
             RelayError::Crypto(format!("failed to derive relay identity key pair: {err}"))
         })?;
@@ -1576,11 +1569,10 @@ impl RelayRuntime {
                     }
                     authenticated_guard_entry = Some(entry);
                 }
-                Err(GuardDirectoryError::RelayEntryMissing { identity_hex, .. })
+                Err(GuardDirectoryError::RelayEntryMissing { .. })
                     if guard_cfg.allow_missing_entry() =>
                 {
                     warn!(
-                        relay = %identity_hex,
                         "guard directory entry missing but allow_missing_entry=true; continuing without pinning proof"
                     );
                 }
@@ -1928,11 +1920,7 @@ impl RelayRuntime {
             Ok(connecting) => match connecting.await {
                 Ok(connection) => {
                     let remote = connection.remote_address();
-                    info!(
-                        remote = %remote,
-                        mode = mode.as_label(),
-                        "accepted SoraNet connection"
-                    );
+                    info!(mode = mode.as_label(), "accepted SoraNet connection");
                     tokio::spawn(Self::establish_circuit(connection, context, remote));
                 }
                 Err(error) => {
@@ -2001,10 +1989,8 @@ impl RelayRuntime {
                         "throttle.congestion",
                     );
                     warn!(
-                        remote = %remote,
                         mode = mode.as_label(),
-                        limit,
-                        "rejecting handshake: global active-circuit capacity reached"
+                        limit, "rejecting handshake: global active-circuit capacity reached"
                     );
                     let reason = format!("global circuit capacity reached (limit {limit})");
                     if let Some(logger) = context.compliance.as_ref()
@@ -2040,10 +2026,8 @@ impl RelayRuntime {
                         "throttle.congestion",
                     );
                     warn!(
-                        remote = %remote,
                         mode = mode.as_label(),
-                        limit,
-                        "rejecting handshake: maximum circuits per client reached"
+                        limit, "rejecting handshake: maximum circuits per client reached"
                     );
                     let reason = format!("circuit limit reached (limit {limit})");
                     if let Some(logger) = context.compliance.as_ref()
@@ -2082,7 +2066,6 @@ impl RelayRuntime {
                         "throttle.cooldown",
                     );
                     debug!(
-                        remote = %remote,
                         mode = mode.as_label(),
                         cooldown_millis,
                         observed_gap_millis,
@@ -2220,7 +2203,6 @@ impl RelayRuntime {
                     }
                 };
                 warn!(
-                    remote = %remote,
                     mode = mode.as_label(),
                     reason = %throttle.reason,
                     cooldown_secs = throttle.cooldown.as_secs_f32(),
@@ -2263,7 +2245,6 @@ impl RelayRuntime {
                         Err(error) => {
                             metrics.record_failure();
                             warn!(
-                                remote = %remote,
                                 %error,
                                 "rejecting handshake with unusable application record key"
                             );
@@ -2284,7 +2265,6 @@ impl RelayRuntime {
                     .collect();
                 info!(
                     target: SORANET_HANDSHAKE_LOG_TARGET,
-                    remote = %remote,
                     mode = mode.as_label(),
                     kem = %negotiated.kem.id,
                     padding = negotiated.padding,
@@ -2305,7 +2285,6 @@ impl RelayRuntime {
                 if !warning_messages.is_empty() {
                     warn!(
                         target: SORANET_HANDSHAKE_LOG_TARGET,
-                        remote = %remote,
                         mode = mode.as_label(),
                         warnings = ?warning_messages,
                         "SoraNet handshake reported capability warnings"
@@ -2314,15 +2293,13 @@ impl RelayRuntime {
                 if let Some(payload) = session.telemetry_payload.as_ref() {
                     debug!(
                         target: SORANET_HANDSHAKE_LOG_TARGET,
-                        remote = %remote,
                         mode = mode.as_label(),
-                        payload = %String::from_utf8_lossy(payload),
+                        payload_bytes = payload.len(),
                         "SoraNet handshake telemetry"
                     );
                 }
                 debug!(
                     target: SORANET_HANDSHAKE_LOG_TARGET,
-                    remote = %remote,
                     mode = mode.as_label(),
                     key_len = session.session_key.payload().len(),
                     "derived SoraNet session key"
@@ -2372,10 +2349,8 @@ impl RelayRuntime {
                             "throttle.constant_rate_neighbors",
                         );
                         warn!(
-                            remote = %remote,
                             mode = mode.as_label(),
-                            limit,
-                            "rejecting handshake: constant-rate neighbor cap reached"
+                            limit, "rejecting handshake: constant-rate neighbor cap reached"
                         );
                         let reason = format!("constant-rate neighbor cap reached (limit {limit})");
                         if let Some(logger) = context.compliance.as_ref()
@@ -2411,10 +2386,8 @@ impl RelayRuntime {
                             "throttle.congestion",
                         );
                         warn!(
-                            remote = %remote,
                             mode = mode.as_label(),
-                            limit,
-                            "rejecting handshake: circuit registry capacity reached"
+                            limit, "rejecting handshake: circuit registry capacity reached"
                         );
                         connection.close(0u32.into(), b"capacity exceeded");
                         return;
@@ -2436,7 +2409,6 @@ impl RelayRuntime {
                             "throttle.congestion",
                         );
                         warn!(
-                            remote = %remote,
                             mode = mode.as_label(),
                             "rejecting handshake: circuit registry memory unavailable"
                         );
@@ -2537,9 +2509,8 @@ impl RelayRuntime {
                 if let Some(payload) = telemetry.as_ref() {
                     warn!(
                         target: SORANET_HANDSHAKE_LOG_TARGET,
-                        remote = %remote,
                         mode = mode.as_label(),
-                        payload = %String::from_utf8_lossy(payload),
+                        payload_bytes = payload.len(),
                         "SoraNet handshake downgrade telemetry"
                     );
                 }
@@ -2549,7 +2520,6 @@ impl RelayRuntime {
                     .collect::<Vec<_>>();
                 warn!(
                     target: SORANET_HANDSHAKE_LOG_TARGET,
-                    remote = %remote,
                     mode = mode.as_label(),
                     warnings = ?warning_messages,
                     "SoraNet handshake downgrade detected"
@@ -2578,7 +2548,6 @@ impl RelayRuntime {
                 let elapsed = attempt.elapsed();
                 metrics.record_failure();
                 warn!(
-                    remote = %remote,
                     mode = mode.as_label(),
                     error = %error,
                     "handshake failed"
@@ -2787,18 +2756,10 @@ impl RelayRuntime {
             }
         }
         if let Err(error) = measurement_task.await {
-            debug!(
-                remote = %remote,
-                %error,
-                "measurement ingestion task join error"
-            );
+            debug!(%error, "measurement ingestion task join error");
         }
         if let Err(error) = exit_task.await {
-            debug!(
-                remote = %remote,
-                %error,
-                "exit stream task join error"
-            );
+            debug!(%error, "exit stream task join error");
         }
         if let Some(vpn_session) = vpn_session {
             let settlement_artifact = vpn_session.settlement_artifact();
@@ -2814,18 +2775,9 @@ impl RelayRuntime {
             {
                 if let Some(artifact) = settlement_artifact.as_ref() {
                     match spool_vpn_settlement_artifact(spool_dir, artifact) {
-                        Ok(path) => {
-                            info!(
-                                remote = %remote,
-                                session_id = %hex::encode(receipt.session_id),
-                                artifact_path = %path.display(),
-                                "vpn settlement artifact spooled"
-                            );
-                        }
+                        Ok(_) => info!("vpn settlement artifact spooled"),
                         Err(error) => {
                             warn!(
-                                remote = %remote,
-                                session_id = %hex::encode(receipt.session_id),
                                 %error,
                                 "failed to spool vpn settlement artifact"
                             );
@@ -2833,15 +2785,11 @@ impl RelayRuntime {
                     }
                 } else {
                     warn!(
-                        remote = %remote,
-                        session_id = %hex::encode(receipt.session_id),
                         "vpn settlement artifact not spooled because no client voucher was accepted"
                     );
                 }
             }
             debug!(
-                remote = %remote,
-                session_id = %hex::encode(receipt.session_id),
                 exit_class = receipt.exit_class.as_label(),
                 ingress = receipt.ingress_bytes,
                 egress = receipt.egress_bytes,
@@ -2850,7 +2798,7 @@ impl RelayRuntime {
                 "vpn session closed; receipt emitted"
             );
         }
-        debug!(remote = %remote, ?reason, "SoraNet connection closed");
+        debug!(?reason, "SoraNet connection closed");
     }
     async fn ingest_measurement_streams(
         connection: Connection,
@@ -2878,7 +2826,6 @@ impl RelayRuntime {
                             Ok(stream) => stream,
                             Err(error) => {
                                 warn!(
-                                    remote = %remote,
                                     %error,
                                     "failed to derive measurement record keys"
                                 );
@@ -2899,21 +2846,13 @@ impl RelayRuntime {
                     )
                     .await
                     {
-                        warn!(
-                            remote = %remote,
-                            ?error,
-                            "failed to ingest blinded bandwidth proof stream"
-                        );
+                        warn!(?error, "failed to ingest blinded bandwidth proof stream");
                     }
                 }
                 Err(quinn::ConnectionError::ApplicationClosed(_)) => break,
                 Err(quinn::ConnectionError::LocallyClosed) => break,
                 Err(error) => {
-                    debug!(
-                        remote = %remote,
-                        %error,
-                        "stopping measurement stream accept loop"
-                    );
+                    debug!(%error, "stopping measurement stream accept loop");
                     break;
                 }
             }
@@ -2934,7 +2873,6 @@ impl RelayRuntime {
                         Ok(stream) => stream,
                         Err(error) => {
                             warn!(
-                                remote = %remote,
                                 %error,
                                 "failed to derive exit-stream record keys"
                             );
@@ -2954,75 +2892,22 @@ impl RelayRuntime {
                     )
                     .await
                     {
+                        let (stream_name, channel, reason) = error.compliance_context();
                         if let Some(logger) = resources.compliance.as_ref() {
-                            let (stream_name, channel) = match &error {
-                                ExitStreamError::StreamDisabled { stream } => (Some(*stream), None),
-                                ExitStreamError::RouteNotProvisioned { stream, channel } => {
-                                    (Some(*stream), Some(channel.as_str()))
-                                }
-                                ExitStreamError::RouteRequiresAuthentication {
-                                    stream,
-                                    channel,
-                                } => (Some(*stream), Some(channel.as_str())),
-                                ExitStreamError::AdapterTimeout { stream, .. } => {
-                                    (Some(*stream), None)
-                                }
-                                ExitStreamError::AdapterConnect { stream, .. } => {
-                                    (Some(*stream), None)
-                                }
-                                ExitStreamError::AdapterSend { stream, .. } => {
-                                    (Some(*stream), None)
-                                }
-                                ExitStreamError::AdapterReceive { stream, .. } => {
-                                    (Some(*stream), None)
-                                }
-                                ExitStreamError::HandshakeEncode { stream, .. } => {
-                                    (Some(*stream), None)
-                                }
-                                ExitStreamError::RouteLookup(_) => (None, None),
-                                ExitStreamError::Read(_)
-                                | ExitStreamError::Decode(_)
-                                | ExitStreamError::RecvRead(_)
-                                | ExitStreamError::SendWrite(_)
-                                | ExitStreamError::SendFinish(_) => (None, None),
-                            };
-                            let reason_str = error.to_string();
                             if let Err(err) = logger.log_exit_route_reject(
                                 remote,
                                 resources.mode,
                                 stream_name,
                                 channel,
-                                &reason_str,
+                                reason,
                             ) {
                                 warn!(%err, "failed to write compliance log entry");
                             }
                         }
-                        match error {
-                            ExitStreamError::StreamDisabled { stream } => warn!(
-                                remote = %remote,
-                                stream,
-                                "exit routing disabled; update configuration"
-                            ),
-                            ExitStreamError::RouteNotProvisioned { stream, channel } => warn!(
-                                remote = %remote,
-                                stream,
-                                channel = %channel,
-                                "exit request rejected: channel not provisioned"
-                            ),
-                            ExitStreamError::RouteRequiresAuthentication { stream, channel } => {
-                                warn!(
-                                    remote = %remote,
-                                    stream,
-                                    channel = %channel,
-                                    "exit request rejected: authentication required"
-                                )
-                            }
-                            other => warn!(
-                                remote = %remote,
-                                error = %other,
-                                "failed to process exit stream"
-                            ),
-                        }
+                        warn!(
+                            stream = stream_name.unwrap_or("unknown"),
+                            reason, "failed to process exit stream"
+                        );
                         drop(protected_send);
                         drop(protected_recv);
                         let _ = send.reset(VarInt::from_u32(0));
@@ -3032,7 +2917,7 @@ impl RelayRuntime {
                 Err(quinn::ConnectionError::ApplicationClosed(_))
                 | Err(quinn::ConnectionError::LocallyClosed) => break,
                 Err(error) => {
-                    debug!(remote = %remote, %error, "stopping exit stream accept loop");
+                    debug!(%error, "stopping exit stream accept loop");
                     break;
                 }
             }
@@ -3047,11 +2932,7 @@ impl RelayRuntime {
         record_layer: Arc<RecordLayer>,
     ) {
         let Some(backend_endpoint) = overlay.config().backend_endpoint() else {
-            warn!(
-                remote = %remote,
-                session_id = %hex::encode(helper_ticket.session_id),
-                "vpn helper connection rejected: vpn.backend_endpoint is not configured"
-            );
+            warn!("vpn helper connection rejected: vpn.backend_endpoint is not configured");
             connection.close(0u32.into(), b"vpn backend unavailable");
             return;
         };
@@ -3074,19 +2955,13 @@ impl RelayRuntime {
                     }
                     Ok(Err(error)) => {
                         warn!(
-                            remote = %remote,
-                            backend = %backend_label,
                             %error,
                             "failed to connect relay VPN backend"
                         );
                         connection.close(0u32.into(), b"vpn backend connect failed");
                     }
                     Err(_) => {
-                        warn!(
-                            remote = %remote,
-                            backend = %backend_label,
-                            "timed out connecting relay VPN backend"
-                        );
+                        warn!("timed out connecting relay VPN backend");
                         connection.close(0u32.into(), b"vpn backend connect timeout");
                     }
                 }
@@ -3109,19 +2984,13 @@ impl RelayRuntime {
                     }
                     Ok(Err(error)) => {
                         warn!(
-                            remote = %remote,
-                            backend = %backend_label,
                             %error,
                             "failed to connect relay VPN backend"
                         );
                         connection.close(0u32.into(), b"vpn backend connect failed");
                     }
                     Err(_) => {
-                        warn!(
-                            remote = %remote,
-                            backend = %backend_label,
-                            "timed out connecting relay VPN backend"
-                        );
+                        warn!("timed out connecting relay VPN backend");
                         connection.close(0u32.into(), b"vpn backend connect timeout");
                     }
                 }
@@ -3134,12 +3003,12 @@ impl RelayRuntime {
     )]
     async fn serve_vpn_backend_tunnel_stream<S>(
         connection: Connection,
-        remote: SocketAddr,
+        _remote: SocketAddr,
         overlay: Arc<VpnOverlay>,
         vpn_session: VpnSessionHandle,
         helper_ticket: VpnHelperTicketV1,
         backend: S,
-        backend_addr: String,
+        _backend_addr: String,
         record_layer: Arc<RecordLayer>,
     ) where
         S: AsyncRead + AsyncWrite + Unpin,
@@ -3149,7 +3018,6 @@ impl RelayRuntime {
                 Ok(Ok(streams)) => streams,
                 Ok(Err(error)) => {
                     warn!(
-                        remote = %remote,
                         %error,
                         "failed to accept vpn helper tunnel stream"
                     );
@@ -3157,36 +3025,38 @@ impl RelayRuntime {
                     return;
                 }
                 Err(_) => {
-                    warn!(
-                        remote = %remote,
-                        "timed out waiting for vpn helper tunnel stream"
-                    );
+                    warn!("timed out waiting for vpn helper tunnel stream");
                     connection.close(0u32.into(), b"vpn tunnel stream timeout");
                     return;
                 }
             };
         let flow_label = vpn_flow_label_from_session_id(helper_ticket.session_id);
-        let adapter = VpnAdapter::new(vpn_session.session().clone(), overlay.as_ref().clone());
-        let bridge = VpnBridge::new(adapter.clone(), helper_ticket.session_id, flow_label);
+        let adapter = VpnAdapter::new(vpn_session.session().clone(), Arc::clone(&overlay));
+        let bridge = match VpnBridge::new(adapter.clone(), helper_ticket.session_id, flow_label) {
+            Ok(bridge) => bridge,
+            Err(error) => {
+                warn!(%error, "failed to initialize VPN cover scheduler");
+                connection.close(0u32.into(), b"vpn cover scheduler unavailable");
+                return;
+            }
+        };
         let mtu = bridge.max_payload_len();
         let (mut backend_read, mut backend_write) = tokio::io::split(backend);
         let bootstrap = build_vpn_backend_bootstrap(helper_ticket.session_id);
         info!(
-            remote = %remote,
-            backend = %backend_addr,
-            session_id = %hex::encode(helper_ticket.session_id),
             expires_at_ms = helper_ticket.expires_at_ms,
             "bridging helper-authenticated vpn tunnel to relay backend"
         );
-        let bootstrap_secret = overlay.config().backend_bootstrap_secret_bytes();
+        let bootstrap_secret = overlay.backend_bootstrap_secret();
+        let Some(bootstrap_secret) = bootstrap_secret else {
+            warn!("vpn backend bootstrap secret is unavailable");
+            connection.close(0u32.into(), b"vpn backend authentication unavailable");
+            return;
+        };
         if let Err(error) =
-            write_vpn_backend_bootstrap(&mut backend_write, &bootstrap, bootstrap_secret.as_ref())
-                .await
+            write_vpn_backend_bootstrap(&mut backend_write, &bootstrap, bootstrap_secret).await
         {
             warn!(
-                remote = %remote,
-                backend = %backend_addr,
-                session_id = %hex::encode(helper_ticket.session_id),
                 %error,
                 "failed to send vpn backend bootstrap"
             );
@@ -3195,9 +3065,6 @@ impl RelayRuntime {
         }
         if let Err(error) = read_vpn_backend_status(&mut backend_read).await {
             warn!(
-                remote = %remote,
-                backend = %backend_addr,
-                session_id = %hex::encode(helper_ticket.session_id),
                 %error,
                 "vpn backend failed session bootstrap"
             );
@@ -3214,8 +3081,6 @@ impl RelayRuntime {
             Ok(stream) => stream,
             Err(error) => {
                 warn!(
-                    remote = %remote,
-                    session_id = %hex::encode(helper_ticket.session_id),
                     %error,
                     "failed to derive vpn tunnel record keys"
                 );
@@ -3246,27 +3111,17 @@ impl RelayRuntime {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 warn!(
-                    remote = %remote,
-                    backend = %backend_addr,
-                    session_id = %hex::encode(helper_ticket.session_id),
                     %error,
                     "vpn helper bridge stopped"
                 );
             }
             Err(_) => {
-                info!(
-                    remote = %remote,
-                    backend = %backend_addr,
-                    session_id = %hex::encode(helper_ticket.session_id),
-                    "vpn helper ticket expired; closing tunnel"
-                );
+                info!("vpn helper ticket expired; closing tunnel");
                 connection.close(0u32.into(), b"vpn helper ticket expired");
             }
         }
         if let Err(error) = protected_send.shutdown().await {
             debug!(
-                remote = %remote,
-                session_id = %hex::encode(helper_ticket.session_id),
                 %error,
                 "failed to finish protected vpn tunnel stream"
             );
@@ -3360,7 +3215,7 @@ impl RelayRuntime {
             resources
                 .vpn
                 .as_ref()
-                .map(|overlay| VpnAdapter::new(session.session().clone(), overlay.as_ref().clone()))
+                .map(|overlay| VpnAdapter::new(session.session().clone(), Arc::clone(overlay)))
         });
         record_route_open_ingress_metrics(vpn_adapter.as_ref(), vpn_session.as_ref());
         match frame.tag() {
@@ -3418,12 +3273,7 @@ impl RelayRuntime {
         let channel_id = *frame.channel_id();
         let channel_hex = hex::encode(channel_id);
         let Some(state) = norito_state else {
-            warn!(
-                remote = %remote,
-                channel = %channel_hex,
-                authenticated,
-                "no norito-stream exit route configured"
-            );
+            warn!(authenticated, "no norito-stream exit route configured");
             return Err(ExitStreamError::StreamDisabled {
                 stream: "norito-stream",
             });
@@ -3435,11 +3285,7 @@ impl RelayRuntime {
             }
         })?;
         if record.access_kind == SoranetAccessKind::Authenticated && !authenticated {
-            warn!(
-                remote = %remote,
-                channel = %channel_hex,
-                "norito-stream route requires authenticated viewers"
-            );
+            warn!("norito-stream route requires authenticated viewers");
             return Err(ExitStreamError::RouteRequiresAuthentication {
                 stream: "norito-stream",
                 channel: channel_hex,
@@ -3458,12 +3304,7 @@ impl RelayRuntime {
                 }
             });
         info!(
-            remote = %remote,
-            channel = %hex::encode(channel_id),
-            route = %hex::encode(record.route_id),
-            stream = %hex::encode(record.stream_id),
             authenticated,
-            exit_multiaddr = %record.exit_multiaddr,
             padding_budget_ms = record.padding_budget_ms.unwrap_or_default(),
             "norito-stream exit route resolved from spool"
         );
@@ -3497,8 +3338,6 @@ impl RelayRuntime {
                 error,
             })?;
         debug!(
-            remote = %remote,
-            channel = %hex::encode(channel_id),
             status = %response.status(),
             "connected to norito-stream adapter"
         );
@@ -3560,8 +3399,6 @@ impl RelayRuntime {
         let channel_hex = hex::encode(channel_id);
         let Some(state) = kaigi_state else {
             warn!(
-                remote = %remote,
-                channel = %channel_hex,
                 authenticated,
                 "kaigi-stream exit route disabled in configuration"
             );
@@ -3576,11 +3413,7 @@ impl RelayRuntime {
             }
         })?;
         if record.access_kind == SoranetAccessKind::Authenticated && !authenticated {
-            warn!(
-                remote = %remote,
-                channel = %channel_hex,
-                "kaigi-stream route requires authenticated viewers"
-            );
+            warn!("kaigi-stream route requires authenticated viewers");
             return Err(ExitStreamError::RouteRequiresAuthentication {
                 stream: "kaigi-stream",
                 channel: channel_hex,
@@ -3590,27 +3423,11 @@ impl RelayRuntime {
         let target_url = match Self::kaigi_multiaddr_to_websocket(&record.exit_multiaddr) {
             Some(url) => url,
             None => {
-                warn!(
-                    remote = %remote,
-                    channel = %hex::encode(channel_id),
-                    exit_multiaddr = %record.exit_multiaddr,
-                    fallback = state.hub_ws_url(),
-                    "kaigi-stream exit multiaddr unsupported; falling back to configured hub"
-                );
+                warn!("kaigi-stream exit multiaddr unsupported; falling back to configured hub");
                 state.hub_ws_url().to_owned()
             }
         };
-        info!(
-            remote = %remote,
-            channel = %hex::encode(channel_id),
-            route = %hex::encode(record.route_id),
-            stream = %hex::encode(record.stream_id),
-            room = %hex::encode(room_id),
-            authenticated,
-            exit_multiaddr = %record.exit_multiaddr,
-            target = %target_url,
-            "kaigi-stream exit route resolved from spool"
-        );
+        info!(authenticated, "kaigi-stream exit route resolved from spool");
         if let Some(logger) = resources.compliance.as_ref()
             && let Err(error) = logger.log_exit_route_open(
                 remote,
@@ -3641,10 +3458,7 @@ impl RelayRuntime {
                 error,
             })?;
         debug!(
-            remote = %remote,
-            channel = %hex::encode(channel_id),
             status = %response.status(),
-            target = %target_url,
             "connected to kaigi-stream adapter"
         );
         let handshake = KaigiStreamOpen {
@@ -3682,7 +3496,7 @@ impl RelayRuntime {
         ws_stream: ToriiWebSocket,
         handshake_bytes: Bytes,
         label: &'static str,
-        remote: SocketAddr,
+        _remote: SocketAddr,
         padding: Option<PaddingSchedule>,
         vpn_adapter: Option<VpnAdapter>,
     ) -> Result<(), ExitStreamError>
@@ -3810,14 +3624,7 @@ impl RelayRuntime {
                         Message::Close(frame) => {
                             if let Some(frame) = frame {
                                 let code = u16::from(frame.code);
-                                let reason = frame.reason.to_string();
-                                debug!(
-                                    remote = %remote,
-                                    stream = label,
-                                    code,
-                                    reason = %reason,
-                                    "exit adapter closed"
-                                );
+                                debug!(stream = label, code, "exit adapter closed");
                             }
                             break;
                         }
@@ -3833,11 +3640,10 @@ impl RelayRuntime {
                         Message::Pong(_) => {
                             *last_send.lock().await = Instant::now();
                         }
-                        Message::Text(text) => {
+                        Message::Text(_) => {
                             warn!(
-                                remote = %remote,
                                 stream = label,
-                                "ignoring text frame from exit adapter: {text}"
+                                "ignoring unexpected text frame from exit adapter"
                             );
                         }
                         Message::Frame(_) => {}
@@ -4067,7 +3873,6 @@ impl RelayRuntime {
         if !cursor.is_empty() {
             return Err(IncentiveStreamError::TrailingBytes(cursor.len()));
         }
-        let measurement_hex = hex::encode(proof.measurement_id);
         let verifier_label = proof.verifier_id.to_string();
         enum ProofOutcome {
             Accepted { summary: Option<EpochSummary> },
@@ -4123,7 +3928,6 @@ impl RelayRuntime {
                 debug!(
                     epoch = proof.epoch,
                     verified_bytes = proof.verified_bytes,
-                    measurement = %measurement_hex,
                     "accepted bandwidth proof"
                 );
                 if let (Some(summary), Some(logger)) = (summary, incentives) {
@@ -4144,23 +3948,18 @@ impl RelayRuntime {
             ProofOutcome::Duplicate => {
                 debug!(
                     epoch = proof.epoch,
-                    measurement = %measurement_hex,
                     "ignored bandwidth proof (duplicate measurement_id)"
                 );
             }
             ProofOutcome::ForeignRelay => {
-                let relay_hex = hex::encode(proof.relay_id);
                 debug!(
                     epoch = proof.epoch,
-                    measurement = %measurement_hex,
-                    relay = %relay_hex,
                     "ignored bandwidth proof (foreign relay)"
                 );
             }
             ProofOutcome::Capacity(error) => {
                 warn!(
                     epoch = proof.epoch,
-                    measurement = %measurement_hex,
                     %error,
                     "ignored bandwidth proof at incentive memory capacity"
                 );
@@ -4226,7 +4025,7 @@ impl RelayRuntime {
         let helper_ticket_secret = context
             .vpn
             .as_ref()
-            .and_then(|overlay| overlay.config().helper_ticket_secret_bytes());
+            .and_then(|overlay| overlay.helper_ticket_secret());
         let mut byte_guard = HandshakeByteGuard::new(&context.metrics);
         let mut puzzle_verify_micros: Option<u64> = None;
         let pow_params = context.dos.current_pow_parameters();
@@ -4253,7 +4052,7 @@ impl RelayRuntime {
                 Err(_) => return Err(HandshakeError::Timeout("pow token/ticket")),
             };
             byte_guard.add(first_frame.len() + 2);
-            if let Some(secret) = helper_ticket_secret.as_ref() {
+            if let Some(secret) = helper_ticket_secret {
                 if VpnHelperTicketV1::looks_like(&first_frame) {
                     let now_ms = unix_time_ms(SystemTime::now());
                     let helper_ticket = VpnHelperTicketV1::parse(&first_frame, secret, now_ms)?;
@@ -4532,6 +4331,53 @@ impl RelayRuntime {
             .map_err(HandshakeError::Write)?;
         Ok(())
     }
+    async fn read_admin_request<R>(reader: &mut R, deadline: Duration) -> io::Result<String>
+    where
+        R: AsyncRead + Unpin,
+    {
+        let bytes = timeout(deadline, async {
+            let mut request = Vec::with_capacity(1024);
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let remaining = ADMIN_MAX_HEADER_BYTES_V1.saturating_sub(request.len());
+                if remaining == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "admin request headers exceed the first-release limit",
+                    ));
+                }
+                let read_capacity = remaining.min(buffer.len());
+                let read = reader.read(&mut buffer[..read_capacity]).await?;
+                if read == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "admin request ended before its headers were complete",
+                    ));
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if let Some(header_end) = request
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .map(|offset| offset + 4)
+                {
+                    request.truncate(header_end);
+                    break;
+                }
+            }
+            Ok::<_, io::Error>(request)
+        })
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "admin request timed out"))??;
+        String::from_utf8(bytes).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "admin request headers must be valid UTF-8",
+            )
+        })
+    }
+    fn try_admin_connection_permit(permits: &Arc<Semaphore>) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(permits).try_acquire_owned().ok()
+    }
     fn admin_http_response(
         status: &str,
         content_type: &str,
@@ -4706,7 +4552,7 @@ impl RelayRuntime {
         relay_id: RelayId,
         addr: SocketAddr,
         mode: RelayMode,
-        authorization: AdminAuthorization,
+        authorization: Arc<AdminAuthorization>,
     ) -> Result<(), RelayError> {
         let AdminResources {
             metrics,
@@ -4717,9 +4563,15 @@ impl RelayRuntime {
         } = resources;
         let listener = TcpListener::bind(addr).await?;
         let actual = listener.local_addr()?;
+        let connection_permits = Arc::new(Semaphore::new(ADMIN_MAX_CONCURRENT_CONNECTIONS_V1));
         info!(listen = %actual, "authenticated admin server listening");
         loop {
-            let (mut stream, peer) = listener.accept().await?;
+            let (mut stream, _peer) = listener.accept().await?;
+            let Some(connection_permit) = Self::try_admin_connection_permit(&connection_permits)
+            else {
+                debug!("rejecting admin connection at capacity");
+                continue;
+            };
             let metrics = Arc::clone(&metrics);
             let privacy = Arc::clone(&privacy);
             let privacy_events = Arc::clone(&privacy_events);
@@ -4727,16 +4579,39 @@ impl RelayRuntime {
             let performance = Arc::clone(&performance);
             let authorization = authorization.clone();
             tokio::spawn(async move {
-                debug!(peer = %peer, "serving admin request");
-                let mut request_buf = [0u8; 1024];
-                let read = match stream.read(&mut request_buf).await {
-                    Ok(bytes) => bytes,
+                let _connection_permit = connection_permit;
+                debug!("serving admin request");
+                let request = match RelayRuntime::read_admin_request(
+                    &mut stream,
+                    ADMIN_REQUEST_TIMEOUT,
+                )
+                .await
+                {
+                    Ok(request) => request,
                     Err(error) => {
                         debug!(%error, "failed to read admin request");
+                        let (status, body) = match error.kind() {
+                            io::ErrorKind::TimedOut => ("408 Request Timeout", "request timeout\n"),
+                            io::ErrorKind::InvalidData => (
+                                "431 Request Header Fields Too Large",
+                                "invalid request headers\n",
+                            ),
+                            _ => ("400 Bad Request", "incomplete request\n"),
+                        };
+                        let response = RelayRuntime::admin_http_response(
+                            status,
+                            PLAIN_TEXT_CONTENT_TYPE,
+                            body,
+                            "",
+                        );
+                        let _ = timeout(
+                            ADMIN_RESPONSE_TIMEOUT,
+                            stream.write_all(response.as_bytes()),
+                        )
+                        .await;
                         return;
                     }
                 };
-                let request = std::str::from_utf8(&request_buf[..read]).unwrap_or_default();
                 let context = AdminRenderContext {
                     metrics: metrics.as_ref(),
                     privacy: privacy.as_ref(),
@@ -4745,17 +4620,24 @@ impl RelayRuntime {
                     performance: performance.as_ref(),
                 };
                 let response = RelayRuntime::render_admin_request(
-                    request,
+                    &request,
                     &authorization,
                     context,
                     relay_id,
                     mode,
                 )
                 .await;
-                if let Err(error) = stream.write_all(response.as_bytes()).await {
-                    debug!(%error, "failed to send admin response");
+                match timeout(
+                    ADMIN_RESPONSE_TIMEOUT,
+                    stream.write_all(response.as_bytes()),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => debug!(%error, "failed to send admin response"),
+                    Err(_) => debug!("timed out sending admin response"),
                 }
-                let _ = stream.shutdown().await;
+                let _ = timeout(ADMIN_RESPONSE_TIMEOUT, stream.shutdown()).await;
             });
         }
     }
@@ -4905,14 +4787,15 @@ impl RelayRuntime {
         Ok(certs)
     }
     fn load_private_key(path: &std::path::Path) -> Result<PrivateKeyDer<'static>, RelayError> {
-        let data = read_bounded_direct_regular_file(
+        let mut data = read_bounded_private_regular_file(
             path,
             TLS_PRIVATE_KEY_MAX_BYTES_V1,
             "relay TLS private key",
         )?;
         let key = PrivateKeyDer::from_pem_slice(&data)
-            .map_err(|error| RelayError::Tls(error.to_string()))?;
-        Ok(key)
+            .map_err(|error| RelayError::Tls(error.to_string()));
+        data.fill(0);
+        key
     }
 }
 include!("runtime/stream_errors.rs");
@@ -4983,6 +4866,27 @@ fn append_grease_tlvs(
     mut base: Vec<u8>,
     grease: &[GreaseEntry],
 ) -> Result<Vec<u8>, CapabilityError> {
+    let mut encoded_len = base.len();
+    if encoded_len > capability::MAX_CAP_VECTOR_LEN {
+        return Err(CapabilityError::CapabilityVectorTooLarge);
+    }
+    for entry in grease {
+        let len = u16::try_from(entry.value.len()).map_err(|_| {
+            CapabilityError::CapabilityValueTooLarge {
+                ty: entry.ty,
+                length: entry.value.len(),
+            }
+        })?;
+        encoded_len = encoded_len
+            .checked_add(4)
+            .and_then(|total| total.checked_add(usize::from(len)))
+            .ok_or(CapabilityError::CapabilityVectorTooLarge)?;
+        if encoded_len > capability::MAX_CAP_VECTOR_LEN {
+            return Err(CapabilityError::CapabilityVectorTooLarge);
+        }
+    }
+    base.try_reserve(encoded_len.saturating_sub(base.len()))
+        .map_err(|_| CapabilityError::CapabilityVectorTooLarge)?;
     for entry in grease {
         base.extend_from_slice(&entry.ty.to_be_bytes());
         let len = u16::try_from(entry.value.len()).map_err(|_| {

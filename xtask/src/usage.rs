@@ -1,11 +1,7 @@
 fn print_usage() {
     eprintln!("xtask usage:");
-    eprintln!(
-        "  cargo xtask soracloud-inrou-smoke <portable|firecracker|mixed-host> [--inventory <path>]"
-    );
-    eprintln!(
-        "    Run the hosted-HTTP Inrou smoke harness for PortableVm, Firecracker/KVM, or a mixed-host inventory gate."
-    );
+    eprintln!("  cargo xtask soracloud-inrou-smoke portable");
+    eprintln!("    Run the first-release hosted-HTTP Inrou PortableVm smoke harness.");
     eprintln!(
         "  cargo xtask openapi [--output <path>|--output-root <dir>] [--signature-envelope <path>|--unsigned-manifest] [--signing-payload <path>]"
     );

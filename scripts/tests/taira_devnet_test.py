@@ -71,21 +71,61 @@ class FakeRuntime:
             genesis_hash = "a" * 63 + "b"
             network_id = module.network_id_from_genesis_hash(genesis_hash)
             for index in range(module.PEER_COUNT):
+                sorafs_dir = target / "state" / f"peer{index}" / "sorafs"
                 (target / f"peer{index}.toml").write_text(
                     f'chain = "{module.DEFAULT_CHAIN_ID}"\n'
+                    f"chain_discriminant = {module.DEFAULT_CHAIN_DISCRIMINANT}\n"
                     f'[genesis]\nexpected_hash = "{network_id}"\n'
-                    f'address = "addr:127.0.0.1:{api_port + index}#ABCD"\n',
+                    f'address = "addr:127.0.0.1:{api_port + index}#ABCD"\n'
+                    "[nexus.storage]\n"
+                    f"local_budget_bytes = {module.GENERATED_LOCALNET_NEXUS_STORAGE_BYTES}\n"
+                    "[sorafs.storage]\n"
+                    "enabled = false\n"
+                    f'data_dir = "{sorafs_dir}"\n',
                     encoding="utf-8",
                 )
+            signer_directory = target / module.RUNTIME_SIGNER_DIRECTORY
+            signer_directory.mkdir(parents=True, mode=0o700)
+            for index in range(module.PEER_COUNT):
+                signer = signer_directory / f"peer{index}.private_key"
+                signer.write_bytes(b"x" * module.RUNTIME_SIGNER_FILE_BYTES)
+                signer.chmod(0o600)
             (target / "genesis.expected_hash").write_text(
                 genesis_hash + "\n", encoding="utf-8"
             )
             (target / "client.toml").write_text(
                 f'chain = "{module.DEFAULT_CHAIN_ID}"\n'
                 f'network_id = "{network_id}"\n'
-                f'torii_url = "http://127.0.0.1:{api_port}/"\n',
+                f'torii_url = "http://127.0.0.1:{api_port}/"\n'
+                f"[account]\nchain_discriminant = {module.DEFAULT_CHAIN_DISCRIMINANT}\n",
                 encoding="utf-8",
             )
+        elif "--check-config" in values:
+            config = Path(values[values.index("--config") + 1])
+            module.require_canonical_taira_storage_profiles(config.parent)
+        elif "inrou-stage" in values:
+            stage = Path(values[values.index("--stage-dir") + 1])
+            (stage / "manifests").mkdir(parents=True, mode=0o700)
+            (stage / "payloads" / "guest" / "aarch64").mkdir(
+                parents=True, mode=0o700
+            )
+            (stage / module.INROU_STAGE_RECEIPT_FILE).write_text(
+                '{"schema_version":1}\n', encoding="utf-8"
+            )
+            (stage / module.INROU_STAGE_BUNDLE_PAYLOAD).write_bytes(b"bundle")
+            (stage / module.INROU_STAGE_BUNDLE_MANIFEST).write_bytes(b"bundle-manifest")
+            (stage / module.INROU_STAGE_GUEST_MANIFEST).write_bytes(b"guest-manifest")
+            (stage / module.INROU_STAGE_GUEST_PAYLOAD / "aarch64" / "kernel").write_bytes(
+                b"kernel"
+            )
+            stage.chmod(0o700)
+            for staged_file in (
+                stage / module.INROU_STAGE_RECEIPT_FILE,
+                stage / module.INROU_STAGE_BUNDLE_PAYLOAD,
+                stage / module.INROU_STAGE_BUNDLE_MANIFEST,
+                stage / module.INROU_STAGE_GUEST_MANIFEST,
+            ):
+                staged_file.chmod(0o600)
         elif values[0] == "/bin/bash" and values[1].endswith("/start.sh"):
             target = Path(str(kwargs["cwd"]))
             self.start_env = dict(kwargs["env"])
@@ -93,7 +133,7 @@ class FakeRuntime:
                 pid = 10_000 + index
                 (target / f"peer{index}.pid").write_text(f"{pid}\n", encoding="utf-8")
                 self.process_commands[pid] = (
-                    f"/fake/iroha3d --sora --config {target / f'peer{index}.toml'}"
+                    f"/fake/iroha3d_taira --sora --config {target / f'peer{index}.toml'}"
                 )
         elif values[0] == "/bin/bash" and values[1].endswith("/stop.sh"):
             target = Path(str(kwargs["cwd"]))
@@ -165,11 +205,18 @@ class TairaDevnetTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.bin_dir = self.root / "bin"
         self.bin_dir.mkdir()
-        for name in ("kagami", "iroha3d", "iroha"):
+        for name in ("kagami", "iroha3d_taira", "iroha", "sorafs-node"):
             executable(self.bin_dir / name)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_first_release_taira_identity_is_exact(self) -> None:
+        self.assertEqual(
+            module.DEFAULT_CHAIN_ID,
+            "fc56984b-2be7-431d-840e-21514d1883f0",
+        )
+        self.assertEqual(module.DEFAULT_CHAIN_DISCRIMINANT, 369)
 
     def up_args(self, *extra: str):
         """Parse a no-build ``up`` command for this test directory."""
@@ -188,6 +235,35 @@ class TairaDevnetTests(unittest.TestCase):
             ]
         )
 
+    def inrou_canary_workspace(self) -> Path:
+        """Create the exact three-file runtime-only canary interface."""
+
+        workspace = self.root / "inrou-canary"
+        workspace.mkdir()
+        (workspace / module.INROU_CANARY_CONTAINER_FILE).write_text(
+            "{}\n", encoding="utf-8"
+        )
+        (workspace / module.INROU_CANARY_SERVICE_FILE).write_text(
+            "{}\n", encoding="utf-8"
+        )
+        (workspace / module.INROU_CANARY_BUNDLE_FILE).write_bytes(b"bundle")
+        return workspace
+
+    def generated_network(self, name: str) -> tuple[FakeRuntime, Path]:
+        """Ask the fake Kagami runtime for one unmodified generated network."""
+
+        runtime = FakeRuntime()
+        target = (self.root / name).resolve(strict=False)
+        module.generate_network(
+            target,
+            self.bin_dir / "kagami",
+            module.DEFAULT_API_PORT,
+            module.DEFAULT_P2P_PORT,
+            module.DEFAULT_BLOCK_CADENCE_MS,
+            runtime.run,
+        )
+        return runtime, target
+
     def test_up_is_fresh_exact_four_and_proves_signed_finality(self) -> None:
         runtime = FakeRuntime()
 
@@ -197,6 +273,7 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertEqual(report["final_height"], 2)
         self.assertEqual(report["transaction_hash"], "a" * 64)
         self.assertEqual(report["terminal_status"], "Applied")
+        self.assertFalse(report["inrou_canary"])
         kagami = next(command for command in runtime.commands if "localnet" in command)
         self.assertIn("--fresh-random-keys", kagami)
         self.assertEqual(kagami[kagami.index("--peers") + 1], "4")
@@ -214,11 +291,51 @@ class TairaDevnetTests(unittest.TestCase):
         ]
         self.assertEqual(len(config_checks), 4)
         self.assertTrue(
-            all(command.count(str(self.bin_dir / "iroha3d")) == 1 for command in config_checks)
+            all(
+                command.count(str(self.bin_dir / "iroha3d_taira")) == 1
+                for command in config_checks
+            )
         )
         self.assertEqual(sum("ping" in command for command in runtime.commands), 1)
         self.assertEqual(sum("status" in command for command in runtime.commands), 1)
         self.assertEqual(sum("doctor" in command for command in runtime.commands), 0)
+        expected_weights = dict(module.TAIRA_NEXUS_STORAGE_WEIGHTS)
+        for index in range(module.PEER_COUNT):
+            config = self.root / "state" / "network" / f"peer{index}.toml"
+            self.assertEqual(
+                module.section_assignment(
+                    config, "nexus.storage", "local_budget_bytes"
+                ),
+                str(module.TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES),
+            )
+            for key, value in expected_weights.items():
+                self.assertEqual(
+                    module.section_assignment(
+                        config, "nexus.storage.disk_budget_weights", key
+                    ),
+                    str(value),
+                )
+            self.assertEqual(
+                module.section_assignment(
+                    config, "sorafs.storage", "max_capacity_bytes"
+                ),
+                str(module.TAIRA_SORAFS_MAX_CAPACITY_BYTES),
+            )
+            self.assertEqual(
+                module.section_assignment(config, "sorafs.storage", "enabled"),
+                "false",
+            )
+            self.assertEqual(
+                Path(module.section_assignment(config, "sorafs.storage", "data_dir")),
+                (
+                    self.root
+                    / "state"
+                    / "network"
+                    / "state"
+                    / f"peer{index}"
+                    / "sorafs"
+                ).resolve(),
+            )
         ping = next(command for command in runtime.commands if "ping" in command)
         self.assertIn("--machine", ping)
         self.assertIn("--fee-payer", ping)
@@ -241,6 +358,75 @@ class TairaDevnetTests(unittest.TestCase):
             mcp_methods,
             ["initialize", "notifications/initialized", "tools/list"],
         )
+
+    def test_storage_overlay_fails_closed_before_rewriting_any_peer(self) -> None:
+        source_nexus = (
+            "[nexus.storage]\n"
+            f"local_budget_bytes = {module.GENERATED_LOCALNET_NEXUS_STORAGE_BYTES}\n"
+        )
+        source_sorafs = "[sorafs.storage]\nenabled = false\n"
+        cases = (
+            (
+                "missing",
+                lambda text: text.replace(source_nexus, "", 1),
+                "must contain one \\[nexus.storage\\]",
+            ),
+            (
+                "duplicate",
+                lambda text: text + "\n" + source_sorafs,
+                "must contain one \\[sorafs.storage\\]",
+            ),
+            (
+                "unexpected-section",
+                lambda text: text
+                + "\n[nexus.storage.disk_budget_weights]\nkura_blocks_bps = 1\n",
+                "unexpected storage sections",
+            ),
+            (
+                "unexpected-assignment",
+                lambda text: text.replace(
+                    source_nexus,
+                    source_nexus + "fallback_budget_bytes = 1\n",
+                    1,
+                ),
+                "wrong assignment set",
+            ),
+        )
+        for name, mutate, error in cases:
+            with self.subTest(name=name):
+                _, target = self.generated_network(f"generated-{name}")
+                peer0 = target / "peer0.toml"
+                peer3 = target / "peer3.toml"
+                peer0_before = peer0.read_text(encoding="utf-8")
+                peer3.write_text(
+                    mutate(peer3.read_text(encoding="utf-8")),
+                    encoding="utf-8",
+                )
+
+                with self.assertRaisesRegex(module.DevnetError, error):
+                    module.apply_canonical_taira_storage_profiles(target)
+
+                self.assertEqual(peer0.read_text(encoding="utf-8"), peer0_before)
+
+    def test_canonical_storage_validator_rejects_capacity_drift(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        config = self.root / "state" / "network" / "peer2.toml"
+        contents = config.read_text(encoding="utf-8")
+        config.write_text(
+            contents.replace(
+                f"max_capacity_bytes = {module.TAIRA_SORAFS_MAX_CAPACITY_BYTES}",
+                f"max_capacity_bytes = {module.TAIRA_SORAFS_MAX_CAPACITY_BYTES + 1}",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        args = module.parser().parse_args(
+            ["--dir", str(self.root / "state"), "check", "--timeout-seconds", "1"]
+        )
+
+        with self.assertRaisesRegex(module.DevnetError, "wrong computed SoraFS capacity"):
+            module.check(args, run=runtime.run, request=runtime.request)
 
     def test_default_deadline_matches_the_generated_transaction_window(self) -> None:
         args = module.parser().parse_args(
@@ -333,8 +519,15 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertEqual(report["height"], 2)
         self.assertEqual(sum("ping" in command for command in runtime.commands), ping_count)
 
+        for path in module.runtime_signer_launch_paths(state / "network"):
+            path.write_bytes(b"")
+            path.chmod(0o600)
+
         down_args = module.parser().parse_args(["--dir", str(state), "down"])
-        self.assertTrue(module.down(down_args, run=runtime.run)["stopped"])
+        down_report = module.down(down_args, run=runtime.run)
+        self.assertTrue(down_report["stopped"])
+        self.assertTrue(down_report["runtime_signers_deleted"])
+        self.assertFalse((state / "network" / module.RUNTIME_SIGNER_DIRECTORY).exists())
 
     def test_check_derives_custom_ports_from_the_generated_bundle(self) -> None:
         runtime = FakeRuntime()
@@ -453,6 +646,46 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "not for canonical Taira"):
             module.check(args, run=runtime.run, request=runtime.request)
 
+    def test_check_rejects_client_chain_discriminant_drift(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        client = self.root / "state" / "network" / "client.toml"
+        client.write_text(
+            client.read_text(encoding="utf-8").replace(
+                f"chain_discriminant = {module.DEFAULT_CHAIN_DISCRIMINANT}",
+                f"chain_discriminant = {module.DEFAULT_CHAIN_DISCRIMINANT + 1}",
+            ),
+            encoding="utf-8",
+        )
+        args = module.parser().parse_args(
+            ["--dir", str(self.root / "state"), "check", "--timeout-seconds", "1"]
+        )
+
+        with self.assertRaisesRegex(
+            module.DevnetError, "wrong Taira chain discriminant"
+        ):
+            module.check(args, run=runtime.run, request=runtime.request)
+
+    def test_check_rejects_peer_chain_discriminant_drift(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        peer = self.root / "state" / "network" / "peer2.toml"
+        peer.write_text(
+            peer.read_text(encoding="utf-8").replace(
+                f"chain_discriminant = {module.DEFAULT_CHAIN_DISCRIMINANT}",
+                f"chain_discriminant = {module.DEFAULT_CHAIN_DISCRIMINANT + 1}",
+            ),
+            encoding="utf-8",
+        )
+        args = module.parser().parse_args(
+            ["--dir", str(self.root / "state"), "check", "--timeout-seconds", "1"]
+        )
+
+        with self.assertRaisesRegex(
+            module.DevnetError, "wrong Taira chain discriminant"
+        ):
+            module.check(args, run=runtime.run, request=runtime.request)
+
     def test_check_rejects_client_network_id_checksum_drift(self) -> None:
         runtime = FakeRuntime()
         module.up(self.up_args(), run=runtime.run, request=runtime.request)
@@ -485,10 +718,122 @@ class TairaDevnetTests(unittest.TestCase):
 
     def test_full_public_doctor_is_opt_in(self) -> None:
         runtime = FakeRuntime()
-        module.up(self.up_args("--full-doctor"), run=runtime.run, request=runtime.request)
+        workspace = self.inrou_canary_workspace()
+        report = module.up(
+            self.up_args(
+                "--full-doctor",
+                "--inrou-canary-dir",
+                str(workspace),
+            ),
+            run=runtime.run,
+            request=runtime.request,
+        )
+        stages = [command for command in runtime.commands if "inrou-stage" in command]
+        canaries = [command for command in runtime.commands if "inrou-canary" in command]
+        ingests = [command for command in runtime.commands if "ingest" in command]
         doctor = [command for command in runtime.commands if "doctor" in command]
+        self.assertTrue(report["inrou_canary"])
+        self.assertIsNotNone(report["inrou_stage"])
+        self.assertEqual(len(stages), 1)
+        self.assertEqual(len(canaries), 1)
+        self.assertEqual(len(ingests), module.PEER_COUNT * 2)
         self.assertEqual(len(doctor), 1)
+        self.assertTrue(
+            all(
+                f"--max-capacity-bytes={module.TAIRA_SORAFS_MAX_CAPACITY_BYTES}"
+                in command
+                for command in ingests
+            )
+        )
+        self.assertEqual(
+            {
+                next(value for value in command if value.startswith("--data-dir="))
+                for command in ingests
+            },
+            {
+                "--data-dir="
+                + str(
+                    (
+                        self.root
+                        / "state"
+                        / "network"
+                        / "state"
+                        / f"peer{index}"
+                        / "sorafs"
+                    ).resolve()
+                )
+                for index in range(module.PEER_COUNT)
+            },
+        )
+        stage = stages[0]
+        canary = canaries[0]
+        self.assertEqual(
+            stage[stage.index("--container") + 1],
+            str((workspace / module.INROU_CANARY_CONTAINER_FILE).resolve()),
+        )
+        self.assertEqual(
+            stage[stage.index("--service") + 1],
+            str((workspace / module.INROU_CANARY_SERVICE_FILE).resolve()),
+        )
+        self.assertEqual(
+            stage[stage.index("--bundle-file") + 1],
+            str((workspace / module.INROU_CANARY_BUNDLE_FILE).resolve()),
+        )
+        self.assertEqual(
+            canary[canary.index("--stage-dir") + 1],
+            stage[stage.index("--stage-dir") + 1],
+        )
+        self.assertIn("--fee-payer", canary)
         self.assertEqual(doctor[0][doctor[0].index("--public-root") + 1], "http://127.0.0.1:29080/")
+        ping_index = next(
+            index for index, command in enumerate(runtime.commands) if "ping" in command
+        )
+        status_index = next(
+            index for index, command in enumerate(runtime.commands) if "status" in command
+        )
+        stage_index = runtime.commands.index(stage)
+        ingest_indexes = [runtime.commands.index(command) for command in ingests]
+        start_index = next(
+            index
+            for index, command in enumerate(runtime.commands)
+            if command[0] == "/bin/bash" and command[1].endswith("start.sh")
+        )
+        canary_index = runtime.commands.index(canary)
+        doctor_index = runtime.commands.index(doctor[0])
+        self.assertLess(stage_index, min(ingest_indexes))
+        self.assertLess(max(ingest_indexes), start_index)
+        self.assertLess(ping_index, status_index)
+        self.assertLess(status_index, canary_index)
+        self.assertLess(canary_index, doctor_index)
+
+    def test_full_doctor_without_inrou_workspace_fails_before_commands(self) -> None:
+        runtime = FakeRuntime()
+
+        with self.assertRaisesRegex(
+            module.DevnetError, "--full-doctor requires --inrou-canary-dir"
+        ):
+            module.up(
+                self.up_args("--full-doctor"),
+                run=runtime.run,
+                request=runtime.request,
+            )
+
+        self.assertEqual(runtime.commands, [])
+        self.assertFalse((self.root / "state").exists())
+
+    def test_inrou_workspace_requires_all_three_regular_files(self) -> None:
+        runtime = FakeRuntime()
+        workspace = self.inrou_canary_workspace()
+        (workspace / module.INROU_CANARY_BUNDLE_FILE).unlink()
+
+        with self.assertRaisesRegex(module.DevnetError, "missing regular file"):
+            module.up(
+                self.up_args("--inrou-canary-dir", str(workspace)),
+                run=runtime.run,
+                request=runtime.request,
+            )
+
+        self.assertEqual(runtime.commands, [])
 
     def test_managed_directory_refuses_foreign_contents(self) -> None:
         foreign = self.root / "foreign"
@@ -536,8 +881,10 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertIn("--stable-local-metadata", command)
         self.assertIn("--no-sccache", command)
         self.assertEqual(command[command.index("--target-dir") + 1], "/tmp/taira-target")
-        self.assertEqual(command.count("--bin"), 3)
+        self.assertEqual(command.count("--bin"), 4)
         rendered = " ".join(command)
+        self.assertIn("iroha3d_taira", rendered)
+        self.assertIn("sorafs-node", rendered)
         self.assertNotIn("external-software-signer-bin", rendered)
         self.assertIn("--locked", command)
         self.assertNotIn("--features", command)
@@ -722,7 +1069,11 @@ class TairaDevnetTests(unittest.TestCase):
         )
         self.assertEqual(
             names(REPO_ROOT / "scripts" / "tests"),
-            {"render_taira_edge_nginx_conf_test.py", "taira_devnet_test.py"},
+            {
+                "render_taira_edge_nginx_conf_test.py",
+                "taira_devnet_test.py",
+                "taira_inrou_canary_identity_source_test.py",
+            },
         )
         config_root = REPO_ROOT / "configs" / "soranexus" / "taira"
         self.assertEqual(
@@ -742,7 +1093,7 @@ class TairaDevnetTests(unittest.TestCase):
         )
         self.assertEqual(
             names(REPO_ROOT / "crates" / "irohad" / "src" / "bin"),
-            {"taira_bootle_lantern_broker.rs"},
+            {"iroha3d_taira.rs", "taira_bootle_lantern_broker.rs"},
         )
         self.assertEqual(
             names(REPO_ROOT / "crates" / "iroha_test_network" / "src" / "bin"),

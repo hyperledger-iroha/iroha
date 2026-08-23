@@ -15,7 +15,7 @@ use iroha_primitives::numeric::Quantity;
 use nonzero_ext::nonzero;
 use std::{
     collections::BTreeMap,
-    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
     path::PathBuf,
     str::FromStr,
     time::Duration,
@@ -135,11 +135,21 @@ pub mod soracloud_runtime {
     /// Default model-weight cache budget in bytes.
     pub const MODEL_WEIGHT_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(4_096_u64 * 1024 * 1024);
     /// Default concurrent Inrou microVMs allowed on one node.
-    pub const INROU_MAX_CONCURRENT_VMS: NonZeroUsize = nonzero!(8_usize);
+    pub const INROU_MAX_CONCURRENT_VMS: NonZeroU16 = nonzero!(8_u16);
     /// Whether this node advertises local Inrou hosting by default.
     pub const INROU_ENABLED: bool = false;
-    /// Default hosted-runtime posture for Inrou nodes.
-    pub const INROU_PROXY_ONLY: bool = false;
+    /// Dedicated QEMU uid. `None` keeps PortableVM hosting fail-closed until configured.
+    pub const INROU_PORTABLE_VM_UID: Option<NonZeroU32> = None;
+    /// Dedicated QEMU primary gid. `None` keeps PortableVM hosting fail-closed until configured.
+    pub const INROU_PORTABLE_VM_GID: Option<NonZeroU32> = None;
+    /// Root-owned QMP control directory. `None` requires an explicit deployment path.
+    pub const INROU_PORTABLE_VM_CONTROL_DIR: Option<&str> = None;
+    /// Disabled-profile fallback aggregate CPU ceiling in millicores.
+    pub const INROU_MAX_CPU_MILLIS: NonZeroU32 = nonzero!(8_000_u32);
+    /// Disabled-profile fallback aggregate memory ceiling in bytes.
+    pub const INROU_MAX_MEMORY_BYTES: NonZeroU64 = nonzero!(8_u64 * 1024 * 1024 * 1024);
+    /// Disabled-profile fallback aggregate writable-storage ceiling in bytes.
+    pub const INROU_MAX_STORAGE_BYTES: NonZeroU64 = nonzero!(64_u64 * 1024 * 1024 * 1024);
     /// Maximum compressed size accepted for one Inrou bundle archive.
     pub const INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES: NonZeroU64 =
         nonzero!(512_u64 * 1024 * 1024);

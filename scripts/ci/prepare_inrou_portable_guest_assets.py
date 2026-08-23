@@ -10,14 +10,18 @@ import platform
 import re
 import shlex
 import shutil
+import stat
 import struct
 import subprocess
 import sys
 import tarfile
+import tempfile
 import urllib.error
 import urllib.request
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
+from typing import BinaryIO, Iterator
 
 
 DEBIAN_CODENAME = "bookworm"
@@ -62,9 +66,10 @@ def debian_archive_name(deb_arch: str) -> str:
 
 
 def parse_args() -> argparse.Namespace:
+    owner_tag = str(os.geteuid()) if hasattr(os, "geteuid") else "user"
     default_output = (
         Path(os.environ.get("TMPDIR", "/tmp"))
-        / "iroha-inrou-portable-assets"
+        / f"iroha-inrou-portable-assets-{owner_tag}"
         / host_asset_arch()[1]
     )
     parser = argparse.ArgumentParser(
@@ -82,7 +87,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="rebuild prepared assets even when output files already exist",
+        help=(
+            "redownload upstream inputs before rebuilding; derived guest assets "
+            "are always rebuilt from the verified archive"
+        ),
     )
     parser.add_argument(
         "--print-env",
@@ -151,14 +159,99 @@ def run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[s
     return subprocess.run(args, check=check, text=True, capture_output=True)
 
 
+@contextmanager
+def atomic_output(destination: Path) -> Iterator[BinaryIO]:
+    """Publish one file atomically from an exclusive owner-only staging file."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(
+        mode="w+b",
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        dir=destination.parent,
+        delete=False,
+    )
+    temporary = Path(handle.name)
+    try:
+        yield handle
+        handle.flush()
+        os.fsync(handle.fileno())
+        handle.close()
+        temporary.replace(destination)
+    finally:
+        handle.close()
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def download(url: str, destination: Path) -> None:
+    if destination.is_symlink():
+        raise SystemExit(f"refusing symlinked download destination: {destination}")
     if destination.is_file():
         return
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_suffix(destination.suffix + ".tmp")
-    with urllib.request.urlopen(url) as response, temporary.open("wb") as out:
+    if destination.exists():
+        raise SystemExit(f"download destination is not a regular file: {destination}")
+    with urllib.request.urlopen(url) as response, atomic_output(destination) as out:
         shutil.copyfileobj(response, out, length=1024 * 1024)
-    temporary.replace(destination)
+
+
+def prepare_output_directory(requested: Path) -> Path:
+    """Create and validate an owner-only, non-symlinked asset directory."""
+    expanded = requested.expanduser()
+    if expanded.is_symlink():
+        raise SystemExit(f"refusing symlinked Inrou asset output directory: {expanded}")
+    expanded.mkdir(mode=0o700, parents=True, exist_ok=True)
+    output_dir = expanded.resolve()
+    if not output_dir.is_dir():
+        raise SystemExit(f"Inrou asset output path is not a directory: {output_dir}")
+    if os.name != "posix" or not hasattr(os, "geteuid"):
+        return output_dir
+
+    owner = os.geteuid()
+    output_stat = output_dir.stat()
+    if output_stat.st_uid != owner:
+        raise SystemExit(
+            f"Inrou asset output directory must be owned by uid {owner}: {output_dir}"
+        )
+    if stat.S_IMODE(output_stat.st_mode) & (stat.S_IWGRP | stat.S_IWOTH):
+        raise SystemExit(
+            f"Inrou asset output directory must not be group/other writable: {output_dir}"
+        )
+
+    child = output_dir
+    for parent in output_dir.parents:
+        parent_stat = parent.stat()
+        mode = stat.S_IMODE(parent_stat.st_mode)
+        if mode & stat.S_ISVTX and parent_stat.st_uid in {0, owner}:
+            # A sticky directory such as /tmp protects the directly owned child
+            # from replacement by other unprivileged users.
+            break
+        if parent_stat.st_uid == owner:
+            if mode & (stat.S_IWGRP | stat.S_IWOTH):
+                raise SystemExit(
+                    f"Inrou asset parent directory is writable by other users: {parent}"
+                )
+            child = parent
+            continue
+        if parent_stat.st_uid == 0 and not mode & (stat.S_IWGRP | stat.S_IWOTH):
+            break
+        raise SystemExit(
+            "Inrou asset directory has an untrusted parent "
+            f"{parent} above owned child {child}"
+        )
+    return output_dir
+
+
+def remove_cached_download(path: Path) -> None:
+    """Remove one cached upstream input without following links."""
+    if path.is_symlink():
+        raise SystemExit(f"refusing symlinked cached download: {path}")
+    if not path.exists():
+        return
+    if not path.is_file():
+        raise SystemExit(f"cached download is not a regular file: {path}")
+    path.unlink()
 
 
 def download_optional_signature(url: str, destination: Path) -> bool:
@@ -292,20 +385,20 @@ def verify_debian_sums_signature_if_available(
 def extract_disk(archive: Path, disk: Path, force: bool) -> None:
     if disk.is_file() and not force:
         return
-    temporary = disk.with_suffix(".raw.tmp")
     with tarfile.open(archive, "r:xz") as tar:
-        member = next(
-            (entry for entry in tar.getmembers() if Path(entry.name).name == "disk.raw"),
-            None,
-        )
-        if member is None:
+        members = [
+            entry for entry in tar.getmembers() if Path(entry.name).name == "disk.raw"
+        ]
+        if not members:
             raise SystemExit(f"{archive} does not contain disk.raw")
+        if len(members) != 1 or not members[0].isfile():
+            raise SystemExit(f"{archive} must contain exactly one regular disk.raw")
+        member = members[0]
         source = tar.extractfile(member)
         if source is None:
             raise SystemExit(f"unable to extract disk.raw from {archive}")
-        with temporary.open("wb") as out:
+        with atomic_output(disk) as out:
             shutil.copyfileobj(source, out, length=1024 * 1024)
-    temporary.replace(disk)
 
 
 def guid_from_gpt(raw: bytes) -> str:
@@ -346,9 +439,8 @@ def root_partition_range(disk: Path) -> tuple[int, int]:
 def copy_range(source: Path, destination: Path, offset: int, length: int, force: bool) -> None:
     if destination.is_file() and not force:
         return
-    temporary = destination.with_suffix(destination.suffix + ".tmp")
     remaining = length
-    with source.open("rb") as src, temporary.open("wb") as out:
+    with source.open("rb") as src, atomic_output(destination) as out:
         src.seek(offset)
         while remaining:
             chunk = src.read(min(1024 * 1024, remaining))
@@ -356,7 +448,6 @@ def copy_range(source: Path, destination: Path, offset: int, length: int, force:
                 raise SystemExit(f"unexpected EOF while extracting root partition from {source}")
             out.write(chunk)
             remaining -= len(chunk)
-    temporary.replace(destination)
 
 
 def patch_rootfs(rootfs: Path, root_label: str, debugfs: str, tune2fs: str) -> None:
@@ -407,8 +498,7 @@ def write_env(output_dir: Path, kernel: Path, rootfs: Path, initrd: Path, print_
 def main() -> None:
     args = parse_args()
     deb_arch, guest_arch, root_label = host_asset_arch()
-    output_dir = args.output_dir.expanduser().resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = prepare_output_directory(args.output_dir)
 
     base_url = args.image_base_url.rstrip("/")
     archive_name = debian_archive_name(deb_arch)
@@ -423,6 +513,10 @@ def main() -> None:
     debugfs = find_tool("debugfs")
     tune2fs = find_tool("tune2fs")
 
+    if args.force:
+        for cached_download in (archive, sums, sums_signature):
+            remove_cached_download(cached_download)
+
     download(f"{base_url}/SHA512SUMS", sums)
     sums_verified = verify_debian_sums_signature_if_available(
         base_url, sums, sums_signature, args.debian_keyring
@@ -432,9 +526,11 @@ def main() -> None:
         verify_archive(archive, sums)
     else:
         verify_pinned_archive(archive)
-    extract_disk(archive, disk, args.force)
+    # Never trust derived cache entries: rebuild them from the archive whose
+    # signature or pinned digest was verified immediately above.
+    extract_disk(archive, disk, True)
     offset, length = root_partition_range(disk)
-    copy_range(disk, rootfs, offset, length, args.force)
+    copy_range(disk, rootfs, offset, length, True)
     patch_rootfs(rootfs, root_label, debugfs, tune2fs)
 
     kernel_name = newest_boot_file(debugfs, rootfs, "vmlinuz-")

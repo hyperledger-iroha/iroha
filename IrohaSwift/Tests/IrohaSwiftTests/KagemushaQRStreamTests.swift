@@ -4,9 +4,9 @@ import XCTest
 final class KagemushaQRStreamTests: XCTestCase {
     func testMeasuredReleaseArchivesStayWithinTheStandardQRFrameBudget() {
         let samples: [(String, Int, Int)] = [
-            ("receive-offer", 12_363, 63),
+            ("receive-offer", 12_425, 63),
             ("acknowledgement", 471, 4),
-            ("payment-v4-peer-hop-1", 11_887, 60),
+            ("payment-v4-peer-hop-1", 12_896, 65),
         ]
         let options = KagemushaQRStreamOptions.standard
         for (label, archiveBytes, expectedFrames) in samples {

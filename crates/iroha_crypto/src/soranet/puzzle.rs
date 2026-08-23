@@ -4,7 +4,7 @@
 //! attach a single frame regardless of which policy a relay enforces. Difficulty adjustments and
 //! TTL validation follow the same rules as the `PoW` implementation, while the work predicate is
 //! backed by Argon2id to raise the cost of GPU/ASIC optimisations.
-use crate::soranet::pow::{CHALLENGE_DOMAIN, SOLUTION_DOMAIN, Ticket};
+use crate::soranet::pow::{CHALLENGE_DOMAIN, SOLUTION_DOMAIN, Ticket, ticket_binding_commitment};
 use argon2::{Algorithm, Argon2, Params, Version};
 use blake3::Hasher;
 use rand_core::TryCryptoRng;
@@ -13,6 +13,7 @@ use std::{
     num::NonZeroU32,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use subtle::ConstantTimeEq as _;
 use thiserror::Error;
 const OUTPUT_LEN: usize = 32;
 const SOLUTION_SALT_LEN: usize = SOLUTION_DOMAIN.len() + OUTPUT_LEN;
@@ -362,6 +363,22 @@ fn fill_random<R: TryCryptoRng>(
     }
     Ok(())
 }
+fn reject_repeated_nonce_material(
+    operation: &'static str,
+    candidate: &[u8; 32],
+    prior: &[(&'static str, &[u8; 32])],
+) -> Result<(), MintError> {
+    if let Some((label, _)) = prior
+        .iter()
+        .find(|(_, bytes)| bool::from(candidate.ct_eq(*bytes)))
+    {
+        return Err(MintError::RandomBytes {
+            operation,
+            message: format!("rng repeated {label} material"),
+        });
+    }
+    Ok(())
+}
 /// Verify a puzzle ticket using the supplied policy.
 ///
 /// # Errors
@@ -410,6 +427,14 @@ pub fn verify_at(
     }
     if ttl_remaining > params.max_future_skew {
         return Err(Error::FutureSkewExceeded(params.max_future_skew));
+    }
+    let expected_binding = ticket_binding_commitment(
+        binding.descriptor_commit,
+        binding.relay_id,
+        binding.transcript_hash,
+    );
+    if !bool::from(ticket.client_nonce.ct_eq(&expected_binding)) {
+        return Err(Error::InvalidSolution);
     }
     let challenge = derive_challenge(binding, ticket.client_nonce, ticket.expires_at);
     let digest =
@@ -477,6 +502,12 @@ where
             max_skew: params.max_future_skew,
         });
     }
+    let client_nonce = ticket_binding_commitment(
+        binding.descriptor_commit,
+        binding.relay_id,
+        binding.transcript_hash,
+    );
+    let mut previous_solution = None;
     loop {
         let minted_at = now();
         let expires_at = minted_at
@@ -485,11 +516,16 @@ where
         let expires_at_secs = expires_at.duration_since(UNIX_EPOCH)?.as_secs();
         let wire_expires_at =
             unix_time_from_secs(expires_at_secs).ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
-        let mut client_nonce = [0u8; 32];
-        fill_random(rng, "minting puzzle client nonce", &mut client_nonce)?;
+        let mut prior = Vec::with_capacity(2);
+        prior.push(("ticket binding commitment", &client_nonce));
+        if let Some(previous) = previous_solution.as_ref() {
+            prior.push(("previous solution nonce", previous));
+        }
         let challenge = derive_challenge(binding, client_nonce, expires_at_secs);
         let mut solution = [0u8; 32];
         fill_random(rng, "minting puzzle solution nonce", &mut solution)?;
+        reject_repeated_nonce_material("minting puzzle solution nonce", &solution, &prior)?;
+        previous_solution = Some(solution);
         let digest = derive_digest(&challenge, &solution, params).map_err(|err| match err {
             DigestError::Parameters(msg) => MintError::Parameters(msg),
             DigestError::Hash(msg) => MintError::Hash(msg),
@@ -878,7 +914,7 @@ mod tests {
         .expect_err("failing RNG must abort ticket minting");
         match err {
             MintError::RandomBytes { operation, message } => {
-                assert_eq!(operation, "minting puzzle client nonce");
+                assert_eq!(operation, "minting puzzle solution nonce");
                 assert!(
                     message.contains("failing puzzle ticket RNG"),
                     "unexpected message: {message}"
@@ -899,6 +935,27 @@ mod tests {
                 assert!(message.contains("all-zero material"));
             }
             other => panic!("expected all-zero nonce RandomBytes error, got {other:?}"),
+        }
+    }
+    #[test]
+    fn mint_ticket_rejects_repeated_nonzero_rng_material() {
+        let mut rng = FixedTryRng { byte: 0xA5 };
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let error = mint_ticket_with_clock_and_digest(
+            &test_parameters(),
+            &binding(),
+            Duration::from_secs(10),
+            &mut rng,
+            || now,
+            |_, _, _| Ok([0xFF; OUTPUT_LEN]),
+        )
+        .expect_err("a stuck nonzero RNG must fail before repeated Argon2 work");
+        match error {
+            MintError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "minting puzzle solution nonce");
+                assert!(message.contains("repeated previous solution nonce material"));
+            }
+            other => panic!("expected repeated nonce failure, got {other:?}"),
         }
     }
     #[test]
@@ -973,56 +1030,6 @@ mod tests {
             }
         }
         panic!("failed to construct an invalid solution candidate")
-    }
-    fn first_invalid_relay_id(
-        ticket: &Ticket,
-        params: &Parameters,
-        base: &ChallengeBinding<'_>,
-    ) -> [u8; 32] {
-        for seed in 0u8..=u8::MAX {
-            let mut relay = [0u8; 32];
-            for (idx, byte) in relay.iter_mut().enumerate() {
-                let idx = u8::try_from(idx).expect("relay index fits in u8");
-                *byte = seed.wrapping_add(idx);
-            }
-            if relay.as_slice() == base.relay_id {
-                continue;
-            }
-            let candidate =
-                ChallengeBinding::new(base.descriptor_commit, &relay, base.transcript_hash);
-            let challenge = derive_challenge(&candidate, ticket.client_nonce, ticket.expires_at);
-            let digest = derive_solution_digest(&challenge, &ticket.solution, params)
-                .expect("digest derivation should succeed");
-            if !leading_zero_bits_at_least(&digest, params.difficulty) {
-                return relay;
-            }
-        }
-        panic!("failed to construct an invalid relay binding candidate")
-    }
-    fn first_invalid_transcript_hash(
-        ticket: &Ticket,
-        params: &Parameters,
-        base: &ChallengeBinding<'_>,
-    ) -> [u8; 32] {
-        for seed in 0u8..=u8::MAX {
-            let mut transcript = [0u8; 32];
-            for (idx, byte) in transcript.iter_mut().enumerate() {
-                let idx = u8::try_from(idx).expect("transcript index fits in u8");
-                *byte = seed.wrapping_add(idx);
-            }
-            if base.transcript_hash == &transcript {
-                continue;
-            }
-            let candidate =
-                ChallengeBinding::new(base.descriptor_commit, base.relay_id, &transcript);
-            let challenge = derive_challenge(&candidate, ticket.client_nonce, ticket.expires_at);
-            let digest = derive_solution_digest(&challenge, &ticket.solution, params)
-                .expect("digest derivation should succeed");
-            if !leading_zero_bits_at_least(&digest, params.difficulty) {
-                return transcript;
-            }
-        }
-        panic!("failed to construct an invalid transcript binding candidate")
     }
     fn first_invalid_expiry(
         ticket: &Ticket,
@@ -1320,7 +1327,7 @@ mod tests {
             mint_ticket(&params, &binding, Duration::from_secs(12), &mut rng).expect("mint");
         let now = stable_verify_time(&ticket, &params);
         verify_at(&ticket, &binding, &params, now).expect("expected transcript to verify");
-        let transcript_b = first_invalid_transcript_hash(&ticket, &params, &binding);
+        let transcript_b = [0x22; 32];
         let mismatched = ChallengeBinding::new(&DESCRIPTOR, &RELAY, &transcript_b);
         let err = verify_at(&ticket, &mismatched, &params, now)
             .expect_err("transcript mismatch should reject ticket");
@@ -1335,7 +1342,7 @@ mod tests {
         let binding = binding();
         let ticket =
             mint_ticket(&params, &binding, Duration::from_secs(10), &mut rng).expect("mint");
-        let mismatched_relay = first_invalid_relay_id(&ticket, &params, &binding);
+        let mismatched_relay = [0x44; 32];
         let mismatched = ChallengeBinding::new(
             binding.descriptor_commit,
             &mismatched_relay,

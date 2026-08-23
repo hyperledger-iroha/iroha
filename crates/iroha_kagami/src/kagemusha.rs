@@ -21,6 +21,8 @@ use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
     KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
     KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4,
+    KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
     KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4,
     KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
@@ -124,8 +126,8 @@ impl ReleaseInventoryStateV4 {
     }
     const fn exact_file_count(self) -> usize {
         match self {
-            Self::Candidate => 16,
-            Self::Promoted => 17,
+            Self::Candidate => 17,
+            Self::Promoted => 18,
         }
     }
     const fn label(self) -> &'static str {
@@ -186,7 +188,7 @@ enum Command {
 }
 #[derive(Debug, ClapArgs)]
 struct VerifyReleaseV4Args {
-    /// Immutable directory containing the exact seventeen-file promoted ABI-21/V4 inventory.
+    /// Immutable directory containing the exact eighteen-file promoted ABI-21/V4 inventory.
     #[arg(long)]
     bundle_dir: PathBuf,
     /// Canonical release policy provisioned alongside the candidate release.
@@ -204,7 +206,7 @@ struct VerifyReleaseV4Args {
 }
 #[derive(Debug, ClapArgs)]
 struct PromoteReleaseV4Args {
-    /// Directory containing the exact sixteen-file pre-promotion ABI-21/V4 candidate.
+    /// Directory containing the exact seventeen-file pre-promotion ABI-21/V4 candidate.
     #[arg(long)]
     bundle_dir: PathBuf,
     /// Canonical release policy provisioned alongside the candidate release.
@@ -542,16 +544,25 @@ fn validate_device_attestation_policy_for_atomic_activation(
     validate_atomic_activation_revocations(policy)?;
     validate_atomic_activation_ios_apps(policy)?;
     validate_atomic_activation_android_apps(policy)?;
+    validate_atomic_activation_android_status(policy, policy_evaluation_time_ms)?;
     validate_offline_attestation_policy_for_release_activation(policy, policy_evaluation_time_ms)
         .map_err(|error| eyre!("consensus device-attestation policy validation failed: {error}"))?;
     Ok(())
 }
 fn validate_atomic_activation_policy_shape(policy: &OfflineDeviceAttestationPolicy) -> Result<()> {
     if policy.trusted_roots.len() > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1
-        || policy.revoked_certificate_sha256.len()
+        || policy.revoked_certificate_tbs_sha256.len()
             > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_REVOKED_CERTIFICATES_V1
         || policy.ios_apps.len() > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_APPS_V1
         || policy.android_apps.len() > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1
+        || policy.android_status_snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.non_valid_serials.len()
+                > iroha_data_model::offline::OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_NON_VALID_SERIALS_V1
+                || snapshot.non_valid_serials.iter().any(|serial| {
+                    serial.len()
+                        > iroha_data_model::offline::OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_SERIAL_HEX_BYTES_V1
+                })
+        })
     {
         bail!("atomic Kagemusha activation device-attestation policy exceeds collection limits");
     }
@@ -628,9 +639,11 @@ fn validate_atomic_activation_trusted_roots(policy: &OfflineDeviceAttestationPol
 }
 fn validate_atomic_activation_revocations(policy: &OfflineDeviceAttestationPolicy) -> Result<()> {
     let mut revoked = BTreeSet::new();
-    for digest in &policy.revoked_certificate_sha256 {
+    for digest in &policy.revoked_certificate_tbs_sha256 {
         if digest.len() != 32 || !revoked.insert(digest.as_slice()) {
-            bail!("atomic Kagemusha activation contains an invalid duplicate revocation");
+            bail!(
+                "atomic Kagemusha activation contains an invalid duplicate certificate TBS revocation"
+            );
         }
     }
     Ok(())
@@ -704,6 +717,52 @@ fn validate_atomic_activation_android_apps(policy: &OfflineDeviceAttestationPoli
     }
     Ok(())
 }
+fn validate_atomic_activation_android_status(
+    policy: &OfflineDeviceAttestationPolicy,
+    evaluation_time_ms: u64,
+) -> Result<()> {
+    let snapshot = policy
+        .android_status_snapshot
+        .as_ref()
+        .ok_or_else(|| eyre!("atomic Kagemusha activation requires an Android status snapshot"))?;
+    if snapshot.version
+        != iroha_data_model::offline::OFFLINE_ANDROID_ATTESTATION_STATUS_SNAPSHOT_VERSION_V1
+        || snapshot.payload_sha256 == [0; 32]
+        || snapshot.response_date_ms == 0
+        || !snapshot.response_date_ms.is_multiple_of(1_000)
+        || snapshot.cache_max_age_seconds == 0
+        || snapshot.cache_max_age_seconds
+            > iroha_data_model::offline::OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_CACHE_AGE_SECONDS_V1
+        || snapshot.last_modified_ms.is_some_and(|last_modified_ms| {
+            last_modified_ms == 0
+                || !last_modified_ms.is_multiple_of(1_000)
+                || last_modified_ms > snapshot.response_date_ms
+        })
+    {
+        bail!("atomic Kagemusha activation Android status metadata is invalid");
+    }
+    let mut previous_serial: Option<&str> = None;
+    for serial in &snapshot.non_valid_serials {
+        if serial.is_empty()
+            || !serial
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            || (serial.len() > 1 && serial.starts_with('0'))
+            || previous_serial.is_some_and(|previous| previous >= serial.as_str())
+        {
+            bail!("atomic Kagemusha activation Android status serials are not canonical");
+        }
+        previous_serial = Some(serial);
+    }
+    let fresh_until_ms = snapshot
+        .response_date_ms
+        .checked_add(u64::from(snapshot.cache_max_age_seconds) * 1_000)
+        .ok_or_else(|| eyre!("atomic Kagemusha activation Android status deadline overflows"))?;
+    if evaluation_time_ms < snapshot.response_date_ms || evaluation_time_ms >= fresh_until_ms {
+        bail!("atomic Kagemusha activation Android status snapshot is not fresh");
+    }
+    Ok(())
+}
 struct VerifiedReleaseV4 {
     authenticated: KagemushaAuthenticatedReleaseV4,
     report: VerificationReport,
@@ -746,6 +805,10 @@ impl VerifiedReleaseV4 {
                 .manifest()
                 .qualification_receipt_sha256,
             qualified_candidate_sha256: self.authenticated.manifest().qualified_candidate_sha256,
+            internal_validation_receipt_sha256: self
+                .authenticated
+                .manifest()
+                .internal_validation_receipt_sha256,
             manifest_sha256: self.authenticated.manifest_sha256(),
             release_attestation_sha256: self.authenticated.release_attestation_sha256(),
             release_policy_sha256: self.authenticated.release_policy_sha256(),
@@ -864,10 +927,17 @@ fn verify_release_directory_v4(
         KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4,
         "canonical signed cryptographic review",
     )?;
+    let internal_validation_receipt = read_regular_bounded(
+        &root,
+        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
+        "canonical signed Kagemusha V4 internal-validation receipt",
+    )?;
     let authenticated = KagemushaAuthenticatedReleaseV4::verify(
         &manifest,
         &policy,
         &attestation,
+        &internal_validation_receipt,
         &benchmark,
         &review,
     )
@@ -1176,6 +1246,10 @@ fn verify_exact_inventory_v4(
             KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
             "qualification receipt",
         ),
+        (
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+            "internal-validation receipt",
+        ),
     ] {
         insert_expected_release_file_v4(&mut expected, file_name, role)?;
     }
@@ -1203,10 +1277,8 @@ fn verify_exact_inventory_v4(
         )?;
     }
     if inventory_state.includes_promotion_record() {
-        if expected.len() != 17 {
-            bail!(
-                "Kagemusha V4 promoted release contract must name exactly seventeen unique files"
-            );
+        if expected.len() != 18 {
+            bail!("Kagemusha V4 promoted release contract must name exactly eighteen unique files");
         }
     }
     if expected.len() != inventory_state.exact_file_count() {
@@ -2190,6 +2262,7 @@ struct VerificationReport {
     manifest_body_sha256: String,
     qualification_receipt_sha256: String,
     qualified_candidate_sha256: String,
+    internal_validation_receipt_sha256: String,
     release_policy_sha256: String,
     authenticated_source_seal_projection_sha256: String,
     reviewed_cargo_binary_sha256: String,
@@ -2243,6 +2316,9 @@ impl VerificationReport {
             manifest_body_sha256: hex::encode(manifest_body_sha256),
             qualification_receipt_sha256: hex::encode(manifest.qualification_receipt_sha256),
             qualified_candidate_sha256: hex::encode(manifest.qualified_candidate_sha256),
+            internal_validation_receipt_sha256: hex::encode(
+                manifest.internal_validation_receipt_sha256,
+            ),
             release_policy_sha256: hex::encode(release_policy_sha256),
             authenticated_source_seal_projection_sha256: hex::encode(
                 manifest.authenticated_source_seal_projection_sha256,
@@ -2275,6 +2351,7 @@ struct VerificationReportV4 {
     candidate_sha256: String,
     qualification_receipt_sha256: String,
     qualified_candidate_sha256: String,
+    internal_validation_receipt_sha256: String,
     promotion_record_sha256: String,
     release_policy_sha256: String,
     authenticated_source_seal_projection_sha256: String,
@@ -2305,6 +2382,7 @@ impl VerificationReportV4 {
             candidate_sha256: hex::encode(candidate_sha256),
             qualification_receipt_sha256: report.qualification_receipt_sha256.clone(),
             qualified_candidate_sha256: report.qualified_candidate_sha256.clone(),
+            internal_validation_receipt_sha256: report.internal_validation_receipt_sha256.clone(),
             promotion_record_sha256: hex::encode(promotion_record_sha256),
             release_policy_sha256: report.release_policy_sha256.clone(),
             authenticated_source_seal_projection_sha256: report
@@ -2336,14 +2414,16 @@ impl VerificationReportV4 {
 #[cfg(test)]
 mod tests {
     use super::{
-        AUTHENTICATED_ARTIFACT_ROLES_V4, PROMOTION_RECORD_FILE_NAME_V4,
-        PrepareReleaseCircuitParamsV4Args, RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
-        RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4, REPORT_ARTIFACT_PURPOSES_V4,
-        REPORT_ROSTER_PURPOSE, ReleaseInventoryStateV4, insert_expected_release_file_v4,
-        parse_manifest_sha256, parse_nonzero_canonical_u64, prepare_release_circuit_params_v4,
-        read_regular_bounded, require_new_promotion_record_path_v4,
-        roster_release_generations_match_v4, validate_artifacts_sequentially,
-        validate_device_attestation_policy_for_atomic_activation, verify_publish_verify_release_v4,
+        AUTHENTICATED_ARTIFACT_ROLES_V4,
+        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+        PROMOTION_RECORD_FILE_NAME_V4, PrepareReleaseCircuitParamsV4Args,
+        RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4, RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
+        REPORT_ARTIFACT_PURPOSES_V4, REPORT_ROSTER_PURPOSE, ReleaseInventoryStateV4,
+        insert_expected_release_file_v4, parse_manifest_sha256, parse_nonzero_canonical_u64,
+        parse_promotion_id, prepare_release_circuit_params_v4, read_regular_bounded,
+        require_new_promotion_record_path_v4, roster_release_generations_match_v4,
+        validate_artifacts_sequentially, validate_device_attestation_policy_for_atomic_activation,
+        verify_publish_verify_release_v4,
     };
     #[cfg(unix)]
     use super::{
@@ -2393,6 +2473,14 @@ mod tests {
             vec!["202605050324".to_owned()],
             "com.pk.retailwallet".to_owned(),
             vec![[0x11; 32]],
+            iroha_data_model::offline::OfflineAndroidAttestationStatusSnapshotV1 {
+                version: iroha_data_model::offline::OFFLINE_ANDROID_ATTESTATION_STATUS_SNAPSHOT_VERSION_V1,
+                payload_sha256: [0x99; 32],
+                response_date_ms: POLICY_EVALUATION_TIME_MS,
+                last_modified_ms: Some(POLICY_EVALUATION_TIME_MS),
+                cache_max_age_seconds: 86_400,
+                non_valid_serials: Vec::new(),
+            },
             POLICY_EVALUATION_TIME_MS,
         )
         .expect("built-in production attestation roots are valid")
@@ -2859,22 +2947,22 @@ mod tests {
         let result = verify_publish_verify_release_v4(
             |state| {
                 events.borrow_mut().push(match state {
-                    ReleaseInventoryStateV4::Candidate => "verify-16",
-                    ReleaseInventoryStateV4::Promoted => "verify-17",
+                    ReleaseInventoryStateV4::Candidate => "verify-17",
+                    ReleaseInventoryStateV4::Promoted => "verify-18",
                 });
                 Ok(state.exact_file_count())
             },
             |candidate_count| {
-                assert_eq!(*candidate_count, 16);
+                assert_eq!(*candidate_count, 17);
                 events.borrow_mut().push("publish-no-replace");
                 Ok(())
             },
         )
         .expect("non-circular promotion flow succeeds");
-        assert_eq!(result, 17);
+        assert_eq!(result, 18);
         assert_eq!(
             events.into_inner(),
-            ["verify-16", "publish-no-replace", "verify-17"]
+            ["verify-17", "publish-no-replace", "verify-18"]
         );
     }
     #[test]
@@ -2935,16 +3023,16 @@ mod tests {
         let mut expected = BTreeSet::new();
         insert_expected_release_file_v4(
             &mut expected,
-            "recursive-step-two-qualification-v4.norito",
-            "qualification receipt",
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+            "internal-validation receipt",
         )
         .expect("first role owns its file name");
         let error = insert_expected_release_file_v4(
             &mut expected,
-            "recursive-step-two-qualification-v4.norito",
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
             "substituted artifact",
         )
-        .expect_err("a descriptor cannot alias the fixed qualification receipt");
+        .expect_err("a descriptor cannot alias the fixed internal-validation receipt");
         assert!(error.to_string().contains("aliases another release file"));
         assert_eq!(expected.len(), 1);
     }
@@ -3179,7 +3267,7 @@ mod tests {
         );
 
         let mut exact_revocations = valid_device_attestation_policy();
-        exact_revocations.revoked_certificate_sha256 = (0
+        exact_revocations.revoked_certificate_tbs_sha256 = (0
             ..OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_REVOKED_CERTIFICATES_V1)
             .map(|index| {
                 let mut digest = vec![0; 32];
@@ -3189,7 +3277,7 @@ mod tests {
             .collect();
         assert_atomic_policy_shape_valid(&exact_revocations, "revocation limit");
         exact_revocations
-            .revoked_certificate_sha256
+            .revoked_certificate_tbs_sha256
             .push(vec![0xFF; 32]);
         assert_atomic_policy_cap_rejected(
             &exact_revocations,

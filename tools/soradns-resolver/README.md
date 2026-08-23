@@ -2,8 +2,8 @@
 
 `soradns-resolver` provides the DG-2 resolver prototype described in the
 roadmap. It ingests resolver attestation documents (RAD snapshots) and proof
-bundles, tracks bundle/adverts in memory, emits events, and exposes stub
-DoH/DoT/DoQ listeners for integration testing.
+bundles, tracks bundle/adverts in memory, emits events, and exposes DoH and DoT
+listeners for integration testing.
 
 ## Configuration
 
@@ -13,21 +13,36 @@ The daemon loads a Norito JSON document. A minimal example looks like:
 {
   "resolver_id": "resolver.sora.test",
   "region": "global",
-  "bundle_sources": [{"kind": "file", "value": {"path": "bundles/proof.norito"}}],
-  "rad_sources": [{"kind": "torii", "value": {"base_url": "https://torii.dev"}}],
+  "bundle_sources": [{"kind": "file", "value": {"path": "bundles/proof.norito", "expected_blake3_hex": "<independently-provisioned 32-byte digest>"}}],
+  "rad_sources": [{"kind": "file", "value": {"path": "rad/snapshot.norito", "expected_blake3_hex": "<independently-provisioned 32-byte digest>"}}],
   "doh_listen": ["127.0.0.1:8443"],
   "dot_listen": ["127.0.0.1:853"],
-  "doq_listen": ["127.0.0.1:8853"],
   "event_listen": "127.0.0.1:9100",
+  "operations_auth_token_path": "/run/secrets/soradns-operations-token",
   "sync_interval_secs": 30
 }
 ```
 
-- `bundle_sources` / `rad_sources` accept `file`, `torii`, or `sorafs` variants
-  and may include `headers` blocks for auth tokens.
+- `bundle_sources` / `rad_sources` accept only local files with a mandatory,
+  independently provisioned BLAKE3 digest. Remote `torii` and `sorafs`
+  variants fail configuration admission until the resolver verifies the full
+  proof chain and RAD operator/governance signatures plus Merkle membership.
 - `sync_interval_secs` controls how often the daemon re-fetches bundles and RAD
   snapshots once it has started. If omitted it defaults to 30 seconds; values
   below 1 second are rejected.
+- `doq_listen` is rejected in the first release; no raw UDP or unauthenticated
+  QUIC-compatible listener is compiled into the daemon.
+- `doh_listen` and `event_listen` must be loopback addresses because they serve
+  plaintext HTTP behind a local TLS proxy. The DoH listener exposes only
+  `/dns-query`. Enabling `event_listen` also requires
+  `operations_auth_token_path`; its `/events`, `/metrics`, and `/healthz`
+  routes require that bearer token. The token file must be a direct,
+  single-link, owner-private regular file containing 32–256 printable
+  non-whitespace ASCII bytes. Directory-CLI requests use bounded
+  connect/request timeouts and a five-redirect ceiling.
+- `event_log_path` is rejected in v1. Persist events through the process log or
+  consume the bounded loopback SSE stream; the retired append-only file sink had
+  no safe rotation or retained-size corridor.
 
 ### Input and memory corridors
 
@@ -40,9 +55,9 @@ explicit Norito decode limits that reject oversized fields and collections
 before allocating them.
 
 - Resolver config: 1 MiB; at most 256 bundle sources, 256 RAD sources, 4,096
-  total bundle object references, 64 headers per source, and 64 addresses per
-  listener list. A general string/header value is at most 16 KiB and a short
-  identifier is at most 4 KiB.
+  total bundle object references, and 64 addresses per listener list. A
+  general string value is at most 16 KiB and a short identifier is at most 4
+  KiB.
 - Static config: at most 4,096 zones and 16,384 records in total, with no more
   than 256 TXT chunks or freeze notes per owning record/zone. Static zones may
   retain at most 16 MiB.
@@ -53,9 +68,14 @@ before allocating them.
   32 MiB Norito allocation and 262,144 cumulative-element ceilings.
 - Directory CLI: 256 KiB for `record.json`, 16 MiB for `directory.json`, and
   at most 16,384 RAD leaves/files. Merkle levels reuse the admitted leaf vector
-  and reserve every successor level fallibly.
+  and reserve every successor level fallibly. Both `directory fetch` and
+  `directory verify` require an externally provisioned builder public key and
+  the exact expected Merkle root; a validly signed old release therefore cannot
+  be replayed as the current directory by a mirror.
 - DoT material: 1 MiB for the certificate input and 256 KiB for the private
-  key input.
+  key input. The private key must be a direct, single-link regular file owned by
+  the effective user or root and, on Unix, must have no group or other
+  permissions (for example mode `0600`).
 - Live resolver state: at most 16,384 proof bundles, 16,384 RAD adverts, and
   64 MiB of aggregate accounted heap across bundles, RADs, map buckets, and
   static zones. Duplicate-key replacement subtracts the prior retained charge
@@ -68,12 +88,12 @@ transport or silently truncates a valid response.
 After editing the config run:
 
 ```bash
-cargo run -p soradns-resolver -- --config ops/soradns/resolver.json
+cargo run -p soradns-resolver -- serve --config ops/soradns/resolver.json
 ```
 
 The daemon performs an initial sync and then refreshes state on the configured
-interval. Each refresh updates the `/metrics` and `/healthz` endpoints and
-emits bundle/resolver events via the SSE listener.
+interval. Each refresh updates the bearer-protected `/metrics` and `/healthz`
+endpoints and emits bundle/resolver events via the protected SSE listener.
 
 Pass `--sync-interval-secs <seconds>` to the `serve` command to temporarily
 override the cadence without editing the configuration file. This is useful for
@@ -83,8 +103,8 @@ canary tests that need faster or slower refreshes than the production profile.
 
 - Proof bundles and RAD entries are pruned once their validity windows expire
   (or when RAD entries are not yet valid). These removals emit
-  `bundle.expired` and `resolver.invalidate` events through the SSE stream and,
-  when configured, the on-disk event log.
+  `bundle.expired` and `resolver.invalidate` events through the loopback SSE
+  stream and process log.
 - If no authoritative static zones are configured the DNS listeners return a
   deterministic `SERVFAIL`, keeping stub deployments predictable while registry
   data is being fetched.

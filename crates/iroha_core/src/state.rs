@@ -333,6 +333,7 @@ use crate::{
         pin_store::DaPinStore,
         receipts::{DaReceiptCursorError, DaReceiptCursorIndex},
     },
+    smartcontracts::isi::offline::LifecycleEntrypointContext,
 };
 mod bounded_authority;
 mod canonical_history;
@@ -12906,6 +12907,8 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) privacy_transaction_intent_binding: Option<PrivacyTransactionIntentBindingV1>,
     /// Complete signed-wire identity of an exact direct Kagemusha Taira canary transaction.
     pub(crate) kagemusha_taira_canary_wire_identity: Option<KagemushaExactBytesDigestV1>,
+    /// Exact direct Kagemusha release-lifecycle carrier, absent for batches and nested execution.
+    pub(crate) kagemusha_release_lifecycle_entrypoint: Option<LifecycleEntrypointContext>,
     /// Whether the canonical carrier itself is an evidentiary `External` entrypoint.
     pub(crate) kagemusha_taira_canary_external_entrypoint: bool,
     /// Original block entrypoint index for the current transaction, when known.
@@ -46346,6 +46349,7 @@ impl<'state> StateBlock<'state> {
             current_tx_hash: None,
             privacy_transaction_intent_binding: None,
             kagemusha_taira_canary_wire_identity: None,
+            kagemusha_release_lifecycle_entrypoint: None,
             kagemusha_taira_canary_external_entrypoint: false,
             current_entrypoint_index: None,
             rwa_generated_id_ordinal: 0,
