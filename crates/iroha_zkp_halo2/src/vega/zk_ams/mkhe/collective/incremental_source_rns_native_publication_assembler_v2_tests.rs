@@ -487,11 +487,11 @@ fn assemble_fixture_with_owner_drop_probes_v2(
         .expect("valid drop-probed fixture must assemble")
 }
 
-fn receipt_mut_at_v2(
-    v1: &mut RnsNativeFinalizedV1PublicationEvidenceV2,
-    tails: &mut RnsNativeBasisExtensionTailLifecycleEvidenceV2,
+fn receipt_mut_at_v2<'a>(
+    v1: &'a mut RnsNativeFinalizedV1PublicationEvidenceV2,
+    tails: &'a mut RnsNativeBasisExtensionTailLifecycleEvidenceV2,
     position: RnsNativeCanonicalPositionV2,
-) -> &mut RnsNativeObjectPublicationEvidenceV2 {
+) -> &'a mut RnsNativeObjectPublicationEvidenceV2 {
     match position.role {
         RnsNativePublicPolynomialRoleV2::A => {
             if position.limb_ordinal < RNS_NATIVE_LEGACY_LIMB_COUNT_V2 {
@@ -1765,12 +1765,14 @@ fn parent_declares_exactly_one_private_path_child_v2() {
 
 #[test]
 fn integration_readiness_release_and_adapters_remain_closed_v2() {
-    assert!(RNS_NATIVE_PUBLICATION_ASSEMBLER_CONTRACT_IMPLEMENTED_V2);
-    assert!(!RNS_NATIVE_PUBLICATION_ASSEMBLER_LIVE_OWNER_INTEGRATED_V2);
-    assert!(!RNS_NATIVE_PUBLICATION_ASSEMBLER_PRODUCTION_ADAPTER_AVAILABLE_V2);
-    assert!(!RNS_NATIVE_PUBLICATION_ASSEMBLER_READER_INTEGRATED_V2);
-    assert!(!RNS_NATIVE_PUBLICATION_ASSEMBLER_READINESS_V2);
-    assert!(!RNS_NATIVE_PUBLICATION_ASSEMBLER_RELEASE_AUTHORIZED_V2);
+    const {
+        assert!(RNS_NATIVE_PUBLICATION_ASSEMBLER_CONTRACT_IMPLEMENTED_V2);
+        assert!(!RNS_NATIVE_PUBLICATION_ASSEMBLER_LIVE_OWNER_INTEGRATED_V2);
+        assert!(!RNS_NATIVE_PUBLICATION_ASSEMBLER_PRODUCTION_ADAPTER_AVAILABLE_V2);
+        assert!(!RNS_NATIVE_PUBLICATION_ASSEMBLER_READER_INTEGRATED_V2);
+        assert!(!RNS_NATIVE_PUBLICATION_ASSEMBLER_READINESS_V2);
+        assert!(!RNS_NATIVE_PUBLICATION_ASSEMBLER_RELEASE_AUTHORIZED_V2);
+    }
     let codes: BTreeSet<_> = RNS_NATIVE_PUBLICATION_ASSEMBLER_BLOCKERS_V2
         .iter()
         .map(|blocker| blocker.code)

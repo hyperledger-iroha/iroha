@@ -5169,7 +5169,7 @@ mod kagemusha_v4_artifact_contract_tests {
     include!("kagemusha_release_validation_inline_tests.rs");
     include!("kagemusha_promotion_receipt_inline_tests.rs");
     #[cfg(feature = "transparent_api")]
-    pub(crate) fn lifecycle_enable_witness_wire_fixture() -> KagemushaV4IssuanceEnableWitnessV1 {
+    pub fn lifecycle_enable_witness_wire_fixture() -> KagemushaV4IssuanceEnableWitnessV1 {
         let fixture = complete_canary_fixture();
         let binding = fixture.receipt.expectations.binding().clone();
         let receipt_bytes =
@@ -5252,8 +5252,9 @@ mod kagemusha_v4_artifact_contract_tests {
             staged_at_height: 2,
             staged_at_unix_ms: 1_700_000_000_000,
             release_record_norito: exact_receipt_bytes(&release_record_norito),
+            // The finality receipt retains only the exact reservation identity;
+            // the governed policy comes from the separately retained signed reservation.
             device_attestation_policy: fixture
-                .receipt
                 .promotion_reservation
                 .body
                 .device_attestation_policy

@@ -464,7 +464,7 @@ fn derived_mask_v1(
     previous_borrow: Option<Scalar>,
 ) -> Scalar {
     let radix = Scalar::from_u64(RADIX_BASE_V1);
-    difference - centered_difference + radix * borrow - previous_borrow.unwrap_or(Scalar::zero())
+    difference - centered_difference + radix * borrow - previous_borrow.unwrap_or_default()
 }
 
 fn tiny_commitments_and_witness_v1(

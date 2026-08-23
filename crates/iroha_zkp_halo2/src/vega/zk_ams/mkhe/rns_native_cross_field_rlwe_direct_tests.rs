@@ -286,9 +286,6 @@ fn claim_equality_pending_fixture_v1<'a>(
     RnsNativeCrossFieldRlweClaimEqualityPendingVerifiedV1 {
         successor,
         binding_digest: digest_v1(111),
-        q_mask_s_root: digest_v1(112),
-        numeric_root: digest_v1(113),
-        commitment_root: digest_v1(114),
         safe_core_projection,
         cross_field_root_equality_obligation,
         verified_cross_field_core_root,
@@ -873,7 +870,10 @@ impl RnsNativeCrossFieldQuotientOpeningCursorV1 for FullZeroSourceV1 {
         }
         self.opening_poisoned = true;
         let expected_relation = self.next_opening_owner / QUOTIENT_OPENING_SIGNS_V1;
-        let expected_sign = if self.next_opening_owner % QUOTIENT_OPENING_SIGNS_V1 == 0 {
+        let expected_sign = if self
+            .next_opening_owner
+            .is_multiple_of(QUOTIENT_OPENING_SIGNS_V1)
+        {
             RnsNativeCrossFieldQuotientOpeningSignV1::Positive
         } else {
             RnsNativeCrossFieldQuotientOpeningSignV1::Negative
@@ -1098,9 +1098,6 @@ fn concrete_direct_root_bridge_is_matching_mismatch_and_one_shot() {
         .expect("matching concrete direct root");
     assert_eq!(terminal.successor(), successor.as_slice());
     assert_eq!(terminal.binding_digest(), digest_v1(111));
-    assert_eq!(terminal.q_mask_s_root(), digest_v1(112));
-    assert_eq!(terminal.numeric_root(), digest_v1(113));
-    assert_eq!(terminal.commitment_root(), digest_v1(114));
     assert_eq!(
         terminal.safe_core_projection_v1(),
         RnsNativeCrossFieldRlweSafeCoreProjectionV1 {
@@ -1567,7 +1564,9 @@ fn pending_owner_seal_and_frame_preflight_roundtrip_are_mutation_sensitive() {
         wire.len(),
         RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_FRAME_BYTES_V1 + successor.len()
     );
-    assert!(RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_FRAME_BYTES_V1 <= 36_020);
+    const {
+        assert!(RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_FRAME_BYTES_V1 <= 36_020);
+    }
     let preflight = FramePreflightV1::decode_exact_v1(&wire).expect("source-free preflight");
     preflight
         .validate_schedule_v1(&relation_schedule_fixture_v1())
@@ -2049,8 +2048,10 @@ fn membership_backed_point_projection_has_exact_boundary_owners_and_no_join() {
             "incomplete join leaked into membership handoff: {unavailable_join_surface}"
         );
     }
-    assert!(!SINGLE_OWNER_NUMERIC_MEMBERSHIP_CHRONOLOGY_AVAILABLE_V1);
-    assert!(!VERIFIER_NUMERIC_MEMBERSHIP_JOIN_AVAILABLE_V1);
+    const {
+        assert!(!SINGLE_OWNER_NUMERIC_MEMBERSHIP_CHRONOLOGY_AVAILABLE_V1);
+        assert!(!VERIFIER_NUMERIC_MEMBERSHIP_JOIN_AVAILABLE_V1);
+    }
 }
 
 #[test]
@@ -2071,9 +2072,9 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
         "value.clear_secret();",
         "rns_native_qpcs_prefix::RnsNativeQpcsRelationScheduleV1",
         "RnsNativeQpcsCompletedLineageV1",
-        "pub(super) fn prepare_direct_relation_schedule_after_qpcs_v1<",
-        "let q_mask_s_root = q_mask_s_root_v1(axes.pre_qpcs_safe_axes_v1(), source)?;",
-        "if q_mask_s_root != qpcs_schedule.q_mask_s_root()",
+        "pub(super) fn bind_authenticated_claimed_qpcs_inventory_direct_v2<",
+        "let q_mask_s_root = q_mask_s_root_v1(axes.pre_qpcs_safe_axes_v1(), &source)?;",
+        "if q_mask_s_root != completed_qpcs.relation_schedule_v1().q_mask_s_root()",
         "let bound = bind_direct_q_mask_schedule_v1(axes, completed_qpcs)?;",
         "derive_relation_schedule_v1(bound)",
         "source.take_numeric_evaluation_v1(limb, repetition, &mut numeric)?;",
@@ -2382,7 +2383,7 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
         );
     }
     let chronology = source
-        .split_once("pub(super) fn prepare_direct_relation_schedule_after_qpcs_v1")
+        .split_once("pub(super) fn bind_authenticated_claimed_qpcs_inventory_direct_v2")
         .expect("chronology function")
         .1
         .split_once("fn validate_relation_schedule_v1")
@@ -2502,10 +2503,7 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
     assert!(
         source[legacy_declaration.saturating_sub(24)..legacy_declaration].contains("#[cfg(test)]")
     );
-    let public_legacy = source
-        .find("pub(super) fn prove_rns_native_cross_field_rlwe_direct_v1")
-        .expect("public legacy declaration");
-    assert!(source[public_legacy.saturating_sub(240)..public_legacy].contains("#[cfg(test)]"));
+    assert!(!source.contains("pub(super) fn prove_rns_native_cross_field_rlwe_direct_v1"));
 
     let verifier = source
         .split_once("fn verify_kernel_for_suite_v1")

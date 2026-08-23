@@ -1367,7 +1367,7 @@ pub enum KagemushaInternalValidationReceiptErrorV1 {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use super::super::{
         KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendCandidateV4,
     };
@@ -1510,7 +1510,7 @@ pub(crate) mod tests {
         .expect("sign valid receipt")
     }
 
-    pub(crate) fn signed_receipt_for_v4_candidate(
+    pub fn signed_receipt_for_v4_candidate(
         candidate: &KagemushaRecursiveSpendCandidateV4,
         finalized_manifest: &KagemushaRecursiveSpendArtifactManifestV4,
     ) -> KagemushaRecursiveSpendInternalValidationReceiptV1 {
@@ -1526,7 +1526,7 @@ pub(crate) mod tests {
         )
     }
 
-    pub(crate) fn signed_receipt_for_v4_candidate_with_tracked_cargo_lock(
+    pub fn signed_receipt_for_v4_candidate_with_tracked_cargo_lock(
         candidate: &KagemushaRecursiveSpendCandidateV4,
         finalized_manifest: &KagemushaRecursiveSpendArtifactManifestV4,
         tracked_cargo_lock_sha256: [u8; 32],
@@ -1682,8 +1682,8 @@ pub(crate) mod tests {
         receipt.body.validation_runner_public_key = different_runner.public_key().clone();
         assert!(matches!(
             receipt.validate(),
-            Err(KagemushaInternalValidationReceiptErrorV1::InvalidField(_))
-                | Err(KagemushaInternalValidationReceiptErrorV1::InvalidSignature)
+            Err(KagemushaInternalValidationReceiptErrorV1::InvalidField(_)
+                | KagemushaInternalValidationReceiptErrorV1::InvalidSignature)
         ));
 
         let mut receipt = valid_receipt();

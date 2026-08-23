@@ -558,17 +558,13 @@ fn connect_command() -> Result<(), ControllerError> {
     let current_exe = env::current_exe()?;
     let payload_frame = WipeBytes(encode_connect_payload_frame(&payload)?);
     payload.wipe_credentials();
-    let child_result = ProcessCommand::new(current_exe)
+    let mut child = ProcessCommand::new(current_exe)
         .arg("run-tunnel")
         .env_clear()
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn();
-    let mut child = match child_result {
-        Ok(child) => child,
-        Err(error) => return Err(error.into()),
-    };
+        .spawn()?;
     // The worker is still blocked on its empty stdin here, so the PID cannot have exited and
     // been reused before the pidfd-backed identity capture.
     let child_pid = child.id();
@@ -1655,6 +1651,7 @@ const fn linux_tun_creation_flag_bits() -> u16 {
     // an existing interface that it would subsequently reconfigure.
     LINUX_IFF_TUN_BITS | LINUX_IFF_NO_PI_BITS | LINUX_IFF_TUN_EXCL_BITS
 }
+#[cfg(any(target_os = "linux", test))]
 fn ensure_exact_tun_interface_name(
     requested_name: &str,
     kernel_name: &str,
@@ -1734,10 +1731,10 @@ fn cleanup_persisted_network(state: &mut State) -> Result<(), ControllerError> {
 }
 fn cleanup_network(applied: &AppliedNetworkState) -> Result<(), ControllerError> {
     let mut failures = Vec::new();
-    if let Some(dns_backend) = &applied.dns_backend {
-        if let Err(error) = cleanup_dns(dns_backend) {
-            failures.push(format!("DNS cleanup failed: {error}"));
-        }
+    if let Some(dns_backend) = &applied.dns_backend
+        && let Err(error) = cleanup_dns(dns_backend)
+    {
+        failures.push(format!("DNS cleanup failed: {error}"));
     }
     for snapshot in applied.excluded_route_snapshots.iter().rev() {
         if let Err(error) = restore_excluded_route(snapshot) {
@@ -4487,8 +4484,10 @@ mod tests {
     fn state_persistence_is_private_atomic_and_round_trips() {
         let root = private_test_state_root("roundtrip");
         let path = root.join(STATE_FILE_NAME);
-        let mut state = State::default();
-        state.message = "first".to_owned();
+        let mut state = State {
+            message: "first".to_owned(),
+            ..State::default()
+        };
         persist_state_at(&path, &state).expect("persist first state");
         state.message = "second".to_owned();
         persist_state_at(&path, &state).expect("replace state");
