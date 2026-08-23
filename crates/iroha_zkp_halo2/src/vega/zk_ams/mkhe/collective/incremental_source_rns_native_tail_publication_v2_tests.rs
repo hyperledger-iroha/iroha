@@ -1085,6 +1085,13 @@ fn coordinator_preserves_callback_error_origin_and_every_live_gate_remains_close
             "missing error/contract pin: {required}"
         );
     }
+    assert!(source.contains("let callback_failure = Cell::new(None);"));
+    assert!(source.contains("let callback_failure_ref = &callback_failure;"));
+    assert_eq!(source.matches("callback_failure_ref").count(), 6);
+    assert_eq!(source.matches(".set(Some(").count(), 5);
+    assert_eq!(source.matches("callback_failure.get()").count(), 2);
+    assert!(!source.contains("let mut callback_failure = None;"));
+    assert!(!source.contains("callback_failure = Some("));
     for closed in [
         "RNS_NATIVE_TAIL_PHASE23_OWNER_AVAILABLE_V2: bool = false",
         "RNS_NATIVE_KEY_TAIL_CAS_OWNER_AVAILABLE_V2: bool = false",

@@ -50,9 +50,8 @@ Completed history lives in [`status.md`](./status.md).
   operations are separate and remain valid.
 - Decide whether the currently unreachable
   `halo2/ipa/poly-open` backend belongs in the closed first-release registry.
-- Once the in-progress Halo2 tree compiles, run the focused native-STARK and
-  FASTPQ regressions, then the full workspace test and strict all-target Clippy
-  matrices from one settled candidate.
+- Run the focused native-STARK and FASTPQ regressions, then the full workspace
+  test and strict all-target Clippy matrices from one settled candidate.
 - On CUDA- and Metal-capable release hosts, compile the corrected BN254 kernels
   and archive direct-evaluation, CPU/GPU parity, FFT/LDE, and benchmark evidence
   from the same immutable source revision.

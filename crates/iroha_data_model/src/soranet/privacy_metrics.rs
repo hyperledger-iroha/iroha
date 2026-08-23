@@ -784,6 +784,7 @@ mod handshake_failure_tests {
 #[cfg(test)]
 mod gar_event_tests {
     use super::*;
+    use norito::codec::DecodeAll as _;
 
     #[test]
     fn fixed_gar_category_hash_roundtrips_through_norito() {

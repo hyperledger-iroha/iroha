@@ -14105,6 +14105,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     /// operation, and elapsed wall time must not manufacture a timeout vote or
     /// retransmission. The runner consumes this runtime after finalization and
     /// constructs a fresh, normally armed successor-height runtime.
+    #[allow(dead_code, reason = "retained by formal contracts")]
     pub(crate) fn step_recovery(
         &mut self,
         now: Instant,
