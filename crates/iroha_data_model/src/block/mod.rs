@@ -490,6 +490,11 @@ impl SignedBlock {
     ///
     /// The set must be attached before lane-finality statements are signed so
     /// Kura replay can reproduce nonce revocation for transient rotations.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SetLaneFinalityStatementsError::MissingTransactionResults`] when the block does
+    /// not yet carry a [`BlockResult`].
     #[cfg(feature = "transparent_api")]
     pub fn set_axt_transitioned_dataspaces(
         &mut self,
